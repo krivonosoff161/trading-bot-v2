@@ -29,8 +29,13 @@ async def run_bot(config: Config, client: OKXClient) -> None:
 
 
 async def _tick(config: Config, client: OKXClient) -> None:
-    candles = await client.get_candles(config.symbol, bar="5m", limit=100)
-    if not candles:
+    # Load both timeframes
+    candles_5m, candles_15m = await asyncio.gather(
+        client.get_candles(config.symbol, bar="5m", limit=100),
+        client.get_candles(config.symbol, bar="15m", limit=100),
+    )
+
+    if not candles_5m or not candles_15m:
         logger.warning("No candles received | symbol={}", config.symbol)
         return
 
@@ -42,7 +47,7 @@ async def _tick(config: Config, client: OKXClient) -> None:
         pos_size = float(open_pos.get("pos", 0))
         position_side = "buy" if pos_size > 0 else "sell"
 
-        reversal = get_reversal_signal(candles, position_side)
+        reversal = get_reversal_signal(candles_5m, candles_15m, position_side)
         if reversal:
             logger.info(
                 "Reversal detected | symbol={} position_side={} reason={}",
@@ -58,17 +63,17 @@ async def _tick(config: Config, client: OKXClient) -> None:
         return
 
     # No open position — check entry signal
-    signal = get_signal(candles)
+    signal = get_signal(candles_5m, candles_15m)
 
     if not signal["side"]:
         logger.info(
-            "No trade | symbol={} reason={} adx={:.1f} rsi={:.1f}",
+            "No trade | symbol={} reason={} adx_15m={:.1f} rsi_5m={:.1f}",
             config.symbol, signal["reason"], signal["adx"], signal["rsi"],
         )
         return
 
-    # Calculate TP / SL from ATR
-    price = float(candles[0][4])  # latest candle close (candles[0] = newest)
+    # Calculate TP / SL from ATR (5m)
+    price = float(candles_5m[0][4])  # latest 5m candle close (candles_5m[0] = newest)
     atr = signal["atr"]
     sl_dist = max(atr * config.atr_sl_multiplier, price * config.min_sl_percent)
     tp_dist = sl_dist * config.tp_rr
@@ -81,7 +86,7 @@ async def _tick(config: Config, client: OKXClient) -> None:
         tp_price = str(round(price - tp_dist, 2))
 
     logger.info(
-        "Signal | symbol={} side={} reason={} rsi={:.1f} adx={:.1f} "
+        "Signal | symbol={} side={} reason={} rsi_5m={:.1f} adx_15m={:.1f} "
         "range=[{:.0f}-{:.0f}] mpr={:.0f} atr={:.2f} price={} sl={} tp={}",
         config.symbol, signal["side"], signal["reason"],
         signal["rsi"], signal["adx"],
