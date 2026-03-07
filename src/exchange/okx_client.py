@@ -146,6 +146,17 @@ class OKXClient:
             return data.get("data", [])
         return []
 
+    async def get_last_position_close(self, symbol: str) -> Optional[dict]:
+        """Get last closed position with realizedPnl, closeAvgPx, openAvgPx."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get(
+            "/api/v5/account/positions-history",
+            {"instId": inst_id, "limit": "1"},
+        )
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"][0]
+        return None
+
     # --- Orders ---
 
     async def place_market_order(
