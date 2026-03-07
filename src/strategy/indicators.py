@@ -44,7 +44,7 @@ def calc_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: in
     return float(atr[-1])
 
 
-def calc_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
+def calc_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> tuple:
     n = len(closes)
     plus_dm  = np.zeros(n)
     minus_dm = np.zeros(n)
@@ -83,12 +83,12 @@ def calc_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: in
     adx = np.zeros(n)
     start = period * 2
     if start >= n:
-        return 0.0
+        return 0.0, 0.0, 0.0
     adx[start] = np.mean(dx[period:period * 2])
     for i in range(start + 1, n):
         adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
 
-    return float(adx[-1])
+    return float(adx[-1]), float(plus_di[-1]), float(minus_di[-1])
 
 
 def calc_rsi(closes: np.ndarray, period: int = 3) -> float:

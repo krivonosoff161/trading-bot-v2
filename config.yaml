@@ -1,17 +1,25 @@
 trading:
-  symbol: BTC-USDT
   leverage: 5
-  order_size: "1"       # contracts
   poll_interval: 10     # seconds between each bot tick
 
+  symbols:
+    - id: BTC-USDT
+      order_size: "1"           # contracts
+      atr_sl_multiplier: 1.5   # SL = ATR(1m) * multiplier
+      atr_tp_multiplier: 2.25  # TP = ATR(1m) * multiplier (R:R 1:1.5)
+      min_sl_percent: 0.003    # SL minimum 0.3% (mark price drift protection)
+      rsi_oversold: 35
+      rsi_overbought: 65
+
+    - id: SOL-USDT
+      order_size: "1"
+      atr_sl_multiplier: 2.5
+      atr_tp_multiplier: 3.75
+      min_sl_percent: 0.005    # SOL is more volatile, wider buffer
+      rsi_oversold: 30
+      rsi_overbought: 70
+
 strategy:
-  atr_sl_multiplier: 1.5    # SL = ATR * multiplier
-  min_sl_percent: 0.006     # SL minimum 0.6% from price (mark price drift protection)
-  tp_rr: 1.5                # TP = SL * tp_rr  (R:R 1:1.5)
-  # Strategy C: Range + RSI (hardcoded in signal.py, documented here)
-  # range_period: 20         # candles for High/Low range
-  # rsi_period: 3            # RSI period (Wilder's smoothing)
-  # rsi_oversold: 35         # BUY threshold
-  # rsi_overbought: 65       # SELL threshold
-  # entry_atr_mult: 0.5      # entry zone = boundary ± ATR * 0.5
-  # adx_threshold: 25        # ADX < 25 → ranging (good)
+  adx_threshold: 22    # ADX(5m) > 22 → trending (good for entry)
+  # EMA(8/21) crossover on 1m — hardcoded in signal.py
+  # RSI(3) pullback filter — hardcoded in signal.py
