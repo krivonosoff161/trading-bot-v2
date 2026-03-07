@@ -1,0 +1,10 @@
+trading:
+  symbol: BTC-USDT
+  leverage: 5
+  order_size: "1"       # contracts
+  poll_interval: 10     # seconds between each bot tick
+
+strategy:
+  atr_sl_multiplier: 1.5    # SL = ATR * multiplier
+  min_sl_percent: 0.006     # SL minimum 0.6% from price (mark price drift protection)
+  tp_rr: 1.5                # TP = SL * tp_rr  (R:R 1:1.5)
