@@ -3,13 +3,17 @@ Trading Bot V2 — entry point.
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 from loguru import logger
 
 from src.config import Config, SymbolConfig
 from src.exchange.okx_client import OKXClient
 from src.strategy.signal import get_signal
-from src.utils.logger import setup_logger
+from src.utils.logger import setup_logger, trade_logger
+
+# Per-symbol position state: symbol -> {side, entry_price, entry_time, sl, tp}
+_open_positions: dict = {}
 
 
 async def run_bot(config: Config, client: OKXClient) -> None:
@@ -48,17 +52,21 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         logger.warning("No candles received | symbol={}", sym.symbol)
         return
 
-    # Check open position first
     positions = await client.get_positions(sym.symbol)
     open_pos = next((p for p in positions if float(p.get("pos", 0)) != 0), None)
 
+    had_position = sym.symbol in _open_positions
+
     if open_pos:
-        # Position already open — OCO handles TP/SL, nothing to do
+        _open_positions.setdefault(sym.symbol, {})
         pos_size = float(open_pos.get("pos", 0))
-        logger.debug(
-            "Position open | symbol={} size={}", sym.symbol, pos_size,
-        )
+        logger.debug("Position open | symbol={} size={}", sym.symbol, pos_size)
         return
+
+    # Position just closed — fetch PnL and log
+    if had_position:
+        entry = _open_positions.pop(sym.symbol)
+        await _log_trade_close(client, sym.symbol, entry)
 
     # No open position — check entry signal
     signal = get_signal(candles_1m, candles_5m, sym.as_signal_dict())
@@ -74,10 +82,10 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         return
 
     # Calculate TP / SL from ATR (1m)
-    price = float(candles_1m[0][4])  # latest 1m candle close (candles_1m[0] = newest)
+    price = float(candles_1m[0][4])
     atr = signal["atr"]
     sl_dist = max(atr * sym.atr_sl_multiplier, price * sym.min_sl_percent)
-    tp_dist = sl_dist * (sym.atr_tp_multiplier / sym.atr_sl_multiplier)  # TP = SL * R:R ratio
+    tp_dist = sl_dist * (sym.atr_tp_multiplier / sym.atr_sl_multiplier)
 
     if signal["side"] == "buy":
         sl_price = str(round(price - sl_dist, 2))
@@ -95,8 +103,60 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         atr, price, sl_price, tp_price,
     )
 
-    await client.place_market_order(
+    result = await client.place_market_order(
         sym.symbol, signal["side"], sym.order_size, tp_price, sl_price,
+    )
+
+    if result:
+        entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        _open_positions[sym.symbol] = {
+            "side": signal["side"],
+            "entry_price": price,
+            "entry_time": entry_time,
+            "sl": sl_price,
+            "tp": tp_price,
+            "atr": round(atr, 4),
+        }
+        trade_logger.info(
+            "OPEN  | symbol={} side={} entry={} sl={} tp={} atr={:.4f} "
+            "adx_5m={:.1f} rsi_1m={:.1f}",
+            sym.symbol, signal["side"], price, sl_price, tp_price, atr,
+            signal["adx"], signal["rsi"],
+        )
+
+
+async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
+    close = await client.get_last_position_close(symbol)
+    if not close:
+        trade_logger.info(
+            "CLOSE | symbol={} side={} entry={} — could not fetch close data",
+            symbol, entry.get("side"), entry.get("entry_price"),
+        )
+        return
+
+    pnl = float(close.get("realizedPnl", 0))
+    close_px = float(close.get("closeAvgPx", 0))
+    entry_px = float(close.get("openAvgPx", entry.get("entry_price", 0)))
+    direction = close.get("direction", entry.get("side", "?"))
+    close_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Determine close reason: TP / SL / manual
+    tp = float(entry.get("tp", 0))
+    sl = float(entry.get("sl", 0))
+    if tp and abs(close_px - tp) / tp < 0.002:
+        reason = "TP"
+    elif sl and abs(close_px - sl) / sl < 0.002:
+        reason = "SL"
+    else:
+        reason = "manual"
+
+    pnl_sign = "+" if pnl >= 0 else ""
+    trade_logger.info(
+        "CLOSE | symbol={} side={} entry={} close={} pnl={}{:.4f} reason={} "
+        "open_at={} close_at={}",
+        symbol, direction, entry_px, close_px,
+        pnl_sign, pnl, reason,
+        entry.get("entry_time"), close_time,
     )
 
 
