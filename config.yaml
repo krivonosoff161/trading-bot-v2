@@ -8,3 +8,10 @@ strategy:
   atr_sl_multiplier: 1.5    # SL = ATR * multiplier
   min_sl_percent: 0.006     # SL minimum 0.6% from price (mark price drift protection)
   tp_rr: 1.5                # TP = SL * tp_rr  (R:R 1:1.5)
+  # Strategy C: Range + RSI (hardcoded in signal.py, documented here)
+  # range_period: 20         # candles for High/Low range
+  # rsi_period: 3            # RSI period (Wilder's smoothing)
+  # rsi_oversold: 35         # BUY threshold
+  # rsi_overbought: 65       # SELL threshold
+  # entry_atr_mult: 0.5      # entry zone = boundary ± ATR * 0.5
+  # adx_threshold: 25        # ADX < 25 → ranging (good)

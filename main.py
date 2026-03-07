@@ -62,8 +62,8 @@ async def _tick(config: Config, client: OKXClient) -> None:
 
     if not signal["side"]:
         logger.info(
-            "No trade | symbol={} reason={} adx={:.1f}",
-            config.symbol, signal["reason"], signal["adx"],
+            "No trade | symbol={} reason={} adx={:.1f} rsi={:.1f}",
+            config.symbol, signal["reason"], signal["adx"], signal["rsi"],
         )
         return
 
@@ -81,9 +81,12 @@ async def _tick(config: Config, client: OKXClient) -> None:
         tp_price = str(round(price - tp_dist, 2))
 
     logger.info(
-        "Signal | symbol={} side={} reason={} adx={:.1f} atr={:.2f} price={} sl={} tp={}",
+        "Signal | symbol={} side={} reason={} rsi={:.1f} adx={:.1f} "
+        "range=[{:.0f}-{:.0f}] mpr={:.0f} atr={:.2f} price={} sl={} tp={}",
         config.symbol, signal["side"], signal["reason"],
-        signal["adx"], atr, price, sl_price, tp_price,
+        signal["rsi"], signal["adx"],
+        signal["range_low"], signal["range_high"], signal["mpr"],
+        atr, price, sl_price, tp_price,
     )
 
     await client.place_market_order(
