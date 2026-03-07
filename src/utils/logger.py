@@ -1,19 +1,26 @@
 """
 Logging setup for trading bot.
 
-Three log files:
-  bot.log    — DEBUG+ everything (full debug trail)
-  trades.log — trade events only: OPEN / CLOSE with PnL
-  errors.log — WARNING+ errors and exceptions
+Log files:
+  bot.log      — DEBUG+ everything (full debug trail)
+  trades.log   — trade events only: OPEN / CLOSE with PnL
+  errors.log   — WARNING+ errors and exceptions
+  signals.jsonl — structured JSONL: every tick decision with full indicator state
 """
 
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 
+_signal_log_path: str = "logs/signals.jsonl"
+
 
 def setup_logger(log_dir: str = "logs") -> None:
+    global _signal_log_path
+    _signal_log_path = f"{log_dir}/signals.jsonl"
     Path(log_dir).mkdir(exist_ok=True)
 
     logger.remove()
@@ -73,3 +80,13 @@ def setup_logger(log_dir: str = "logs") -> None:
 
 # Shortcut for trade events — writes to both bot.log and trades.log
 trade_logger = logger.bind(trade=True)
+
+
+def write_signal(data: dict) -> None:
+    """Append one JSON line to signals.jsonl. Adds timestamp if not present."""
+    data.setdefault("ts", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    try:
+        with open(_signal_log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("write_signal failed | {}", e)

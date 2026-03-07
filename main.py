@@ -10,7 +10,7 @@ from loguru import logger
 from src.config import Config, SymbolConfig
 from src.exchange.okx_client import OKXClient
 from src.strategy.signal import get_signal
-from src.utils.logger import setup_logger, trade_logger
+from src.utils.logger import setup_logger, trade_logger, write_signal
 
 # Per-symbol position state: symbol -> {side, entry_price, entry_time, sl, tp}
 _open_positions: dict = {}
@@ -79,6 +79,19 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             signal["adx"], signal["plus_di"], signal["minus_di"],
             signal["rsi"], signal["ema_fast"] - signal["ema_slow"],
         )
+        write_signal({
+            "event": "no_trade",
+            "symbol": sym.symbol,
+            "reason": signal["reason"],
+            "adx": round(signal["adx"], 2),
+            "plus_di": round(signal["plus_di"], 2),
+            "minus_di": round(signal["minus_di"], 2),
+            "rsi": round(signal["rsi"], 2),
+            "ema_fast": round(signal["ema_fast"], 4),
+            "ema_slow": round(signal["ema_slow"], 4),
+            "ema_gap": round(signal["ema_fast"] - signal["ema_slow"], 4),
+            "atr": round(signal["atr"], 4),
+        })
         return
 
     # Calculate TP / SL from ATR (1m)
@@ -108,7 +121,9 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
     )
 
     if result:
-        entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(timezone.utc)
+        entry_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        trade_id = f"{sym.symbol}_{now.strftime('%Y%m%dT%H%M%S')}"
         _open_positions[sym.symbol] = {
             "side": signal["side"],
             "entry_price": price,
@@ -116,6 +131,7 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             "sl": sl_price,
             "tp": tp_price,
             "atr": round(atr, 4),
+            "trade_id": trade_id,
         }
         trade_logger.info(
             "OPEN  | symbol={} side={} entry={} sl={} tp={} atr={:.4f} "
@@ -123,6 +139,23 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             sym.symbol, signal["side"], price, sl_price, tp_price, atr,
             signal["adx"], signal["rsi"],
         )
+        write_signal({
+            "event": "open",
+            "trade_id": trade_id,
+            "symbol": sym.symbol,
+            "side": signal["side"],
+            "price": price,
+            "sl": float(sl_price),
+            "tp": float(tp_price),
+            "atr": round(atr, 4),
+            "ema_fast": round(signal["ema_fast"], 4),
+            "ema_slow": round(signal["ema_slow"], 4),
+            "ema_gap": round(signal["ema_fast"] - signal["ema_slow"], 4),
+            "adx": round(signal["adx"], 2),
+            "plus_di": round(signal["plus_di"], 2),
+            "minus_di": round(signal["minus_di"], 2),
+            "rsi": round(signal["rsi"], 2),
+        })
 
 
 async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
@@ -158,6 +191,15 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
         pnl_sign, pnl, reason,
         entry.get("entry_time"), close_time,
     )
+    write_signal({
+        "event": "close",
+        "trade_id": entry.get("trade_id"),
+        "symbol": symbol,
+        "pnl": round(pnl, 4),
+        "reason": reason,
+        "entry_price": entry_px,
+        "close_price": close_px,
+    })
 
 
 def main() -> None:

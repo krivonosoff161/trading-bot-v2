@@ -36,6 +36,7 @@ dir /b "!dest!\*.log" 2>nul
 
 REM Delete original logs after successful copy
 del /Q /F "logs\*.log" 2>nul
+del /Q /F "logs\*.jsonl" 2>nul
 echo.
 echo [OK] Original logs cleared.
 
