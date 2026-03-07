@@ -26,11 +26,18 @@ mkdir "!dest!" 2>nul
 xcopy /E /Q "logs\*" "!dest!\" >nul
 if errorlevel 1 (
     echo [ERROR] Could not copy logs.
-) else (
-    echo [OK] Logs saved to: !dest!\
-    echo.
-    dir /b "!dest!\*.log" 2>nul
+    pause
+    exit /b 1
 )
+
+echo [OK] Logs saved to: !dest!\
+echo.
+dir /b "!dest!\*.log" 2>nul
+
+REM Delete original logs after successful copy
+del /Q /F "logs\*.log" 2>nul
+echo.
+echo [OK] Original logs cleared.
 
 echo.
 pause
