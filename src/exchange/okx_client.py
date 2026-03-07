@@ -153,7 +153,6 @@ class OKXClient:
             "instId": inst_id,
             "tdMode": "cross",
             "side": side,
-            "posSide": pos_side,
             "ordType": "market",
             "sz": size,
             "attachAlgoOrds": [
@@ -184,7 +183,6 @@ class OKXClient:
         body = {
             "instId": inst_id,
             "mgnMode": "cross",
-            "posSide": pos_side,
         }
         logger.info("Closing position | symbol={} pos_side={}", symbol, pos_side)
         data = await self._post("/api/v5/trade/close-position", body)
