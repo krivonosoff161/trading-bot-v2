@@ -6,19 +6,21 @@ import asyncio
 
 from loguru import logger
 
-from src.config import Config
+from src.config import Config, SymbolConfig
 from src.exchange.okx_client import OKXClient
-from src.strategy.signal import get_reversal_signal, get_signal
+from src.strategy.signal import get_signal
 from src.utils.logger import setup_logger
 
 
 async def run_bot(config: Config, client: OKXClient) -> None:
+    symbol_ids = [s.symbol for s in config.symbols]
     logger.info(
-        "Bot started | symbol={} leverage={}x demo={} poll={}s",
-        config.symbol, config.leverage, config.is_demo, config.poll_interval,
+        "Bot started | symbols={} leverage={}x demo={} poll={}s",
+        symbol_ids, config.leverage, config.is_demo, config.poll_interval,
     )
 
-    await client.set_leverage(config.symbol, config.leverage)
+    for sym in config.symbols:
+        await client.set_leverage(sym.symbol, config.leverage)
 
     while True:
         try:
@@ -29,54 +31,53 @@ async def run_bot(config: Config, client: OKXClient) -> None:
 
 
 async def _tick(config: Config, client: OKXClient) -> None:
-    # Load both timeframes
-    candles_5m, candles_15m = await asyncio.gather(
-        client.get_candles(config.symbol, bar="5m", limit=100),
-        client.get_candles(config.symbol, bar="15m", limit=100),
+    for sym in config.symbols:
+        try:
+            await _tick_symbol(config, client, sym)
+        except Exception as e:
+            logger.error("Symbol tick error | symbol={} {}", sym.symbol, e)
+
+
+async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> None:
+    candles_1m, candles_5m = await asyncio.gather(
+        client.get_candles(sym.symbol, bar="1m", limit=100),
+        client.get_candles(sym.symbol, bar="5m", limit=100),
     )
 
-    if not candles_5m or not candles_15m:
-        logger.warning("No candles received | symbol={}", config.symbol)
+    if not candles_1m or not candles_5m:
+        logger.warning("No candles received | symbol={}", sym.symbol)
         return
 
     # Check open position first
-    positions = await client.get_positions(config.symbol)
+    positions = await client.get_positions(sym.symbol)
     open_pos = next((p for p in positions if float(p.get("pos", 0)) != 0), None)
 
     if open_pos:
+        # Position already open — OCO handles TP/SL, nothing to do
         pos_size = float(open_pos.get("pos", 0))
-        position_side = "buy" if pos_size > 0 else "sell"
-
-        reversal = get_reversal_signal(candles_5m, candles_15m, position_side)
-        if reversal:
-            logger.info(
-                "Reversal detected | symbol={} position_side={} reason={}",
-                config.symbol, position_side, reversal,
-            )
-            # Re-check position is still open before closing (ghost position protection)
-            positions_recheck = await client.get_positions(config.symbol)
-            still_open = next((p for p in positions_recheck if float(p.get("pos", 0)) != 0), None)
-            if still_open:
-                await client.close_position(config.symbol, position_side)
-            else:
-                logger.info("Position already closed | symbol={}", config.symbol)
-        return
-
-    # No open position — check entry signal
-    signal = get_signal(candles_5m, candles_15m)
-
-    if not signal["side"]:
-        logger.info(
-            "No trade | symbol={} reason={} adx_15m={:.1f} rsi_5m={:.1f}",
-            config.symbol, signal["reason"], signal["adx"], signal["rsi"],
+        logger.debug(
+            "Position open | symbol={} size={}", sym.symbol, pos_size,
         )
         return
 
-    # Calculate TP / SL from ATR (5m)
-    price = float(candles_5m[0][4])  # latest 5m candle close (candles_5m[0] = newest)
+    # No open position — check entry signal
+    signal = get_signal(candles_1m, candles_5m, sym.as_signal_dict())
+
+    if not signal["side"]:
+        logger.info(
+            "No trade | symbol={} reason={} adx_5m={:.1f} +DI={:.1f} -DI={:.1f} "
+            "rsi_1m={:.1f} ema_gap={:.2f}",
+            sym.symbol, signal["reason"],
+            signal["adx"], signal["plus_di"], signal["minus_di"],
+            signal["rsi"], signal["ema_fast"] - signal["ema_slow"],
+        )
+        return
+
+    # Calculate TP / SL from ATR (1m)
+    price = float(candles_1m[0][4])  # latest 1m candle close (candles_1m[0] = newest)
     atr = signal["atr"]
-    sl_dist = max(atr * config.atr_sl_multiplier, price * config.min_sl_percent)
-    tp_dist = sl_dist * config.tp_rr
+    sl_dist = max(atr * sym.atr_sl_multiplier, price * sym.min_sl_percent)
+    tp_dist = sl_dist * (sym.atr_tp_multiplier / sym.atr_sl_multiplier)  # TP = SL * R:R ratio
 
     if signal["side"] == "buy":
         sl_price = str(round(price - sl_dist, 2))
@@ -86,16 +87,16 @@ async def _tick(config: Config, client: OKXClient) -> None:
         tp_price = str(round(price - tp_dist, 2))
 
     logger.info(
-        "Signal | symbol={} side={} reason={} rsi_5m={:.1f} adx_15m={:.1f} "
-        "range=[{:.0f}-{:.0f}] mpr={:.0f} atr={:.2f} price={} sl={} tp={}",
-        config.symbol, signal["side"], signal["reason"],
+        "Signal | symbol={} side={} reason={} rsi_1m={:.1f} adx_5m={:.1f} "
+        "+DI={:.1f} -DI={:.1f} atr={:.4f} price={} sl={} tp={}",
+        sym.symbol, signal["side"], signal["reason"],
         signal["rsi"], signal["adx"],
-        signal["range_low"], signal["range_high"], signal["mpr"],
+        signal["plus_di"], signal["minus_di"],
         atr, price, sl_price, tp_price,
     )
 
     await client.place_market_order(
-        config.symbol, signal["side"], config.order_size, tp_price, sl_price,
+        sym.symbol, signal["side"], sym.order_size, tp_price, sl_price,
     )
 
 
@@ -106,8 +107,8 @@ def main() -> None:
     try:
         config = Config.load()
         logger.info(
-            "Config loaded | symbol={} leverage={}x demo={}",
-            config.symbol, config.leverage, config.is_demo,
+            "Config loaded | symbols={} leverage={}x demo={}",
+            [s.symbol for s in config.symbols], config.leverage, config.is_demo,
         )
     except (ValueError, FileNotFoundError) as e:
         logger.error("Config error: {}", e)
