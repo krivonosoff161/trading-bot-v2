@@ -96,6 +96,16 @@ class OKXClient:
 
     # --- Market Data ---
 
+    async def get_candles(self, symbol: str, bar: str = "5m", limit: int = 100) -> list:
+        """Get OHLCV candles. Returns list of [ts, open, high, low, close, vol, ...]"""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/market/candles", {"instId": inst_id, "bar": bar, "limit": str(limit)})
+        if data.get("code") == "0" and data.get("data"):
+            candles = data["data"]
+            logger.debug("Candles | symbol={} bar={} count={}", symbol, bar, len(candles))
+            return candles
+        return []
+
     async def get_ticker(self, symbol: str) -> Optional[dict]:
         """Get current price for symbol."""
         inst_id = f"{symbol}-SWAP"
