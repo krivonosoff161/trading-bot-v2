@@ -61,7 +61,7 @@ async def _tick(config: Config, client: OKXClient) -> None:
     signal = get_signal(candles)
 
     if not signal["side"]:
-        logger.debug(
+        logger.info(
             "No trade | symbol={} reason={} adx={:.1f}",
             config.symbol, signal["reason"], signal["adx"],
         )
