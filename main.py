@@ -69,6 +69,7 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         closed = await _log_trade_close(client, sym.symbol, entry)
         if closed:
             _open_positions.pop(sym.symbol)
+        return  # wait for next tick before new entry
 
     # No open position — check entry signal
     signal = get_signal(candles_1m, candles_5m, sym.as_signal_dict())
