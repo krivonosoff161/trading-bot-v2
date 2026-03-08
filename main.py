@@ -247,8 +247,11 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
         )
         return False
 
-    # Pick closest match by openAvgPx proximity to our entry_price
-    close = min(candidates, key=lambda r: abs(float(r.get("openAvgPx") or 0) - entry_price))
+    # Pick best match: closest in time first, then by price proximity
+    close = min(candidates, key=lambda r: (
+        abs(int(r.get("uTime") or 0) - entry_ts_ms),
+        abs(float(r.get("openAvgPx") or 0) - entry_price),
+    ))
 
     pnl = float(close.get("realizedPnl", 0))
     close_px = float(close.get("closeAvgPx", 0))
