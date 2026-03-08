@@ -22,12 +22,14 @@ class SymbolConfig:
     atr_tp_multiplier: float
     min_sl_percent: float
     adx_threshold: float
+    rsi_period: int
     rsi_oversold: float
     rsi_overbought: float
 
     def as_signal_dict(self) -> dict:
         return {
             "adx_threshold": self.adx_threshold,
+            "rsi_period": self.rsi_period,
             "rsi_oversold": self.rsi_oversold,
             "rsi_overbought": self.rsi_overbought,
         }
@@ -80,6 +82,7 @@ class Config:
                 atr_tp_multiplier=float(s.get("atr_tp_multiplier", 2.25)),
                 min_sl_percent=float(s.get("min_sl_percent", 0.003)),
                 adx_threshold=adx_threshold,
+                rsi_period=int(s.get("rsi_period", 3)),
                 rsi_oversold=float(s.get("rsi_oversold", 35)),
                 rsi_overbought=float(s.get("rsi_overbought", 65)),
             )
