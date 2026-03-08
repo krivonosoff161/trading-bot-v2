@@ -42,9 +42,11 @@ def get_signal(raw_1m: list, raw_5m: list, sym_config: dict) -> dict:
     if len(raw_1m) < MIN_CANDLES_1M or len(raw_5m) < MIN_CANDLES_5M:
         return {**empty, "reason": "not_enough_candles"}
 
-    # 5m — regime detection
+    # 5m — regime detection + trend direction
     highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
     adx, plus_di, minus_di = calc_adx(highs_5m, lows_5m, closes_5m, period=14)
+    ema8_5m  = calc_ema(closes_5m, EMA_FAST)
+    ema21_5m = calc_ema(closes_5m, EMA_SLOW)
 
     # 1m — entry indicators
     highs_1m, lows_1m, closes_1m = parse_candles(raw_1m)
@@ -66,8 +68,9 @@ def get_signal(raw_1m: list, raw_5m: list, sym_config: dict) -> dict:
     rsi_oversold   = sym_config["rsi_oversold"]
     rsi_overbought = sym_config["rsi_overbought"]
 
-    # BUY: 5m uptrend (+DI > -DI) + EMA uptrend on 1m + RSI pullback below oversold
-    if (plus_di > minus_di + DI_MIN_DIFF
+    # BUY: 5m uptrend (EMA + DI) + EMA uptrend on 1m + RSI pullback below oversold
+    if (ema8_5m[-1] > ema21_5m[-1]
+            and plus_di > minus_di + DI_MIN_DIFF
             and ema8[-1] > ema21[-1]
             and rsi < rsi_oversold):
         logger.debug(
@@ -76,8 +79,9 @@ def get_signal(raw_1m: list, raw_5m: list, sym_config: dict) -> dict:
         )
         return {**base, "side": "buy", "reason": "ema_uptrend_rsi_pullback"}
 
-    # SELL: 5m downtrend (-DI > +DI) + EMA downtrend on 1m + RSI spike above overbought
-    if (minus_di > plus_di + DI_MIN_DIFF
+    # SELL: 5m downtrend (EMA + DI) + EMA downtrend on 1m + RSI spike above overbought
+    if (ema8_5m[-1] < ema21_5m[-1]
+            and minus_di > plus_di + DI_MIN_DIFF
             and ema8[-1] < ema21[-1]
             and rsi > rsi_overbought):
         logger.debug(
