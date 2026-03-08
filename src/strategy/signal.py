@@ -1,13 +1,12 @@
 """
-Signal — Strategy D: EMA(8/21) + RSI(3) scalping with MTF regime.
+Signal — Strategy D: EMA(8/21) + RSI scalping with MTF regime.
 
 Regime filter : ADX(14) + DI on 5m — trending market detection.
 Trend gate    : EMA(8/21) on 15m — directional confirmation.
-Entry signal  : EMA(8/21) uptrend + RSI(3) pullback on 1m.
+Entry signal  : EMA(8/21) uptrend + RSI pullback on 1m.
 Exit          : OCO (TP+SL) placed on exchange. No reversal signal.
 """
 
-import numpy as np
 from loguru import logger
 
 from src.strategy.indicators import calc_adx, calc_atr, calc_ema, calc_rsi, parse_candles
@@ -16,7 +15,6 @@ DI_MIN_DIFF     = 2.0   # min +DI/-DI separation to confirm direction
 ATR_PERIOD      = 14
 EMA_FAST        = 8
 EMA_SLOW        = 21
-RSI_PERIOD      = 3
 MIN_CANDLES_1M  = 50    # enough for EMA(21) + RSI warmup
 MIN_CANDLES_5M  = 35    # enough for ADX(14) warmup
 
@@ -26,9 +24,9 @@ def get_signal(raw_1m: list, raw_5m: list, raw_15m: list, sym_config: dict) -> d
     MTF scalping signal.
     raw_15m → EMA(8/21) directional gate
     raw_5m → ADX + DI (regime filter, direction)
-    raw_1m → EMA(8/21) + RSI(3) (entry)
+    raw_1m → EMA(8/21) + RSI (entry)
 
-    sym_config keys: adx_threshold, rsi_oversold, rsi_overbought
+    sym_config keys: adx_threshold, rsi_period, rsi_oversold, rsi_overbought
 
     Returns: {"side": "buy"/"sell"/None, "reason": str, "atr": float,
               "rsi": float, "adx": float, "plus_di": float, "minus_di": float,
@@ -63,7 +61,7 @@ def get_signal(raw_1m: list, raw_5m: list, raw_15m: list, sym_config: dict) -> d
     # 1m — entry indicators
     highs_1m, lows_1m, closes_1m = parse_candles(raw_1m)
     atr   = calc_atr(highs_1m, lows_1m, closes_1m, period=ATR_PERIOD)
-    rsi   = calc_rsi(closes_1m, period=RSI_PERIOD)
+    rsi   = calc_rsi(closes_1m, period=int(sym_config["rsi_period"]))
     ema8  = calc_ema(closes_1m, EMA_FAST)
     ema21 = calc_ema(closes_1m, EMA_SLOW)
 
