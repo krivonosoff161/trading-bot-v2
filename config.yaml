@@ -19,6 +19,22 @@ trading:
       rsi_oversold: 30
       rsi_overbought: 70
 
+    - id: ETH-USDT
+      order_size: "1"
+      atr_sl_multiplier: 1.5
+      atr_tp_multiplier: 2.25
+      min_sl_percent: 0.003    # ETH is closer to BTC than alts
+      rsi_oversold: 35
+      rsi_overbought: 65
+
+    - id: XRP-USDT
+      order_size: "1"
+      atr_sl_multiplier: 2.5
+      atr_tp_multiplier: 3.75
+      min_sl_percent: 0.006    # XRP is noisier, keep wider minimum stop
+      rsi_oversold: 28
+      rsi_overbought: 72
+
 strategy:
   adx_threshold: 22    # ADX(5m) regime threshold
   # EMA(8/21) crossover on 1m — hardcoded in signal.py
