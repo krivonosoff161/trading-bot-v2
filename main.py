@@ -208,31 +208,55 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
 
 
 async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
-    """Returns True if close was logged, False if record is stale (retry next tick)."""
-    close = await client.get_last_position_close(symbol)
-    if not close:
-        trade_logger.info(
-            "CLOSE | symbol={} side={} entry={} — could not fetch close data",
-            symbol, entry.get("side"), entry.get("entry_price"),
-        )
-        return False
-
-    # Stale record check: OKX uTime must be after our entry time
-    close_utime = int(close.get("uTime", 0)) / 1000
-    if close_utime < entry.get("entry_ts", 0):
+    """Returns True if close was logged, False if no matching record yet (retry next tick)."""
+    records = await client.get_last_position_close(symbol)
+    if not records:
         trade_logger.warning(
-            "CLOSE waiting | symbol={} — stale record, will retry next tick",
+            "CLOSE waiting | symbol={} — no positions-history data",
             symbol,
         )
         return False
 
+    entry_ts_ms = int(float(entry.get("entry_ts", 0)) * 1000)
+    entry_price = float(entry.get("entry_price") or 0)
+    entry_atr = float(entry.get("atr") or 0)
+    expected_direction = "long" if entry.get("side") == "buy" else "short"
+    # Allow 30s clock skew between local time and OKX server time
+    time_skew_ms = 30_000
+    price_tol = max(entry_price * 0.001, entry_atr * 0.5, 0.01)
+
+    candidates = []
+    for rec in records:
+        if rec.get("direction") != expected_direction:
+            continue
+        open_avg_px = float(rec.get("openAvgPx") or 0)
+        close_avg_px = float(rec.get("closeAvgPx") or 0)
+        rec_utime = int(rec.get("uTime") or 0)
+        if open_avg_px <= 0 or close_avg_px <= 0:
+            continue
+        if entry_ts_ms and rec_utime < entry_ts_ms - time_skew_ms:
+            continue
+        if entry_price and abs(open_avg_px - entry_price) > price_tol:
+            continue
+        candidates.append(rec)
+
+    if not candidates:
+        trade_logger.warning(
+            "CLOSE waiting | symbol={} — no matching record yet, will retry next tick",
+            symbol,
+        )
+        return False
+
+    # Pick closest match by openAvgPx proximity to our entry_price
+    close = min(candidates, key=lambda r: abs(float(r.get("openAvgPx") or 0) - entry_price))
+
     pnl = float(close.get("realizedPnl", 0))
     close_px = float(close.get("closeAvgPx", 0))
-    entry_px = float(close.get("openAvgPx", entry.get("entry_price", 0)))
+    entry_px = float(close.get("openAvgPx") or entry_price)
     direction = close.get("direction", entry.get("side", "?"))
     close_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Determine close reason: TP / SL / manual
+    # Determine close reason: TP / SL / reversal / manual
     tp = float(entry.get("tp", 0))
     sl = float(entry.get("sl", 0))
     if tp and abs(close_px - tp) / tp < 0.002:
