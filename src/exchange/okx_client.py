@@ -146,16 +146,16 @@ class OKXClient:
             return data.get("data", [])
         return []
 
-    async def get_last_position_close(self, symbol: str) -> Optional[dict]:
-        """Get last closed position with realizedPnl, closeAvgPx, openAvgPx."""
+    async def get_last_position_close(self, symbol: str, limit: int = 20) -> list:
+        """Get recent closed positions. Returns list (newest first) with realizedPnl, closeAvgPx, openAvgPx, uTime."""
         inst_id = f"{symbol}-SWAP"
         data = await self._get(
             "/api/v5/account/positions-history",
-            {"instId": inst_id, "limit": "1"},
+            {"instId": inst_id, "limit": str(limit)},
         )
         if data.get("code") == "0" and data.get("data"):
-            return data["data"][0]
-        return None
+            return data["data"]
+        return []
 
     # --- Orders ---
 
