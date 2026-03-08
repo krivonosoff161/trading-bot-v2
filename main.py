@@ -65,8 +65,10 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
 
     # Position just closed — fetch PnL and log
     if had_position:
-        entry = _open_positions.pop(sym.symbol)
-        await _log_trade_close(client, sym.symbol, entry)
+        entry = _open_positions[sym.symbol]
+        closed = await _log_trade_close(client, sym.symbol, entry)
+        if closed:
+            _open_positions.pop(sym.symbol)
 
     # No open position — check entry signal
     signal = get_signal(candles_1m, candles_5m, sym.as_signal_dict())
@@ -159,23 +161,24 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         })
 
 
-async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
+async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
+    """Returns True if close was logged, False if record is stale (retry next tick)."""
     close = await client.get_last_position_close(symbol)
     if not close:
         trade_logger.info(
             "CLOSE | symbol={} side={} entry={} — could not fetch close data",
             symbol, entry.get("side"), entry.get("entry_price"),
         )
-        return
+        return False
 
     # Stale record check: OKX uTime must be after our entry time
     close_utime = int(close.get("uTime", 0)) / 1000
     if close_utime < entry.get("entry_ts", 0):
         trade_logger.warning(
-            "CLOSE skipped | symbol={} — stale record (uTime={} < entry_ts={})",
-            symbol, close_utime, entry.get("entry_ts"),
+            "CLOSE waiting | symbol={} — stale record, will retry next tick",
+            symbol,
         )
-        return
+        return False
 
     pnl = float(close.get("realizedPnl", 0))
     close_px = float(close.get("closeAvgPx", 0))
@@ -210,6 +213,7 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
         "entry_price": entry_px,
         "close_price": close_px,
     })
+    return True
 
 
 def main() -> None:
