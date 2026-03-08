@@ -128,6 +128,7 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             "side": signal["side"],
             "entry_price": price,
             "entry_time": entry_time,
+            "entry_ts": now.timestamp(),
             "sl": sl_price,
             "tp": tp_price,
             "atr": round(atr, 4),
@@ -164,6 +165,15 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> None:
         trade_logger.info(
             "CLOSE | symbol={} side={} entry={} — could not fetch close data",
             symbol, entry.get("side"), entry.get("entry_price"),
+        )
+        return
+
+    # Stale record check: OKX uTime must be after our entry time
+    close_utime = int(close.get("uTime", 0)) / 1000
+    if close_utime < entry.get("entry_ts", 0):
+        trade_logger.warning(
+            "CLOSE skipped | symbol={} — stale record (uTime={} < entry_ts={})",
+            symbol, close_utime, entry.get("entry_ts"),
         )
         return
 
