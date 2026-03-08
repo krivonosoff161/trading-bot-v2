@@ -9,7 +9,8 @@ from loguru import logger
 
 from src.config import Config, SymbolConfig
 from src.exchange.okx_client import OKXClient
-from src.strategy.signal import get_signal
+from src.strategy.indicators import calc_ema, parse_candles
+from src.strategy.signal import EMA_FAST, EMA_SLOW, get_signal
 from src.utils.logger import setup_logger, trade_logger, write_signal
 
 # Per-symbol position state: symbol -> {side, entry_price, entry_time, sl, tp}
@@ -59,8 +60,51 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
     had_position = sym.symbol in _open_positions
 
     if open_pos:
-        _open_positions.setdefault(sym.symbol, {})
+        entry = _open_positions.setdefault(sym.symbol, {})
         pos_size = float(open_pos.get("pos", 0))
+        if entry.get("pending_close_reason") == "reversal":
+            logger.debug("Position close pending | symbol={} reason=reversal size={}", sym.symbol, pos_size)
+            return
+
+        if entry.get("side") in {"buy", "sell"}:
+            _, _, closes_5m = parse_candles(candles_5m)
+            ema8_5m = calc_ema(closes_5m, EMA_FAST)
+            ema21_5m = calc_ema(closes_5m, EMA_SLOW)
+
+            mark_price = float(open_pos.get("markPx") or 0)
+            upl = float(open_pos.get("upl") or 0)
+            upl_ratio = float(open_pos.get("uplRatio") or 0)
+            entry_price = float(entry.get("entry_price") or 0)
+            entry_atr = float(entry.get("atr") or 0)
+            profit_threshold = config.reversal_profit_atr * entry_atr
+            price_move = abs(mark_price - entry_price)
+
+            reversed_against_position = (
+                (entry["side"] == "buy" and ema8_5m[-1] < ema21_5m[-1])
+                or (entry["side"] == "sell" and ema8_5m[-1] > ema21_5m[-1])
+            )
+
+            if (
+                reversed_against_position
+                and upl > 0
+                and mark_price > 0
+                and entry_price > 0
+                and entry_atr > 0
+                and price_move >= profit_threshold
+            ):
+                pos_side = "long" if entry["side"] == "buy" else "short"
+                entry["pending_close_reason"] = "reversal"
+                logger.info(
+                    "Reversal exit | symbol={} side={} upl={:.4f} upl_ratio={:.4f} "
+                    "mark={} entry={} move={:.4f} threshold={:.4f}",
+                    sym.symbol, entry["side"], upl, upl_ratio,
+                    mark_price, entry_price, price_move, profit_threshold,
+                )
+                closed = await client.close_position(sym.symbol, pos_side)
+                if not closed:
+                    entry.pop("pending_close_reason", None)
+                return
+
         logger.debug("Position open | symbol={} size={}", sym.symbol, pos_size)
         return
 
@@ -196,7 +240,7 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
     elif sl and abs(close_px - sl) / sl < 0.002:
         reason = "SL"
     else:
-        reason = "manual"
+        reason = entry.get("pending_close_reason", "manual")
 
     pnl_sign = "+" if pnl >= 0 else ""
     trade_logger.info(

@@ -44,6 +44,7 @@ class Config:
     # Trading
     leverage: int
     poll_interval: int
+    reversal_profit_atr: float
     symbols: List[SymbolConfig]
 
     @classmethod
@@ -65,8 +66,11 @@ class Config:
 
         if "adx_threshold" not in strategy:
             raise ValueError("Missing strategy.adx_threshold in config.yaml")
+        if "reversal_profit_atr" not in strategy:
+            raise ValueError("Missing strategy.reversal_profit_atr in config.yaml")
 
         adx_threshold = float(strategy["adx_threshold"])
+        reversal_profit_atr = float(strategy["reversal_profit_atr"])
 
         symbols = [
             SymbolConfig(
@@ -92,5 +96,6 @@ class Config:
             is_demo=is_demo,
             leverage=int(trading.get("leverage", 5)),
             poll_interval=int(trading.get("poll_interval", 10)),
+            reversal_profit_atr=reversal_profit_atr,
             symbols=symbols,
         )

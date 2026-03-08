@@ -37,5 +37,6 @@ trading:
 
 strategy:
   adx_threshold: 22    # ADX(5m) regime threshold
+  reversal_profit_atr: 0.5   # close reversal only after >= 0.5 ATR in profit
   # EMA(8/21) crossover on 1m — hardcoded in signal.py
   # RSI(3) pullback filter — hardcoded in signal.py
