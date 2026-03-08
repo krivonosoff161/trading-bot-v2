@@ -43,12 +43,13 @@ async def _tick(config: Config, client: OKXClient) -> None:
 
 
 async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> None:
-    candles_1m, candles_5m = await asyncio.gather(
+    candles_1m, candles_5m, candles_15m = await asyncio.gather(
         client.get_candles(sym.symbol, bar="1m", limit=100),
         client.get_candles(sym.symbol, bar="5m", limit=100),
+        client.get_candles(sym.symbol, bar="15m", limit=100),
     )
 
-    if not candles_1m or not candles_5m:
+    if not candles_1m or not candles_5m or not candles_15m:
         logger.warning("No candles received | symbol={}", sym.symbol)
         return
 
@@ -72,7 +73,7 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
         return  # wait for next tick before new entry
 
     # No open position — check entry signal
-    signal = get_signal(candles_1m, candles_5m, sym.as_signal_dict())
+    signal = get_signal(candles_1m, candles_5m, candles_15m, sym.as_signal_dict())
 
     if not signal["side"]:
         logger.info(
