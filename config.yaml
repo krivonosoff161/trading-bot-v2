@@ -8,6 +8,7 @@ trading:
       atr_sl_multiplier: 1.5   # SL = ATR(1m) * multiplier
       atr_tp_multiplier: 2.25  # TP = ATR(1m) * multiplier (R:R 1:1.5)
       min_sl_percent: 0.003    # SL minimum 0.3% (mark price drift protection)
+      rsi_period: 3
       rsi_oversold: 35
       rsi_overbought: 65
 
@@ -16,6 +17,7 @@ trading:
       atr_sl_multiplier: 2.5
       atr_tp_multiplier: 3.75
       min_sl_percent: 0.005    # SOL is more volatile, wider buffer
+      rsi_period: 5
       rsi_oversold: 30
       rsi_overbought: 70
 
@@ -24,6 +26,7 @@ trading:
       atr_sl_multiplier: 1.5
       atr_tp_multiplier: 2.25
       min_sl_percent: 0.003    # ETH is closer to BTC than alts
+      rsi_period: 3
       rsi_oversold: 35
       rsi_overbought: 65
 
@@ -32,11 +35,12 @@ trading:
       atr_sl_multiplier: 2.5
       atr_tp_multiplier: 3.75
       min_sl_percent: 0.006    # XRP is noisier, keep wider minimum stop
+      rsi_period: 7
       rsi_oversold: 28
       rsi_overbought: 72
 
 strategy:
   adx_threshold: 22    # ADX(5m) regime threshold
   reversal_profit_atr: 0.5   # close reversal only after >= 0.5 ATR in profit
-  # EMA(8/21) crossover on 1m — hardcoded in signal.py
-  # RSI(3) pullback filter — hardcoded in signal.py
+  # EMA(8/21) crossover on 1m — configurable in signal.py constants
+  # RSI period per symbol — configurable via rsi_period above
