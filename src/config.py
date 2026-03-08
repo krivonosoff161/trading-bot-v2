@@ -82,7 +82,7 @@ class Config:
                 atr_tp_multiplier=float(s.get("atr_tp_multiplier", 2.25)),
                 min_sl_percent=float(s.get("min_sl_percent", 0.003)),
                 adx_threshold=adx_threshold,
-                rsi_period=int(s.get("rsi_period", 3)),
+                rsi_period=int(s["rsi_period"]),
                 rsi_oversold=float(s.get("rsi_oversold", 35)),
                 rsi_overbought=float(s.get("rsi_overbought", 65)),
             )
