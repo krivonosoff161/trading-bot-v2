@@ -21,11 +21,13 @@ class SymbolConfig:
     atr_sl_multiplier: float
     atr_tp_multiplier: float
     min_sl_percent: float
+    adx_threshold: float
     rsi_oversold: float
     rsi_overbought: float
 
     def as_signal_dict(self) -> dict:
         return {
+            "adx_threshold": self.adx_threshold,
             "rsi_oversold": self.rsi_oversold,
             "rsi_overbought": self.rsi_overbought,
         }
@@ -59,6 +61,12 @@ class Config:
             cfg = yaml.safe_load(f)
 
         trading = cfg.get("trading", {})
+        strategy = cfg.get("strategy", {})
+
+        if "adx_threshold" not in strategy:
+            raise ValueError("Missing strategy.adx_threshold in config.yaml")
+
+        adx_threshold = float(strategy["adx_threshold"])
 
         symbols = [
             SymbolConfig(
@@ -67,6 +75,7 @@ class Config:
                 atr_sl_multiplier=float(s.get("atr_sl_multiplier", 1.5)),
                 atr_tp_multiplier=float(s.get("atr_tp_multiplier", 2.25)),
                 min_sl_percent=float(s.get("min_sl_percent", 0.003)),
+                adx_threshold=adx_threshold,
                 rsi_oversold=float(s.get("rsi_oversold", 35)),
                 rsi_overbought=float(s.get("rsi_overbought", 65)),
             )

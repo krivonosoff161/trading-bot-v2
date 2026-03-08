@@ -20,6 +20,6 @@ trading:
       rsi_overbought: 70
 
 strategy:
-  adx_threshold: 22    # ADX(5m) > 22 → trending (good for entry)
+  adx_threshold: 22    # ADX(5m) regime threshold
   # EMA(8/21) crossover on 1m — hardcoded in signal.py
   # RSI(3) pullback filter — hardcoded in signal.py

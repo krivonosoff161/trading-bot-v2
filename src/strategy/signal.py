@@ -12,7 +12,6 @@ from loguru import logger
 
 from src.strategy.indicators import calc_adx, calc_atr, calc_ema, calc_rsi, parse_candles
 
-ADX_THRESHOLD   = 22    # ADX(5m) > this → trending market
 DI_MIN_DIFF     = 2.0   # min +DI/-DI separation to confirm direction
 ATR_PERIOD      = 14
 EMA_FAST        = 8
@@ -29,7 +28,7 @@ def get_signal(raw_1m: list, raw_5m: list, raw_15m: list, sym_config: dict) -> d
     raw_5m → ADX + DI (regime filter, direction)
     raw_1m → EMA(8/21) + RSI(3) (entry)
 
-    sym_config keys: rsi_oversold, rsi_overbought
+    sym_config keys: adx_threshold, rsi_oversold, rsi_overbought
 
     Returns: {"side": "buy"/"sell"/None, "reason": str, "atr": float,
               "rsi": float, "adx": float, "plus_di": float, "minus_di": float,
@@ -74,8 +73,12 @@ def get_signal(raw_1m: list, raw_5m: list, raw_15m: list, sym_config: dict) -> d
         "ema_fast": float(ema8[-1]), "ema_slow": float(ema21[-1]),
     }
 
-    if adx < ADX_THRESHOLD:
-        logger.debug("Signal skipped | reason=choppy adx_5m={:.1f}", adx)
+    adx_threshold = float(sym_config["adx_threshold"])
+    if adx < adx_threshold:
+        logger.debug(
+            "Signal skipped | reason=choppy adx_5m={:.1f} threshold={:.1f}",
+            adx, adx_threshold,
+        )
         return {**base, "reason": "choppy"}
 
     rsi_oversold   = sym_config["rsi_oversold"]
