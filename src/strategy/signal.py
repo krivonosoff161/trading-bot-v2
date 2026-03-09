@@ -1,122 +1,163 @@
 """
-Signal — Strategy D: EMA(8/21) + RSI scalping with MTF regime.
+Signal — Strategy E: Trend Pullback Breakout (1H → 15m → 5m).
 
-Regime filter : ADX(14) + DI on 5m — trending market detection.
-Trend gate    : EMA(8/21) on 15m — directional confirmation.
-Entry signal  : EMA(8/21) uptrend + RSI pullback on 1m.
-Exit          : OCO (TP+SL) placed on exchange. No reversal signal.
+Trend   : 1H EMA(20/50) + DI + ADX — who controls the market
+Setup   : 15m pullback to EMA zone with weak counter-trend volume
+Trigger : 5m breakout candle with strong volume + DI confirm
+Exit    : OCO (TP + SL) on exchange. SL anchored to setup structure.
 """
 
+import numpy as np
 from loguru import logger
 
-from src.strategy.indicators import calc_adx, calc_atr, calc_ema, calc_rsi, parse_candles
+from src.strategy.indicators import (
+    calc_adx, calc_atr, calc_ema, calc_sma, parse_candles, parse_volumes,
+)
 
-DI_MIN_DIFF     = 2.0   # min +DI/-DI separation to confirm direction
-ATR_PERIOD      = 14
-EMA_FAST        = 8
-EMA_SLOW        = 21
-MIN_CANDLES_1M  = 50    # enough for EMA(21) + RSI warmup
-MIN_CANDLES_5M  = 35    # enough for ADX(14) warmup
+MIN_CANDLES_1H  = 80   # EMA(50) + ADX(14) warmup
+MIN_CANDLES_15M = 80
+MIN_CANDLES_5M  = 30
 
 
-def get_signal(raw_1m: list, raw_5m: list, raw_15m: list, sym_config: dict) -> dict:
+def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> dict:
     """
-    MTF scalping signal.
-    raw_15m → EMA(8/21) directional gate
-    raw_5m → ADX + DI (regime filter, direction)
-    raw_1m → EMA(8/21) + RSI (entry)
+    Strategy E: top-down trend pullback breakout.
+    raw_1h  → trend direction (EMA20/50, DI, ADX)
+    raw_15m → pullback setup (price near EMA20, weak counter volume)
+    raw_5m  → entry trigger (breakout candle + volume + DI)
 
-    sym_config keys: adx_threshold, rsi_period, rsi_oversold, rsi_overbought
+    sym_config keys: ema_fast, ema_slow, adx_period, adx_threshold_1h,
+                     pullback_touch_atr, pullback_volume_bars, pullback_volume_factor,
+                     breakout_lookback_5m, trigger_volume_ma_period, trigger_volume_factor,
+                     sl_buffer_atr, sl_min_atr
 
-    Returns: {"side": "buy"/"sell"/None, "reason": str, "atr": float,
-              "rsi": float, "adx": float, "plus_di": float, "minus_di": float,
-              "ema_fast": float, "ema_slow": float}
+    Returns: {side, reason, atr, adx, plus_di, minus_di,
+              ema_fast, ema_slow, setup_sl, vol_ratio}
     """
     empty = {
-        "side": None, "reason": "", "atr": 0.0, "rsi": 50.0,
+        "side": None, "reason": "", "atr": 0.0,
         "adx": 0.0, "plus_di": 0.0, "minus_di": 0.0,
-        "ema_fast": 0.0, "ema_slow": 0.0,
+        "ema_fast": 0.0, "ema_slow": 0.0, "setup_sl": 0.0, "vol_ratio": 0.0,
     }
 
     if (
-        len(raw_1m) < MIN_CANDLES_1M
-        or len(raw_5m) < MIN_CANDLES_5M
-        or len(raw_15m) < EMA_SLOW
+        len(raw_1h)  < MIN_CANDLES_1H
+        or len(raw_15m) < MIN_CANDLES_15M
+        or len(raw_5m)  < MIN_CANDLES_5M
     ):
         return {**empty, "reason": "not_enough_candles"}
 
-    # 15m — higher timeframe directional gate
-    _, _, closes_15m = parse_candles(raw_15m)
-    ema8_15m = calc_ema(closes_15m, EMA_FAST)
-    ema21_15m = calc_ema(closes_15m, EMA_SLOW)
-    trend_up_15m = ema8_15m[-1] > ema21_15m[-1]
-    trend_down_15m = ema8_15m[-1] < ema21_15m[-1]
+    ema_fast   = int(sym_config["ema_fast"])
+    ema_slow   = int(sym_config["ema_slow"])
+    adx_period = int(sym_config["adx_period"])
+    adx_thresh = float(sym_config["adx_threshold_1h"])
+    pb_touch   = float(sym_config["pullback_touch_atr"])
+    pb_bars    = int(sym_config["pullback_volume_bars"])
+    pb_factor  = float(sym_config["pullback_volume_factor"])
+    bk_lookbk  = int(sym_config["breakout_lookback_5m"])
+    vol_period = int(sym_config["trigger_volume_ma_period"])
+    vol_factor = float(sym_config["trigger_volume_factor"])
+    sl_buffer  = float(sym_config["sl_buffer_atr"])
 
-    # 5m — regime detection + trend direction
-    highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
-    adx, plus_di, minus_di = calc_adx(highs_5m, lows_5m, closes_5m, period=14)
-    ema8_5m = calc_ema(closes_5m, EMA_FAST)
-    ema21_5m = calc_ema(closes_5m, EMA_SLOW)
+    # --- 1H: Trend direction ---
+    highs_1h, lows_1h, closes_1h = parse_candles(raw_1h)
+    adx, plus_di, minus_di = calc_adx(highs_1h, lows_1h, closes_1h, period=adx_period)
+    ema20_1h = calc_ema(closes_1h, ema_fast)
+    ema50_1h = calc_ema(closes_1h, ema_slow)
 
-    # 1m — entry indicators
-    highs_1m, lows_1m, closes_1m = parse_candles(raw_1m)
-    atr   = calc_atr(highs_1m, lows_1m, closes_1m, period=ATR_PERIOD)
-    rsi   = calc_rsi(closes_1m, period=int(sym_config["rsi_period"]))
-    ema8  = calc_ema(closes_1m, EMA_FAST)
-    ema21 = calc_ema(closes_1m, EMA_SLOW)
+    bull_trend = ema20_1h[-1] > ema50_1h[-1] and plus_di > minus_di and adx >= adx_thresh
+    bear_trend = ema20_1h[-1] < ema50_1h[-1] and minus_di > plus_di and adx >= adx_thresh
 
     base = {
-        "side": None, "atr": atr, "rsi": rsi, "adx": adx,
-        "plus_di": plus_di, "minus_di": minus_di,
-        "ema_fast": float(ema8[-1]), "ema_slow": float(ema21[-1]),
+        "side": None, "atr": 0.0,
+        "adx": adx, "plus_di": plus_di, "minus_di": minus_di,
+        "ema_fast": float(ema20_1h[-1]), "ema_slow": float(ema50_1h[-1]),
+        "setup_sl": 0.0, "vol_ratio": 0.0,
     }
 
-    adx_threshold = float(sym_config["adx_threshold"])
-    if adx < adx_threshold:
-        logger.debug(
-            "Signal skipped | reason=choppy adx_5m={:.1f} threshold={:.1f}",
-            adx, adx_threshold,
-        )
-        return {**base, "reason": "choppy"}
+    if not bull_trend and not bear_trend:
+        logger.debug("Signal skipped | reason=no_trend_1h adx={:.1f}", adx)
+        return {**base, "reason": "no_trend_1h"}
 
-    rsi_oversold   = sym_config["rsi_oversold"]
-    rsi_overbought = sym_config["rsi_overbought"]
+    # --- 15m: Pullback setup ---
+    highs_15m, lows_15m, closes_15m = parse_candles(raw_15m)
+    vols_15m = parse_volumes(raw_15m)
+    atr_15m = calc_atr(highs_15m, lows_15m, closes_15m, period=adx_period)
+    ema20_15m = calc_ema(closes_15m, ema_fast)
+    ema50_15m = calc_ema(closes_15m, ema_slow)
 
-    buy_setup = (
-        ema8_5m[-1] > ema21_5m[-1]
-        and plus_di > minus_di + DI_MIN_DIFF
-        and ema8[-1] > ema21[-1]
-        and rsi < rsi_oversold
+    if atr_15m <= 0:
+        return {**base, "atr": atr_15m, "reason": "atr_zero"}
+
+    base["atr"] = atr_15m
+    cur_close = closes_15m[-1]
+
+    # Price must be near EMA20 on 15m (pullback zone) and structure intact
+    near_ema = abs(cur_close - ema20_15m[-1]) <= pb_touch * atr_15m
+
+    if bull_trend:
+        structure_ok = cur_close > ema50_15m[-1]
+        # SL anchor = lowest low of recent pullback candles
+        setup_sl_raw = float(np.min(lows_15m[-pb_bars - 1:-1])) - sl_buffer * atr_15m
+    else:
+        structure_ok = cur_close < ema50_15m[-1]
+        # SL anchor = highest high of recent pullback candles
+        setup_sl_raw = float(np.max(highs_15m[-pb_bars - 1:-1])) + sl_buffer * atr_15m
+
+    if not near_ema or not structure_ok:
+        return {**base, "reason": "no_pullback_15m"}
+
+    # Counter-trend volume must be weaker than prior impulse volume
+    recent_vols = vols_15m[-pb_bars - 1:-1]
+    prior_vols  = vols_15m[-pb_bars * 2 - 1:-pb_bars - 1]
+    avg_recent  = float(np.mean(recent_vols)) if len(recent_vols) > 0 else 1.0
+    avg_prior   = float(np.mean(prior_vols))  if len(prior_vols)  > 0 else 1.0
+
+    if avg_prior > 0 and avg_recent > avg_prior * pb_factor:
+        return {**base, "reason": "pullback_volume_strong"}
+
+    # --- 5m: Entry trigger ---
+    highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
+    vols_5m = parse_volumes(raw_5m)
+    _, plus_di_5m, minus_di_5m = calc_adx(highs_5m, lows_5m, closes_5m, period=adx_period)
+
+    # Use last completed candle ([-2]); [-1] may be incomplete
+    trigger_close = closes_5m[-2]
+    trigger_vol   = vols_5m[-2]
+    lookback_highs = highs_5m[-bk_lookbk - 2:-2]
+    lookback_lows  = lows_5m[-bk_lookbk - 2:-2]
+
+    vol_sma   = calc_sma(vols_5m[:-1], vol_period)
+    vol_ratio = trigger_vol / vol_sma if vol_sma > 0 else 0.0
+
+    if bull_trend:
+        breakout   = trigger_close > float(np.max(lookback_highs))
+        di_confirm = plus_di_5m > minus_di_5m
+        side       = "buy"
+    else:
+        breakout   = trigger_close < float(np.min(lookback_lows))
+        di_confirm = minus_di_5m > plus_di_5m
+        side       = "sell"
+
+    if not breakout:
+        return {**base, "reason": "no_breakout_5m", "vol_ratio": round(vol_ratio, 2)}
+
+    if trigger_vol < vol_sma * vol_factor:
+        return {**base, "reason": "breakout_volume_weak", "vol_ratio": round(vol_ratio, 2)}
+
+    if not di_confirm:
+        return {**base, "reason": "di_not_confirmed_5m", "vol_ratio": round(vol_ratio, 2)}
+
+    logger.debug(
+        "Signal | side={} adx_1h={:.1f} +DI={:.1f} -DI={:.1f} "
+        "vol_ratio={:.2f} setup_sl={:.4f} atr_15m={:.4f}",
+        side, adx, plus_di, minus_di, vol_ratio, setup_sl_raw, atr_15m,
     )
-    sell_setup = (
-        ema8_5m[-1] < ema21_5m[-1]
-        and minus_di > plus_di + DI_MIN_DIFF
-        and ema8[-1] < ema21[-1]
-        and rsi > rsi_overbought
-    )
 
-    if buy_setup and not trend_up_15m:
-        logger.debug("Signal skipped | reason=blocked_15m_downtrend")
-        return {**base, "reason": "blocked_15m_downtrend"}
-
-    if sell_setup and not trend_down_15m:
-        logger.debug("Signal skipped | reason=blocked_15m_uptrend")
-        return {**base, "reason": "blocked_15m_uptrend"}
-
-    # BUY: 15m uptrend + 5m uptrend (EMA + DI) + EMA uptrend on 1m + RSI pullback
-    if buy_setup:
-        logger.debug(
-            "Signal | side=buy rsi={:.1f} ema_gap={:.2f} adx={:.1f} +DI={:.1f} -DI={:.1f}",
-            rsi, ema8[-1] - ema21[-1], adx, plus_di, minus_di,
-        )
-        return {**base, "side": "buy", "reason": "ema_uptrend_rsi_pullback"}
-
-    # SELL: 15m downtrend + 5m downtrend (EMA + DI) + EMA downtrend on 1m + RSI spike
-    if sell_setup:
-        logger.debug(
-            "Signal | side=sell rsi={:.1f} ema_gap={:.2f} adx={:.1f} +DI={:.1f} -DI={:.1f}",
-            rsi, ema8[-1] - ema21[-1], adx, plus_di, minus_di,
-        )
-        return {**base, "side": "sell", "reason": "ema_downtrend_rsi_spike"}
-
-    return {**base, "reason": "no_signal"}
+    return {
+        **base,
+        "side": side,
+        "reason": "trend_pullback_breakout",
+        "setup_sl": round(setup_sl_raw, 6),
+        "vol_ratio": round(vol_ratio, 2),
+    }
