@@ -21,7 +21,7 @@ _open_positions: dict = {}
 # Prevents re-entering on the same bar if TP/SL fires within the same 5m candle.
 _last_trigger_ts: dict = {}
 
-# Instrument specs cache: symbol -> {ct_val, lot_sz}
+# Instrument specs cache: symbol -> {ct_val, lot_sz, min_sz} or None if load failed
 _instrument_cache: dict = {}
 
 
@@ -35,16 +35,26 @@ async def run_bot(config: Config, client: OKXClient) -> None:
     for sym in config.symbols:
         await client.set_leverage(sym.symbol, config.leverage)
         info = await client.get_instrument_info(sym.symbol)
-        _instrument_cache[sym.symbol] = {
-            "ct_val": float(info.get("ctVal", 1)),
-            "lot_sz": float(info.get("lotSz", 1)),
-        }
-        logger.info(
-            "Instrument loaded | symbol={} ctVal={} lotSz={}",
-            sym.symbol,
-            _instrument_cache[sym.symbol]["ct_val"],
-            _instrument_cache[sym.symbol]["lot_sz"],
-        )
+        if not info:
+            logger.error(
+                "Instrument spec load FAILED | symbol={} — symbol will be SKIPPED (no trading)",
+                sym.symbol,
+            )
+            _instrument_cache[sym.symbol] = None
+        else:
+            lot_sz = float(info.get("lotSz", 1))
+            _instrument_cache[sym.symbol] = {
+                "ct_val":  float(info.get("ctVal", 1)),
+                "lot_sz":  lot_sz,
+                "min_sz":  float(info.get("minSz", lot_sz)),
+            }
+            logger.info(
+                "Instrument loaded | symbol={} ctVal={} lotSz={} minSz={}",
+                sym.symbol,
+                _instrument_cache[sym.symbol]["ct_val"],
+                _instrument_cache[sym.symbol]["lot_sz"],
+                _instrument_cache[sym.symbol]["min_sz"],
+            )
 
     while True:
         try:
@@ -54,25 +64,36 @@ async def run_bot(config: Config, client: OKXClient) -> None:
         await asyncio.sleep(config.poll_interval)
 
 
-def _calc_sz(symbol: str, target_margin_usdt: float, leverage: int, price: float) -> str:
+def _calc_sz(symbol: str, target_margin_usdt: float, leverage: int, price: float):
     """Convert target margin to OKX contract size.
+    Returns str sz, or None if spec missing or target_margin_usdt is too small.
     notional = margin * leverage; sz = floor(notional / (ctVal * price) / lotSz) * lotSz
     """
-    spec = _instrument_cache.get(symbol, {})
-    ct_val = spec.get("ct_val", 1.0)
-    lot_sz = spec.get("lot_sz", 1.0)
+    spec = _instrument_cache.get(symbol)
+    if spec is None:
+        logger.error("Sizing skipped | symbol={} — no instrument spec", symbol)
+        return None
+
+    ct_val  = spec["ct_val"]
+    lot_sz  = spec["lot_sz"]
+    min_sz  = spec["min_sz"]
+
     target_notional = target_margin_usdt * leverage
     raw_sz = target_notional / (ct_val * price)
     sz = math.floor(raw_sz / lot_sz) * lot_sz
-    sz = max(sz, lot_sz)  # at least 1 lot
+
+    if sz < min_sz:
+        logger.warning(
+            "Sizing skipped | symbol={} sz={} < minSz={} — raise target_margin_usdt (notional={:.2f})",
+            symbol, sz, min_sz, target_notional,
+        )
+        return None
+
     logger.info(
-        "Sizing | symbol={} margin={}usdt lev={}x notional={:.2f} ctVal={} lotSz={} sz={}",
-        symbol, target_margin_usdt, leverage, target_notional, ct_val, lot_sz, sz,
+        "Sizing | symbol={} margin={}usdt lev={}x notional={:.2f} ctVal={} lotSz={} minSz={} sz={}",
+        symbol, target_margin_usdt, leverage, target_notional, ct_val, lot_sz, min_sz, sz,
     )
-    # Return int string if lot_sz >= 1 (contracts are whole numbers), else decimal
-    if lot_sz >= 1:
-        return str(int(sz))
-    return str(sz)
+    return str(int(sz)) if lot_sz >= 1 else str(sz)
 
 
 async def _tick(config: Config, client: OKXClient) -> None:
@@ -169,6 +190,9 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
     )
 
     sz = _calc_sz(sym.symbol, sym.target_margin_usdt, config.leverage, price)
+    if sz is None:
+        return  # already logged — no trade
+
     result = await client.place_market_order(
         sym.symbol, signal["side"], sz, tp_price, sl_price,
     )
