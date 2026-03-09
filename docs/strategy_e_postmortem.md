@@ -1,6 +1,6 @@
 # Strategy E — Postmortem
 
-**Статус:** CLOSED — не дала сделок, закрыта 2026-03-10
+**Статус:** CLOSED — не дала сделок, закрыта 2026-03-09
 **Не реанимировать.** Не тюнить. Не продолжать.
 
 ---
@@ -24,9 +24,9 @@
 | # | Изменение | Результат |
 |---|-----------|-----------|
 | 1 | Базовая реализация | 0 сделок, 53% blocked by no_trend_1h |
-| 2 | ADX 25→20→18, pullback_vol 0.8→1.2, trigger_vol 1.3→1.1 | 0 сделок, blocker сместился в pullback_volume_strong |
+| 2 | ADX 20→18, pullback_vol 0.8→1.2, trigger_vol 1.3→1.1 | 0 сделок, blocker сместился в pullback_volume_strong |
 | 3 | ETH/XRP отключены, фокус BTC+SOL | 0 сделок, blocker: pullback_volume_strong + no_pullback_15m |
-| 4 | pullback_volume_factor 1.2→2.0 | Не запускалось — остановили стратегию |
+| 4 | pullback_volume_factor 1.2→2.0 | Прогон запускался: BTC=pullback_volume_strong, SOL=no_pullback_15m — решение остановить стратегию |
 
 ---
 
