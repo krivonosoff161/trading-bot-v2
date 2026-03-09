@@ -1,21 +1,33 @@
 @echo off
 chcp 65001 > nul
 echo ================================================
-echo   CHART ANALYZER — последний скрин из обучение/
+echo   CHART ANALYZER — последний скрин из обучение проба/
 echo ================================================
 echo.
 
-:: Find latest image in обучение/ folder
-set STUDY_DIR=%~dp0обучение
+:: Input folder — screenshots go here
+set "STUDY_DIR=%~dp0обучение проба"
+
+if not exist "%STUDY_DIR%" (
+    echo Папка не найдена: %STUDY_DIR%
+    echo Создай папку "обучение проба" и положи туда скрин.
+    pause
+    exit /b 1
+)
+
+:: Find latest image that is NOT an annotated output (_annotated in name)
 set LATEST_IMG=
 
 for /f "delims=" %%F in ('dir /b /o-d /a-d "%STUDY_DIR%\*.jpg" "%STUDY_DIR%\*.jpeg" "%STUDY_DIR%\*.png" 2^>nul') do (
-    if not defined LATEST_IMG set LATEST_IMG=%%F
+    if not defined LATEST_IMG (
+        echo %%F | findstr /i "_annotated" > nul
+        if errorlevel 1 set LATEST_IMG=%%F
+    )
 )
 
 if not defined LATEST_IMG (
-    echo Скринов не найдено в папке обучение/
-    echo Положи .jpg или .png файл в папку и запусти снова.
+    echo Скринов не найдено в папке "%STUDY_DIR%"
+    echo Положи .jpg или .png файл (не _annotated) и запусти снова.
     pause
     exit /b 1
 )

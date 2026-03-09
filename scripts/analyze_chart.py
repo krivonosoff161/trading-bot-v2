@@ -159,7 +159,8 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
     if signal.get("side"):
         setup_sl = float(signal.get("setup_sl", 0))
         sl_dist_structure = abs(entry_price - setup_sl)
-        sl_dist_min = max(entry_price * 0.003, 1.2 * atr_15m)
+        sl_min_atr = float(params.get("sl_min_atr", 1.2))
+        sl_dist_min = sl_min_atr * atr_15m
         sl_dist = max(sl_dist_structure, sl_dist_min)
         tp_dist = sl_dist * tp_r
         if signal["side"] == "buy":
