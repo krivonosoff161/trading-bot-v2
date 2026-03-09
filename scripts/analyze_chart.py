@@ -46,6 +46,17 @@ def load_strategy_params() -> dict:
     return cfg.get("strategy", {})
 
 
+def load_symbol_min_sl_percent(symbol: str) -> float:
+    """Read min_sl_percent for the given symbol from config.yaml trading.symbols."""
+    config_path = Path(__file__).parent.parent / "config.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    for s in cfg.get("trading", {}).get("symbols", []):
+        if s.get("id") == symbol:
+            return float(s.get("min_sl_percent", 0.003))
+    return 0.003  # fallback if symbol not in config
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def ts_to_ms(iso: str) -> int:
@@ -79,7 +90,7 @@ def _stopped_stage(reason: str) -> str:
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
 
-def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
+def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003) -> dict:
     ema_fast   = int(params["ema_fast"])
     ema_slow   = int(params["ema_slow"])
     adx_period = int(params["adx_period"])
@@ -159,8 +170,8 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
     if signal.get("side"):
         setup_sl = float(signal.get("setup_sl", 0))
         sl_dist_structure = abs(entry_price - setup_sl)
-        sl_min_atr = float(params.get("sl_min_atr", 1.2))
-        sl_dist_min = sl_min_atr * atr_15m
+        sl_min_atr  = float(params.get("sl_min_atr", 1.2))
+        sl_dist_min = max(entry_price * min_sl_percent, sl_min_atr * atr_15m)
         sl_dist = max(sl_dist_structure, sl_dist_min)
         tp_dist = sl_dist * tp_r
         if signal["side"] == "buy":
@@ -471,8 +482,9 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     passphrase = os.getenv("OKX_PASSPHRASE", "")
     is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1"
 
-    client = OKXClient(api_key, secret_key, passphrase, is_demo)
-    params = load_strategy_params()
+    client          = OKXClient(api_key, secret_key, passphrase, is_demo)
+    params          = load_strategy_params()
+    min_sl_percent  = load_symbol_min_sl_percent(symbol)
 
     captured_ms = ts_to_ms(captured_at_iso)
     after_ts    = captured_ms + 1
@@ -494,7 +506,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
-    result      = analyze(raw_1h, raw_15m, raw_5m, params)
+    result      = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent)
     report_text = format_report(symbol, captured_at_iso, result)
     print(report_text)
 
