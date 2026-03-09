@@ -91,6 +91,19 @@ def calc_adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: in
     return float(adx[-1]), float(plus_di[-1]), float(minus_di[-1])
 
 
+def parse_volumes(raw_candles: list) -> np.ndarray:
+    """Extract volume from OKX candles (index 5). Reverses to chronological order."""
+    candles = list(reversed(raw_candles))
+    return np.array([float(c[5]) for c in candles])
+
+
+def calc_sma(values: np.ndarray, period: int) -> float:
+    """Simple moving average of last `period` values."""
+    if len(values) < period:
+        return float(np.mean(values)) if len(values) > 0 else 0.0
+    return float(np.mean(values[-period:]))
+
+
 def calc_rsi(closes: np.ndarray, period: int = 3) -> float:
     """RSI with Wilder's smoothing."""
     n = len(closes)
