@@ -56,7 +56,8 @@ async def run_bot(config: Config, client: OKXClient) -> None:
                 _instrument_cache[sym.symbol]["min_sz"],
             )
 
-    symbols_str = ", ".join(symbol_ids)
+    active_symbols = [s for s in symbol_ids if _instrument_cache.get(s) is not None]
+    symbols_str = ", ".join(active_symbols)
     await send_message(
         f"<b>Bot started</b> ✓\n"
         f"Symbols: {symbols_str}\n"
