@@ -1,14 +1,17 @@
 """
-Chart Analyzer — pulls historical OKX data for a given moment and shows
-what the bot would see (Bot view) plus a human-readable trader explanation.
+Chart Analyzer — pulls historical OKX data for a given moment and produces:
+  - Console report
+  - analysis_output/<sym>_<ts>_report.md
+  - analysis_output/<sym>_<ts>_snapshot.json
+  - analysis_output/<sym>_<ts>_annotated.png  (if --image is provided)
 
-Usage:
+Usage (manual):
     python scripts/analyze_chart.py --symbol XRP-USDT --captured-at "2026-03-09T11:42:35Z"
 
-Outputs:
-    Console report
-    scripts/analysis_output/<symbol>_<ts>_report.md
-    scripts/analysis_output/<symbol>_<ts>_snapshot.json
+Usage (with screenshot):
+    python scripts/analyze_chart.py --symbol XRP-USDT --captured-at "2026-03-09T11:42:35Z" --image "обучение/xrp.jpg"
+
+Tip: use analyze_latest.bat to find the latest screenshot automatically.
 """
 
 import argparse
@@ -16,6 +19,7 @@ import asyncio
 import json
 import os
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,6 +90,8 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
     bk_lookbk  = int(params["breakout_lookback_5m"])
     vol_period = int(params["trigger_volume_ma_period"])
     vol_factor = float(params["trigger_volume_factor"])
+    sl_buffer  = float(params["sl_buffer_atr"])
+    tp_r       = float(params["tp_r_multiple"])
 
     # ── 1H ──────────────────────────────────────────────────────────────────
     highs_1h, lows_1h, closes_1h = parse_candles(raw_1h)
@@ -147,6 +153,42 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
 
     signal = get_signal(raw_1h, raw_15m, raw_5m, params)
 
+    # ── Action View ──────────────────────────────────────────────────────────
+    # Entry suggestion based on current 5m close
+    entry_price = float(trigger_close)
+    if signal.get("side"):
+        setup_sl = float(signal.get("setup_sl", 0))
+        sl_dist_structure = abs(entry_price - setup_sl)
+        sl_dist_min = max(entry_price * 0.003, 1.2 * atr_15m)
+        sl_dist = max(sl_dist_structure, sl_dist_min)
+        tp_dist = sl_dist * tp_r
+        if signal["side"] == "buy":
+            sl_price = round(entry_price - sl_dist, 4)
+            tp_price = round(entry_price + tp_dist, 4)
+            tp2_price = round(entry_price + tp_dist * 1.5, 4)
+        else:
+            sl_price = round(entry_price + sl_dist, 4)
+            tp_price = round(entry_price - tp_dist, 4)
+            tp2_price = round(entry_price - tp_dist * 1.5, 4)
+        action = {
+            "valid": True,
+            "entry":      entry_price,
+            "sl":         sl_price,
+            "tp1":        tp_price,
+            "tp2":        tp2_price,
+            "sl_dist":    round(sl_dist, 4),
+            "r_multiple": tp_r,
+            "type":       "confirmed",  # breakout closed = confirmed
+        }
+    else:
+        # Near-setup action hints even without signal
+        action = {
+            "valid": False,
+            "entry": None, "sl": None, "tp1": None, "tp2": None,
+            "hint": _action_hint(bear_1h, bull_1h, near_ema, m_close=cur_close,
+                                 ema20=float(ema20_15m[-2]), atr=atr_15m),
+        }
+
     return {
         "1h": {
             "ema20": round(float(ema20_1h[-2]), 6),
@@ -181,7 +223,19 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict) -> dict:
             "minus_di": round(minus_di_5m, 2),
         },
         "signal": signal,
+        "action": action,
     }
+
+
+def _action_hint(bear: bool, bull: bool, near_ema: bool,
+                 m_close: float, ema20: float, atr: float) -> str:
+    if not bear and not bull:
+        return "Нет тренда — не торговать. Ждать ADX ≥ 20."
+    direction = "шорт" if bear else "лонг"
+    if not near_ema:
+        dist = abs(m_close - ema20)
+        return f"Ждать {direction}-сетапа у EMA20(15m) ≈ {ema20:.4f} (сейчас gap={dist:.4f})"
+    return f"Сетап близко для {direction} — ждать пробойной 5m свечи с объёмом"
 
 
 # ── Trader view ───────────────────────────────────────────────────────────────
@@ -206,8 +260,8 @@ def build_trader_view(r: dict) -> list:
     else:
         dist = abs(m["close"] - m["ema20"])
         lines.append(
-            f"• На 15m цена далеко от EMA20 "
-            f"(gap={dist:.4f}, порог={m['pb_touch_threshold']:.4f}) — сетапа нет"
+            f"• На 15m цена далеко от EMA20 (gap={dist:.4f}, "
+            f"порог={m['pb_touch_threshold']:.4f}) — сетапа нет"
         )
 
     if h["bull"] or h["bear"]:
@@ -218,13 +272,9 @@ def build_trader_view(r: dict) -> list:
             lines.append("• Структура 15m сломана — цена на неправильной стороне EMA50")
 
     if m["pb_vol_weak"]:
-        lines.append(
-            f"• Объём пулбэка слабый (ratio={m['vol_ratio_pb']:.2f}) — хороший признак"
-        )
+        lines.append(f"• Объём пулбэка слабый (ratio={m['vol_ratio_pb']:.2f}) — хороший признак")
     else:
-        lines.append(
-            f"• Объём пулбэка сильный (ratio={m['vol_ratio_pb']:.2f}) — движение агрессивное"
-        )
+        lines.append(f"• Объём пулбэка сильный (ratio={m['vol_ratio_pb']:.2f}) — движение агрессивное")
 
     if f["breakout"]:
         lines.append("• На 5m есть пробой — триггерная свеча вышла за структуру")
@@ -238,21 +288,38 @@ def build_trader_view(r: dict) -> list:
 
     if sig.get("side"):
         side_str = "LONG" if sig["side"] == "buy" else "SHORT"
-        lines.append(f"• Итог: бот видит сигнал {side_str} — все фильтры пройдены")
+        lines.append(f"• Итог: бот видит сигнал {side_str} — все фильтры пройдены ✓")
     elif reason == "no_trend_1h":
-        lines.append(f"• Итог: нет тренда. Ждать ADX ≥ 20 и расхождения DI на 1H")
+        lines.append("• Итог: нет тренда. Ждать ADX ≥ 20 и расхождения DI на 1H")
     elif reason == "no_pullback_15m":
-        lines.append(
-            f"• Итог: нет сетапа. Ждать возврата цены к EMA20(15m) ≈ {m['ema20']:.4f}"
-        )
+        lines.append(f"• Итог: нет сетапа. Ждать цены к EMA20(15m) ≈ {m['ema20']:.4f}")
     elif reason == "pullback_volume_strong":
         lines.append("• Итог: пулбэк слишком агрессивный. Ждать ослабления объёма")
     elif reason == "no_breakout_5m":
         lines.append("• Итог: сетап есть — ждать пробойной свечи на 5m")
     elif reason == "breakout_volume_weak":
-        lines.append("• Итог: пробой есть, но объём слабый — не входить")
+        lines.append("• Итог: пробой есть, объём слабый — не входить")
     elif reason == "di_not_confirmed_5m":
-        lines.append("• Итог: пробой и объём есть, но DI против направления — не входить")
+        lines.append("• Итог: пробой и объём есть, DI против — не входить")
+
+    return lines
+
+
+def build_action_view(r: dict) -> list:
+    lines = []
+    act = r["action"]
+    sig = r["signal"]
+
+    if act["valid"]:
+        side_str = "LONG" if sig["side"] == "buy" else "SHORT"
+        lines.append(f"  Направление:  {side_str}  ({act['type']})")
+        lines.append(f"  Entry:        {act['entry']}")
+        lines.append(f"  SL:           {act['sl']}  (dist={act['sl_dist']:.4f})")
+        lines.append(f"  TP1:          {act['tp1']}  (R×{act['r_multiple']})")
+        lines.append(f"  TP2:          {act['tp2']}  (R×{act['r_multiple'] * 1.5:.1f})")
+        lines.append(f"  Invalidation: позиция инвалидна если цена пересекла SL")
+    else:
+        lines.append(f"  Сигнала нет. {act.get('hint', '')}")
 
     return lines
 
@@ -268,10 +335,10 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
     stage  = _stopped_stage(reason)
     side   = sig.get("side")
     trader = build_trader_view(r)
+    action = build_action_view(r)
 
     SEP  = "=" * 62
     THIN = "─" * 62
-
     trend_str = "BULLISH" if h["bull"] else "BEARISH" if h["bear"] else "NONE (flat)"
 
     lines = [
@@ -280,16 +347,16 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
         SEP,
         "",
         f"── 1H TREND {THIN[11:]}",
-        f"  EMA20:  {h['ema20']:<10.4f}  EMA50:  {h['ema50']:.4f}",
-        f"  ADX:    {h['adx']:<10.1f}  +DI: {h['plus_di']:.1f}   -DI: {h['minus_di']:.1f}",
+        f"  EMA20:  {h['ema20']:<12.4f} EMA50:  {h['ema50']:.4f}",
+        f"  ADX:    {h['adx']:<12.1f} +DI: {h['plus_di']:.1f}   -DI: {h['minus_di']:.1f}",
         f"  Trend:  {trend_str}",
         "",
         f"── 15m SETUP {THIN[12:]}",
-        f"  Close:  {m['close']:<10.4f}  EMA20: {m['ema20']:.4f}   EMA50: {m['ema50']:.4f}",
+        f"  Close:  {m['close']:<12.4f} EMA20: {m['ema20']:.4f}   EMA50: {m['ema50']:.4f}",
         f"  ATR:    {m['atr']:.4f}",
-        f"  Near EMA20:  |{m['close']:.4f} - {m['ema20']:.4f}| = {abs(m['close'] - m['ema20']):.4f}  "
+        f"  Near EMA20:   gap={abs(m['close'] - m['ema20']):.4f}  "
         f"threshold={m['pb_touch_threshold']:.4f}  {ok(m['near_ema'])}",
-        f"  Structure:   {ok(m['structure_ok'])}",
+        f"  Structure:    {ok(m['structure_ok'])}",
         f"  Pullback vol: recent={m['vol_recent']:.0f}  prior={m['vol_prior']:.0f}  "
         f"ratio={m['vol_ratio_pb']:.2f}  weak={ok(m['pb_vol_weak'])}",
         "",
@@ -301,21 +368,103 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
         f"  DI confirm:    +DI={f['plus_di']:.1f}  -DI={f['minus_di']:.1f}  {ok(f['di_confirm'])}",
         "",
         f"── BOT DECISION {THIN[15:]}",
-        f"  Result:          {'TRADE ' + side.upper() if side else 'NO TRADE'}",
-        f"  Reason:          {reason}",
-        f"  Stopped at:      {stage}",
+        f"  Result:       {'TRADE ' + side.upper() if side else 'NO TRADE'}",
+        f"  Reason:       {reason}",
+        f"  Stopped at:   {stage}",
         "",
         f"── TRADER VIEW {THIN[14:]}",
     ]
     for t in trader:
         lines.append(f"  {t}")
+
+    lines += [
+        "",
+        f"── ACTION VIEW {THIN[14:]}",
+    ]
+    lines += action
     lines += ["", SEP]
     return "\n".join(lines)
 
 
+# ── Annotated PNG ─────────────────────────────────────────────────────────────
+
+def generate_annotated_png(image_path: str, report_text: str, out_path: str) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        print("WARNING: Pillow not installed, skipping annotated PNG")
+        return
+
+    img = Image.open(image_path).convert("RGB")
+    iw, ih = img.size
+
+    # Build panel lines (right sidebar, 380px wide)
+    PANEL_W = 400
+    PADDING = 14
+    FONT_SIZE = 14
+
+    try:
+        font = ImageFont.truetype("arial.ttf", FONT_SIZE)
+        font_bold = ImageFont.truetype("arialbd.ttf", FONT_SIZE + 1)
+    except Exception:
+        font = ImageFont.load_default()
+        font_bold = font
+
+    # Wrap long lines to fit panel
+    max_chars = (PANEL_W - PADDING * 2) // 8
+    wrapped = []
+    for line in report_text.split("\n"):
+        if len(line) <= max_chars:
+            wrapped.append(line)
+        else:
+            wrapped.extend(textwrap.wrap(line, width=max_chars) or [""])
+
+    line_h = FONT_SIZE + 4
+    panel_h = max(ih, len(wrapped) * line_h + PADDING * 2)
+
+    # New canvas: original image + right panel
+    canvas = Image.new("RGB", (iw + PANEL_W, panel_h), (15, 15, 20))
+    canvas.paste(img, (0, (panel_h - ih) // 2))
+
+    draw = ImageDraw.Draw(canvas)
+
+    # Panel background with subtle border
+    draw.rectangle([(iw, 0), (iw + PANEL_W, panel_h)], fill=(18, 20, 28))
+    draw.line([(iw, 0), (iw, panel_h)], fill=(60, 80, 120), width=2)
+
+    # Color map for lines
+    def line_color(text: str) -> tuple:
+        if text.startswith("=") or text.startswith("  CHART"):
+            return (100, 160, 255)
+        if text.startswith("──"):
+            return (80, 130, 200)
+        if "✓" in text:
+            return (80, 220, 120)
+        if "✗" in text or "NO TRADE" in text or "нет" in text.lower():
+            return (220, 80, 80)
+        if "TRADE" in text and "NO" not in text:
+            return (80, 220, 120)
+        if text.strip().startswith("•"):
+            return (200, 200, 220)
+        if text.strip().startswith("Entry") or text.strip().startswith("SL") or text.strip().startswith("TP"):
+            return (255, 200, 80)
+        return (180, 185, 200)
+
+    y = PADDING
+    for line in wrapped:
+        color = line_color(line)
+        draw.text((iw + PADDING, y), line, font=font, fill=color)
+        y += line_h
+        if y > panel_h - PADDING:
+            break
+
+    canvas.save(out_path, quality=92)
+    print(f"Saved: {out_path}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
+async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None) -> None:
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
@@ -325,7 +474,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
     params = load_strategy_params()
 
     captured_ms = ts_to_ms(captured_at_iso)
-    after_ts    = captured_ms + 1  # include candle at exactly captured_at
+    after_ts    = captured_ms + 1
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
     raw_1h, raw_15m, raw_5m = await asyncio.gather(
@@ -336,10 +485,9 @@ async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
     await client.close()
 
     if not raw_1h or not raw_15m or not raw_5m:
-        print("ERROR: No candle data returned. Check symbol name and captured-at timestamp.")
+        print("ERROR: No candle data returned. Check symbol and captured-at timestamp.")
         return
 
-    # Confirm status — warn if any bar was still forming at captured_at
     c1h  = confirm_label(raw_1h)
     c15m = confirm_label(raw_15m)
     c5m  = confirm_label(raw_5m)
@@ -356,6 +504,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
 
     report_path = out_dir / f"{symbol}_{slug}_report.md"
     snap_path   = out_dir / f"{symbol}_{slug}_snapshot.json"
+    png_path    = out_dir / f"{symbol}_{slug}_annotated.png"
 
     report_path.write_text(f"```\n{report_text}\n```\n", encoding="utf-8")
 
@@ -370,6 +519,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
             "reason":           result["signal"].get("reason"),
             "stopped_at_stage": _stopped_stage(result["signal"].get("reason", "")),
         },
+        "action":       result["action"],
         "trader_notes": [],
     }
     snap_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -377,18 +527,24 @@ async def run(symbol: str, captured_at_iso: str, limit: int) -> None:
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
 
+    if image_path and Path(image_path).exists():
+        generate_annotated_png(image_path, report_text, str(png_path))
+    elif image_path:
+        print(f"WARNING: Image not found: {image_path}")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Chart Analyzer — bot + trader view for a historical market snapshot"
+        description="Chart Analyzer — bot + trader + action view for a historical snapshot"
     )
-    parser.add_argument("--symbol",      required=True, help="e.g. XRP-USDT")
-    parser.add_argument("--captured-at", required=True, dest="captured_at",
+    parser.add_argument("--symbol",      required=True,  help="e.g. XRP-USDT")
+    parser.add_argument("--captured-at", required=True,  dest="captured_at",
                         help="ISO UTC timestamp e.g. 2026-03-09T11:42:35Z")
+    parser.add_argument("--image",       default=None,   help="Path to screenshot (optional)")
     parser.add_argument("--limit",       type=int, default=100,
                         help="Candles to fetch per timeframe (default 100)")
     args = parser.parse_args()
-    asyncio.run(run(args.symbol, args.captured_at, args.limit))
+    asyncio.run(run(args.symbol, args.captured_at, args.limit, args.image))
 
 
 if __name__ == "__main__":
