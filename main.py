@@ -16,6 +16,10 @@ from src.utils.telegram import send_message
 # Per-symbol position state: symbol -> {side, entry_price, entry_time, sl, tp, ...}
 _open_positions: dict = {}
 
+# Timestamp of the last 5m trigger bar used for entry, per symbol.
+# Prevents re-entering on the same bar if TP/SL fires within the same 5m candle.
+_last_trigger_ts: dict = {}
+
 
 async def run_bot(config: Config, client: OKXClient) -> None:
     symbol_ids = [s.symbol for s in config.symbols]
@@ -72,6 +76,13 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             _open_positions.pop(sym.symbol)
         return  # wait for next tick before new entry
 
+    # Guard: skip if the last closed 5m bar is the same one we already entered on.
+    # candles_5m[1] = last closed bar (OKX returns newest-first, [0] is forming).
+    trigger_ts = candles_5m[1][0]
+    if _last_trigger_ts.get(sym.symbol) == trigger_ts:
+        logger.debug("Skip re-entry | symbol={} same trigger bar {}", sym.symbol, trigger_ts)
+        return
+
     # No open position — check entry signal
     signal = get_signal(candles_1h, candles_15m, candles_5m, config.as_strategy_dict())
 
@@ -126,6 +137,7 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
     )
 
     if result:
+        _last_trigger_ts[sym.symbol] = trigger_ts  # block re-entry on same bar
         now        = datetime.now(timezone.utc)
         entry_time = now.strftime("%Y-%m-%d %H:%M:%S")
         trade_id   = f"{sym.symbol}_{now.strftime('%Y%m%dT%H%M%S')}"
@@ -145,12 +157,12 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             sym.symbol, signal["side"], price, sl_price, tp_price, atr,
             signal["adx"], signal["vol_ratio"],
         )
-        await send_message(
+        asyncio.create_task(send_message(
             f"<b>OPEN</b> {sym.symbol}\n"
             f"Side: {signal['side'].upper()}  Entry: {price}\n"
             f"SL: {sl_price}  TP: {tp_price}\n"
             f"ADX: {signal['adx']:.1f}  Vol×: {signal['vol_ratio']:.2f}"
-        )
+        ))
         write_signal({
             "event":     "open",
             "trade_id":  trade_id,
@@ -238,11 +250,11 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
         pnl_sign, pnl, reason,
         entry.get("entry_time"), close_time,
     )
-    await send_message(
+    asyncio.create_task(send_message(
         f"<b>CLOSE</b> {symbol} — {reason}\n"
         f"Side: {direction.upper()}  Entry: {entry_px}  Close: {close_px}\n"
         f"PnL: <b>{pnl_sign}{pnl:.4f} USDT</b>"
-    )
+    ))
     write_signal({
         "event":       "close",
         "trade_id":    entry.get("trade_id"),
