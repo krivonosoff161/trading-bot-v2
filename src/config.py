@@ -18,21 +18,7 @@ load_dotenv()
 class SymbolConfig:
     symbol: str
     order_size: str
-    atr_sl_multiplier: float
-    atr_tp_multiplier: float
     min_sl_percent: float
-    adx_threshold: float
-    rsi_period: int
-    rsi_oversold: float
-    rsi_overbought: float
-
-    def as_signal_dict(self) -> dict:
-        return {
-            "adx_threshold": self.adx_threshold,
-            "rsi_period": self.rsi_period,
-            "rsi_oversold": self.rsi_oversold,
-            "rsi_overbought": self.rsi_overbought,
-        }
 
 
 @dataclass
@@ -46,15 +32,46 @@ class Config:
     # Trading
     leverage: int
     poll_interval: int
-    reversal_profit_atr: float
     symbols: List[SymbolConfig]
+
+    # Strategy E parameters (global, not per-symbol)
+    ema_fast: int
+    ema_slow: int
+    adx_period: int
+    adx_threshold_1h: float
+    pullback_touch_atr: float
+    pullback_volume_bars: int
+    pullback_volume_factor: float
+    breakout_lookback_5m: int
+    trigger_volume_ma_period: int
+    trigger_volume_factor: float
+    sl_buffer_atr: float
+    sl_min_atr: float
+    tp_r_multiple: float
+
+    def as_strategy_dict(self) -> dict:
+        """All strategy parameters passed to get_signal()."""
+        return {
+            "ema_fast":               self.ema_fast,
+            "ema_slow":               self.ema_slow,
+            "adx_period":             self.adx_period,
+            "adx_threshold_1h":       self.adx_threshold_1h,
+            "pullback_touch_atr":     self.pullback_touch_atr,
+            "pullback_volume_bars":   self.pullback_volume_bars,
+            "pullback_volume_factor": self.pullback_volume_factor,
+            "breakout_lookback_5m":   self.breakout_lookback_5m,
+            "trigger_volume_ma_period": self.trigger_volume_ma_period,
+            "trigger_volume_factor":  self.trigger_volume_factor,
+            "sl_buffer_atr":          self.sl_buffer_atr,
+            "sl_min_atr":             self.sl_min_atr,
+        }
 
     @classmethod
     def load(cls) -> "Config":
-        api_key = os.getenv("OKX_API_KEY", "")
+        api_key    = os.getenv("OKX_API_KEY", "")
         secret_key = os.getenv("OKX_SECRET_KEY", "")
         passphrase = os.getenv("OKX_PASSPHRASE", "")
-        is_demo = os.getenv("OKX_IS_DEMO", "1") == "1"
+        is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1"
 
         if not all([api_key, secret_key, passphrase]):
             raise ValueError("Missing OKX API credentials in .env")
@@ -63,28 +80,24 @@ class Config:
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
 
-        trading = cfg.get("trading", {})
+        trading  = cfg.get("trading", {})
         strategy = cfg.get("strategy", {})
 
-        if "adx_threshold" not in strategy:
-            raise ValueError("Missing strategy.adx_threshold in config.yaml")
-        if "reversal_profit_atr" not in strategy:
-            raise ValueError("Missing strategy.reversal_profit_atr in config.yaml")
-
-        adx_threshold = float(strategy["adx_threshold"])
-        reversal_profit_atr = float(strategy["reversal_profit_atr"])
+        required = [
+            "ema_fast", "ema_slow", "adx_period", "adx_threshold_1h",
+            "pullback_touch_atr", "pullback_volume_bars", "pullback_volume_factor",
+            "breakout_lookback_5m", "trigger_volume_ma_period", "trigger_volume_factor",
+            "sl_buffer_atr", "sl_min_atr", "tp_r_multiple",
+        ]
+        for key in required:
+            if key not in strategy:
+                raise ValueError(f"Missing strategy.{key} in config.yaml")
 
         symbols = [
             SymbolConfig(
                 symbol=s["id"],
                 order_size=str(s.get("order_size", "1")),
-                atr_sl_multiplier=float(s.get("atr_sl_multiplier", 1.5)),
-                atr_tp_multiplier=float(s.get("atr_tp_multiplier", 2.25)),
-                min_sl_percent=float(s.get("min_sl_percent", 0.003)),
-                adx_threshold=adx_threshold,
-                rsi_period=int(s["rsi_period"]),
-                rsi_oversold=float(s.get("rsi_oversold", 35)),
-                rsi_overbought=float(s.get("rsi_overbought", 65)),
+                min_sl_percent=float(s["min_sl_percent"]),
             )
             for s in trading.get("symbols", [])
         ]
@@ -99,6 +112,18 @@ class Config:
             is_demo=is_demo,
             leverage=int(trading.get("leverage", 5)),
             poll_interval=int(trading.get("poll_interval", 10)),
-            reversal_profit_atr=reversal_profit_atr,
             symbols=symbols,
+            ema_fast=int(strategy["ema_fast"]),
+            ema_slow=int(strategy["ema_slow"]),
+            adx_period=int(strategy["adx_period"]),
+            adx_threshold_1h=float(strategy["adx_threshold_1h"]),
+            pullback_touch_atr=float(strategy["pullback_touch_atr"]),
+            pullback_volume_bars=int(strategy["pullback_volume_bars"]),
+            pullback_volume_factor=float(strategy["pullback_volume_factor"]),
+            breakout_lookback_5m=int(strategy["breakout_lookback_5m"]),
+            trigger_volume_ma_period=int(strategy["trigger_volume_ma_period"]),
+            trigger_volume_factor=float(strategy["trigger_volume_factor"]),
+            sl_buffer_atr=float(strategy["sl_buffer_atr"]),
+            sl_min_atr=float(strategy["sl_min_atr"]),
+            tp_r_multiple=float(strategy["tp_r_multiple"]),
         )
