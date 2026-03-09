@@ -4,7 +4,7 @@ trading:
 
   symbols:
     - id: BTC-USDT
-      target_margin_usdt: 100   # position notional = margin * leverage (100 * 5x = 500 USDT)
+      target_margin_usdt: 200   # BTC: 200 * 5x = 1000 USDT notional (1 contract ~850 USDT at 85k)
       min_sl_percent: 0.003     # minimum SL 0.3% (OKX mark price drift protection)
 
     - id: SOL-USDT
