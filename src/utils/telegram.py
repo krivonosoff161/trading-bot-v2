@@ -24,10 +24,13 @@ async def send_message(text: str) -> None:
     try:
         async with aiohttp.ClientSession() as session:
             for chat_id in _CHAT_IDS:
-                await session.post(
+                resp = await session.post(
                     url,
                     json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
                     timeout=aiohttp.ClientTimeout(total=5),
                 )
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.warning("Telegram error | chat_id={} status={} body={}", chat_id, resp.status, body)
     except Exception as e:
         logger.warning("Telegram send failed | {}", e)
