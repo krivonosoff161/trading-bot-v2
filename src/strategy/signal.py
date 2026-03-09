@@ -65,13 +65,14 @@ def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> d
     ema20_1h = calc_ema(closes_1h, ema_fast)
     ema50_1h = calc_ema(closes_1h, ema_slow)
 
-    bull_trend = ema20_1h[-1] > ema50_1h[-1] and plus_di > minus_di and adx >= adx_thresh
-    bear_trend = ema20_1h[-1] < ema50_1h[-1] and minus_di > plus_di and adx >= adx_thresh
+    # Use [-2] — last closed 1H candle; [-1] is the currently forming bar (repaints)
+    bull_trend = ema20_1h[-2] > ema50_1h[-2] and plus_di > minus_di and adx >= adx_thresh
+    bear_trend = ema20_1h[-2] < ema50_1h[-2] and minus_di > plus_di and adx >= adx_thresh
 
     base = {
         "side": None, "atr": 0.0,
         "adx": adx, "plus_di": plus_di, "minus_di": minus_di,
-        "ema_fast": float(ema20_1h[-1]), "ema_slow": float(ema50_1h[-1]),
+        "ema_fast": float(ema20_1h[-2]), "ema_slow": float(ema50_1h[-2]),
         "setup_sl": 0.0, "vol_ratio": 0.0,
     }
 
@@ -90,26 +91,28 @@ def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> d
         return {**base, "atr": atr_15m, "reason": "atr_zero"}
 
     base["atr"] = atr_15m
-    cur_close = closes_15m[-1]
+    # Use [-2] — last closed 15m candle; [-1] is the currently forming bar (repaints)
+    cur_close = closes_15m[-2]
 
     # Price must be near EMA20 on 15m (pullback zone) and structure intact
-    near_ema = abs(cur_close - ema20_15m[-1]) <= pb_touch * atr_15m
+    near_ema = abs(cur_close - ema20_15m[-2]) <= pb_touch * atr_15m
 
     if bull_trend:
-        structure_ok = cur_close > ema50_15m[-1]
-        # SL anchor = lowest low of recent pullback candles
-        setup_sl_raw = float(np.min(lows_15m[-pb_bars - 1:-1])) - sl_buffer * atr_15m
+        structure_ok = cur_close > ema50_15m[-2]
+        # SL anchor = lowest low of recent pullback candles (exclude forming bar)
+        setup_sl_raw = float(np.min(lows_15m[-pb_bars - 2:-2])) - sl_buffer * atr_15m
     else:
-        structure_ok = cur_close < ema50_15m[-1]
-        # SL anchor = highest high of recent pullback candles
-        setup_sl_raw = float(np.max(highs_15m[-pb_bars - 1:-1])) + sl_buffer * atr_15m
+        structure_ok = cur_close < ema50_15m[-2]
+        # SL anchor = highest high of recent pullback candles (exclude forming bar)
+        setup_sl_raw = float(np.max(highs_15m[-pb_bars - 2:-2])) + sl_buffer * atr_15m
 
     if not near_ema or not structure_ok:
         return {**base, "reason": "no_pullback_15m"}
 
     # Counter-trend volume must be weaker than prior impulse volume
-    recent_vols = vols_15m[-pb_bars - 1:-1]
-    prior_vols  = vols_15m[-pb_bars * 2 - 1:-pb_bars - 1]
+    # [-2] = last closed 15m bar (our current reference); exclude forming [-1]
+    recent_vols = vols_15m[-pb_bars - 2:-2]
+    prior_vols  = vols_15m[-pb_bars * 2 - 2:-pb_bars - 2]
     avg_recent  = float(np.mean(recent_vols)) if len(recent_vols) > 0 else 1.0
     avg_prior   = float(np.mean(prior_vols))  if len(prior_vols)  > 0 else 1.0
 
@@ -127,7 +130,8 @@ def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> d
     lookback_highs = highs_5m[-bk_lookbk - 2:-2]
     lookback_lows  = lows_5m[-bk_lookbk - 2:-2]
 
-    vol_sma   = calc_sma(vols_5m[:-1], vol_period)
+    # Exclude trigger bar (-2) from baseline so it doesn't dilute its own ratio
+    vol_sma   = calc_sma(vols_5m[:-2], vol_period)
     vol_ratio = trigger_vol / vol_sma if vol_sma > 0 else 0.0
 
     if bull_trend:
