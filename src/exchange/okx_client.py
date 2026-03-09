@@ -146,6 +146,27 @@ class OKXClient:
             return data.get("data", [])
         return []
 
+    async def get_history_candles(
+        self, symbol: str, bar: str = "5m",
+        after: int = None, before: int = None, limit: int = 100,
+    ) -> list:
+        """Get historical OHLCV candles (public endpoint, supports time range).
+        after  = return candles OLDER than this timestamp ms (exclusive)
+        before = return candles NEWER than this timestamp ms (exclusive)
+        To get 100 candles ending at ts: after=ts+1
+        Returns list newest-first; each candle includes confirm flag at index 8.
+        """
+        inst_id = f"{symbol}-SWAP"
+        params: dict = {"instId": inst_id, "bar": bar, "limit": str(limit)}
+        if after is not None:
+            params["after"] = str(after)
+        if before is not None:
+            params["before"] = str(before)
+        data = await self._get("/api/v5/market/history-candles", params)
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
     async def get_last_position_close(self, symbol: str, limit: int = 20) -> list:
         """Get recent closed positions. Returns list (newest first) with realizedPnl, closeAvgPx, openAvgPx, uTime."""
         inst_id = f"{symbol}-SWAP"
