@@ -17,7 +17,7 @@ load_dotenv()
 @dataclass
 class SymbolConfig:
     symbol: str
-    order_size: str
+    target_margin_usdt: float   # margin per trade; notional = margin * leverage
     min_sl_percent: float
 
 
@@ -96,7 +96,7 @@ class Config:
         symbols = [
             SymbolConfig(
                 symbol=s["id"],
-                order_size=str(s.get("order_size", "1")),
+                target_margin_usdt=float(s["target_margin_usdt"]),
                 min_sl_percent=float(s["min_sl_percent"]),
             )
             for s in trading.get("symbols", [])

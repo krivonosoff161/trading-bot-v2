@@ -94,6 +94,17 @@ class OKXClient:
             logger.error("OKX POST failed | path={} error={}", path, e)
             return {}
 
+    # --- Instrument Info ---
+
+    async def get_instrument_info(self, symbol: str) -> dict:
+        """Return instrument spec (ctVal, lotSz, minSz) for a SWAP symbol."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/public/instruments", {"instType": "SWAP", "instId": inst_id})
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"][0]
+        logger.error("get_instrument_info failed | symbol={}", symbol)
+        return {}
+
     # --- Market Data ---
 
     async def get_candles(self, symbol: str, bar: str = "5m", limit: int = 100) -> list:

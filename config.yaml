@@ -4,20 +4,20 @@ trading:
 
   symbols:
     - id: BTC-USDT
-      order_size: "1"
-      min_sl_percent: 0.003    # minimum SL 0.3% (OKX mark price drift protection)
+      target_margin_usdt: 100   # position notional = margin * leverage (100 * 5x = 500 USDT)
+      min_sl_percent: 0.003     # minimum SL 0.3% (OKX mark price drift protection)
 
     - id: SOL-USDT
-      order_size: "1"
-      min_sl_percent: 0.005    # SOL is more volatile
+      target_margin_usdt: 100
+      min_sl_percent: 0.005     # SOL is more volatile
 
     - id: ETH-USDT
-      order_size: "1"
+      target_margin_usdt: 100
       min_sl_percent: 0.003
 
     - id: XRP-USDT
-      order_size: "1"
-      min_sl_percent: 0.006    # XRP is noisier
+      target_margin_usdt: 100
+      min_sl_percent: 0.006     # XRP is noisier
 
 strategy:
   # Timeframe: 1H trend
