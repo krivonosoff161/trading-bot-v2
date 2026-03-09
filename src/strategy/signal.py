@@ -61,7 +61,7 @@ def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> d
 
     # --- 1H: Trend direction ---
     highs_1h, lows_1h, closes_1h = parse_candles(raw_1h)
-    adx, plus_di, minus_di = calc_adx(highs_1h, lows_1h, closes_1h, period=adx_period)
+    adx, plus_di, minus_di = calc_adx(highs_1h, lows_1h, closes_1h, period=adx_period, bar_index=-2)
     ema20_1h = calc_ema(closes_1h, ema_fast)
     ema50_1h = calc_ema(closes_1h, ema_slow)
 
@@ -122,7 +122,7 @@ def get_signal(raw_1h: list, raw_15m: list, raw_5m: list, sym_config: dict) -> d
     # --- 5m: Entry trigger ---
     highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
     vols_5m = parse_volumes(raw_5m)
-    _, plus_di_5m, minus_di_5m = calc_adx(highs_5m, lows_5m, closes_5m, period=adx_period)
+    _, plus_di_5m, minus_di_5m = calc_adx(highs_5m, lows_5m, closes_5m, period=adx_period, bar_index=-2)
 
     # Use last completed candle ([-2]); [-1] may be incomplete
     trigger_close = closes_5m[-2]
