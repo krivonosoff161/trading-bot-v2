@@ -56,6 +56,13 @@ async def run_bot(config: Config, client: OKXClient) -> None:
                 _instrument_cache[sym.symbol]["min_sz"],
             )
 
+    symbols_str = ", ".join(symbol_ids)
+    await send_message(
+        f"<b>Bot started</b> ✓\n"
+        f"Symbols: {symbols_str}\n"
+        f"Leverage: {config.leverage}x  Demo: {config.is_demo}"
+    )
+
     while True:
         try:
             await _tick(config, client)

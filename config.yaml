@@ -11,13 +11,7 @@ trading:
       target_margin_usdt: 100
       min_sl_percent: 0.005     # SOL is more volatile
 
-    - id: ETH-USDT
-      target_margin_usdt: 100
-      min_sl_percent: 0.003
-
-    - id: XRP-USDT
-      target_margin_usdt: 100
-      min_sl_percent: 0.006     # XRP is noisier
+    # ETH and XRP disabled — no_trend_1h blocks all trades, not useful for this pattern
 
 strategy:
   # Timeframe: 1H trend
@@ -29,7 +23,7 @@ strategy:
   # Timeframe: 15m pullback setup
   pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
   pullback_volume_bars: 2      # bars to compare pullback vs impulse volume
-  pullback_volume_factor: 1.2  # pullback volume must be < impulse volume * factor
+  pullback_volume_factor: 2.0  # pullback volume must be < impulse volume * factor
 
   # Timeframe: 5m entry trigger
   breakout_lookback_5m: 3      # breakout of last N candles high/low
