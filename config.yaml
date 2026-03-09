@@ -24,17 +24,17 @@ strategy:
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
-  adx_threshold_1h: 20         # minimum ADX on 1H to confirm trend
+  adx_threshold_1h: 18         # minimum ADX on 1H to confirm trend
 
   # Timeframe: 15m pullback setup
   pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
   pullback_volume_bars: 2      # bars to compare pullback vs impulse volume
-  pullback_volume_factor: 0.8  # pullback volume must be < impulse volume * factor
+  pullback_volume_factor: 1.2  # pullback volume must be < impulse volume * factor
 
   # Timeframe: 5m entry trigger
   breakout_lookback_5m: 3      # breakout of last N candles high/low
   trigger_volume_ma_period: 20 # SMA period for volume baseline
-  trigger_volume_factor: 1.3   # breakout volume must be > avg * factor
+  trigger_volume_factor: 1.1   # breakout volume must be > avg * factor
 
   # SL / TP
   sl_buffer_atr: 0.2           # extra buffer beyond setup low/high (in ATR units)
