@@ -11,6 +11,7 @@ from src.config import Config, SymbolConfig
 from src.exchange.okx_client import OKXClient
 from src.strategy.signal import get_signal
 from src.utils.logger import setup_logger, trade_logger, write_signal
+from src.utils.telegram import send_message
 
 # Per-symbol position state: symbol -> {side, entry_price, entry_time, sl, tp, ...}
 _open_positions: dict = {}
@@ -144,6 +145,12 @@ async def _tick_symbol(config: Config, client: OKXClient, sym: SymbolConfig) -> 
             sym.symbol, signal["side"], price, sl_price, tp_price, atr,
             signal["adx"], signal["vol_ratio"],
         )
+        await send_message(
+            f"<b>OPEN</b> {sym.symbol}\n"
+            f"Side: {signal['side'].upper()}  Entry: {price}\n"
+            f"SL: {sl_price}  TP: {tp_price}\n"
+            f"ADX: {signal['adx']:.1f}  Vol×: {signal['vol_ratio']:.2f}"
+        )
         write_signal({
             "event":     "open",
             "trade_id":  trade_id,
@@ -230,6 +237,11 @@ async def _log_trade_close(client: OKXClient, symbol: str, entry: dict) -> bool:
         symbol, direction, entry_px, close_px,
         pnl_sign, pnl, reason,
         entry.get("entry_time"), close_time,
+    )
+    await send_message(
+        f"<b>CLOSE</b> {symbol} — {reason}\n"
+        f"Side: {direction.upper()}  Entry: {entry_px}  Close: {close_px}\n"
+        f"PnL: <b>{pnl_sign}{pnl:.4f} USDT</b>"
     )
     write_signal({
         "event":       "close",

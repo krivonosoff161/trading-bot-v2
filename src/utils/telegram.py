@@ -1,0 +1,33 @@
+"""
+Telegram notifications — send trade alerts via Bot API.
+Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from .env.
+TELEGRAM_CHAT_ID supports multiple IDs separated by commas.
+Silently skips if not configured.
+"""
+
+import os
+
+import aiohttp
+from loguru import logger
+
+_BOT_TOKEN: str       = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
+_CHAT_IDS:  list[str] = [
+    cid.strip() for cid in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if cid.strip()
+]
+
+
+async def send_message(text: str) -> None:
+    """Send a Telegram message to all configured chat IDs. No-op if not configured."""
+    if not _BOT_TOKEN or not _CHAT_IDS:
+        return
+    url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
+    try:
+        async with aiohttp.ClientSession() as session:
+            for chat_id in _CHAT_IDS:
+                await session.post(
+                    url,
+                    json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+    except Exception as e:
+        logger.warning("Telegram send failed | {}", e)
