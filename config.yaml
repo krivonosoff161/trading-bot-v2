@@ -4,43 +4,39 @@ trading:
 
   symbols:
     - id: BTC-USDT
-      order_size: "1"           # contracts
-      atr_sl_multiplier: 1.5   # SL = ATR(1m) * multiplier
-      atr_tp_multiplier: 2.25  # TP = ATR(1m) * multiplier (R:R 1:1.5)
-      min_sl_percent: 0.003    # SL minimum 0.3% (mark price drift protection)
-      rsi_period: 3
-      rsi_oversold: 35
-      rsi_overbought: 65
+      order_size: "1"
+      min_sl_percent: 0.003    # minimum SL 0.3% (OKX mark price drift protection)
 
     - id: SOL-USDT
       order_size: "1"
-      atr_sl_multiplier: 2.5
-      atr_tp_multiplier: 3.75
-      min_sl_percent: 0.005    # SOL is more volatile, wider buffer
-      rsi_period: 5
-      rsi_oversold: 30
-      rsi_overbought: 70
+      min_sl_percent: 0.005    # SOL is more volatile
 
     - id: ETH-USDT
       order_size: "1"
-      atr_sl_multiplier: 1.5
-      atr_tp_multiplier: 2.25
-      min_sl_percent: 0.003    # ETH is closer to BTC than alts
-      rsi_period: 3
-      rsi_oversold: 35
-      rsi_overbought: 65
+      min_sl_percent: 0.003
 
     - id: XRP-USDT
       order_size: "1"
-      atr_sl_multiplier: 2.5
-      atr_tp_multiplier: 3.75
-      min_sl_percent: 0.006    # XRP is noisier, keep wider minimum stop
-      rsi_period: 7
-      rsi_oversold: 28
-      rsi_overbought: 72
+      min_sl_percent: 0.006    # XRP is noisier
 
 strategy:
-  adx_threshold: 22    # ADX(5m) regime threshold
-  reversal_profit_atr: 0.5   # close reversal only after >= 0.5 ATR in profit
-  # EMA(8/21) crossover on 1m — configurable in signal.py constants
-  # RSI period per symbol — configurable via rsi_period above
+  # Timeframe: 1H trend
+  ema_fast: 20
+  ema_slow: 50
+  adx_period: 14
+  adx_threshold_1h: 20         # minimum ADX on 1H to confirm trend
+
+  # Timeframe: 15m pullback setup
+  pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
+  pullback_volume_bars: 2      # bars to compare pullback vs impulse volume
+  pullback_volume_factor: 0.8  # pullback volume must be < impulse volume * factor
+
+  # Timeframe: 5m entry trigger
+  breakout_lookback_5m: 3      # breakout of last N candles high/low
+  trigger_volume_ma_period: 20 # SMA period for volume baseline
+  trigger_volume_factor: 1.3   # breakout volume must be > avg * factor
+
+  # SL / TP
+  sl_buffer_atr: 0.2           # extra buffer beyond setup low/high (in ATR units)
+  sl_min_atr: 1.2              # minimum SL distance = 1.2 * ATR(15m)
+  tp_r_multiple: 2.0           # TP = entry +/- SL_dist * R
