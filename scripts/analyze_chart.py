@@ -88,6 +88,17 @@ def _stopped_stage(reason: str) -> str:
     return reason
 
 
+def _json_safe(value):
+    """Recursively convert numpy scalars/containers to JSON-serializable Python types."""
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 
 def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003) -> dict:
@@ -250,6 +261,180 @@ def _action_hint(bear: bool, bull: bool, near_ema: bool,
     return f"Сетап близко для {direction} — ждать пробойной 5m свечи с объёмом"
 
 
+# ── Client summary ────────────────────────────────────────────────────────────
+
+def _reason_to_human(reason: str) -> str:
+    """Translate internal bot reason code to a human-readable sentence."""
+    mapping = {
+        "not_enough_candles":     "Недостаточно данных для анализа.",
+        "no_trend_1h":            "Нет выраженного тренда — рынок в боковике.",
+        "atr_zero":               "Недостаточно данных для анализа.",
+        "no_pullback_15m":        "Цена ещё не вернулась к зоне EMA — сетапа нет.",
+        "pullback_volume_strong": "Откат слишком агрессивный — структура не подходит.",
+        "no_breakout_5m":         "Сетап формируется — ждём подтверждения на 5m.",
+        "breakout_volume_weak":   "Движение без объёма — неуверенный пробой.",
+        "di_not_confirmed_5m":    "Направление на 5m не совпадает с трендом.",
+    }
+    return mapping.get(reason, "Условия входа не выполнены.")
+
+
+def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
+    """Build a scenario-based client-facing summary with no internal bot codes."""
+    h      = r["1h"]
+    m      = r["15m"]
+    f      = r["5m"]
+    sig    = r["signal"]
+    act    = r["action"]
+    reason = sig.get("reason", "")
+
+    try:
+        dt     = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        ts_str = dt.strftime("%d %b %Y  %H:%M UTC")
+    except Exception:
+        ts_str = captured_at
+
+    has_trend  = h["bull"] or h["bear"]
+    setup_zone = m["near_ema"] and m["structure_ok"]
+    side_is_buy = sig.get("side") == "buy"
+    gap        = abs(m["close"] - m["ema20"])
+    threshold  = m["pb_touch_threshold"]
+
+    SEP   = "═" * 46
+    lines = [SEP, f"  {symbol}  |  {ts_str}", SEP, ""]
+
+    # ── КОНТЕКСТ ──────────────────────────────────────────────
+    lines.append("КОНТЕКСТ")
+    if h["bull"]:
+        adx_word = "устойчивый" if h["adx"] >= 25 else "умеренный"
+        lines.append("  Рынок в восходящем движении на старшем таймфрейме.")
+        lines.append(f"  Тренд {adx_word} (ADX {h['adx']:.1f}).")
+    elif h["bear"]:
+        adx_word = "устойчивый" if h["adx"] >= 25 else "умеренный"
+        lines.append("  Рынок в нисходящем движении на старшем таймфрейме.")
+        lines.append(f"  Тренд {adx_word} (ADX {h['adx']:.1f}).")
+    else:
+        lines.append("  Выраженного направления нет.")
+        lines.append(f"  ADX {h['adx']:.1f} — рынок в боковике.")
+    lines.append("")
+
+    # ── ЧТО СЕЙЧАС ────────────────────────────────────────────
+    lines.append("ЧТО СЕЙЧАС")
+    if act["valid"]:
+        side_str = "лонга" if side_is_buy else "шорта"
+        lines.append(f"  На 5m подтверждающее движение с объёмом — условия для {side_str} выполнены.")
+    elif not has_trend:
+        lines.append("  Направленного движения нет — рынок движется без выраженного контекста.")
+    elif setup_zone:
+        if reason == "pullback_volume_strong":
+            lines.append("  Цена у зоны EMA на 15m, но откат агрессивный — объём выше нормы.")
+        elif f["breakout"] and f["vol_strong"]:
+            lines.append("  Цена у EMA на 15m, на 5m начинается подтверждающее движение с объёмом.")
+        elif f["breakout"]:
+            lines.append("  Цена у EMA на 15m, движение на 5m есть — объём умеренный.")
+        elif m["pb_vol_weak"]:
+            lines.append("  Цена откатывает к EMA20 на 15m. Откат спокойный — объём не агрессивный.")
+        else:
+            lines.append("  Цена у зоны EMA на 15m, откат с повышенным объёмом.")
+    else:
+        if reason == "pullback_volume_strong":
+            lines.append("  Откат к EMA начался, но объём слишком агрессивный — структура не подходит.")
+        else:
+            lines.append("  Тренд активен. Цена пока не откатывает к зоне интереса.")
+    lines.append("")
+
+    # ── ЗОНА ИНТЕРЕСА ─────────────────────────────────────────
+    lines.append("ЗОНА ИНТЕРЕСА")
+    if not has_trend:
+        lines.append("  Зона интереса не определена — нет направленного контекста.")
+    else:
+        lines.append(f"  EMA20 (15m): ≈ {m['ema20']:.4f}")
+        if gap <= threshold:
+            lines.append(f"  Цена уже в зоне (gap {gap:.4f} ≤ порог {threshold:.4f}).")
+        elif gap <= threshold * 2:
+            lines.append(f"  Цена приближается к зоне (gap {gap:.4f}, порог {threshold:.4f}).")
+        else:
+            lines.append(f"  Цена пока далеко от зоны (gap {gap:.4f}, порог {threshold:.4f}).")
+    lines.append("")
+
+    # ── ПОДТВЕРЖДЕНИЕ ВХОДА ───────────────────────────────────
+    lines.append("ПОДТВЕРЖДЕНИЕ ВХОДА")
+    if not has_trend:
+        lines.append("  Нет условий для поиска входа.")
+        lines.append("  Ждать формирования направленного движения на старшем таймфрейме.")
+    else:
+        entry_dir = "лонга" if h["bull"] else "шорта"
+        di_str    = "DI+" if h["bull"] else "DI-"
+        lines.append(f"  Для рассмотрения {entry_dir} нужно:")
+        lines.append("  — цена возвращается к EMA20 (15m) с умеренным объёмом")
+        lines.append("  — 5m свеча закрывается за пределами последней структуры")
+        lines.append("  — объём 5m выше среднего")
+        lines.append(f"  — {di_str} на 5m остаётся доминирующим")
+    lines.append("")
+
+    # ── ОТМЕНА СЦЕНАРИЯ ───────────────────────────────────────
+    lines.append("ОТМЕНА СЦЕНАРИЯ")
+    if act["valid"]:
+        side_word = "ниже" if side_is_buy else "выше"
+        lines.append(f"  Идея теряет смысл если цена пересечёт уровень {act['sl']} ({side_word}).")
+    elif has_trend:
+        side_word = "ниже" if h["bull"] else "выше"
+        lines.append(
+            f"  Сценарий наблюдения теряет смысл, если цена уходит {side_word} "
+            f"EMA50 (15m) ≈ {m['ema50']:.4f}."
+        )
+        lines.append("  Это ориентир структурного слома, а не готовый стоп.")
+    else:
+        lines.append("  Нет активного сценария — отменять нечего.")
+    lines.append("")
+
+    # ── ЦЕЛИ ──────────────────────────────────────────────────
+    lines.append("ЦЕЛИ")
+    if act["valid"]:
+        r_mul = act["r_multiple"]
+        lines.append(f"  Entry:  {act['entry']}")
+        lines.append(f"  TP1:    {act['tp1']}  (R\u00d7{r_mul:.1f})")
+        lines.append(f"  TP2:    {act['tp2']}  (R\u00d7{r_mul * 1.5:.1f})")
+        lines.append(f"  SL:     {act['sl']}")
+    elif setup_zone and has_trend:
+        lines.append("  Ждём подтверждения на 5m.")
+        lines.append(f"  Ориентир входа — около EMA20 (15m) ≈ {m['ema20']:.4f}.")
+        lines.append("  Уровни TP и SL будут рассчитаны при подтверждении.")
+    elif has_trend:
+        lines.append(f"  Ждём возврата цены к EMA20 (15m) ≈ {m['ema20']:.4f}.")
+        lines.append("  Уровни рассчитаем при появлении сетапа.")
+    else:
+        lines.append("  Уровни не рассчитываются без направленного тренда.")
+    lines.append("")
+
+    # ── КОГДА НЕ ВХОДИТЬ ──────────────────────────────────────
+    lines.append("КОГДА НЕ ВХОДИТЬ")
+    if act["valid"]:
+        lines.append("  Если цена резко ушла от уровня входа к моменту исполнения.")
+        lines.append("  Если рынок начал хаотично двигаться в обе стороны.")
+    elif not has_trend:
+        lines.append("  Сейчас — нет направленного контекста для позиции.")
+    elif reason == "pullback_volume_strong":
+        lines.append("  Откат слишком агрессивный — структура не подходит для входа.")
+        lines.append("  Ждать ослабления давления и нового спокойного отката к EMA.")
+    elif setup_zone and not f["breakout"]:
+        side_word = "ниже" if h["bull"] else "выше"
+        lines.append("  Пока 5m не дала подтверждения с объёмом.")
+        lines.append(f"  Если цена уйдёт {side_word} EMA20 — сетап аннулируется.")
+    elif not setup_zone:
+        lines.append("  Пока цена не вернулась в зону EMA20.")
+        lines.append("  Не гнаться за ценой — ждать отката.")
+    else:
+        lines.append("  Пока не выполнены все условия подтверждения входа.")
+
+    lines += ["", SEP]
+    return "\n".join(lines)
+
+
+def _format_telegram(client_summary: str) -> str:
+    """Wrap client summary in a monospace block for Telegram HTML."""
+    return f"<pre>{client_summary}</pre>"
+
+
 # ── Trader view ───────────────────────────────────────────────────────────────
 
 def build_trader_view(r: dict) -> list:
@@ -400,7 +585,7 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
 
 # ── Annotated PNG ─────────────────────────────────────────────────────────────
 
-def generate_annotated_png(image_path: str, report_text: str, out_path: str) -> None:
+def generate_annotated_png(image_path: str, summary_text: str, out_path: str) -> None:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -425,7 +610,7 @@ def generate_annotated_png(image_path: str, report_text: str, out_path: str) -> 
     # Wrap long lines to fit panel
     max_chars = (PANEL_W - PADDING * 2) // 8
     wrapped = []
-    for line in report_text.split("\n"):
+    for line in summary_text.split("\n"):
         if len(line) <= max_chars:
             wrapped.append(line)
         else:
@@ -444,23 +629,23 @@ def generate_annotated_png(image_path: str, report_text: str, out_path: str) -> 
     draw.rectangle([(iw, 0), (iw + PANEL_W, panel_h)], fill=(18, 20, 28))
     draw.line([(iw, 0), (iw, panel_h)], fill=(60, 80, 120), width=2)
 
-    # Color map for lines
+    # Color map for client summary lines
+    _SECTION_HEADERS = {
+        "КОНТЕКСТ", "ЧТО СЕЙЧАС", "ЗОНА ИНТЕРЕСА",
+        "ПОДТВЕРЖДЕНИЕ ВХОДА", "ОТМЕНА СЦЕНАРИЯ", "ЦЕЛИ", "КОГДА НЕ ВХОДИТЬ",
+    }
+
     def line_color(text: str) -> tuple:
-        if text.startswith("=") or text.startswith("  CHART"):
+        stripped = text.strip()
+        if "═" in text:
             return (100, 160, 255)
-        if text.startswith("──"):
-            return (80, 130, 200)
-        if "✓" in text:
-            return (80, 220, 120)
-        if "✗" in text or "NO TRADE" in text or "нет" in text.lower():
-            return (220, 80, 80)
-        if "TRADE" in text and "NO" not in text:
-            return (80, 220, 120)
-        if text.strip().startswith("•"):
-            return (200, 200, 220)
-        if text.strip().startswith("Entry") or text.strip().startswith("SL") or text.strip().startswith("TP"):
+        if stripped in _SECTION_HEADERS:
+            return (80, 140, 210)
+        if stripped.startswith(("Entry:", "TP1:", "TP2:")):
             return (255, 200, 80)
-        return (180, 185, 200)
+        if stripped.startswith("SL:"):
+            return (220, 130, 80)
+        return (190, 195, 210)
 
     y = PADDING
     for line in wrapped:
@@ -476,7 +661,7 @@ def generate_annotated_png(image_path: str, report_text: str, out_path: str) -> 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None) -> None:
+async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None, send_telegram: bool = False) -> None:
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
@@ -506,9 +691,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
-    result      = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent)
-    report_text = format_report(symbol, captured_at_iso, result)
+    result         = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent)
+    report_text    = format_report(symbol, captured_at_iso, result)
+    client_summary = build_client_summary(symbol, captured_at_iso, result)
+
     print(report_text)
+    print("\n── CLIENT SUMMARY " + "─" * 44)
+    print(client_summary)
 
     # Save outputs
     out_dir = Path(__file__).parent / "analysis_output"
@@ -519,7 +708,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     snap_path   = out_dir / f"{symbol}_{slug}_snapshot.json"
     png_path    = out_dir / f"{symbol}_{slug}_annotated.png"
 
-    report_path.write_text(f"```\n{report_text}\n```\n", encoding="utf-8")
+    report_path.write_text(report_text + "\n", encoding="utf-8")
 
     snapshot = {
         "symbol":       symbol,
@@ -535,15 +724,28 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         "action":       result["action"],
         "trader_notes": [],
     }
-    snap_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
+    snap_path.write_text(
+        json.dumps(_json_safe(snapshot), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
 
     if image_path and Path(image_path).exists():
-        generate_annotated_png(image_path, report_text, str(png_path))
+        generate_annotated_png(image_path, client_summary, str(png_path))
     elif image_path:
         print(f"WARNING: Image not found: {image_path}")
+
+    if send_telegram:
+        from src.utils.telegram import send_message
+        tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
+        tg_chat  = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        if not tg_token or not tg_chat:
+            print("Telegram: not sent — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in .env")
+        else:
+            await send_message(_format_telegram(client_summary))
+            print("Telegram: sent.")
 
 
 def main() -> None:
@@ -554,10 +756,12 @@ def main() -> None:
     parser.add_argument("--captured-at", required=True,  dest="captured_at",
                         help="ISO UTC timestamp e.g. 2026-03-09T11:42:35Z")
     parser.add_argument("--image",       default=None,   help="Path to screenshot (optional)")
-    parser.add_argument("--limit",       type=int, default=100,
+    parser.add_argument("--limit",        type=int, default=100,
                         help="Candles to fetch per timeframe (default 100)")
+    parser.add_argument("--send-telegram", action="store_true", dest="send_telegram",
+                        help="Send client summary to Telegram after analysis")
     args = parser.parse_args()
-    asyncio.run(run(args.symbol, args.captured_at, args.limit, args.image))
+    asyncio.run(run(args.symbol, args.captured_at, args.limit, args.image, args.send_telegram))
 
 
 if __name__ == "__main__":
