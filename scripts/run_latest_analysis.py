@@ -38,7 +38,8 @@ def _latest_source_image() -> Path | None:
     if not STUDY_DIR.exists():
         return None
     candidates = [
-        p for p in STUDY_DIR.iterdir()
+        p
+        for p in STUDY_DIR.iterdir()
         if p.is_file()
         and p.suffix.lower() in {".jpg", ".jpeg", ".png"}
         and "_annotated" not in p.name.lower()
@@ -96,8 +97,8 @@ def main() -> int:
 
     latest_img = _latest_source_image()
     if latest_img is None:
-        print(f'Скрин не найден в папке: {STUDY_DIR}')
-        print('Положи .jpg/.jpeg/.png файл (не _annotated) и запусти снова.')
+        print(f"Скрин не найден в папке: {STUDY_DIR}")
+        print("Положи .jpg/.jpeg/.png файл (не _annotated) и запусти снова.")
         return 1
 
     print(f"Найден скрин: {latest_img.name}")
@@ -126,7 +127,7 @@ def main() -> int:
     )
 
     print()
-    print("Готово. Результаты в scripts\\analysis_output\\")
+    print("Готово. Результаты в scripts\\analysis_output\\reports, snapshots, images\\")
     return 0
 
 
