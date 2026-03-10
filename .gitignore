@@ -18,6 +18,11 @@ logs/
 logs_archive/
 *.log
 
+# Analyzer working folders
+scripts/analysis_output/
+обучение проба/*
+!обучение проба/.gitkeep
+
 # IDE
 .vscode/
 .idea/
@@ -27,6 +32,6 @@ logs_archive/
 .DS_Store
 Thumbs.db
 
-# API keys — НИКОГДА не коммитить
+# API keys - NEVER commit
 secrets.yaml
 api_keys.yaml
