@@ -127,7 +127,7 @@ def main() -> int:
     )
 
     print()
-    print("Готово. Результаты в scripts\\analysis_output\\reports, snapshots, images\\")
+    print("Готово.")
     return 0
 
 
