@@ -20,6 +20,7 @@ logs_archive/
 
 # Analyzer working folders
 scripts/analysis_output/
+scripts/tg_temp/
 обучение проба/*
 !обучение проба/.gitkeep
 
