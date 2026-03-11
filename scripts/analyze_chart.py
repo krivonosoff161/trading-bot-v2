@@ -99,6 +99,17 @@ def _json_safe(value):
     return value
 
 
+def _fmt_metric(value: float) -> str:
+    """Format small metrics with enough precision for low-price instruments."""
+    val = float(value)
+    abs_val = abs(val)
+    if abs_val >= 1:
+        return f"{val:.4f}"
+    if abs_val >= 0.01:
+        return f"{val:.5f}"
+    return f"{val:.6f}"
+
+
 # ── Core analysis ─────────────────────────────────────────────────────────────
 
 def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003) -> dict:
@@ -257,7 +268,7 @@ def _action_hint(bear: bool, bull: bool, near_ema: bool,
     direction = "шорт" if bear else "лонг"
     if not near_ema:
         dist = abs(m_close - ema20)
-        return f"Ждать {direction}-сетапа у EMA20(15m) ≈ {ema20:.4f} (сейчас gap={dist:.4f})"
+        return f"Ждать {direction}-сетапа у EMA20(15m) ≈ {ema20:.4f} (сейчас gap={_fmt_metric(dist)})"
     return f"Сетап близко для {direction} — ждать пробойной 5m свечи с объёмом"
 
 
@@ -328,9 +339,22 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         lines.append("  (Проще: рынок дал нужную последовательность — контекст, откат, пробой. Всё сошлось.)")
     elif not has_trend:
         lines.append(f"  На старшем таймфрейме уверенного направленного движения нет — ADX {adx_word}, рынок не показывает ясного импульса в одну сторону.")
-        if f["vol_strong"]:
+        if m["near_ema"]:
+            local_line = "  Локально на 15m цена уже у средней зоны"
+            if m["structure_ok"]:
+                local_line += f" {pb_char}"
+            else:
+                local_line += ", но структура пока не удержана"
+            if f["breakout"] and f["vol_strong"]:
+                local_line += "; на 5m есть движение, но без старшего контекста этого недостаточно."
+            elif f["breakout"]:
+                local_line += "; на 5m движение появилось, но подтверждение ещё слабое."
+            else:
+                local_line += "; на 5m явного импульса пока нет."
+            lines.append(local_line)
+        elif f["vol_strong"]:
             lines.append("  На 5m есть локальная активность, но без контекста сверху это не основание для позиции.")
-        lines.append("  (Проще: нет нужного контекста — ждать пока рынок определится.)")
+        lines.append("  (Проще: локально что-то может формироваться, но без сильного 1H-контекста вход лучше не рассматривать.)")
     elif setup_zone and reason == "pullback_volume_strong":
         struct = "бычий" if h["bull"] else "медвежий"
         lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена вернулась к средней зоне, однако откат сопровождается повышенным объёмом — структура под давлением.")
@@ -376,7 +400,10 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         # ── СЕЙЧАС ОРДЕР НЕ СТАВИМ ───────────────────────────────
         lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
         if not has_trend:
-            lines.append("  Нет направленного контекста на 1H — торговать нечего.")
+            if m["near_ema"]:
+                lines.append("  Локально цена у рабочей зоны, но без подтверждённого направления на 1H вход не рассматриваем.")
+            else:
+                lines.append("  Нет направленного контекста на 1H — торговать рано.")
         elif not m["structure_ok"]:
             lines.append("  На 15m структура не удержана — сетап некачественный.")
         elif reason == "pullback_volume_strong":
@@ -390,7 +417,8 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         # ── ЗОНА НАБЛЮДЕНИЯ ──────────────────────────────────────
         lines.append("ЗОНА НАБЛЮДЕНИЯ")
         if not has_trend:
-            lines.append("  Зона не определена — сначала нужен контекст на 1H.")
+            lines.append(f"  Локальный ориентир — EMA20 (15m) ≈ {m['ema20']:.4f}.")
+            lines.append("  Пока это только уровень наблюдения, а не готовая зона входа.")
         elif not m["structure_ok"]:
             lines.append("  Сейчас зона входа не сформирована.")
             lines.append(f"  Сначала цене нужно вернуться {side_above} EMA50 (15m) ≈ {m['ema50']:.4f}.")
@@ -414,7 +442,8 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         # ── ЧТО НУЖНО ДЛЯ ВХОДА ─────────────────────────────────
         lines.append("ЧТО НУЖНО ДЛЯ ВХОДА")
         if not has_trend:
-            lines.append("  Лучше дождаться пока рынок определится с направлением на 1H.")
+            lines.append("  Сначала на 1H должен появиться более уверенный импульс в одну сторону.")
+            lines.append("  Даже если локально цена у уровня, без этого контекста вход лучше не открывать.")
         elif not m["structure_ok"]:
             lines.append(f"  Цена должна закрепиться {side_above} EMA50 (15m).")
             lines.append("  После этого — спокойный откат к EMA20 и подтверждение на 5m.")
@@ -470,8 +499,8 @@ def build_trader_view(r: dict) -> list:
     else:
         dist = abs(m["close"] - m["ema20"])
         lines.append(
-            f"• На 15m цена далеко от EMA20 (gap={dist:.4f}, "
-            f"порог={m['pb_touch_threshold']:.4f}) — сетапа нет"
+            f"• На 15m цена далеко от EMA20 (gap={_fmt_metric(dist)}, "
+            f"порог={_fmt_metric(m['pb_touch_threshold'])}) — сетапа нет"
         )
 
     if h["bull"] or h["bear"]:
@@ -524,7 +553,7 @@ def build_action_view(r: dict) -> list:
         side_str = "LONG" if sig["side"] == "buy" else "SHORT"
         lines.append(f"  Направление:  {side_str}  ({act['type']})")
         lines.append(f"  Entry:        {act['entry']}")
-        lines.append(f"  SL:           {act['sl']}  (dist={act['sl_dist']:.4f})")
+        lines.append(f"  SL:           {act['sl']}  (dist={_fmt_metric(act['sl_dist'])})")
         lines.append(f"  TP1:          {act['tp1']}  (R×{act['r_multiple']})")
         lines.append(f"  TP2:          {act['tp2']}  (R×{act['r_multiple'] * 1.5:.1f})")
         lines.append(f"  Invalidation: позиция инвалидна если цена пересекла SL")
@@ -564,8 +593,8 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
         f"── 15m SETUP {THIN[12:]}",
         f"  Close:  {m['close']:<12.4f} EMA20: {m['ema20']:.4f}   EMA50: {m['ema50']:.4f}",
         f"  ATR:    {m['atr']:.4f}",
-        f"  Near EMA20:   gap={abs(m['close'] - m['ema20']):.4f}  "
-        f"threshold={m['pb_touch_threshold']:.4f}  {ok(m['near_ema'])}",
+        f"  Near EMA20:   gap={_fmt_metric(abs(m['close'] - m['ema20']))}  "
+        f"threshold={_fmt_metric(m['pb_touch_threshold'])}  {ok(m['near_ema'])}",
         f"  Structure:    {ok(m['structure_ok'])}",
         f"  Pullback vol: recent={m['vol_recent']:.0f}  prior={m['vol_prior']:.0f}  "
         f"ratio={m['vol_ratio_pb']:.2f}  weak={ok(m['pb_vol_weak'])}",
