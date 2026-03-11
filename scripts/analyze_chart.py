@@ -311,35 +311,42 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
     lines = [SEP, f"  {symbol}  |  {ts_str}", SEP, ""]
 
     # ── СЕЙЧАС НА РЫНКЕ ───────────────────────────────────────
+    adx_word = "устойчивый" if h["adx"] >= 25 else "умеренный" if h["adx"] >= 20 else "слабый"
+    em_rel   = "выше" if h["ema20"] > h["ema50"] else "ниже"
+    pb_char  = "с умеренным объёмом" if m["pb_vol_weak"] else "с повышенным объёмом"
+
     lines.append("СЕЙЧАС НА РЫНКЕ")
     if act["valid"]:
-        struct   = "восходящую" if h["bull"] else "нисходящую"
-        side_str = "лонга" if side_is_buy else "шорта"
-        up_down  = "вверх" if h["bull"] else "вниз"
-        lines.append(f"  Цена сохраняет {struct} структуру — на 5m зафиксирован импульс с объёмом, условия для {side_str} выполнены.")
-        lines.append(f"  (Проще: рынок смотрит {up_down} и показал нужное движение для входа.)")
+        struct = "бычий" if h["bull"] else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена откатила к средней зоне {pb_char}, структура удержалась. На 5m зафиксирован пробой с объёмом — все условия выполнены.")
+        lines.append("  (Проще: рынок дал нужную последовательность — контекст, откат, пробой. Всё сошлось.)")
     elif not has_trend:
+        lines.append(f"  На старшем таймфрейме уверенного направленного движения нет — ADX {adx_word}, рынок не показывает ясного импульса в одну сторону.")
         if f["vol_strong"]:
-            lines.append("  На старшем таймфрейме устойчивого направления нет, хотя на 5m появился локальный всплеск активности.")
-            lines.append("  (Проще: движение есть, но пока оно слишком локальное, чтобы открывать позицию.)")
-        else:
-            lines.append("  Рынок находится в фазе консолидации без выраженного направления.")
-            lines.append("  (Проще: рынок никуда не движется — торговать сейчас нечего.)")
+            lines.append("  На 5m есть локальная активность, но без контекста сверху это не основание для позиции.")
+        lines.append("  (Проще: нет нужного контекста — ждать пока рынок определится.)")
     elif setup_zone and reason == "pullback_volume_strong":
-        lines.append("  Цена находится в зоне интереса, однако откат сопровождается повышенным объёмом, что снижает качество сетапа.")
+        struct = "бычий" if h["bull"] else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена вернулась к средней зоне, однако откат сопровождается повышенным объёмом — структура под давлением.")
         lines.append("  (Проще: уровень правильный, но движение к нему слишком агрессивное — лучше подождать.)")
     elif setup_zone and f["breakout"]:
-        lines.append("  Цена у зоны интереса, на 5m зафиксировано движение — однако не все условия для входа пока подтверждены.")
+        struct = "бычий" if h["bull"] else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у средней зоны, на 5m появляется движение — однако не все условия подтверждения пока выполнены.")
         lines.append("  (Проще: что-то начинается, но сигнал пока неполный — ждём.)")
     elif setup_zone:
-        struct = "восходящую" if h["bull"] else "нисходящую"
-        lines.append(f"  Цена сохраняет {struct} структуру и откатывает к зоне интереса — текущее движение больше похоже на коррекцию, чем на разворот.")
-        lines.append("  (Проще: рынок пока не сломался, ждём точки входа.)")
+        struct = "бычий" if h["bull"] else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена вернулась к средней зоне {pb_char} — структура держится, откат выглядит как коррекция. Ждём сигнала на 5m.")
+        lines.append("  (Проще: всё сходится — контекст, уровень, характер отката. Остаётся только сигнал.)")
     else:
-        struct   = "Восходящая" if h["bull"] else "Нисходящая"
-        up_down  = "вверх" if h["bull"] else "вниз"
-        lines.append(f"  {struct} структура сохраняется, однако цена пока не вернулась к зоне интереса.")
-        lines.append(f"  (Проще: рынок смотрит {up_down}, но входить сейчас — значит гнаться за ценой.)")
+        struct = "бычий" if h["bull"] else "медвежий"
+        if not m["structure_ok"]:
+            side_word = "ниже" if h["bull"] else "выше"
+            lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m структура не удержана — цена {side_word} EMA50, качество сетапа низкое.")
+            lines.append("  (Проще: тренд есть, но на 15m цена пробила опорную зону. Ждать восстановления структуры.)")
+        else:
+            move_dir = "растёт" if h["bull"] else "падает"
+            lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена ещё не откатила к средней зоне — рынок {move_dir} без паузы, удобной точки входа пока нет.")
+            lines.append("  (Проще: тренд есть, но цена не в том месте. Ждём отката к EMA20.)")
     lines.append("")
 
     # ── ЧТО ДЕЛАТЬ ────────────────────────────────────────────
@@ -357,8 +364,13 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         lines.append(f"  {direction} рассматривается только при подтверждении на 5m.")
         lines.append("  Пока — наблюдение.")
     else:
-        lines.append("  Ждём возврата цены к зоне интереса.")
-        lines.append("  (Не гнаться за ценой — дождаться отката к уровню.)")
+        if not m["structure_ok"]:
+            side_word = "выше" if h["bull"] else "ниже"
+            lines.append("  Пока — наблюдение.")
+            lines.append(f"  Для возврата к идее цена должна сначала закрепиться {side_word} EMA50 (15m).")
+        else:
+            lines.append("  Ждём возврата цены к зоне интереса.")
+            lines.append("  (Не гнаться за ценой — дождаться отката к уровню.)")
     lines.append("")
 
     # ── ГДЕ ВХОДИТЬ ───────────────────────────────────────────
@@ -370,14 +382,19 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         lines.append(f"  Вход на уровне {act['entry']} — зона подтверждена.")
         lines.append("  (EMA20 — средняя зона цены на 15m — уже отработана.)")
     else:
-        lines.append(f"  Зона интереса — EMA20 (средняя зона цены на 15m) ≈ {m['ema20']:.4f}.")
-        if zone_prox == "уже в зоне":
-            lines.append("  Цена уже в этой зоне — ждём подтверждения на 5m.")
-        elif zone_prox == "приближается к зоне":
-            lines.append("  Цена приближается к зоне — следим за поведением на 5m.")
+        if not m["structure_ok"]:
+            side_word = "ниже" if h["bull"] else "выше"
+            lines.append(f"  Структура на 15m не подтверждена — цена {side_word} EMA50 (15m) ≈ {m['ema50']:.4f}.")
+            lines.append("  Вход в зоне EMA20 не рассматривается до восстановления структуры.")
         else:
-            lines.append("  Цена пока не добралась до этой зоны.")
-        lines.append("  Вход рассматривается при откате сюда и новом импульсе на 5m.")
+            lines.append(f"  Зона интереса — EMA20 (средняя зона цены на 15m) ≈ {m['ema20']:.4f}.")
+            if zone_prox == "уже в зоне":
+                lines.append("  Цена уже в этой зоне — ждём подтверждения на 5m.")
+            elif zone_prox == "приближается к зоне":
+                lines.append("  Цена приближается к зоне — следим за поведением на 5m.")
+            else:
+                lines.append("  Цена пока не добралась до этой зоны.")
+            lines.append("  Вход рассматривается при откате сюда и новом импульсе на 5m.")
     lines.append("")
 
     # ── ГДЕ ВЫЙТИ, ЕСЛИ ИДЕЯ НЕ СРАБОТАЛА ────────────────────
@@ -386,6 +403,10 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         if act["valid"]:
             side_word = "ниже" if side_is_buy else "выше"
             lines.append(f"  Если цена пересечёт уровень {act['sl']} — идея не работает, выходим.")
+        elif not m["structure_ok"]:
+            side_word = "ниже" if h["bull"] else "выше"
+            lines.append(f"  Структура на 15m уже нарушена — цена {side_word} EMA50 (15m) ≈ {m['ema50']:.4f}.")
+            lines.append("  (Проще: опорная зона уже пробита — сценарий под вопросом.)")
         else:
             side_word = "ниже" if h["bull"] else "выше"
             lines.append(f"  Если цена пробьёт EMA50 (15m) ≈ {m['ema50']:.4f}, сценарий перестаёт работать.")
@@ -402,8 +423,12 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         lines.append("  Ждём подтверждения — уровни рассчитаем при входе.")
         lines.append(f"  Ориентир входа: около EMA20 ≈ {m['ema20']:.4f}.")
     elif has_trend:
-        lines.append(f"  Ждём возврата цены к EMA20 ≈ {m['ema20']:.4f}.")
-        lines.append("  Уровни рассчитаем при появлении входа.")
+        if not m["structure_ok"]:
+            lines.append("  Уровни не считаем — структура 15m не подтверждена.")
+            lines.append("  Вернёмся к расчёту когда структура восстановится.")
+        else:
+            lines.append(f"  Ждём возврата цены к EMA20 ≈ {m['ema20']:.4f}.")
+            lines.append("  Уровни рассчитаем при появлении входа.")
     else:
         lines.append("  Пока цели не считаем — сначала нужен понятный тренд.")
     lines.append("")
@@ -427,8 +452,13 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         lines.append("  Если 5m не даёт нового импульса в сторону тренда.")
         lines.append(f"  Если цена уйдёт {side_word} EMA20 — зона входа аннулируется.")
     else:
-        lines.append("  Пока цена не вернулась к зоне EMA20.")
-        lines.append("  Входить без отката — значит брать на себя лишний риск.")
+        if not m["structure_ok"]:
+            side_word = "выше" if h["bull"] else "ниже"
+            lines.append("  Пока структура на 15m не восстановлена.")
+            lines.append(f"  Входить нельзя, пока цена не закрепится {side_word} EMA50 (15m).")
+        else:
+            lines.append("  Пока цена не вернулась к зоне EMA20.")
+            lines.append("  Входить без отката — значит брать на себя лишний риск.")
 
     lines += ["", SEP]
     return "\n".join(lines)
@@ -706,19 +736,14 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print("\n── CLIENT SUMMARY " + "─" * 44)
     print(client_summary)
 
-    # Save outputs
-    out_dir = Path(__file__).parent / "analysis_output"
-    reports_dir = out_dir / "reports"
-    snaps_dir = out_dir / "snapshots"
-    images_dir = out_dir / "images"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    snaps_dir.mkdir(parents=True, exist_ok=True)
-    images_dir.mkdir(parents=True, exist_ok=True)
-    slug = captured_at_iso.replace(":", "").replace("Z", "").replace("-", "")
+    # Save outputs — one folder per run
+    ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir  = Path(__file__).parent / "analysis_output" / ts_label
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    report_path = reports_dir / f"{symbol}_{slug}_report.md"
-    snap_path   = snaps_dir / f"{symbol}_{slug}_snapshot.json"
-    png_path    = images_dir / f"{symbol}_{slug}_annotated.png"
+    report_path = run_dir / f"{symbol}_report.md"
+    snap_path   = run_dir / f"{symbol}_snapshot.json"
+    png_path    = run_dir / f"{symbol}_annotated.png"
 
     report_path.write_text(report_text + "\n", encoding="utf-8")
 
@@ -758,6 +783,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         else:
             await send_message(_format_telegram(client_summary))
             print("Telegram: sent.")
+
+    print(f"\nРезультаты: {run_dir}")
 
 
 def main() -> None:
