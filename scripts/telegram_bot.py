@@ -186,9 +186,13 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
         png_path  = run_dir / f"{symbol}_annotated.png"
         snap_path = run_dir / f"{symbol}_snapshot.json"
 
-        # Reconstruct client summary from saved snapshot
+        # Read LLM-generated summary if available, else reconstruct from snapshot
         summary_text = None
-        if snap_path.exists():
+        summary_file = run_dir / f"{symbol}_client_summary.txt"
+        if summary_file.exists():
+            import html as _html
+            summary_text = _html.escape(summary_file.read_text(encoding="utf-8"))
+        elif snap_path.exists():
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
             r = {
                 "1h":          snap["1h"],

@@ -899,6 +899,218 @@ def generate_annotated_png(image_path: str, summary_text: str, out_path: str) ->
     print(f"Saved: {out_path}")
 
 
+def generate_chart_png(
+    raw_15m: list,
+    result: dict,
+    symbol: str,
+    captured_at: str,
+    client_summary: str,
+    out_path: str,
+) -> None:
+    """Generate candlestick chart from OKX data with EMA + price level overlays."""
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as e:
+        print(f"WARNING: Missing library for chart: {e}")
+        return
+
+    # ── Candle slices (chronological, last 60 bars) ────────────────────────
+    candles = list(reversed(raw_15m))
+    n_show  = min(60, len(candles))
+    candles = candles[-n_show:]
+
+    ts_list = [int(c[0])   for c in candles]
+    opens   = [float(c[1]) for c in candles]
+    highs_c = [float(c[2]) for c in candles]
+    lows_c  = [float(c[3]) for c in candles]
+    closes  = [float(c[4]) for c in candles]
+    volumes = [float(c[5]) for c in candles]
+
+    # EMA on full history, then slice last n_show
+    closes_full = np.array([float(c[4]) for c in list(reversed(raw_15m))])
+    ema20_slice = calc_ema(closes_full, 20)[-n_show:]
+    ema50_slice = calc_ema(closes_full, 50)[-n_show:]
+
+    COL_EMA20 = "#2196F3"
+    COL_EMA50 = "#FF9800"
+
+    # ── Figure: price chart (top) + volume (bottom) ────────────────────────
+    BG = "#0b0d14"
+    matplotlib.rcParams.update({"font.family": "DejaVu Sans", "font.size": 8})
+    fig, (ax, ax_vol) = plt.subplots(
+        2, 1, figsize=(10, 5.8), facecolor=BG,
+        gridspec_kw={"height_ratios": [4, 1], "hspace": 0.04},
+        sharex=True,
+    )
+    ax.set_facecolor(BG)
+    ax_vol.set_facecolor(BG)
+
+    # Candlesticks
+    for i, (o, h, l, c) in enumerate(zip(opens, highs_c, lows_c, closes)):
+        col = "#26a69a" if c >= o else "#ef5350"
+        ax.plot([i, i], [l, h], color=col, linewidth=0.7, zorder=2)
+        bh = max(abs(c - o), (h - l) * 0.015)
+        ax.add_patch(mpatches.Rectangle(
+            (i - 0.35, min(c, o)), 0.7, bh,
+            facecolor=col, edgecolor=col, linewidth=0, zorder=3,
+        ))
+
+    # EMA lines + inline price labels at right edge
+    R_MARGIN = 7  # extra x-units for labels
+    for arr, col, lbl in [(ema20_slice, COL_EMA20, "EMA20"), (ema50_slice, COL_EMA50, "EMA50")]:
+        pts = [(i, v) for i, v in enumerate(arr) if v > 0]
+        if not pts:
+            continue
+        xi, yi = zip(*pts)
+        ax.plot(xi, yi, color=col, linewidth=1.2, zorder=4)
+        last_x, last_y = pts[-1]
+        ax.annotate(
+            f"{lbl}: {_fmt_price(symbol, last_y)}",
+            xy=(last_x, last_y), xytext=(last_x + 0.6, last_y),
+            color=col, fontsize=6.5, va="center",
+            bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.85),
+        )
+
+    # ── Price levels ───────────────────────────────────────────────────────
+    pp  = result.get("pending_plan", {})
+    act = result.get("action", {})
+
+    level_keys = [
+        ("entry_zone", "Зона входа", "#4CAF50", "--"),
+        ("trigger",    "Триггер",    "#00E676", "-"),
+        ("sl",         "SL",         "#F44336", "--"),
+        ("tp1",        "TP1",        "#FFD700", "--"),
+        ("tp2",        "TP2",        "#FFA500", ":"),
+    ]
+    src = pp if pp.get("available") else (act if act.get("valid") else {})
+    for key, label, col, ls in level_keys:
+        if not src.get(key):
+            continue
+        price = float(src[key])
+        ax.axhline(y=price, color=col, linestyle=ls, linewidth=0.9, alpha=0.85, zorder=5)
+        ax.text(n_show - 1, price, f"  {label}: {_fmt_price(symbol, price)}",
+                color=col, fontsize=7, va="bottom", ha="right", zorder=6)
+
+    # ── Volume bars ────────────────────────────────────────────────────────
+    vol_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(closes, opens)]
+    ax_vol.bar(range(n_show), volumes, color=vol_colors, alpha=0.75, width=0.7, zorder=2)
+    vol_sma = np.convolve(volumes, np.ones(20) / 20, mode="full")[:n_show]
+    ax_vol.plot(range(n_show), vol_sma, color="#888", linewidth=0.8, zorder=3)
+    ax_vol.set_facecolor(BG)
+    ax_vol.tick_params(colors="#555", labelsize=6)
+    ax_vol.yaxis.tick_right()
+    ax_vol.yaxis.set_label_position("right")
+    ax_vol.set_ylabel("Vol", color="#555", fontsize=6)
+    ax_vol.yaxis.set_major_formatter(
+        plt.FuncFormatter(lambda v, _: f"{v/1e6:.1f}M" if v >= 1e6 else f"{v/1e3:.0f}K")
+    )
+    for spine in ax_vol.spines.values():
+        spine.set_edgecolor("#252838")
+    ax_vol.grid(axis="y", color="#1a1d2e", linewidth=0.4, zorder=0)
+
+    # ── Axes ───────────────────────────────────────────────────────────────
+    y_min, y_max = min(lows_c), max(highs_c)
+    margin = (y_max - y_min) * 0.06
+    ax.set_xlim(-0.8, n_show + R_MARGIN)
+    ax.set_ylim(y_min - margin, y_max + margin)
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
+    ax.tick_params(colors="#666", labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#252838")
+    ax.grid(axis="y", color="#1a1d2e", linewidth=0.5, zorder=0)
+    ax.grid(axis="x", color="#161828", linewidth=0.3, zorder=0)
+
+    step = max(1, n_show // 8)
+    ticks = list(range(0, n_show, step))
+    ax_vol.set_xticks(ticks)
+    ax_vol.set_xticklabels(
+        [datetime.fromtimestamp(ts_list[i] / 1000, tz=timezone.utc).strftime("%H:%M") for i in ticks],
+        color="#555", fontsize=6,
+    )
+
+    ax.set_title(f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC",
+                 color="#7788aa", fontsize=8, loc="left", pad=5)
+
+    plt.tight_layout(pad=0.4)
+
+    # ── Render chart to PIL Image ──────────────────────────────────────────
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    chart_img = Image.open(buf).convert("RGB")
+
+    # ── Right text panel (same coloring as generate_annotated_png) ────────
+    PANEL_W  = 400
+    PADDING  = 14
+    FONT_SZ  = 14
+    try:
+        font = ImageFont.truetype("arial.ttf", FONT_SZ)
+    except Exception:
+        font = ImageFont.load_default()
+
+    iw, ih = chart_img.size
+    max_chars = (PANEL_W - PADDING * 2) // 8
+    wrapped: list[str] = []
+    for line in client_summary.split("\n"):
+        if len(line) <= max_chars:
+            wrapped.append(line)
+        else:
+            wrapped.extend(textwrap.wrap(line, width=max_chars) or [""])
+
+    line_h   = FONT_SZ + 4
+    panel_h  = max(ih, len(wrapped) * line_h + PADDING * 2)
+    canvas   = Image.new("RGB", (iw + PANEL_W, panel_h), (15, 15, 20))
+    canvas.paste(chart_img, (0, (panel_h - ih) // 2))
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle([(iw, 0), (iw + PANEL_W, panel_h)], fill=(18, 20, 28))
+    draw.line([(iw, 0), (iw, panel_h)], fill=(60, 80, 120), width=2)
+
+    _HEADERS = {
+        "СЕЙЧАС НА РЫНКЕ", "ПЛАН ВХОДА", "ГДЕ ИДЕЯ ЛОМАЕТСЯ",
+        "ГДЕ ЗАБРАТЬ ПРИБЫЛЬ", "СЕЙЧАС ОРДЕР НЕ СТАВИМ", "ЗОНА НАБЛЮДЕНИЯ",
+        "ПЛАН ПРИ ПОДТВЕРЖДЕНИИ", "ЧТО НУЖНО ДЛЯ ВХОДА",
+        "ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ", "КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ",
+        "НЕ ДЕЛАТЬ", "КОГДА ВЕРНУТЬСЯ",
+    }
+
+    def _col(text: str) -> tuple:
+        s = text.strip()
+        if "═" in text:                          return (100, 160, 255)
+        if s.startswith("Статус:"):
+            if "ГОТОВ"    in s: return (80, 210, 120)
+            if "НАБЛЮДАЕМ" in s: return (220, 180, 60)
+            return (150, 150, 155)
+        if s in _HEADERS:                        return (80, 140, 210)
+        if s.startswith(("Первая цель:", "Вторая цель:", "Зона входа:", "Триггерная цена:")):
+            return (255, 200, 80)
+        if s.startswith(("Защитный выход:", "Ориентир стопа:", "Сценарий ломается:")):
+            return (220, 130, 80)
+        if s.startswith("Волатильность:"):
+            if "высокая" in s or "расширение" in s: return (220, 130, 80)
+            if "низкая"  in s or "сжатие"     in s: return (100, 160, 255)
+        if "EMA20" in s and "EMA50" not in s:    return (33, 150, 243)   # blue — matches chart
+        if "EMA50" in s and "EMA20" not in s:    return (255, 152, 0)    # orange — matches chart
+        if s.startswith("("):                    return (145, 150, 165)
+        return (190, 195, 210)
+
+    y = PADDING
+    for line in wrapped:
+        draw.text((iw + PADDING, y), line, font=font, fill=_col(line))
+        y += line_h
+        if y > panel_h - PADDING:
+            break
+
+    canvas.save(out_path, quality=92)
+    print(f"Saved: {out_path}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None, send_telegram: bool = False) -> None:
@@ -950,9 +1162,22 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     report_path.write_text(report_text + "\n", encoding="utf-8")
 
+    # Expiry time: how long this analysis is valid
+    _act = result["action"]
+    _pp  = result["pending_plan"]
+    _r1h = result["1h"]
+    if _act.get("valid") or _pp.get("available"):
+        _tf_exp = 5
+    elif _r1h.get("bull") or _r1h.get("bear"):
+        _tf_exp = 15
+    else:
+        _tf_exp = 60
+    expiry_time = _next_candle_close(captured_at_iso, _tf_exp)
+
     snapshot = {
         "symbol":       symbol,
         "captured_at":  captured_at_iso,
+        "expiry_time":  expiry_time,
         "1h":           result["1h"],
         "15m":          result["15m"],
         "5m":           result["5m"],
@@ -973,10 +1198,18 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
 
-    if image_path and Path(image_path).exists():
-        generate_annotated_png(image_path, client_summary, str(png_path))
-    elif image_path:
-        print(f"WARNING: Image not found: {image_path}")
+    # Generate natural Russian text via LLM (falls back to template on any error)
+    from src.utils.llm_formatter import generate_client_text
+    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, image_path)
+    delivery_text = llm_text if llm_text else client_summary
+
+    # Save for downstream consumers (e.g. telegram_bot.py)
+    summary_path = run_dir / f"{symbol}_client_summary.txt"
+    summary_path.write_text(delivery_text, encoding="utf-8")
+    print(f"Saved: {summary_path}")
+
+    # Chart generated from OKX data — no screenshot needed
+    generate_chart_png(raw_15m, result, symbol, captured_at_iso, client_summary, str(png_path))
 
     if send_telegram:
         from src.utils.telegram import send_message
@@ -985,7 +1218,9 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if not tg_token or not tg_chat:
             print("Telegram: not sent — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in .env")
         else:
-            await send_message(_format_telegram(client_summary))
+            import html as _html
+            tg_text = _html.escape(delivery_text) if llm_text else _format_telegram(client_summary)
+            await send_message(tg_text)
             print("Telegram: sent.")
 
     print(f"\nРезультаты: {run_dir}")
