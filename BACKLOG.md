@@ -36,4 +36,7 @@
 
 ## Последнее ревью
 - Дата: 2026-03-14
-- Статус: добавлен multi-agent dev environment (Google Antigravity + Kimi K2.5)
+- Статус: ревью S1.2 — LLM (Yandex AI Studio / Gemma 3) реализован и в работе.
+  Telegram intake бот работает end-to-end. Screenshot Analyzer (идея 2026-03-09) —
+  частично реализован как часть S1.2, переиспользует okx_client + indicators.
+  OCR (S3.2) и WebSocket (S2+) остаются в бэклоге.
