@@ -1,4 +1,7 @@
-# PROJECT VISION — Trading Bot V2
+# PROJECT VISION — Trading Bot V2 [УСТАРЕЛО — см. SERVICE_PIVOT.md и PLAN.md]
+
+> Этот документ написан под bot-first подход (Strategy E).
+> Проект сделал пивот в analyzer-first. Актуальный план: PLAN.md.
 
 ## Цель
 
