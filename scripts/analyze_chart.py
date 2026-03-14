@@ -33,6 +33,7 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_adx, calc_atr, calc_ema, calc_sma, parse_candles, parse_volumes,
+    find_swing_levels, atr_regime,
 )
 from src.strategy.signal import get_signal
 
@@ -108,6 +109,30 @@ def _fmt_metric(value: float) -> str:
     if abs_val >= 0.01:
         return f"{val:.5f}"
     return f"{val:.6f}"
+
+
+def _fmt_price(symbol: str, price) -> str:
+    """Format price based on instrument scale: BTC→1dp, ETH/SOL→2dp, others→4dp."""
+    if price is None:
+        return "—"
+    base = symbol.split("-")[0].upper()
+    if base == "BTC":
+        return f"{float(price):.1f}"
+    if base in ("ETH", "SOL"):
+        return f"{float(price):.2f}"
+    return f"{float(price):.4f}"
+
+
+def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
+    """Return next candle close boundary as HH:MM UTC string."""
+    try:
+        dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        total_min = dt.hour * 60 + dt.minute
+        next_boundary = ((total_min // tf_minutes) + 1) * tf_minutes
+        h, m = divmod(next_boundary % (24 * 60), 60)
+        return f"{h:02d}:{m:02d} UTC"
+    except Exception:
+        return "—"
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
@@ -223,6 +248,48 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
                                  ema20=float(ema20_15m[-2]), atr=atr_15m),
         }
 
+    # ── Swing structure + volatility regime (15m) ────────────────────────────
+    swings_15m        = find_swing_levels(highs_15m, lows_15m, lookback=3, count=4)
+    atr_pct, atr_lbl  = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
+
+    # ── Pending plan — levels for WATCH mode (trend+structure, no signal yet) ─
+    pending_plan: dict = {"available": False}
+    if (bull_1h or bear_1h) and structure_ok and not signal.get("side"):
+        zone   = float(ema20_15m[-2])
+        inv    = float(ema50_15m[-2])
+        s_high = swings_15m["recent_highs"]
+        s_low  = swings_15m["recent_lows"]
+        if bull_1h:
+            above_zone = [h for h in s_high if h > zone]
+            trigger    = min(above_zone) if above_zone else round(zone + 0.5 * atr_15m, 6)
+            below_zone = [l for l in s_low  if l < zone]
+            sl_ref     = max(below_zone) if below_zone else inv
+            sl         = round(sl_ref - sl_buffer * atr_15m, 6)
+            sl_dist    = trigger - sl   # R:R anchored to trigger, not zone
+        else:  # bear
+            below_zone = [l for l in s_low  if l < zone]
+            trigger    = max(below_zone) if below_zone else round(zone - 0.5 * atr_15m, 6)
+            above_zone = [h for h in s_high if h > zone]
+            sl_ref     = min(above_zone) if above_zone else inv
+            sl         = round(sl_ref + sl_buffer * atr_15m, 6)
+            sl_dist    = sl - trigger   # R:R anchored to trigger, not zone
+        if sl_dist > 0:
+            if bull_1h:
+                tp1 = round(trigger + sl_dist * tp_r,       6)
+                tp2 = round(trigger + sl_dist * tp_r * 1.5, 6)
+            else:
+                tp1 = round(trigger - sl_dist * tp_r,       6)
+                tp2 = round(trigger - sl_dist * tp_r * 1.5, 6)
+            pending_plan = {
+                "available":    True,
+                "entry_zone":   round(zone, 6),
+                "trigger":      round(trigger, 6),
+                "sl":           round(sl, 6),
+                "tp1":          tp1,
+                "tp2":          tp2,
+                "invalidation": round(inv, 6),
+            }
+
     return {
         "1h": {
             "ema20": round(float(ema20_1h[-2]), 6),
@@ -244,6 +311,10 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "vol_ratio_pb": round(avg_recent / avg_prior, 2) if avg_prior > 0 else 0.0,
             "pb_vol_weak": pb_vol_weak,
             "pb_touch_threshold": round(pb_touch * atr_15m, 6),
+            "atr_pct":   atr_pct,
+            "atr_label": atr_lbl,
+            "swing_highs": swings_15m["recent_highs"],
+            "swing_lows":  swings_15m["recent_lows"],
         },
         "5m": {
             "trigger_close": round(float(trigger_close), 6),
@@ -256,8 +327,9 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "plus_di": round(plus_di_5m, 2),
             "minus_di": round(minus_di_5m, 2),
         },
-        "signal": signal,
-        "action": action,
+        "signal":       signal,
+        "action":       action,
+        "pending_plan": pending_plan,
     }
 
 
@@ -290,15 +362,17 @@ def _reason_to_human(reason: str) -> str:
 
 
 def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
-    """Two distinct templates based on whether a signal is confirmed:
-    - act["valid"]: ПЛАН ВХОДА (trade plan, 3 blocks)
-    - otherwise:   СЕЙЧАС ОРДЕР НЕ СТАВИМ (observation, 4-5 blocks)
+    """Three output modes based on market state:
+    - ГОТОВ ВХОД  (act["valid"])
+    - НАБЛЮДАЕМ   (trend + structure ok, no confirmed entry)
+    - ВНЕ РЫНКА   (no trend, or trend with broken structure)
     """
     h      = r["1h"]
     m      = r["15m"]
     f      = r["5m"]
     sig    = r["signal"]
     act    = r["action"]
+    pp     = r.get("pending_plan", {"available": False})
     reason = sig.get("reason", "")
 
     try:
@@ -307,11 +381,10 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
     except Exception:
         ts_str = captured_at
 
-    has_trend   = h["bull"] or h["bear"]
-    setup_zone  = m["near_ema"] and m["structure_ok"]
-    side_is_buy = sig.get("side") == "buy"
-    gap         = abs(m["close"] - m["ema20"])
-    threshold   = m["pb_touch_threshold"]
+    has_trend  = h["bull"] or h["bear"]
+    setup_zone = m["near_ema"] and m["structure_ok"]
+    gap        = abs(m["close"] - m["ema20"])
+    threshold  = m["pb_touch_threshold"]
 
     if gap <= threshold:
         zone_prox = "уже в зоне"
@@ -323,152 +396,249 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
     adx_word   = "устойчивый" if h["adx"] >= 25 else "умеренный" if h["adx"] >= 20 else "слабый"
     em_rel     = "выше" if h["ema20"] > h["ema50"] else "ниже"
     pb_char    = "с умеренным объёмом" if m["pb_vol_weak"] else "с повышенным объёмом"
-    side_above = "выше" if h["bull"] else "ниже"   # direction to recover structure
-    side_below = "ниже" if h["bull"] else "выше"   # direction that breaks scenario
-    bk_dir     = "выше" if h["bull"] else "ниже"   # breakout direction on 5m
-    direction  = "лонга" if h["bull"] else "шорта"
+    side_above = "выше" if h["bull"] else "ниже"
+    side_below = "ниже" if h["bull"] else "выше"
+    bk_dir     = "выше" if h["bull"] else "ниже"
+    dir_long   = h["bull"]
+
+    # ── Mode classification ──────────────────────────────────────────────────
+    mode_entry    = act["valid"]
+    mode_no_trend = not has_trend
+    mode_broken   = has_trend and not m["structure_ok"]
+    mode_off      = mode_no_trend or mode_broken   # ВНЕ РЫНКА
+    # mode_watch  = has_trend and m["structure_ok"] and not mode_entry  # НАБЛЮДАЕМ
+
+    # ── Status + direction labels (top lines, not block headers) ────────────
+    if mode_entry:
+        status_label = "ГОТОВ ВХОД"
+        dir_label    = "только LONG — короткая сторона не рассматривается" if dir_long \
+                       else "только SHORT — длинная сторона не рассматривается"
+    elif mode_no_trend:
+        status_label = "ВНЕ РЫНКА"
+        dir_label    = "направления нет — ни LONG, ни SHORT не рассматриваются"
+    elif mode_broken:
+        status_label = "ВНЕ РЫНКА"
+        dir_label    = "только LONG — но после восстановления структуры на 15m" if dir_long \
+                       else "только SHORT — но после восстановления структуры на 15m"
+    else:
+        status_label = "НАБЛЮДАЕМ"
+        dir_label    = "только LONG — короткая сторона не рассматривается" if dir_long \
+                       else "только SHORT — длинная сторона не рассматривается"
 
     SEP   = "═" * 46
     lines = [SEP, f"  {symbol}  |  {ts_str}", SEP, ""]
-
-    # ── СЕЙЧАС НА РЫНКЕ (one strong analytical block, same for both templates) ──
-    lines.append("СЕЙЧАС НА РЫНКЕ")
-    if act["valid"]:
-        struct = "бычий" if h["bull"] else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена откатила к средней зоне {pb_char}, структура удержалась. На 5m зафиксирован пробой с объёмом — все условия выполнены.")
-        lines.append("  (Проще: рынок дал нужную последовательность — контекст, откат, пробой. Всё сошлось.)")
-    elif not has_trend:
-        lines.append(f"  На старшем таймфрейме уверенного направленного движения нет — ADX {adx_word}, рынок не показывает ясного импульса в одну сторону.")
-        if m["near_ema"]:
-            local_line = "  Локально на 15m цена уже у средней зоны"
-            if m["structure_ok"]:
-                local_line += f" {pb_char}"
-            else:
-                local_line += ", но структура пока не удержана"
-            if f["breakout"] and f["vol_strong"]:
-                local_line += "; на 5m есть движение, но без старшего контекста этого недостаточно."
-            elif f["breakout"]:
-                local_line += "; на 5m движение появилось, но подтверждение ещё слабое."
-            else:
-                local_line += "; на 5m явного импульса пока нет."
-            lines.append(local_line)
-        elif f["vol_strong"]:
-            lines.append("  На 5m есть локальная активность, но без контекста сверху это не основание для позиции.")
-        lines.append("  (Проще: локально что-то может формироваться, но без сильного 1H-контекста вход лучше не рассматривать.)")
-    elif setup_zone and reason == "pullback_volume_strong":
-        struct = "бычий" if h["bull"] else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена вернулась к средней зоне, однако откат сопровождается повышенным объёмом — структура под давлением.")
-        lines.append("  (Проще: уровень правильный, но движение к нему слишком агрессивное — лучше подождать.)")
-    elif setup_zone and f["breakout"]:
-        struct = "бычий" if h["bull"] else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у средней зоны, на 5m появляется движение — однако не все условия подтверждения пока выполнены.")
-        lines.append("  (Проще: что-то начинается, но сигнал пока неполный — ждём.)")
-    elif setup_zone:
-        struct = "бычий" if h["bull"] else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена вернулась к средней зоне {pb_char} — структура держится, откат выглядит как коррекция. Ждём сигнала на 5m.")
-        lines.append("  (Проще: всё сходится — контекст, уровень, характер отката. Остаётся только сигнал.)")
-    elif not m["structure_ok"]:
-        struct = "бычий" if h["bull"] else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m структура не удержана — цена {side_below} EMA50, качество сетапа низкое.")
-        lines.append("  (Проще: тренд есть, но на 15m цена пробила опорную зону. Ждать восстановления структуры.)")
-    else:
-        struct   = "бычий" if h["bull"] else "медвежий"
-        move_dir = "растёт" if h["bull"] else "падает"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена ещё не откатила к средней зоне — рынок {move_dir} без паузы, удобной точки входа пока нет.")
-        lines.append("  (Проще: тренд есть, но цена не в том месте. Ждём отката к EMA20.)")
+    lines.append(f"  Статус:      {status_label}")
+    lines.append(f"  Направление: {dir_label}")
     lines.append("")
 
-    # ════════════════════════════════════════════════════════════════
-    # TEMPLATE A — вход подтверждён (act["valid"] = True)
-    # ════════════════════════════════════════════════════════════════
-    if act["valid"]:
-        lines.append("ПЛАН ВХОДА")
-        lines.append(f"  Вход можно рассматривать около {act['entry']}.")
-        lines.append(f"  Защитный выход:  {act['sl']}")
-        lines.append(f"  Первая цель:     {act['tp1']}")
-        lines.append(f"  Вторая цель:     {act['tp2']}")
-        lines.append("")
-
-        lines.append("КОГДА ЛУЧШЕ НЕ ВХОДИТЬ")
-        lines.append("  Если цена резко ушла от уровня к моменту исполнения.")
-        lines.append("  Если рынок начал хаотично двигаться в обе стороны.")
-
-    # ════════════════════════════════════════════════════════════════
-    # TEMPLATE B — наблюдение (act["valid"] = False)
-    # ════════════════════════════════════════════════════════════════
-    else:
-        # ── СЕЙЧАС ОРДЕР НЕ СТАВИМ ───────────────────────────────
-        lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
-        if not has_trend:
-            if m["near_ema"]:
-                lines.append("  Локально цена у рабочей зоны, но без подтверждённого направления на 1H вход не рассматриваем.")
+    # ── СЕЙЧАС НА РЫНКЕ ─────────────────────────────────────────────────────
+    lines.append("СЕЙЧАС НА РЫНКЕ")
+    if mode_entry:
+        struct = "бычий" if dir_long else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена откатила к средней зоне {pb_char}, структура удержалась. На 5m зафиксирован пробой с объёмом.")
+        lines.append("  (Проще: контекст, откат, пробой — всё сошлось.)")
+    elif mode_no_trend:
+        lines.append(f"  На 1H уверенного направленного движения нет — ADX {adx_word}, рынок не показывает ясного импульса.")
+        if m["near_ema"]:
+            local = f"  Локально на 15m цена у средней зоны (EMA20 ≈ {_fmt_price(symbol, m['ema20'])})"
+            if m["structure_ok"]:
+                local += f" {pb_char}"
             else:
-                lines.append("  Нет направленного контекста на 1H — торговать рано.")
-        elif not m["structure_ok"]:
-            lines.append("  На 15m структура не удержана — сетап некачественный.")
-        elif reason == "pullback_volume_strong":
-            lines.append("  Откат к зоне слишком агрессивный — лучше дождаться ослабления давления.")
-        elif f["breakout"]:
-            lines.append("  Сетап формируется — не все условия подтверждения пока выполнены.")
-        else:
-            lines.append("  Сетап формируется — ждём подтверждающего импульса на 5m.")
-        lines.append("")
-
-        # ── ЗОНА НАБЛЮДЕНИЯ ──────────────────────────────────────
-        lines.append("ЗОНА НАБЛЮДЕНИЯ")
-        if not has_trend:
-            lines.append(f"  Локальный ориентир — EMA20 (15m) ≈ {m['ema20']:.4f}.")
-            lines.append("  Пока это только уровень наблюдения, а не готовая зона входа.")
-        elif not m["structure_ok"]:
-            lines.append("  Сейчас зона входа не сформирована.")
-            lines.append(f"  Сначала цене нужно вернуться {side_above} EMA50 (15m) ≈ {m['ema50']:.4f}.")
-        elif setup_zone:
-            lines.append(f"  EMA20 (средняя зона цены на 15m) ≈ {m['ema20']:.4f}.")
-            if reason == "pullback_volume_strong":
-                lines.append("  Цена у зоны, но характер движения к ней агрессивный.")
+                local += ", но структура пока не удержана"
+            if f["breakout"] and f["vol_strong"]:
+                local += "; на 5m есть движение, но без старшего контекста этого недостаточно."
             elif f["breakout"]:
-                lines.append("  Цена у зоны, на 5m формируется движение.")
+                local += "; на 5m движение появилось, подтверждение ещё слабое."
             else:
-                lines.append("  Цена у зоны, откат выглядит как коррекция.")
-        else:
-            # structure_ok=True, not near EMA20
-            lines.append(f"  EMA20 (средняя зона цены на 15m) ≈ {m['ema20']:.4f}.")
-            if zone_prox == "приближается к зоне":
-                lines.append("  Цена приближается к зоне — следим за поведением при подходе.")
-            else:
-                lines.append("  Цена пока не добралась до зоны — ждём отката.")
+                local += "; на 5m явного импульса пока нет."
+            lines.append(local)
+        elif f["vol_strong"]:
+            lines.append("  На 5m есть локальная активность, но без контекста сверху это не основание для позиции.")
+        lines.append("  (Проще: рынок не определился — вход без контекста это лотерея.)")
+    elif mode_broken:
+        struct = "бычий" if dir_long else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. Тренд есть. Но на 15m структура нарушена — цена {side_below} EMA50.")
+        lines.append("  (Проще: направление понятно, но опорная зона пробита. Вход преждевременный.)")
+    elif reason == "pullback_volume_strong":
+        struct = "бычий" if dir_long else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у зоны, но откат идёт с повышенным объёмом — давление на структуру.")
+        lines.append("  (Проще: уровень правильный, но движение к нему слишком агрессивное.)")
+    elif setup_zone and f["breakout"]:
+        struct = "бычий" if dir_long else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у зоны, на 5m появляется движение — но подтверждение ещё неполное.")
+        lines.append("  (Проще: всё почти сходится — ждём последнего условия.)")
+    elif setup_zone:
+        struct = "бычий" if dir_long else "медвежий"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у средней зоны {pb_char} — структура держится, откат выглядит как коррекция.")
+        lines.append("  (Проще: контекст и уровень сошлись, ждём сигнала на 5m.)")
+    else:
+        struct   = "бычий" if dir_long else "медвежий"
+        move_dir = "растёт" if dir_long else "падает"
+        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена ещё не откатила к средней зоне — рынок {move_dir} без паузы.")
+        lines.append("  (Проще: тренд есть, но цена не в том месте.)")
+    # ATR regime note — only when not normal (adds soft volatility context)
+    atr_lbl = m.get("atr_label", "")
+    if "сжатие" in atr_lbl or "расширение" in atr_lbl:
+        lines.append(f"  Волатильность: {atr_lbl}.")
+    lines.append("")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # MODE C — ГОТОВ ВХОД
+    # ════════════════════════════════════════════════════════════════════════
+    if mode_entry:
+        lines.append("ПЛАН ВХОДА")
+        lines.append(f"  Вход можно рассматривать около {_fmt_price(symbol, act['entry'])}.")
+        lines.append(f"  Защитный выход:  {_fmt_price(symbol, act['sl'])}")
+        lines.append(f"  Первая цель:     {_fmt_price(symbol, act['tp1'])}")
+        lines.append(f"  Вторая цель:     {_fmt_price(symbol, act['tp2'])}")
         lines.append("")
 
-        # ── ЧТО НУЖНО ДЛЯ ВХОДА ─────────────────────────────────
-        lines.append("ЧТО НУЖНО ДЛЯ ВХОДА")
-        if not has_trend:
-            lines.append("  Сначала на 1H должен появиться более уверенный импульс в одну сторону.")
-            lines.append("  Даже если локально цена у уровня, без этого контекста вход лучше не открывать.")
-        elif not m["structure_ok"]:
-            lines.append(f"  Цена должна закрепиться {side_above} EMA50 (15m).")
+        lines.append("ГДЕ ИДЕЯ ЛОМАЕТСЯ")
+        lines.append("  Если цена пересечёт защитный выход — сценарий не работает, выходим.")
+        lines.append("")
+
+        lines.append("ГДЕ ЗАБРАТЬ ПРИБЫЛЬ")
+        lines.append(f"  Первая цель: {_fmt_price(symbol, act['tp1'])} — можно зафиксировать часть.")
+        lines.append(f"  Вторая цель: {_fmt_price(symbol, act['tp2'])} — если позиция всё ещё открыта.")
+        lines.append("")
+
+        lines.append("НЕ ДЕЛАТЬ")
+        lines.append(f"  Не входить, если цена уже ушла далеко от {_fmt_price(symbol, act['entry'])}.")
+        lines.append("  Не двигать стоп в убыточную сторону.")
+        lines.append("  Не увеличивать позицию после открытия.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # MODE A — ВНЕ РЫНКА
+    # ════════════════════════════════════════════════════════════════════════
+    elif mode_off:
+        lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
+        if mode_no_trend:
+            lines.append("  Нет направленного контекста на 1H — оснований для позиции нет.")
+        else:
+            lines.append("  На 15m структура нарушена — сетап некачественный.")
+        lines.append("")
+
+        lines.append("ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ")
+        if mode_no_trend:
+            lines.append("  Уверенный импульс на 1H с расхождением EMA20/EMA50 и ADX ≥ 20.")
+            lines.append("  Только после этого — возврат к оценке зоны входа.")
+        else:
+            lines.append(f"  Цена должна вернуться {side_above} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} и закрепиться.")
             lines.append("  После этого — спокойный откат к EMA20 и подтверждение на 5m.")
-        elif reason == "pullback_volume_strong":
-            lines.append(f"  Новый откат к EMA20 с умеренным объёмом.")
-            lines.append(f"  Затем подтверждающий импульс на 5m в сторону {direction}а.")
+        lines.append("")
+
+        lines.append("НЕ ДЕЛАТЬ")
+        if mode_no_trend:
+            lines.append("  Не открывать позицию ни в LONG, ни в SHORT.")
+            lines.append("  Не трактовать локальные движения на 5m как самостоятельный сигнал.")
+        elif dir_long:
+            lines.append("  Не открывать LONG — структура нарушена, вход преждевременный.")
+            lines.append("  Не открывать SHORT против бычьего сценария.")
+        else:
+            lines.append("  Не открывать SHORT — структура нарушена, вход преждевременный.")
+            lines.append("  Не открывать LONG против медвежьего сценария.")
+        lines.append("")
+
+        lines.append("КОГДА ВЕРНУТЬСЯ")
+        if mode_no_trend:
+            lines.append("  Пришлите новый скрин после закрытия текущей 1H свечи.")
+            lines.append("  Если на 1H по-прежнему нет импульса — сценарий по этому активу пока не актуален.")
+        else:
+            lines.append(f"  Вернитесь когда цена закрепится {side_above} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])}.")
+            lines.append("  До этого пересылать скрин нет смысла — условия не изменились.")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # MODE B — НАБЛЮДАЕМ
+    # ════════════════════════════════════════════════════════════════════════
+    else:
+        lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
+        if reason == "pullback_volume_strong":
+            lines.append("  Откат к зоне слишком агрессивный — ждём ослабления давления.")
         elif f["breakout"]:
-            lines.append(f"  Свеча на 5m должна закрыться {bk_dir} последней структуры с объёмом выше среднего.")
-            lines.append("  Все условия должны выполниться одновременно — частичного сигнала недостаточно.")
+            lines.append("  Движение на 5m есть — но не все условия подтверждения выполнены.")
+        else:
+            lines.append("  Ждём подтверждающего импульса на 5m.")
+        lines.append("")
+
+        lines.append("ЗОНА НАБЛЮДЕНИЯ")
+        lines.append(f"  EMA20 (средняя зона цены на 15m) ≈ {_fmt_price(symbol, m['ema20'])}.")
+        if setup_zone:
+            if reason == "pullback_volume_strong":
+                lines.append("  Цена в зоне — но вход ещё не готов: откат к зоне слишком агрессивный.")
+            elif f["breakout"]:
+                lines.append("  Цена в зоне — но вход ещё не готов: на 5m движение есть, ждём подтверждения условий.")
+            else:
+                lines.append("  Цена в зоне — но вход ещё не готов: ждём подтверждающего импульса на 5m.")
+        else:
+            if zone_prox == "приближается к зоне":
+                lines.append("  Цена приближается к зоне.")
+            else:
+                lines.append("  Цена пока не добралась до зоны.")
+        lines.append("")
+
+        # Pending plan — show pre-computed levels when available
+        if pp.get("available"):
+            lines.append("ПЛАН ПРИ ПОДТВЕРЖДЕНИИ")
+            lines.append("  Уровни рассчитаны заранее. Точнее станут при появлении сигнала:")
+            lines.append(f"  Зона входа:        ≈ {_fmt_price(symbol, pp['entry_zone'])}")
+            lines.append(f"  Триггерная цена:   {_fmt_price(symbol, pp['trigger'])}")
+            lines.append(f"  Ориентир стопа:    {_fmt_price(symbol, pp['sl'])}")
+            lines.append(f"  Первая цель:       {_fmt_price(symbol, pp['tp1'])}")
+            lines.append(f"  Вторая цель:       {_fmt_price(symbol, pp['tp2'])}")
+            lines.append(f"  Сценарий ломается: цена уходит {side_below} {_fmt_price(symbol, pp['invalidation'])}")
+            lines.append("")
+
+        lines.append("ЧТО НУЖНО ДЛЯ ВХОДА")
+        if reason == "pullback_volume_strong":
+            lines.append(f"  Новый откат к EMA20 с умеренным объёмом.")
+            lines.append(f"  Затем подтверждающий импульс на 5m {bk_dir} последней структуры.")
+        elif f["breakout"]:
+            lines.append(f"  Свеча на 5m должна закрыться {bk_dir} структуры с объёмом выше среднего.")
+            lines.append("  Все условия должны выполниться одновременно.")
         else:
             lines.append(f"  Свеча на 5m должна закрыться {bk_dir} последней структуры.")
             lines.append("  Объём на 5m должен быть выше среднего.")
         lines.append("")
 
-        # ── КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ (только если есть тренд) ────
-        if has_trend:
-            lines.append("КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ")
-            if not m["structure_ok"]:
-                lines.append(f"  Если цена продолжает удерживаться {side_below} EMA50 — наблюдение откладываем.")
-            elif setup_zone:
-                lines.append(f"  Если цена уйдёт {side_below} EMA50 (15m) ≈ {m['ema50']:.4f} — сценарий наблюдения отменяем.")
-            else:
-                lines.append(f"  Если цена пробьёт EMA50 (15m) ≈ {m['ema50']:.4f}, сценарий наблюдения отменяем.")
+        lines.append("КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ")
+        if setup_zone:
+            lines.append(f"  Если цена уйдёт {side_below} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} — сценарий отменяем.")
+        else:
+            lines.append(f"  Если цена пробьёт EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} — сценарий отменяем.")
+        lines.append("")
 
-    lines += ["", SEP]
+        lines.append("НЕ ДЕЛАТЬ")
+        if dir_long:
+            lines.append("  Не входить в SHORT. Ожидаемое движение цены к зоне — это подготовка к LONG, не short-идея.")
+            lines.append("  Не открывать LONG до подтверждения на 5m.")
+            lines.append("  Не гнаться за ценой, если она ушла от зоны.")
+        else:
+            lines.append("  Не входить в LONG. Ожидаемое движение цены к зоне — это подготовка к SHORT, не long-идея.")
+            lines.append("  Не открывать SHORT до подтверждения на 5m.")
+            lines.append("  Не гнаться за ценой, если она ушла от зоны.")
+        lines.append("")
+
+        lines.append("КОГДА ВЕРНУТЬСЯ")
+        if not setup_zone:
+            lines.append(f"  Пришлите скрин когда цена приблизится к ≈ {_fmt_price(symbol, m['ema20'])}.")
+            lines.append("  Или после закрытия ближайшей 15m свечи.")
+        elif reason == "pullback_volume_strong":
+            lines.append("  Пришлите новый скрин через 1-2 закрытых 15m свечи.")
+            lines.append("  Нужно убедиться, что давление на откате ослабло.")
+        elif f["breakout"]:
+            lines.append("  Пришлите скрин после закрытия текущей 5m свечи.")
+            lines.append("  Нужно видеть подтверждение закрытия, а не только движение в моменте.")
+        else:
+            lines.append("  Пришлите скрин после закрытия ближайшей 5m свечи.")
+
+    # Актуально до — next candle close for the relevant timeframe
+    if mode_entry or setup_zone:
+        until_str = _next_candle_close(captured_at, 5)
+    elif mode_no_trend:
+        until_str = _next_candle_close(captured_at, 60)
+    else:
+        until_str = _next_candle_close(captured_at, 15)
+    lines += ["", f"  Актуально до: {until_str}", "", SEP]
     return "\n".join(lines)
 
 
@@ -479,7 +649,7 @@ def _format_telegram(client_summary: str) -> str:
 
 # ── Trader view ───────────────────────────────────────────────────────────────
 
-def build_trader_view(r: dict) -> list:
+def build_trader_view(r: dict, symbol: str = "") -> list:
     lines = []
     h = r["1h"]
     m = r["15m"]
@@ -495,7 +665,7 @@ def build_trader_view(r: dict) -> list:
         lines.append(f"• 1H тренда нет (ADX {h['adx']:.1f}) — рынок в боковике, ждать")
 
     if m["near_ema"]:
-        lines.append(f"• На 15m цена у EMA20 ({m['ema20']:.4f}) — зона пулбэка есть")
+        lines.append(f"• На 15m цена у EMA20 ({_fmt_price(symbol, m['ema20'])}) — зона пулбэка есть")
     else:
         dist = abs(m["close"] - m["ema20"])
         lines.append(
@@ -531,7 +701,7 @@ def build_trader_view(r: dict) -> list:
     elif reason == "no_trend_1h":
         lines.append("• Итог: нет тренда. Ждать ADX ≥ 20 и расхождения DI на 1H")
     elif reason == "no_pullback_15m":
-        lines.append(f"• Итог: нет сетапа. Ждать цены к EMA20(15m) ≈ {m['ema20']:.4f}")
+        lines.append(f"• Итог: нет сетапа. Ждать цены к EMA20(15m) ≈ {_fmt_price(symbol, m['ema20'])}")
     elif reason == "pullback_volume_strong":
         lines.append("• Итог: пулбэк слишком агрессивный. Ждать ослабления объёма")
     elif reason == "no_breakout_5m":
@@ -544,7 +714,7 @@ def build_trader_view(r: dict) -> list:
     return lines
 
 
-def build_action_view(r: dict) -> list:
+def build_action_view(r: dict, symbol: str = "") -> list:
     lines = []
     act = r["action"]
     sig = r["signal"]
@@ -552,10 +722,10 @@ def build_action_view(r: dict) -> list:
     if act["valid"]:
         side_str = "LONG" if sig["side"] == "buy" else "SHORT"
         lines.append(f"  Направление:  {side_str}  ({act['type']})")
-        lines.append(f"  Entry:        {act['entry']}")
-        lines.append(f"  SL:           {act['sl']}  (dist={_fmt_metric(act['sl_dist'])})")
-        lines.append(f"  TP1:          {act['tp1']}  (R×{act['r_multiple']})")
-        lines.append(f"  TP2:          {act['tp2']}  (R×{act['r_multiple'] * 1.5:.1f})")
+        lines.append(f"  Entry:        {_fmt_price(symbol, act['entry'])}")
+        lines.append(f"  SL:           {_fmt_price(symbol, act['sl'])}  (dist={_fmt_metric(act['sl_dist'])})")
+        lines.append(f"  TP1:          {_fmt_price(symbol, act['tp1'])}  (R×{act['r_multiple']})")
+        lines.append(f"  TP2:          {_fmt_price(symbol, act['tp2'])}  (R×{act['r_multiple'] * 1.5:.1f})")
         lines.append(f"  Invalidation: позиция инвалидна если цена пересекла SL")
     else:
         lines.append(f"  Сигнала нет. {act.get('hint', '')}")
@@ -573,8 +743,8 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
     reason = sig.get("reason", "")
     stage  = _stopped_stage(reason)
     side   = sig.get("side")
-    trader = build_trader_view(r)
-    action = build_action_view(r)
+    trader = build_trader_view(r, symbol)
+    action = build_action_view(r, symbol)
 
     SEP  = "=" * 62
     THIN = "─" * 62
@@ -586,12 +756,12 @@ def format_report(symbol: str, captured_at: str, r: dict) -> str:
         SEP,
         "",
         f"── 1H TREND {THIN[11:]}",
-        f"  EMA20:  {h['ema20']:<12.4f} EMA50:  {h['ema50']:.4f}",
+        f"  EMA20:  {_fmt_price(symbol, h['ema20']):<12} EMA50:  {_fmt_price(symbol, h['ema50'])}",
         f"  ADX:    {h['adx']:<12.1f} +DI: {h['plus_di']:.1f}   -DI: {h['minus_di']:.1f}",
         f"  Trend:  {trend_str}",
         "",
         f"── 15m SETUP {THIN[12:]}",
-        f"  Close:  {m['close']:<12.4f} EMA20: {m['ema20']:.4f}   EMA50: {m['ema50']:.4f}",
+        f"  Close:  {_fmt_price(symbol, m['close']):<12} EMA20: {_fmt_price(symbol, m['ema20'])}   EMA50: {_fmt_price(symbol, m['ema50'])}",
         f"  ATR:    {m['atr']:.4f}",
         f"  Near EMA20:   gap={_fmt_metric(abs(m['close'] - m['ema20']))}  "
         f"threshold={_fmt_metric(m['pb_touch_threshold'])}  {ok(m['near_ema'])}",
@@ -675,25 +845,44 @@ def generate_annotated_png(image_path: str, summary_text: str, out_path: str) ->
     _SECTION_HEADERS = {
         "СЕЙЧАС НА РЫНКЕ",
         "ПЛАН ВХОДА",
+        "ГДЕ ИДЕЯ ЛОМАЕТСЯ",
+        "ГДЕ ЗАБРАТЬ ПРИБЫЛЬ",
         "СЕЙЧАС ОРДЕР НЕ СТАВИМ",
         "ЗОНА НАБЛЮДЕНИЯ",
+        "ПЛАН ПРИ ПОДТВЕРЖДЕНИИ",
         "ЧТО НУЖНО ДЛЯ ВХОДА",
+        "ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ",
         "КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ",
-        "КОГДА ЛУЧШЕ НЕ ВХОДИТЬ",
+        "НЕ ДЕЛАТЬ",
+        "КОГДА ВЕРНУТЬСЯ",
     }
 
     def line_color(text: str) -> tuple:
         stripped = text.strip()
         if "═" in text:
             return (100, 160, 255)
+        # Status lines — colored by mode
+        if stripped.startswith("Статус:"):
+            if "ГОТОВ ВХОД" in stripped:  return (80, 210, 120)   # green
+            if "НАБЛЮДАЕМ" in stripped:   return (220, 180, 60)   # amber
+            return (150, 150, 155)                                  # gray (ВНЕ РЫНКА)
+        if stripped.startswith("Направление:"):
+            if "только LONG" in stripped:   return (80, 210, 120)
+            if "только SHORT" in stripped:  return (210, 80,  80)
+            return (150, 150, 155)
         if stripped in _SECTION_HEADERS:
             return (80, 140, 210)
         if stripped.startswith("Вход можно"):
             return (255, 200, 80)
-        if stripped.startswith(("Первая цель:", "Вторая цель:")):
+        if stripped.startswith(("Первая цель:", "Вторая цель:", "Зона входа:", "Триггерная цена:")):
             return (255, 200, 80)
-        if stripped.startswith("Защитный выход:"):
+        if stripped.startswith(("Защитный выход:", "Ориентир стопа:", "Сценарий ломается:")):
             return (220, 130, 80)
+        if stripped.startswith("Волатильность:"):
+            if "высокая" in stripped or "расширение" in stripped:
+                return (220, 130, 80)
+            if "низкая" in stripped or "сжатие" in stripped:
+                return (100, 160, 255)
         if stripped.startswith("("):
             return (145, 150, 165)
         return (190, 195, 210)
@@ -773,6 +962,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "stopped_at_stage": _stopped_stage(result["signal"].get("reason", "")),
         },
         "action":       result["action"],
+        "pending_plan": result["pending_plan"],
         "trader_notes": [],
     }
     snap_path.write_text(

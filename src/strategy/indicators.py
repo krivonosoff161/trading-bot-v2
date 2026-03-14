@@ -104,6 +104,70 @@ def calc_sma(values: np.ndarray, period: int) -> float:
     return float(np.mean(values[-period:]))
 
 
+def calc_atr_series(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> np.ndarray:
+    """Full ATR array using Wilder's smoothing (same logic as calc_atr but returns array)."""
+    n = len(closes)
+    tr = np.zeros(n)
+    for i in range(1, n):
+        tr[i] = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+    atr = np.zeros(n)
+    if period < n:
+        atr[period] = float(np.mean(tr[1:period + 1]))
+        for i in range(period + 1, n):
+            atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+    return atr
+
+
+def atr_regime(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+               period: int = 14, history: int = 50) -> tuple:
+    """ATR percentile vs recent history bars. Returns (pct: float, label: str)."""
+    atr_arr = calc_atr_series(highs, lows, closes, period)
+    valid = atr_arr[period + 1:]  # skip warmup zeros
+    if len(valid) < 10:
+        return 50.0, "нормальная волатильность"
+    h = min(history, len(valid))
+    recent = valid[-h:]
+    current = float(valid[-1])
+    pct = float(np.mean(recent <= current) * 100)
+    if pct <= 30:
+        label = "сжатие (волатильность низкая)"
+    elif pct >= 70:
+        label = "расширение (волатильность высокая)"
+    else:
+        label = "нормальная волатильность"
+    return round(pct, 1), label
+
+
+def find_swing_levels(highs: np.ndarray, lows: np.ndarray,
+                      lookback: int = 3, count: int = 4) -> dict:
+    """Pivot-based swing high/low detection.
+
+    A swing high at bar i: highs[i] is the max in window [i-lookback, i+lookback].
+    A swing low  at bar i: lows[i]  is the min in window [i-lookback, i+lookback].
+    Excludes last `lookback` bars (incomplete pivots).
+    Returns last `count` confirmed swings of each type.
+    """
+    n = len(highs)
+    swing_highs: list = []
+    swing_lows:  list = []
+    # Stop one bar earlier so the right window never includes the forming (unclosed) candle at n-1
+    for i in range(lookback, n - lookback - 1):
+        win_h = highs[max(0, i - lookback): i + lookback + 1]
+        win_l = lows[max(0, i - lookback): i + lookback + 1]
+        if float(highs[i]) >= float(np.max(win_h)):
+            swing_highs.append(float(highs[i]))
+        if float(lows[i]) <= float(np.min(win_l)):
+            swing_lows.append(float(lows[i]))
+    return {
+        "recent_highs": swing_highs[-count:] if swing_highs else [],
+        "recent_lows":  swing_lows[-count:]  if swing_lows  else [],
+    }
+
+
 def calc_rsi(closes: np.ndarray, period: int = 3) -> float:
     """RSI with Wilder's smoothing."""
     n = len(closes)

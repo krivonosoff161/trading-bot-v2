@@ -4,13 +4,12 @@ Opens BTC LONG 1 contract with TP +0.5% and SL -0.3%, then closes it.
 """
 
 import asyncio
-import time
 from src.utils.logger import setup_logger
 from src.config import Config
 from src.exchange.okx_client import OKXClient
 
 
-async def test():
+async def main():
     setup_logger()
     config = Config.load()
     client = OKXClient(config.api_key, config.secret_key, config.passphrase, config.is_demo)
@@ -67,4 +66,5 @@ async def test():
     print("\n--- OCO test complete ---\n")
 
 
-asyncio.run(test())
+if __name__ == "__main__":
+    asyncio.run(main())
