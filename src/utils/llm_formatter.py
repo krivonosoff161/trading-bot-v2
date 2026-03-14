@@ -28,67 +28,160 @@ _TIMEOUT    = 60  # seconds
 _SYSTEM_PROMPT = """\
 Ты — аналитик крипторынка. Пишешь клиенту короткий разбор торговой ситуации на русском языке.
 
-Правила:
+Правила формата:
 - Опирайся ТОЛЬКО на структурированные данные из JSON. Изображение — визуальный контекст, не источник решений.
 - Тон: деловой, конкретный. Без приветствий ("Привет!", "Добрый день"). Без первого лица ("я считаю", "я согласен").
 - Не используй слова "бот", "ботовская", "система" — просто описывай ситуацию от своего имени как аналитик.
-- Длина: 120–200 слов. Коротко и по делу.
+- Длина: 130–210 слов. Коротко и по делу.
 - Структура (без заголовков-капслока, пиши свободно):
-  1. Что сейчас происходит на рынке (тренд/боковик, волатильность)
+  1. Что сейчас происходит на рынке (режим, волатильность)
   2. Что делать: ждать, готовиться к входу, или рынок не интересен
-  3. Конкретные уровни ТОЛЬКО если они есть в JSON (entry_zone, trigger, sl, tp1, tp2) — пиши числа
+  3. Конкретные уровни ТОЛЬКО если они есть в JSON — пиши числа
   4. Когда идея теряет смысл (инвалидация)
 - Направление сделки: всегда пиши ЛОНГ или ШОРТ, не "покупка"/"продажа".
 - Если в данных написано "Подтверждённых уровней для входа НЕТ" — не предлагай лимитные ордера вообще. Никаких конкретных цен для входа. Объясни что ждём.
-- Если есть ПОДТВЕРЖДЁННЫЙ ПЛАН или АКТИВНЫЙ СИГНАЛ с entry_zone/trigger — тогда можно написать что трейдер может выставить лимитный ордер на уровне триггера заранее.
+- Если есть ПОДТВЕРЖДЁННЫЙ ПЛАН или АКТИВНЫЙ СИГНАЛ с entry_zone/trigger — можно написать что трейдер может выставить лимитный ордер на уровне триггера заранее.
 - Инвалидация: пиши что именно сломает сценарий (пробой уровня, разворот), а не что его подтвердит.
 - Никогда не давай гарантий. Никогда не пиши "советую" или "рекомендую купить/продать".
 - В конце одна строка: "Актуально до: HH:MM UTC" — возьми из поля expiry_time.
+
+Инструкции по режиму рынка (смотри поле РЕЖИМ РЫНКА):
+- ТРЕНД ВВЕРХ: ищи точку входа в ЛОНГ на откате к EMA20 или EMA50. Опиши где ждать откат и при каком условии входить.
+- ТРЕНД ВНИЗ: ищи точку входа в ШОРТ на откате к EMA20 или EMA50. Опиши где ждать откат.
+- БОКОВИК / НЕТ ТРЕНДА: не рекомендуй трендовые входы. Опиши диапазон (swing high / swing low как границы).
+  Если цена в диапазоне менее 25% от низа — можно рассматривать ЛОНГ к середине или верху диапазона.
+  Если цена более 75% от низа к верху — можно рассматривать ШОРТ к середине или низу диапазона.
+  Если цена в середине (25–75%) — ждать подхода к границе.
+  TP в боковике = противоположная граница диапазона. SL = за границей с запасом.
+  Инвалидация в боковике = закрытие свечи за границей диапазона.
 """
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
-    """Structured snapshot summary for LLM — only confirmed data, no raw dicts."""
+    """Structured snapshot summary for LLM — full data for all three market regimes."""
     h1  = snapshot.get("1h",  {})
     h15 = snapshot.get("15m", {})
+    h5  = snapshot.get("5m",  {})
     bd  = snapshot.get("bot_decision", {})
     pp  = snapshot.get("pending_plan", {})
     act = snapshot.get("action", {})
 
-    # 1H trend status
+    # ── Market regime ──────────────────────────────────────────────────────────
     if h1.get("bull"):
-        trend_1h = f"бычий (ADX={h1.get('adx', '—')}, +DI={h1.get('plus_di', '—')}, -DI={h1.get('minus_di', '—')})"
+        regime = "ТРЕНД ВВЕРХ"
     elif h1.get("bear"):
-        trend_1h = f"медвежий (ADX={h1.get('adx', '—')}, +DI={h1.get('plus_di', '—')}, -DI={h1.get('minus_di', '—')})"
+        regime = "ТРЕНД ВНИЗ"
     else:
-        trend_1h = f"нет тренда (ADX={h1.get('adx', '—')})"
+        regime = "БОКОВИК / НЕТ ТРЕНДА"
 
-    # 15m structure
-    structure = "есть" if h15.get("structure_ok") else "нет"
-    near_ema  = "да"   if h15.get("near_ema")     else "нет"
+    # ── Current price and swing levels ────────────────────────────────────────
+    close       = h15.get("close")
+    ema20_15m   = h15.get("ema20")
+    ema50_15m   = h15.get("ema50")
+    swing_highs = h15.get("swing_highs") or []
+    swing_lows  = h15.get("swing_lows")  or []
+    swing_high  = swing_highs[-1] if swing_highs else None
+    swing_low   = swing_lows[-1]  if swing_lows  else None
 
-    # Bot decision in plain text
+    price_pct = None
+    if close and swing_high and swing_low:
+        rng = swing_high - swing_low
+        if rng > 0:
+            price_pct = round((close - swing_low) / rng * 100, 1)
+
+    # ── Volatility ─────────────────────────────────────────────────────────────
+    atr_label = h15.get("atr_label", "—")
+    atr_pct   = h15.get("atr_pct")
+
+    # ── Volume context (15m pullback) ──────────────────────────────────────────
+    vol_recent   = h15.get("vol_recent")
+    vol_prior    = h15.get("vol_prior")
+    vol_ratio_pb = h15.get("vol_ratio_pb")
+    pb_vol_weak  = h15.get("pb_vol_weak")
+
+    # ── 5m confirmation ───────────────────────────────────────────────────────
+    breakout_5m   = h5.get("breakout")
+    vol_strong_5m = h5.get("vol_strong")
+    vol_ratio_5m  = h5.get("vol_ratio")
+    di_confirm_5m = h5.get("di_confirm")
+    plus_di_5m    = h5.get("plus_di")
+    minus_di_5m   = h5.get("minus_di")
+
+    # ── Bot decision ──────────────────────────────────────────────────────────
     reason = bd.get("reason", "—")
     stage  = bd.get("stopped_at_stage", "—")
     decision_text = f"нет сигнала (причина: {reason}, остановлено на: {stage})"
     if bd.get("side"):
         decision_text = f"сигнал {bd['side'].upper()}"
 
+    # ── Build text ────────────────────────────────────────────────────────────
     lines = [
         f"Пара: {symbol}",
         f"Время: {captured_at}",
         "",
-        f"1H тренд: {trend_1h}",
-        f"15m структура: {structure}",
-        f"15m цена у EMA20: {near_ema}",
-        f"15m ATR режим: {h15.get('atr_label', '—')}",
+        f"РЕЖИМ РЫНКА: {regime}",
+        f"1H: ADX={h1.get('adx', '—')}, +DI={h1.get('plus_di', '—')}, -DI={h1.get('minus_di', '—')}",
         "",
-        f"Решение: {decision_text}",
     ]
 
-    # Confirmed trade levels — ONLY if pending_plan is available
+    # Price context
+    if close:
+        lines.append(f"Текущая цена: {close}")
+    if ema20_15m:
+        lines.append(f"EMA20 (15m): {ema20_15m}")
+    if ema50_15m:
+        lines.append(f"EMA50 (15m): {ema50_15m}")
+    if swing_high and swing_low:
+        lines.append(f"Swing High (ближайший максимум): {swing_high}")
+        lines.append(f"Swing Low  (ближайший минимум): {swing_low}")
+        if price_pct is not None:
+            lines.append(f"Цена в диапазоне: {price_pct}% от низа к верху")
+    lines.append("")
+
+    # Volatility — atr_pct is ATR percentile vs last 50 bars (0–100), not % of price
+    atr_line = f"Волатильность 15m: {atr_label}"
+    if atr_pct is not None:
+        atr_line += f" (перцентиль ATR: {atr_pct} из 100)"
+    lines.append(atr_line)
+
+    # Volume 15m
+    if vol_ratio_pb is not None:
+        desc = f"Объём пулбэка (15m): ratio={vol_ratio_pb}"
+        if vol_recent is not None and vol_prior is not None:
+            desc += f" (недавний={round(vol_recent)}, норма={round(vol_prior)})"
+        if pb_vol_weak is not None:
+            desc += f" — {'слабый (норм. для отката)' if pb_vol_weak else 'сильный (агрессивный откат)'}"
+        lines.append(desc)
+
+    lines.append("")
+
+    # 15m structure
+    structure = "есть" if h15.get("structure_ok") else "нет"
+    near_ema  = "да"   if h15.get("near_ema")     else "нет"
+    lines += [
+        f"15m структура для входа: {structure}",
+        f"15m цена у EMA20: {near_ema}",
+    ]
+
+    # 5m confirmation
+    if any(v is not None for v in [breakout_5m, vol_strong_5m, di_confirm_5m]):
+        lines += ["", "5m подтверждение:"]
+        if breakout_5m is not None:
+            lines.append(f"  пробой уровня: {'да' if breakout_5m else 'нет'}")
+        if vol_strong_5m is not None:
+            ratio_str = f" (×{vol_ratio_5m})" if vol_ratio_5m is not None else ""
+            lines.append(f"  сильный объём: {'да' if vol_strong_5m else 'нет'}{ratio_str}")
+        if di_confirm_5m is not None:
+            di_str = ""
+            if plus_di_5m is not None and minus_di_5m is not None:
+                di_str = f" (+DI={plus_di_5m}, -DI={minus_di_5m})"
+            lines.append(f"  DI подтверждение: {'да' if di_confirm_5m else 'нет'}{di_str}")
+
+    lines += ["", f"Решение: {decision_text}"]
+
+    # Confirmed trade levels
     if pp.get("available"):
         lines += [
             "",
@@ -111,13 +204,10 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
             f"  Цель 2: {act.get('tp2', '—')}",
         ]
     else:
-        lines += [
-            "",
-            "Подтверждённых уровней для входа НЕТ. Ордера не ставятся.",
-        ]
+        lines += ["", "Подтверждённых уровней для входа НЕТ. Ордера не ставятся."]
         hint = act.get("hint")
         if hint:
-            lines += [f"Наблюдение (не уровень для ордера): {hint}"]
+            lines.append(f"Наблюдение (не уровень для ордера): {hint}")
 
     expiry = snapshot.get("expiry_time")
     if expiry:
