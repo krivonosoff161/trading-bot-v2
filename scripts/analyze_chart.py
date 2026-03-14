@@ -1008,11 +1008,13 @@ def generate_chart_png(
                 sh_p = float(sh_list[-1])
                 sl_p = float(sl_list[-1])
                 rng  = sh_p - sl_p
-                if rng > 0:
-                    pct  = (float(close_p) - sl_p) / rng
-                    if pct < 0.25:
+                cp   = float(close_p)
+                # Only draw if range is meaningful (≥0.5% of price) and price is inside range
+                if rng > 0 and (rng / cp) >= 0.005:
+                    pct = (cp - sl_p) / rng
+                    if 0.0 <= pct < 0.25:
                         est_side, tp_est, sl_est = "ЛОНГ", sh_p, sl_p - rng * 0.05
-                    elif pct > 0.75:
+                    elif 0.75 < pct <= 1.0:
                         est_side, tp_est, sl_est = "ШОРТ", sl_p, sh_p + rng * 0.05
                     else:
                         est_side = None
