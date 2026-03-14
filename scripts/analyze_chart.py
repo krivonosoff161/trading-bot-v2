@@ -943,8 +943,8 @@ def generate_chart_png(
     BG = "#0b0d14"
     matplotlib.rcParams.update({"font.family": "DejaVu Sans", "font.size": 8})
     fig, (ax, ax_vol) = plt.subplots(
-        2, 1, figsize=(10, 5.8), facecolor=BG,
-        gridspec_kw={"height_ratios": [4, 1], "hspace": 0.04},
+        2, 1, figsize=(10, 6.2), facecolor=BG,
+        gridspec_kw={"height_ratios": [3.5, 1], "hspace": 0.06},
         sharex=True,
     )
     ax.set_facecolor(BG)
@@ -961,7 +961,7 @@ def generate_chart_png(
         ))
 
     # EMA lines + inline price labels at right edge
-    R_MARGIN = 7  # extra x-units for labels
+    R_MARGIN = 9  # extra x-units for labels
     for arr, col, lbl in [(ema20_slice, COL_EMA20, "EMA20"), (ema50_slice, COL_EMA50, "EMA50")]:
         pts = [(i, v) for i, v in enumerate(arr) if v > 0]
         if not pts:
@@ -969,10 +969,10 @@ def generate_chart_png(
         xi, yi = zip(*pts)
         ax.plot(xi, yi, color=col, linewidth=1.2, zorder=4)
         last_x, last_y = pts[-1]
-        ax.annotate(
+        ax.text(
+            last_x + 0.8, last_y,
             f"{lbl}: {_fmt_price(symbol, last_y)}",
-            xy=(last_x, last_y), xytext=(last_x + 0.6, last_y),
-            color=col, fontsize=6.5, va="center",
+            color=col, fontsize=6.5, va="center", ha="left", zorder=7,
             bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.85),
         )
 
@@ -996,22 +996,73 @@ def generate_chart_png(
         ax.text(n_show - 1, price, f"  {label}: {_fmt_price(symbol, price)}",
                 color=col, fontsize=7, va="bottom", ha="right", zorder=6)
 
+    # ── Estimated levels (range mode, no confirmed signal) ────────────────
+    if not src:
+        h1_res  = result.get("1h", {})
+        m15_res = result.get("15m", {})
+        if not (h1_res.get("bull") or h1_res.get("bear")):  # range mode only
+            close_p = m15_res.get("close")
+            sh_list = m15_res.get("swing_highs") or []
+            sl_list = m15_res.get("swing_lows")  or []
+            if close_p and sh_list and sl_list:
+                sh_p = float(sh_list[-1])
+                sl_p = float(sl_list[-1])
+                rng  = sh_p - sl_p
+                if rng > 0:
+                    pct  = (float(close_p) - sl_p) / rng
+                    if pct < 0.25:
+                        est_side, tp_est, sl_est = "ЛОНГ", sh_p, sl_p - rng * 0.05
+                    elif pct > 0.75:
+                        est_side, tp_est, sl_est = "ШОРТ", sl_p, sh_p + rng * 0.05
+                    else:
+                        est_side = None
+                    if est_side:
+                        for price, lbl, col in [
+                            (float(close_p), f"расч. Вход ({est_side})", "#90CAF9"),
+                            (tp_est,         "расч. TP",                 "#FFD700"),
+                            (sl_est,         "расч. SL",                 "#F44336"),
+                        ]:
+                            ax.axhline(y=price, color=col, linestyle=":", linewidth=0.85, alpha=0.55, zorder=5)
+                            ax.text(n_show - 1, price, f"  {lbl}: {_fmt_price(symbol, price)}",
+                                    color=col, fontsize=6.5, va="bottom", ha="right", zorder=6,
+                                    bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.75))
+
+    # ── Swing High / Swing Low ─────────────────────────────────────────────
+    m15 = result.get("15m", {})
+    swing_highs = m15.get("swing_highs") or []
+    swing_lows  = m15.get("swing_lows")  or []
+    if swing_highs:
+        sh = float(swing_highs[-1])
+        ax.axhline(y=sh, color="#B39DDB", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
+        ax.text(0, sh, f"  Swing H: {_fmt_price(symbol, sh)}",
+                color="#B39DDB", fontsize=6, va="bottom", ha="left", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
+    if swing_lows:
+        sl_sw = float(swing_lows[-1])
+        ax.axhline(y=sl_sw, color="#80CBC4", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
+        ax.text(0, sl_sw, f"  Swing L: {_fmt_price(symbol, sl_sw)}",
+                color="#80CBC4", fontsize=6, va="top", ha="left", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
+
     # ── Volume bars ────────────────────────────────────────────────────────
     vol_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(closes, opens)]
-    ax_vol.bar(range(n_show), volumes, color=vol_colors, alpha=0.75, width=0.7, zorder=2)
-    vol_sma = np.convolve(volumes, np.ones(20) / 20, mode="full")[:n_show]
-    ax_vol.plot(range(n_show), vol_sma, color="#888", linewidth=0.8, zorder=3)
+    ax_vol.bar(range(n_show), volumes, color=vol_colors, alpha=0.8, width=0.7, zorder=2)
+    if len(volumes) >= 20:
+        vol_sma = np.convolve(volumes, np.ones(20) / 20, mode="valid")
+        ax_vol.plot(range(19, n_show), vol_sma, color="#888", linewidth=0.9, zorder=3)
     ax_vol.set_facecolor(BG)
-    ax_vol.tick_params(colors="#555", labelsize=6)
+    ax_vol.tick_params(colors="#555", labelsize=6, left=False, right=True, labelleft=False, labelright=True)
     ax_vol.yaxis.tick_right()
     ax_vol.yaxis.set_label_position("right")
-    ax_vol.set_ylabel("Vol", color="#555", fontsize=6)
-    ax_vol.yaxis.set_major_formatter(
-        plt.FuncFormatter(lambda v, _: f"{v/1e6:.1f}M" if v >= 1e6 else f"{v/1e3:.0f}K")
-    )
+    ax_vol.set_ylabel("Vol", color="#555", fontsize=6, rotation=0, labelpad=28)
     for spine in ax_vol.spines.values():
         spine.set_edgecolor("#252838")
     ax_vol.grid(axis="y", color="#1a1d2e", linewidth=0.4, zorder=0)
+    ax_vol.set_yticks([max(volumes) * 0.5, max(volumes)])
+    ax_vol.set_yticklabels(
+        [f"{max(volumes)*0.5/1e3:.0f}K", f"{max(volumes)/1e3:.0f}K"],
+        color="#555", fontsize=5.5,
+    )
 
     # ── Axes ───────────────────────────────────────────────────────────────
     y_min, y_max = min(lows_c), max(highs_c)

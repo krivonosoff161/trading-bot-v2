@@ -63,6 +63,11 @@ TRANSPARENCY_NOTE = (
     "Изображение — визуальная подложка результата, не источник торгового решения."
 )
 
+WELCOME_TEXT = (
+    "Анализ рынка по данным OKX. "
+    "Выберите пару — получите разбор текущей ситуации, уровни и график."
+)
+
 # In-memory state per chat_id: {status, image_path, started_at, msg_date}
 # status: idle | awaiting_symbol | processing
 _state: dict[str, dict] = {}
@@ -100,8 +105,10 @@ async def _download(file_id: str, dest: Path) -> None:
         dest.write_bytes(await resp.read())
 
 
-async def _send_pair_keyboard(chat_id: str, extra_note: str = "") -> None:
+async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool = False) -> None:
     parts = []
+    if welcome:
+        parts.append(WELCOME_TEXT)
     if extra_note:
         parts.append(extra_note)
     parts.append(TRANSPARENCY_NOTE)
@@ -316,7 +323,7 @@ async def _handle_text(msg: dict) -> None:
     if status == "awaiting_symbol":
         if _timed_out(chat_id):
             _reset(chat_id)
-            await _send(chat_id, "Время вышло. Отправь скрин заново.")
+            await _send(chat_id, "Время вышло. Напиши «Анализ» чтобы начать заново.")
             return
         # Validate format: letters/digits, dash, letters/digits (e.g. BTC-USDT)
         symbol = text.upper()
@@ -326,8 +333,17 @@ async def _handle_text(msg: dict) -> None:
             await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
         return
 
-    # idle — prompt to send a screenshot
-    await _send(chat_id, "Отправь фото или изображение графика, чтобы начать анализ.")
+    # idle — trigger on "анализ", hint otherwise
+    if "анализ" in text.lower():
+        _state[chat_id] = {
+            "status":     "awaiting_symbol",
+            "image_path": None,
+            "started_at": time.time(),
+            "msg_date":   int(time.time()),
+        }
+        await _send_pair_keyboard(chat_id, welcome=True)
+    else:
+        await _send(chat_id, "Напиши «Анализ» чтобы начать.")
 
 
 async def handle_update(update: dict) -> None:
