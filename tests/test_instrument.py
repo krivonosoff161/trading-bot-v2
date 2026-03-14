@@ -6,7 +6,7 @@ from src.config import Config
 from src.exchange.okx_client import OKXClient
 
 
-async def test():
+async def main():
     setup_logger()
     config = Config.load()
     client = OKXClient(config.api_key, config.secret_key, config.passphrase, config.is_demo)
@@ -24,4 +24,5 @@ async def test():
     await client.close()
 
 
-asyncio.run(test())
+if __name__ == "__main__":
+    asyncio.run(main())

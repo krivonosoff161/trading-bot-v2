@@ -23,11 +23,13 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
 from dotenv import load_dotenv
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -49,18 +51,39 @@ OUTPUT_ROOT = Path(__file__).parent / "analysis_output"
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 TIMEOUT_SEC = 120
+STALE_THRESHOLD = 300   # seconds — warn if image message is older than this
+MIN_IMAGE_BYTES = 5_000  # below this = suspicious (not a real chart)
+MIN_IMAGE_WIDTH = 360
+MIN_IMAGE_HEIGHT = 240
+MIN_ASPECT_RATIO = 0.45
+MAX_ASPECT_RATIO = 3.50
+
+TRANSPARENCY_NOTE = (
+    "ℹ️ Анализ строится по рыночным данным OKX.\n"
+    "Изображение — визуальная подложка результата, не источник торгового решения."
+)
 
 # In-memory state per chat_id: {status, image_path, started_at, msg_date}
 # status: idle | awaiting_symbol | processing
 _state: dict[str, dict] = {}
 
+# Persistent HTTP session — one per bot lifetime, not per request
+_SESSION: aiohttp.ClientSession | None = None
+
 
 # ── Telegram API helpers ───────────────────────────────────────────────────────
 
+async def _get_session() -> aiohttp.ClientSession:
+    global _SESSION
+    if _SESSION is None or _SESSION.closed:
+        _SESSION = aiohttp.ClientSession()
+    return _SESSION
+
+
 async def _tg(method: str, http_timeout: int = 10, **params) -> dict:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-    async with aiohttp.ClientSession() as s:
-        resp = await s.post(url, json=params, timeout=aiohttp.ClientTimeout(total=http_timeout))
+    s = await _get_session()
+    async with s.post(url, json=params, timeout=aiohttp.ClientTimeout(total=http_timeout)) as resp:
         return await resp.json()
 
 
@@ -72,20 +95,63 @@ async def _download(file_id: str, dest: Path) -> None:
     info = await _tg("getFile", file_id=file_id)
     remote_path = info["result"]["file_path"]
     url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{remote_path}"
-    async with aiohttp.ClientSession() as s:
-        resp = await s.get(url, timeout=aiohttp.ClientTimeout(total=30))
+    s = await _get_session()
+    async with s.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
         dest.write_bytes(await resp.read())
 
 
-async def _send_pair_keyboard(chat_id: str) -> None:
+async def _send_pair_keyboard(chat_id: str, extra_note: str = "") -> None:
+    parts = []
+    if extra_note:
+        parts.append(extra_note)
+    parts.append(TRANSPARENCY_NOTE)
+    parts.append("\nВыбери пару:")
     buttons = [[{"text": sym, "callback_data": sym}] for sym in SYMBOLS]
     buttons.append([{"text": "Другая пара", "callback_data": "__manual__"}])
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="Выбери пару:",
+        text="\n".join(parts),
         reply_markup={"inline_keyboard": buttons},
     )
+
+
+# ── Image validation ──────────────────────────────────────────────────────────
+
+def _validate_image(path: Path) -> str | None:
+    """Returns error message if image is suspicious, None if OK."""
+    size = path.stat().st_size
+    if size < MIN_IMAGE_BYTES:
+        return (
+            f"Изображение подозрительно маленькое ({size} байт). "
+            "Убедись, что отправляешь полный скрин графика."
+        )
+    # Check magic bytes for common image formats
+    header = path.read_bytes()[:8]
+    is_jpg  = header[:2] == b'\xff\xd8'
+    is_png  = header[:8] == b'\x89PNG\r\n\x1a\n'
+    is_webp = header[:4] == b'RIFF'  # RIFF....WEBP
+    if not (is_jpg or is_png or is_webp):
+        return "Не удалось распознать формат изображения. Отправь PNG или JPEG."
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+    except Exception:
+        return "Не удалось открыть изображение. Отправь обычный PNG, JPEG или WebP."
+
+    if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
+        return (
+            f"Изображение слишком маленькое ({width}x{height}). "
+            "Отправь полный скрин графика, а не миниатюру."
+        )
+
+    aspect_ratio = width / height if height else 0.0
+    if aspect_ratio < MIN_ASPECT_RATIO or aspect_ratio > MAX_ASPECT_RATIO:
+        return (
+            f"У изображения нетипичные пропорции ({width}x{height}). "
+            "Проверь, что это действительно скрин графика."
+        )
+    return None
 
 
 # ── State helpers ──────────────────────────────────────────────────────────────
@@ -116,8 +182,8 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
             await _send(chat_id, "Анализ завершён, но результаты не найдены. Попробуй снова.")
             return
 
-        run_dir  = max(candidates, key=lambda d: d.stat().st_mtime)
-        png_path = run_dir / f"{symbol}_annotated.png"
+        run_dir   = max(candidates, key=lambda d: d.stat().st_mtime)
+        png_path  = run_dir / f"{symbol}_annotated.png"
         snap_path = run_dir / f"{symbol}_snapshot.json"
 
         # Reconstruct client summary from saved snapshot
@@ -125,11 +191,12 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
         if snap_path.exists():
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
             r = {
-                "1h":     snap["1h"],
-                "15m":    snap["15m"],
-                "5m":     snap["5m"],
-                "signal": snap["bot_decision"],
-                "action": snap["action"],
+                "1h":          snap["1h"],
+                "15m":         snap["15m"],
+                "5m":          snap["5m"],
+                "signal":      snap["bot_decision"],
+                "action":      snap["action"],
+                "pending_plan": snap.get("pending_plan", {"available": False}),
             }
             summary_text = _format_telegram(build_client_summary(symbol, captured_at, r))
 
@@ -141,9 +208,14 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
-    except Exception as e:
-        await _send(chat_id, "Произошла ошибка при анализе. Попробуй позже.")
-        print(f"ERROR _run_and_deliver | chat_id={chat_id} symbol={symbol} | {e}")
+    except Exception:
+        # Print traceback first — before any further network calls that may also fail
+        tb = traceback.format_exc()
+        print(f"ERROR _run_and_deliver | chat_id={chat_id} symbol={symbol}\n{tb}")
+        try:
+            await _send(chat_id, "Произошла ошибка при анализе. Попробуй позже.")
+        except Exception:
+            pass  # already logged above — don't mask the original error
     finally:
         _reset(chat_id)
 
@@ -175,13 +247,30 @@ async def _handle_image(msg: dict, file_id: str) -> None:
     dest = TEMP_DIR / f"{chat_id}_{int(time.time())}.jpg"
     await _download(file_id, dest)
 
+    # Validate image before proceeding
+    err = _validate_image(dest)
+    if err:
+        dest.unlink(missing_ok=True)
+        await _send(chat_id, f"⚠️ {err}")
+        return
+
+    msg_date = msg.get("date", int(time.time()))
+    captured_at = datetime.fromtimestamp(msg_date, tz=timezone.utc).strftime("%H:%M UTC")
     _state[chat_id] = {
         "status":     "awaiting_symbol",
         "image_path": str(dest),
         "started_at": time.time(),
-        "msg_date":   msg.get("date", int(time.time())),
+        "msg_date":   msg_date,
     }
-    await _send_pair_keyboard(chat_id)
+
+    # Warn if image is stale (message sent long before bot received it)
+    extra = f"🕒 Время анализа будет взято из времени сообщения: {captured_at}."
+    age_sec = int(time.time()) - msg_date
+    if age_sec > STALE_THRESHOLD:
+        minutes = age_sec // 60
+        extra += f"\n⏰ Сообщение отправлено {minutes} мин назад — результат может отличаться от старого скрина."
+
+    await _send_pair_keyboard(chat_id, extra_note=extra)
 
 
 async def _handle_callback(cbq: dict) -> None:
@@ -279,21 +368,28 @@ async def main() -> None:
     print(f"Telegram bot started. Whitelist: {WHITELIST}")
 
     offset = 0
-    while True:
-        try:
-            result = await _tg(
-                "getUpdates",
-                http_timeout=45,
-                offset=offset,
-                timeout=30,
-                allowed_updates=["message", "callback_query"],
-            )
-            for update in result.get("result", []):
-                offset = update["update_id"] + 1
-                await handle_update(update)
-        except Exception as e:
-            print(f"Poll error: {e}")
-            await asyncio.sleep(3)
+    try:
+        while True:
+            try:
+                result = await _tg(
+                    "getUpdates",
+                    http_timeout=45,
+                    offset=offset,
+                    timeout=30,
+                    allowed_updates=["message", "callback_query"],
+                )
+                for update in result.get("result", []):
+                    offset = update["update_id"] + 1
+                    await handle_update(update)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                print(f"Poll error:\n{traceback.format_exc()}")
+                await asyncio.sleep(3)
+    finally:
+        global _SESSION
+        if _SESSION and not _SESSION.closed:
+            await _SESSION.close()
 
 
 if __name__ == "__main__":
