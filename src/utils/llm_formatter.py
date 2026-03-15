@@ -21,7 +21,8 @@ import aiohttp
 _API_URL    = "https://ai.api.cloud.yandex.net/v1/chat/completions"
 _API_KEY    = os.getenv("YANDEX_API_KEY", "").strip("'\"")
 _FOLDER_ID  = os.getenv("YANDEX_FOLDER_ID", "").strip("'\"")
-_MODEL_URI  = f"gpt://{_FOLDER_ID}/gemma-3-27b-it/latest"
+_MODEL_URI       = f"gpt://{_FOLDER_ID}/gemma-3-27b-it/latest"
+_SUPPORTS_VISION = True    # Gemma 3 27B = True, Qwen3 235B = False
 _MAX_TOKENS = 900
 _TIMEOUT    = 60  # seconds
 
@@ -308,10 +309,11 @@ async def generate_client_text(
     # Build user message content
     content: list[dict] = [{"type": "text", "text": analysis_text}]
 
-    # Attach chart image if available (original chart, not annotated)
-    b64 = _encode_image(image_path)
-    if b64:
-        content.append({"type": "image_url", "image_url": {"url": b64}})
+    # Attach chart image only if model supports vision
+    if _SUPPORTS_VISION:
+        b64 = _encode_image(image_path)
+        if b64:
+            content.append({"type": "image_url", "image_url": {"url": b64}})
 
     payload = {
         "model": _MODEL_URI,
