@@ -245,3 +245,29 @@ def calc_rsi(closes: np.ndarray, period: int = 3) -> float:
         return 100.0
     rs = avg_gain / avg_loss
     return float(100 - 100 / (1 + rs))
+
+
+def calc_chandelier_exit(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+                         lookback: int = 22, multiplier: float = 3.5) -> dict:
+    """Chandelier Exit — volatility-based trailing stop.
+
+    Long:  CE = Highest High(lookback) - ATR(lookback) * multiplier
+    Short: CE = Lowest Low(lookback)   + ATR(lookback) * multiplier
+
+    Crypto params: lookback=22 (1H candles ≈ 1 day), multiplier=3.5 (wider than std 3.0).
+    Returns ce_long and ce_short for last bar.
+    """
+    n = len(closes)
+    if n < lookback + 1:
+        return {"ce_long": float(lows[-1]), "ce_short": float(highs[-1]), "atr": 0.0}
+
+    atr_arr = calc_atr_series(highs, lows, closes, period=lookback)
+    current_atr = float(atr_arr[-1])
+
+    highest_high = float(np.max(highs[-lookback:]))
+    lowest_low   = float(np.min(lows[-lookback:]))
+
+    ce_long  = round(highest_high - multiplier * current_atr, 6)
+    ce_short = round(lowest_low   + multiplier * current_atr, 6)
+
+    return {"ce_long": ce_long, "ce_short": ce_short, "atr": round(current_atr, 6)}

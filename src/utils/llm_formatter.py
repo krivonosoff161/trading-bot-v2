@@ -183,12 +183,17 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     if h4:
         h4_adx = h4.get("adx", 0)
         h4_dir_str = "рост (бычий)" if h4.get("bull") else ("падение (медвежий)" if h4.get("bear") else "боковик")
+        bb_width_4h  = h4.get("bb_width", 0)
+        range_mode   = h4.get("range_mode", False)
+        range_label  = "ДА — рынок в боковике (BandWidth < 12%, ADX < 25). Приоритет: range trade у границ." if range_mode else f"нет (BandWidth {bb_width_4h}%)"
         lines += [
             "=== 4-часовой график (старший контекст) ===",
             f"Направление 4H: {h4_dir_str}",
             f"Сила 4H тренда: ADX {h4_adx}",
             f"Средняя быстрая (4H): {h4.get('ema20', '—')}",
             f"Средняя медленная (4H): {h4.get('ema50', '—')}",
+            f"Bollinger Bands 4H: нижняя={h4.get('bb_lower','—')}  верхняя={h4.get('bb_upper','—')}  ширина={bb_width_4h}%",
+            f"Режим боковика (range mode): {range_label}",
         ]
         if h4_warning:
             lines.append(h4_warning)
@@ -199,11 +204,13 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         f"Средняя линия быстрая (1H): {h1.get('ema20','—')}",
         f"Средняя линия медленная (1H): {h1.get('ema50','—')}",
         f"Направление часового тренда: {'рост' if h1.get('bull') else ('падение' if h1.get('bear') else 'боковик')}",
+        f"RSI(14) на 1H: {h1.get('rsi', '—')} ({'перекуплен' if (h1.get('rsi') or 0) > 70 else ('перепродан' if (h1.get('rsi') or 0) < 30 else 'нейтральная зона')})",
         "",
         "=== 15-минутный график (точка входа) ===",
         f"Текущая цена: {close}",
         f"Средняя быстрая (15m): {h15.get('ema20','—')}",
         f"Средняя медленная (15m): {h15.get('ema50','—')}",
+        f"RSI(14) на 15m: {h15.get('rsi', '—')} ({'перекуплен — осторожно с лонгом' if (h15.get('rsi') or 0) > 70 else ('перепродан — осторожно с шортом' if (h15.get('rsi') or 0) < 30 else 'нейтральная зона')})",
         f"Волатильность: {vol_desc}",
         f"Цена у средней быстрой линии: {'да' if h15.get('near_ema') else 'нет'}",
         f"Паттерн отката сформирован: {'да' if h15.get('structure_ok') else 'нет'}",
@@ -247,6 +254,15 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         st_dir_ru = "вверх (бычий)" if st_dir == "up" else "вниз (медвежий)"
         lines.append(f"SuperTrend: {st_val} — направление {st_dir_ru}, цена отдалена на {st_dist}%"
                      f" (это уровень разворота тренда — если цена пересечёт его, тренд сменится)")
+
+    # Chandelier Exit — trailing stop level
+    ce_long  = h15.get("ce_long")
+    ce_short = h15.get("ce_short")
+    if ce_long and ce_short:
+        lines += [
+            f"Chandelier Exit (трейлинг-стоп): лонг={ce_long}  шорт={ce_short}",
+            f"(если цена закроет 1H свечу ниже {ce_long} при лонге — трейлинг сработал, выход)",
+        ]
 
     lines += [
         "",
