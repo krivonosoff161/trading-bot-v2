@@ -158,6 +158,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     )
     ema20_1h = calc_ema(closes_1h, ema_fast)
     ema50_1h = calc_ema(closes_1h, ema_slow)
+    atr_1h   = calc_atr(highs_1h, lows_1h, closes_1h, period=adx_period)
     bull_1h = ema20_1h[-2] > ema50_1h[-2] and plus_di > minus_di and adx >= adx_thresh
     bear_1h = ema20_1h[-2] < ema50_1h[-2] and minus_di > plus_di and adx >= adx_thresh
 
@@ -221,14 +222,17 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
         sl_dist_min = max(entry_price * min_sl_percent, sl_min_atr * atr_15m)
         sl_dist = max(sl_dist_structure, sl_dist_min)
         tp_dist = sl_dist * tp_r
+        # Cap TP at ATR(1H)-based realistic daily move
+        tp1_cap = 1.5 * atr_1h
+        tp2_cap = 2.5 * atr_1h
         if signal["side"] == "buy":
-            sl_price = round(entry_price - sl_dist, 4)
-            tp_price = round(entry_price + tp_dist, 4)
-            tp2_price = round(entry_price + tp_dist * 1.5, 4)
+            sl_price  = round(entry_price - sl_dist, 4)
+            tp_price  = round(entry_price + min(tp_dist,       tp1_cap), 4)
+            tp2_price = round(entry_price + min(tp_dist * 1.5, tp2_cap), 4)
         else:
-            sl_price = round(entry_price + sl_dist, 4)
-            tp_price = round(entry_price - tp_dist, 4)
-            tp2_price = round(entry_price - tp_dist * 1.5, 4)
+            sl_price  = round(entry_price + sl_dist, 4)
+            tp_price  = round(entry_price - min(tp_dist,       tp1_cap), 4)
+            tp2_price = round(entry_price - min(tp_dist * 1.5, tp2_cap), 4)
         action = {
             "valid": True,
             "entry":      entry_price,
@@ -276,12 +280,14 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             sl         = round(sl_ref + sl_buffer * atr_15m, 6)
             sl_dist    = sl - trigger   # R:R anchored to trigger, not zone
         if sl_dist > 0:
+            tp1_cap = 1.5 * atr_1h
+            tp2_cap = 2.5 * atr_1h
             if bull_1h:
-                tp1 = round(trigger + sl_dist * tp_r,       6)
-                tp2 = round(trigger + sl_dist * tp_r * 1.5, 6)
+                tp1 = round(trigger + min(sl_dist * tp_r,       tp1_cap), 6)
+                tp2 = round(trigger + min(sl_dist * tp_r * 1.5, tp2_cap), 6)
             else:
-                tp1 = round(trigger - sl_dist * tp_r,       6)
-                tp2 = round(trigger - sl_dist * tp_r * 1.5, 6)
+                tp1 = round(trigger - min(sl_dist * tp_r,       tp1_cap), 6)
+                tp2 = round(trigger - min(sl_dist * tp_r * 1.5, tp2_cap), 6)
             pending_plan = {
                 "available":    True,
                 "entry_zone":   round(zone, 6),
