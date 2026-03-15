@@ -33,7 +33,7 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_adx, calc_atr, calc_ema, calc_sma, parse_candles, parse_volumes,
-    find_swing_levels, atr_regime,
+    find_swing_levels, atr_regime, calc_bollinger_bands, calc_supertrend,
 )
 from src.strategy.signal import get_signal
 
@@ -251,6 +251,8 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     # ── Swing structure + volatility regime (15m) ────────────────────────────
     swings_15m        = find_swing_levels(highs_15m, lows_15m, lookback=3, count=4)
     atr_pct, atr_lbl  = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
+    bb_15m            = calc_bollinger_bands(closes_15m, period=20, std_mult=2.0)
+    supertrend_15m    = calc_supertrend(highs_15m, lows_15m, closes_15m, period=14, multiplier=3.0)
 
     # ── Pending plan — levels for WATCH mode (trend+structure, no signal yet) ─
     pending_plan: dict = {"available": False}
@@ -315,6 +317,14 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "atr_label": atr_lbl,
             "swing_highs": swings_15m["recent_highs"],
             "swing_lows":  swings_15m["recent_lows"],
+            "bb_upper":    bb_15m["upper"],
+            "bb_middle":   bb_15m["middle"],
+            "bb_lower":    bb_15m["lower"],
+            "bb_pct_b":    bb_15m["pct_b"],
+            "bb_width_pct": bb_15m["width_pct"],
+            "supertrend":       supertrend_15m["value"],
+            "supertrend_dir":   supertrend_15m["direction"],
+            "supertrend_dist":  supertrend_15m["distance_pct"],
         },
         "5m": {
             "trigger_close": round(float(trigger_close), 6),
@@ -930,10 +940,46 @@ def generate_chart_png(
     closes  = [float(c[4]) for c in candles]
     volumes = [float(c[5]) for c in candles]
 
-    # EMA on full history, then slice last n_show
+    # EMA + BB + SuperTrend on full history, then slice last n_show
     closes_full = np.array([float(c[4]) for c in list(reversed(raw_15m))])
+    highs_full  = np.array([float(c[2]) for c in list(reversed(raw_15m))])
+    lows_full   = np.array([float(c[3]) for c in list(reversed(raw_15m))])
     ema20_slice = calc_ema(closes_full, 20)[-n_show:]
     ema50_slice = calc_ema(closes_full, 50)[-n_show:]
+
+    # Bollinger Bands series
+    bb_upper_arr = np.zeros(len(closes_full))
+    bb_lower_arr = np.zeros(len(closes_full))
+    for i in range(20, len(closes_full)):
+        mid = np.mean(closes_full[i-20:i])
+        std = np.std(closes_full[i-20:i], ddof=0)
+        bb_upper_arr[i] = mid + 2 * std
+        bb_lower_arr[i] = mid - 2 * std
+    bb_upper_slice = bb_upper_arr[-n_show:]
+    bb_lower_slice = bb_lower_arr[-n_show:]
+
+    # SuperTrend series
+    st_vals = np.zeros(len(closes_full))
+    st_dirs = np.zeros(len(closes_full))  # 1=up, -1=down
+    _atr_st = np.zeros(len(closes_full))
+    for i in range(1, len(closes_full)):
+        tr = max(highs_full[i]-lows_full[i], abs(highs_full[i]-closes_full[i-1]), abs(lows_full[i]-closes_full[i-1]))
+        _atr_st[i] = (_atr_st[i-1] * 13 + tr) / 14 if i >= 14 else tr
+    _upper_st = np.zeros(len(closes_full))
+    _lower_st = np.zeros(len(closes_full))
+    for i in range(14, len(closes_full)):
+        mid = (highs_full[i] + lows_full[i]) / 2
+        bu  = mid + 3 * _atr_st[i]
+        bl  = mid - 3 * _atr_st[i]
+        _upper_st[i] = bu if bu < _upper_st[i-1] or closes_full[i-1] > _upper_st[i-1] else _upper_st[i-1]
+        _lower_st[i] = bl if bl > _lower_st[i-1] or closes_full[i-1] < _lower_st[i-1] else _lower_st[i-1]
+        if st_vals[i-1] == _upper_st[i-1]:
+            st_vals[i] = _lower_st[i] if closes_full[i] > _upper_st[i] else _upper_st[i]
+        else:
+            st_vals[i] = _upper_st[i] if closes_full[i] < _lower_st[i] else _lower_st[i]
+        st_dirs[i] = 1 if closes_full[i] > st_vals[i] else -1
+    st_vals_slice = st_vals[-n_show:]
+    st_dirs_slice = st_dirs[-n_show:]
 
     COL_EMA20 = "#2196F3"
     COL_EMA50 = "#FF9800"
@@ -974,6 +1020,31 @@ def generate_chart_png(
             color=col, fontsize=6.5, va="center", ha="left", zorder=7,
             bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.85),
         )
+
+    # Bollinger Bands
+    bb_u_pts = [(i, v) for i, v in enumerate(bb_upper_slice) if v > 0]
+    bb_l_pts = [(i, v) for i, v in enumerate(bb_lower_slice) if v > 0]
+    if bb_u_pts and bb_l_pts:
+        ax.plot([p[0] for p in bb_u_pts], [p[1] for p in bb_u_pts],
+                color="#7E57C2", linewidth=0.7, linestyle="--", alpha=0.6, zorder=3)
+        ax.plot([p[0] for p in bb_l_pts], [p[1] for p in bb_l_pts],
+                color="#7E57C2", linewidth=0.7, linestyle="--", alpha=0.6, zorder=3)
+        ax.text(bb_u_pts[-1][0] + 0.5, bb_u_pts[-1][1], f" BB↑{_fmt_price(symbol, bb_u_pts[-1][1])}",
+                color="#7E57C2", fontsize=5.5, va="center", ha="left", zorder=7)
+        ax.text(bb_l_pts[-1][0] + 0.5, bb_l_pts[-1][1], f" BB↓{_fmt_price(symbol, bb_l_pts[-1][1])}",
+                color="#7E57C2", fontsize=5.5, va="center", ha="left", zorder=7)
+
+    # SuperTrend — green when up, red when down
+    for i in range(1, n_show):
+        if st_vals_slice[i] == 0:
+            continue
+        col_st = "#26a69a" if st_dirs_slice[i] == 1 else "#ef5350"
+        ax.plot([i-1, i], [st_vals_slice[i-1] if st_vals_slice[i-1] > 0 else st_vals_slice[i],
+                           st_vals_slice[i]], color=col_st, linewidth=1.5, alpha=0.8, zorder=4)
+    if st_vals_slice[-1] > 0:
+        col_st_last = "#26a69a" if st_dirs_slice[-1] == 1 else "#ef5350"
+        ax.text(n_show - 1 + 0.5, st_vals_slice[-1], f" ST{_fmt_price(symbol, st_vals_slice[-1])}",
+                color=col_st_last, fontsize=5.5, va="center", ha="left", zorder=7)
 
     # ── Price levels ───────────────────────────────────────────────────────
     pp  = result.get("pending_plan", {})
