@@ -137,7 +137,7 @@ def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
 
-def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003) -> dict:
+def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003, raw_4h: list | None = None) -> dict:
     ema_fast   = int(params["ema_fast"])
     ema_slow   = int(params["ema_slow"])
     adx_period = int(params["adx_period"])
@@ -150,6 +150,25 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     vol_factor = float(params["trigger_volume_factor"])
     sl_buffer  = float(params["sl_buffer_atr"])
     tp_r       = float(params["tp_r_multiple"])
+
+    # ── 4H (старший контекст) ────────────────────────────────────────────────
+    h4_data: dict = {}
+    if raw_4h:
+        highs_4h, lows_4h, closes_4h = parse_candles(raw_4h)
+        adx_4h, plus_di_4h, minus_di_4h = calc_adx(highs_4h, lows_4h, closes_4h, period=adx_period, bar_index=-2)
+        ema20_4h = calc_ema(closes_4h, ema_fast)
+        ema50_4h = calc_ema(closes_4h, ema_slow)
+        bull_4h = ema20_4h[-2] > ema50_4h[-2] and plus_di_4h > minus_di_4h and adx_4h >= adx_thresh
+        bear_4h = ema20_4h[-2] < ema50_4h[-2] and minus_di_4h > plus_di_4h and adx_4h >= adx_thresh
+        h4_data = {
+            "ema20":    round(float(ema20_4h[-2]), 6),
+            "ema50":    round(float(ema50_4h[-2]), 6),
+            "adx":      round(adx_4h, 1),
+            "plus_di":  round(plus_di_4h, 1),
+            "minus_di": round(minus_di_4h, 1),
+            "bull": bool(bull_4h),
+            "bear": bool(bear_4h),
+        }
 
     # ── 1H ──────────────────────────────────────────────────────────────────
     highs_1h, lows_1h, closes_1h = parse_candles(raw_1h)
@@ -343,6 +362,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "plus_di": round(plus_di_5m, 2),
             "minus_di": round(minus_di_5m, 2),
         },
+        "4h":           h4_data,
         "signal":       signal,
         "action":       action,
         "pending_plan": pending_plan,
@@ -1259,7 +1279,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     after_ts    = captured_ms + 1
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
-    raw_1h, raw_15m, raw_5m = await asyncio.gather(
+    raw_4h, raw_1h, raw_15m, raw_5m = await asyncio.gather(
+        client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
         client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
         client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
         client.get_history_candles(symbol, "5m",  after=after_ts, limit=limit),
@@ -1275,7 +1296,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
-    result         = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent)
+    result         = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent, raw_4h=raw_4h)
     report_text    = format_report(symbol, captured_at_iso, result)
     client_summary = build_client_summary(symbol, captured_at_iso, result)
 
@@ -1310,6 +1331,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         "symbol":       symbol,
         "captured_at":  captured_at_iso,
         "expiry_time":  expiry_time,
+        "4h":           result.get("4h", {}),
         "1h":           result["1h"],
         "15m":          result["15m"],
         "5m":           result["5m"],
