@@ -59,7 +59,8 @@ _SYSTEM_PROMPT = """\
 - Направление: ЛОНГ или ШОРТ — не "покупка/продажа"
 - Если уровней нет — объясни что именно ждём, без цен
 - Если тренд слабый (ADX 20-25) — предупреди: "сигнал слабый, возможен разворот"
-- В конце одна строка: "Актуально до: HH:MM UTC"
+- Предпоследняя строка ВСЕГДА: "Выход: если [пара] закроет свечу [выше/ниже] [конкретная цена] — сценарий сломан, выходи" — используй уровень инвалидации из данных
+- Последняя строка: "Актуально до: HH:MM UTC"
 
 Режимы рынка:
 - Тренд вверх → ищи ЛОНГ на откате, опиши где ждать
@@ -225,6 +226,14 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         "=== Итог анализа ===",
         f"{decision_text}",
     ]
+
+    # Invalidation level — выносим явно чтобы LLM не пропустила
+    inv_level = pp.get("invalidation") if pp.get("available") else None
+    if not inv_level and act.get("valid"):
+        inv_level = act.get("sl")
+    if inv_level:
+        side_word = "ниже" if (h1.get("bull") or act.get("side") == "buy") else "выше"
+        lines.append(f"УРОВЕНЬ ОТМЕНЫ СЦЕНАРИЯ: {inv_level} — если цена закроет 15m свечу {side_word} этого уровня, идея теряет смысл")
 
     # Confirmed trade levels
     if pp.get("available"):
