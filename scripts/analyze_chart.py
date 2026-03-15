@@ -1254,18 +1254,20 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
 
-    # Generate natural Russian text via LLM (falls back to template on any error)
+    # Chart first — so LLM can see it as visual context
+    generate_chart_png(raw_15m, result, symbol, captured_at_iso, client_summary, str(png_path))
+
+    # Generate natural Russian text via LLM — pass our annotated chart as image
+    # (always available, has EMA/swing/levels drawn; user screenshot ignored)
     from src.utils.llm_formatter import generate_client_text
-    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, image_path)
+    llm_image = str(png_path) if png_path.exists() else image_path
+    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image)
     delivery_text = llm_text if llm_text else client_summary
 
     # Save for downstream consumers (e.g. telegram_bot.py)
     summary_path = run_dir / f"{symbol}_client_summary.txt"
     summary_path.write_text(delivery_text, encoding="utf-8")
     print(f"Saved: {summary_path}")
-
-    # Chart generated from OKX data — no screenshot needed
-    generate_chart_png(raw_15m, result, symbol, captured_at_iso, client_summary, str(png_path))
 
     if send_telegram:
         from src.utils.telegram import send_message
