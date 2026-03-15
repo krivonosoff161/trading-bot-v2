@@ -21,8 +21,8 @@ import aiohttp
 _API_URL    = "https://ai.api.cloud.yandex.net/v1/chat/completions"
 _API_KEY    = os.getenv("YANDEX_API_KEY", "").strip("'\"")
 _FOLDER_ID  = os.getenv("YANDEX_FOLDER_ID", "").strip("'\"")
-_MODEL_URI       = f"gpt://{_FOLDER_ID}/gemma-3-27b-it/latest"
-_SUPPORTS_VISION = True    # Gemma 3 27B = True, Qwen3 235B = False
+_MODEL_URI       = f"gpt://{_FOLDER_ID}/qwen3-235b-a22b-fp8/latest"
+_SUPPORTS_VISION = False   # Gemma 3 27B = True, Qwen3/gpt-oss = False
 _MAX_TOKENS = 900
 _TIMEOUT    = 60  # seconds
 
