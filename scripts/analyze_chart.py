@@ -1029,22 +1029,25 @@ def generate_chart_png(
                                     color=col, fontsize=6.5, va="bottom", ha="right", zorder=6,
                                     bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.75))
 
-    # ── Swing High / Swing Low ─────────────────────────────────────────────
+    # ── Swing High / Swing Low (only if level is within ±8% of current price)
+    _cur = float(result.get("15m", {}).get("close") or closes[-1])
     m15 = result.get("15m", {})
     swing_highs = m15.get("swing_highs") or []
     swing_lows  = m15.get("swing_lows")  or []
     if swing_highs:
         sh = float(swing_highs[-1])
-        ax.axhline(y=sh, color="#B39DDB", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
-        ax.text(0, sh, f"  Swing H: {_fmt_price(symbol, sh)}",
-                color="#B39DDB", fontsize=6, va="bottom", ha="left", zorder=6,
-                bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
+        if abs(sh - _cur) / _cur <= 0.08:
+            ax.axhline(y=sh, color="#B39DDB", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
+            ax.text(0, sh, f"  Swing H: {_fmt_price(symbol, sh)}",
+                    color="#B39DDB", fontsize=6, va="bottom", ha="left", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
     if swing_lows:
         sl_sw = float(swing_lows[-1])
-        ax.axhline(y=sl_sw, color="#80CBC4", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
-        ax.text(0, sl_sw, f"  Swing L: {_fmt_price(symbol, sl_sw)}",
-                color="#80CBC4", fontsize=6, va="top", ha="left", zorder=6,
-                bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
+        if abs(sl_sw - _cur) / _cur <= 0.08:
+            ax.axhline(y=sl_sw, color="#80CBC4", linestyle=":", linewidth=0.8, alpha=0.75, zorder=4)
+            ax.text(0, sl_sw, f"  Swing L: {_fmt_price(symbol, sl_sw)}",
+                    color="#80CBC4", fontsize=6, va="top", ha="left", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
 
     # ── Volume bars ────────────────────────────────────────────────────────
     vol_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(closes, opens)]
