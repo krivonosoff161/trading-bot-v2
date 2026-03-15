@@ -34,6 +34,7 @@ from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_adx, calc_atr, calc_ema, calc_sma, parse_candles, parse_volumes,
     find_swing_levels, atr_regime, calc_bollinger_bands, calc_supertrend,
+    calc_chandelier_exit, calc_rsi,
 )
 from src.strategy.signal import get_signal
 
@@ -160,14 +161,21 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
         ema50_4h = calc_ema(closes_4h, ema_slow)
         bull_4h = ema20_4h[-2] > ema50_4h[-2] and plus_di_4h > minus_di_4h and adx_4h >= adx_thresh
         bear_4h = ema20_4h[-2] < ema50_4h[-2] and minus_di_4h > plus_di_4h and adx_4h >= adx_thresh
+        bb_4h   = calc_bollinger_bands(closes_4h, period=20, std_mult=2.5)
+        # Range mode: low BandWidth + weak trend = market consolidating
+        range_mode_4h = bb_4h["width_pct"] < 12.0 and adx_4h < 25
         h4_data = {
-            "ema20":    round(float(ema20_4h[-2]), 6),
-            "ema50":    round(float(ema50_4h[-2]), 6),
-            "adx":      round(adx_4h, 1),
-            "plus_di":  round(plus_di_4h, 1),
-            "minus_di": round(minus_di_4h, 1),
-            "bull": bool(bull_4h),
-            "bear": bool(bear_4h),
+            "ema20":      round(float(ema20_4h[-2]), 6),
+            "ema50":      round(float(ema50_4h[-2]), 6),
+            "adx":        round(adx_4h, 1),
+            "plus_di":    round(plus_di_4h, 1),
+            "minus_di":   round(minus_di_4h, 1),
+            "bull":       bool(bull_4h),
+            "bear":       bool(bear_4h),
+            "bb_upper":   bb_4h["upper"],
+            "bb_lower":   bb_4h["lower"],
+            "bb_width":   bb_4h["width_pct"],
+            "range_mode": bool(range_mode_4h),
         }
 
     # ── 1H ──────────────────────────────────────────────────────────────────
@@ -178,6 +186,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     ema20_1h = calc_ema(closes_1h, ema_fast)
     ema50_1h = calc_ema(closes_1h, ema_slow)
     atr_1h   = calc_atr(highs_1h, lows_1h, closes_1h, period=adx_period)
+    rsi_1h   = calc_rsi(closes_1h, period=14)
     bull_1h = ema20_1h[-2] > ema50_1h[-2] and plus_di > minus_di and adx >= adx_thresh
     bear_1h = ema20_1h[-2] < ema50_1h[-2] and minus_di > plus_di and adx >= adx_thresh
 
@@ -187,6 +196,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     atr_15m   = calc_atr(highs_15m, lows_15m, closes_15m, period=adx_period)
     ema20_15m = calc_ema(closes_15m, ema_fast)
     ema50_15m = calc_ema(closes_15m, ema_slow)
+    rsi_15m   = calc_rsi(closes_15m, period=14)
 
     cur_close = closes_15m[-2]
     near_ema  = abs(cur_close - ema20_15m[-2]) <= pb_touch * atr_15m
@@ -276,6 +286,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     atr_pct, atr_lbl  = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
     bb_15m            = calc_bollinger_bands(closes_15m, period=20, std_mult=2.0)
     supertrend_15m    = calc_supertrend(highs_15m, lows_15m, closes_15m, period=14, multiplier=3.0)
+    ce_1h             = calc_chandelier_exit(highs_1h, lows_1h, closes_1h, lookback=22, multiplier=3.5)
 
     # ── Pending plan — levels for WATCH mode (trend+structure, no signal yet) ─
     pending_plan: dict = {"available": False}
@@ -325,12 +336,14 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "plus_di": round(plus_di, 2),
             "minus_di": round(minus_di, 2),
             "bull": bull_1h, "bear": bear_1h,
+            "rsi": round(rsi_1h, 1),
         },
         "15m": {
             "close": round(float(cur_close), 6),
             "ema20": round(float(ema20_15m[-2]), 6),
             "ema50": round(float(ema50_15m[-2]), 6),
             "atr": round(float(atr_15m), 6),
+            "rsi": round(rsi_15m, 1),
             "near_ema": near_ema,
             "structure_ok": structure_ok,
             "vol_recent": round(avg_recent, 2),
@@ -350,6 +363,8 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "supertrend":       supertrend_15m["value"],
             "supertrend_dir":   supertrend_15m["direction"],
             "supertrend_dist":  supertrend_15m["distance_pct"],
+            "ce_long":          ce_1h["ce_long"],
+            "ce_short":         ce_1h["ce_short"],
         },
         "5m": {
             "trigger_close": round(float(trigger_close), 6),
