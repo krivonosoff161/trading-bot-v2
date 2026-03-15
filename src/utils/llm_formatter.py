@@ -92,10 +92,8 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     else:
         regime = f"БОКОВИК / НЕТ ТРЕНДА — {adx_strength}"
 
-    # ── Current price and swing levels ────────────────────────────────────────
+    # ── 1H full data ───────────────────────────────────────────────────────────
     close       = h15.get("close")
-    ema20_15m   = h15.get("ema20")
-    ema50_15m   = h15.get("ema50")
     swing_highs = h15.get("swing_highs") or []
     swing_lows  = h15.get("swing_lows")  or []
     swing_high  = swing_highs[-1] if swing_highs else None
@@ -106,24 +104,6 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         rng = swing_high - swing_low
         if rng > 0:
             price_pct = round((close - swing_low) / rng * 100, 1)
-
-    # ── Volatility ─────────────────────────────────────────────────────────────
-    atr_label = h15.get("atr_label", "—")
-    atr_pct   = h15.get("atr_pct")
-
-    # ── Volume context (15m pullback) ──────────────────────────────────────────
-    vol_recent   = h15.get("vol_recent")
-    vol_prior    = h15.get("vol_prior")
-    vol_ratio_pb = h15.get("vol_ratio_pb")
-    pb_vol_weak  = h15.get("pb_vol_weak")
-
-    # ── 5m confirmation ───────────────────────────────────────────────────────
-    breakout_5m   = h5.get("breakout")
-    vol_strong_5m = h5.get("vol_strong")
-    vol_ratio_5m  = h5.get("vol_ratio")
-    di_confirm_5m = h5.get("di_confirm")
-    plus_di_5m    = h5.get("plus_di")
-    minus_di_5m   = h5.get("minus_di")
 
     # ── Bot decision ──────────────────────────────────────────────────────────
     reason = bd.get("reason", "—")
@@ -138,64 +118,43 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         f"Время: {captured_at}",
         "",
         f"РЕЖИМ РЫНКА: {regime}",
-        f"1H: ADX={h1.get('adx', '—')}, +DI={h1.get('plus_di', '—')}, -DI={h1.get('minus_di', '—')}",
         "",
+        "=== 1H (часовой таймфрейм) ===",
+        f"ADX={h1.get('adx','—')}  +DI={h1.get('plus_di','—')}  -DI={h1.get('minus_di','—')}",
+        f"EMA20={h1.get('ema20','—')}  EMA50={h1.get('ema50','—')}",
+        f"Тренд: {'бычий' if h1.get('bull') else ('медвежий' if h1.get('bear') else 'нет')}",
+        "",
+        "=== 15m (основной таймфрейм) ===",
+        f"Цена (close): {close}",
+        f"EMA20={h15.get('ema20','—')}  EMA50={h15.get('ema50','—')}",
+        f"ATR={h15.get('atr','—')}  ATR перцентиль={h15.get('atr_pct','—')}/100  режим={h15.get('atr_label','—')}",
+        f"Структура для входа: {'есть' if h15.get('structure_ok') else 'нет'}",
+        f"Цена у EMA20: {'да' if h15.get('near_ema') else 'нет'}",
+        f"Объём пулбэка: недавний={h15.get('vol_recent','—')}  норма={h15.get('vol_prior','—')}  "
+        f"ratio={h15.get('vol_ratio_pb','—')}  слабый={'да' if h15.get('pb_vol_weak') else 'нет'}",
     ]
 
-    # Price context
-    if close:
-        lines.append(f"Текущая цена: {close}")
-    if ema20_15m:
-        lines.append(f"EMA20 (15m): {ema20_15m}")
-    if ema50_15m:
-        lines.append(f"EMA50 (15m): {ema50_15m}")
+    if swing_highs:
+        lines.append(f"Swing Highs (сопротивления, от новых к старым): {swing_highs[::-1]}")
+    if swing_lows:
+        lines.append(f"Swing Lows  (поддержки, от новых к старым): {swing_lows[::-1]}")
     if swing_high and swing_low:
-        lines.append(f"Swing High (ближайший максимум): {swing_high}")
-        lines.append(f"Swing Low  (ближайший минимум): {swing_low}")
+        lines.append(f"Ближайший диапазон: {swing_low} — {swing_high}")
         if price_pct is not None:
-            lines.append(f"Цена в диапазоне: {price_pct}% от низа к верху")
-    lines.append("")
+            lines.append(f"Позиция цены в диапазоне: {price_pct}% от низа к верху")
 
-    # Volatility — atr_pct is ATR percentile vs last 50 bars (0–100), not % of price
-    atr_line = f"Волатильность 15m: {atr_label}"
-    if atr_pct is not None:
-        atr_line += f" (перцентиль ATR: {atr_pct} из 100)"
-    lines.append(atr_line)
-
-    # Volume 15m
-    if vol_ratio_pb is not None:
-        desc = f"Объём пулбэка (15m): ratio={vol_ratio_pb}"
-        if vol_recent is not None and vol_prior is not None:
-            desc += f" (недавний={round(vol_recent)}, норма={round(vol_prior)})"
-        if pb_vol_weak is not None:
-            desc += f" — {'слабый (норм. для отката)' if pb_vol_weak else 'сильный (агрессивный откат)'}"
-        lines.append(desc)
-
-    lines.append("")
-
-    # 15m structure
-    structure = "есть" if h15.get("structure_ok") else "нет"
-    near_ema  = "да"   if h15.get("near_ema")     else "нет"
     lines += [
-        f"15m структура для входа: {structure}",
-        f"15m цена у EMA20: {near_ema}",
+        "",
+        "=== 5m (подтверждение входа) ===",
+        f"Цена 5m: {h5.get('trigger_close','—')}",
+        f"Пробой уровня: {'да' if h5.get('breakout') else 'нет'}",
+        f"Объём 5m: {h5.get('trigger_vol','—')}  SMA объёма={h5.get('vol_sma','—')}  "
+        f"ratio={h5.get('vol_ratio','—')}  сильный={'да' if h5.get('vol_strong') else 'нет'}",
+        f"+DI={h5.get('plus_di','—')}  -DI={h5.get('minus_di','—')}  DI подтверждение={'да' if h5.get('di_confirm') else 'нет'}",
+        "",
+        "=== Решение системы ===",
+        f"{decision_text}",
     ]
-
-    # 5m confirmation
-    if any(v is not None for v in [breakout_5m, vol_strong_5m, di_confirm_5m]):
-        lines += ["", "5m подтверждение:"]
-        if breakout_5m is not None:
-            lines.append(f"  пробой уровня: {'да' if breakout_5m else 'нет'}")
-        if vol_strong_5m is not None:
-            ratio_str = f" (×{vol_ratio_5m})" if vol_ratio_5m is not None else ""
-            lines.append(f"  сильный объём: {'да' if vol_strong_5m else 'нет'}{ratio_str}")
-        if di_confirm_5m is not None:
-            di_str = ""
-            if plus_di_5m is not None and minus_di_5m is not None:
-                di_str = f" (+DI={plus_di_5m}, -DI={minus_di_5m})"
-            lines.append(f"  DI подтверждение: {'да' if di_confirm_5m else 'нет'}{di_str}")
-
-    lines += ["", f"Решение: {decision_text}"]
 
     # Confirmed trade levels
     if pp.get("available"):
