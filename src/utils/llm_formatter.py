@@ -120,46 +120,79 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         decision_text = f"сигнал {bd['side'].upper()}"
 
     # ── Build text ────────────────────────────────────────────────────────────
+    # ── Volatility label ──────────────────────────────────────────────────────
+    atr_pct = h15.get("atr_pct", 50)
+    if atr_pct <= 30:
+        vol_desc = "низкая (рынок сжался, готовится к движению)"
+    elif atr_pct >= 70:
+        vol_desc = "высокая (резкие колебания)"
+    else:
+        vol_desc = "умеренная (нормальный режим)"
+
+    # ── Volume pullback label ──────────────────────────────────────────────────
+    vol_ratio_pb = h15.get("vol_ratio_pb", 1.0)
+    pb_weak = h15.get("pb_vol_weak", True)
+    if pb_weak:
+        vol_pb_desc = f"слабый (откат без агрессии, хороший признак для входа по тренду)"
+    else:
+        vol_pb_desc = f"сильный (агрессивное давление на откате, риск продолжения против тренда)"
+
+    # ── 5m volume label ────────────────────────────────────────────────────────
+    vol_strong_5m = h5.get("vol_strong", False)
+    vol_ratio_5m  = h5.get("vol_ratio", 1.0)
+    vol_5m_desc = f"{'подтверждает движение (выше среднего)' if vol_strong_5m else 'слабый (ниже среднего)'} — соотношение к среднему: {vol_ratio_5m}x"
+
+    # ── DI direction label ────────────────────────────────────────────────────
+    plus_di_5m  = h5.get("plus_di", 0)
+    minus_di_5m = h5.get("minus_di", 0)
+    if plus_di_5m > minus_di_5m * 1.2:
+        di_desc = "покупатели сильнее продавцов"
+    elif minus_di_5m > plus_di_5m * 1.2:
+        di_desc = "продавцы сильнее покупателей"
+    else:
+        di_desc = "покупатели и продавцы в равновесии"
+    di_confirm = "подтверждает направление" if h5.get("di_confirm") else "не подтверждает направление"
+
     lines = [
         f"Пара: {symbol}",
-        f"Время: {captured_at}",
+        f"Время анализа: {captured_at}",
         "",
         f"РЕЖИМ РЫНКА: {regime}",
         "",
-        "=== 1H (часовой таймфрейм) ===",
-        f"ADX={h1.get('adx','—')}  +DI={h1.get('plus_di','—')}  -DI={h1.get('minus_di','—')}",
-        f"EMA20={h1.get('ema20','—')}  EMA50={h1.get('ema50','—')}",
-        f"Тренд: {'бычий' if h1.get('bull') else ('медвежий' if h1.get('bear') else 'нет')}",
+        "=== Часовой график (общая картина) ===",
+        f"Сила тренда: {adx_strength}",
+        f"Средняя линия быстрая (1H): {h1.get('ema20','—')}",
+        f"Средняя линия медленная (1H): {h1.get('ema50','—')}",
+        f"Направление часового тренда: {'рост' if h1.get('bull') else ('падение' if h1.get('bear') else 'боковик')}",
         "",
-        "=== 15m (основной таймфрейм) ===",
-        f"Цена (close): {close}",
-        f"EMA20={h15.get('ema20','—')}  EMA50={h15.get('ema50','—')}",
-        f"ATR={h15.get('atr','—')}  ATR перцентиль={h15.get('atr_pct','—')}/100  режим={h15.get('atr_label','—')}",
-        f"Структура для входа: {'есть' if h15.get('structure_ok') else 'нет'}",
-        f"Цена у EMA20: {'да' if h15.get('near_ema') else 'нет'}",
-        f"Объём пулбэка: недавний={h15.get('vol_recent','—')}  норма={h15.get('vol_prior','—')}  "
-        f"ratio={h15.get('vol_ratio_pb','—')}  слабый={'да' if h15.get('pb_vol_weak') else 'нет'}",
+        "=== 15-минутный график (точка входа) ===",
+        f"Текущая цена: {close}",
+        f"Средняя быстрая (15m): {h15.get('ema20','—')}",
+        f"Средняя медленная (15m): {h15.get('ema50','—')}",
+        f"Волатильность: {vol_desc}",
+        f"Цена у средней быстрой линии: {'да' if h15.get('near_ema') else 'нет'}",
+        f"Паттерн отката сформирован: {'да' if h15.get('structure_ok') else 'нет'}",
+        f"Объём на откате: {vol_pb_desc}",
     ]
 
     if swing_highs:
-        lines.append(f"Swing Highs (сопротивления, от новых к старым): {swing_highs[::-1]}")
+        lines.append(f"Уровни сопротивления (от ближнего к дальнему): {swing_highs[::-1]}")
     if swing_lows:
-        lines.append(f"Swing Lows  (поддержки, от новых к старым): {swing_lows[::-1]}")
+        lines.append(f"Уровни поддержки (от ближнего к дальнему): {swing_lows[::-1]}")
     if swing_high and swing_low:
-        lines.append(f"Ближайший диапазон: {swing_low} — {swing_high}")
+        lines.append(f"Текущий диапазон колебаний: {swing_low} (низ) — {swing_high} (верх)")
         if price_pct is not None:
-            lines.append(f"Позиция цены в диапазоне: {price_pct}% от низа к верху")
+            lines.append(f"Цена в диапазоне: {price_pct}% от низа к верху (0%=у низа, 100%=у верха)")
 
     lines += [
         "",
-        "=== 5m (подтверждение входа) ===",
-        f"Цена 5m: {h5.get('trigger_close','—')}",
-        f"Пробой уровня: {'да' if h5.get('breakout') else 'нет'}",
-        f"Объём 5m: {h5.get('trigger_vol','—')}  SMA объёма={h5.get('vol_sma','—')}  "
-        f"ratio={h5.get('vol_ratio','—')}  сильный={'да' if h5.get('vol_strong') else 'нет'}",
-        f"+DI={h5.get('plus_di','—')}  -DI={h5.get('minus_di','—')}  DI подтверждение={'да' if h5.get('di_confirm') else 'нет'}",
+        "=== 5-минутный график (подтверждение) ===",
+        f"Текущая цена 5m: {h5.get('trigger_close','—')}",
+        f"Пробой ключевого уровня: {'да' if h5.get('breakout') else 'нет'}",
+        f"Объём на 5m: {vol_5m_desc}",
+        f"Баланс покупателей и продавцов: {di_desc}, {di_confirm}",
         "",
-        "=== Решение системы ===",
+        "=== Итог анализа ===",
         f"{decision_text}",
     ]
 

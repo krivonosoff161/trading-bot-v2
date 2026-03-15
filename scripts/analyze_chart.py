@@ -336,12 +336,11 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
 def _action_hint(bear: bool, bull: bool, near_ema: bool,
                  m_close: float, ema20: float, atr: float) -> str:
     if not bear and not bull:
-        return "Нет тренда — не торговать. Ждать ADX ≥ 20."
-    direction = "шорт" if bear else "лонг"
+        return "Рынок движется в боковике без чёткого направления. Ждать пока рынок выберет сторону."
+    direction = "ШОРТ" if bear else "ЛОНГ"
     if not near_ema:
-        dist = abs(m_close - ema20)
-        return f"Ждать {direction}-сетапа у EMA20(15m) ≈ {ema20:.4f} (сейчас gap={_fmt_metric(dist)})"
-    return f"Сетап близко для {direction} — ждать пробойной 5m свечи с объёмом"
+        return f"Направление есть ({direction}), но цена ещё далеко от удобной точки входа ({ema20:.4f}). Ждать отката."
+    return f"Цена у удобной точки входа для {direction}. Ждать подтверждения на 5-минутном графике."
 
 
 # ── Client summary ────────────────────────────────────────────────────────────
