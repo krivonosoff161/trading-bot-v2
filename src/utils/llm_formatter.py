@@ -184,6 +184,35 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         if price_pct is not None:
             lines.append(f"Цена в диапазоне: {price_pct}% от низа к верху (0%=у низа, 100%=у верха)")
 
+    # Bollinger Bands
+    bb_upper  = h15.get("bb_upper")
+    bb_middle = h15.get("bb_middle")
+    bb_lower  = h15.get("bb_lower")
+    bb_pct_b  = h15.get("bb_pct_b")
+    bb_width  = h15.get("bb_width_pct")
+    if bb_upper and bb_lower:
+        if bb_pct_b is not None and bb_pct_b <= 20:
+            bb_pos = "у нижней границы (зона перепроданности)"
+        elif bb_pct_b is not None and bb_pct_b >= 80:
+            bb_pos = "у верхней границы (зона перекупленности)"
+        else:
+            bb_pos = f"в середине полос ({bb_pct_b}%)"
+        bb_squeeze = "полосы сужены (рынок сжался, ожидается взрыв)" if bb_width and bb_width < 2.0 else "полосы нормальные"
+        lines += [
+            f"Bollinger Bands: нижняя={bb_lower}  середина={bb_middle}  верхняя={bb_upper}",
+            f"Положение цены в полосах: {bb_pos}",
+            f"Ширина полос: {bb_width}% — {bb_squeeze}",
+        ]
+
+    # SuperTrend
+    st_val  = h15.get("supertrend")
+    st_dir  = h15.get("supertrend_dir")
+    st_dist = h15.get("supertrend_dist")
+    if st_val and st_dir:
+        st_dir_ru = "вверх (бычий)" if st_dir == "up" else "вниз (медвежий)"
+        lines.append(f"SuperTrend: {st_val} — направление {st_dir_ru}, цена отдалена на {st_dist}%"
+                     f" (это уровень разворота тренда — если цена пересечёт его, тренд сменится)")
+
     lines += [
         "",
         "=== 5-минутный график (подтверждение) ===",

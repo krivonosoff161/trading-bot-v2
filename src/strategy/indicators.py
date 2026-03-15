@@ -168,6 +168,62 @@ def find_swing_levels(highs: np.ndarray, lows: np.ndarray,
     }
 
 
+def calc_bollinger_bands(closes: np.ndarray, period: int = 20, std_mult: float = 2.0) -> dict:
+    """Bollinger Bands. Returns upper, middle, lower for last bar, plus %B and width%."""
+    n = len(closes)
+    if n < period:
+        mid = float(closes[-1])
+        return {"upper": mid, "middle": mid, "lower": mid, "pct_b": 50.0, "width_pct": 0.0}
+    mid   = float(np.mean(closes[-period:]))
+    std   = float(np.std(closes[-period:], ddof=0))
+    upper = mid + std_mult * std
+    lower = mid - std_mult * std
+    pct_b = round((float(closes[-1]) - lower) / (upper - lower) * 100, 1) if upper != lower else 50.0
+    width = round((upper - lower) / mid * 100, 2) if mid else 0.0
+    return {
+        "upper":     round(upper, 6),
+        "middle":    round(mid,   6),
+        "lower":     round(lower, 6),
+        "pct_b":     pct_b,   # 0=at lower, 50=at middle, 100=at upper
+        "width_pct": width,   # band width as % of price — high = volatile
+    }
+
+
+def calc_supertrend(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
+                    period: int = 14, multiplier: float = 3.0) -> dict:
+    """SuperTrend indicator. Returns current value, direction, and distance from price."""
+    n = len(closes)
+    if n < period + 2:
+        return {"value": float(closes[-1]), "direction": "up", "distance_pct": 0.0}
+
+    atr_arr = calc_atr_series(highs, lows, closes, period)
+
+    upper = np.zeros(n)
+    lower = np.zeros(n)
+    st    = np.zeros(n)
+    direction = np.ones(n, dtype=int)  # 1=up (bullish), -1=down (bearish)
+
+    for i in range(period, n):
+        mid = (highs[i] + lows[i]) / 2
+        basic_upper = mid + multiplier * atr_arr[i]
+        basic_lower = mid - multiplier * atr_arr[i]
+
+        upper[i] = basic_upper if basic_upper < upper[i-1] or closes[i-1] > upper[i-1] else upper[i-1]
+        lower[i] = basic_lower if basic_lower > lower[i-1] or closes[i-1] < lower[i-1] else lower[i-1]
+
+        if st[i-1] == upper[i-1]:
+            st[i] = lower[i] if closes[i] > upper[i] else upper[i]
+        else:
+            st[i] = upper[i] if closes[i] < lower[i] else lower[i]
+
+        direction[i] = 1 if closes[i] > st[i] else -1
+
+    cur_st  = round(float(st[-1]),  6)
+    cur_dir = "up" if direction[-1] == 1 else "down"
+    dist    = round(abs(float(closes[-1]) - cur_st) / float(closes[-1]) * 100, 2)
+    return {"value": cur_st, "direction": cur_dir, "distance_pct": dist}
+
+
 def calc_rsi(closes: np.ndarray, period: int = 3) -> float:
     """RSI with Wilder's smoothing."""
     n = len(closes)
