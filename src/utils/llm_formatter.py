@@ -77,6 +77,7 @@ _SYSTEM_PROMPT = """\
 
 def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     """Structured snapshot summary for LLM — full data for all three market regimes."""
+    h4  = snapshot.get("4h",  {})
     h1  = snapshot.get("1h",  {})
     h15 = snapshot.get("15m", {})
     h5  = snapshot.get("5m",  {})
@@ -156,12 +157,43 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         di_desc = "покупатели и продавцы в равновесии"
     di_confirm = "подтверждает направление" if h5.get("di_confirm") else "не подтверждает направление"
 
+    # ── 4H contradiction warning ──────────────────────────────────────────────
+    h4_warning = ""
+    if h4:
+        h4_bull = h4.get("bull", False)
+        h4_bear = h4.get("bear", False)
+        if h1.get("bull") and h4_bear:
+            h4_warning = "⚠️ ВНИМАНИЕ: 4H тренд медвежий, 1H бычий — старший таймфрейм противоречит. Риск выше обычного."
+        elif h1.get("bear") and h4_bull:
+            h4_warning = "⚠️ ВНИМАНИЕ: 4H тренд бычий, 1H медвежий — старший таймфрейм противоречит. Риск выше обычного."
+        elif h4_bull:
+            h4_dir = "рост (бычий)"
+        elif h4_bear:
+            h4_dir = "падение (медвежий)"
+        else:
+            h4_dir = "боковик"
+
     lines = [
         f"Пара: {symbol}",
         f"Время анализа: {captured_at}",
         "",
         f"РЕЖИМ РЫНКА: {regime}",
         "",
+    ]
+    if h4:
+        h4_adx = h4.get("adx", 0)
+        h4_dir_str = "рост (бычий)" if h4.get("bull") else ("падение (медвежий)" if h4.get("bear") else "боковик")
+        lines += [
+            "=== 4-часовой график (старший контекст) ===",
+            f"Направление 4H: {h4_dir_str}",
+            f"Сила 4H тренда: ADX {h4_adx}",
+            f"Средняя быстрая (4H): {h4.get('ema20', '—')}",
+            f"Средняя медленная (4H): {h4.get('ema50', '—')}",
+        ]
+        if h4_warning:
+            lines.append(h4_warning)
+        lines.append("")
+    lines += [
         "=== Часовой график (общая картина) ===",
         f"Сила тренда: {adx_strength}",
         f"Средняя линия быстрая (1H): {h1.get('ema20','—')}",
