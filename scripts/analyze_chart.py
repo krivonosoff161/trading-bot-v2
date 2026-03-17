@@ -1327,7 +1327,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "adx_4h":           round(_adx_4h, 1),
             "rsi_1h":           _h1.get("rsi"),
             "rsi_15m":          _h15.get("rsi"),
-            "volume_ratio_15m": _h15.get("vol_ratio"),
+            "volume_ratio_15m": _h15.get("vol_ratio_pb"),
             "bb_width_15m":     _h15.get("bb_width_pct"),
             "trade_style_hint": _trade_style,
             "sl_price":         _sl_p,
