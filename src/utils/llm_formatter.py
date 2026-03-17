@@ -32,14 +32,17 @@ _SYSTEM_PROMPT = """\
 
 ПРАВИЛО ПРИНЯТИЯ РЕШЕНИЯ:
 
-trade_style_hint = NO_TRADE → обязательно РЕЖИМ 3. Без исключений.
-trade_style_hint = SCALP или SWING → ты сам решаешь:
+Сначала проверь запреты — если хоть одно выполнено, сразу РЕЖИМ 3:
+  - trade_style_hint = NO_TRADE
+  - bias_1h = NEUTRAL (нет направления на 1H)
+  - sl_price отсутствует
+
+Если запреты не сработали — trade_style_hint = SCALP или SWING — ты сам решаешь:
   - РЕЖИМ 1 (вход) — если видишь чёткий сигнал и уровни подтверждены
   - РЕЖИМ 2 (ждём) — если сетап есть, но триггера нет
   - РЕЖИМ 3 (нет сделки) — если видишь проблему или сомнение
 
-trade_style_hint — это потолок возможности, не обязательство входить.
-Если сомневаешься — выбирай РЕЖИМ 3. Пропущенная сделка лучше плохой сделки.
+Если сомневаешься — РЕЖИМ 3. Пропущенная сделка лучше плохой сделки.
 
 ЗАПРЕЩЕНО выводить дерево решений, шаги проверки, внутренние рассуждения — только финальный текст по шаблону.
 
@@ -255,6 +258,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     lines = [
         f"Пара: {symbol}",
         f"Время анализа: {captured_at}",
+        f"ТОРГОВАЯ ПАРА: {symbol}",
         "",
         "=== [КОНТЕКСТ РЕШЕНИЯ] — читай первым ===",
         f"trade_style_hint: {ctx.get('trade_style_hint', 'NO_TRADE')}",
@@ -367,41 +371,15 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         f"{decision_text}",
     ]
 
-    # Invalidation level — выносим явно чтобы LLM не пропустила
-    inv_level = pp.get("invalidation") if pp.get("available") else None
-    if not inv_level and act.get("valid"):
-        inv_level = act.get("sl")
-    if inv_level:
-        side_word = "ниже" if (h1.get("bull") or act.get("side") == "buy") else "выше"
-        lines.append(f"УРОВЕНЬ ОТМЕНЫ СЦЕНАРИЯ: {inv_level} — если цена закроет 15m свечу {side_word} этого уровня, идея теряет смысл")
-
-    # Confirmed trade levels
-    if pp.get("available"):
+    # ATR-based levels from llm_context — use these for plan, not Strategy E levels
+    if ctx.get("sl_price"):
         lines += [
             "",
-            f"ПОДТВЕРЖДЁННЫЙ ПЛАН ({pp.get('side', '').upper()}):",
-            f"  Зона входа: {pp.get('entry_zone', '—')}",
-            f"  Триггер: {pp.get('trigger', '—')}",
-            f"  Стоп: {pp.get('sl', '—')}",
-            f"  Цель 1: {pp.get('tp1', '—')}",
-            f"  Цель 2: {pp.get('tp2', '—')}",
-            f"  Инвалидация: {pp.get('invalidation', '—')}",
-            f"  R:R: {pp.get('rr', '—')}",
+            f"УРОВНИ ДЛЯ ПЛАНА (ATR-based):",
+            f"  Стоп:   {ctx.get('sl_price')}",
+            f"  Цель 1: {ctx.get('tp1_price')}",
+            f"  Цель 2: {ctx.get('tp2_price')}",
         ]
-    elif act.get("valid"):
-        lines += [
-            "",
-            f"АКТИВНЫЙ СИГНАЛ ({act.get('side', '').upper()}):",
-            f"  Зона входа: {act.get('entry_zone', '—')}",
-            f"  Стоп: {act.get('sl', '—')}",
-            f"  Цель 1: {act.get('tp1', '—')}",
-            f"  Цель 2: {act.get('tp2', '—')}",
-        ]
-    else:
-        lines += ["", "Подтверждённых уровней для входа НЕТ. Ордера не ставятся."]
-        hint = act.get("hint")
-        if hint:
-            lines.append(f"Наблюдение (не уровень для ордера): {hint}")
 
     expiry = snapshot.get("expiry_time")
     if expiry:
