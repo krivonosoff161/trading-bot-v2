@@ -157,233 +157,50 @@ _SYSTEM_PROMPT = """\
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
-    """Structured snapshot summary for LLM — full data for all three market regimes."""
+    """Clean snapshot for LLM — llm_context first, price structure second. No Strategy E."""
     h4  = snapshot.get("4h",  {})
     h1  = snapshot.get("1h",  {})
     h15 = snapshot.get("15m", {})
-    h5  = snapshot.get("5m",  {})
-    bd  = snapshot.get("bot_decision", {})
-    pp  = snapshot.get("pending_plan", {})
-    act = snapshot.get("action", {})
     ctx = snapshot.get("llm_context", {})
 
-    # ── Market regime + ADX strength ──────────────────────────────────────────
-    adx_val = h1.get("adx", 0) or 0
-    if adx_val >= 30:
-        adx_strength = "сильный (ADX≥30, тренд подтверждён)"
-    elif adx_val >= 25:
-        adx_strength = "умеренный (ADX 25-30, тренд есть)"
-    elif adx_val >= 20:
-        adx_strength = "слабый (ADX 20-25, тренд не подтверждён — осторожно)"
-    else:
-        adx_strength = "очень слабый (ADX<20, тренда нет)"
-
-    if h1.get("bull"):
-        regime = f"ТРЕНД ВВЕРХ — {adx_strength}"
-    elif h1.get("bear"):
-        regime = f"ТРЕНД ВНИЗ — {adx_strength}"
-    else:
-        regime = f"БОКОВИК / НЕТ ТРЕНДА — {adx_strength}"
-
-    # ── 1H full data ───────────────────────────────────────────────────────────
     close       = h15.get("close")
-    swing_highs = h15.get("swing_highs") or []
-    swing_lows  = h15.get("swing_lows")  or []
-    swing_high  = swing_highs[-1] if swing_highs else None
-    swing_low   = swing_lows[-1]  if swing_lows  else None
+    swing_highs = (h15.get("swing_highs") or [])[::-1][:3]
+    swing_lows  = (h15.get("swing_lows")  or [])[::-1][:3]
 
-    price_pct = None
-    if close and swing_high and swing_low:
-        rng = swing_high - swing_low
-        if rng > 0:
-            price_pct = round((close - swing_low) / rng * 100, 1)
-
-    # ── Bot decision ──────────────────────────────────────────────────────────
-    reason = bd.get("reason", "—")
-    stage  = bd.get("stopped_at_stage", "—")
-    decision_text = f"нет сигнала (причина: {reason}, остановлено на: {stage})"
-    if bd.get("side"):
-        decision_text = f"сигнал {bd['side'].upper()}"
-
-    # ── Build text ────────────────────────────────────────────────────────────
-    # ── Volatility label ──────────────────────────────────────────────────────
-    atr_pct = h15.get("atr_pct", 50)
-    if atr_pct <= 30:
-        vol_desc = "низкая (рынок сжался, готовится к движению)"
-    elif atr_pct >= 70:
-        vol_desc = "высокая (резкие колебания)"
-    else:
-        vol_desc = "умеренная (нормальный режим)"
-
-    # ── Volume pullback label ──────────────────────────────────────────────────
-    vol_ratio_pb = h15.get("vol_ratio_pb", 1.0)
-    pb_weak = h15.get("pb_vol_weak", True)
-    if pb_weak:
-        vol_pb_desc = f"слабый (откат без агрессии, хороший признак для входа по тренду)"
-    else:
-        vol_pb_desc = f"сильный (агрессивное давление на откате, риск продолжения против тренда)"
-
-    # ── 5m volume label ────────────────────────────────────────────────────────
-    vol_strong_5m = h5.get("vol_strong", False)
-    vol_ratio_5m  = h5.get("vol_ratio", 1.0)
-    vol_5m_desc = f"{'подтверждает движение (выше среднего)' if vol_strong_5m else 'слабый (ниже среднего)'} — соотношение к среднему: {vol_ratio_5m}x"
-
-    # ── DI direction label ────────────────────────────────────────────────────
-    plus_di_5m  = h5.get("plus_di", 0)
-    minus_di_5m = h5.get("minus_di", 0)
-    if plus_di_5m > minus_di_5m * 1.2:
-        di_desc = "покупатели сильнее продавцов"
-    elif minus_di_5m > plus_di_5m * 1.2:
-        di_desc = "продавцы сильнее покупателей"
-    else:
-        di_desc = "покупатели и продавцы в равновесии"
-    di_confirm = "подтверждает направление" if h5.get("di_confirm") else "не подтверждает направление"
-
-    # ── 4H contradiction warning ──────────────────────────────────────────────
+    # 4H contradiction warning
     h4_warning = ""
-    if h4:
-        h4_bull = h4.get("bull", False)
-        h4_bear = h4.get("bear", False)
-        if h1.get("bull") and h4_bear:
-            h4_warning = "⚠️ ВНИМАНИЕ: 4H тренд медвежий, 1H бычий — старший таймфрейм противоречит. Риск выше обычного."
-        elif h1.get("bear") and h4_bull:
-            h4_warning = "⚠️ ВНИМАНИЕ: 4H тренд бычий, 1H медвежий — старший таймфрейм противоречит. Риск выше обычного."
-        elif h4_bull:
-            h4_dir = "рост (бычий)"
-        elif h4_bear:
-            h4_dir = "падение (медвежий)"
-        else:
-            h4_dir = "боковик"
+    if h1.get("bull") and h4.get("bear"):
+        h4_warning = "⚠️ 4H медвежий, 1H бычий — таймфреймы противоречат"
+    elif h1.get("bear") and h4.get("bull"):
+        h4_warning = "⚠️ 4H бычий, 1H медвежий — таймфреймы противоречат"
 
     lines = [
-        f"Пара: {symbol}",
-        f"Время анализа: {captured_at}",
         f"ТОРГОВАЯ ПАРА: {symbol}",
+        f"Время анализа: {captured_at}",
+        f"Текущая цена: {close}",
         "",
         "=== [КОНТЕКСТ РЕШЕНИЯ] — читай первым ===",
         f"trade_style_hint: {ctx.get('trade_style_hint', 'NO_TRADE')}",
-        f"bias_4h: {ctx.get('bias_4h', 'NEUTRAL')}",
-        f"bias_1h: {ctx.get('bias_1h', 'NEUTRAL')}",
-        f"adx_1h: {ctx.get('adx_1h', 0)}",
-        f"adx_4h: {ctx.get('adx_4h', 0)}",
-        f"rsi_1h: {ctx.get('rsi_1h', '—')}",
+        f"bias_4h: {ctx.get('bias_4h', 'NEUTRAL')}  |  bias_1h: {ctx.get('bias_1h', 'NEUTRAL')}",
+        f"adx_1h: {ctx.get('adx_1h', 0)}  |  adx_4h: {ctx.get('adx_4h', 0)}",
+        f"rsi_1h: {ctx.get('rsi_1h', '—')}  |  rsi_15m: {ctx.get('rsi_15m', '—')}",
         f"volume_ratio_15m: {ctx.get('volume_ratio_15m', '—')}",
         f"sl_price: {ctx.get('sl_price', 'нет')}",
         f"tp1_price: {ctx.get('tp1_price', 'нет')}",
         f"tp2_price: {ctx.get('tp2_price', 'нет')}",
-        "",
-        f"РЕЖИМ РЫНКА: {regime}",
-        "",
     ]
-    if h4:
-        h4_adx = h4.get("adx", 0)
-        h4_dir_str = "рост (бычий)" if h4.get("bull") else ("падение (медвежий)" if h4.get("bear") else "боковик")
-        bb_width_4h  = h4.get("bb_width", 0)
-        range_mode   = h4.get("range_mode", False)
-        range_label  = "ДА — рынок в боковике (BandWidth < 12%, ADX < 25). Приоритет: range trade у границ." if range_mode else f"нет (BandWidth {bb_width_4h}%)"
-        lines += [
-            "=== 4-часовой график (старший контекст) ===",
-            f"Направление 4H: {h4_dir_str}",
-            f"Сила 4H тренда: ADX {h4_adx}",
-            f"Средняя быстрая (4H): {h4.get('ema20', '—')}",
-            f"Средняя медленная (4H): {h4.get('ema50', '—')}",
-            f"Bollinger Bands 4H: нижняя={h4.get('bb_lower','—')}  верхняя={h4.get('bb_upper','—')}  ширина={bb_width_4h}%",
-            f"Режим боковика (range mode): {range_label}",
-        ]
-        if h4_warning:
-            lines.append(h4_warning)
-        lines.append("")
-    lines += [
-        "=== Часовой график (общая картина) ===",
-        f"Сила тренда: {adx_strength}",
-        f"Средняя линия быстрая (1H): {h1.get('ema20','—')}",
-        f"Средняя линия медленная (1H): {h1.get('ema50','—')}",
-        f"Направление часового тренда: {'рост' if h1.get('bull') else ('падение' if h1.get('bear') else 'боковик')}",
-        f"RSI(14) на 1H: {h1.get('rsi', '—')} ({'перекуплен' if (h1.get('rsi') or 0) > 70 else ('перепродан' if (h1.get('rsi') or 0) < 30 else 'нейтральная зона')})",
-        "",
-        "=== 15-минутный график (точка входа) ===",
-        f"Текущая цена: {close}",
-        f"Средняя быстрая (15m): {h15.get('ema20','—')}",
-        f"Средняя медленная (15m): {h15.get('ema50','—')}",
-        f"RSI(14) на 15m: {h15.get('rsi', '—')} ({'перекуплен — осторожно с лонгом' if (h15.get('rsi') or 0) > 70 else ('перепродан — осторожно с шортом' if (h15.get('rsi') or 0) < 30 else 'нейтральная зона')})",
-        f"Волатильность: {vol_desc}",
-        f"Цена у средней быстрой линии: {'да' if h15.get('near_ema') else 'нет'}",
-        f"Паттерн отката сформирован: {'да' if h15.get('structure_ok') else 'нет'}",
-        f"Объём на откате: {vol_pb_desc}",
-    ]
+
+    if h4_warning:
+        lines.append(h4_warning)
 
     if swing_highs:
-        lines.append(f"Уровни сопротивления (от ближнего к дальнему): {swing_highs[::-1]}")
+        lines.append(f"Сопротивления: {swing_highs}")
     if swing_lows:
-        lines.append(f"Уровни поддержки (от ближнего к дальнему): {swing_lows[::-1]}")
-    if swing_high and swing_low:
-        lines.append(f"Текущий диапазон колебаний: {swing_low} (низ) — {swing_high} (верх)")
-        if price_pct is not None:
-            lines.append(f"Цена в диапазоне: {price_pct}% от низа к верху (0%=у низа, 100%=у верха)")
-
-    # Bollinger Bands
-    bb_upper  = h15.get("bb_upper")
-    bb_middle = h15.get("bb_middle")
-    bb_lower  = h15.get("bb_lower")
-    bb_pct_b  = h15.get("bb_pct_b")
-    bb_width  = h15.get("bb_width_pct")
-    if bb_upper and bb_lower:
-        if bb_pct_b is not None and bb_pct_b <= 20:
-            bb_pos = "у нижней границы (зона перепроданности)"
-        elif bb_pct_b is not None and bb_pct_b >= 80:
-            bb_pos = "у верхней границы (зона перекупленности)"
-        else:
-            bb_pos = f"в середине полос ({bb_pct_b}%)"
-        bb_squeeze = "полосы сужены (рынок сжался, ожидается взрыв)" if bb_width and bb_width < 2.0 else "полосы нормальные"
-        lines += [
-            f"Bollinger Bands: нижняя={bb_lower}  середина={bb_middle}  верхняя={bb_upper}",
-            f"Положение цены в полосах: {bb_pos}",
-            f"Ширина полос: {bb_width}% — {bb_squeeze}",
-        ]
-
-    # SuperTrend
-    st_val  = h15.get("supertrend")
-    st_dir  = h15.get("supertrend_dir")
-    st_dist = h15.get("supertrend_dist")
-    if st_val and st_dir:
-        st_dir_ru = "вверх (бычий)" if st_dir == "up" else "вниз (медвежий)"
-        lines.append(f"SuperTrend: {st_val} — направление {st_dir_ru}, цена отдалена на {st_dist}%"
-                     f" (это уровень разворота тренда — если цена пересечёт его, тренд сменится)")
-
-    # Chandelier Exit — trailing stop level
-    ce_long  = h15.get("ce_long")
-    ce_short = h15.get("ce_short")
-    if ce_long and ce_short:
-        lines += [
-            f"Chandelier Exit (трейлинг-стоп): лонг={ce_long}  шорт={ce_short}",
-            f"(если цена закроет 1H свечу ниже {ce_long} при лонге — трейлинг сработал, выход)",
-        ]
-
-    lines += [
-        "",
-        "=== 5-минутный график (подтверждение) ===",
-        f"Текущая цена 5m: {h5.get('trigger_close','—')}",
-        f"Пробой ключевого уровня: {'да' if h5.get('breakout') else 'нет'}",
-        f"Объём на 5m: {vol_5m_desc}",
-        f"Баланс покупателей и продавцов: {di_desc}, {di_confirm}",
-        "",
-        "=== Итог анализа ===",
-        f"{decision_text}",
-    ]
-
-    # ATR-based levels from llm_context — use these for plan, not Strategy E levels
-    if ctx.get("sl_price"):
-        lines += [
-            "",
-            f"УРОВНИ ДЛЯ ПЛАНА (ATR-based):",
-            f"  Стоп:   {ctx.get('sl_price')}",
-            f"  Цель 1: {ctx.get('tp1_price')}",
-            f"  Цель 2: {ctx.get('tp2_price')}",
-        ]
+        lines.append(f"Поддержки: {swing_lows}")
 
     expiry = snapshot.get("expiry_time")
     if expiry:
-        lines += ["", f"Актуально до: {expiry}"]
+        lines.append(f"\nАктуально до: {expiry}")
 
     return "\n".join(lines)
 
