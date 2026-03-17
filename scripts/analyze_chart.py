@@ -1280,10 +1280,60 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _tf_exp = 60
     expiry_time = _next_candle_close(captured_at_iso, _tf_exp)
 
+    # Pre-compute LLM context — Python decides, LLM formats
+    _h4  = result.get("4h", {})
+    _h1  = result["1h"]
+    _h15 = result["15m"]
+    _h5  = result["5m"]
+    _act = result["action"]
+
+    _bias_4h = "UP" if _h4.get("bull") else ("DOWN" if _h4.get("bear") else "NEUTRAL")
+    _bias_1h = "UP" if _h1.get("bull") else ("DOWN" if _h1.get("bear") else "NEUTRAL")
+    _adx_1h  = float(_h1.get("adx") or 0)
+    _adx_4h  = float(_h4.get("adx") or 0)
+
+    # Trade style: Python decides based on ADX and trend alignment
+    if _adx_1h >= 25 and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
+        _trade_style = "SWING"
+    elif _adx_1h >= 15:
+        _trade_style = "SCALP"
+    else:
+        _trade_style = "NO_TRADE"
+
+    # ATR-based SL/TP levels — multipliers by asset
+    _atr_15m = float(_h15.get("atr") or 0)
+    _close   = float(_h15.get("close") or 0)
+    _sym_up  = symbol.upper()
+    _sl_mult = 3.0 if "DOGE" in _sym_up else (2.75 if ("SOL" in _sym_up or "XRP" in _sym_up) else 2.5)
+    _sl_dist  = _atr_15m * _sl_mult
+    _tp1_dist = _sl_dist * 1.5
+    _tp2_dist = _sl_dist * 2.5
+    _side = _act.get("side") or ("buy" if _h1.get("bull") else ("sell" if _h1.get("bear") else None))
+    if _side == "buy" and _close:
+        _sl_p, _tp1_p, _tp2_p = round(_close - _sl_dist, 4), round(_close + _tp1_dist, 4), round(_close + _tp2_dist, 4)
+    elif _side == "sell" and _close:
+        _sl_p, _tp1_p, _tp2_p = round(_close + _sl_dist, 4), round(_close - _tp1_dist, 4), round(_close - _tp2_dist, 4)
+    else:
+        _sl_p = _tp1_p = _tp2_p = None
+
     snapshot = {
         "symbol":       symbol,
         "captured_at":  captured_at_iso,
         "expiry_time":  expiry_time,
+        "llm_context": {
+            "bias_4h":          _bias_4h,
+            "bias_1h":          _bias_1h,
+            "adx_1h":           round(_adx_1h, 1),
+            "adx_4h":           round(_adx_4h, 1),
+            "rsi_1h":           _h1.get("rsi"),
+            "rsi_15m":          _h15.get("rsi"),
+            "volume_ratio_15m": _h15.get("vol_ratio"),
+            "bb_width_15m":     _h15.get("bb_width_pct"),
+            "trade_style_hint": _trade_style,
+            "sl_price":         _sl_p,
+            "tp1_price":        _tp1_p,
+            "tp2_price":        _tp2_p,
+        },
         "4h":           result.get("4h", {}),
         "1h":           result["1h"],
         "15m":          result["15m"],
