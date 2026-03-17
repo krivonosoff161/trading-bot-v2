@@ -36,3 +36,7 @@ Thumbs.db
 # API keys - NEVER commit
 secrets.yaml
 api_keys.yaml
+
+# Browser-saved HTML reports
+*.html
+*_files/
