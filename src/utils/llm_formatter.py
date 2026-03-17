@@ -31,7 +31,10 @@ _SYSTEM_PROMPT = """\
 Клиент — обычный человек, не технический специалист. Он хочет понять: что происходит и что делать.
 
 Ты получишь данные по паре: направление тренда, сила тренда, объём, уровни входа/стопа/цели.
-На основе этих данных выбери один из трёх режимов и напиши текст строго по его шаблону.
+ГЛАВНОЕ ПОЛЕ — entry_signal. Оно определяет режим:
+- entry_signal = ENTRY  → используй РЕЖИМ 1 (ВХОД)
+- entry_signal = WAIT   → используй РЕЖИМ 2 (ЖДЁМ)
+- entry_signal = NO_TRADE → используй РЕЖИМ 3 (НЕТ ТОРГОВЛИ)
 
 ПРАВИЛО ЯЗЫКА:
 Объясняй смысл, не пересказывай цифры. "Тренд вверх и сильный" — не "ADX=36, bias=UP".
@@ -178,8 +181,12 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
 
     conflict = bias_4h != "NEUTRAL" and bias_1h != "NEUTRAL" and bias_4h != bias_1h
 
+    entry_signal = ctx.get("entry_signal", "WAIT")
+    trade_style  = ctx.get("trade_style_hint", "NO_TRADE")
+
     lines = [
         f"Пара: {symbol}  |  Цена: {close}  |  Время: {captured_at}",
+        f"entry_signal: {entry_signal}  |  trade_style_hint: {trade_style}",
         "",
         f"Тренд на 4H: {trend_str(bias_4h, adx_4h)}",
         f"Тренд на 1H: {trend_str(bias_1h, adx_1h)}",

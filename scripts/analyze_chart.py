@@ -1300,6 +1300,17 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:
         _trade_style = "NO_TRADE"
 
+    # Entry signal: Python decides — LLM only formats
+    # Vol activity: recent candles vs prior (capped at 10 to avoid pullback metric anomalies)
+    _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
+
+    if _trade_style == "NO_TRADE" or _vol_ratio < 0.7:
+        _entry_signal = "NO_TRADE"
+    elif _vol_ratio >= 1.3 and _bias_1h != "NEUTRAL":
+        _entry_signal = "ENTRY"
+    else:
+        _entry_signal = "WAIT"
+
     # ATR-based SL/TP levels — multipliers by asset
     _atr_15m = float(_h15.get("atr") or 0)
     _close   = float(_h15.get("close") or 0)
@@ -1331,9 +1342,10 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "adx_4h":           round(_adx_4h, 1),
             "rsi_1h":           _h1.get("rsi"),
             "rsi_15m":          _h15.get("rsi"),
-            "volume_ratio_15m": _h15.get("vol_ratio_pb"),
+            "volume_ratio_15m": round(_vol_ratio, 2),
             "bb_width_15m":     _h15.get("bb_width_pct"),
             "trade_style_hint": _trade_style,
+            "entry_signal":     _entry_signal,
             "sl_price":         _sl_p,
             "tp1_price":        _tp1_p,
             "tp2_price":        _tp2_p,
