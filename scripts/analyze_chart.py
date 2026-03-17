@@ -1308,7 +1308,11 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _sl_dist  = _atr_15m * _sl_mult
     _tp1_dist = _sl_dist * 1.5
     _tp2_dist = _sl_dist * 2.5
-    _side = _act.get("side") or ("buy" if _h1.get("bull") else ("sell" if _h1.get("bear") else None))
+    _side = (_act.get("side")
+             or ("buy"  if _h1.get("bull") else None)
+             or ("sell" if _h1.get("bear") else None)
+             or ("buy"  if _h4.get("bull") else None)
+             or ("sell" if _h4.get("bear") else None))
     if _side == "buy" and _close:
         _sl_p, _tp1_p, _tp2_p = round(_close - _sl_dist, 4), round(_close + _tp1_dist, 4), round(_close + _tp2_dist, 4)
     elif _side == "sell" and _close:
