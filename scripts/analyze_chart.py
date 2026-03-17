@@ -954,7 +954,6 @@ def generate_chart_png(
     result: dict,
     symbol: str,
     captured_at: str,
-    client_summary: str,
     out_path: str,
 ) -> None:
     """Generate candlestick chart from OKX data with EMA + price level overlays."""
@@ -1213,68 +1212,7 @@ def generate_chart_png(
     buf.seek(0)
     chart_img = Image.open(buf).convert("RGB")
 
-    # ── Right text panel (same coloring as generate_annotated_png) ────────
-    PANEL_W  = 400
-    PADDING  = 14
-    FONT_SZ  = 14
-    try:
-        font = ImageFont.truetype("arial.ttf", FONT_SZ)
-    except Exception:
-        font = ImageFont.load_default()
-
-    iw, ih = chart_img.size
-    max_chars = (PANEL_W - PADDING * 2) // 8
-    wrapped: list[str] = []
-    for line in client_summary.split("\n"):
-        if len(line) <= max_chars:
-            wrapped.append(line)
-        else:
-            wrapped.extend(textwrap.wrap(line, width=max_chars) or [""])
-
-    line_h   = FONT_SZ + 4
-    panel_h  = max(ih, len(wrapped) * line_h + PADDING * 2)
-    canvas   = Image.new("RGB", (iw + PANEL_W, panel_h), (15, 15, 20))
-    canvas.paste(chart_img, (0, (panel_h - ih) // 2))
-    draw = ImageDraw.Draw(canvas)
-    draw.rectangle([(iw, 0), (iw + PANEL_W, panel_h)], fill=(18, 20, 28))
-    draw.line([(iw, 0), (iw, panel_h)], fill=(60, 80, 120), width=2)
-
-    _HEADERS = {
-        "СЕЙЧАС НА РЫНКЕ", "ПЛАН ВХОДА", "ГДЕ ИДЕЯ ЛОМАЕТСЯ",
-        "ГДЕ ЗАБРАТЬ ПРИБЫЛЬ", "СЕЙЧАС ОРДЕР НЕ СТАВИМ", "ЗОНА НАБЛЮДЕНИЯ",
-        "ПЛАН ПРИ ПОДТВЕРЖДЕНИИ", "ЧТО НУЖНО ДЛЯ ВХОДА",
-        "ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ", "КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ",
-        "НЕ ДЕЛАТЬ", "КОГДА ВЕРНУТЬСЯ",
-    }
-
-    def _col(text: str) -> tuple:
-        s = text.strip()
-        if "═" in text:                          return (100, 160, 255)
-        if s.startswith("Статус:"):
-            if "ГОТОВ"    in s: return (80, 210, 120)
-            if "НАБЛЮДАЕМ" in s: return (220, 180, 60)
-            return (150, 150, 155)
-        if s in _HEADERS:                        return (80, 140, 210)
-        if s.startswith(("Первая цель:", "Вторая цель:", "Зона входа:", "Триггерная цена:")):
-            return (255, 200, 80)
-        if s.startswith(("Защитный выход:", "Ориентир стопа:", "Сценарий ломается:")):
-            return (220, 130, 80)
-        if s.startswith("Волатильность:"):
-            if "высокая" in s or "расширение" in s: return (220, 130, 80)
-            if "низкая"  in s or "сжатие"     in s: return (100, 160, 255)
-        if "EMA20" in s and "EMA50" not in s:    return (33, 150, 243)   # blue — matches chart
-        if "EMA50" in s and "EMA20" not in s:    return (255, 152, 0)    # orange — matches chart
-        if s.startswith("("):                    return (145, 150, 165)
-        return (190, 195, 210)
-
-    y = PADDING
-    for line in wrapped:
-        draw.text((iw + PADDING, y), line, font=font, fill=_col(line))
-        y += line_h
-        if y > panel_h - PADDING:
-            break
-
-    canvas.save(out_path, quality=92)
+    chart_img.save(out_path, quality=92)
     print(f"Saved: {out_path}")
 
 
@@ -1368,13 +1306,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print(f"Saved: {snap_path}")
 
     # Chart first — so LLM can see it as visual context
-    generate_chart_png(raw_15m, result, symbol, captured_at_iso, client_summary, str(png_path))
+    generate_chart_png(raw_15m, result, symbol, captured_at_iso, str(png_path))
 
-    # Generate natural Russian text via LLM — pass our annotated chart as image
-    # (always available, has EMA/swing/levels drawn; user screenshot ignored)
+    # Generate natural Russian text via LLM — pass chart image + client_summary as context
     from src.utils.llm_formatter import generate_client_text
     llm_image = str(png_path) if png_path.exists() else image_path
-    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image)
+    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=client_summary)
     delivery_text = llm_text if llm_text else client_summary
 
     # Save for downstream consumers (e.g. telegram_bot.py)
@@ -1389,9 +1326,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if not tg_token or not tg_chat:
             print("Telegram: not sent — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in .env")
         else:
+            from src.utils.telegram import send_photo_to
             import html as _html
             tg_text = _html.escape(delivery_text) if llm_text else _format_telegram(client_summary)
             await send_message(tg_text)
+            if image_path and os.path.exists(image_path):
+                await send_photo_to(tg_chat, image_path)
             print("Telegram: sent.")
 
     print(f"\nРезультаты: {run_dir}")
