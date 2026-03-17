@@ -30,24 +30,15 @@ _SYSTEM_PROMPT = """\
 Ты — аналитик крипторынка. Пишешь клиенту разбор на русском языке.
 Клиент — обычный человек, не технический специалист. Он хочет понять: что происходит и что делать.
 
-ПРАВИЛО ПРИНЯТИЯ РЕШЕНИЯ:
+Ты получишь данные по паре: направление тренда, сила тренда, объём, уровни входа/стопа/цели.
+На основе этих данных выбери один из трёх режимов и напиши текст строго по его шаблону.
 
-Сначала проверь запреты — если хоть одно выполнено, сразу РЕЖИМ 3:
-  - trade_style_hint = NO_TRADE
-  - bias_1h = NEUTRAL (нет направления на 1H)
-  - sl_price отсутствует
-
-Если запреты не сработали — trade_style_hint = SCALP или SWING — ты сам решаешь:
-  - РЕЖИМ 1 (вход) — если видишь чёткий сигнал и уровни подтверждены
-  - РЕЖИМ 2 (ждём) — если сетап есть, но триггера нет
-  - РЕЖИМ 3 (нет сделки) — если видишь проблему или сомнение
-
-Если сомневаешься — РЕЖИМ 3. Пропущенная сделка лучше плохой сделки.
-
-ЗАПРЕЩЕНО выводить дерево решений, шаги проверки, внутренние рассуждения — только финальный текст по шаблону.
-
-ГЛАВНОЕ ПРАВИЛО ЯЗЫКА:
-Переводи технические данные в человеческий смысл. Не пересказывай цифры — объясняй что они означают.
+ПРАВИЛО ЯЗЫКА:
+Объясняй смысл, не пересказывай цифры. "Тренд вверх и сильный" — не "ADX=36, bias=UP".
+Конкретные цены для входа/стопа/цели — писать обязательно если есть в данных.
+Без приветствий. Без слов "бот", "система", "алгоритм". Без внутренних рассуждений.
+Направление: ЛОНГ или ШОРТ.
+Последняя строка ВСЕГДА: "🕐 Актуально до: HH:MM UTC"
 
 ЗАПРЕЩЕНО писать:
 - названия индикаторов: ADX, DI, EMA, ATR, ratio, перцентиль — клиент не знает что это
@@ -157,7 +148,7 @@ _SYSTEM_PROMPT = """\
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
-    """Clean snapshot for LLM — llm_context first, price structure second. No Strategy E."""
+    """Human-readable data snapshot for LLM — no Strategy E, no raw field names."""
     h4  = snapshot.get("4h",  {})
     h1  = snapshot.get("1h",  {})
     h15 = snapshot.get("15m", {})
@@ -167,36 +158,63 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     swing_highs = (h15.get("swing_highs") or [])[::-1][:3]
     swing_lows  = (h15.get("swing_lows")  or [])[::-1][:3]
 
-    # 4H contradiction warning
-    h4_warning = ""
-    if h1.get("bull") and h4.get("bear"):
-        h4_warning = "⚠️ 4H медвежий, 1H бычий — таймфреймы противоречат"
-    elif h1.get("bear") and h4.get("bull"):
-        h4_warning = "⚠️ 4H бычий, 1H медвежий — таймфреймы противоречат"
+    # Trend descriptions
+    def trend_str(bias, adx):
+        direction = "вверх" if bias == "UP" else ("вниз" if bias == "DOWN" else "боковик")
+        adx = adx or 0
+        strength = "сильный" if adx >= 30 else ("умеренный" if adx >= 25 else ("слабый" if adx >= 15 else "очень слабый / нет тренда"))
+        return f"{direction}, {strength} (ADX {adx})"
+
+    bias_4h = ctx.get("bias_4h", "NEUTRAL")
+    bias_1h = ctx.get("bias_1h", "NEUTRAL")
+    adx_4h  = ctx.get("adx_4h", 0)
+    adx_1h  = ctx.get("adx_1h", 0)
+    rsi_1h  = ctx.get("rsi_1h")
+    rsi_15m = ctx.get("rsi_15m")
+    vol     = ctx.get("volume_ratio_15m")
+    sl      = ctx.get("sl_price")
+    tp1     = ctx.get("tp1_price")
+    tp2     = ctx.get("tp2_price")
+
+    conflict = bias_4h != "NEUTRAL" and bias_1h != "NEUTRAL" and bias_4h != bias_1h
 
     lines = [
-        f"ТОРГОВАЯ ПАРА: {symbol}",
-        f"Время анализа: {captured_at}",
-        f"Текущая цена: {close}",
+        f"Пара: {symbol}  |  Цена: {close}  |  Время: {captured_at}",
         "",
-        "=== [КОНТЕКСТ РЕШЕНИЯ] — читай первым ===",
-        f"trade_style_hint: {ctx.get('trade_style_hint', 'NO_TRADE')}",
-        f"bias_4h: {ctx.get('bias_4h', 'NEUTRAL')}  |  bias_1h: {ctx.get('bias_1h', 'NEUTRAL')}",
-        f"adx_1h: {ctx.get('adx_1h', 0)}  |  adx_4h: {ctx.get('adx_4h', 0)}",
-        f"rsi_1h: {ctx.get('rsi_1h', '—')}  |  rsi_15m: {ctx.get('rsi_15m', '—')}",
-        f"volume_ratio_15m: {ctx.get('volume_ratio_15m', '—')}",
-        f"sl_price: {ctx.get('sl_price', 'нет')}",
-        f"tp1_price: {ctx.get('tp1_price', 'нет')}",
-        f"tp2_price: {ctx.get('tp2_price', 'нет')}",
+        f"Тренд на 4H: {trend_str(bias_4h, adx_4h)}",
+        f"Тренд на 1H: {trend_str(bias_1h, adx_1h)}",
     ]
 
-    if h4_warning:
-        lines.append(h4_warning)
+    if conflict:
+        lines.append("⚠️ Таймфреймы противоречат друг другу — повышенный риск")
+
+    if rsi_1h is not None:
+        rsi_label = "перекуплен" if rsi_1h > 70 else ("перепродан" if rsi_1h < 30 else "нейтральная зона")
+        lines.append(f"Импульс (1H): RSI {rsi_1h} — {rsi_label}")
+
+    if rsi_15m is not None:
+        rsi_label = "перекуплен" if rsi_15m > 70 else ("перепродан" if rsi_15m < 30 else "нейтральная зона")
+        lines.append(f"Импульс (15m): RSI {rsi_15m} — {rsi_label}")
+
+    if vol is not None:
+        vol_label = "высокий — подтверждает движение" if float(vol) >= 1.5 else ("нормальный" if float(vol) >= 1.0 else "низкий — движение слабое")
+        lines.append(f"Объём: {vol}x от среднего — {vol_label}")
 
     if swing_highs:
         lines.append(f"Сопротивления: {swing_highs}")
     if swing_lows:
         lines.append(f"Поддержки: {swing_lows}")
+
+    if sl:
+        lines += [
+            "",
+            f"Расчётные уровни:",
+            f"  Стоп:   {sl}",
+            f"  Цель 1: {tp1}",
+            f"  Цель 2: {tp2}",
+        ]
+    else:
+        lines.append("\nУровней для входа нет.")
 
     expiry = snapshot.get("expiry_time")
     if expiry:
