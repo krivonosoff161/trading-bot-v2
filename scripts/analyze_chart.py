@@ -1232,11 +1232,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     after_ts    = captured_ms + 1
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
-    raw_4h, raw_1h, raw_15m, raw_5m = await asyncio.gather(
+    raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi = await asyncio.gather(
         client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
         client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
         client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
         client.get_history_candles(symbol, "5m",  after=after_ts, limit=limit),
+        client.get_funding_rate(symbol),
+        client.get_open_interest(symbol),
     )
     await client.close()
 
@@ -1291,45 +1293,93 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _bias_1h = "UP" if _h1.get("bull") else ("DOWN" if _h1.get("bear") else "NEUTRAL")
     _adx_1h  = float(_h1.get("adx") or 0)
     _adx_4h  = float(_h4.get("adx") or 0)
+    _atr_15m = float(_h15.get("atr") or 0)
+    _close   = float(_h15.get("close") or 0)
+    _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
 
-    # Trade style: Python decides based on ADX and trend alignment
-    if _adx_1h >= 25 and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
+    # ATR 1H — calculated from raw candles (not stored in result["1h"])
+    if raw_1h and len(raw_1h) >= 14:
+        _highs_1h, _lows_1h, _closes_1h = parse_candles(raw_1h)
+        _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=14))
+    else:
+        _atr_1h = _atr_15m * 4  # fallback: rough 1H estimate
+
+    # VWAP and daily High/Low from 15m candles (current UTC day only)
+    _captured_dt = datetime.fromisoformat(captured_at_iso.replace("Z", "+00:00"))
+    _day_start_ms = int(datetime(_captured_dt.year, _captured_dt.month, _captured_dt.day,
+                                  tzinfo=timezone.utc).timestamp() * 1000)
+    _day_candles = [c for c in raw_15m if int(c[0]) >= _day_start_ms]
+    if _day_candles:
+        _dc_closes = [float(c[4]) for c in _day_candles]
+        _dc_vols   = [float(c[5]) for c in _day_candles]
+        _dc_highs  = [float(c[2]) for c in _day_candles]
+        _dc_lows   = [float(c[3]) for c in _day_candles]
+        _vol_sum = sum(_dc_vols)
+        _vwap     = round(sum(c * v for c, v in zip(_dc_closes, _dc_vols)) / _vol_sum, 4) if _vol_sum > 0 else None
+        _day_high = round(max(_dc_highs), 4)
+        _day_low  = round(min(_dc_lows),  4)
+    else:
+        _vwap = _day_high = _day_low = None
+
+    # Level 1 — Trade style (Qwen3 thresholds)
+    if _adx_4h >= 25 and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
         _trade_style = "SWING"
-    elif _adx_1h >= 15:
+    elif _adx_1h >= 20 and _vol_ratio >= 1.5:
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"
 
-    # Entry signal: Python decides — LLM only formats
-    # Vol activity: recent candles vs prior (capped at 10 to avoid pullback metric anomalies)
-    _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
-
-    if _trade_style == "NO_TRADE" or _vol_ratio < 0.7:
-        _entry_signal = "NO_TRADE"
-    elif _vol_ratio >= 1.3 and _bias_1h != "NEUTRAL":
-        _entry_signal = "ENTRY"
-    else:
-        _entry_signal = "WAIT"
-
-    # ATR-based SL/TP levels — multipliers by asset
-    _atr_15m = float(_h15.get("atr") or 0)
-    _close   = float(_h15.get("close") or 0)
-    _sym_up  = symbol.upper()
-    _sl_mult = 3.0 if "DOGE" in _sym_up else (2.75 if ("SOL" in _sym_up or "XRP" in _sym_up) else 2.5)
-    _sl_dist  = _atr_15m * _sl_mult
-    _tp1_dist = _sl_dist * 1.5
-    _tp2_dist = _sl_dist * 2.5
+    # Level 2 — Direction
     _side = (_act.get("side")
              or ("buy"  if _h1.get("bull") else None)
              or ("sell" if _h1.get("bear") else None)
              or ("buy"  if _h4.get("bull") else None)
              or ("sell" if _h4.get("bear") else None))
+    # VWAP hard filter: LONG only above VWAP, SHORT only below
+    _vwap_ok = True
+    if _vwap and _close:
+        if _side == "buy"  and _close < _vwap:
+            _vwap_ok = False
+        elif _side == "sell" and _close > _vwap:
+            _vwap_ok = False
+
+    # Level 3 — Derivatives filters
+    _funding_block = _funding is not None and abs(_funding) > 0.001   # >0.1% — NO_TRADE
+    _funding_warn  = _funding is not None and abs(_funding) > 0.0005  # >0.05% — WAIT
+
+    # Level 4 — SL/TP by trade style
+    if _trade_style == "SWING":
+        _sl_dist = _atr_1h * 2.0
+    else:
+        _sl_dist = _atr_15m * 1.5
+    _tp1_dist = _sl_dist * 1.5
+
     if _side == "buy" and _close:
-        _sl_p, _tp1_p, _tp2_p = round(_close - _sl_dist, 4), round(_close + _tp1_dist, 4), round(_close + _tp2_dist, 4)
+        _sl_p  = round(_close - _sl_dist, 4)
+        _tp1_p = round(_close + _tp1_dist, 4)
+        _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
     elif _side == "sell" and _close:
-        _sl_p, _tp1_p, _tp2_p = round(_close + _sl_dist, 4), round(_close - _tp1_dist, 4), round(_close - _tp2_dist, 4)
+        _sl_p  = round(_close + _sl_dist, 4)
+        _tp1_p = round(_close - _tp1_dist, 4)
+        _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
     else:
         _sl_p = _tp1_p = _tp2_p = None
+
+    # R/R check: if TP2 closer than SL — no trade
+    _rr_ok = True
+    if _sl_p and _tp2_p and _close:
+        _dist_sl  = abs(_close - _sl_p)
+        _dist_tp2 = abs(_close - _tp2_p)
+        if _dist_tp2 < _dist_sl:
+            _rr_ok = False
+
+    # Final entry signal
+    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_ratio < 0.7:
+        _entry_signal = "NO_TRADE"
+    elif _funding_warn or _vol_ratio < 1.3:
+        _entry_signal = "WAIT"
+    else:
+        _entry_signal = "ENTRY"
 
     snapshot = {
         "symbol":       symbol,
@@ -1346,6 +1396,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "bb_width_15m":     _h15.get("bb_width_pct"),
             "trade_style_hint": _trade_style,
             "entry_signal":     _entry_signal,
+            "funding_rate":     round(_funding, 6) if _funding is not None else None,
+            "open_interest":    round(_oi, 0) if _oi is not None else None,
+            "vwap_day":         _vwap,
+            "day_high":         _day_high,
+            "day_low":          _day_low,
+            "atr_1h":           round(_atr_1h, 4),
+            "atr_15m":          round(_atr_15m, 4),
             "sl_price":         _sl_p,
             "tp1_price":        _tp1_p,
             "tp2_price":        _tp2_p,
@@ -1378,7 +1435,17 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     from src.utils.llm_formatter import generate_client_text
     llm_image = str(png_path) if png_path.exists() else image_path
     llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=client_summary)
-    delivery_text = llm_text if llm_text else client_summary
+    if llm_text:
+        delivery_text = llm_text
+    else:
+        # Fallback: patch status label to match entry_signal (build_client_summary uses old logic)
+        _status_map = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА"}
+        _correct = _status_map.get(_entry_signal, "НАБЛЮДАЕМ")
+        delivery_text = client_summary
+        for _old in ["ГОТОВ ВХОД", "НАБЛЮДАЕМ", "ВНЕ РЫНКА"]:
+            if f"  Статус:      {_old}" in delivery_text:
+                delivery_text = delivery_text.replace(f"  Статус:      {_old}", f"  Статус:      {_correct}", 1)
+                break
 
     # Save for downstream consumers (e.g. telegram_bot.py)
     summary_path = run_dir / f"{symbol}_client_summary.txt"
