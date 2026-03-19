@@ -955,6 +955,7 @@ def generate_chart_png(
     symbol: str,
     captured_at: str,
     out_path: str,
+    llm_levels: dict | None = None,
 ) -> None:
     """Generate candlestick chart from OKX data with EMA + price level overlays."""
     try:
@@ -1097,7 +1098,8 @@ def generate_chart_png(
         ("tp1",        "TP1",        "#FFD700", "--"),
         ("tp2",        "TP2",        "#FFA500", ":"),
     ]
-    src = pp if pp.get("available") else (act if act.get("valid") else {})
+    # Prefer old-strategy levels, fall back to llm_context levels
+    src = pp if pp.get("available") else (act if act.get("valid") else (llm_levels or {}))
     for key, label, col, ls in level_keys:
         if not src.get(key):
             continue
@@ -1296,6 +1298,14 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _atr_15m = float(_h15.get("atr") or 0)
     _close   = float(_h15.get("close") or 0)
     _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
+    _rsi_15m   = float(_h15.get("rsi") or 50)
+
+    # Extra indicators already calculated — use for PULLBACK filter
+    _plus_di_1h     = float(_h1.get("plus_di") or 0)
+    _minus_di_1h    = float(_h1.get("minus_di") or 0)
+    _supertrend_dir = str(_h15.get("supertrend_dir") or "")   # "up" / "down"
+    _ce_long        = float(_h15.get("ce_long") or 0)
+    _ce_short       = float(_h15.get("ce_short") or 0)
 
     # ATR 1H — calculated from raw candles (not stored in result["1h"])
     if raw_1h and len(raw_1h) >= 14:
@@ -1321,9 +1331,31 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:
         _vwap = _day_high = _day_low = None
 
-    # Level 1 — Trade style (Qwen3 thresholds)
+    # Day position: 0.0 = day_low, 1.0 = day_high
+    if _day_high and _day_low and _day_high != _day_low and _close:
+        _day_position = round((_close - _day_low) / (_day_high - _day_low), 3)
+    else:
+        _day_position = None
+
+    # Level 1 — Trade style
     if _adx_4h >= 25 and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
         _trade_style = "SWING"
+    elif _adx_4h >= 25 and _bias_4h != "NEUTRAL" and _bias_1h == "NEUTRAL":
+        # PULLBACK: 4H trend active, 1H in correction — check confirming signals
+        _pb_long  = (_bias_4h == "UP"
+                     and _supertrend_dir == "up"
+                     and _plus_di_1h > _minus_di_1h
+                     and _day_position is not None and _day_position < 0.45
+                     and _rsi_15m < 70)
+        _pb_short = (_bias_4h == "DOWN"
+                     and _supertrend_dir == "down"
+                     and _minus_di_1h > _plus_di_1h
+                     and _day_position is not None and _day_position > 0.55
+                     and _rsi_15m > 30)
+        _trade_style = "PULLBACK" if (_pb_long or _pb_short) else "NO_TRADE"
+        if _trade_style == "NO_TRADE":
+            print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
+                  f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
     elif _adx_1h >= 20 and _vol_ratio >= 1.5:
         _trade_style = "SCALP"
     else:
@@ -1335,48 +1367,92 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
              or ("sell" if _h1.get("bear") else None)
              or ("buy"  if _h4.get("bull") else None)
              or ("sell" if _h4.get("bear") else None))
-    # VWAP hard filter: LONG only above VWAP, SHORT only below
+
+    # VWAP filter — different logic per trade style
     _vwap_ok = True
     if _vwap and _close:
-        if _side == "buy"  and _close < _vwap:
-            _vwap_ok = False
-        elif _side == "sell" and _close > _vwap:
-            _vwap_ok = False
+        if _trade_style == "PULLBACK":
+            # PULLBACK LONG wants price in discount zone (near/below VWAP)
+            if _side == "buy"  and _close > _vwap * 1.02:
+                _vwap_ok = False
+            elif _side == "sell" and _close < _vwap * 0.98:
+                _vwap_ok = False
+        else:
+            # SWING/SCALP: price must be on the trend side of VWAP
+            if _side == "buy"  and _close < _vwap:
+                _vwap_ok = False
+            elif _side == "sell" and _close > _vwap:
+                _vwap_ok = False
 
-    # Level 3 — Derivatives filters
-    _funding_block = _funding is not None and abs(_funding) > 0.001   # >0.1% — NO_TRADE
-    _funding_warn  = _funding is not None and abs(_funding) > 0.0005  # >0.05% — WAIT
+    # Level 3 — Dynamic funding thresholds per trade style
+    _funding_abs = abs(_funding) if _funding is not None else 0
+    if _trade_style == "SWING":
+        _funding_block = _funding_abs > 0.003   # >0.3%
+        _funding_warn  = _funding_abs > 0.001   # >0.1%
+    elif _trade_style == "PULLBACK":
+        _funding_block = _funding_abs > 0.008   # >0.8%
+        _funding_warn  = _funding_abs > 0.003   # >0.3%
+    elif _trade_style == "SCALP":
+        _funding_block = _funding_abs > 0.005   # >0.5%
+        _funding_warn  = _funding_abs > 0.001   # >0.1%
+    else:
+        _funding_block = _funding_warn = False
 
     # Level 4 — SL/TP by trade style
+    _sl_p = _tp1_p = _tp2_p = None
+
     if _trade_style == "SWING":
-        _sl_dist = _atr_1h * 2.0
-    else:
-        _sl_dist = _atr_15m * 1.5
-    _tp1_dist = _sl_dist * 1.5
+        _sl_dist  = _atr_1h * 2.0
+        _tp1_dist = _sl_dist * 1.5
+        if _side == "buy" and _close:
+            _sl_p  = round(_close - _sl_dist, 4)
+            _tp1_p = round(_close + _tp1_dist, 4)
+            _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
+        elif _side == "sell" and _close:
+            _sl_p  = round(_close + _sl_dist, 4)
+            _tp1_p = round(_close - _tp1_dist, 4)
+            _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
 
-    if _side == "buy" and _close:
-        _sl_p  = round(_close - _sl_dist, 4)
-        _tp1_p = round(_close + _tp1_dist, 4)
-        _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
-    elif _side == "sell" and _close:
-        _sl_p  = round(_close + _sl_dist, 4)
-        _tp1_p = round(_close - _tp1_dist, 4)
-        _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
-    else:
-        _sl_p = _tp1_p = _tp2_p = None
+    elif _trade_style == "PULLBACK":
+        # SL: Chandelier Exit or day boundary (whichever is tighter)
+        if _side == "buy" and _close and _ce_long:
+            _sl_p_day = round(_day_low * 0.995, 4) if _day_low else None
+            _sl_p     = round(min(_ce_long, _sl_p_day) if _sl_p_day else _ce_long, 4)
+            _sl_dist  = max(_close - _sl_p, _atr_15m * 0.5)   # floor: avoid zero-dist
+            _tp1_p    = round(_close + _sl_dist * 2.0, 4)
+            _tp2_p    = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 3.0, 4)
+        elif _side == "sell" and _close and _ce_short:
+            _sl_p_day = round(_day_high * 1.005, 4) if _day_high else None
+            _sl_p     = round(max(_ce_short, _sl_p_day) if _sl_p_day else _ce_short, 4)
+            _sl_dist  = max(_sl_p - _close, _atr_15m * 0.5)
+            _tp1_p    = round(_close - _sl_dist * 2.0, 4)
+            _tp2_p    = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 3.0, 4)
+        else:
+            _sl_dist = _atr_15m * 1.5
 
-    # R/R check: if TP2 closer than SL — no trade
+    else:  # SCALP
+        _sl_dist  = _atr_15m * 1.5
+        _tp1_dist = _sl_dist * 1.5
+        if _side == "buy" and _close:
+            _sl_p  = round(_close - _sl_dist, 4)
+            _tp1_p = round(_close + _tp1_dist, 4)
+            _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
+        elif _side == "sell" and _close:
+            _sl_p  = round(_close + _sl_dist, 4)
+            _tp1_p = round(_close - _tp1_dist, 4)
+            _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
+
+    # R/R check: TP2 must be further than SL
     _rr_ok = True
     if _sl_p and _tp2_p and _close:
-        _dist_sl  = abs(_close - _sl_p)
-        _dist_tp2 = abs(_close - _tp2_p)
-        if _dist_tp2 < _dist_sl:
+        if abs(_close - _tp2_p) < abs(_close - _sl_p):
             _rr_ok = False
 
     # Final entry signal
-    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_ratio < 0.7:
+    _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
+    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_too_low:
         _entry_signal = "NO_TRADE"
-    elif _funding_warn or _vol_ratio < 1.3:
+    elif _funding_warn or (_vol_ratio < 1.3 and _trade_style == "SCALP"):
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
@@ -1390,10 +1466,14 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "bias_1h":          _bias_1h,
             "adx_1h":           round(_adx_1h, 1),
             "adx_4h":           round(_adx_4h, 1),
+            "plus_di_1h":       round(_plus_di_1h, 1),
+            "minus_di_1h":      round(_minus_di_1h, 1),
+            "supertrend_dir":   _supertrend_dir,
             "rsi_1h":           _h1.get("rsi"),
             "rsi_15m":          _h15.get("rsi"),
             "volume_ratio_15m": round(_vol_ratio, 2),
             "bb_width_15m":     _h15.get("bb_width_pct"),
+            "day_position":     _day_position,
             "trade_style_hint": _trade_style,
             "entry_signal":     _entry_signal,
             "funding_rate":     round(_funding, 6) if _funding is not None else None,
@@ -1429,7 +1509,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print(f"Saved: {snap_path}")
 
     # Chart first — so LLM can see it as visual context
-    generate_chart_png(raw_15m, result, symbol, captured_at_iso, str(png_path))
+    # Pass llm_context levels so chart shows SL/TP even when old strategy has no signal
+    _llm_levels = {
+        "sl":  _sl_p,
+        "tp1": _tp1_p,
+        "tp2": _tp2_p,
+    } if _sl_p else {}
+    generate_chart_png(raw_15m, result, symbol, captured_at_iso, str(png_path), llm_levels=_llm_levels)
 
     # Generate natural Russian text via LLM — pass chart image + client_summary as context
     from src.utils.llm_formatter import generate_client_text
