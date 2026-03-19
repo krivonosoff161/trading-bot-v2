@@ -178,6 +178,26 @@ class OKXClient:
             return data["data"]
         return []
 
+    async def get_funding_rate(self, symbol: str) -> Optional[float]:
+        """Get current funding rate for perpetual swap. Returns rate as float (e.g. 0.0001 = 0.01%)."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/public/funding-rate", {"instId": inst_id})
+        if data.get("code") == "0" and data.get("data"):
+            rate = float(data["data"][0].get("fundingRate", 0))
+            logger.debug("Funding rate | symbol={} rate={}", symbol, rate)
+            return rate
+        return None
+
+    async def get_open_interest(self, symbol: str) -> Optional[float]:
+        """Get current open interest in contracts."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/public/open-interest", {"instId": inst_id})
+        if data.get("code") == "0" and data.get("data"):
+            oi = float(data["data"][0].get("oi", 0))
+            logger.debug("Open interest | symbol={} oi={}", symbol, oi)
+            return oi
+        return None
+
     async def get_last_position_close(self, symbol: str, limit: int = 20) -> list:
         """Get recent closed positions. Returns list (newest first) with realizedPnl, closeAvgPx, openAvgPx, uTime."""
         inst_id = f"{symbol}-SWAP"
