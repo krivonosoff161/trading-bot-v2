@@ -41,11 +41,12 @@
 - [x] expiry_time в snapshot — "Актуально до" считается правильно
 - [x] entry_signal (ENTRY/WAIT/NO_TRADE) — Python решает режим
 - [x] trade_style_hint (SWING/SCALP) — Python решает тип
-- [ ] **Починить SL/TP** — ATR 15m × 1.5 для скальпа, ATR 1H × 2.0 для свинга
-- [ ] **Добавить данные деривативов** — Funding Rate, OI delta 4H
-- [ ] **Добавить структурные уровни** — VWAP дня, дневной High/Low, ATR 15m
-- [ ] **Обновить логику Python (4 уровня фильтрации)** — см. ниже
-- [ ] **Обновить промпт LLM** — только объяснение, не решение
+- [x] **Починить SL/TP** — ATR 15m × 1.5 для скальпа, ATR 1H × 2.0 для свинга, CE для PULLBACK
+- [x] **Добавить данные деривативов** — Funding Rate, OI
+- [x] **Добавить структурные уровни** — VWAP дня, дневной High/Low, day_position
+- [x] **Обновить логику Python (4 уровня фильтрации)** — SWING/PULLBACK/SCALP/NO_TRADE
+- [x] **Добавить режим PULLBACK** — откат в тренде, supertrend+DI+day_position фильтры, динамический funding
+- [x] **Обновить промпт LLM** — РЕЖИМ 4, контекстный funding, нет ADX/RSI чисел, chart levels из llm_context
 - [ ] **Разделить SCALP/SWING flow** — скальп без LLM (мгновенный пуш), свинг с LLM
 
 **Результат:** клиент получает точный сигнал с правильными уровнями и понятным объяснением.
