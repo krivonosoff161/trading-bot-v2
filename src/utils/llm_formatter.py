@@ -1,5 +1,5 @@
 """
-LLM formatter — Yandex AI Studio (Gemma 3 27B-IT).
+LLM formatter — Yandex AI Studio (Qwen3-235B).
 
 Takes structured analysis snapshot + optional chart image,
 returns natural Russian text for client delivery.
@@ -350,7 +350,7 @@ async def generate_client_text(
     session: aiohttp.ClientSession | None = None,
 ) -> str | None:
     """
-    Call Gemma 3 27B-IT via Yandex AI Studio and return natural Russian text.
+    Call Qwen3-235B via Yandex AI Studio and return natural Russian text.
     Returns None on any error (caller uses template fallback).
     """
     if not _API_KEY or not _FOLDER_ID:
