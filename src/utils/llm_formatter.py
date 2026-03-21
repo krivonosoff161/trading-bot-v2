@@ -288,8 +288,9 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     if swing_lows:
         lines.append(f"Ближайшие поддержки: {swing_lows}")
 
-    # Funding rate — context-aware relative to mode threshold
-    if funding is not None and abs(funding) > 0.0005:
+    # Funding rate — show only if trade is active OR funding actually blocked it
+    funding_blocked = ctx.get("funding_blocked", False)
+    if funding is not None and abs(funding) > 0.0005 and (entry_signal != "NO_TRADE" or funding_blocked):
         pct = round(abs(funding) * 100, 3)
         direction_word = "лонги переплачивают шортам" if funding > 0 else "шорты переплачивают лонгам"
         _limits = {"SWING": 0.3, "PULLBACK": 0.8, "SCALP": 0.5}
