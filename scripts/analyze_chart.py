@@ -1343,10 +1343,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _day_position = None
 
     # Level 1 — Trade style
-    # BB Width < 10% = consolidation, no trade regardless of ADX
-    if _bb_width_1h < 10.0:
-        _trade_style = "NO_TRADE"
-    elif _adx_4h >= adx_thresh_4h and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
+    if _adx_4h >= adx_thresh_4h and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
         _trade_style = "SWING"
     elif _adx_4h >= adx_thresh_4h and _bias_4h != "NEUTRAL" and _bias_1h == "NEUTRAL":
         # PULLBACK: 4H trend active, 1H in correction — check confirming signals
