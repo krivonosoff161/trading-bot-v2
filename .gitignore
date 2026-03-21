@@ -47,5 +47,6 @@ scripts/qwen_analysis_pack.txt
 
 # Video analysis artifacts
 docs/*.mp4
-docs/video_frames/
-docs/video_transcript_*.txt
+docs/video*_frames/
+docs/video*_transcript_*.txt
+!docs/video2_transcript_medium.txt
