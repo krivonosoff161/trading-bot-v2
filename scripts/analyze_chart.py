@@ -142,7 +142,9 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     ema_fast   = int(params["ema_fast"])
     ema_slow   = int(params["ema_slow"])
     adx_period = int(params["adx_period"])
-    adx_thresh = float(params["adx_threshold_1h"])
+    adx_thresh    = float(params["adx_threshold_1h"])
+    adx_thresh_4h = float(params.get("adx_threshold_4h", adx_thresh))
+    scalp_enabled = bool(params.get("scalp_enabled", True))
     pb_touch   = float(params["pullback_touch_atr"])
     pb_bars    = int(params["pullback_volume_bars"])
     pb_factor  = float(params["pullback_volume_factor"])
@@ -187,6 +189,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     ema50_1h = calc_ema(closes_1h, ema_slow)
     atr_1h   = calc_atr(highs_1h, lows_1h, closes_1h, period=adx_period)
     rsi_1h   = calc_rsi(closes_1h, period=14)
+    bb_1h   = calc_bollinger_bands(closes_1h, period=20, std_mult=2.0)
     bull_1h = ema20_1h[-2] > ema50_1h[-2] and plus_di > minus_di and adx >= adx_thresh
     bear_1h = ema20_1h[-2] < ema50_1h[-2] and minus_di > plus_di and adx >= adx_thresh
 
@@ -337,6 +340,7 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
             "minus_di": round(minus_di, 2),
             "bull": bull_1h, "bear": bear_1h,
             "rsi": round(rsi_1h, 1),
+            "bb_width_pct": bb_1h["width_pct"],
         },
         "15m": {
             "close": round(float(cur_close), 6),
@@ -1293,8 +1297,9 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     _bias_4h = "UP" if _h4.get("bull") else ("DOWN" if _h4.get("bear") else "NEUTRAL")
     _bias_1h = "UP" if _h1.get("bull") else ("DOWN" if _h1.get("bear") else "NEUTRAL")
-    _adx_1h  = float(_h1.get("adx") or 0)
-    _adx_4h  = float(_h4.get("adx") or 0)
+    _adx_1h      = float(_h1.get("adx") or 0)
+    _adx_4h      = float(_h4.get("adx") or 0)
+    _bb_width_1h = float(_h1.get("bb_width_pct") or 99.0)
     _atr_15m = float(_h15.get("atr") or 0)
     _close   = float(_h15.get("close") or 0)
     _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
@@ -1338,9 +1343,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _day_position = None
 
     # Level 1 — Trade style
-    if _adx_4h >= 25 and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
+    # BB Width < 10% = consolidation, no trade regardless of ADX
+    if _bb_width_1h < 10.0:
+        _trade_style = "NO_TRADE"
+    elif _adx_4h >= adx_thresh_4h and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
         _trade_style = "SWING"
-    elif _adx_4h >= 25 and _bias_4h != "NEUTRAL" and _bias_1h == "NEUTRAL":
+    elif _adx_4h >= adx_thresh_4h and _bias_4h != "NEUTRAL" and _bias_1h == "NEUTRAL":
         # PULLBACK: 4H trend active, 1H in correction — check confirming signals
         _pb_long  = (_bias_4h == "UP"
                      and _supertrend_dir == "up"
@@ -1356,7 +1364,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if _trade_style == "NO_TRADE":
             print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
                   f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
-    elif _adx_1h >= 20 and _vol_ratio >= 1.5:
+    elif scalp_enabled and _adx_1h >= 20 and _vol_ratio >= 1.5:
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"

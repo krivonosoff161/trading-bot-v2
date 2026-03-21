@@ -36,6 +36,9 @@ sys.path.insert(0, str(ROOT))
 load_dotenv()
 
 from scripts.analyze_chart import build_client_summary, _format_telegram, run as analyze_run  # noqa: E402
+from scripts.feedback import (  # noqa: E402
+    save_entry, update_entry, pending_reminders, pending_for_chat,
+)
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -175,10 +178,58 @@ def _reset(chat_id: str) -> None:
         Path(img).unlink(missing_ok=True)
 
 
+# ── Feedback helpers ──────────────────────────────────────────────────────────
+
+async def _send_feedback_entry_buttons(chat_id: str, entry_id: str, symbol: str, style: str) -> None:
+    """Ask user if they entered the trade. Sent once after ENTRY signal."""
+    label = f"{symbol} {style}" if style else symbol
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=f"📊 Сигнал по {label} — вошёл в сделку?",
+        reply_markup={"inline_keyboard": [[
+            {"text": "✅ Вошёл",      "callback_data": f"fb_in:{entry_id}"},
+            {"text": "⏭ Пропустил",  "callback_data": f"fb_skip:{entry_id}"},
+        ]]},
+    )
+
+
+async def _send_feedback_result_buttons(chat_id: str, entry_id: str, symbol: str) -> None:
+    """Ask for trade result. Sent after user confirms entry, or as 24h reminder."""
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=f"📊 {symbol} — какой итог сделки?",
+        reply_markup={"inline_keyboard": [[
+            {"text": "✅ TP1",             "callback_data": f"fb_tp1:{entry_id}"},
+            {"text": "✅✅ TP2",           "callback_data": f"fb_tp2:{entry_id}"},
+            {"text": "❌ STOP",            "callback_data": f"fb_sl:{entry_id}"},
+            {"text": "🔧 Закрыл вручную", "callback_data": f"fb_man:{entry_id}"},
+        ]]},
+    )
+
+
+async def _check_and_send_reminders() -> None:
+    """Send 24h result reminders for all pending entries. Called on bot startup."""
+    for e in pending_reminders():
+        await _send_feedback_result_buttons(e["chat_id"], e["id"], e["symbol"])
+        update_entry(e["id"], reminded=True)
+        await asyncio.sleep(0.3)  # avoid Telegram flood
+
+
 # ── Analysis runner ────────────────────────────────────────────────────────────
 
 async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_at: str) -> None:
     try:
+        # Remind about open trades for this chat before delivering new signal
+        open_trades = pending_for_chat(chat_id)
+        if open_trades:
+            symbols_str = ", ".join(e["symbol"] for e in open_trades)
+            await _send(chat_id, f"⚠️ У тебя есть незакрытые сделки: {symbols_str}\nОтметь результат прежде чем получить новый сигнал — или просто пропусти.")
+            for e in open_trades:
+                await _send_feedback_result_buttons(chat_id, e["id"], e["symbol"])
+                await asyncio.sleep(0.3)
+
         await _send(chat_id, f"Анализирую {symbol}... ⏳")
         before = time.time()
         await analyze_run(symbol=symbol, captured_at_iso=captured_at, limit=100, image_path=image_path)
@@ -218,6 +269,14 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
             await send_photo_to(chat_id, str(png_path))
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
+
+        # Feedback buttons — only for ENTRY signals
+        if snap_path.exists():
+            snap = json.loads(snap_path.read_text(encoding="utf-8"))
+            if snap.get("llm_context", {}).get("entry_signal") == "ENTRY":
+                style = snap.get("llm_context", {}).get("trade_style_hint", "")
+                entry_id = save_entry(chat_id, symbol, snap, str(snap_path))
+                await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 
     except Exception:
         # Print traceback first — before any further network calls that may also fail
@@ -301,6 +360,28 @@ async def _handle_callback(cbq: dict) -> None:
         return
 
     data = cbq["data"]
+
+    # Feedback callbacks
+    if data.startswith("fb_"):
+        action, _, entry_id = data.partition(":")
+        if action == "fb_in":
+            update_entry(entry_id, entered=True)
+            # Find symbol for this entry
+            from scripts.feedback import load_entries
+            entry = next((e for e in load_entries() if e["id"] == entry_id), None)
+            symbol = entry["symbol"] if entry else "?"
+            await _send(chat_id, "Отлично! Отмечу результат через 24 часа — или можешь закрыть сам:")
+            await _send_feedback_result_buttons(chat_id, entry_id, symbol)
+        elif action == "fb_skip":
+            update_entry(entry_id, entered=False, result="skipped")
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Понял, записал ⏭")
+        elif action in ("fb_tp1", "fb_tp2", "fb_sl", "fb_man"):
+            result_map = {"fb_tp1": "tp1", "fb_tp2": "tp2", "fb_sl": "sl", "fb_man": "manual"}
+            label_map  = {"fb_tp1": "TP1 ✅", "fb_tp2": "TP2 ✅✅", "fb_sl": "STOP ❌", "fb_man": "Закрыл вручную 🔧"}
+            update_entry(entry_id, result=result_map[action])
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text=f"Записал: {label_map[action]}")
+        return
+
     if data == "__manual__":
         await _send(chat_id, "Напиши тикер пары (например: AVAX-USDT):")
     else:
@@ -386,6 +467,9 @@ async def main() -> None:
     OUTPUT_ROOT.mkdir(exist_ok=True)
 
     print(f"Telegram bot started. Whitelist: {WHITELIST}")
+
+    # On startup: send 24h reminders for any open trades
+    await _check_and_send_reminders()
 
     offset = 0
     try:

@@ -18,7 +18,9 @@ strategy:
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
-  adx_threshold_1h: 18         # minimum ADX on 1H to confirm trend
+  adx_threshold_1h: 30         # minimum ADX on 1H to confirm trend (raised from 18 after backtest march 2026)
+  adx_threshold_4h: 30         # minimum ADX on 4H to confirm trend (used for SWING/PULLBACK)
+  scalp_enabled: false          # SCALP mode disabled (beta) — 30% winrate, needs WebSocket data
 
   # Timeframe: 15m pullback setup
   pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
