@@ -40,3 +40,12 @@ api_keys.yaml
 # Browser-saved HTML reports
 *.html
 *_files/
+
+# Backtest outputs (generated data, not source)
+scripts/backtest_result.txt
+scripts/qwen_analysis_pack.txt
+
+# Video analysis artifacts
+docs/*.mp4
+docs/video_frames/
+docs/video_transcript_*.txt
