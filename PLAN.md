@@ -47,9 +47,12 @@
 - [x] **Обновить логику Python (4 уровня фильтрации)** — SWING/PULLBACK/SCALP/NO_TRADE
 - [x] **Добавить режим PULLBACK** — откат в тренде, supertrend+DI+day_position фильтры, динамический funding
 - [x] **Обновить промпт LLM** — РЕЖИМ 4, контекстный funding, нет ADX/RSI чисел, chart levels из llm_context
-- [ ] **Разделить SCALP/SWING flow** — скальп без LLM (мгновенный пуш), свинг с LLM
+- [x] **Разделить SCALP/SWING flow** — SCALP отключён (scalp_enabled=false), перенесён в BACKLOG до S3 (WebSocket)
+- [x] **Бэктест 14 дней** — SWING 53% winrate, SCALP 30%, задокументировано в docs/backtest_march_2026.md
+- [x] **ADX порог 25→30, BB Width фильтр** — снижение TIME_EXIT с 38%
 
 **Результат:** клиент получает точный сигнал с правильными уровнями и понятным объяснением.
+**Закрыта:** 21.03.2026 — SWING production (53% WR), SCALP beta (отключён).
 
 ---
 
