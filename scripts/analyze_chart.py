@@ -1501,6 +1501,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "trade_style_hint": _trade_style,
             "entry_signal":     _entry_signal,
             "funding_rate":     round(_funding, 6) if _funding is not None else None,
+            "funding_blocked":  bool(_funding_block),
             "open_interest":    round(_oi, 0) if _oi is not None else None,
             "vwap_day":         _vwap,
             "day_high":         _day_high,
