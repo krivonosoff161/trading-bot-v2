@@ -1402,7 +1402,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _sl_p = _tp1_p = _tp2_p = None
 
     if _trade_style == "SWING":
-        _sl_dist  = _atr_1h * 2.0
+        # Minimum SL: 0.8% of price — prevents tiny stoploss on low-volatility candles
+        _sl_dist  = max(_atr_1h * 2.0, _close * 0.008) if _close else _atr_1h * 2.0
         _tp1_dist = _sl_dist * 1.5
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
@@ -1414,16 +1415,19 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
 
     elif _trade_style == "PULLBACK":
-        # SL: Chandelier Exit or day boundary (whichever is tighter)
+        # SL: Chandelier Exit or day boundary (whichever is tighter), min 0.6%
         if _side == "buy" and _close and _ce_long:
             _sl_p_day = round(_day_low * 0.995, 4) if _day_low else None
-            _sl_p     = round(min(_ce_long, _sl_p_day) if _sl_p_day else _ce_long, 4)
-            _sl_dist  = max(_close - _sl_p, _atr_15m * 0.5)   # floor: avoid zero-dist
+            _sl_p_raw = min(_ce_long, _sl_p_day) if _sl_p_day else _ce_long
+            # floor: SL must be at least 0.6% below entry
+            _sl_p     = round(min(_sl_p_raw, _close * 0.994), 4)
+            _sl_dist  = max(_close - _sl_p, _atr_15m * 0.5)
             _tp1_p    = round(_close + _sl_dist * 2.0, 4)
             _tp2_p    = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 3.0, 4)
         elif _side == "sell" and _close and _ce_short:
             _sl_p_day = round(_day_high * 1.005, 4) if _day_high else None
-            _sl_p     = round(max(_ce_short, _sl_p_day) if _sl_p_day else _ce_short, 4)
+            _sl_p_raw = max(_ce_short, _sl_p_day) if _sl_p_day else _ce_short
+            _sl_p     = round(max(_sl_p_raw, _close * 1.006), 4)
             _sl_dist  = max(_sl_p - _close, _atr_15m * 0.5)
             _tp1_p    = round(_close - _sl_dist * 2.0, 4)
             _tp2_p    = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 3.0, 4)
@@ -1431,7 +1435,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             _sl_dist = _atr_15m * 1.5
 
     else:  # SCALP
-        _sl_dist  = _atr_15m * 1.5
+        # Minimum SL: 0.5% of price
+        _sl_dist  = max(_atr_15m * 1.5, _close * 0.005) if _close else _atr_15m * 1.5
         _tp1_dist = _sl_dist * 1.5
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
@@ -1448,9 +1453,21 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if abs(_close - _tp2_p) < abs(_close - _sl_p):
             _rr_ok = False
 
+    # BTC market regime filter: block LONG if price in top 15% of day, block SHORT if in bottom 15%
+    # Prevents entering trend continuation at exhaustion zone
+    _regime_ok = True
+    if _day_position is not None and _trade_style in ("SWING", "SCALP"):
+        if _side == "buy"  and _day_position > 0.85:
+            _regime_ok = False  # price at day top — risky LONG
+        elif _side == "sell" and _day_position < 0.15:
+            _regime_ok = False  # price at day bottom — risky SHORT
+
+    # max_hold hint for client (minutes)
+    _max_hold_minutes = 120 if _trade_style == "SCALP" else 480 if _trade_style == "PULLBACK" else 960
+
     # Final entry signal
     _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
-    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_too_low:
+    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok:
         _entry_signal = "NO_TRADE"
     elif _funding_warn or (_vol_ratio < 1.3 and _trade_style == "SCALP"):
         _entry_signal = "WAIT"
@@ -1486,6 +1503,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "sl_price":         _sl_p,
             "tp1_price":        _tp1_p,
             "tp2_price":        _tp2_p,
+            "max_hold_minutes": _max_hold_minutes,
         },
         "4h":           result.get("4h", {}),
         "1h":           result["1h"],

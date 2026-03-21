@@ -164,9 +164,9 @@ _SYSTEM_PROMPT = """\
 # ── Header builder (Python, not LLM) ───────────────────────────────────────────
 
 _STATUS_LABELS = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА", "PULLBACK": "ОТКАТ В ТРЕНДЕ"}
-_STYLE_LABELS  = {"SWING":    "📈 СВИНГ — держать 2-8 часов, график 1H",
-                  "SCALP":    "⚡ СКАЛЬП — держать 15-30 минут, график 15m",
-                  "PULLBACK": "🔄 ОТКАТ — вход на коррекции в тренде, график 1H"}
+_STYLE_LABELS  = {"SWING":    "📈 СВИНГ — держать до 16 часов, график 1H",
+                  "SCALP":    "⚡ СКАЛЬП — закрыть в течение 2 часов, график 15m",
+                  "PULLBACK": "🔄 ОТКАТ — закрыть в течение 8 часов, график 1H"}
 
 
 def _build_header(symbol: str, captured_at: str, entry_signal: str, trade_style: str,
@@ -311,6 +311,10 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
             f"  Цель 1: {tp1}",
             f"  Цель 2: {tp2}",
         ]
+
+    max_hold = ctx.get("max_hold_minutes")
+    if max_hold and entry_signal != "NO_TRADE":
+        lines.append(f"\n⏱ Максимальное время удержания: {max_hold} минут — закрыть вручную если уровни не достигнуты")
 
     expiry = snapshot.get("expiry_time")
     if expiry:
