@@ -1518,7 +1518,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     # Final entry signal
     _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
-    _has_watch   = bool(_act.get("pending_plan", {}).get("available"))  # old strategy found a setup
+    _has_watch   = bool(result.get("pending_plan", {}).get("available"))  # old strategy found a setup
     if _trade_style == "NO_TRADE" or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok:
         _entry_signal = "NO_TRADE"
     elif not _vwap_ok:
@@ -1528,8 +1528,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
-    # If old strategy found a watch zone, upgrade NO_TRADE → WAIT (pending setup exists)
-    if _entry_signal == "NO_TRADE" and _has_watch and _trade_style != "NO_TRADE":
+    # If old strategy found a watch setup with levels — upgrade NO_TRADE → WAIT
+    if _entry_signal == "NO_TRADE" and _has_watch:
         _entry_signal = "WAIT"
 
     snapshot = {
