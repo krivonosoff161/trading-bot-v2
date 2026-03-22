@@ -270,11 +270,25 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
-        # Feedback buttons — only for ENTRY signals
+        # Feedback buttons + risk disclaimer — only for ENTRY signals
         if snap_path.exists():
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
-            if snap.get("llm_context", {}).get("entry_signal") == "ENTRY":
-                style = snap.get("llm_context", {}).get("trade_style_hint", "")
+            ctx = snap.get("llm_context", {})
+            if ctx.get("entry_signal") == "ENTRY":
+                style = ctx.get("trade_style_hint", "")
+                max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
+                leverage = 3 if style == "SCALP" else 5
+                disclaimer = (
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "⚠️ ПРАВИЛА ВХОДА\n"
+                    f"├─ Плечо: макс {leverage}x\n"
+                    "├─ Стоп: обязателен, не двигать дальше\n"
+                    f"├─ Время: закрыть через {max_hours}ч если уровни не достигнуты\n"
+                    "├─ Размер: 2-3% депозита на сделку\n"
+                    "└─ Это аналитика, не инвест-рекомендация\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                await _send(chat_id, disclaimer)
                 entry_id = save_entry(chat_id, symbol, snap, str(snap_path))
                 await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 

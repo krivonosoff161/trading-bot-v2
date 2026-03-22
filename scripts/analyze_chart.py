@@ -1300,8 +1300,10 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _adx_1h      = float(_h1.get("adx") or 0)
     _adx_4h      = float(_h4.get("adx") or 0)
     _bb_width_1h = float(_h1.get("bb_width_pct") or 99.0)
-    adx_thresh_4h = float(params.get("adx_threshold_4h", params.get("adx_threshold_1h", 25)))
-    scalp_enabled = bool(params.get("scalp_enabled", True))
+    adx_thresh_4h  = float(params.get("adx_threshold_4h", params.get("adx_threshold_1h", 25)))
+    scalp_enabled  = bool(params.get("scalp_enabled", True))
+    scalp_symbols  = params.get("scalp_symbols", ["XRP-USDT", "ETH-USDT"])
+    scalp_vol_min  = float(params.get("scalp_vol_ratio", 2.0))
     _atr_15m = float(_h15.get("atr") or 0)
     _close   = float(_h15.get("close") or 0)
     _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
@@ -1363,7 +1365,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if _trade_style == "NO_TRADE":
             print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
                   f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
-    elif scalp_enabled and _adx_1h >= 20 and _vol_ratio >= 1.5:
+    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min:
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"

@@ -18,9 +18,13 @@ strategy:
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
-  adx_threshold_1h: 30         # minimum ADX on 1H to confirm trend (raised from 18 after backtest march 2026)
-  adx_threshold_4h: 30         # minimum ADX on 4H to confirm trend (used for SWING/PULLBACK)
-  scalp_enabled: false          # SCALP mode disabled (beta) — 30% winrate, needs WebSocket data
+  adx_threshold_1h: 25         # minimum ADX on 1H to confirm trend
+  adx_threshold_4h: 25         # minimum ADX on 4H to confirm trend (used for SWING/PULLBACK)
+  scalp_enabled: true           # SCALP enabled — only XRP/ETH, vol_ratio >= 2.0
+  scalp_symbols:                # pairs allowed for SCALP (others = NO_TRADE)
+    - XRP-USDT
+    - ETH-USDT
+  scalp_vol_ratio: 2.0          # minimum volume ratio for SCALP (raised from 1.5)
 
   # Timeframe: 15m pullback setup
   pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
