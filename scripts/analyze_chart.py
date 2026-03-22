@@ -1601,16 +1601,19 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         trade_style=_trade_style,
     )
 
-    # Generate natural Russian text via LLM — pass chart image + client_summary as context
-    from src.utils.llm_formatter import generate_client_text
-    llm_image = str(png_path) if png_path.exists() else image_path
-    llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=client_summary)
+    # LLM only for actionable signals — NO_TRADE uses Python template (saves API calls)
+    llm_text = None
+    if _entry_signal in ("ENTRY", "WAIT"):
+        from src.utils.llm_formatter import generate_client_text
+        llm_image = str(png_path) if png_path.exists() else image_path
+        llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=client_summary)
+
     if llm_text:
         delivery_text = llm_text
     else:
-        # Fallback: patch status label to match entry_signal (build_client_summary uses old logic)
+        # Python template — patch status label to match entry_signal
         _status_map = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА"}
-        _correct = _status_map.get(_entry_signal, "НАБЛЮДАЕМ")
+        _correct = _status_map.get(_entry_signal, "ВНЕ РЫНКА")
         delivery_text = client_summary
         for _old in ["ГОТОВ ВХОД", "НАБЛЮДАЕМ", "ВНЕ РЫНКА"]:
             if f"  Статус:      {_old}" in delivery_text:
