@@ -37,7 +37,7 @@ load_dotenv()
 
 from scripts.analyze_chart import build_client_summary, _format_telegram, run as analyze_run  # noqa: E402
 from scripts.feedback import (  # noqa: E402
-    save_entry, update_entry, pending_reminders, pending_for_chat,
+    save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
@@ -48,8 +48,8 @@ WHITELIST: set[str] = {
     cid.strip() for cid in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if cid.strip()
 }
 
-TEMP_DIR    = Path(__file__).parent / "tg_temp"
-OUTPUT_ROOT = Path(__file__).parent / "analysis_output"
+TEMP_DIR   = Path(__file__).parent / "tg_temp"
+USERS_ROOT = ROOT / "logs" / "users"
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
@@ -68,7 +68,10 @@ TRANSPARENCY_NOTE = (
 
 WELCOME_TEXT = (
     "Анализ рынка по данным OKX. "
-    "Выберите пару — получите разбор текущей ситуации, уровни и график."
+    "Выберите пару — получите разбор текущей ситуации, уровни и график.\n\n"
+    "⚠️ Это аналитика, не инвестиционная рекомендация. "
+    "Торговля фьючерсами сопряжена с риском полной потери капитала. "
+    "Решения принимаете вы сами."
 )
 
 # In-memory state per chat_id: {status, image_path, started_at, msg_date}
@@ -213,7 +216,7 @@ async def _check_and_send_reminders() -> None:
     """Send 24h result reminders for all pending entries. Called on bot startup."""
     for e in pending_reminders():
         await _send_feedback_result_buttons(e["chat_id"], e["id"], e["symbol"])
-        update_entry(e["id"], reminded=True)
+        update_entry(e["id"], chat_id=e["chat_id"], reminded=True)
         await asyncio.sleep(0.3)  # avoid Telegram flood
 
 
@@ -221,28 +224,33 @@ async def _check_and_send_reminders() -> None:
 
 async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_at: str) -> None:
     try:
-        # Remind about open trades for this chat before delivering new signal
-        open_trades = pending_for_chat(chat_id)
+        # Remind about open trade for THIS pair — context reminder, max once per 4h
+        open_trades = pending_for_chat(chat_id, symbol=symbol)
         if open_trades:
-            symbols_str = ", ".join(e["symbol"] for e in open_trades)
-            await _send(chat_id, f"⚠️ У тебя есть незакрытые сделки: {symbols_str}\nОтметь результат прежде чем получить новый сигнал — или просто пропусти.")
+            await _send(chat_id, f"⚠️ У тебя открытая сделка по {symbol}.\nОтметь результат — или просто пропусти и получи свежий анализ.")
             for e in open_trades:
                 await _send_feedback_result_buttons(chat_id, e["id"], e["symbol"])
+                update_entry(e["id"], chat_id=chat_id, last_reminded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
                 await asyncio.sleep(0.3)
 
         await _send(chat_id, f"Анализирую {symbol}... ⏳")
-        before = time.time()
-        await analyze_run(symbol=symbol, captured_at_iso=captured_at, limit=100, image_path=image_path)
+        user_analyses_dir = USERS_ROOT / str(chat_id) / "analyses"
+        user_analyses_dir.mkdir(parents=True, exist_ok=True)
 
-        # Locate the run_dir created by analyze_run (newest dir after `before`)
-        candidates = [d for d in OUTPUT_ROOT.iterdir() if d.is_dir() and d.stat().st_mtime >= before]
-        if not candidates:
-            await _send(chat_id, "Анализ завершён, но результаты не найдены. Попробуй снова.")
-            return
+        ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+        run_dir  = user_analyses_dir / f"{ts_label}_{symbol}"
+        run_dir.mkdir(parents=True, exist_ok=True)
 
-        run_dir   = max(candidates, key=lambda d: d.stat().st_mtime)
+        await analyze_run(
+            symbol=symbol, captured_at_iso=captured_at, limit=100,
+            image_path=image_path, output_dir=run_dir,
+        )
+
         png_path  = run_dir / f"{symbol}_annotated.png"
         snap_path = run_dir / f"{symbol}_snapshot.json"
+        if not snap_path.exists():
+            await _send(chat_id, "Анализ завершён, но результаты не найдены. Попробуй снова.")
+            return
 
         # Read LLM-generated summary if available, else reconstruct from snapshot
         summary_text = None
@@ -270,27 +278,27 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
-        # Feedback buttons + risk disclaimer — only for ENTRY signals
-        if snap_path.exists():
-            snap = json.loads(snap_path.read_text(encoding="utf-8"))
-            ctx = snap.get("llm_context", {})
-            if ctx.get("entry_signal") == "ENTRY":
-                style = ctx.get("trade_style_hint", "")
-                max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
-                leverage = 3 if style == "SCALP" else 5
-                disclaimer = (
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "⚠️ ПРАВИЛА ВХОДА\n"
-                    f"├─ Плечо: макс {leverage}x\n"
-                    "├─ Стоп: обязателен, не двигать дальше\n"
-                    f"├─ Время: закрыть через {max_hours}ч если уровни не достигнуты\n"
-                    "├─ Размер: 2-3% депозита на сделку\n"
-                    "└─ Это аналитика, не инвест-рекомендация\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
-                )
-                await _send(chat_id, disclaimer)
-                entry_id = save_entry(chat_id, symbol, snap, str(snap_path))
-                await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
+        # Disclaimer + feedback buttons — for ENTRY and WAIT signals
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+        ctx = snap.get("llm_context", {})
+        entry_signal = ctx.get("entry_signal", "")
+        if entry_signal in ("ENTRY", "WAIT"):
+            style = ctx.get("trade_style_hint", "")
+            max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
+            leverage = 3 if style == "SCALP" else 5
+            disclaimer = (
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️ ПРАВИЛА ВХОДА\n"
+                f"├─ Плечо: макс {leverage}x\n"
+                "├─ Стоп: обязателен, не двигать дальше\n"
+                f"├─ Время: закрыть через {max_hours}ч если уровни не достигнуты\n"
+                "├─ Размер: 2-3% депозита на сделку\n"
+                "└─ Это аналитика, не инвест-рекомендация\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await _send(chat_id, disclaimer)
+            entry_id = save_entry(chat_id, symbol, snap, str(snap_path))
+            await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 
     except Exception:
         # Print traceback first — before any further network calls that may also fail
@@ -359,10 +367,36 @@ async def _handle_image(msg: dict, file_id: str) -> None:
 
 async def _handle_callback(cbq: dict) -> None:
     chat_id = str(cbq["message"]["chat"]["id"])
-    await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+    data    = cbq.get("data", "")
 
     if chat_id not in WHITELIST:
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         return
+
+    # ── Feedback callbacks — handled regardless of current state ──────────
+    if data.startswith("fb_"):
+        action, _, entry_id = data.partition(":")
+        if action == "fb_in":
+            update_entry(entry_id, chat_id=chat_id, entered=True)
+            entry = next((e for e in load_entries(chat_id) if e["id"] == entry_id), None)
+            symbol = entry["symbol"] if entry else "?"
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Записал ✅")
+            await _send(chat_id, "Отлично! Отмечу результат через 24 часа — или можешь закрыть сам:")
+            await _send_feedback_result_buttons(chat_id, entry_id, symbol)
+        elif action == "fb_skip":
+            update_entry(entry_id, chat_id=chat_id, entered=False, result="skipped")
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Понял, записал ⏭")
+        elif action in ("fb_tp1", "fb_tp2", "fb_sl", "fb_man"):
+            result_map = {"fb_tp1": "tp1", "fb_tp2": "tp2", "fb_sl": "sl", "fb_man": "manual"}
+            label_map  = {"fb_tp1": "TP1 ✅", "fb_tp2": "TP2 ✅✅", "fb_sl": "STOP ❌", "fb_man": "Закрыл вручную 🔧"}
+            update_entry(entry_id, chat_id=chat_id, result=result_map[action])
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text=f"Записал: {label_map[action]}")
+        else:
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        return
+
+    # ── Symbol selection callbacks — require awaiting_symbol state ─────────
+    await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
 
     if _timed_out(chat_id):
         _reset(chat_id)
@@ -371,29 +405,6 @@ async def _handle_callback(cbq: dict) -> None:
 
     st = _state.get(chat_id, {})
     if st.get("status") != "awaiting_symbol":
-        return
-
-    data = cbq["data"]
-
-    # Feedback callbacks
-    if data.startswith("fb_"):
-        action, _, entry_id = data.partition(":")
-        if action == "fb_in":
-            update_entry(entry_id, entered=True)
-            # Find symbol for this entry
-            from scripts.feedback import load_entries
-            entry = next((e for e in load_entries() if e["id"] == entry_id), None)
-            symbol = entry["symbol"] if entry else "?"
-            await _send(chat_id, "Отлично! Отмечу результат через 24 часа — или можешь закрыть сам:")
-            await _send_feedback_result_buttons(chat_id, entry_id, symbol)
-        elif action == "fb_skip":
-            update_entry(entry_id, entered=False, result="skipped")
-            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Понял, записал ⏭")
-        elif action in ("fb_tp1", "fb_tp2", "fb_sl", "fb_man"):
-            result_map = {"fb_tp1": "tp1", "fb_tp2": "tp2", "fb_sl": "sl", "fb_man": "manual"}
-            label_map  = {"fb_tp1": "TP1 ✅", "fb_tp2": "TP2 ✅✅", "fb_sl": "STOP ❌", "fb_man": "Закрыл вручную 🔧"}
-            update_entry(entry_id, result=result_map[action])
-            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text=f"Записал: {label_map[action]}")
         return
 
     if data == "__manual__":
@@ -478,7 +489,7 @@ async def main() -> None:
         return
 
     TEMP_DIR.mkdir(exist_ok=True)
-    OUTPUT_ROOT.mkdir(exist_ok=True)
+    USERS_ROOT.mkdir(parents=True, exist_ok=True)
 
     print(f"Telegram bot started. Whitelist: {WHITELIST}")
 
