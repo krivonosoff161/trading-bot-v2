@@ -63,7 +63,7 @@ _SYSTEM_PROMPT = """\
 - "выше" → покупатели контролируют, сила за лонгами
 - "ниже" → продавцы давят, осторожно с лонгами
 
-Последняя строка ВСЕГДА: "🕐 Актуально до: HH:MM UTC"
+Последняя строка ВСЕГДА: "🔄 ПОВТОРНЫЙ АНАЛИЗ\nЧерез N минут (после HH:MM UTC)."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 РЕЖИМ 1 — ВХОД
@@ -328,7 +328,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
 
     expiry = snapshot.get("expiry_time")
     if expiry:
-        lines.append(f"\nАктуально до: {expiry}")
+        lines.append(f"\n🕐 Актуально до: {expiry}")
 
     return "\n".join(lines)
 
