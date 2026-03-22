@@ -960,6 +960,9 @@ def generate_chart_png(
     captured_at: str,
     out_path: str,
     llm_levels: dict | None = None,
+    entry_signal: str = None,
+    direction: str = None,
+    trade_style: str = None,
 ) -> None:
     """Generate candlestick chart from OKX data with EMA + price level overlays."""
     try:
@@ -1112,6 +1115,19 @@ def generate_chart_png(
         ax.text(n_show - 1, price, f"  {label}: {_fmt_price(symbol, price)}",
                 color=col, fontsize=7, va="bottom", ha="right", zorder=6)
 
+    # ── Entry price marker with explicit LONG/SHORT label ─────────────────
+    _entry_p = (llm_levels or {}).get("entry_price")
+    if _entry_p and direction and entry_signal in ("ENTRY", "WAIT"):
+        _dir_text = "ВХОД LONG ▲" if direction == "buy" else "ВХОД SHORT ▼"
+        _ecol = "#00E676" if direction == "buy" else "#FF5252"
+        ax.axhline(y=_entry_p, color=_ecol, linestyle="-", linewidth=1.2, alpha=0.9, zorder=6)
+        ax.text(
+            n_show // 2, _entry_p,
+            f"  {_dir_text}: {_fmt_price(symbol, _entry_p)}",
+            color=_ecol, fontsize=8, fontweight="bold", va="bottom", ha="center", zorder=8,
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="#0b0d14", edgecolor=_ecol, alpha=0.9),
+        )
+
     # ── Estimated levels (range mode, no confirmed signal) ────────────────
     if not src:
         h1_res  = result.get("1h", {})
@@ -1206,8 +1222,24 @@ def generate_chart_png(
         color="#555", fontsize=6,
     )
 
-    ax.set_title(f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC",
-                 color="#7788aa", fontsize=8, loc="left", pad=5)
+    # Build title with direction/signal badge if available
+    _title_base = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
+    ax.set_title(_title_base, color="#7788aa", fontsize=8, loc="left", pad=5)
+    if entry_signal and direction:
+        _dir_label = "▲ LONG" if direction == "buy" else "▼ SHORT"
+        _style_label = f" {trade_style}" if trade_style and trade_style != "NO_TRADE" else ""
+        if entry_signal == "ENTRY":
+            _badge_col = "#00E676"
+        elif entry_signal == "WAIT":
+            _badge_col = "#FFD700"
+        else:
+            _badge_col = "#888888"
+        ax.text(
+            0.99, 0.97, f"{_dir_label}{_style_label}  [{entry_signal}]",
+            transform=ax.transAxes, color=_badge_col, fontsize=9, fontweight="bold",
+            va="top", ha="right", zorder=10,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="#0b0d14", edgecolor=_badge_col, alpha=0.9),
+        )
 
     plt.tight_layout(pad=0.4)
 
@@ -1224,7 +1256,7 @@ def generate_chart_png(
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None, send_telegram: bool = False) -> None:
+async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None, send_telegram: bool = False, output_dir: Path = None) -> None:
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
@@ -1267,7 +1299,10 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     # Save outputs — one folder per run
     ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir  = Path(__file__).parent / "analysis_output" / ts_label
+    if output_dir is not None:
+        run_dir = Path(output_dir) / f"{ts_label}_{symbol}"
+    else:
+        run_dir = Path(__file__).parent / "analysis_output" / ts_label
     run_dir.mkdir(parents=True, exist_ok=True)
 
     report_path = run_dir / f"{symbol}_report.md"
@@ -1553,11 +1588,18 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     # Chart first — so LLM can see it as visual context
     # Pass llm_context levels so chart shows SL/TP even when old strategy has no signal
     _llm_levels = {
-        "sl":  _sl_p,
-        "tp1": _tp1_p,
-        "tp2": _tp2_p,
+        "sl":          _sl_p,
+        "tp1":         _tp1_p,
+        "tp2":         _tp2_p,
+        "entry_price": _close,
     } if _sl_p else {}
-    generate_chart_png(raw_15m, result, symbol, captured_at_iso, str(png_path), llm_levels=_llm_levels)
+    generate_chart_png(
+        raw_15m, result, symbol, captured_at_iso, str(png_path),
+        llm_levels=_llm_levels,
+        entry_signal=_entry_signal,
+        direction=_side,
+        trade_style=_trade_style,
+    )
 
     # Generate natural Russian text via LLM — pass chart image + client_summary as context
     from src.utils.llm_formatter import generate_client_text
