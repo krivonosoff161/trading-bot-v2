@@ -1300,7 +1300,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     # Save outputs — one folder per run
     ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     if output_dir is not None:
-        run_dir = Path(output_dir) / f"{ts_label}_{symbol}"
+        run_dir = Path(output_dir)  # caller already provides the exact folder
     else:
         run_dir = Path(__file__).parent / "analysis_output" / ts_label
     run_dir.mkdir(parents=True, exist_ok=True)
