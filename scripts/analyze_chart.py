@@ -1387,10 +1387,10 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             elif _side == "sell" and _close < _vwap * 0.98:
                 _vwap_ok = False
         else:
-            # SWING/SCALP: price must be on the trend side of VWAP
-            if _side == "buy"  and _close < _vwap:
+            # SWING/SCALP: price must be on the trend side of VWAP, allow 0.5% tolerance
+            if _side == "buy"  and _close < _vwap * 0.995:
                 _vwap_ok = False
-            elif _side == "sell" and _close > _vwap:
+            elif _side == "sell" and _close > _vwap * 1.005:
                 _vwap_ok = False
 
     # Level 3 — Dynamic funding thresholds per trade style
@@ -1472,12 +1472,19 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     # Final entry signal
     _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
-    if _trade_style == "NO_TRADE" or not _vwap_ok or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok:
+    _has_watch   = bool(_act.get("pending_plan", {}).get("available"))  # old strategy found a setup
+    if _trade_style == "NO_TRADE" or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok:
         _entry_signal = "NO_TRADE"
+    elif not _vwap_ok:
+        # VWAP filter failed but trend exists — downgrade to WAIT, not NO_TRADE
+        _entry_signal = "WAIT"
     elif _funding_warn or (_vol_ratio < 1.3 and _trade_style == "SCALP"):
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
+    # If old strategy found a watch zone, upgrade NO_TRADE → WAIT (pending setup exists)
+    if _entry_signal == "NO_TRADE" and _has_watch and _trade_style != "NO_TRADE":
+        _entry_signal = "WAIT"
 
     snapshot = {
         "symbol":       symbol,
