@@ -1422,24 +1422,20 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
 
     elif _trade_style == "PULLBACK":
-        # SL: Chandelier Exit or day boundary (whichever is tighter), min 0.6%
-        if _side == "buy" and _close and _ce_long:
-            _sl_p_day = round(_day_low * 0.995, 4) if _day_low else None
-            _sl_p_raw = min(_ce_long, _sl_p_day) if _sl_p_day else _ce_long
-            # floor: SL must be at least 0.6% below entry
-            _sl_p     = round(min(_sl_p_raw, _close * 0.994), 4)
-            _sl_dist  = max(_close - _sl_p, _atr_15m * 0.5)
-            _tp1_p    = round(_close + _sl_dist * 2.0, 4)
-            _tp2_p    = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 3.0, 4)
-        elif _side == "sell" and _close and _ce_short:
-            _sl_p_day = round(_day_high * 1.005, 4) if _day_high else None
-            _sl_p_raw = max(_ce_short, _sl_p_day) if _sl_p_day else _ce_short
-            _sl_p     = round(max(_sl_p_raw, _close * 1.006), 4)
-            _sl_dist  = max(_sl_p - _close, _atr_15m * 0.5)
-            _tp1_p    = round(_close - _sl_dist * 2.0, 4)
-            _tp2_p    = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 3.0, 4)
+        # SL: tight, based on 15m ATR — pullback holds max 8h, no need for wide CE-based stop
+        # TP: targets 1H resistance levels — R/R minimum 3:1
+        if _side == "buy" and _close:
+            _sl_dist  = max(_atr_15m * 2.0, _close * 0.006)
+            _sl_p     = round(_close - _sl_dist, 4)
+            _tp1_p    = round(_close + _sl_dist * 3.0, 4)
+            _tp2_p    = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 4.5, 4)
+        elif _side == "sell" and _close:
+            _sl_dist  = max(_atr_15m * 2.0, _close * 0.006)
+            _sl_p     = round(_close + _sl_dist, 4)
+            _tp1_p    = round(_close - _sl_dist * 3.0, 4)
+            _tp2_p    = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 4.5, 4)
         else:
-            _sl_dist = _atr_15m * 1.5
+            _sl_dist = _atr_15m * 2.0
 
     else:  # SCALP
         # Minimum SL: 0.5% of price
