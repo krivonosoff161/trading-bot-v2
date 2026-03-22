@@ -692,7 +692,8 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
         until_str = _next_candle_close(captured_at, 60)
     else:
         until_str = _next_candle_close(captured_at, 15)
-    lines += ["", f"  Актуально до: {until_str}", "", SEP]
+    until_label = "Повторный анализ после:" if (mode_entry or setup_zone) else "Актуально до:"
+    lines += ["", f"  {until_label} {until_str}", "", SEP]
     return "\n".join(lines)
 
 
