@@ -1377,6 +1377,15 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
              or ("buy"  if _h4.get("bull") else None)
              or ("sell" if _h4.get("bear") else None))
 
+    # SCALP direction fix: 1H is NEUTRAL by design, use 15m supertrend + VWAP + RSI
+    if _trade_style == "SCALP" and _side is None:
+        if _supertrend_dir == "up" and _vwap and _close > _vwap and 30 <= _rsi_15m < 70:
+            _side = "buy"
+        elif _supertrend_dir == "down" and _vwap and _close < _vwap and 30 < _rsi_15m <= 70:
+            _side = "sell"
+        else:
+            _trade_style = "NO_TRADE"  # no clear direction — cancel SCALP
+
     # VWAP filter — different logic per trade style
     _vwap_ok = True
     if _vwap and _close:
@@ -1402,8 +1411,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _funding_block = _funding_abs > 0.008   # >0.8%
         _funding_warn  = _funding_abs > 0.003   # >0.3%
     elif _trade_style == "SCALP":
-        _funding_block = _funding_abs > 0.005   # >0.5%
-        _funding_warn  = _funding_abs > 0.001   # >0.1%
+        _funding_block = _funding_abs > 0.008   # >0.8% — short hold, funding barely accumulates
+        _funding_warn  = _funding_abs > 0.003   # >0.3%
     else:
         _funding_block = _funding_warn = False
 
@@ -1458,13 +1467,15 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if abs(_close - _tp2_p) < abs(_close - _sl_p):
             _rr_ok = False
 
-    # BTC market regime filter: block LONG if price in top 15% of day, block SHORT if in bottom 15%
-    # Prevents entering trend continuation at exhaustion zone
+    # Market regime filter: block entries at day exhaustion zones
+    # SWING: top/bottom 15% | SCALP: softer — top/bottom 10% only
     _regime_ok = True
     if _day_position is not None and _trade_style in ("SWING", "SCALP"):
-        if _side == "buy"  and _day_position > 0.85:
+        _regime_top    = 0.85 if _trade_style == "SWING" else 0.90
+        _regime_bottom = 0.15 if _trade_style == "SWING" else 0.10
+        if _side == "buy"  and _day_position > _regime_top:
             _regime_ok = False  # price at day top — risky LONG
-        elif _side == "sell" and _day_position < 0.15:
+        elif _side == "sell" and _day_position < _regime_bottom:
             _regime_ok = False  # price at day bottom — risky SHORT
 
     # max_hold hint for client (minutes)
