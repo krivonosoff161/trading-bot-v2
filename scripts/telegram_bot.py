@@ -338,7 +338,7 @@ async def _start_analysis(chat_id: str, symbol: str) -> None:
 async def _handle_image(msg: dict, file_id: str) -> None:
     chat_id = str(msg["chat"]["id"])
     if not is_subscribed(chat_id):
-        await _send(chat_id, "🔒 Доступ закрыт. Напишите @your_admin для подключения.")
+        await _send(chat_id, "🔒 Доступ закрыт. Напишите @Krivonosoff для подключения.")
         return
 
     st = _state.get(chat_id, {})
@@ -443,27 +443,7 @@ async def _handle_text(msg: dict) -> None:
     if not text:
         return
 
-    st = _state.get(chat_id, {})
-    status = st.get("status", "idle")
-
-    if status == "processing":
-        await _send(chat_id, "Уже обрабатываю запрос. Подожди немного.")
-        return
-
-    if status == "awaiting_symbol":
-        if _timed_out(chat_id):
-            _reset(chat_id)
-            await _send(chat_id, "Время вышло. Напиши «Анализ» чтобы начать заново.")
-            return
-        # Validate format: letters/digits, dash, letters/digits (e.g. BTC-USDT)
-        symbol = text.upper()
-        if re.match(r"^[A-Z0-9]+-[A-Z0-9]+$", symbol):
-            await _start_analysis(chat_id, symbol)
-        else:
-            await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
-        return
-
-    # ── Superadmin commands ───────────────────────────────────────────────────
+    # ── Superadmin commands — checked before access gate ─────────────────────
     entry = get_status(chat_id)
     is_admin = entry and entry.get("plan") == "superadmin"
 
@@ -485,9 +465,29 @@ async def _handle_text(msg: dict) -> None:
         await _send(chat_id, "\n".join(lines))
         return
 
-    # ── Access check ─────────────────────────────────────────────────────────
+    # ── Access check — all non-admin traffic blocked here ────────────────────
     if not is_subscribed(chat_id):
-        await _send(chat_id, "🔒 Доступ закрыт. Напишите @your_admin для подключения.")
+        await _send(chat_id, "🔒 Доступ закрыт. Напишите @Krivonosoff для подключения.")
+        return
+
+    st = _state.get(chat_id, {})
+    status = st.get("status", "idle")
+
+    if status == "processing":
+        await _send(chat_id, "Уже обрабатываю запрос. Подожди немного.")
+        return
+
+    if status == "awaiting_symbol":
+        if _timed_out(chat_id):
+            _reset(chat_id)
+            await _send(chat_id, "Время вышло. Напиши «Анализ» чтобы начать заново.")
+            return
+        # Validate format: letters/digits, dash, letters/digits (e.g. BTC-USDT)
+        symbol = text.upper()
+        if re.match(r"^[A-Z0-9]+-[A-Z0-9]+$", symbol):
+            await _start_analysis(chat_id, symbol)
+        else:
+            await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
         return
 
     # idle — trigger on "анализ", hint otherwise
