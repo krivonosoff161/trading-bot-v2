@@ -376,17 +376,26 @@ async def _handle_callback(cbq: dict) -> None:
     # ── Feedback callbacks — handled regardless of current state ──────────
     if data.startswith("fb_"):
         action, _, entry_id = data.partition(":")
+        entry = next((e for e in load_entries(chat_id) if e["id"] == entry_id), None)
         if action == "fb_in":
+            if entry and entry.get("entered") is not None:
+                await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
+                return
             update_entry(entry_id, chat_id=chat_id, entered=True)
-            entry = next((e for e in load_entries(chat_id) if e["id"] == entry_id), None)
             symbol = entry["symbol"] if entry else "?"
             await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Записал ✅")
             await _send(chat_id, "Отлично! Отмечу результат через 24 часа — или можешь закрыть сам:")
             await _send_feedback_result_buttons(chat_id, entry_id, symbol)
         elif action == "fb_skip":
+            if entry and entry.get("entered") is not None:
+                await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
+                return
             update_entry(entry_id, chat_id=chat_id, entered=False, result="skipped")
             await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Понял, записал ⏭")
         elif action in ("fb_tp1", "fb_tp2", "fb_sl", "fb_man"):
+            if entry and entry.get("result") is not None:
+                await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
+                return
             result_map = {"fb_tp1": "tp1", "fb_tp2": "tp2", "fb_sl": "sl", "fb_man": "manual"}
             label_map  = {"fb_tp1": "TP1 ✅", "fb_tp2": "TP2 ✅✅", "fb_sl": "STOP ❌", "fb_man": "Закрыл вручную 🔧"}
             update_entry(entry_id, chat_id=chat_id, result=result_map[action])
