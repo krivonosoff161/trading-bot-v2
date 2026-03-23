@@ -81,6 +81,9 @@ _state: dict[str, dict] = {}
 # Persistent HTTP session — one per bot lifetime, not per request
 _SESSION: aiohttp.ClientSession | None = None
 
+# Max concurrent analyses — prevents OKX rate limit hits and RAM spikes from matplotlib
+_ANALYSIS_SEM = asyncio.Semaphore(3)
+
 
 # ── Telegram API helpers ───────────────────────────────────────────────────────
 
@@ -224,6 +227,25 @@ async def _check_and_send_reminders() -> None:
 
 async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_at: str) -> None:
     try:
+        # Queue guard — notify user if waiting for a slot
+        if _ANALYSIS_SEM._value == 0:
+            await _send(chat_id, f"⏳ Очередь на анализ {symbol}... подожди немного.")
+
+        async with _ANALYSIS_SEM:
+            await _run_analysis(chat_id, image_path, symbol, captured_at)
+    except Exception:
+        tb = traceback.format_exc()
+        print(f"ERROR _run_and_deliver | chat_id={chat_id} symbol={symbol}\n{tb}")
+        try:
+            await _send(chat_id, "Произошла ошибка при анализе. Попробуй позже.")
+        except Exception:
+            pass
+    finally:
+        _reset(chat_id)
+
+
+async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at: str) -> None:
+    try:
         # Remind about open trade for THIS pair — context reminder, max once per 4h
         open_trades = pending_for_chat(chat_id, symbol=symbol)
         if open_trades:
@@ -301,15 +323,9 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
             await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 
     except Exception:
-        # Print traceback first — before any further network calls that may also fail
         tb = traceback.format_exc()
-        print(f"ERROR _run_and_deliver | chat_id={chat_id} symbol={symbol}\n{tb}")
-        try:
-            await _send(chat_id, "Произошла ошибка при анализе. Попробуй позже.")
-        except Exception:
-            pass  # already logged above — don't mask the original error
-    finally:
-        _reset(chat_id)
+        print(f"ERROR _run_analysis | chat_id={chat_id} symbol={symbol}\n{tb}")
+        raise
 
 
 async def _start_analysis(chat_id: str, symbol: str) -> None:
