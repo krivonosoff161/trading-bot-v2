@@ -1404,7 +1404,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if _trade_style == "NO_TRADE":
             print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
                   f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
-    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min and _bias_1h != "NEUTRAL":
+    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min:
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"
@@ -1418,12 +1418,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     # SCALP direction fix: 1H is NEUTRAL by design, use 15m supertrend + VWAP + RSI
     if _trade_style == "SCALP" and _side is None:
-        if _supertrend_dir == "up" and _vwap and _close > _vwap and 30 <= _rsi_15m < 70:
+        if _supertrend_dir == "up" and _vwap and _close > _vwap and _rsi_15m > 55:
             _side = "buy"
-        elif _supertrend_dir == "down" and _vwap and _close < _vwap and 30 < _rsi_15m <= 70:
+        elif _supertrend_dir == "down" and _vwap and _close < _vwap and _rsi_15m < 45:
             _side = "sell"
         else:
-            _trade_style = "NO_TRADE"  # no clear direction — cancel SCALP
+            _trade_style = "NO_TRADE"  # no clear direction on 15m — cancel SCALP
 
     # VWAP filter — different logic per trade style
     _vwap_ok = True
