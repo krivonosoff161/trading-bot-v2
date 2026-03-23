@@ -1203,7 +1203,10 @@ def generate_chart_png(
     )
 
     # ── Axes ───────────────────────────────────────────────────────────────
-    y_min, y_max = min(lows_c), max(highs_c)
+    # Clip y-axis to 2nd/98th percentile of visible candles — prevents spike distortion
+    all_prices = lows_c + highs_c
+    y_min = float(np.percentile(all_prices, 2))
+    y_max = float(np.percentile(all_prices, 98))
     margin = (y_max - y_min) * 0.06
     ax.set_xlim(-0.8, n_show + R_MARGIN)
     ax.set_ylim(y_min - margin, y_max + margin)
@@ -1226,7 +1229,7 @@ def generate_chart_png(
     # Build title with direction/signal badge if available
     _title_base = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
     ax.set_title(_title_base, color="#7788aa", fontsize=8, loc="left", pad=5)
-    if entry_signal and direction:
+    if entry_signal and entry_signal != "NO_TRADE" and direction:
         _dir_label = "▲ LONG" if direction == "buy" else "▼ SHORT"
         _style_label = f" {trade_style}" if trade_style and trade_style != "NO_TRADE" else ""
         if entry_signal == "ENTRY":
