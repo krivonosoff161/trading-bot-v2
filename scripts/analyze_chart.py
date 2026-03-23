@@ -1401,7 +1401,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         if _trade_style == "NO_TRADE":
             print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
                   f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
-    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min:
+    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min and _bias_1h != "NEUTRAL":
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"
@@ -1447,8 +1447,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _funding_block = _funding_abs > 0.008   # >0.8%
         _funding_warn  = _funding_abs > 0.003   # >0.3%
     elif _trade_style == "SCALP":
-        _funding_block = _funding_abs > 0.008   # >0.8% — short hold, funding barely accumulates
-        _funding_warn  = _funding_abs > 0.003   # >0.3%
+        _funding_block = _funding_abs > 0.003   # >0.3%
+        _funding_warn  = _funding_abs > 0.001   # >0.1% — same as SWING
     else:
         _funding_block = _funding_warn = False
 
@@ -1520,7 +1520,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     # Final entry signal
     _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
     _has_watch   = bool(result.get("pending_plan", {}).get("available"))  # old strategy found a setup
-    if _trade_style == "NO_TRADE" or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok:
+    # Supertrend must confirm direction: SHORT needs supertrend=down, LONG needs supertrend=up
+    _supertrend_ok = (
+        (_side == "sell" and _supertrend_dir == "down") or
+        (_side == "buy"  and _supertrend_dir == "up")   or
+        _side is None
+    )
+    if _trade_style == "NO_TRADE" or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok or not _supertrend_ok:
         _entry_signal = "NO_TRADE"
     elif not _vwap_ok:
         # VWAP filter failed but trend exists — downgrade to WAIT, not NO_TRADE
@@ -1560,6 +1566,8 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "day_low":          _day_low,
             "atr_1h":           round(_atr_1h, 4),
             "atr_15m":          round(_atr_15m, 4),
+            "side":             _side,
+            "entry_price":      _close if _sl_p else None,
             "sl_price":         _sl_p,
             "tp1_price":        _tp1_p,
             "tp2_price":        _tp2_p,
