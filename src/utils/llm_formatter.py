@@ -175,7 +175,8 @@ _SYSTEM_PROMPT = """\
 _STATUS_LABELS = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА", "PULLBACK": "ОТКАТ В ТРЕНДЕ"}
 _STYLE_LABELS  = {"SWING":    "📈 СВИНГ — держать до 16 часов, график 1H",
                   "SCALP":    "⚡ СКАЛЬП — закрыть в течение 2 часов, график 15m",
-                  "PULLBACK": "🔄 ОТКАТ — закрыть в течение 8 часов, график 1H"}
+                  "PULLBACK": "🔄 ОТКАТ — закрыть в течение 8 часов, график 1H",
+                  "NO_TRADE": "📊 НАБЛЮДАЕМ — ждём подтверждения на 5m"}
 
 
 def _build_header(symbol: str, captured_at: str, entry_signal: str, trade_style: str,
@@ -197,6 +198,18 @@ def _build_header(symbol: str, captured_at: str, entry_signal: str, trade_style:
         lines.append(f"  Тип:         {style}")
     lines += [f"  Направление: {direction}", ""]
     return "\n".join(lines)
+
+
+def _fp(symbol: str, price) -> str:
+    """Format price with correct decimal places for the instrument."""
+    if price is None:
+        return "—"
+    base = symbol.split("-")[0].upper()
+    if base == "BTC":
+        return f"{float(price):.1f}"
+    if base in ("ETH", "SOL"):
+        return f"{float(price):.2f}"
+    return f"{float(price):.4f}"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -316,10 +329,10 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         lines += [
             "",
             f"Расчётные уровни:",
-            f"  Вход:   {close}",
-            f"  Стоп:   {sl}",
-            f"  Цель 1: {tp1}",
-            f"  Цель 2: {tp2}",
+            f"  Вход:   {_fp(symbol, close)}",
+            f"  Стоп:   {_fp(symbol, sl)}",
+            f"  Цель 1: {_fp(symbol, tp1)}",
+            f"  Цель 2: {_fp(symbol, tp2)}",
         ]
 
     max_hold = ctx.get("max_hold_minutes")
