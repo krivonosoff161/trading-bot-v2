@@ -39,14 +39,12 @@ from scripts.analyze_chart import build_client_summary, _format_telegram, run as
 from scripts.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
+from scripts.subscriptions import is_subscribed, add_user, list_users, get_status  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
-WHITELIST: set[str] = {
-    cid.strip() for cid in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if cid.strip()
-}
 
 TEMP_DIR   = Path(__file__).parent / "tg_temp"
 USERS_ROOT = ROOT / "logs" / "users"
@@ -339,7 +337,8 @@ async def _start_analysis(chat_id: str, symbol: str) -> None:
 
 async def _handle_image(msg: dict, file_id: str) -> None:
     chat_id = str(msg["chat"]["id"])
-    if chat_id not in WHITELIST:
+    if not is_subscribed(chat_id):
+        await _send(chat_id, "🔒 Доступ закрыт. Напишите @your_admin для подключения.")
         return
 
     st = _state.get(chat_id, {})
@@ -385,7 +384,7 @@ async def _handle_callback(cbq: dict) -> None:
     chat_id = str(cbq["message"]["chat"]["id"])
     data    = cbq.get("data", "")
 
-    if chat_id not in WHITELIST:
+    if not is_subscribed(chat_id):
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         return
 
@@ -441,7 +440,7 @@ async def _handle_callback(cbq: dict) -> None:
 async def _handle_text(msg: dict) -> None:
     chat_id = str(msg["chat"]["id"])
     text = msg.get("text", "").strip()
-    if not text or chat_id not in WHITELIST:
+    if not text:
         return
 
     st = _state.get(chat_id, {})
@@ -462,6 +461,33 @@ async def _handle_text(msg: dict) -> None:
             await _start_analysis(chat_id, symbol)
         else:
             await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
+        return
+
+    # ── Superadmin commands ───────────────────────────────────────────────────
+    entry = get_status(chat_id)
+    is_admin = entry and entry.get("plan") == "superadmin"
+
+    if text.startswith("/add ") and is_admin:
+        parts = text.split()
+        if len(parts) == 3 and parts[2].isdigit():
+            target_id, days = parts[1], int(parts[2])
+            expiry = add_user(target_id, days)
+            await _send(chat_id, f"✅ Подписка выдана: {target_id}\nДо: {expiry} (+{days} дней)")
+        else:
+            await _send(chat_id, "Формат: /add <chat_id> <дней>")
+        return
+
+    if text == "/users" and is_admin:
+        users = list_users()
+        lines = ["👥 Пользователи:"]
+        for u in users:
+            lines.append(f"  {u['chat_id']} — {u['plan']} — {u['status']}")
+        await _send(chat_id, "\n".join(lines))
+        return
+
+    # ── Access check ─────────────────────────────────────────────────────────
+    if not is_subscribed(chat_id):
+        await _send(chat_id, "🔒 Доступ закрыт. Напишите @your_admin для подключения.")
         return
 
     # idle — trigger on "анализ", hint otherwise
@@ -495,7 +521,7 @@ async def handle_update(update: dict) -> None:
     if doc := msg.get("document"):
         if doc.get("mime_type", "") in IMAGE_MIMES:
             await _handle_image(msg, doc["file_id"])
-        elif str(msg["chat"]["id"]) in WHITELIST:
+        elif is_subscribed(str(msg["chat"]["id"])):
             await _send(str(msg["chat"]["id"]), "Отправь, пожалуйста, фото или изображение графика.")
         return
 
@@ -509,14 +535,12 @@ async def main() -> None:
     if not BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
         return
-    if not WHITELIST:
-        print("ERROR: TELEGRAM_CHAT_ID not set in .env")
-        return
 
     TEMP_DIR.mkdir(exist_ok=True)
     USERS_ROOT.mkdir(parents=True, exist_ok=True)
 
-    print(f"Telegram bot started. Whitelist: {WHITELIST}")
+    users = list_users()
+    print(f"Telegram bot started. Subscribed users: {len(users)}")
 
     # On startup: send 24h reminders for any open trades
     await _check_and_send_reminders()
