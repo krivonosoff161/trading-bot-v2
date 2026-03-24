@@ -72,7 +72,7 @@ WELCOME_TEXT = (
     "Решения принимаете вы сами."
 )
 
-CHAT_LINK  = "https://t.me/разговорчики"
+CHAT_LINK  = "https://t.me/+qamAEhweADQwZmUy"
 ADMIN_LINK = "https://t.me/Krivonosoff"
 
 START_TEXT = """\
