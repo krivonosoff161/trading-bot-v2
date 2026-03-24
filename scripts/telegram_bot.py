@@ -191,10 +191,13 @@ async def _send_feedback_entry_buttons(chat_id: str, entry_id: str, symbol: str,
         "sendMessage",
         chat_id=chat_id,
         text=f"📊 Сигнал по {label} — вошёл в сделку?",
-        reply_markup={"inline_keyboard": [[
-            {"text": "✅ Вошёл",      "callback_data": f"fb_in:{entry_id}"},
-            {"text": "⏭ Пропустил",  "callback_data": f"fb_skip:{entry_id}"},
-        ]]},
+        reply_markup={"inline_keyboard": [
+            [{"text": "☑️ SL выставил, плечо ≤5x", "callback_data": f"fb_ack:{entry_id}"}],
+            [
+                {"text": "✅ Вошёл",      "callback_data": f"fb_in:{entry_id}"},
+                {"text": "⏭ Пропустил",  "callback_data": f"fb_skip:{entry_id}"},
+            ],
+        ]},
     )
 
 
@@ -392,6 +395,9 @@ async def _handle_callback(cbq: dict) -> None:
     if data.startswith("fb_"):
         action, _, entry_id = data.partition(":")
         entry = next((e for e in load_entries(chat_id) if e["id"] == entry_id), None)
+        if action == "fb_ack":
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="✅ Принято — торгуй по плану!")
+            return
         if action == "fb_in":
             if entry and entry.get("entered") is not None:
                 await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
