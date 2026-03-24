@@ -72,6 +72,20 @@ WELCOME_TEXT = (
     "Решения принимаете вы сами."
 )
 
+START_TEXT = """\
+Привет 👋
+
+Я анализирую графики криптовалют и говорю человеческим языком:
+что происходит, куда смотреть, где вход и где выход.
+
+Работаю с BTC, ETH, SOL, DOGE, XRP и другими парами.
+Данные беру с OKX в реальном времени.
+
+Нажми кнопку ниже — и посмотри сам.
+
+⚠️ Аналитика, не сигналы с гарантией.\
+"""
+
 # In-memory state per chat_id: {status, image_path, started_at, msg_date}
 # status: idle | awaiting_symbol | processing
 _state: dict[str, dict] = {}
@@ -391,6 +405,14 @@ async def _handle_callback(cbq: dict) -> None:
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         return
 
+    # ── Start analysis button from /start banner ──────────────────────────
+    if data == "__start_analysis__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        _state[chat_id] = {"status": "awaiting_symbol", "image_path": None,
+                           "started_at": time.time(), "msg_date": int(time.time())}
+        await _send_pair_keyboard(chat_id)
+        return
+
     # ── Feedback callbacks — handled regardless of current state ──────────
     if data.startswith("fb_"):
         action, _, entry_id = data.partition(":")
@@ -447,6 +469,26 @@ async def _handle_text(msg: dict) -> None:
     chat_id = str(msg["chat"]["id"])
     text = msg.get("text", "").strip()
     if not text:
+        return
+
+    # ── /start — show banner to everyone, no access check ────────────────────
+    if text == "/start":
+        if is_subscribed(chat_id):
+            # Subscribed: show banner + start analysis button
+            await _tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text=START_TEXT,
+                reply_markup={"inline_keyboard": [[{"text": "📊 Начать анализ", "callback_data": "__start_analysis__"}]]},
+            )
+        else:
+            # Not subscribed: show banner + contact admin
+            await _tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text=START_TEXT + "\n\n🔒 Доступ по подписке. Написать: @Krivonosoff",
+                reply_markup={"inline_keyboard": [[{"text": "✉️ Написать @Krivonosoff", "url": "https://t.me/Krivonosoff"}]]},
+            )
         return
 
     # ── Superadmin commands — checked before access gate ─────────────────────
