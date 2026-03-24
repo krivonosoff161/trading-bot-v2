@@ -362,6 +362,8 @@ async def run():
             funding = candle_cache[symbol]["funding"]
             for ts_ms in timestamps:
                 # Find nearest cached candles
+                if not candle_cache[symbol]["raw"]:
+                    continue
                 cached_ts = min(candle_cache[symbol]["raw"].keys(), key=lambda t: abs(t - ts_ms))
                 raw = candle_cache[symbol]["raw"][cached_ts]
 
