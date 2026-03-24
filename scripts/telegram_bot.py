@@ -585,6 +585,9 @@ async def handle_update(update: dict) -> None:
     if not msg:
         return
 
+    if msg.get("chat", {}).get("type") != "private":
+        return  # ignore group/channel messages
+
     # Photo (compressed by Telegram)
     if "photo" in msg:
         await _handle_image(msg, msg["photo"][-1]["file_id"])
