@@ -345,6 +345,7 @@ async def run():
             async with _api_sem:
                 h15 = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
                 await asyncio.sleep(0.2)
+            raw_cache[ts_ms] = {"4h": h4, "1h": h1, "15m": h15}
         print(f"  {symbol} загружен")
         return symbol, funding, raw_cache
 
@@ -355,6 +356,23 @@ async def run():
         candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
 
     # Run two param sets
+    # ── Cache diagnostics ────────────────────────────────────────────────────
+    for sym in SYMBOLS:
+        raw = candle_cache[sym]["raw"]
+        non_empty = sum(1 for v in raw.values() if v["4h"] and len(v["4h"]) >= 20)
+        sample_ts  = next(iter(raw)) if raw else None
+        sample_4h  = len(raw[sample_ts]["4h"]) if sample_ts else 0
+        sample_1h  = len(raw[sample_ts]["1h"]) if sample_ts else 0
+        sample_15m = len(raw[sample_ts]["15m"]) if sample_ts else 0
+        print(f"  {sym}: {len(raw)} кэш-точек, {non_empty} с данными 4H≥20 | пример: 4H={sample_4h} 1H={sample_1h} 15m={sample_15m}")
+    # First non-None signal for debug
+    _dbg_sym = SYMBOLS[0]
+    _dbg_ts  = next(iter(candle_cache[_dbg_sym]["raw"]))
+    _dbg_raw = candle_cache[_dbg_sym]["raw"][_dbg_ts]
+    _dbg_sig = compute_signal(_dbg_raw["4h"], _dbg_raw["1h"], _dbg_raw["15m"], candle_cache[_dbg_sym]["funding"])
+    print(f"  Sample signal ({_dbg_sym}): {_dbg_sig}")
+    print()
+
     all_set_results = {}
     for pset in PARAM_SETS:
         results = []
