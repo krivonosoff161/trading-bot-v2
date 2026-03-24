@@ -72,6 +72,9 @@ WELCOME_TEXT = (
     "Решения принимаете вы сами."
 )
 
+CHAT_LINK  = "https://t.me/разговорчики"
+ADMIN_LINK = "https://t.me/Krivonosoff"
+
 START_TEXT = """\
 Привет 👋
 
@@ -355,7 +358,15 @@ async def _start_analysis(chat_id: str, symbol: str) -> None:
 async def _handle_image(msg: dict, file_id: str) -> None:
     chat_id = str(msg["chat"]["id"])
     if not is_subscribed(chat_id):
-        await _send(chat_id, "🔒 Доступ закрыт. Напишите @Krivonosoff для подключения.")
+        await _tg(
+            "sendMessage",
+            chat_id=chat_id,
+            text="🔒 Доступ по подписке.",
+            reply_markup={"inline_keyboard": [
+                [{"text": "✉️ Подключиться → @Krivonosoff", "url": ADMIN_LINK}],
+                [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
+            ]},
+        )
         return
 
     st = _state.get(chat_id, {})
@@ -474,20 +485,26 @@ async def _handle_text(msg: dict) -> None:
     # ── /start — show banner to everyone, no access check ────────────────────
     if text == "/start":
         if is_subscribed(chat_id):
-            # Subscribed: show banner + start analysis button
+            # Subscribed: show banner + start analysis + chat link
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
                 text=START_TEXT,
-                reply_markup={"inline_keyboard": [[{"text": "📊 Начать анализ", "callback_data": "__start_analysis__"}]]},
+                reply_markup={"inline_keyboard": [
+                    [{"text": "📊 Начать анализ", "callback_data": "__start_analysis__"}],
+                    [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
+                ]},
             )
         else:
-            # Not subscribed: show banner + contact admin
+            # Not subscribed: show banner + contact admin + chat link
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
-                text=START_TEXT + "\n\n🔒 Доступ по подписке. Написать: @Krivonosoff",
-                reply_markup={"inline_keyboard": [[{"text": "✉️ Написать @Krivonosoff", "url": "https://t.me/Krivonosoff"}]]},
+                text=START_TEXT + "\n\n🔒 Доступ по подписке.",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "✉️ Подключиться → @Krivonosoff", "url": ADMIN_LINK}],
+                    [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
+                ]},
             )
         return
 
@@ -515,7 +532,15 @@ async def _handle_text(msg: dict) -> None:
 
     # ── Access check — all non-admin traffic blocked here ────────────────────
     if not is_subscribed(chat_id):
-        await _send(chat_id, "🔒 Доступ закрыт. Напишите @Krivonosoff для подключения.")
+        await _tg(
+            "sendMessage",
+            chat_id=chat_id,
+            text="🔒 Доступ по подписке.",
+            reply_markup={"inline_keyboard": [
+                [{"text": "✉️ Подключиться → @Krivonosoff", "url": ADMIN_LINK}],
+                [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
+            ]},
+        )
         return
 
     st = _state.get(chat_id, {})
