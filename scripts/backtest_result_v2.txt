@@ -1,0 +1,75 @@
+[32m2026-03-24 17:52:50.728[0m | [1mINFO    [0m | [36msrc.exchange.okx_client[0m:[36m__init__[0m:[36m29[0m - [1mOKXClient initialized | demo=False[0m
+[32m2026-03-24 17:52:51.277[0m | [34m[1mDEBUG   [0m | [36msrc.exchange.okx_client[0m:[36mget_funding_rate[0m:[36m187[0m - [34m[1mFunding rate | symbol=BTC-USDT rate=6.13500666953e-05[0m
+[32m2026-03-24 17:55:56.732[0m | [34m[1mDEBUG   [0m | [36msrc.exchange.okx_client[0m:[36mget_funding_rate[0m:[36m187[0m - [34m[1mFunding rate | symbol=ETH-USDT rate=5.04337138049e-05[0m
+[32m2026-03-24 17:59:03.875[0m | [34m[1mDEBUG   [0m | [36msrc.exchange.okx_client[0m:[36mget_funding_rate[0m:[36m187[0m - [34m[1mFunding rate | symbol=SOL-USDT rate=7.579375306e-07[0m
+[32m2026-03-24 18:02:11.658[0m | [34m[1mDEBUG   [0m | [36msrc.exchange.okx_client[0m:[36mget_funding_rate[0m:[36m187[0m - [34m[1mFunding rate | symbol=DOGE-USDT rate=4.7729775223e-05[0m
+[32m2026-03-24 18:05:18.253[0m | [34m[1mDEBUG   [0m | [36msrc.exchange.okx_client[0m:[36mget_funding_rate[0m:[36m187[0m - [34m[1mFunding rate | symbol=XRP-USDT rate=-5.03953867663e-05[0m
+[32m2026-03-24 18:15:13.625[0m | [1mINFO    [0m | [36msrc.exchange.okx_client[0m:[36mclose[0m:[36m39[0m - [1mOKXClient session closed[0m
+Загрузка свечей для 5 пар...
+  BTC-USDT загружен
+  ETH-USDT загружен
+  SOL-USDT загружен
+  DOGE-USDT загружен
+  XRP-USDT загружен
+
+============================================================
+  OLD  tp1×1.5 adx30
+============================================================
+  Сигналов всего:   444  (31.7/день)
+  ✅ TP:  54  ❌ SL: 77  ⏱ TIME: 313
+  Winrate:          41%  (54/131)
+  Profit Factor:    0.74
+  Max серия стопов: 7
+  LONG:  252 сигналов | ✅32 ❌42 | 43%
+  SHORT:  192 сигналов | ✅22 ❌35 | 38%
+
+  По стилю:
+    SWING   : 288 | ✅44 ❌29 | 60%
+    SCALP   : 156 | ✅10 ❌48 | 17%
+
+  По паре:
+    BTC-USDT    :  88 | ✅8 ❌20 | 28%
+    ETH-USDT    :  88 | ✅20 ❌19 | 51%
+    SOL-USDT    :  68 | ✅1 ❌19 | 5%
+    DOGE-USDT   : 100 | ✅17 ❌9 | 65%
+    XRP-USDT    : 100 | ✅8 ❌10 | 44%
+
+  Лучший час:  11:00 UTC — 66% winrate (6 сигналов)
+  Худший час:  14:00 UTC — 0% winrate (34 сигналов)
+
+  PASS/FAIL (S1.3):
+    Winrate ≥50%:      ❌ FAIL  (41%)
+    Profit Factor ≥1.2:❌ FAIL  (0.74)
+    Сигналов/день ≥2:  ✅ PASS  (31.7)
+    Max серия SL ≤5:   ❌ FAIL  (7)
+
+============================================================
+  NEW  tp1×1.0 adx25
+============================================================
+  Сигналов всего:   476  (34.0/день)
+  ✅ TP:  106  ❌ SL: 67  ⏱ TIME: 303
+  Winrate:          61%  (106/173)
+  Profit Factor:    1.22
+  Max серия стопов: 7
+  LONG:  264 сигналов | ✅55 ❌44 | 55%
+  SHORT:  212 сигналов | ✅51 ❌23 | 68%
+
+  По стилю:
+    SWING   : 348 | ✅82 ❌29 | 73%
+    SCALP   : 128 | ✅24 ❌38 | 38%
+
+  По паре:
+    BTC-USDT    :  88 | ✅16 ❌17 | 48%
+    ETH-USDT    :  80 | ✅22 ❌11 | 66%
+    SOL-USDT    :  96 | ✅19 ❌22 | 46%
+    DOGE-USDT   : 120 | ✅30 ❌9 | 76%
+    XRP-USDT    :  92 | ✅19 ❌8 | 70%
+
+  Лучший час:  11:00 UTC — 75% winrate (8 сигналов)
+  Худший час:  04:00 UTC — 0% winrate (10 сигналов)
+
+  PASS/FAIL (S1.3):
+    Winrate ≥50%:      ✅ PASS  (61%)
+    Profit Factor ≥1.2:✅ PASS  (1.22)
+    Сигналов/день ≥2:  ✅ PASS  (34.0)
+    Max серия SL ≤5:   ❌ FAIL  (7)
