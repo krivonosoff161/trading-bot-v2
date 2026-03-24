@@ -190,11 +190,16 @@ _STYLE_LABELS  = {"SWING":    "📈 СВИНГ — держать до 16 час
 
 
 def _build_header(symbol: str, captured_at: str, entry_signal: str, trade_style: str,
-                  bias_1h: str, bias_4h: str) -> str:
+                  bias_1h: str, bias_4h: str, side: str | None = None) -> str:
     status = _STATUS_LABELS.get(entry_signal, "НАБЛЮДАЕМ")
     style  = _STYLE_LABELS.get(trade_style, "")
+    # For SCALP, bias_1h is NEUTRAL by design — use side from llm_context instead
     bias   = bias_1h if bias_1h != "NEUTRAL" else bias_4h
-    if bias == "UP":
+    if side == "buy":
+        direction = "только LONG — короткая сторона не рассматривается"
+    elif side == "sell":
+        direction = "только SHORT — длинная сторона не рассматривается"
+    elif bias == "UP":
         direction = "только LONG — короткая сторона не рассматривается"
     elif bias == "DOWN":
         direction = "только SHORT — длинная сторона не рассматривается"
@@ -455,6 +460,7 @@ async def generate_client_text(
             ctx.get("trade_style_hint", "NO_TRADE"),
             ctx.get("bias_1h", "NEUTRAL"),
             ctx.get("bias_4h", "NEUTRAL"),
+            side=ctx.get("side"),
         )
         return header + body
 
