@@ -1461,7 +1461,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     if _trade_style == "SWING":
         # Minimum SL: 0.8% of price — prevents tiny stoploss on low-volatility candles
         _sl_dist  = max(_atr_1h * 2.0, _close * 0.008) if _close else _atr_1h * 2.0
-        _tp1_dist = _sl_dist * 1.5
+        _tp1_dist = _sl_dist * 1.0  # reduced from 1.5 — market rarely travels 1.5×SL in sideways
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
             _tp1_p = round(_close + _tp1_dist, 4)
@@ -1490,7 +1490,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:  # SCALP
         # Minimum SL: 0.5% of price
         _sl_dist  = max(_atr_15m * 1.5, _close * 0.005) if _close else _atr_15m * 1.5
-        _tp1_dist = _sl_dist * 1.5
+        _tp1_dist = _sl_dist * 1.0  # reduced from 1.5 — scalp targets hit more often at 1:1
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
             _tp1_p = round(_close + _tp1_dist, 4)
@@ -1510,15 +1510,15 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     # SWING: top/bottom 15% | SCALP: softer — top/bottom 10% only
     _regime_ok = True
     if _day_position is not None and _trade_style in ("SWING", "SCALP"):
-        _regime_top    = 0.85 if _trade_style == "SWING" else 0.90
-        _regime_bottom = 0.15 if _trade_style == "SWING" else 0.10
+        _regime_top    = 0.80  # block LONG if price already >80% of daily range
+        _regime_bottom = 0.20  # block SHORT if price already <20% of daily range
         if _side == "buy"  and _day_position > _regime_top:
             _regime_ok = False  # price at day top — risky LONG
         elif _side == "sell" and _day_position < _regime_bottom:
             _regime_ok = False  # price at day bottom — risky SHORT
 
     # max_hold hint for client (minutes)
-    _max_hold_minutes = 120 if _trade_style == "SCALP" else 480 if _trade_style == "PULLBACK" else 960
+    _max_hold_minutes = 120 if _trade_style == "SCALP" else 480 if _trade_style == "PULLBACK" else 360  # SWING 6h (was 16h)
 
     # Final entry signal
     _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
