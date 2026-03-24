@@ -1385,6 +1385,22 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:
         _day_position = None
 
+    # Night session: 01:00–06:59 UTC — low liquidity
+    _signal_hour = _captured_dt.hour
+    _is_night    = 1 <= _signal_hour < 7
+
+    # Dynamic TP multiplier: tighter in low-volatility days, wider in high-volatility days
+    if _day_high and _day_low and _day_low > 0:
+        _daily_range_pct = (_day_high - _day_low) / _day_low * 100
+    else:
+        _daily_range_pct = 0.0
+    if _daily_range_pct >= 4.0:
+        _tp1_mult = 1.0   # high volatility day — full 1:1
+    elif _daily_range_pct >= 2.0:
+        _tp1_mult = 0.8   # medium — 0.8:1
+    else:
+        _tp1_mult = 0.6   # low volatility — tight TP, hits more often
+
     # Level 1 — Trade style
     if _adx_4h >= adx_thresh_4h and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
         _trade_style = "SWING"
@@ -1408,6 +1424,15 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _trade_style = "SCALP"
     else:
         _trade_style = "NO_TRADE"
+
+    # Night session filters
+    if _is_night:
+        if _trade_style == "SCALP":
+            print(f"SCALP night block: hour={_signal_hour}UTC — low liquidity window")
+            _trade_style = "NO_TRADE"
+        elif _trade_style == "SWING" and not (_adx_4h >= 30 and _vol_ratio >= 3.0):
+            print(f"SWING night filter: hour={_signal_hour}UTC, ADX4H={_adx_4h:.1f}, vol={_vol_ratio:.2f} — weak trend, skipping")
+            _trade_style = "NO_TRADE"
 
     # Level 2 — Direction
     _side = (_act.get("side")
@@ -1461,7 +1486,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     if _trade_style == "SWING":
         # Minimum SL: 0.8% of price — prevents tiny stoploss on low-volatility candles
         _sl_dist  = max(_atr_1h * 2.0, _close * 0.008) if _close else _atr_1h * 2.0
-        _tp1_dist = _sl_dist * 1.0  # reduced from 1.5 — market rarely travels 1.5×SL in sideways
+        _tp1_dist = _sl_dist * _tp1_mult  # dynamic: 0.6× low-vol / 0.8× med / 1.0× high-vol day
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
             _tp1_p = round(_close + _tp1_dist, 4)
@@ -1490,7 +1515,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:  # SCALP
         # Minimum SL: 0.5% of price
         _sl_dist  = max(_atr_15m * 1.5, _close * 0.005) if _close else _atr_15m * 1.5
-        _tp1_dist = _sl_dist * 1.0  # reduced from 1.5 — scalp targets hit more often at 1:1
+        _tp1_dist = _sl_dist * _tp1_mult  # dynamic: 0.6× low-vol / 0.8× med / 1.0× high-vol day
         if _side == "buy" and _close:
             _sl_p  = round(_close - _sl_dist, 4)
             _tp1_p = round(_close + _tp1_dist, 4)
@@ -1542,6 +1567,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     if _entry_signal == "NO_TRADE" and _has_watch:
         _entry_signal = "WAIT"
 
+    # High-risk scalp: BTC and SOL have wide spreads and fast reversals — warn client
+    _high_risk_scalp = (
+        _trade_style == "SCALP"
+        and _entry_signal in ("ENTRY", "WAIT")
+        and any(tok in symbol for tok in ("BTC", "SOL"))
+    )
+
     snapshot = {
         "symbol":       symbol,
         "captured_at":  captured_at_iso,
@@ -1574,7 +1606,11 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "sl_price":         _sl_p,
             "tp1_price":        _tp1_p,
             "tp2_price":        _tp2_p,
-            "max_hold_minutes": _max_hold_minutes,
+            "max_hold_minutes":  _max_hold_minutes,
+            "daily_range_pct":   round(_daily_range_pct, 2),
+            "tp1_mult":          _tp1_mult,
+            "is_night_session":  _is_night,
+            "high_risk_scalp":   _high_risk_scalp,
         },
         "4h":           result.get("4h", {}),
         "1h":           result["1h"],
@@ -1631,6 +1667,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             if f"  Статус:      {_old}" in delivery_text:
                 delivery_text = delivery_text.replace(f"  Статус:      {_old}", f"  Статус:      {_correct}", 1)
                 break
+
+    # Append high-risk scalp warning for BTC/SOL
+    if _high_risk_scalp:
+        delivery_text += (
+            "\n\n⚠️ Внимание: BTC и SOL — широкий спред и быстрые развороты.\n"
+            "   Скальп на этих парах: плечо ≤3x, вход малой долей (до 30% депо)."
+        )
 
     # Save for downstream consumers (e.g. telegram_bot.py)
     summary_path = run_dir / f"{symbol}_client_summary.txt"
