@@ -26,8 +26,8 @@ from src.strategy.indicators import (
 
 # ── Config ───────────────────────────────────────────────────────────────────
 SYMBOLS     = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
-DAYS_BACK   = 14       # how many days of history to simulate
-INTERVAL_M  = 30       # simulate every N minutes
+DAYS_BACK   = 30       # how many days of history to simulate
+INTERVAL_M  = 15       # simulate every N minutes
 OUTCOME_H   = 24       # hours of forward candles to check outcome
 ADX_PERIOD  = 14
 
