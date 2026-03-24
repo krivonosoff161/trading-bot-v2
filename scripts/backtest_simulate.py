@@ -326,22 +326,32 @@ async def run():
     hold_ms  = {"SCALP": 120*60*1000, "PULLBACK": 480*60*1000, "SWING": 360*60*1000}
     timestamps = list(range(start_ms, now_ms - OUTCOME_H * 3600 * 1000, step_ms))
 
-    # Pre-fetch all candles once per symbol
-    candle_cache: dict = {}
-    print(f"Загрузка свечей для {len(SYMBOLS)} пар...")
-    for symbol in SYMBOLS:
-        funding = await client.get_funding_rate(symbol)
-        await asyncio.sleep(0.3)
-        candle_cache[symbol] = {"funding": funding, "raw": {}}
-        for ts_ms in timestamps[::4]:  # sample every 4th point for cache warmup
+    # Pre-fetch all candles — all symbols in parallel (semaphore limits OKX rate)
+    _api_sem = asyncio.Semaphore(10)  # max 10 concurrent OKX requests
+
+    async def _fetch_symbol(symbol: str) -> tuple:
+        async with _api_sem:
+            funding = await client.get_funding_rate(symbol)
+        await asyncio.sleep(0.2)
+        raw_cache = {}
+        for ts_ms in timestamps[::4]:  # sample every 4th point
             after_ms = ts_ms + step_ms
-            candle_cache[symbol]["raw"][ts_ms] = {
-                "4h":  await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60),
-                "1h":  await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60),
-                "15m": await client.get_history_candles(symbol, "15m", after=after_ms, limit=96),
-            }
-            await asyncio.sleep(0.4)
+            async with _api_sem:
+                h4  = await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60)
+            async with _api_sem:
+                h1  = await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60)
+            async with _api_sem:
+                h15 = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
+            raw_cache[ts_ms] = {"4h": h4, "1h": h1, "15m": h15}
+            await asyncio.sleep(0.15)
         print(f"  {symbol} загружен")
+        return symbol, funding, raw_cache
+
+    candle_cache: dict = {}
+    print(f"Загрузка свечей для {len(SYMBOLS)} пар (параллельно)...")
+    results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in SYMBOLS])
+    for symbol, funding, raw_cache in results_fetch:
+        candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
 
     # Run two param sets
     all_set_results = {}
