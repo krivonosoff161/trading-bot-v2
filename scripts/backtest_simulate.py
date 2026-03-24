@@ -33,8 +33,9 @@ ADX_PERIOD  = 14
 
 # ── Param sets to compare ────────────────────────────────────────────────────
 PARAM_SETS = [
-    {"label": "OLD  tp1×1.5 adx30", "tp1_mult": 1.5, "adx_thresh": 30, "regime_top": 0.85},
-    {"label": "NEW  tp1×1.0 adx25", "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80},
+    {"label": "OLD  tp1×1.5 adx30",          "tp1_mult": 1.5, "adx_thresh": 30, "regime_top": 0.85, "use_dynamic_tp": False, "night_filter": False},
+    {"label": "NEW  tp1×1.0 adx25",          "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": False, "night_filter": False},
+    {"label": "NEW+ dynamic_tp+night_filter", "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True,  "night_filter": True},
 ]
 
 # ── Signal logic (mirrors analyze_chart.py llm_context block) ────────────────
@@ -58,7 +59,8 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     return vwap, max(highs), min(lows)
 
 
-def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25, regime_top=0.80):
+def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25, regime_top=0.80,
+                   use_dynamic_tp=False, night_filter=False):
     """Run signal logic. Returns dict with signal fields or None if not enough data."""
     if not raw_4h or len(raw_4h) < 20:
         return None
@@ -129,6 +131,20 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25
     if day_high and day_low and day_high != day_low:
         day_position = (close - day_low) / (day_high - day_low)
 
+    # Signal hour for night filter
+    signal_hour = dt_last.hour
+    is_night    = 1 <= signal_hour < 7
+
+    # Dynamic TP multiplier
+    if use_dynamic_tp and day_high and day_low and day_low > 0:
+        daily_range_pct = (day_high - day_low) / day_low * 100
+        if daily_range_pct >= 4.0:
+            tp1_mult = 1.0
+        elif daily_range_pct >= 2.0:
+            tp1_mult = 0.8
+        else:
+            tp1_mult = 0.6
+
     # CE (simplified)
     ce_long  = float(l15[-1]) - 3 * atr_15m
     ce_short = float(h15[-1]) + 3 * atr_15m
@@ -149,6 +165,13 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25
         trade_style = "PULLBACK" if (pb_long or pb_short) else "NO_TRADE"
     elif adx_1h >= 20 and vol_ratio >= 1.5:
         trade_style = "SCALP"
+
+    # Night session filters (01-07 UTC)
+    if night_filter and is_night:
+        if trade_style == "SCALP":
+            trade_style = "NO_TRADE"
+        elif trade_style == "SWING" and not (adx_4h >= 30 and vol_ratio >= 3.0):
+            trade_style = "NO_TRADE"
 
     # ── Level 2: Direction ───────────────────────────────────────────────────
     side = None
@@ -336,6 +359,8 @@ async def run():
                     tp1_mult=pset["tp1_mult"],
                     adx_thresh=pset["adx_thresh"],
                     regime_top=pset["regime_top"],
+                    use_dynamic_tp=pset.get("use_dynamic_tp", False),
+                    night_filter=pset.get("night_filter", False),
                 )
                 if sig is None or sig["entry_signal"] not in ("ENTRY", "WAIT"):
                     continue
