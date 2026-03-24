@@ -31,6 +31,12 @@ INTERVAL_M  = 30       # simulate every N minutes
 OUTCOME_H   = 24       # hours of forward candles to check outcome
 ADX_PERIOD  = 14
 
+# ── Param sets to compare ────────────────────────────────────────────────────
+PARAM_SETS = [
+    {"label": "OLD  tp1×1.5 adx30", "tp1_mult": 1.5, "adx_thresh": 30, "regime_top": 0.85},
+    {"label": "NEW  tp1×1.0 adx25", "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80},
+]
+
 # ── Signal logic (mirrors analyze_chart.py llm_context block) ────────────────
 
 def _bias(bull: bool, bear: bool) -> str:
@@ -52,7 +58,7 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     return vwap, max(highs), min(lows)
 
 
-def compute_signal(raw_4h, raw_1h, raw_15m, funding):
+def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25, regime_top=0.80):
     """Run signal logic. Returns dict with signal fields or None if not enough data."""
     if not raw_4h or len(raw_4h) < 20:
         return None
@@ -129,9 +135,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding):
 
     # ── Level 1: Trade style ──────────────────────────────────────────────────
     trade_style = "NO_TRADE"
-    if adx_4h >= 25 and bias_4h == bias_1h and bias_1h != "NEUTRAL":
+    if adx_4h >= adx_thresh and bias_4h == bias_1h and bias_1h != "NEUTRAL":
         trade_style = "SWING"
-    elif adx_4h >= 25 and bias_4h != "NEUTRAL" and bias_1h == "NEUTRAL":
+    elif adx_4h >= adx_thresh and bias_4h != "NEUTRAL" and bias_1h == "NEUTRAL":
         pb_long  = (bias_4h == "UP"   and supertrend_dir == "up"
                     and plus_di_1h > minus_di_1h
                     and day_position is not None and day_position < 0.45
@@ -174,8 +180,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding):
     # ── Regime filter ────────────────────────────────────────────────────────
     regime_ok = True
     if day_position is not None and trade_style in ("SWING", "SCALP"):
-        if side == "buy"  and day_position > 0.85: regime_ok = False
-        if side == "sell" and day_position < 0.15: regime_ok = False
+        if side == "buy"  and day_position > regime_top:        regime_ok = False
+        if side == "sell" and day_position < (1 - regime_top):  regime_ok = False
 
     # ── Level 4: SL/TP ───────────────────────────────────────────────────────
     sl_p = tp1_p = tp2_p = None
@@ -183,7 +189,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding):
 
     if trade_style == "SWING" and side and close:
         sl_dist = max(atr_1h * 2.0, close * 0.008)
-        tp1_dist = sl_dist * 1.5
+        tp1_dist = sl_dist * tp1_mult
         if side == "buy":
             sl_p  = round(close - sl_dist, 6)
             tp1_p = round(close + tp1_dist, 6)
@@ -209,7 +215,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding):
 
     elif trade_style == "SCALP" and side and close:
         sl_dist  = max(atr_15m * 1.5, close * 0.005)
-        tp1_dist = sl_dist * 1.5
+        tp1_dist = sl_dist * tp1_mult
         if side == "buy":
             sl_p  = round(close - sl_dist, 6)
             tp1_p = round(close + tp1_dist, 6)
@@ -291,119 +297,166 @@ async def run():
         is_demo=False,
     )
 
-    now_ms    = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    start_ms  = now_ms - DAYS_BACK * 24 * 3600 * 1000
-    step_ms   = INTERVAL_M * 60 * 1000
-    hold_ms   = {"SCALP": 120*60*1000, "PULLBACK": 480*60*1000, "SWING": 960*60*1000}
-
-    results = []
+    now_ms   = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    start_ms = now_ms - DAYS_BACK * 24 * 3600 * 1000
+    step_ms  = INTERVAL_M * 60 * 1000
+    hold_ms  = {"SCALP": 120*60*1000, "PULLBACK": 480*60*1000, "SWING": 360*60*1000}
     timestamps = list(range(start_ms, now_ms - OUTCOME_H * 3600 * 1000, step_ms))
 
-    total = len(SYMBOLS) * len(timestamps)
-    done  = 0
-
-    print(f"Симуляция: {len(SYMBOLS)} пар × {len(timestamps)} точек = {total} анализов")
-    print(f"Период: {DAYS_BACK} дней, интервал: {INTERVAL_M}m, окно проверки: {OUTCOME_H}h\n")
-
+    # Pre-fetch all candles once per symbol
+    candle_cache: dict = {}
+    print(f"Загрузка свечей для {len(SYMBOLS)} пар...")
     for symbol in SYMBOLS:
-        print(f"  → {symbol} ...", flush=True)
-        # Pre-fetch funding once (current only — history not available via OKX public API)
         funding = await client.get_funding_rate(symbol)
         await asyncio.sleep(0.3)
+        candle_cache[symbol] = {"funding": funding, "raw": {}}
+        for ts_ms in timestamps[::4]:  # sample every 4th point for cache warmup
+            after_ms = ts_ms + step_ms
+            candle_cache[symbol]["raw"][ts_ms] = {
+                "4h":  await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60),
+                "1h":  await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60),
+                "15m": await client.get_history_candles(symbol, "15m", after=after_ms, limit=96),
+            }
+            await asyncio.sleep(0.4)
+        print(f"  {symbol} загружен")
 
-        for ts_ms in timestamps:
-            done += 1
-            # Fetch candles up to this timestamp
-            # OKX 'after' param = return candles with ts < after
-            after_ms = ts_ms + step_ms  # include candle at ts_ms
+    # Run two param sets
+    all_set_results = {}
+    for pset in PARAM_SETS:
+        results = []
+        for symbol in SYMBOLS:
+            funding = candle_cache[symbol]["funding"]
+            for ts_ms in timestamps:
+                # Find nearest cached candles
+                cached_ts = min(candle_cache[symbol]["raw"].keys(), key=lambda t: abs(t - ts_ms))
+                raw = candle_cache[symbol]["raw"][cached_ts]
 
-            raw_4h  = await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.15)
-            raw_1h  = await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.15)
-            raw_15m = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
-            await asyncio.sleep(0.15)
+                sig = compute_signal(
+                    raw["4h"], raw["1h"], raw["15m"], funding,
+                    tp1_mult=pset["tp1_mult"],
+                    adx_thresh=pset["adx_thresh"],
+                    regime_top=pset["regime_top"],
+                )
+                if sig is None or sig["entry_signal"] not in ("ENTRY", "WAIT"):
+                    continue
+                if not sig["sl"] or not sig["tp1"]:
+                    continue
 
-            sig = compute_signal(raw_4h, raw_1h, raw_15m, funding)
-            if sig is None or sig["entry_signal"] == "NO_TRADE":
-                continue
+                # Fetch forward candles
+                fwd_end = ts_ms + OUTCOME_H * 3600 * 1000 + step_ms
+                raw_fwd = await client.get_history_candles(symbol, "5m", after=fwd_end, limit=288)
+                await asyncio.sleep(0.1)
 
-            # Fetch forward candles to check outcome
-            fwd_end = ts_ms + OUTCOME_H * 3600 * 1000 + step_ms
-            raw_fwd = await client.get_history_candles(symbol, "5m", after=fwd_end, limit=288)
-            await asyncio.sleep(0.15)
-
-            if sig["entry_signal"] in ("ENTRY", "WAIT") and sig["sl"] and sig["tp1"]:
                 max_h = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
                 outcome, elapsed = check_outcome(
-                    raw_fwd, sig["side"], sig["sl"], sig["tp1"], sig["tp2"],
-                    ts_ms, max_h
+                    raw_fwd, sig["side"], sig["sl"], sig["tp1"], sig["tp2"], ts_ms, max_h
                 )
+                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
                 results.append({
                     "symbol":    symbol,
-                    "ts":        datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%m-%d %H:%M"),
+                    "ts":        dt.strftime("%m-%d %H:%M"),
+                    "hour":      dt.hour,
                     "signal":    sig["entry_signal"],
                     "style":     sig["trade_style"],
                     "side":      sig["side"],
                     "close":     sig["close"],
                     "sl":        sig["sl"],
                     "tp1":       sig["tp1"],
+                    "sl_dist":   abs(sig["close"] - sig["sl"]),
                     "outcome":   outcome,
                     "elapsed_m": elapsed,
-                    "adx_4h":   sig["adx_4h"],
-                    "day_pos":  sig["day_position"],
+                    "day_pos":   sig["day_position"],
                 })
-
-        print(f"     {symbol}: {len([r for r in results if r['symbol']==symbol])} сигналов")
+        all_set_results[pset["label"]] = results
 
     await client.close()
 
     # ── Report ────────────────────────────────────────────────────────────────
-    print("\n" + "="*110)
-    print(f"{'Дата':>12} {'Пара':>10} {'Стиль':>8} {'Side':>4} {'Вход':>10} {'SL':>10} {'TP1':>10} {'Результат':>12} {'Минут':>7}")
-    print("-"*110)
+    def _report(label, results):
+        wins   = [r for r in results if r["outcome"] in ("TP1", "TP2")]
+        losses = [r for r in results if r["outcome"] == "STOP"]
+        time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
+        total_r = len(wins) + len(losses)
+        winrate = len(wins) * 100 // total_r if total_r > 0 else 0
 
-    for r in results:
-        print(f"{r['ts']:>12} {r['symbol']:>10} {r['style']:>8} {r['side']:>4} "
-              f"{str(r['close']):>10} {str(round(r['sl'],4)):>10} {str(round(r['tp1'],4)):>10} "
-              f"{r['outcome']:>12} {str(r['elapsed_m'] or '—'):>7}")
+        # Profit factor (assuming R:R 1:tp1_mult, but simplified: 1:1 for new, 1:1.5 for old)
+        gross_w = sum(r["sl_dist"] * (1.0 if "1.0" in label else 1.5) for r in wins)
+        gross_l = sum(r["sl_dist"] for r in losses)
+        pf = round(gross_w / gross_l, 2) if gross_l > 0 else 99.0
 
-    print("="*110)
+        # Max drawdown (sequential losses)
+        max_dd = consec = 0
+        for r in results:
+            if r["outcome"] == "STOP": consec += 1
+            else: consec = 0
+            max_dd = max(max_dd, consec)
 
-    wins   = [r for r in results if r["outcome"] in ("TP1", "TP2")]
-    losses = [r for r in results if r["outcome"] == "STOP"]
-    time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
-    total_r = len(wins) + len(losses)
+        signals_per_day = round(len(results) / DAYS_BACK, 1)
 
-    print(f"\nВсего сигналов (ENTRY+WAIT): {len(results)}")
-    print(f"  ✅ TP1/TP2:    {len(wins)}")
-    print(f"  ❌ STOP:       {len(losses)}")
-    print(f"  ⏱ TIME_EXIT:  {len(time_x)}")
-    print(f"  ? OPEN/NO_DATA: {len(results) - total_r - len(time_x)}")
+        print(f"\n{'='*60}")
+        print(f"  {label}")
+        print(f"{'='*60}")
+        print(f"  Сигналов всего:   {len(results)}  ({signals_per_day}/день)")
+        print(f"  ✅ TP:  {len(wins)}  ❌ SL: {len(losses)}  ⏱ TIME: {len(time_x)}")
+        print(f"  Winrate:          {winrate}%  ({len(wins)}/{total_r})")
+        print(f"  Profit Factor:    {pf}")
+        print(f"  Max серия стопов: {max_dd}")
 
-    if total_r > 0:
-        winrate = len(wins) * 100 // total_r
-        print(f"\nWinrate: {winrate}%  ({len(wins)}/{total_r})")
+        # LONG vs SHORT
+        for side in ("buy", "sell"):
+            sr = [r for r in results if r["side"] == side]
+            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+            sl_ = [r for r in sr if r["outcome"] == "STOP"]
+            if sr:
+                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
+                label_s = "LONG" if side == "buy" else "SHORT"
+                print(f"  {label_s}:  {len(sr)} сигналов | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
-    # By style
-    print("\nПо стилю:")
-    for style in ("SWING", "SCALP", "PULLBACK"):
-        sr = [r for r in results if r["style"] == style]
-        sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
-        sl = [r for r in sr if r["outcome"] == "STOP"]
-        if sr:
-            wr = len(sw)*100//(len(sw)+len(sl)) if (len(sw)+len(sl)) > 0 else 0
-            print(f"  {style:8}: {len(sr):3} сигналов | ✅{len(sw)} ❌{len(sl)} | winrate {wr}%")
+        # By style
+        print(f"\n  По стилю:")
+        for style in ("SWING", "SCALP", "PULLBACK"):
+            sr = [r for r in results if r["style"] == style]
+            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+            sl_ = [r for r in sr if r["outcome"] == "STOP"]
+            if sr:
+                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
+                print(f"    {style:8}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
-    # By symbol
-    print("\nПо паре:")
-    for sym in SYMBOLS:
-        sr = [r for r in results if r["symbol"] == sym]
-        sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
-        sl = [r for r in sr if r["outcome"] == "STOP"]
-        if sr:
-            wr = len(sw)*100//(len(sw)+len(sl)) if (len(sw)+len(sl)) > 0 else 0
-            print(f"  {sym:12}: {len(sr):3} сигналов | ✅{len(sw)} ❌{len(sl)} | winrate {wr}%")
+        # By symbol
+        print(f"\n  По паре:")
+        for sym in SYMBOLS:
+            sr = [r for r in results if r["symbol"] == sym]
+            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+            sl_ = [r for r in sr if r["outcome"] == "STOP"]
+            if sr:
+                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
+                print(f"    {sym:12}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
+
+        # Best/worst hours
+        hour_wins = {}
+        hour_total = {}
+        for r in results:
+            h = r["hour"]
+            hour_total[h] = hour_total.get(h, 0) + 1
+            if r["outcome"] in ("TP1","TP2"):
+                hour_wins[h] = hour_wins.get(h, 0) + 1
+        if hour_total:
+            hour_wr = {h: hour_wins.get(h,0)*100//hour_total[h] for h in hour_total if hour_total[h] >= 2}
+            if hour_wr:
+                best  = max(hour_wr, key=hour_wr.get)
+                worst = min(hour_wr, key=hour_wr.get)
+                print(f"\n  Лучший час:  {best:02d}:00 UTC — {hour_wr[best]}% winrate ({hour_total[best]} сигналов)")
+                print(f"  Худший час:  {worst:02d}:00 UTC — {hour_wr[worst]}% winrate ({hour_total[worst]} сигналов)")
+
+        # Pass/Fail
+        print(f"\n  PASS/FAIL (S1.3):")
+        print(f"    Winrate ≥50%:      {'✅ PASS' if winrate >= 50 else '❌ FAIL'}  ({winrate}%)")
+        print(f"    Profit Factor ≥1.2:{'✅ PASS' if pf >= 1.2  else '❌ FAIL'}  ({pf})")
+        print(f"    Сигналов/день ≥2:  {'✅ PASS' if signals_per_day >= 2 else '❌ FAIL'}  ({signals_per_day})")
+        print(f"    Max серия SL ≤5:   {'✅ PASS' if max_dd <= 5 else '❌ FAIL'}  ({max_dd})")
+
+    for label, res in all_set_results.items():
+        _report(label, res)
 
 
 if __name__ == "__main__":
