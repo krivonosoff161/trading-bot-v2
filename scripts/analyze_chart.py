@@ -1293,6 +1293,10 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
+    _pair_adx = params.get("adx_thresholds", {}).get(symbol)
+    if _pair_adx is not None:
+        params = {**params, "adx_threshold_1h": float(_pair_adx)}
+
     result         = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent, raw_4h=raw_4h)
     report_text    = format_report(symbol, captured_at_iso, result)
     client_summary = build_client_summary(symbol, captured_at_iso, result)
@@ -1334,12 +1338,19 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _h5  = result["5m"]
     _act = result["action"]
 
-    _bias_4h = "UP" if _h4.get("bull") else ("DOWN" if _h4.get("bear") else "NEUTRAL")
-    _bias_1h = "UP" if _h1.get("bull") else ("DOWN" if _h1.get("bear") else "NEUTRAL")
+    # Bias: EMA-only (matches backtest logic — no ADX requirement for direction)
+    _ema20_4h = float(_h4.get("ema20") or 0)
+    _ema50_4h = float(_h4.get("ema50") or 0)
+    _ema20_1h = float(_h1.get("ema20") or 0)
+    _ema50_1h = float(_h1.get("ema50") or 0)
+    _bias_4h = "UP" if _ema20_4h > _ema50_4h > 0 else ("DOWN" if _ema20_4h < _ema50_4h else "NEUTRAL")
+    _bias_1h = "UP" if _ema20_1h > _ema50_1h > 0 else ("DOWN" if _ema20_1h < _ema50_1h else "NEUTRAL")
     _adx_1h      = float(_h1.get("adx") or 0)
     _adx_4h      = float(_h4.get("adx") or 0)
     _bb_width_1h = float(_h1.get("bb_width_pct") or 99.0)
-    adx_thresh_4h  = float(params.get("adx_threshold_4h", params.get("adx_threshold_1h", 25)))
+    # Per-pair ADX threshold — slow pairs (BTC/ETH) need lower threshold
+    _per_pair_adx = params.get("adx_thresholds", {})
+    adx_thresh_4h = float(_per_pair_adx.get(symbol, params.get("adx_threshold_4h", params.get("adx_threshold_1h", 25))))
     scalp_enabled  = bool(params.get("scalp_enabled", True))
     scalp_symbols  = params.get("scalp_symbols", ["XRP-USDT", "ETH-USDT"])
     scalp_vol_min  = float(params.get("scalp_vol_ratio", 2.0))

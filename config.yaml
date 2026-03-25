@@ -18,8 +18,16 @@ strategy:
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
-  adx_threshold_1h: 25         # minimum ADX on 1H to confirm trend
-  adx_threshold_4h: 25         # minimum ADX on 4H to confirm trend (used for SWING/PULLBACK)
+  adx_threshold_1h: 25         # minimum ADX on 1H to confirm trend (default, overridden per-pair)
+  adx_threshold_4h: 25         # minimum ADX on 4H to confirm trend (default, overridden per-pair)
+
+  # Per-pair ADX thresholds — slow pairs need lower threshold to catch grinding trends
+  adx_thresholds:
+    BTC-USDT:  20
+    ETH-USDT:  20
+    SOL-USDT:  22
+    DOGE-USDT: 25
+    XRP-USDT:  22
   scalp_enabled: true           # SCALP enabled — only XRP/ETH, vol_ratio >= 2.0
   scalp_symbols:                # pairs allowed for SCALP (others = NO_TRADE)
     - XRP-USDT
