@@ -468,7 +468,7 @@ async def _handle_callback(cbq: dict) -> None:
         return
 
     if data == "__manual__":
-        await _send(chat_id, "Напиши тикер пары (например: AVAX-USDT):")
+        await _send(chat_id, "Напиши тикер пары (например: AVAX-USDT):\n\n⚠️ Сервис заточен под крипто-фьючерсы. Анализ золота, нефти и валют — в разработке, результат может быть некорректным.")
     else:
         await _start_analysis(chat_id, data)
 
