@@ -219,16 +219,16 @@ async def _send_feedback_entry_buttons(chat_id: str, entry_id: str, symbol: str,
 
 
 async def _send_feedback_result_buttons(chat_id: str, entry_id: str, symbol: str) -> None:
-    """Ask for trade result. Sent after user confirms entry, or as 24h reminder."""
+    """Ask for trade result — shown when user re-requests analysis of the same pair."""
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text=f"📊 {symbol} — какой итог сделки?",
+        text=f"📊 {symbol} — позиция ещё открыта?",
         reply_markup={"inline_keyboard": [[
-            {"text": "✅ TP1",             "callback_data": f"fb_tp1:{entry_id}"},
-            {"text": "✅✅ TP2",           "callback_data": f"fb_tp2:{entry_id}"},
-            {"text": "❌ STOP",            "callback_data": f"fb_sl:{entry_id}"},
-            {"text": "🔧 Закрыл вручную", "callback_data": f"fb_man:{entry_id}"},
+            {"text": "✅ TP",             "callback_data": f"fb_tp:{entry_id}"},
+            {"text": "❌ SL",             "callback_data": f"fb_sl:{entry_id}"},
+            {"text": "🔓 Ещё держу",     "callback_data": f"fb_hold:{entry_id}"},
+            {"text": "🔧 Вручную",       "callback_data": f"fb_man:{entry_id}"},
         ]]},
     )
 
@@ -267,10 +267,8 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
         # Remind about open trade for THIS pair — context reminder, max once per 4h
         open_trades = pending_for_chat(chat_id, symbol=symbol)
         if open_trades:
-            await _send(chat_id, f"⚠️ У тебя открытая сделка по {symbol}.\nОтметь результат — или просто пропусти и получи свежий анализ.")
             for e in open_trades:
                 await _send_feedback_result_buttons(chat_id, e["id"], e["symbol"])
-                update_entry(e["id"], chat_id=chat_id, last_reminded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
                 await asyncio.sleep(0.3)
 
         await _send(chat_id, f"Анализирую {symbol}... ⏳")
@@ -436,22 +434,21 @@ async def _handle_callback(cbq: dict) -> None:
                 await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
                 return
             update_entry(entry_id, chat_id=chat_id, entered=True)
-            symbol = entry["symbol"] if entry else "?"
-            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Записал ✅")
-            await _send(chat_id, "Отлично! Отмечу результат через 24 часа — или можешь закрыть сам:")
-            await _send_feedback_result_buttons(chat_id, entry_id, symbol)
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Записал ✅ Торгуй по плану!")
         elif action == "fb_skip":
             if entry and entry.get("entered") is not None:
                 await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
                 return
             update_entry(entry_id, chat_id=chat_id, entered=False, result="skipped")
             await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Понял, записал ⏭")
-        elif action in ("fb_tp1", "fb_tp2", "fb_sl", "fb_man"):
+        elif action == "fb_hold":
+            await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="🔓 Держишь — удачи!")
+        elif action in ("fb_tp", "fb_sl", "fb_man"):
             if entry and entry.get("result") is not None:
                 await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text="Уже записано ✅")
                 return
-            result_map = {"fb_tp1": "tp1", "fb_tp2": "tp2", "fb_sl": "sl", "fb_man": "manual"}
-            label_map  = {"fb_tp1": "TP1 ✅", "fb_tp2": "TP2 ✅✅", "fb_sl": "STOP ❌", "fb_man": "Закрыл вручную 🔧"}
+            result_map = {"fb_tp": "tp", "fb_sl": "sl", "fb_man": "manual"}
+            label_map  = {"fb_tp": "TP ✅", "fb_sl": "SL ❌", "fb_man": "Закрыл вручную 🔧"}
             update_entry(entry_id, chat_id=chat_id, result=result_map[action])
             await _tg("answerCallbackQuery", callback_query_id=cbq["id"], text=f"Записал: {label_map[action]}")
         else:
