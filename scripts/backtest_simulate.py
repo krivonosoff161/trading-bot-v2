@@ -7,8 +7,11 @@ Usage:
 """
 import asyncio
 import os
+import pickle
 import sys
+import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 import numpy as np
 
@@ -31,11 +34,23 @@ INTERVAL_M  = 15       # simulate every N minutes
 OUTCOME_H   = 24       # hours of forward candles to check outcome
 ADX_PERIOD  = 14
 
+# ── Per-pair ADX thresholds ───────────────────────────────────────────────────
+PER_PAIR_ADX = {
+    "BTC-USDT":  20,
+    "ETH-USDT":  20,
+    "SOL-USDT":  22,
+    "DOGE-USDT": 25,
+    "XRP-USDT":  22,
+}
+
+# ── Candle cache path ─────────────────────────────────────────────────────────
+CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
+CACHE_MAX_AGE = 23 * 3600  # reuse cache if fresher than 23h
+
 # ── Param sets to compare ────────────────────────────────────────────────────
 PARAM_SETS = [
-    {"label": "OLD  tp1×1.5 adx30",          "tp1_mult": 1.5, "adx_thresh": 30, "regime_top": 0.85, "use_dynamic_tp": False, "night_filter": False},
-    {"label": "NEW  tp1×1.0 adx25",          "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": False, "night_filter": False},
-    {"label": "NEW+ dynamic_tp+night_filter", "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True,  "night_filter": True},
+    {"label": "NEW+  adx25 dynamic+night",       "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True, "night_filter": True,  "scalp_adx": 20, "swing_adx": 25, "time_block_h": None,  "scalp_symbols": ["XRP-USDT", "ETH-USDT"]},
+    {"label": "V2  swing30+scalp20+time+SOL",    "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True, "night_filter": True,  "scalp_adx": 20, "swing_adx": 30, "time_block_h": [21],   "scalp_symbols": ["XRP-USDT", "ETH-USDT", "SOL-USDT"]},
 ]
 
 # ── Signal logic (mirrors analyze_chart.py llm_context block) ────────────────
@@ -59,8 +74,9 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     return vwap, max(highs), min(lows)
 
 
-def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25, regime_top=0.80,
-                   use_dynamic_tp=False, night_filter=False):
+def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="", tp1_mult=1.0, adx_thresh=25, regime_top=0.80,
+                   use_dynamic_tp=False, night_filter=False, scalp_adx=20, swing_adx=25,
+                   time_block_h=None, scalp_symbols=None):
     """Run signal logic. Returns dict with signal fields or None if not enough data."""
     if not raw_4h or len(raw_4h) < 20:
         return None
@@ -149,11 +165,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25
     ce_long  = float(l15[-1]) - 3 * atr_15m
     ce_short = float(h15[-1]) + 3 * atr_15m
 
+    # Allowed scalp symbols
+    _scalp_ok = (scalp_symbols is None) or (symbol in scalp_symbols)
+
     # ── Level 1: Trade style ──────────────────────────────────────────────────
     trade_style = "NO_TRADE"
-    if adx_4h >= adx_thresh and bias_4h == bias_1h and bias_1h != "NEUTRAL":
+    if adx_4h >= swing_adx and bias_4h == bias_1h and bias_1h != "NEUTRAL":
         trade_style = "SWING"
-    elif adx_4h >= adx_thresh and bias_4h != "NEUTRAL" and bias_1h == "NEUTRAL":
+    elif adx_4h >= swing_adx and bias_4h != "NEUTRAL" and bias_1h == "NEUTRAL":
         pb_long  = (bias_4h == "UP"   and supertrend_dir == "up"
                     and plus_di_1h > minus_di_1h
                     and day_position is not None and day_position < 0.45
@@ -163,8 +182,12 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, tp1_mult=1.0, adx_thresh=25
                     and day_position is not None and day_position > 0.55
                     and rsi_15m > 30)
         trade_style = "PULLBACK" if (pb_long or pb_short) else "NO_TRADE"
-    elif adx_1h >= 20 and vol_ratio >= 1.5:
+    elif _scalp_ok and adx_1h >= scalp_adx and vol_ratio >= 1.5:
         trade_style = "SCALP"
+
+    # Time block filter (e.g. 21 UTC — CME close, 0% WR)
+    if time_block_h and signal_hour in time_block_h:
+        trade_style = "NO_TRADE"
 
     # Night session filters (01-07 UTC)
     if night_filter and is_night:
@@ -350,10 +373,23 @@ async def run():
         return symbol, funding, raw_cache
 
     candle_cache: dict = {}
-    print(f"Загрузка свечей для {len(SYMBOLS)} пар (параллельно)...")
-    results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in SYMBOLS])
-    for symbol, funding, raw_cache in results_fetch:
-        candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
+    cache_valid = (
+        CACHE_FILE.exists()
+        and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
+    )
+    if cache_valid:
+        print(f"Загрузка свечей из кэша ({CACHE_FILE.name})...")
+        with open(CACHE_FILE, "rb") as f:
+            candle_cache = pickle.load(f)
+        print(f"  Кэш загружен: {len(candle_cache)} пар")
+    else:
+        print(f"Загрузка свечей для {len(SYMBOLS)} пар (параллельно)...")
+        results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in SYMBOLS])
+        for symbol, funding, raw_cache in results_fetch:
+            candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
+        with open(CACHE_FILE, "wb") as f:
+            pickle.dump(candle_cache, f)
+        print(f"  Кэш сохранён → {CACHE_FILE.name}")
 
     # Run two param sets
     # ── Cache diagnostics ────────────────────────────────────────────────────
@@ -387,11 +423,16 @@ async def run():
 
                 sig = compute_signal(
                     raw["4h"], raw["1h"], raw["15m"], funding,
+                    symbol=symbol,
                     tp1_mult=pset["tp1_mult"],
                     adx_thresh=pset["adx_thresh"],
                     regime_top=pset["regime_top"],
                     use_dynamic_tp=pset.get("use_dynamic_tp", False),
                     night_filter=pset.get("night_filter", False),
+                    scalp_adx=pset.get("scalp_adx", 20),
+                    swing_adx=pset.get("swing_adx", 25),
+                    time_block_h=pset.get("time_block_h"),
+                    scalp_symbols=pset.get("scalp_symbols"),
                 )
                 if sig is None or sig["entry_signal"] not in ("ENTRY", "WAIT"):
                     continue
