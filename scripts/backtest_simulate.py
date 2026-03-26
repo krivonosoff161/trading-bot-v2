@@ -16,6 +16,7 @@ Usage:
     python scripts/backtest_simulate.py
 """
 import asyncio
+import bisect
 import os
 import pickle
 import sys
@@ -100,46 +101,52 @@ PAIR_PARAMS = {
         "fast_vol":  1.6, "fast_adx":  18, "fast_sl_k":  1.2,
         "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
         "late_range": 4.0,
+        "allowed_modes": ["SWING"],          # BTC: SWING only (FAST 43% too weak)
     },
     "ETH-USDT":  {
         "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.3,
         "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
         "late_range": 7.0,
+        "allowed_modes": ["FAST"],           # ETH: FAST only (SWING 18% too weak)
     },
     "SOL-USDT":  {
         "fast_vol":  2.2, "fast_adx":  20, "fast_sl_k":  1.6,
         "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
         "late_range": 10.0,
+        "allowed_modes": ["FAST"],           # SOL: FAST only (SWING 0%)
     },
-    "DOGE-USDT": None,   # OFF — too noisy
+    "DOGE-USDT": None,                       # OFF — too noisy
     "XRP-USDT":  {
         "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "late_range": 7.0,
+        "allowed_modes": ["SWING"],          # XRP: SWING only (FAST N/A)
     },
     "ADA-USDT":  {
         "fast_vol":  1.8, "fast_adx":  20, "fast_sl_k":  1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],  # ADA: both (too few data to decide)
     },
 }
 
 # ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
     {
-        "label":        "FAST_INTRADAY | per-pair | adx_rising",
-        "mode":         "FAST",
-        "night_filter": True,
+        "label":         "COMBINED | period1 (last 14d) | 10UTC block",
+        "mode":          "COMBINED",
+        "night_filter":  True,
+        "time_block_h":  [10],
+        "dynamic_tp":    True,
+        "offset_days":   0,               # current 14 days
     },
     {
-        "label":        "INTRADAY_SWING | per-pair | adx_rising",
-        "mode":         "SWING",
-        "night_filter": True,
-    },
-    {
-        "label":        "COMBINED | FAST priority → SWING | per-pair",
-        "mode":         "COMBINED",
-        "night_filter": True,
+        "label":         "COMBINED | period2 (14d-28d ago) | 10UTC block",
+        "mode":          "COMBINED",
+        "night_filter":  True,
+        "time_block_h":  [10],
+        "dynamic_tp":    True,
+        "offset_days":   14,              # previous 14 days
     },
 ]
 
@@ -167,7 +174,8 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 # ── Signal engine ───────────────────────────────────────────────────────────────
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
-                   mode="SWING", night_filter=False, oi_delta=0.0):
+                   mode="SWING", night_filter=False, oi_delta=0.0,
+                   time_block_h=None, dynamic_tp=False):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -203,8 +211,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     ema50_4h = calc_ema(c4h, 50)
     bias_4h  = _bias(ema20_4h[-1] > ema50_4h[-1], ema20_4h[-1] < ema50_4h[-1])
 
-    # ATR on 15m
+    # ATR on 15m and 1H
     atr_15m = float(calc_atr(h15, l15, c15, period=ADX_PERIOD))
+    atr_1h  = float(calc_atr(h1h, l1h, c1h, period=ADX_PERIOD))
     close   = float(c15[-1])
 
     # Vol ratio on 15m: last 3 bars vs prev 15 bars
@@ -258,8 +267,17 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 and bias_1h != "NEUTRAL"):
             trade_style = "SWING"
 
+    # Per-pair mode restriction
+    allowed = pp.get("allowed_modes", ["FAST", "SWING"])
+    if trade_style not in allowed:
+        trade_style = "NO_TRADE"
+
     # Night filter — block all signals 01-07 UTC
     if night_filter and is_night:
+        trade_style = "NO_TRADE"
+
+    # Time block (e.g. 10:00 UTC = 0% WR)
+    if time_block_h and signal_hour in time_block_h:
         trade_style = "NO_TRADE"
 
     # Late-move veto
@@ -319,16 +337,25 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = close - sl_p
-            tp1_p   = round(close + sl_dist * 1.0, 6)   # TP1 = 1R
-            tp2_p   = round(close + sl_dist * 2.5, 6)   # TP2 = 2.5R
+            if dynamic_tp:
+                # TP based on what's achievable in 4h given ATR_1H
+                tp1_p = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)
+                tp2_p = round(close + min(sl_dist * 2.5, atr_1h * 1.2), 6)
+            else:
+                tp1_p = round(close + sl_dist * 1.0, 6)
+                tp2_p = round(close + sl_dist * 2.5, 6)
         else:
             atr_sl = close + pp["swing_sl_k"] * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = sl_p - close
-            tp1_p   = round(close - sl_dist * 1.0, 6)
-            tp2_p   = round(close - sl_dist * 2.5, 6)
+            if dynamic_tp:
+                tp1_p = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)
+                tp2_p = round(close - min(sl_dist * 2.5, atr_1h * 1.2), 6)
+            else:
+                tp1_p = round(close - sl_dist * 1.0, 6)
+                tp2_p = round(close - sl_dist * 2.5, 6)
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
@@ -394,39 +421,58 @@ async def run():
         is_demo=False,
     )
 
-    now_ms   = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    start_ms = now_ms - DAYS_BACK * 24 * 3600 * 1000
-    step_ms  = INTERVAL_M * 60 * 1000
-    hold_ms  = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}
-    timestamps = list(range(start_ms, now_ms - OUTCOME_H * 3600 * 1000, step_ms))
+    now_ms  = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    step_ms = INTERVAL_M * 60 * 1000
+    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}
+
+    # Cache must cover all periods: DAYS_BACK + max offset + warmup for EMA-50 on 4H
+    INDICATOR_WARMUP_DAYS = 10   # EMA-50 on 4H needs 50 bars = 8.3 days
+    max_offset_days  = max(p.get("offset_days", 0) for p in PARAM_SETS)
+    total_days       = DAYS_BACK + max_offset_days + INDICATOR_WARMUP_DAYS
+    cache_start_ms   = now_ms - total_days * 24 * 3600 * 1000
+    all_timestamps   = list(range(cache_start_ms,
+                                  now_ms - OUTCOME_H * 3600 * 1000, step_ms))
 
     _api_sem = asyncio.Semaphore(1)
+
+    async def _fetch_full_history(symbol: str, bar: str, since_ms: int) -> list:
+        """Fetch all candles since since_ms via pagination. Returns sorted oldest-first."""
+        all_candles: list = []
+        after_ms = None
+        while True:
+            async with _api_sem:
+                batch = await client.get_history_candles(
+                    symbol, bar, after=after_ms, limit=100)
+            await asyncio.sleep(0.2)
+            if not batch:
+                break
+            all_candles.extend(batch)
+            oldest_ts = int(batch[-1][0])   # batch is newest-first → last = oldest
+            if oldest_ts <= since_ms:
+                break
+            after_ms = oldest_ts            # next page: older than current oldest
+        # keep only candles in range, sort oldest→newest
+        all_candles = [c for c in all_candles if int(c[0]) >= since_ms]
+        all_candles.sort(key=lambda c: int(c[0]))
+        return all_candles
 
     async def _fetch_symbol(symbol: str) -> tuple:
         async with _api_sem:
             funding = await client.get_funding_rate(symbol)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
         async with _api_sem:
             funding_hist = await client.get_funding_rate_history(symbol, limit=100)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
         async with _api_sem:
             oi_hist = await client.get_oi_history(symbol, period="1H", limit=720)
-        await asyncio.sleep(0.3)
-        raw_cache = {}
-        for ts_ms in timestamps[::8]:
-            after_ms = ts_ms + step_ms
-            async with _api_sem:
-                h4  = await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.3)
-            async with _api_sem:
-                h1  = await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.3)
-            async with _api_sem:
-                h15 = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
-            await asyncio.sleep(0.3)
-            raw_cache[ts_ms] = {"4h": h4, "1h": h1, "15m": h15}
-        print(f"  {symbol} загружен (funding: {len(funding_hist)}, OI: {len(oi_hist)})")
-        return symbol, funding, funding_hist, oi_hist, raw_cache
+        await asyncio.sleep(0.2)
+        # One full-history fetch per timeframe instead of per-timestamp
+        h4  = await _fetch_full_history(symbol, "4H",  cache_start_ms)
+        h1  = await _fetch_full_history(symbol, "1H",  cache_start_ms)
+        h15 = await _fetch_full_history(symbol, "15m", cache_start_ms)
+        print(f"  {symbol}: 4H={len(h4)}, 1H={len(h1)}, 15m={len(h15)}, "
+              f"funding={len(funding_hist)}, OI={len(oi_hist)})")
+        return symbol, funding, funding_hist, oi_hist, h4, h1, h15
 
     # ── Load or fetch candles ──────────────────────────────────────────────────
     candle_cache: dict = {}
@@ -436,7 +482,8 @@ async def run():
             CACHE_FILE.exists()
             and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
             and all(s in _tmp for s in ALL_SYMBOLS)
-            and "funding_history" in _tmp.get("BTC-USDT", {})  # new fields check
+            and "4h" in _tmp.get("BTC-USDT", {})    # new cache structure check
+            and _tmp.get("_cache_start_ms", now_ms) <= cache_start_ms  # covers full range
         )
     except Exception:
         cache_valid = False
@@ -449,22 +496,25 @@ async def run():
     else:
         print(f"Загрузка свечей для {len(ALL_SYMBOLS)} пар (параллельно)...")
         results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in ALL_SYMBOLS])
-        for symbol, funding, funding_hist, oi_hist, raw_cache in results_fetch:
+        for symbol, funding, funding_hist, oi_hist, h4, h1, h15 in results_fetch:
             candle_cache[symbol] = {
                 "funding":         funding,
                 "funding_history": funding_hist,
                 "oi_history":      oi_hist,
-                "raw":             raw_cache,
+                "4h":              h4,
+                "1h":              h1,
+                "15m":             h15,
             }
+        candle_cache["_cache_start_ms"] = cache_start_ms
         with open(CACHE_FILE, "wb") as f:
             pickle.dump(candle_cache, f)
         print(f"  Кэш сохранён → {CACHE_FILE.name}")
 
     for sym in ALL_SYMBOLS:
-        raw   = candle_cache[sym]["raw"]
-        valid = sum(1 for v in raw.values() if v["1h"] and len(v["1h"]) >= 20)
+        h1  = candle_cache[sym]["1h"]
+        h15 = candle_cache[sym]["15m"]
         status = "OFF (per config)" if PAIR_PARAMS.get(sym) is None else "active"
-        print(f"  {sym}: {len(raw)} точек, {valid} с 1H≥20  [{status}]")
+        print(f"  {sym}: 1H={len(h1)} баров, 15m={len(h15)} баров  [{status}]")
     print()
 
     # ── Run param sets ─────────────────────────────────────────────────────────
@@ -473,6 +523,14 @@ async def run():
         results = []
         mode         = pset["mode"]
         night_filter = pset.get("night_filter", False)
+        time_block_h = pset.get("time_block_h", [])
+        dynamic_tp   = pset.get("dynamic_tp", False)
+
+        # Per-pset timestamp window based on offset_days
+        offset_ms       = pset.get("offset_days", 0) * 24 * 3600 * 1000
+        pset_end_ms     = now_ms - offset_ms - OUTCOME_H * 3600 * 1000
+        pset_start_ms   = pset_end_ms - DAYS_BACK * 24 * 3600 * 1000
+        pset_timestamps = list(range(pset_start_ms, pset_end_ms, step_ms))
 
         def _process_symbol(symbol, ts_list):
             sym_results = []
@@ -480,19 +538,33 @@ async def run():
                 return sym_results
             funding_hist = candle_cache[symbol].get("funding_history", [])
             oi_hist      = candle_cache[symbol].get("oi_history", [])
+            h4_all  = candle_cache[symbol]["4h"]   # sorted oldest→newest
+            h1_all  = candle_cache[symbol]["1h"]
+            h15_all = candle_cache[symbol]["15m"]
+            # Pre-build timestamp index for fast bisect lookup
+            h4_ts  = [int(c[0]) for c in h4_all]
+            h1_ts  = [int(c[0]) for c in h1_all]
+            h15_ts = [int(c[0]) for c in h15_all]
+
             for ts_ms in ts_list:
-                cached_ts = min(candle_cache[symbol]["raw"].keys(),
-                                key=lambda t: abs(t - ts_ms))
-                raw = candle_cache[symbol]["raw"][cached_ts]
+                # Slice: candles visible at ts_ms (ts < ts_ms), newest-first
+                i4  = bisect.bisect_left(h4_ts,  ts_ms)
+                i1  = bisect.bisect_left(h1_ts,  ts_ms)
+                i15 = bisect.bisect_left(h15_ts, ts_ms)
+                raw_4h  = list(reversed(h4_all [max(0, i4  - 60):i4 ]))
+                raw_1h  = list(reversed(h1_all [max(0, i1  - 60):i1 ]))
+                raw_15m = list(reversed(h15_all[max(0, i15 - 96):i15]))
 
                 hist_funding = _get_hist_funding(funding_hist, ts_ms)
                 oi_delta     = _get_oi_delta(oi_hist, ts_ms)
 
                 sig = compute_signal(
-                    raw["4h"], raw["1h"], raw["15m"],
+                    raw_4h, raw_1h, raw_15m,
                     funding=hist_funding,
                     symbol=symbol, mode=mode, night_filter=night_filter,
                     oi_delta=oi_delta,
+                    time_block_h=time_block_h,
+                    dynamic_tp=dynamic_tp,
                 )
                 if sig is None or sig["entry_signal"] != "ENTRY":
                     continue
@@ -504,10 +576,10 @@ async def run():
         # Collect signals
         pending = []
         for symbol in SYMBOLS:
-            for ts_ms, sig in _process_symbol(symbol, timestamps):
+            for ts_ms, sig in _process_symbol(symbol, pset_timestamps):
                 pending.append((symbol, ts_ms, sig))
         for symbol in EXTRA_SYMBOLS:
-            for ts_ms, sig in _process_symbol(symbol, timestamps[::6]):
+            for ts_ms, sig in _process_symbol(symbol, pset_timestamps[::6]):
                 pending.append((symbol, ts_ms, sig))
 
         # Fetch outcomes
@@ -536,7 +608,7 @@ async def run():
                 "close":     sig["close"],
                 "sl":        sig["sl"],
                 "tp1":       sig["tp1"],
-                "sl_dist":   abs(sig["close"] - sig["sl"]),
+                "sl_dist":   abs(sig["close"] - sig["sl"]) / sig["close"],  # % of price (R-normalized)
                 "outcome":   outcome,
                 "elapsed_m": elapsed,
                 "day_pos":   sig["day_position"],
