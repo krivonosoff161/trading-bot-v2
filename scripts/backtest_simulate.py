@@ -37,12 +37,54 @@ from src.strategy.indicators import (
     find_swing_levels, calc_bollinger_bands,
 )
 
+# ── Historical data helpers ─────────────────────────────────────────────────────
+
+def _get_hist_funding(funding_history: list, ts_ms: int) -> float:
+    """Return the funding rate active at ts_ms.
+    Funding settles every 8h; rate is set at settlement and holds until next.
+    Searches for the most recent settlement <= ts_ms.
+    """
+    best_rate = 0.0
+    best_ts   = 0
+    for entry in funding_history:
+        ft = int(entry.get("fundingTime", 0))
+        if ft <= ts_ms and ft > best_ts:
+            best_ts   = ft
+            best_rate = float(entry.get("fundingRate", 0))
+    return best_rate
+
+
+def _get_oi_delta(oi_history: list, ts_ms: int) -> float:
+    """Return OI change fraction vs previous bar at ts_ms: (oi_now - oi_prev) / oi_prev.
+    OKX rubik returns entries as lists [ts, oi, oiCcy] or dicts.
+    Returns 0.0 if data unavailable.
+    """
+    if not oi_history:
+        return 0.0
+
+    def _parse(entry):
+        if isinstance(entry, dict):
+            return int(entry.get("ts", 0)), float(entry.get("oi", 0) or entry.get("oiCcy", 0))
+        elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            return int(entry[0]), float(entry[1])
+        return 0, 0.0
+
+    sorted_oi = sorted((_parse(e) for e in oi_history), key=lambda x: x[0])
+    prev_oi = cur_oi = None
+    for t, oi in sorted_oi:
+        if t <= ts_ms:
+            prev_oi = cur_oi
+            cur_oi  = oi
+    if cur_oi and prev_oi and prev_oi > 0:
+        return (cur_oi - prev_oi) / prev_oi
+    return 0.0
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"]
 EXTRA_SYMBOLS = ["ADA-USDT"]   # checked hourly (every 6th step)
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
-DAYS_BACK  = 30
+DAYS_BACK  = 14
 INTERVAL_M = 10
 OUTCOME_H  = 24
 ADX_PERIOD = 14
@@ -125,7 +167,7 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 # ── Signal engine ───────────────────────────────────────────────────────────────
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
-                   mode="SWING", night_filter=False):
+                   mode="SWING", night_filter=False, oi_delta=0.0):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -243,11 +285,15 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         if side == "sell" and close > vwap: vwap_ok = False
 
     # ── Side-aware funding filter ─────────────────────────────────────────────
-    funding_val   = funding if funding is not None else 0
+    funding_val   = funding if funding is not None else 0.0
     FUND_THRESH   = 0.0005   # 0.05%
     funding_block = False
     if side == "buy"  and funding_val >  FUND_THRESH: funding_block = True
     if side == "sell" and funding_val < -FUND_THRESH: funding_block = True
+
+    # ── OI delta filter ───────────────────────────────────────────────────────
+    # OI dropping >3% = positions being closed, not new money = weaker signal
+    oi_weak = oi_delta < -0.03
 
     # ── SL / TP ───────────────────────────────────────────────────────────────
     sl_p = tp1_p = tp2_p = None
@@ -286,7 +332,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
-               or funding_block or fourch_veto
+               or funding_block or fourch_veto or oi_weak
                or not sl_p or not tp1_p)
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
@@ -305,10 +351,12 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "bias_1h":         bias_1h,
         "vol_ratio":       round(vol_ratio, 2),
         "bb_width":        round(bb_width, 2),
-        "funding":         funding,
+        "funding":         funding_val,
+        "oi_delta":        round(oi_delta, 4),
         "day_position":    round(day_position, 3) if day_position else None,
         "fourch_veto":     fourch_veto,
         "late_move":       late_move,
+        "oi_weak":         oi_weak,
     }
 
 
@@ -357,30 +405,38 @@ async def run():
     async def _fetch_symbol(symbol: str) -> tuple:
         async with _api_sem:
             funding = await client.get_funding_rate(symbol)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.3)
+        async with _api_sem:
+            funding_hist = await client.get_funding_rate_history(symbol, limit=100)
+        await asyncio.sleep(0.3)
+        async with _api_sem:
+            oi_hist = await client.get_oi_history(symbol, period="1H", limit=720)
+        await asyncio.sleep(0.3)
         raw_cache = {}
-        for ts_ms in timestamps[::4]:
+        for ts_ms in timestamps[::8]:
             after_ms = ts_ms + step_ms
             async with _api_sem:
                 h4  = await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             async with _api_sem:
                 h1  = await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             async with _api_sem:
                 h15 = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             raw_cache[ts_ms] = {"4h": h4, "1h": h1, "15m": h15}
-        print(f"  {symbol} загружен")
-        return symbol, funding, raw_cache
+        print(f"  {symbol} загружен (funding: {len(funding_hist)}, OI: {len(oi_hist)})")
+        return symbol, funding, funding_hist, oi_hist, raw_cache
 
     # ── Load or fetch candles ──────────────────────────────────────────────────
     candle_cache: dict = {}
     try:
+        _tmp = pickle.load(open(CACHE_FILE, "rb")) if CACHE_FILE.exists() else {}
         cache_valid = (
             CACHE_FILE.exists()
             and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
-            and all(s in pickle.load(open(CACHE_FILE, "rb")) for s in ALL_SYMBOLS)
+            and all(s in _tmp for s in ALL_SYMBOLS)
+            and "funding_history" in _tmp.get("BTC-USDT", {})  # new fields check
         )
     except Exception:
         cache_valid = False
@@ -393,8 +449,13 @@ async def run():
     else:
         print(f"Загрузка свечей для {len(ALL_SYMBOLS)} пар (параллельно)...")
         results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in ALL_SYMBOLS])
-        for symbol, funding, raw_cache in results_fetch:
-            candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
+        for symbol, funding, funding_hist, oi_hist, raw_cache in results_fetch:
+            candle_cache[symbol] = {
+                "funding":         funding,
+                "funding_history": funding_hist,
+                "oi_history":      oi_hist,
+                "raw":             raw_cache,
+            }
         with open(CACHE_FILE, "wb") as f:
             pickle.dump(candle_cache, f)
         print(f"  Кэш сохранён → {CACHE_FILE.name}")
@@ -417,15 +478,21 @@ async def run():
             sym_results = []
             if PAIR_PARAMS.get(symbol) is None:
                 return sym_results
-            funding = candle_cache[symbol]["funding"]
+            funding_hist = candle_cache[symbol].get("funding_history", [])
+            oi_hist      = candle_cache[symbol].get("oi_history", [])
             for ts_ms in ts_list:
                 cached_ts = min(candle_cache[symbol]["raw"].keys(),
                                 key=lambda t: abs(t - ts_ms))
                 raw = candle_cache[symbol]["raw"][cached_ts]
 
+                hist_funding = _get_hist_funding(funding_hist, ts_ms)
+                oi_delta     = _get_oi_delta(oi_hist, ts_ms)
+
                 sig = compute_signal(
-                    raw["4h"], raw["1h"], raw["15m"], funding,
+                    raw["4h"], raw["1h"], raw["15m"],
+                    funding=hist_funding,
                     symbol=symbol, mode=mode, night_filter=night_filter,
+                    oi_delta=oi_delta,
                 )
                 if sig is None or sig["entry_signal"] != "ENTRY":
                     continue
