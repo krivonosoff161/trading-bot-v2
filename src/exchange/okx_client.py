@@ -178,6 +178,30 @@ class OKXClient:
             return data["data"]
         return []
 
+    async def get_funding_rate_history(self, symbol: str, limit: int = 100) -> list:
+        """Get historical funding rates (newest first).
+        Covers ~33 days at 8h intervals with limit=100.
+        Returns list of {fundingRate, fundingTime (ms)} dicts.
+        """
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/public/funding-rate-history",
+                               {"instId": inst_id, "limit": str(limit)})
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
+    async def get_oi_history(self, symbol: str, period: str = "1H", limit: int = 100) -> list:
+        """Get open interest history (newest first).
+        Returns list of {oi, oiCcy, ts} dicts.
+        Falls back to empty list if endpoint unavailable.
+        """
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/rubik/stat/contracts/open-interest-history",
+                               {"instId": inst_id, "period": period, "limit": str(limit)})
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
     async def get_funding_rate(self, symbol: str) -> Optional[float]:
         """Get current funding rate for perpetual swap. Returns rate as float (e.g. 0.0001 = 0.01%)."""
         inst_id = f"{symbol}-SWAP"
