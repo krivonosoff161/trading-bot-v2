@@ -1,6 +1,16 @@
 """
-Full backtest simulation: runs signal logic on historical candles every 30 min.
-Does NOT use LLM or chart drawing — pure signal logic only.
+Full backtest simulation: two intraday engines — FAST (1-2h) and SWING (2-4h).
+Runs on historical candles every 10 minutes.
+
+New architecture (Qwen + Codex audit):
+- ADX_1H rising (not static threshold)
+- BB Width expansion on 15m as regime gate
+- Structural SL from swing levels
+- Side-aware funding filter
+- Late-move veto (day_range + day_position)
+- DOGE excluded (too noisy)
+- No day_high/low as TP — fixed R multiples only
+- ADX_4H as late veto only (not main gate)
 
 Usage:
     python scripts/backtest_simulate.py
@@ -24,36 +34,74 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
-    find_swing_levels, calc_bollinger_bands, calc_supertrend,
+    find_swing_levels, calc_bollinger_bands,
 )
 
-# ── Config ───────────────────────────────────────────────────────────────────
-SYMBOLS     = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
-DAYS_BACK   = 30       # how many days of history to simulate
-INTERVAL_M  = 15       # simulate every N minutes
-OUTCOME_H   = 24       # hours of forward candles to check outcome
-ADX_PERIOD  = 14
+# ── Config ─────────────────────────────────────────────────────────────────────
+SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"]
+EXTRA_SYMBOLS = ["ADA-USDT"]   # checked hourly (every 6th step)
+ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
-# ── Per-pair ADX thresholds ───────────────────────────────────────────────────
-PER_PAIR_ADX = {
-    "BTC-USDT":  20,
-    "ETH-USDT":  20,
-    "SOL-USDT":  22,
-    "DOGE-USDT": 25,
-    "XRP-USDT":  22,
+DAYS_BACK  = 30
+INTERVAL_M = 10
+OUTCOME_H  = 24
+ADX_PERIOD = 14
+
+# ── Candle cache ────────────────────────────────────────────────────────────────
+CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
+CACHE_MAX_AGE = 23 * 3600
+
+# ── Per-pair thresholds ─────────────────────────────────────────────────────────
+# None = pair is OFF (DOGE excluded)
+PAIR_PARAMS = {
+    "BTC-USDT":  {
+        "fast_vol":  1.6, "fast_adx":  18, "fast_sl_k":  1.2,
+        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+        "late_range": 4.0,
+    },
+    "ETH-USDT":  {
+        "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.3,
+        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+        "late_range": 7.0,
+    },
+    "SOL-USDT":  {
+        "fast_vol":  2.2, "fast_adx":  20, "fast_sl_k":  1.6,
+        "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
+        "late_range": 10.0,
+    },
+    "DOGE-USDT": None,   # OFF — too noisy
+    "XRP-USDT":  {
+        "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.4,
+        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "late_range": 7.0,
+    },
+    "ADA-USDT":  {
+        "fast_vol":  1.8, "fast_adx":  20, "fast_sl_k":  1.4,
+        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "late_range": 7.0,
+    },
 }
 
-# ── Candle cache path ─────────────────────────────────────────────────────────
-CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
-CACHE_MAX_AGE = 23 * 3600  # reuse cache if fresher than 23h
-
-# ── Param sets to compare ────────────────────────────────────────────────────
+# ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
-    {"label": "NEW+  adx25 dynamic+night",       "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True, "night_filter": True,  "scalp_adx": 20, "swing_adx": 25, "time_block_h": None,  "scalp_symbols": ["XRP-USDT", "ETH-USDT"]},
-    {"label": "V2  swing30+scalp20+time+SOL",    "tp1_mult": 1.0, "adx_thresh": 25, "regime_top": 0.80, "use_dynamic_tp": True, "night_filter": True,  "scalp_adx": 20, "swing_adx": 30, "time_block_h": [21],   "scalp_symbols": ["XRP-USDT", "ETH-USDT", "SOL-USDT"]},
+    {
+        "label":        "FAST_INTRADAY | per-pair | adx_rising",
+        "mode":         "FAST",
+        "night_filter": True,
+    },
+    {
+        "label":        "INTRADAY_SWING | per-pair | adx_rising",
+        "mode":         "SWING",
+        "night_filter": True,
+    },
+    {
+        "label":        "COMBINED | FAST priority → SWING | per-pair",
+        "mode":         "COMBINED",
+        "night_filter": True,
+    },
 ]
 
-# ── Signal logic (mirrors analyze_chart.py llm_context block) ────────────────
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 
 def _bias(bull: bool, bear: bool) -> str:
     if bull: return "UP"
@@ -74,71 +122,63 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     return vwap, max(highs), min(lows)
 
 
-def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="", tp1_mult=1.0, adx_thresh=25, regime_top=0.80,
-                   use_dynamic_tp=False, night_filter=False, scalp_adx=20, swing_adx=25,
-                   time_block_h=None, scalp_symbols=None):
-    """Run signal logic. Returns dict with signal fields or None if not enough data."""
-    if not raw_4h or len(raw_4h) < 20:
-        return None
-    if not raw_1h or len(raw_1h) < 20:
-        return None
-    if not raw_15m or len(raw_15m) < 30:
-        return None
+# ── Signal engine ───────────────────────────────────────────────────────────────
 
-    # Parse candles (chronological)
+def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
+                   mode="SWING", night_filter=False):
+    """
+    mode="FAST"     — fast intraday only (1-2h hold)
+    mode="SWING"    — intraday swing only (2-4h hold)
+    mode="COMBINED" — FAST checked first, SWING as fallback
+    """
+    pp = PAIR_PARAMS.get(symbol)
+    if pp is None:
+        return None   # pair is OFF
+
+    if not raw_4h or len(raw_4h) < 20: return None
+    if not raw_1h or len(raw_1h) < 20: return None
+    if not raw_15m or len(raw_15m) < 30: return None
+
     h4h, l4h, c4h = parse_candles(raw_4h)
     h1h, l1h, c1h = parse_candles(raw_1h)
     h15, l15, c15 = parse_candles(raw_15m)
 
-    # 4H indicators
-    adx_4h, pdi_4h, mdi_4h = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD)
-    ema20_4h = calc_ema(c4h, 20)
-    ema50_4h = calc_ema(c4h, 50)
-    bull_4h  = bool(ema20_4h[-1] > ema50_4h[-1])
-    bear_4h  = bool(ema20_4h[-1] < ema50_4h[-1])
-    bias_4h  = _bias(bull_4h, bear_4h)
+    # ADX on 1H — current and previous bar for rising check
+    adx_1h,      _, _ = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-1)
+    adx_1h_prev, _, _ = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-2)
+    adx_1h_rising = float(adx_1h) > float(adx_1h_prev)
 
-    # 1H indicators
-    adx_1h, pdi_1h, mdi_1h = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD)
+    # ADX on 4H — late veto only
+    adx_4h, _, _ = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD)
+
+    # EMA bias on 1H (direction source)
     ema20_1h = calc_ema(c1h, 20)
     ema50_1h = calc_ema(c1h, 50)
-    bull_1h  = bool(ema20_1h[-1] > ema50_1h[-1])
-    bear_1h  = bool(ema20_1h[-1] < ema50_1h[-1])
-    bias_1h  = _bias(bull_1h, bear_1h)
+    bias_1h  = _bias(ema20_1h[-1] > ema50_1h[-1], ema20_1h[-1] < ema50_1h[-1])
 
-    # 15m indicators
+    # EMA bias on 4H (veto reference)
+    ema20_4h = calc_ema(c4h, 20)
+    ema50_4h = calc_ema(c4h, 50)
+    bias_4h  = _bias(ema20_4h[-1] > ema50_4h[-1], ema20_4h[-1] < ema50_4h[-1])
+
+    # ATR on 15m
     atr_15m = float(calc_atr(h15, l15, c15, period=ADX_PERIOD))
-    atr_1h  = float(calc_atr(h1h, l1h, c1h, period=ADX_PERIOD))
     close   = float(c15[-1])
 
-    # Volume ratio
-    vols_15m = [float(c[5]) for c in list(reversed(raw_15m))]
-    recent_vol = np.mean(vols_15m[:5]) if len(vols_15m) >= 5 else 0
+    # Vol ratio on 15m: last 3 bars vs prev 15 bars
+    vols_15m   = [float(c[5]) for c in list(reversed(raw_15m))]
+    recent_vol = np.mean(vols_15m[:3])   if len(vols_15m) >= 3  else 0
     prior_vol  = np.mean(vols_15m[5:20]) if len(vols_15m) >= 20 else recent_vol
     vol_ratio  = recent_vol / prior_vol if prior_vol > 0 else 1.0
 
-    # RSI 15m (simple)
-    changes = np.diff(c15[-15:])
-    gains   = np.where(changes > 0, changes, 0)
-    losses  = np.where(changes < 0, -changes, 0)
-    avg_g   = np.mean(gains) if len(gains) > 0 else 0
-    avg_l   = np.mean(losses) if len(losses) > 0 else 1
-    rsi_15m = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 50
+    # BB Width on 15m — expansion regime filter
+    bb          = calc_bollinger_bands(c15, period=20, std_mult=2.0)
+    bb_width    = bb["width_pct"]
+    bb_expanding = bb_width > 1.5   # < 1.5% of price = sideways, skip
 
-    # Supertrend dir (simplified: compare close to midpoint of last 14 candles)
-    atr_st   = float(calc_atr(h15, l15, c15, period=10))
-    mid_st   = (h15[-1] + l15[-1]) / 2
-    st_upper = mid_st + 3 * atr_st
-    st_lower = mid_st - 3 * atr_st
-    supertrend_dir = "up" if close > st_lower else "down"
-
-    # DI
-    plus_di_1h  = float(pdi_1h) if pdi_1h else 0
-    minus_di_1h = float(mdi_1h) if mdi_1h else 0
-
-    # VWAP & day range from 15m
-    ts_last = int(raw_15m[0][0])  # newest candle ts (raw is newest-first)
-    dt_last = datetime.fromtimestamp(ts_last / 1000, tz=timezone.utc)
+    # VWAP and day levels
+    ts_last      = int(raw_15m[0][0])
+    dt_last      = datetime.fromtimestamp(ts_last / 1000, tz=timezone.utc)
     day_start_ms = int(datetime(dt_last.year, dt_last.month, dt_last.day,
                                 tzinfo=timezone.utc).timestamp() * 1000)
     vwap, day_high, day_low = _calc_vwap_and_day(raw_15m, day_start_ms)
@@ -147,170 +187,135 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="", tp1_mult=1.0, ad
     if day_high and day_low and day_high != day_low:
         day_position = (close - day_low) / (day_high - day_low)
 
-    # Signal hour for night filter
+    daily_range_pct = 0.0
+    if day_high and day_low and day_low > 0:
+        daily_range_pct = (day_high - day_low) / day_low * 100
+
     signal_hour = dt_last.hour
     is_night    = 1 <= signal_hour < 7
 
-    # Dynamic TP multiplier
-    if use_dynamic_tp and day_high and day_low and day_low > 0:
-        daily_range_pct = (day_high - day_low) / day_low * 100
-        if daily_range_pct >= 4.0:
-            tp1_mult = 1.0
-        elif daily_range_pct >= 2.0:
-            tp1_mult = 0.8
-        else:
-            tp1_mult = 0.6
+    # Late-move veto: day already moved a lot and price is at the top
+    late_move = (daily_range_pct > pp["late_range"]
+                 and day_position is not None and day_position > 0.90)
 
-    # CE (simplified)
-    ce_long  = float(l15[-1]) - 3 * atr_15m
-    ce_short = float(h15[-1]) + 3 * atr_15m
-
-    # Allowed scalp symbols
-    _scalp_ok = (scalp_symbols is None) or (symbol in scalp_symbols)
-
-    # ── Level 1: Trade style ──────────────────────────────────────────────────
+    # ── Mode detection ────────────────────────────────────────────────────────
     trade_style = "NO_TRADE"
-    if adx_4h >= swing_adx and bias_4h == bias_1h and bias_1h != "NEUTRAL":
-        trade_style = "SWING"
-    elif adx_4h >= swing_adx and bias_4h != "NEUTRAL" and bias_1h == "NEUTRAL":
-        pb_long  = (bias_4h == "UP"   and supertrend_dir == "up"
-                    and plus_di_1h > minus_di_1h
-                    and day_position is not None and day_position < 0.45
-                    and rsi_15m < 70)
-        pb_short = (bias_4h == "DOWN" and supertrend_dir == "down"
-                    and minus_di_1h > plus_di_1h
-                    and day_position is not None and day_position > 0.55
-                    and rsi_15m > 30)
-        trade_style = "PULLBACK" if (pb_long or pb_short) else "NO_TRADE"
-    elif _scalp_ok and adx_1h >= scalp_adx and vol_ratio >= 1.5:
-        trade_style = "SCALP"
 
-    # Time block filter (e.g. 21 UTC — CME close, 0% WR)
-    if time_block_h and signal_hour in time_block_h:
+    if mode in ("FAST", "COMBINED"):
+        if (float(adx_1h) >= pp["fast_adx"]
+                and adx_1h_rising
+                and vol_ratio >= pp["fast_vol"]
+                and bb_expanding):
+            trade_style = "FAST"
+
+    if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
+        if (float(adx_1h) >= pp["swing_adx"]
+                and adx_1h_rising
+                and vol_ratio >= pp["swing_vol"]
+                and bb_expanding
+                and bias_1h != "NEUTRAL"):
+            trade_style = "SWING"
+
+    # Night filter — block all signals 01-07 UTC
+    if night_filter and is_night:
         trade_style = "NO_TRADE"
 
-    # Night session filters (01-07 UTC)
-    if night_filter and is_night:
-        if trade_style == "SCALP":
-            trade_style = "NO_TRADE"
-        elif trade_style == "SWING" and not (adx_4h >= 30 and vol_ratio >= 3.0):
-            trade_style = "NO_TRADE"
+    # Late-move veto
+    if late_move:
+        trade_style = "NO_TRADE"
 
-    # ── Level 2: Direction ───────────────────────────────────────────────────
+    # ── Direction ─────────────────────────────────────────────────────────────
     side = None
-    if bias_1h == "UP":   side = "buy"
+    if bias_1h == "UP":    side = "buy"
     elif bias_1h == "DOWN": side = "sell"
-    elif bias_4h == "UP": side = "buy"
-    elif bias_4h == "DOWN": side = "sell"
-
-    if trade_style == "PULLBACK":
-        side = "buy" if bias_4h == "UP" else "sell"
-
-    # ── VWAP filter ──────────────────────────────────────────────────────────
-    vwap_ok = True
-    if vwap and close:
-        if trade_style == "PULLBACK":
-            if side == "buy"  and close > vwap * 1.02: vwap_ok = False
-            if side == "sell" and close < vwap * 0.98: vwap_ok = False
-        else:
-            if side == "buy"  and close < vwap: vwap_ok = False
-            if side == "sell" and close > vwap: vwap_ok = False
-
-    # ── Funding filter ───────────────────────────────────────────────────────
-    funding_abs   = abs(funding) if funding is not None else 0
-    thresholds    = {"SWING": 0.003, "PULLBACK": 0.008, "SCALP": 0.005}
-    warn_thresh   = {"SWING": 0.001, "PULLBACK": 0.003, "SCALP": 0.001}
-    funding_block = funding_abs > thresholds.get(trade_style, 0.01)
-    funding_warn  = funding_abs > warn_thresh.get(trade_style, 0.005)
-
-    # ── Regime filter ────────────────────────────────────────────────────────
-    regime_ok = True
-    if day_position is not None and trade_style in ("SWING", "SCALP"):
-        if side == "buy"  and day_position > regime_top:        regime_ok = False
-        if side == "sell" and day_position < (1 - regime_top):  regime_ok = False
-
-    # ── Level 4: SL/TP ───────────────────────────────────────────────────────
-    sl_p = tp1_p = tp2_p = None
-    sl_dist = 0
-
-    if trade_style == "SWING" and side and close:
-        sl_dist = max(atr_1h * 2.0, close * 0.008)
-        tp1_dist = sl_dist * tp1_mult
-        if side == "buy":
-            sl_p  = round(close - sl_dist, 6)
-            tp1_p = round(close + tp1_dist, 6)
-            tp2_p = day_high if (day_high and day_high > tp1_p) else round(close + sl_dist * 2.5, 6)
-        else:
-            sl_p  = round(close + sl_dist, 6)
-            tp1_p = round(close - tp1_dist, 6)
-            tp2_p = day_low if (day_low and day_low < tp1_p) else round(close - sl_dist * 2.5, 6)
-
-    elif trade_style == "PULLBACK" and side and close:
-        if side == "buy":
-            sl_p_raw = min(ce_long, day_low * 0.995 if day_low else ce_long)
-            sl_p     = round(min(sl_p_raw, close * 0.994), 6)
-            sl_dist  = max(close - sl_p, atr_15m * 0.5)
-            tp1_p    = round(close + sl_dist * 2.0, 6)
-            tp2_p    = day_high if (day_high and day_high > tp1_p) else round(close + sl_dist * 3.0, 6)
-        else:
-            sl_p_raw = max(ce_short, day_high * 1.005 if day_high else ce_short)
-            sl_p     = round(max(sl_p_raw, close * 1.006), 6)
-            sl_dist  = max(sl_p - close, atr_15m * 0.5)
-            tp1_p    = round(close - sl_dist * 2.0, 6)
-            tp2_p    = day_low if (day_low and day_low < tp1_p) else round(close - sl_dist * 3.0, 6)
-
-    elif trade_style == "SCALP" and side and close:
-        sl_dist  = max(atr_15m * 1.5, close * 0.005)
-        tp1_dist = sl_dist * tp1_mult
-        if side == "buy":
-            sl_p  = round(close - sl_dist, 6)
-            tp1_p = round(close + tp1_dist, 6)
-            tp2_p = day_high if (day_high and day_high > tp1_p) else round(close + sl_dist * 2.5, 6)
-        else:
-            sl_p  = round(close + sl_dist, 6)
-            tp1_p = round(close - tp1_dist, 6)
-            tp2_p = day_low if (day_low and day_low < tp1_p) else round(close - sl_dist * 2.5, 6)
-
-    # R/R check
-    rr_ok = True
-    if sl_p and tp2_p and close:
-        if abs(close - tp2_p) < abs(close - sl_p):
-            rr_ok = False
-
-    # ── Final signal ─────────────────────────────────────────────────────────
-    vol_too_low = vol_ratio < 0.7 and trade_style != "PULLBACK"
-    if trade_style == "NO_TRADE" or not vwap_ok or funding_block or not rr_ok or vol_too_low or not regime_ok:
-        entry_signal = "NO_TRADE"
-    elif funding_warn or (vol_ratio < 1.3 and trade_style == "SCALP"):
-        entry_signal = "WAIT"
     else:
-        entry_signal = "ENTRY"
+        trade_style = "NO_TRADE"
+
+    # ── 4H late veto: strong opposing trend ───────────────────────────────────
+    fourch_veto = (float(adx_4h) > 30
+                   and bias_4h != "NEUTRAL"
+                   and bias_4h != bias_1h)
+
+    # ── VWAP filter ───────────────────────────────────────────────────────────
+    vwap_ok = True
+    if vwap and close and side:
+        if side == "buy"  and close < vwap: vwap_ok = False
+        if side == "sell" and close > vwap: vwap_ok = False
+
+    # ── Side-aware funding filter ─────────────────────────────────────────────
+    funding_val   = funding if funding is not None else 0
+    FUND_THRESH   = 0.0005   # 0.05%
+    funding_block = False
+    if side == "buy"  and funding_val >  FUND_THRESH: funding_block = True
+    if side == "sell" and funding_val < -FUND_THRESH: funding_block = True
+
+    # ── SL / TP ───────────────────────────────────────────────────────────────
+    sl_p = tp1_p = tp2_p = None
+    sl_dist = 0.0
+
+    if trade_style == "FAST" and side and close:
+        sl_dist = max(pp["fast_sl_k"] * atr_15m, close * 0.004)
+        if side == "buy":
+            sl_p  = round(close - sl_dist, 6)
+            tp1_p = round(close + sl_dist * 0.8, 6)   # TP1 = 0.8R
+            tp2_p = round(close + sl_dist * 1.5, 6)   # TP2 = 1.5R
+        else:
+            sl_p  = round(close + sl_dist, 6)
+            tp1_p = round(close - sl_dist * 0.8, 6)
+            tp2_p = round(close - sl_dist * 1.5, 6)
+
+    elif trade_style == "SWING" and side and close:
+        # Structural SL: swing level + ATR buffer, at least k*ATR
+        swings = find_swing_levels(h15, l15, lookback=3, count=4)
+        if side == "buy":
+            atr_sl = close - pp["swing_sl_k"] * atr_15m
+            struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
+                         if swings["recent_lows"] else None)
+            sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
+            sl_dist = close - sl_p
+            tp1_p   = round(close + sl_dist * 1.0, 6)   # TP1 = 1R
+            tp2_p   = round(close + sl_dist * 2.5, 6)   # TP2 = 2.5R
+        else:
+            atr_sl = close + pp["swing_sl_k"] * atr_15m
+            struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
+                         if swings["recent_highs"] else None)
+            sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
+            sl_dist = sl_p - close
+            tp1_p   = round(close - sl_dist * 1.0, 6)
+            tp2_p   = round(close - sl_dist * 2.5, 6)
+
+    # ── Final signal ──────────────────────────────────────────────────────────
+    blocked = (trade_style == "NO_TRADE" or not vwap_ok
+               or funding_block or fourch_veto
+               or not sl_p or not tp1_p)
+
+    entry_signal = "NO_TRADE" if blocked else "ENTRY"
 
     return {
-        "entry_signal": entry_signal,
-        "trade_style":  trade_style,
-        "side":         side,
-        "close":        close,
-        "sl":           sl_p,
-        "tp1":          tp1_p,
-        "tp2":          tp2_p,
-        "adx_4h":       round(float(adx_4h), 1),
-        "adx_1h":       round(float(adx_1h), 1),
-        "bias_4h":      bias_4h,
-        "bias_1h":      bias_1h,
-        "vol_ratio":    round(vol_ratio, 2),
-        "funding":      funding,
-        "day_position": round(day_position, 3) if day_position else None,
+        "entry_signal":    entry_signal,
+        "trade_style":     trade_style,
+        "side":            side,
+        "close":           close,
+        "sl":              sl_p,
+        "tp1":             tp1_p,
+        "tp2":             tp2_p,
+        "adx_1h":          round(float(adx_1h), 1),
+        "adx_1h_rising":   adx_1h_rising,
+        "adx_4h":          round(float(adx_4h), 1),
+        "bias_1h":         bias_1h,
+        "vol_ratio":       round(vol_ratio, 2),
+        "bb_width":        round(bb_width, 2),
+        "funding":         funding,
+        "day_position":    round(day_position, 3) if day_position else None,
+        "fourch_veto":     fourch_veto,
+        "late_move":       late_move,
     }
 
 
-def check_outcome(raw_forward: list, side: str, sl: float, tp1: float, tp2: float,
-                  signal_ts_ms: int, max_hold_ms: int):
-    """Check if SL/TP hit in forward candles. Returns (result, minutes_to_hit)."""
+def check_outcome(raw_forward, side, sl, tp1, tp2, signal_ts_ms, max_hold_ms):
     if not raw_forward:
         return "NO_DATA", None
-
-    for c in reversed(raw_forward):  # chronological order
+    for c in reversed(raw_forward):
         ts_c = int(c[0])
         if ts_c <= signal_ts_ms:
             continue
@@ -320,20 +325,18 @@ def check_outcome(raw_forward: list, side: str, sl: float, tp1: float, tp2: floa
         high = float(c[2])
         low  = float(c[3])
         mins = elapsed_ms // 60000
-
         if side == "buy":
-            if low  <= sl:  return "STOP", mins
-            if tp2 and high >= tp2:  return "TP2",  mins
-            if high >= tp1: return "TP1",  mins
+            if low  <= sl:              return "STOP", mins
+            if tp2 and high >= tp2:     return "TP2",  mins
+            if high >= tp1:             return "TP1",  mins
         else:
-            if high >= sl:  return "STOP", mins
-            if tp2 and low  <= tp2:  return "TP2",  mins
-            if low  <= tp1: return "TP1",  mins
-
+            if high >= sl:              return "STOP", mins
+            if tp2 and low  <= tp2:     return "TP2",  mins
+            if low  <= tp1:             return "TP1",  mins
     return "OPEN", None
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ────────────────────────────────────────────────────────────────────────
 
 async def run():
     client = OKXClient(
@@ -346,129 +349,138 @@ async def run():
     now_ms   = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     start_ms = now_ms - DAYS_BACK * 24 * 3600 * 1000
     step_ms  = INTERVAL_M * 60 * 1000
-    hold_ms  = {"SCALP": 120*60*1000, "PULLBACK": 480*60*1000, "SWING": 360*60*1000}
+    hold_ms  = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}
     timestamps = list(range(start_ms, now_ms - OUTCOME_H * 3600 * 1000, step_ms))
 
-    # Pre-fetch all candles — all symbols in parallel (semaphore limits OKX rate)
-    _api_sem = asyncio.Semaphore(3)  # max 3 concurrent OKX requests — stay under rate limit
+    _api_sem = asyncio.Semaphore(1)
 
     async def _fetch_symbol(symbol: str) -> tuple:
         async with _api_sem:
             funding = await client.get_funding_rate(symbol)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1.0)
         raw_cache = {}
-        for ts_ms in timestamps[::4]:  # sample every 4th point
+        for ts_ms in timestamps[::4]:
             after_ms = ts_ms + step_ms
             async with _api_sem:
                 h4  = await client.get_history_candles(symbol, "4H",  after=after_ms, limit=60)
-                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             async with _api_sem:
                 h1  = await client.get_history_candles(symbol, "1H",  after=after_ms, limit=60)
-                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             async with _api_sem:
                 h15 = await client.get_history_candles(symbol, "15m", after=after_ms, limit=96)
-                await asyncio.sleep(0.2)
+            await asyncio.sleep(0.5)
             raw_cache[ts_ms] = {"4h": h4, "1h": h1, "15m": h15}
         print(f"  {symbol} загружен")
         return symbol, funding, raw_cache
 
+    # ── Load or fetch candles ──────────────────────────────────────────────────
     candle_cache: dict = {}
-    cache_valid = (
-        CACHE_FILE.exists()
-        and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
-    )
+    try:
+        cache_valid = (
+            CACHE_FILE.exists()
+            and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
+            and all(s in pickle.load(open(CACHE_FILE, "rb")) for s in ALL_SYMBOLS)
+        )
+    except Exception:
+        cache_valid = False
+
     if cache_valid:
         print(f"Загрузка свечей из кэша ({CACHE_FILE.name})...")
         with open(CACHE_FILE, "rb") as f:
             candle_cache = pickle.load(f)
         print(f"  Кэш загружен: {len(candle_cache)} пар")
     else:
-        print(f"Загрузка свечей для {len(SYMBOLS)} пар (параллельно)...")
-        results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in SYMBOLS])
+        print(f"Загрузка свечей для {len(ALL_SYMBOLS)} пар (параллельно)...")
+        results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in ALL_SYMBOLS])
         for symbol, funding, raw_cache in results_fetch:
             candle_cache[symbol] = {"funding": funding, "raw": raw_cache}
         with open(CACHE_FILE, "wb") as f:
             pickle.dump(candle_cache, f)
         print(f"  Кэш сохранён → {CACHE_FILE.name}")
 
-    # Run two param sets
-    # ── Cache diagnostics ────────────────────────────────────────────────────
-    for sym in SYMBOLS:
-        raw = candle_cache[sym]["raw"]
-        non_empty = sum(1 for v in raw.values() if v["4h"] and len(v["4h"]) >= 20)
-        sample_ts  = next(iter(raw)) if raw else None
-        sample_4h  = len(raw[sample_ts]["4h"]) if sample_ts else 0
-        sample_1h  = len(raw[sample_ts]["1h"]) if sample_ts else 0
-        sample_15m = len(raw[sample_ts]["15m"]) if sample_ts else 0
-        print(f"  {sym}: {len(raw)} кэш-точек, {non_empty} с данными 4H≥20 | пример: 4H={sample_4h} 1H={sample_1h} 15m={sample_15m}")
-    # First non-None signal for debug
-    _dbg_sym = SYMBOLS[0]
-    _dbg_ts  = next(iter(candle_cache[_dbg_sym]["raw"]))
-    _dbg_raw = candle_cache[_dbg_sym]["raw"][_dbg_ts]
-    _dbg_sig = compute_signal(_dbg_raw["4h"], _dbg_raw["1h"], _dbg_raw["15m"], candle_cache[_dbg_sym]["funding"])
-    print(f"  Sample signal ({_dbg_sym}): {_dbg_sig}")
+    for sym in ALL_SYMBOLS:
+        raw   = candle_cache[sym]["raw"]
+        valid = sum(1 for v in raw.values() if v["1h"] and len(v["1h"]) >= 20)
+        status = "OFF (per config)" if PAIR_PARAMS.get(sym) is None else "active"
+        print(f"  {sym}: {len(raw)} точек, {valid} с 1H≥20  [{status}]")
     print()
 
+    # ── Run param sets ─────────────────────────────────────────────────────────
     all_set_results = {}
     for pset in PARAM_SETS:
         results = []
-        for symbol in SYMBOLS:
+        mode         = pset["mode"]
+        night_filter = pset.get("night_filter", False)
+
+        def _process_symbol(symbol, ts_list):
+            sym_results = []
+            if PAIR_PARAMS.get(symbol) is None:
+                return sym_results
             funding = candle_cache[symbol]["funding"]
-            for ts_ms in timestamps:
-                # Find nearest cached candles
-                if not candle_cache[symbol]["raw"]:
-                    continue
-                cached_ts = min(candle_cache[symbol]["raw"].keys(), key=lambda t: abs(t - ts_ms))
+            for ts_ms in ts_list:
+                cached_ts = min(candle_cache[symbol]["raw"].keys(),
+                                key=lambda t: abs(t - ts_ms))
                 raw = candle_cache[symbol]["raw"][cached_ts]
 
                 sig = compute_signal(
                     raw["4h"], raw["1h"], raw["15m"], funding,
-                    symbol=symbol,
-                    tp1_mult=pset["tp1_mult"],
-                    adx_thresh=pset["adx_thresh"],
-                    regime_top=pset["regime_top"],
-                    use_dynamic_tp=pset.get("use_dynamic_tp", False),
-                    night_filter=pset.get("night_filter", False),
-                    scalp_adx=pset.get("scalp_adx", 20),
-                    swing_adx=pset.get("swing_adx", 25),
-                    time_block_h=pset.get("time_block_h"),
-                    scalp_symbols=pset.get("scalp_symbols"),
+                    symbol=symbol, mode=mode, night_filter=night_filter,
                 )
-                if sig is None or sig["entry_signal"] not in ("ENTRY", "WAIT"):
+                if sig is None or sig["entry_signal"] != "ENTRY":
                     continue
                 if not sig["sl"] or not sig["tp1"]:
                     continue
+                sym_results.append((ts_ms, sig))
+            return sym_results
 
-                # Fetch forward candles
-                fwd_end = ts_ms + OUTCOME_H * 3600 * 1000 + step_ms
-                raw_fwd = await client.get_history_candles(symbol, "5m", after=fwd_end, limit=288)
-                await asyncio.sleep(0.1)
+        # Collect signals
+        pending = []
+        for symbol in SYMBOLS:
+            for ts_ms, sig in _process_symbol(symbol, timestamps):
+                pending.append((symbol, ts_ms, sig))
+        for symbol in EXTRA_SYMBOLS:
+            for ts_ms, sig in _process_symbol(symbol, timestamps[::6]):
+                pending.append((symbol, ts_ms, sig))
 
-                max_h = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
-                outcome, elapsed = check_outcome(
-                    raw_fwd, sig["side"], sig["sl"], sig["tp1"], sig["tp2"], ts_ms, max_h
-                )
-                dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-                results.append({
-                    "symbol":    symbol,
-                    "ts":        dt.strftime("%m-%d %H:%M"),
-                    "hour":      dt.hour,
-                    "signal":    sig["entry_signal"],
-                    "style":     sig["trade_style"],
-                    "side":      sig["side"],
-                    "close":     sig["close"],
-                    "sl":        sig["sl"],
-                    "tp1":       sig["tp1"],
-                    "sl_dist":   abs(sig["close"] - sig["sl"]),
-                    "outcome":   outcome,
-                    "elapsed_m": elapsed,
-                    "day_pos":   sig["day_position"],
-                })
+        # Fetch outcomes
+        print(f"  Найдено сигналов: {len(pending)} — загружаю outcomes...")
+        for i, (symbol, ts_ms, sig) in enumerate(pending, 1):
+            fwd_end = ts_ms + OUTCOME_H * 3600 * 1000 + step_ms
+            if i % 20 == 0 or i == len(pending):
+                print(f"    {i}/{len(pending)} ({symbol})")
+            async with _api_sem:
+                raw_fwd = await client.get_history_candles(
+                    symbol, "5m", after=fwd_end, limit=288)
+            await asyncio.sleep(0.1)
+
+            max_h   = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
+            outcome, elapsed = check_outcome(
+                raw_fwd, sig["side"], sig["sl"], sig["tp1"], sig["tp2"],
+                ts_ms, max_h,
+            )
+            dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+            results.append({
+                "symbol":    symbol,
+                "ts":        dt.strftime("%m-%d %H:%M"),
+                "hour":      dt.hour,
+                "style":     sig["trade_style"],
+                "side":      sig["side"],
+                "close":     sig["close"],
+                "sl":        sig["sl"],
+                "tp1":       sig["tp1"],
+                "sl_dist":   abs(sig["close"] - sig["sl"]),
+                "outcome":   outcome,
+                "elapsed_m": elapsed,
+                "day_pos":   sig["day_position"],
+                "bb_width":  sig["bb_width"],
+            })
+
         all_set_results[pset["label"]] = results
 
     await client.close()
 
-    # ── Report ────────────────────────────────────────────────────────────────
+    # ── Report ─────────────────────────────────────────────────────────────────
     def _report(label, results):
         wins   = [r for r in results if r["outcome"] in ("TP1", "TP2")]
         losses = [r for r in results if r["outcome"] == "STOP"]
@@ -476,12 +488,10 @@ async def run():
         total_r = len(wins) + len(losses)
         winrate = len(wins) * 100 // total_r if total_r > 0 else 0
 
-        # Profit factor (assuming R:R 1:tp1_mult, but simplified: 1:1 for new, 1:1.5 for old)
-        gross_w = sum(r["sl_dist"] * (1.0 if "1.0" in label else 1.5) for r in wins)
+        gross_w = sum(r["sl_dist"] for r in wins)
         gross_l = sum(r["sl_dist"] for r in losses)
         pf = round(gross_w / gross_l, 2) if gross_l > 0 else 99.0
 
-        # Max drawdown (sequential losses)
         max_dd = consec = 0
         for r in results:
             if r["outcome"] == "STOP": consec += 1
@@ -499,58 +509,54 @@ async def run():
         print(f"  Profit Factor:    {pf}")
         print(f"  Max серия стопов: {max_dd}")
 
-        # LONG vs SHORT
         for side in ("buy", "sell"):
-            sr = [r for r in results if r["side"] == side]
-            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+            sr  = [r for r in results if r["side"] == side]
+            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
-                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
-                label_s = "LONG" if side == "buy" else "SHORT"
-                print(f"  {label_s}:  {len(sr)} сигналов | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
+                wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
+                print(f"  {'LONG' if side == 'buy' else 'SHORT'}:  "
+                      f"{len(sr)} сигналов | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
-        # By style
         print(f"\n  По стилю:")
-        for style in ("SWING", "SCALP", "PULLBACK"):
-            sr = [r for r in results if r["style"] == style]
-            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+        for style in ("FAST", "SWING"):
+            sr  = [r for r in results if r["style"] == style]
+            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
-                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
+                wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
                 print(f"    {style:8}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
-        # By symbol
         print(f"\n  По паре:")
-        for sym in SYMBOLS:
-            sr = [r for r in results if r["symbol"] == sym]
-            sw = [r for r in sr if r["outcome"] in ("TP1","TP2")]
+        for sym in ALL_SYMBOLS:
+            sr  = [r for r in results if r["symbol"] == sym]
+            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
-                wr = len(sw)*100//(len(sw)+len(sl_)) if (len(sw)+len(sl_)) > 0 else 0
+                wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
                 print(f"    {sym:12}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
-        # Best/worst hours
-        hour_wins = {}
+        hour_wins  = {}
         hour_total = {}
         for r in results:
             h = r["hour"]
             hour_total[h] = hour_total.get(h, 0) + 1
-            if r["outcome"] in ("TP1","TP2"):
+            if r["outcome"] in ("TP1", "TP2"):
                 hour_wins[h] = hour_wins.get(h, 0) + 1
         if hour_total:
-            hour_wr = {h: hour_wins.get(h,0)*100//hour_total[h] for h in hour_total if hour_total[h] >= 2}
+            hour_wr = {h: hour_wins.get(h, 0) * 100 // hour_total[h]
+                       for h in hour_total if hour_total[h] >= 2}
             if hour_wr:
                 best  = max(hour_wr, key=hour_wr.get)
                 worst = min(hour_wr, key=hour_wr.get)
-                print(f"\n  Лучший час:  {best:02d}:00 UTC — {hour_wr[best]}% winrate ({hour_total[best]} сигналов)")
-                print(f"  Худший час:  {worst:02d}:00 UTC — {hour_wr[worst]}% winrate ({hour_total[worst]} сигналов)")
+                print(f"\n  Лучший час:  {best:02d}:00 UTC — {hour_wr[best]}% ({hour_total[best]} сигналов)")
+                print(f"  Худший час:  {worst:02d}:00 UTC — {hour_wr[worst]}% ({hour_total[worst]} сигналов)")
 
-        # Pass/Fail
-        print(f"\n  PASS/FAIL (S1.3):")
-        print(f"    Winrate ≥50%:      {'✅ PASS' if winrate >= 50 else '❌ FAIL'}  ({winrate}%)")
-        print(f"    Profit Factor ≥1.2:{'✅ PASS' if pf >= 1.2  else '❌ FAIL'}  ({pf})")
-        print(f"    Сигналов/день ≥2:  {'✅ PASS' if signals_per_day >= 2 else '❌ FAIL'}  ({signals_per_day})")
-        print(f"    Max серия SL ≤5:   {'✅ PASS' if max_dd <= 5 else '❌ FAIL'}  ({max_dd})")
+        print(f"\n  PASS/FAIL:")
+        print(f"    Winrate ≥55%:      {'✅' if winrate >= 55 else '❌'}  {winrate}%")
+        print(f"    Profit Factor ≥1.3:{'✅' if pf >= 1.3  else '❌'}  {pf}")
+        print(f"    Сигналов/день ≥2:  {'✅' if signals_per_day >= 2 else '❌'}  {signals_per_day}")
+        print(f"    Max серия SL ≤5:   {'✅' if max_dd <= 5 else '❌'}  {max_dd}")
 
     for label, res in all_set_results.items():
         _report(label, res)
