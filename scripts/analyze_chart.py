@@ -1274,13 +1274,14 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     after_ts    = captured_ms + 1
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
-    raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi = await asyncio.gather(
+    raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist = await asyncio.gather(
         client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
         client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
         client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
         client.get_history_candles(symbol, "5m",  after=after_ts, limit=limit),
         client.get_funding_rate(symbol),
         client.get_open_interest(symbol),
+        client.get_oi_history(symbol, period="1H", limit=5),
     )
     await client.close()
 
@@ -1366,12 +1367,36 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     _ce_long        = float(_h15.get("ce_long") or 0)
     _ce_short       = float(_h15.get("ce_short") or 0)
 
-    # ATR 1H — calculated from raw candles (not stored in result["1h"])
+    # ATR 1H + ADX rising check
     if raw_1h and len(raw_1h) >= 14:
         _highs_1h, _lows_1h, _closes_1h = parse_candles(raw_1h)
         _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=14))
+        # ADX rising: last closed bar vs previous bar (bar[-2] vs bar[-3])
+        _adx_1h_prev3, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-3)
+        _adx_1h_rising = _adx_1h > float(_adx_1h_prev3)
     else:
         _atr_1h = _atr_15m * 4  # fallback: rough 1H estimate
+        _adx_1h_rising = False
+
+    # Vol ratio: impulse version — last 3 bars vs prior 15 on 15m
+    if raw_15m and len(raw_15m) >= 20:
+        _vols_imp  = [float(c[5]) for c in list(reversed(raw_15m))]
+        _prior_imp = float(np.mean(_vols_imp[5:20]))
+        _vol_ratio_sig = float(np.mean(_vols_imp[:3])) / max(_prior_imp, 1e-9)
+    else:
+        _vol_ratio_sig = 1.0
+
+    # OI delta: (current - previous) / previous from last 2 bars
+    _oi_delta = 0.0
+    if _oi_hist and len(_oi_hist) >= 2:
+        def _parse_oi_entry(e):
+            if isinstance(e, dict):            return float(e.get("oi", 0) or e.get("oiCcy", 0))
+            if isinstance(e, (list, tuple)) and len(e) >= 2: return float(e[1])
+            return 0.0
+        _oic = _parse_oi_entry(_oi_hist[0])
+        _oip = _parse_oi_entry(_oi_hist[1])
+        if _oip > 0:
+            _oi_delta = (_oic - _oip) / _oip
 
     # VWAP and daily High/Low from 15m candles (current UTC day only)
     _captured_dt = datetime.fromisoformat(captured_at_iso.replace("Z", "+00:00"))
@@ -1412,178 +1437,133 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:
         _tp1_mult = 0.6   # low volatility — tight TP, hits more often
 
-    # Level 1 — Trade style
-    if _adx_4h >= adx_thresh_4h and _bias_4h == _bias_1h and _bias_1h != "NEUTRAL":
-        _trade_style = "SWING"
-    elif _adx_4h >= adx_thresh_4h and _bias_4h != "NEUTRAL" and _bias_1h == "NEUTRAL":
-        # PULLBACK: 4H trend active, 1H in correction — check confirming signals
-        _pb_long  = (_bias_4h == "UP"
-                     and _supertrend_dir == "up"
-                     and _plus_di_1h > _minus_di_1h
-                     and _day_position is not None and _day_position < 0.45
-                     and _rsi_15m < 70)
-        _pb_short = (_bias_4h == "DOWN"
-                     and _supertrend_dir == "down"
-                     and _minus_di_1h > _plus_di_1h
-                     and _day_position is not None and _day_position > 0.55
-                     and _rsi_15m > 30)
-        _trade_style = "PULLBACK" if (_pb_long or _pb_short) else "NO_TRADE"
-        if _trade_style == "NO_TRADE":
-            print(f"PULLBACK rejected: ST={_supertrend_dir}, +DI={_plus_di_1h:.1f}/-DI={_minus_di_1h:.1f}, "
-                  f"day_pos={_day_position}, rsi_15m={_rsi_15m:.1f}")
-    elif scalp_enabled and symbol in scalp_symbols and _adx_1h >= 20 and _vol_ratio >= scalp_vol_min:
-        _trade_style = "SCALP"
-    else:
+    # ── FAST / SWING Signal Engine (backtest-validated, March 2026) ─────────────
+    # Per-pair specialization from 2×14d walk-forward test
+    _PAIR_PARAMS = {
+        "BTC-USDT": {"fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
+                     "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+                     "late_range": 4.0, "allowed_modes": ["SWING"]},
+        "ETH-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
+                     "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+                     "late_range": 7.0, "allowed_modes": ["FAST"]},
+        "SOL-USDT": {"fast_vol": 2.2, "fast_adx": 20, "fast_sl_k": 1.6,
+                     "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
+                     "late_range": 10.0, "allowed_modes": ["FAST"]},
+        "XRP-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
+                     "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+                     "late_range": 7.0, "allowed_modes": ["SWING"]},
+        "ADA-USDT": {"fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
+                     "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+                     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"]},
+    }
+    _pp = _PAIR_PARAMS.get(symbol, {
+        "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
+        "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
+        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+    })
+
+    # BB expansion on 15m (>1.5% width = trending, not sideways)
+    _bb_expanding = float(_h15.get("bb_width_pct") or 0) > 1.5
+
+    # Trade style: FAST first, SWING fallback
+    _trade_style = "NO_TRADE"
+    if (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
+            and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding
+            and "FAST" in _pp["allowed_modes"]):
+        _trade_style = "FAST"
+    if _trade_style == "NO_TRADE":
+        if (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
+                and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
+                and _bias_1h != "NEUTRAL"
+                and "SWING" in _pp["allowed_modes"]):
+            _trade_style = "SWING"
+
+    # Night filter (01-07 UTC)
+    if _is_night:
         _trade_style = "NO_TRADE"
 
-    # Night session filters
-    if _is_night:
-        if _trade_style == "SCALP":
-            print(f"SCALP night block: hour={_signal_hour}UTC — low liquidity window")
-            _trade_style = "NO_TRADE"
-        elif _trade_style == "SWING" and not (_adx_4h >= 30 and _vol_ratio >= 3.0):
-            print(f"SWING night filter: hour={_signal_hour}UTC, ADX4H={_adx_4h:.1f}, vol={_vol_ratio:.2f} — weak trend, skipping")
-            _trade_style = "NO_TRADE"
+    # Late-move veto: daily range exhausted and price at extreme
+    if _daily_range_pct > _pp["late_range"] and _day_position is not None and _day_position > 0.90:
+        _trade_style = "NO_TRADE"
 
-    # Level 2 — Direction
-    _side = (_act.get("side")
-             or ("buy"  if _h1.get("bull") else None)
-             or ("sell" if _h1.get("bear") else None)
-             or ("buy"  if _h4.get("bull") else None)
-             or ("sell" if _h4.get("bear") else None))
-
-    # SCALP direction fix: 1H is NEUTRAL by design, use 15m supertrend + VWAP + RSI
-    if _trade_style == "SCALP" and _side is None:
-        if _supertrend_dir == "up" and _vwap and _close > _vwap and _rsi_15m > 55:
-            _side = "buy"
-        elif _supertrend_dir == "down" and _vwap and _close < _vwap and _rsi_15m < 45:
-            _side = "sell"
-        else:
-            _trade_style = "NO_TRADE"  # no clear direction on 15m — cancel SCALP
-
-    # VWAP filter — different logic per trade style
-    _vwap_ok = True
-    if _vwap and _close:
-        if _trade_style == "PULLBACK":
-            # PULLBACK LONG wants price in discount zone (near/below VWAP)
-            if _side == "buy"  and _close > _vwap * 1.02:
-                _vwap_ok = False
-            elif _side == "sell" and _close < _vwap * 0.98:
-                _vwap_ok = False
-        else:
-            # SWING/SCALP: price must be on the trend side of VWAP, allow 0.5% tolerance
-            if _side == "buy"  and _close < _vwap * 0.995:
-                _vwap_ok = False
-            elif _side == "sell" and _close > _vwap * 1.005:
-                _vwap_ok = False
-
-    # Level 3 — Dynamic funding thresholds per trade style
-    _funding_abs = abs(_funding) if _funding is not None else 0
-    if _trade_style == "SWING":
-        _funding_block = _funding_abs > 0.003   # >0.3%
-        _funding_warn  = _funding_abs > 0.001   # >0.1%
-    elif _trade_style == "PULLBACK":
-        _funding_block = _funding_abs > 0.008   # >0.8%
-        _funding_warn  = _funding_abs > 0.003   # >0.3%
-    elif _trade_style == "SCALP":
-        _funding_block = _funding_abs > 0.003   # >0.3%
-        _funding_warn  = _funding_abs > 0.001   # >0.1% — same as SWING
+    # Direction from 1H EMA bias
+    if _bias_1h == "UP":
+        _side = "buy"
+    elif _bias_1h == "DOWN":
+        _side = "sell"
     else:
-        _funding_block = _funding_warn = False
+        _trade_style = "NO_TRADE"
+        _side = None
 
-    # Level 4 — SL/TP by trade style
+    # 4H veto: strong opposing trend (ADX > 30 and 4H bias conflicts with 1H)
+    _4h_veto = float(_adx_4h) > 30 and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
+    if _4h_veto:
+        _trade_style = "NO_TRADE"
+
+    # VWAP filter: price must be on trend side of VWAP
+    _vwap_ok = True
+    if _vwap and _close and _side:
+        if _side == "buy"  and _close < _vwap: _vwap_ok = False
+        if _side == "sell" and _close > _vwap: _vwap_ok = False
+
+    # Side-aware funding filter (0.05% threshold)
+    _funding_val = _funding if _funding is not None else 0.0
+    _FUND_THRESH = 0.0005
+    _funding_block = ((_side == "buy"  and _funding_val >  _FUND_THRESH) or
+                      (_side == "sell" and _funding_val < -_FUND_THRESH))
+    _funding_warn  = not _funding_block and abs(_funding_val) > _FUND_THRESH * 0.5
+
+    # OI weak: positions closing into the move = weaker signal
+    _oi_weak = _oi_delta < -0.03
+
+    # SL / TP
     _sl_p = _tp1_p = _tp2_p = None
+    _sl_dist = 0.0
+    _swing_highs = _h15.get("swing_highs", [])
+    _swing_lows  = _h15.get("swing_lows",  [])
 
-    if _trade_style == "SWING":
-        # Minimum SL: 0.8% of price — prevents tiny stoploss on low-volatility candles
-        _sl_dist  = max(_atr_1h * 2.0, _close * 0.008) if _close else _atr_1h * 2.0
-        _tp1_dist = _sl_dist * _tp1_mult  # dynamic: 0.6× low-vol / 0.8× med / 1.0× high-vol day
-        if _side == "buy" and _close:
+    if _trade_style == "FAST" and _side and _close:
+        _sl_dist = max(_pp["fast_sl_k"] * _atr_15m, _close * 0.004)
+        if _side == "buy":
             _sl_p  = round(_close - _sl_dist, 4)
-            _tp1_p = round(_close + _tp1_dist, 4)
-            _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
-        elif _side == "sell" and _close:
-            _sl_p  = round(_close + _sl_dist, 4)
-            _tp1_p = round(_close - _tp1_dist, 4)
-            _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
-
-    elif _trade_style == "PULLBACK":
-        # SL: tight, based on 15m ATR — pullback holds max 8h, no need for wide CE-based stop
-        # TP: targets 1H resistance levels — R/R minimum 3:1
-        if _side == "buy" and _close:
-            _sl_dist  = max(_atr_15m * 2.0, _close * 0.006)
-            _sl_p     = round(_close - _sl_dist, 4)
-            _tp1_p    = round(_close + _sl_dist * 3.0, 4)
-            _tp2_p    = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 4.5, 4)
-        elif _side == "sell" and _close:
-            _sl_dist  = max(_atr_15m * 2.0, _close * 0.006)
-            _sl_p     = round(_close + _sl_dist, 4)
-            _tp1_p    = round(_close - _sl_dist * 3.0, 4)
-            _tp2_p    = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 4.5, 4)
+            _tp1_p = round(_close + _sl_dist * 0.8, 4)
+            _tp2_p = round(_close + _sl_dist * 1.5, 4)
         else:
-            _sl_dist = _atr_15m * 2.0
-
-    else:  # SCALP
-        # Minimum SL: 0.5% of price
-        _sl_dist  = max(_atr_15m * 1.5, _close * 0.005) if _close else _atr_15m * 1.5
-        _tp1_dist = _sl_dist * _tp1_mult  # dynamic: 0.6× low-vol / 0.8× med / 1.0× high-vol day
-        if _side == "buy" and _close:
-            _sl_p  = round(_close - _sl_dist, 4)
-            _tp1_p = round(_close + _tp1_dist, 4)
-            _tp2_p = _day_high if _day_high and _day_high > _tp1_p else round(_close + _sl_dist * 2.5, 4)
-        elif _side == "sell" and _close:
             _sl_p  = round(_close + _sl_dist, 4)
-            _tp1_p = round(_close - _tp1_dist, 4)
-            _tp2_p = _day_low if _day_low and _day_low < _tp1_p else round(_close - _sl_dist * 2.5, 4)
+            _tp1_p = round(_close - _sl_dist * 0.8, 4)
+            _tp2_p = round(_close - _sl_dist * 1.5, 4)
 
-    # R/R check: TP2 must be further than SL
-    _rr_ok = True
-    if _sl_p and _tp2_p and _close:
-        if abs(_close - _tp2_p) < abs(_close - _sl_p):
-            _rr_ok = False
+    elif _trade_style == "SWING" and _side and _close:
+        if _side == "buy":
+            _atr_sl  = _close - _pp["swing_sl_k"] * _atr_15m
+            _struct  = (_swing_lows[-1] - 0.3 * _atr_15m) if _swing_lows else None
+            _sl_p    = round(min(_struct, _atr_sl) if _struct else _atr_sl, 4)
+            _sl_dist = _close - _sl_p
+            _tp1_p   = round(_close + min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
+            _tp2_p   = round(_close + min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
+        else:
+            _atr_sl  = _close + _pp["swing_sl_k"] * _atr_15m
+            _struct  = (_swing_highs[-1] + 0.3 * _atr_15m) if _swing_highs else None
+            _sl_p    = round(max(_struct, _atr_sl) if _struct else _atr_sl, 4)
+            _sl_dist = _sl_p - _close
+            _tp1_p   = round(_close - min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
+            _tp2_p   = round(_close - min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
 
-    # Market regime filter: block entries at day exhaustion zones
-    # SWING: top/bottom 15% | SCALP: softer — top/bottom 10% only
-    _regime_ok = True
-    if _day_position is not None and _trade_style in ("SWING", "SCALP"):
-        _regime_top    = 0.80  # block LONG if price already >80% of daily range
-        _regime_bottom = 0.20  # block SHORT if price already <20% of daily range
-        if _side == "buy"  and _day_position > _regime_top:
-            _regime_ok = False  # price at day top — risky LONG
-        elif _side == "sell" and _day_position < _regime_bottom:
-            _regime_ok = False  # price at day bottom — risky SHORT
-
-    # max_hold hint for client (minutes)
-    _max_hold_minutes = 120 if _trade_style == "SCALP" else 480 if _trade_style == "PULLBACK" else 360  # SWING 6h (was 16h)
+    # Max hold by style
+    _max_hold_minutes = 120 if _trade_style == "FAST" else 240  # FAST: 2h, SWING: 4h
+    _tp1_mult = 1.0  # kept for snapshot compatibility
 
     # Final entry signal
-    _vol_too_low = _vol_ratio < 0.7 and _trade_style != "PULLBACK"  # low vol OK for pullback
-    _has_watch   = bool(result.get("pending_plan", {}).get("available"))  # old strategy found a setup
-    # Supertrend must confirm direction: SHORT needs supertrend=down, LONG needs supertrend=up
-    _supertrend_ok = (
-        (_side == "sell" and _supertrend_dir == "down") or
-        (_side == "buy"  and _supertrend_dir == "up")   or
-        _side is None
-    )
-    if _trade_style == "NO_TRADE" or _funding_block or not _rr_ok or _vol_too_low or not _regime_ok or not _supertrend_ok:
+    if (_trade_style == "NO_TRADE" or not _vwap_ok
+            or _funding_block or _4h_veto or _oi_weak
+            or not _sl_p or not _tp1_p):
         _entry_signal = "NO_TRADE"
-    elif not _vwap_ok:
-        # VWAP filter failed but trend exists — downgrade to WAIT, not NO_TRADE
-        _entry_signal = "WAIT"
-    elif _funding_warn or (_vol_ratio < 1.3 and _trade_style == "SCALP"):
+    elif _funding_warn:
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
-    # If old strategy found a watch setup with levels — upgrade NO_TRADE → WAIT
-    if _entry_signal == "NO_TRADE" and _has_watch:
-        _entry_signal = "WAIT"
 
-    # High-risk scalp: BTC and SOL have wide spreads and fast reversals — warn client
-    _high_risk_scalp = (
-        _trade_style == "SCALP"
-        and _entry_signal in ("ENTRY", "WAIT")
-        and any(tok in symbol for tok in ("BTC", "SOL"))
-    )
+    _high_risk_scalp = False  # FAST replaces SCALP
 
     snapshot = {
         "symbol":       symbol,
@@ -1599,10 +1579,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             "supertrend_dir":   _supertrend_dir,
             "rsi_1h":           _h1.get("rsi"),
             "rsi_15m":          _h15.get("rsi"),
-            "volume_ratio_15m": round(_vol_ratio, 2),
+            "volume_ratio_15m": round(_vol_ratio_sig, 2),
             "bb_width_15m":     _h15.get("bb_width_pct"),
             "day_position":     _day_position,
             "trade_style_hint": _trade_style,
+            "adx_1h_rising":    _adx_1h_rising,
+            "oi_delta":         round(_oi_delta, 4),
             "entry_signal":     _entry_signal,
             "funding_rate":     round(_funding, 6) if _funding is not None else None,
             "funding_blocked":  bool(_funding_block),
