@@ -82,7 +82,7 @@ def _get_oi_delta(oi_history: list, ts_ms: int) -> float:
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"]
-EXTRA_SYMBOLS = ["ADA-USDT"]   # checked hourly (every 6th step)
+EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
 DAYS_BACK  = 14
@@ -98,35 +98,33 @@ CACHE_MAX_AGE = 23 * 3600
 # None = pair is OFF (DOGE excluded)
 PAIR_PARAMS = {
     "BTC-USDT":  {
-        "fast_vol":  1.6, "fast_adx":  18, "fast_sl_k":  1.2,
-        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+        "fast_vol": 1.6, "fast_adx": 18,
+        "swing_vol": 1.3, "swing_adx": 18,
+        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 4.0,
-        "allowed_modes": ["SWING"],          # BTC: SWING only (FAST 43% too weak)
+        "allowed_modes": ["FAST", "SWING"],
     },
     "ETH-USDT":  {
-        "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.3,
-        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+        "fast_vol": 1.8, "fast_adx": 18,
+        "swing_vol": 1.5, "swing_adx": 18,
+        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["FAST"],           # ETH: FAST only (SWING 18% too weak)
+        "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT":  {
-        "fast_vol":  2.2, "fast_adx":  20, "fast_sl_k":  1.6,
-        "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
+        "fast_vol": 2.8, "fast_adx": 24,
+        "swing_vol": 2.2, "swing_adx": 24,
+        "sl_k": 1.7, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 10.0,
-        "allowed_modes": ["FAST"],           # SOL: FAST only (SWING 0%)
+        "allowed_modes": ["FAST", "SWING"],
     },
     "DOGE-USDT": None,                       # OFF — too noisy
     "XRP-USDT":  {
-        "fast_vol":  1.8, "fast_adx":  18, "fast_sl_k":  1.4,
-        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "fast_vol": 1.8, "fast_adx": 18,
+        "swing_vol": 1.4, "swing_adx": 18,
+        "sl_k": 1.6, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["SWING"],          # XRP: SWING only (FAST N/A)
-    },
-    "ADA-USDT":  {
-        "fast_vol":  1.8, "fast_adx":  20, "fast_sl_k":  1.4,
-        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],  # ADA: both (too few data to decide)
+        "allowed_modes": ["FAST", "SWING"],
     },
 }
 
@@ -137,7 +135,6 @@ PARAM_SETS = [
         "mode":          "COMBINED",
         "night_filter":  True,
         "time_block_h":  [10],
-        "dynamic_tp":    True,
         "offset_days":   0,               # current 14 days
     },
     {
@@ -145,8 +142,21 @@ PARAM_SETS = [
         "mode":          "COMBINED",
         "night_filter":  True,
         "time_block_h":  [10],
-        "dynamic_tp":    True,
-        "offset_days":   14,              # previous 14 days
+        "offset_days":   14,
+    },
+    {
+        "label":         "COMBINED | period3 (28d-42d ago) | 10UTC block",
+        "mode":          "COMBINED",
+        "night_filter":  True,
+        "time_block_h":  [10],
+        "offset_days":   28,
+    },
+    {
+        "label":         "COMBINED | period4 (42d-56d ago) | 10UTC block",
+        "mode":          "COMBINED",
+        "night_filter":  True,
+        "time_block_h":  [10],
+        "offset_days":   42,
     },
 ]
 
@@ -175,7 +185,7 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                    mode="SWING", night_filter=False, oi_delta=0.0,
-                   time_block_h=None, dynamic_tp=False, raw_5m=None):
+                   time_block_h=None, raw_5m=None):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -334,53 +344,43 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     oi_weak = oi_delta < -0.03
 
     # ── SL / TP ───────────────────────────────────────────────────────────────
-    sl_p = tp1_p = tp2_p = None
+    sl_p = tp_p = None
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
-        sl_dist = max(pp["fast_sl_k"] * atr_15m, close * 0.004)
+        sl_dist  = max(pp["sl_k"] * atr_15m, close * 0.004)
+        tp_dist  = min(sl_dist * pp["fast_tp_k"], atr_1h * FAST_ATR_CAP)
         if side == "buy":
-            sl_p  = round(close - sl_dist, 6)
-            tp1_p = round(close + sl_dist * 0.8, 6)   # TP1 = 0.8R
-            tp2_p = round(close + sl_dist * 1.5, 6)   # TP2 = 1.5R
+            sl_p = round(close - sl_dist, 6)
+            tp_p = round(close + tp_dist,  6)
         else:
-            sl_p  = round(close + sl_dist, 6)
-            tp1_p = round(close - sl_dist * 0.8, 6)
-            tp2_p = round(close - sl_dist * 1.5, 6)
+            sl_p = round(close + sl_dist, 6)
+            tp_p = round(close - tp_dist,  6)
 
     elif trade_style == "SWING" and side and close:
-        # Structural SL: swing level + ATR buffer, at least k*ATR
+        # Structural SL: swing level + ATR buffer, at least sl_k*ATR
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
-            atr_sl = close - pp["swing_sl_k"] * atr_15m
+            atr_sl    = close - pp["sl_k"] * atr_15m
             struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = close - sl_p
-            if dynamic_tp:
-                # TP based on what's achievable in 4h given ATR_1H
-                tp1_p = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)
-                tp2_p = round(close + min(sl_dist * 2.5, atr_1h * 1.2), 6)
-            else:
-                tp1_p = round(close + sl_dist * 1.0, 6)
-                tp2_p = round(close + sl_dist * 2.5, 6)
+            tp_dist = min(sl_dist * pp["swing_tp_k"], atr_1h * SWING_ATR_CAP)
+            tp_p    = round(close + tp_dist, 6)
         else:
-            atr_sl = close + pp["swing_sl_k"] * atr_15m
+            atr_sl    = close + pp["sl_k"] * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = sl_p - close
-            if dynamic_tp:
-                tp1_p = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)
-                tp2_p = round(close - min(sl_dist * 2.5, atr_1h * 1.2), 6)
-            else:
-                tp1_p = round(close - sl_dist * 1.0, 6)
-                tp2_p = round(close - sl_dist * 2.5, 6)
+            tp_dist = min(sl_dist * pp["swing_tp_k"], atr_1h * SWING_ATR_CAP)
+            tp_p    = round(close - tp_dist, 6)
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
                or funding_block or oi_weak
-               or not sl_p or not tp1_p)
+               or not sl_p or not tp_p)
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
 
@@ -390,8 +390,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "side":            side,
         "close":           close,
         "sl":              sl_p,
-        "tp1":             tp1_p,
-        "tp2":             tp2_p,
+        "tp":              tp_p,
         "adx_1h":          round(float(adx_1h), 1),
         "adx_1h_rising":   adx_1h_rising,
         "adx_4h":          round(float(adx_4h), 1),
@@ -407,28 +406,61 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     }
 
 
-def check_outcome(raw_forward, side, sl, tp1, tp2, signal_ts_ms, max_hold_ms):
+RISK_PCT      = 0.03   # risk 3% of current balance per trade (6x leverage, 0.5% margin)
+FAST_ATR_CAP  = 0.7    # FAST TP capped at 0.7 × ATR_1H  (≈ realistic 2h move)
+SWING_ATR_CAP = 1.5    # SWING TP capped at 1.5 × ATR_1H (≈ realistic 4h move)
+
+
+def calc_pnl(outcome, side, entry, sl, tp, exit_price, balance):
+    """Calculate P&L in dollars for one trade outcome.
+    TP:        full close at TP → +R * risk_amount
+    STOP:      full close at SL → -risk_amount
+    TIME_EXIT: close at last candle in hold window → market P&L
+    """
+    sl_dist = abs(entry - sl)
+    if sl_dist == 0:
+        return 0.0
+    risk_amount = balance * RISK_PCT
+    direction   = 1 if side == "buy" else -1
+
+    if outcome == "STOP":
+        return -risk_amount
+    if outcome == "TP":
+        r = abs(tp - entry) / sl_dist
+        return risk_amount * r
+    if outcome == "TIME_EXIT":
+        if exit_price is None:
+            return 0.0
+        price_move = direction * (exit_price - entry)
+        tp_dist    = abs(tp - entry)
+        price_move = max(-sl_dist, min(tp_dist, price_move))
+        return risk_amount * (price_move / sl_dist)
+    return 0.0
+
+
+def check_outcome(raw_forward, side, sl, tp, signal_ts_ms, max_hold_ms):
+    """Returns (outcome, elapsed_mins, exit_price)."""
     if not raw_forward:
-        return "NO_DATA", None
+        return "NO_DATA", None, None
+    last_close = None
     for c in reversed(raw_forward):
         ts_c = int(c[0])
         if ts_c <= signal_ts_ms:
             continue
         elapsed_ms = ts_c - signal_ts_ms
         if elapsed_ms > max_hold_ms:
-            return "TIME_EXIT", elapsed_ms // 60000
+            return "TIME_EXIT", elapsed_ms // 60000, last_close
+        last_close = float(c[4])
         high = float(c[2])
         low  = float(c[3])
         mins = elapsed_ms // 60000
         if side == "buy":
-            if low  <= sl:              return "STOP", mins
-            if tp2 and high >= tp2:     return "TP2",  mins
-            if high >= tp1:             return "TP1",  mins
+            if low  <= sl:  return "STOP", mins, sl
+            if high >= tp:  return "TP",   mins, tp
         else:
-            if high >= sl:              return "STOP", mins
-            if tp2 and low  <= tp2:     return "TP2",  mins
-            if low  <= tp1:             return "TP1",  mins
-    return "OPEN", None
+            if high >= sl:  return "STOP", mins, sl
+            if low  <= tp:  return "TP",   mins, tp
+    return "OPEN", None, None
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
@@ -547,7 +579,6 @@ async def run():
         mode         = pset["mode"]
         night_filter = pset.get("night_filter", False)
         time_block_h = pset.get("time_block_h", [])
-        dynamic_tp   = pset.get("dynamic_tp", False)
 
         # Per-pset timestamp window based on offset_days
         offset_ms       = pset.get("offset_days", 0) * 24 * 3600 * 1000
@@ -591,12 +622,11 @@ async def run():
                     symbol=symbol, mode=mode, night_filter=night_filter,
                     oi_delta=oi_delta,
                     time_block_h=time_block_h,
-                    dynamic_tp=dynamic_tp,
                     raw_5m=raw_5m,
                 )
                 if sig is None or sig["entry_signal"] != "ENTRY":
                     continue
-                if not sig["sl"] or not sig["tp1"]:
+                if not sig["sl"] or not sig["tp"]:
                     continue
                 sym_results.append((ts_ms, sig))
             return sym_results
@@ -622,25 +652,27 @@ async def run():
             await asyncio.sleep(0.1)
 
             max_h   = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
-            outcome, elapsed = check_outcome(
-                raw_fwd, sig["side"], sig["sl"], sig["tp1"], sig["tp2"],
+            outcome, elapsed, exit_price = check_outcome(
+                raw_fwd, sig["side"], sig["sl"], sig["tp"],
                 ts_ms, max_h,
             )
             dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             results.append({
-                "symbol":    symbol,
-                "ts":        dt.strftime("%m-%d %H:%M"),
-                "hour":      dt.hour,
-                "style":     sig["trade_style"],
-                "side":      sig["side"],
-                "close":     sig["close"],
-                "sl":        sig["sl"],
-                "tp1":       sig["tp1"],
-                "sl_dist":   abs(sig["close"] - sig["sl"]) / sig["close"],  # % of price (R-normalized)
-                "outcome":   outcome,
-                "elapsed_m": elapsed,
-                "day_pos":   sig["day_position"],
-                "bb_width":  sig["bb_width"],
+                "symbol":     symbol,
+                "ts":         dt.strftime("%m-%d %H:%M"),
+                "ts_ms":      ts_ms,
+                "hour":       dt.hour,
+                "style":      sig["trade_style"],
+                "side":       sig["side"],
+                "close":      sig["close"],
+                "sl":         sig["sl"],
+                "tp":         sig["tp"],
+                "exit_price": exit_price,
+                "sl_dist":    abs(sig["close"] - sig["sl"]) / sig["close"],
+                "outcome":    outcome,
+                "elapsed_m":  elapsed,
+                "day_pos":    sig["day_position"],
+                "bb_width":   sig["bb_width"],
             })
 
         all_set_results[pset["label"]] = results
@@ -649,14 +681,19 @@ async def run():
 
     # ── Report ─────────────────────────────────────────────────────────────────
     def _report(label, results):
-        wins   = [r for r in results if r["outcome"] in ("TP1", "TP2")]
+        wins   = [r for r in results if r["outcome"] == "TP"]
         losses = [r for r in results if r["outcome"] == "STOP"]
         time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
         total_r = len(wins) + len(losses)
         winrate = len(wins) * 100 // total_r if total_r > 0 else 0
 
-        gross_w = sum(r["sl_dist"] for r in wins)
-        gross_l = sum(r["sl_dist"] for r in losses)
+        def _r(r):
+            sl_d = abs(r["close"] - r["sl"])
+            tp_d = abs(r["tp"] - r["close"]) if r.get("tp") else sl_d
+            return tp_d / sl_d if sl_d > 0 else 1.0
+
+        gross_w = sum(_r(r) for r in wins)
+        gross_l = len(losses)   # each stop = 1R
         pf = round(gross_w / gross_l, 2) if gross_l > 0 else 99.0
 
         max_dd = consec = 0
@@ -678,7 +715,7 @@ async def run():
 
         for side in ("buy", "sell"):
             sr  = [r for r in results if r["side"] == side]
-            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
+            sw  = [r for r in sr if r["outcome"] == "TP"]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
                 wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
@@ -688,7 +725,7 @@ async def run():
         print(f"\n  По стилю:")
         for style in ("FAST", "SWING"):
             sr  = [r for r in results if r["style"] == style]
-            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
+            sw  = [r for r in sr if r["outcome"] == "TP"]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
                 wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
@@ -697,7 +734,7 @@ async def run():
         print(f"\n  По паре:")
         for sym in ALL_SYMBOLS:
             sr  = [r for r in results if r["symbol"] == sym]
-            sw  = [r for r in sr if r["outcome"] in ("TP1", "TP2")]
+            sw  = [r for r in sr if r["outcome"] == "TP"]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
             if sr:
                 wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
@@ -708,7 +745,7 @@ async def run():
         for r in results:
             h = r["hour"]
             hour_total[h] = hour_total.get(h, 0) + 1
-            if r["outcome"] in ("TP1", "TP2"):
+            if r["outcome"] == "TP":
                 hour_wins[h] = hour_wins.get(h, 0) + 1
         if hour_total:
             hour_wr = {h: hour_wins.get(h, 0) * 100 // hour_total[h]
@@ -724,6 +761,70 @@ async def run():
         print(f"    Profit Factor ≥1.3:{'✅' if pf >= 1.3  else '❌'}  {pf}")
         print(f"    Сигналов/день ≥2:  {'✅' if signals_per_day >= 2 else '❌'}  {signals_per_day}")
         print(f"    Max серия SL ≤5:   {'✅' if max_dd <= 5 else '❌'}  {max_dd}")
+
+        # ── Balance simulation: one position per symbol, 1% risk ──────────────
+        # Simulates real bot behavior: new signal skipped if position already open
+        START = 1000.0
+        balance      = START
+        peak         = START
+        max_drawdown = 0.0
+        executed     = 0
+        skipped      = 0
+        pos_close_ms = {}   # (symbol, side) → timestamp when position closes
+
+        sorted_r = sorted(results, key=lambda r: r.get("ts_ms", 0))
+        for r in sorted_r:
+            sym     = r["symbol"]
+            side_r  = r["side"]
+            ts      = r["ts_ms"]
+            elapsed = r.get("elapsed_m")
+            max_hold_ms_sym = hold_ms.get(r["style"], hold_ms["SWING"])
+            pos_key = (sym, side_r)
+
+            # Block only same pair + same direction
+            if pos_close_ms.get(pos_key, 0) > ts:
+                r["executed"] = False
+                skipped += 1
+                continue
+
+            # Register position close time
+            if elapsed is not None:
+                close_at = ts + elapsed * 60 * 1000
+            else:
+                close_at = ts + max_hold_ms_sym
+            pos_close_ms[pos_key] = close_at
+
+            pnl = calc_pnl(
+                r["outcome"], r["side"], r["close"],
+                r["sl"], r.get("tp"), r.get("exit_price"),
+                balance,
+            )
+            r["pnl"]      = pnl
+            r["executed"] = True
+            balance += pnl
+            if balance > peak:
+                peak = balance
+            dd = (peak - balance) / peak * 100
+            if dd > max_drawdown:
+                max_drawdown = dd
+            executed += 1
+
+        total_pct = (balance - START) / START * 100
+        sign = "+" if total_pct >= 0 else ""
+        print(f"\n  ── Симуляция баланса (1 позиция/пара, риск {int(RISK_PCT*100)}%/сделку) ───")
+        print(f"  Старт:            $1000")
+        print(f"  Финиш:            ${balance:.0f}  ({sign}{total_pct:.1f}%)")
+        print(f"  Макс. просадка:   {max_drawdown:.1f}%")
+        print(f"  Исполнено:        {executed}  |  Пропущено: {skipped} (позиция занята)")
+
+        # Per-symbol skipped breakdown
+        skip_by_sym = {}
+        for r in sorted_r:
+            if not r.get("executed", True):
+                skip_by_sym[r["symbol"]] = skip_by_sym.get(r["symbol"], 0) + 1
+        if skip_by_sym:
+            parts = "  ".join(f"{s.split('-')[0]}:{n}" for s, n in skip_by_sym.items())
+            print(f"  Пропущено по паре: {parts}")
 
     for label, res in all_set_results.items():
         _report(label, res)
