@@ -284,7 +284,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             image_path=image_path, output_dir=run_dir,
         )
 
-        png_path  = run_dir / f"{symbol}_annotated.png"
+        png_path  = run_dir / f"{symbol}_chart.png"
         snap_path = run_dir / f"{symbol}_snapshot.json"
         if not snap_path.exists():
             await _send(chat_id, "Анализ завершён, но результаты не найдены. Попробуй снова.")
