@@ -1555,10 +1555,11 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
     # Final entry signal
     if (_trade_style == "NO_TRADE" or not _vwap_ok
-            or _funding_block or _4h_veto or _oi_weak
+            or _4h_veto or _oi_weak
             or not _sl_p or not _tp1_p):
         _entry_signal = "NO_TRADE"
-    elif _funding_warn:
+    elif _funding_warn or _funding_block:
+        # Funding high — warn but don't block: profit covers funding cost for 2-4h trades
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
