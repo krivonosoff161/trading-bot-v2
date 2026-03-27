@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -1661,6 +1662,22 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             if f"  Статус:      {_old}" in delivery_text:
                 delivery_text = delivery_text.replace(f"  Статус:      {_old}", f"  Статус:      {_correct}", 1)
                 break
+
+        # Fix new-engine vs old-engine mismatches in Python template
+        # 1. Direction: new engine has a side but old engine said "нет направления"
+        if _side == "buy" and "направления нет" in delivery_text:
+            delivery_text = delivery_text.replace(
+                "направления нет — ни LONG, ни SHORT не рассматриваются",
+                "только LONG — короткая сторона не рассматривается", 1)
+        elif _side == "sell" and "направления нет" in delivery_text:
+            delivery_text = delivery_text.replace(
+                "направления нет — ни LONG, ни SHORT не рассматриваются",
+                "только SHORT — длинная сторона не рассматривается", 1)
+        # 2. Remove fake pending_plan levels when new engine has no SL/TP
+        if _sl_p is None:
+            delivery_text = re.sub(
+                r'  (Зона входа|Триггерная цена|Ориентир стопа|Первая цель|Вторая цель|Сценарий ломается):[^\n]*\n',
+                '', delivery_text)
 
     # Append high-risk scalp warning for BTC/SOL
     if _high_risk_scalp:
