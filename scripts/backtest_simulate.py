@@ -175,7 +175,7 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                    mode="SWING", night_filter=False, oi_delta=0.0,
-                   time_block_h=None, dynamic_tp=False):
+                   time_block_h=None, dynamic_tp=False, raw_5m=None):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -210,6 +210,21 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     ema20_4h = calc_ema(c4h, 20)
     ema50_4h = calc_ema(c4h, 50)
     bias_4h  = _bias(ema20_4h[-1] > ema50_4h[-1], ema20_4h[-1] < ema50_4h[-1])
+
+    # 4H alignment context (SWING)
+    four_h_conflict = bias_4h != "NEUTRAL" and bias_4h != bias_1h
+    adx_4h_ok       = float(adx_4h) >= 20
+
+    # 5m trigger (FAST): price already moving in 1H direction on 5m EMA20
+    five_m_trigger = True  # default: don't block if no 5m data
+    if raw_5m and len(raw_5m) >= 21 and bias_1h != "NEUTRAL":
+        h5, l5, c5 = parse_candles(raw_5m)
+        ema20_5m      = calc_ema(c5, 20)
+        trigger_close = float(c5[-1])
+        if bias_1h == "UP":
+            five_m_trigger = trigger_close > float(ema20_5m[-1])
+        else:
+            five_m_trigger = trigger_close < float(ema20_5m[-1])
 
     # ATR on 15m and 1H
     atr_15m = float(calc_atr(h15, l15, c15, period=ADX_PERIOD))
@@ -252,19 +267,26 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # ── Mode detection ────────────────────────────────────────────────────────
     trade_style = "NO_TRADE"
 
+    # FAST: short-term momentum — 1H trend + 15m impulse + 5m confirmation
+    # 4H context is irrelevant for a 2-hour trade
     if mode in ("FAST", "COMBINED"):
         if (float(adx_1h) >= pp["fast_adx"]
                 and adx_1h_rising
                 and vol_ratio >= pp["fast_vol"]
-                and bb_expanding):
+                and bb_expanding
+                and bias_1h != "NEUTRAL"
+                and five_m_trigger):
             trade_style = "FAST"
 
+    # SWING: trend continuation — 4H trend must exist and align with 1H
     if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
         if (float(adx_1h) >= pp["swing_adx"]
                 and adx_1h_rising
                 and vol_ratio >= pp["swing_vol"]
                 and bb_expanding
-                and bias_1h != "NEUTRAL"):
+                and bias_1h != "NEUTRAL"
+                and not four_h_conflict
+                and adx_4h_ok):
             trade_style = "SWING"
 
     # Per-pair mode restriction
@@ -291,10 +313,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     else:
         trade_style = "NO_TRADE"
 
-    # ── 4H late veto: strong opposing trend ───────────────────────────────────
-    fourch_veto = (float(adx_4h) > 30
-                   and bias_4h != "NEUTRAL"
-                   and bias_4h != bias_1h)
+    # 4H veto — informational only; SWING handles 4H in condition, FAST is 4H-agnostic
+    fourch_veto = four_h_conflict
 
     # ── VWAP filter ───────────────────────────────────────────────────────────
     vwap_ok = True
@@ -359,7 +379,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
-               or funding_block or fourch_veto or oi_weak
+               or funding_block or oi_weak
                or not sl_p or not tp1_p)
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
@@ -470,9 +490,10 @@ async def run():
         h4  = await _fetch_full_history(symbol, "4H",  cache_start_ms)
         h1  = await _fetch_full_history(symbol, "1H",  cache_start_ms)
         h15 = await _fetch_full_history(symbol, "15m", cache_start_ms)
-        print(f"  {symbol}: 4H={len(h4)}, 1H={len(h1)}, 15m={len(h15)}, "
+        h5  = await _fetch_full_history(symbol, "5m",  cache_start_ms)
+        print(f"  {symbol}: 4H={len(h4)}, 1H={len(h1)}, 15m={len(h15)}, 5m={len(h5)}, "
               f"funding={len(funding_hist)}, OI={len(oi_hist)})")
-        return symbol, funding, funding_hist, oi_hist, h4, h1, h15
+        return symbol, funding, funding_hist, oi_hist, h4, h1, h15, h5
 
     # ── Load or fetch candles ──────────────────────────────────────────────────
     candle_cache: dict = {}
@@ -483,6 +504,7 @@ async def run():
             and (time.time() - CACHE_FILE.stat().st_mtime) < CACHE_MAX_AGE
             and all(s in _tmp for s in ALL_SYMBOLS)
             and "4h" in _tmp.get("BTC-USDT", {})    # new cache structure check
+            and "5m" in _tmp.get("BTC-USDT", {})    # 5m trigger requires 5m data
             and _tmp.get("_cache_start_ms", now_ms) <= cache_start_ms  # covers full range
         )
     except Exception:
@@ -496,7 +518,7 @@ async def run():
     else:
         print(f"Загрузка свечей для {len(ALL_SYMBOLS)} пар (параллельно)...")
         results_fetch = await asyncio.gather(*[_fetch_symbol(s) for s in ALL_SYMBOLS])
-        for symbol, funding, funding_hist, oi_hist, h4, h1, h15 in results_fetch:
+        for symbol, funding, funding_hist, oi_hist, h4, h1, h15, h5 in results_fetch:
             candle_cache[symbol] = {
                 "funding":         funding,
                 "funding_history": funding_hist,
@@ -504,6 +526,7 @@ async def run():
                 "4h":              h4,
                 "1h":              h1,
                 "15m":             h15,
+                "5m":              h5,
             }
         candle_cache["_cache_start_ms"] = cache_start_ms
         with open(CACHE_FILE, "wb") as f:
@@ -541,19 +564,23 @@ async def run():
             h4_all  = candle_cache[symbol]["4h"]   # sorted oldest→newest
             h1_all  = candle_cache[symbol]["1h"]
             h15_all = candle_cache[symbol]["15m"]
+            h5_all  = candle_cache[symbol].get("5m", [])
             # Pre-build timestamp index for fast bisect lookup
             h4_ts  = [int(c[0]) for c in h4_all]
             h1_ts  = [int(c[0]) for c in h1_all]
             h15_ts = [int(c[0]) for c in h15_all]
+            h5_ts  = [int(c[0]) for c in h5_all]
 
             for ts_ms in ts_list:
                 # Slice: candles visible at ts_ms (ts < ts_ms), newest-first
                 i4  = bisect.bisect_left(h4_ts,  ts_ms)
                 i1  = bisect.bisect_left(h1_ts,  ts_ms)
                 i15 = bisect.bisect_left(h15_ts, ts_ms)
+                i5  = bisect.bisect_left(h5_ts,  ts_ms)
                 raw_4h  = list(reversed(h4_all [max(0, i4  - 60):i4 ]))
                 raw_1h  = list(reversed(h1_all [max(0, i1  - 60):i1 ]))
                 raw_15m = list(reversed(h15_all[max(0, i15 - 96):i15]))
+                raw_5m  = list(reversed(h5_all [max(0, i5  - 30):i5 ])) if h5_all else None
 
                 hist_funding = _get_hist_funding(funding_hist, ts_ms)
                 oi_delta     = _get_oi_delta(oi_hist, ts_ms)
@@ -565,6 +592,7 @@ async def run():
                     oi_delta=oi_delta,
                     time_block_h=time_block_h,
                     dynamic_tp=dynamic_tp,
+                    raw_5m=raw_5m,
                 )
                 if sig is None or sig["entry_signal"] != "ENTRY":
                     continue
