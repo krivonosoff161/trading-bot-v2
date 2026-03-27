@@ -517,10 +517,24 @@ async def _handle_text(msg: dict) -> None:
 
     if text == "/users" and is_admin:
         users = list_users()
-        lines = ["👥 Пользователи:"]
+        if not users:
+            await _send(chat_id, "👥 Нет пользователей.")
+            return
+        rows = []
         for u in users:
-            lines.append(f"  {u['chat_id']} — {u['plan']} — {u['status']}")
-        await _send(chat_id, "\n".join(lines))
+            expires = "∞" if u["expires"] is None else u["expires"]
+            rows.append((u["chat_id"], u["status"], expires))
+        col1 = max(len(r[0]) for r in rows)
+        col2 = max(len(r[1]) for r in rows)
+        header = f"{'ID':<{col1}}  {'Статус':<{col2}}  До"
+        sep = "-" * (col1 + col2 + 14)
+        table_lines = [header, sep]
+        for cid, status, expires in rows:
+            table_lines.append(f"{cid:<{col1}}  {status:<{col2}}  {expires}")
+        body = "\n".join(table_lines)
+        await _tg("sendMessage", chat_id=chat_id,
+                  text=f"👥 Пользователей: {len(users)}\n\n<pre>{body}</pre>",
+                  parse_mode="HTML")
         return
 
     if text.startswith("/del ") and is_admin:
