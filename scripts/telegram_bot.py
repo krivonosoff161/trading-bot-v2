@@ -493,7 +493,13 @@ async def _handle_text(msg: dict) -> None:
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
-                text=START_TEXT + "\n\n🔒 Доступ по подписке.",
+                text=(
+                    START_TEXT
+                    + "\n\n🔒 Доступ по подписке.\n\n"
+                    + f"Твой ID для подключения: <code>{chat_id}</code>\n"
+                    + "Скопируй и отправь администратору."
+                ),
+                parse_mode="HTML",
                 reply_markup={"inline_keyboard": [
                     [{"text": "✉️ Подключиться → @Krivonosoff", "url": ADMIN_LINK}],
                     [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
