@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 load_dotenv()
 
-from scripts.analyze_chart import build_client_summary, _format_telegram, run as analyze_run  # noqa: E402
+from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: E402
 from scripts.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
@@ -297,16 +297,12 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             import html as _html
             summary_text = _html.escape(summary_file.read_text(encoding="utf-8"))
         elif snap_path.exists():
+            # Fallback: re-read snapshot expiry as minimal message
             snap = json.loads(snap_path.read_text(encoding="utf-8"))
-            r = {
-                "1h":          snap["1h"],
-                "15m":         snap["15m"],
-                "5m":          snap["5m"],
-                "signal":      snap["bot_decision"],
-                "action":      snap["action"],
-                "pending_plan": snap.get("pending_plan", {"available": False}),
-            }
-            summary_text = _format_telegram(build_client_summary(symbol, captured_at, r))
+            ctx  = snap.get("llm_context", {})
+            _sig = ctx.get("entry_signal", "NO_TRADE")
+            _sym = snap.get("symbol", symbol)
+            summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
         if summary_text:
             await send_message_to(chat_id, summary_text)

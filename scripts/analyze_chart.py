@@ -3,22 +3,16 @@ Chart Analyzer — pulls historical OKX data for a given moment and produces:
   - Console report
   - analysis_output/<sym>_<ts>_report.md
   - analysis_output/<sym>_<ts>_snapshot.json
-  - analysis_output/<sym>_<ts>_annotated.png  (if --image is provided)
+  - analysis_output/<sym>_<ts>_chart.png
 
 Usage (manual):
     python scripts/analyze_chart.py --symbol XRP-USDT --captured-at "2026-03-09T11:42:35Z"
-
-Usage (with screenshot):
-    python scripts/analyze_chart.py --symbol XRP-USDT --captured-at "2026-03-09T11:42:35Z" --image "обучение/xrp.jpg"
-
-Tip: use analyze_latest.bat to find the latest screenshot automatically.
 """
 
 import argparse
 import asyncio
 import json
 import os
-import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -37,7 +31,6 @@ from src.strategy.indicators import (
     find_swing_levels, atr_regime, calc_bollinger_bands, calc_supertrend,
     calc_chandelier_exit, calc_rsi,
 )
-from src.strategy.signal import get_signal
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -50,14 +43,13 @@ def load_strategy_params() -> dict:
 
 
 def load_symbol_min_sl_percent(symbol: str) -> float:
-    """Read min_sl_percent for the given symbol from config.yaml trading.symbols."""
     config_path = Path(__file__).parent.parent / "config.yaml"
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     for s in cfg.get("trading", {}).get("symbols", []):
         if s.get("id") == symbol:
             return float(s.get("min_sl_percent", 0.003))
-    return 0.003  # fallback if symbol not in config
+    return 0.003
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -79,20 +71,7 @@ def confirm_label(candles: list, idx: int = 0) -> str:
         return "unknown"
 
 
-def _stopped_stage(reason: str) -> str:
-    if reason in ("not_enough_candles", "no_trend_1h", "atr_zero"):
-        return "1H"
-    if reason in ("no_pullback_15m", "pullback_volume_strong"):
-        return "15m"
-    if reason in ("no_breakout_5m", "breakout_volume_weak", "di_not_confirmed_5m"):
-        return "5m"
-    if reason == "trend_pullback_breakout":
-        return "PASSED"
-    return reason
-
-
 def _json_safe(value):
-    """Recursively convert numpy scalars/containers to JSON-serializable Python types."""
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -103,7 +82,6 @@ def _json_safe(value):
 
 
 def _fmt_metric(value: float) -> str:
-    """Format small metrics with enough precision for low-price instruments."""
     val = float(value)
     abs_val = abs(val)
     if abs_val >= 1:
@@ -114,7 +92,6 @@ def _fmt_metric(value: float) -> str:
 
 
 def _fmt_price(symbol: str, price) -> str:
-    """Format price based on instrument scale: BTC→1dp, ETH/SOL→2dp, others→4dp."""
     if price is None:
         return "—"
     base = symbol.split("-")[0].upper()
@@ -126,7 +103,6 @@ def _fmt_price(symbol: str, price) -> str:
 
 
 def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
-    """Return next candle close boundary as HH:MM UTC string."""
     try:
         dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
         total_min = dt.hour * 60 + dt.minute
@@ -137,48 +113,39 @@ def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
         return "—"
 
 
-# ── Core analysis ─────────────────────────────────────────────────────────────
+# ── Indicators ────────────────────────────────────────────────────────────────
 
-def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_percent: float = 0.003, raw_4h: list | None = None) -> dict:
+def compute_indicators(
+    raw_1h: list,
+    raw_15m: list,
+    raw_5m: list,
+    params: dict,
+    raw_4h: list | None = None,
+) -> dict:
+    """Compute all indicators across timeframes. No signal, no action — pure data."""
     ema_fast   = int(params["ema_fast"])
     ema_slow   = int(params["ema_slow"])
     adx_period = int(params["adx_period"])
-    adx_thresh    = float(params["adx_threshold_1h"])
-    adx_thresh_4h = float(params.get("adx_threshold_4h", adx_thresh))
-    scalp_enabled = bool(params.get("scalp_enabled", True))
-    pb_touch   = float(params["pullback_touch_atr"])
-    pb_bars    = int(params["pullback_volume_bars"])
-    pb_factor  = float(params["pullback_volume_factor"])
-    bk_lookbk  = int(params["breakout_lookback_5m"])
-    vol_period = int(params["trigger_volume_ma_period"])
-    vol_factor = float(params["trigger_volume_factor"])
-    sl_buffer  = float(params["sl_buffer_atr"])
-    tp_r       = float(params["tp_r_multiple"])
 
-    # ── 4H (старший контекст) ────────────────────────────────────────────────
+    # ── 4H ──────────────────────────────────────────────────────────────────
     h4_data: dict = {}
     if raw_4h:
         highs_4h, lows_4h, closes_4h = parse_candles(raw_4h)
-        adx_4h, plus_di_4h, minus_di_4h = calc_adx(highs_4h, lows_4h, closes_4h, period=adx_period, bar_index=-2)
+        adx_4h, plus_di_4h, minus_di_4h = calc_adx(
+            highs_4h, lows_4h, closes_4h, period=adx_period, bar_index=-2
+        )
         ema20_4h = calc_ema(closes_4h, ema_fast)
         ema50_4h = calc_ema(closes_4h, ema_slow)
-        bull_4h = ema20_4h[-2] > ema50_4h[-2] and plus_di_4h > minus_di_4h and adx_4h >= adx_thresh
-        bear_4h = ema20_4h[-2] < ema50_4h[-2] and minus_di_4h > plus_di_4h and adx_4h >= adx_thresh
-        bb_4h   = calc_bollinger_bands(closes_4h, period=20, std_mult=2.5)
-        # Range mode: low BandWidth + weak trend = market consolidating
-        range_mode_4h = bb_4h["width_pct"] < 12.0 and adx_4h < 25
+        bb_4h    = calc_bollinger_bands(closes_4h, period=20, std_mult=2.5)
         h4_data = {
-            "ema20":      round(float(ema20_4h[-2]), 6),
-            "ema50":      round(float(ema50_4h[-2]), 6),
-            "adx":        round(adx_4h, 1),
-            "plus_di":    round(plus_di_4h, 1),
-            "minus_di":   round(minus_di_4h, 1),
-            "bull":       bool(bull_4h),
-            "bear":       bool(bear_4h),
-            "bb_upper":   bb_4h["upper"],
-            "bb_lower":   bb_4h["lower"],
-            "bb_width":   bb_4h["width_pct"],
-            "range_mode": bool(range_mode_4h),
+            "ema20":    round(float(ema20_4h[-2]), 6),
+            "ema50":    round(float(ema50_4h[-2]), 6),
+            "adx":      round(adx_4h, 1),
+            "plus_di":  round(plus_di_4h, 1),
+            "minus_di": round(minus_di_4h, 1),
+            "bb_upper": bb_4h["upper"],
+            "bb_lower": bb_4h["lower"],
+            "bb_width": bb_4h["width_pct"],
         }
 
     # ── 1H ──────────────────────────────────────────────────────────────────
@@ -190,245 +157,96 @@ def analyze(raw_1h: list, raw_15m: list, raw_5m: list, params: dict, min_sl_perc
     ema50_1h = calc_ema(closes_1h, ema_slow)
     atr_1h   = calc_atr(highs_1h, lows_1h, closes_1h, period=adx_period)
     rsi_1h   = calc_rsi(closes_1h, period=14)
-    bb_1h   = calc_bollinger_bands(closes_1h, period=20, std_mult=2.0)
-    bull_1h = ema20_1h[-2] > ema50_1h[-2] and plus_di > minus_di and adx >= adx_thresh
-    bear_1h = ema20_1h[-2] < ema50_1h[-2] and minus_di > plus_di and adx >= adx_thresh
+    bb_1h    = calc_bollinger_bands(closes_1h, period=20, std_mult=2.0)
+    ce_1h    = calc_chandelier_exit(highs_1h, lows_1h, closes_1h, lookback=22, multiplier=3.5)
+
+    # EMA-based bias (no ADX requirement)
+    _bull_1h = float(ema20_1h[-2]) > float(ema50_1h[-2])
+    _bear_1h = float(ema20_1h[-2]) < float(ema50_1h[-2])
 
     # ── 15m ─────────────────────────────────────────────────────────────────
     highs_15m, lows_15m, closes_15m = parse_candles(raw_15m)
-    vols_15m  = parse_volumes(raw_15m)
     atr_15m   = calc_atr(highs_15m, lows_15m, closes_15m, period=adx_period)
     ema20_15m = calc_ema(closes_15m, ema_fast)
     ema50_15m = calc_ema(closes_15m, ema_slow)
     rsi_15m   = calc_rsi(closes_15m, period=14)
-
+    bb_15m    = calc_bollinger_bands(closes_15m, period=20, std_mult=2.0)
+    swings_15m     = find_swing_levels(highs_15m, lows_15m, lookback=3, count=4)
+    atr_pct, atr_lbl = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
+    supertrend_15m = calc_supertrend(highs_15m, lows_15m, closes_15m, period=14, multiplier=3.0)
     cur_close = closes_15m[-2]
-    near_ema  = abs(cur_close - ema20_15m[-2]) <= pb_touch * atr_15m
-
-    if bull_1h:
-        structure_ok = cur_close > ema50_15m[-2]
-    elif bear_1h:
-        structure_ok = cur_close < ema50_15m[-2]
-    else:
-        structure_ok = False
-
-    recent_vols = vols_15m[-pb_bars - 2:-2]
-    prior_vols  = vols_15m[-pb_bars * 2 - 2:-pb_bars - 2]
-    avg_recent  = float(np.mean(recent_vols)) if len(recent_vols) > 0 else 1.0
-    avg_prior   = float(np.mean(prior_vols))  if len(prior_vols)  > 0 else 1.0
-    pb_vol_weak = not (avg_prior > 0 and avg_recent > avg_prior * pb_factor)
 
     # ── 5m ──────────────────────────────────────────────────────────────────
     highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
-    vols_5m = parse_volumes(raw_5m)
-    _, plus_di_5m, minus_di_5m = calc_adx(
-        highs_5m, lows_5m, closes_5m, period=adx_period, bar_index=-2
-    )
-    trigger_close = closes_5m[-2]
-    trigger_vol   = vols_5m[-2]
-    vol_sma       = calc_sma(vols_5m[:-2], vol_period)
-    vol_ratio     = round(trigger_vol / vol_sma, 2) if vol_sma > 0 else 0.0
-    vol_strong    = trigger_vol >= vol_sma * vol_factor
-
-    lookback_highs = highs_5m[-bk_lookbk - 2:-2]
-    lookback_lows  = lows_5m[-bk_lookbk - 2:-2]
-
-    if bull_1h:
-        breakout      = bool(trigger_close > float(np.max(lookback_highs))) if len(lookback_highs) else False
-        di_confirm_5m = plus_di_5m > minus_di_5m
-    elif bear_1h:
-        breakout      = bool(trigger_close < float(np.min(lookback_lows))) if len(lookback_lows) else False
-        di_confirm_5m = minus_di_5m > plus_di_5m
-    else:
-        breakout      = False
-        di_confirm_5m = False
-
-    signal = get_signal(raw_1h, raw_15m, raw_5m, params)
-
-    # ── Action View ──────────────────────────────────────────────────────────
-    # Entry suggestion based on current 5m close
-    entry_price = float(trigger_close)
-    if signal.get("side"):
-        setup_sl = float(signal.get("setup_sl", 0))
-        sl_dist_structure = abs(entry_price - setup_sl)
-        sl_min_atr  = float(params.get("sl_min_atr", 1.2))
-        sl_dist_min = max(entry_price * min_sl_percent, sl_min_atr * atr_15m)
-        sl_dist = max(sl_dist_structure, sl_dist_min)
-        tp_dist = sl_dist * tp_r
-        # Cap TP at ATR(1H)-based realistic daily move
-        tp1_cap = 1.5 * atr_1h
-        tp2_cap = 2.5 * atr_1h
-        if signal["side"] == "buy":
-            sl_price  = round(entry_price - sl_dist, 4)
-            tp_price  = round(entry_price + min(tp_dist,       tp1_cap), 4)
-            tp2_price = round(entry_price + min(tp_dist * 1.5, tp2_cap), 4)
-        else:
-            sl_price  = round(entry_price + sl_dist, 4)
-            tp_price  = round(entry_price - min(tp_dist,       tp1_cap), 4)
-            tp2_price = round(entry_price - min(tp_dist * 1.5, tp2_cap), 4)
-        action = {
-            "valid": True,
-            "entry":      entry_price,
-            "sl":         sl_price,
-            "tp1":        tp_price,
-            "tp2":        tp2_price,
-            "sl_dist":    round(sl_dist, 4),
-            "r_multiple": tp_r,
-            "type":       "confirmed",  # breakout closed = confirmed
-        }
-    else:
-        # Near-setup action hints even without signal
-        action = {
-            "valid": False,
-            "entry": None, "sl": None, "tp1": None, "tp2": None,
-            "hint": _action_hint(bear_1h, bull_1h, near_ema, m_close=cur_close,
-                                 ema20=float(ema20_15m[-2]), atr=atr_15m),
-        }
-
-    # ── Swing structure + volatility regime (15m) ────────────────────────────
-    swings_15m        = find_swing_levels(highs_15m, lows_15m, lookback=3, count=4)
-    atr_pct, atr_lbl  = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
-    bb_15m            = calc_bollinger_bands(closes_15m, period=20, std_mult=2.0)
-    supertrend_15m    = calc_supertrend(highs_15m, lows_15m, closes_15m, period=14, multiplier=3.0)
-    ce_1h             = calc_chandelier_exit(highs_1h, lows_1h, closes_1h, lookback=22, multiplier=3.5)
-
-    # ── Pending plan — levels for WATCH mode (trend+structure, no signal yet) ─
-    pending_plan: dict = {"available": False}
-    if (bull_1h or bear_1h) and structure_ok and not signal.get("side"):
-        zone   = float(ema20_15m[-2])
-        inv    = float(ema50_15m[-2])
-        s_high = swings_15m["recent_highs"]
-        s_low  = swings_15m["recent_lows"]
-        if bull_1h:
-            above_zone = [h for h in s_high if h > zone]
-            trigger    = min(above_zone) if above_zone else round(zone + 0.5 * atr_15m, 6)
-            below_zone = [l for l in s_low  if l < zone]
-            sl_ref     = max(below_zone) if below_zone else inv
-            sl         = round(sl_ref - sl_buffer * atr_15m, 6)
-            sl_dist    = trigger - sl   # R:R anchored to trigger, not zone
-        else:  # bear
-            below_zone = [l for l in s_low  if l < zone]
-            trigger    = max(below_zone) if below_zone else round(zone - 0.5 * atr_15m, 6)
-            above_zone = [h for h in s_high if h > zone]
-            sl_ref     = min(above_zone) if above_zone else inv
-            sl         = round(sl_ref + sl_buffer * atr_15m, 6)
-            sl_dist    = sl - trigger   # R:R anchored to trigger, not zone
-        if sl_dist > 0:
-            tp1_cap = 1.5 * atr_1h
-            tp2_cap = 2.5 * atr_1h
-            if bull_1h:
-                tp1 = round(trigger + min(sl_dist * tp_r,       tp1_cap), 6)
-                tp2 = round(trigger + min(sl_dist * tp_r * 1.5, tp2_cap), 6)
-            else:
-                tp1 = round(trigger - min(sl_dist * tp_r,       tp1_cap), 6)
-                tp2 = round(trigger - min(sl_dist * tp_r * 1.5, tp2_cap), 6)
-            pending_plan = {
-                "available":    True,
-                "entry_zone":   round(zone, 6),
-                "trigger":      round(trigger, 6),
-                "sl":           round(sl, 6),
-                "tp1":          tp1,
-                "tp2":          tp2,
-                "invalidation": round(inv, 6),
-            }
 
     return {
         "1h": {
-            "ema20": round(float(ema20_1h[-2]), 6),
-            "ema50": round(float(ema50_1h[-2]), 6),
-            "adx": round(adx, 2),
-            "plus_di": round(plus_di, 2),
-            "minus_di": round(minus_di, 2),
-            "bull": bull_1h, "bear": bear_1h,
-            "rsi": round(rsi_1h, 1),
+            "ema20":        round(float(ema20_1h[-2]), 6),
+            "ema50":        round(float(ema50_1h[-2]), 6),
+            "adx":          round(adx, 2),
+            "plus_di":      round(plus_di, 2),
+            "minus_di":     round(minus_di, 2),
+            "atr":          round(float(atr_1h), 6),
+            "rsi":          round(rsi_1h, 1),
             "bb_width_pct": bb_1h["width_pct"],
+            "bull":         _bull_1h,
+            "bear":         _bear_1h,
         },
         "15m": {
-            "close": round(float(cur_close), 6),
-            "ema20": round(float(ema20_15m[-2]), 6),
-            "ema50": round(float(ema50_15m[-2]), 6),
-            "atr": round(float(atr_15m), 6),
-            "rsi": round(rsi_15m, 1),
-            "near_ema": near_ema,
-            "structure_ok": structure_ok,
-            "vol_recent": round(avg_recent, 2),
-            "vol_prior": round(avg_prior, 2),
-            "vol_ratio_pb": round(avg_recent / avg_prior, 2) if avg_prior > 0 else 0.0,
-            "pb_vol_weak": pb_vol_weak,
-            "pb_touch_threshold": round(pb_touch * atr_15m, 6),
-            "atr_pct":   atr_pct,
-            "atr_label": atr_lbl,
-            "swing_highs": swings_15m["recent_highs"],
-            "swing_lows":  swings_15m["recent_lows"],
-            "bb_upper":    bb_15m["upper"],
-            "bb_middle":   bb_15m["middle"],
-            "bb_lower":    bb_15m["lower"],
-            "bb_pct_b":    bb_15m["pct_b"],
-            "bb_width_pct": bb_15m["width_pct"],
-            "supertrend":       supertrend_15m["value"],
-            "supertrend_dir":   supertrend_15m["direction"],
-            "supertrend_dist":  supertrend_15m["distance_pct"],
-            "ce_long":          ce_1h["ce_long"],
-            "ce_short":         ce_1h["ce_short"],
+            "close":          round(float(cur_close), 6),
+            "ema20":          round(float(ema20_15m[-2]), 6),
+            "ema50":          round(float(ema50_15m[-2]), 6),
+            "atr":            round(float(atr_15m), 6),
+            "rsi":            round(rsi_15m, 1),
+            "atr_pct":        atr_pct,
+            "atr_label":      atr_lbl,
+            "swing_highs":    swings_15m["recent_highs"],
+            "swing_lows":     swings_15m["recent_lows"],
+            "bb_upper":       bb_15m["upper"],
+            "bb_middle":      bb_15m["middle"],
+            "bb_lower":       bb_15m["lower"],
+            "bb_pct_b":       bb_15m["pct_b"],
+            "bb_width_pct":   bb_15m["width_pct"],
+            "supertrend":     supertrend_15m["value"],
+            "supertrend_dir": supertrend_15m["direction"],
+            "supertrend_dist":supertrend_15m["distance_pct"],
+            "ce_long":        ce_1h["ce_long"],
+            "ce_short":       ce_1h["ce_short"],
         },
         "5m": {
-            "trigger_close": round(float(trigger_close), 6),
-            "trigger_vol": round(float(trigger_vol), 2),
-            "vol_sma": round(float(vol_sma), 2),
-            "vol_ratio": vol_ratio,
-            "vol_strong": vol_strong,
-            "breakout": breakout,
-            "di_confirm": di_confirm_5m,
-            "plus_di": round(plus_di_5m, 2),
-            "minus_di": round(minus_di_5m, 2),
+            "trigger_close": round(float(closes_5m[-2]), 6),
         },
-        "4h":           h4_data,
-        "signal":       signal,
-        "action":       action,
-        "pending_plan": pending_plan,
+        "4h": h4_data,
     }
 
 
-def _action_hint(bear: bool, bull: bool, near_ema: bool,
-                 m_close: float, ema20: float, atr: float) -> str:
-    if not bear and not bull:
-        return "Рынок движется в боковике без чёткого направления. Ждать пока рынок выберет сторону."
-    direction = "ШОРТ" if bear else "ЛОНГ"
-    if not near_ema:
-        return f"Направление есть ({direction}), но цена ещё далеко от удобной точки входа ({ema20:.4f}). Ждать отката."
-    return f"Цена у удобной точки входа для {direction}. Ждать подтверждения на 5-минутном графике."
+# ── Client summary (FAST/SWING engine) ────────────────────────────────────────
 
-
-# ── Client summary ────────────────────────────────────────────────────────────
-
-def _reason_to_human(reason: str) -> str:
-    """Translate internal bot reason code to a human-readable sentence."""
-    mapping = {
-        "not_enough_candles":     "Недостаточно данных для анализа.",
-        "no_trend_1h":            "Нет выраженного тренда — рынок в боковике.",
-        "atr_zero":               "Недостаточно данных для анализа.",
-        "no_pullback_15m":        "Цена ещё не вернулась к зоне EMA — сетапа нет.",
-        "pullback_volume_strong": "Откат слишком агрессивный — структура не подходит.",
-        "no_breakout_5m":         "Сетап формируется — ждём подтверждения на 5m.",
-        "breakout_volume_weak":   "Движение без объёма — неуверенный пробой.",
-        "di_not_confirmed_5m":    "Направление на 5m не совпадает с трендом.",
-    }
-    return mapping.get(reason, "Условия входа не выполнены.")
-
-
-def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
-    """Three output modes based on market state:
-    - ГОТОВ ВХОД  (act["valid"])
-    - НАБЛЮДАЕМ   (trend + structure ok, no confirmed entry)
-    - ВНЕ РЫНКА   (no trend, or trend with broken structure)
-    """
-    h      = r["1h"]
-    m      = r["15m"]
-    f      = r["5m"]
-    sig    = r["signal"]
-    act    = r["action"]
-    pp     = r.get("pending_plan", {"available": False})
-    reason = sig.get("reason", "")
+def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
+    """Python fallback client text — explains FAST/SWING engine decision in plain words."""
+    trade_style   = eng["trade_style"]
+    entry_signal  = eng["entry_signal"]
+    side          = eng["side"]
+    bias_1h       = eng["bias_1h"]
+    adx_1h        = eng["adx_1h"]
+    adx_rising    = eng["adx_1h_rising"]
+    vol_ratio     = eng["vol_ratio_sig"]
+    bb_expanding  = eng["bb_expanding"]
+    vwap_ok       = eng["vwap_ok"]
+    four_h_veto   = eng["four_h_veto"]
+    oi_weak       = eng["oi_weak"]
+    is_night      = eng["is_night"]
+    funding_warn  = eng["funding_warn"]
+    funding_block = eng["funding_block"]
+    funding_val   = eng["funding_val"]
+    close         = eng["close"]
+    sl_p          = eng["sl_p"]
+    tp1_p         = eng["tp1_p"]
+    tp2_p         = eng["tp2_p"]
+    vwap          = eng["vwap"]
+    day_high      = eng["day_high"]
+    day_low       = eng["day_low"]
+    max_hold      = eng["max_hold_minutes"]
 
     try:
         dt     = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
@@ -436,422 +254,211 @@ def build_client_summary(symbol: str, captured_at: str, r: dict) -> str:
     except Exception:
         ts_str = captured_at
 
-    has_trend  = h["bull"] or h["bear"]
-    setup_zone = m["near_ema"] and m["structure_ok"]
-    gap        = abs(m["close"] - m["ema20"])
-    threshold  = m["pb_touch_threshold"]
+    _status_map = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА"}
+    _status = _status_map.get(entry_signal, "ВНЕ РЫНКА")
 
-    if gap <= threshold:
-        zone_prox = "уже в зоне"
-    elif gap <= threshold * 2:
-        zone_prox = "приближается к зоне"
+    _style_map = {
+        "FAST":  "⚡ БЫСТРЫЙ — закрыть в течение 2 часов",
+        "SWING": "📈 СВИНГ — держать до 4 часов",
+    }
+    _type_str = _style_map.get(trade_style, "")
+
+    if side == "buy":
+        _dir = "только LONG — короткая сторона не рассматривается"
+    elif side == "sell":
+        _dir = "только SHORT — длинная сторона не рассматривается"
     else:
-        zone_prox = "пока не добралась до зоны"
+        _dir = "направления нет — ни LONG, ни SHORT не рассматриваются"
 
-    adx_word   = "устойчивый" if h["adx"] >= 25 else "умеренный" if h["adx"] >= 20 else "слабый"
-    em_rel     = "выше" if h["ema20"] > h["ema50"] else "ниже"
-    pb_char    = "с умеренным объёмом" if m["pb_vol_weak"] else "с повышенным объёмом"
-    side_above = "выше" if h["bull"] else "ниже"
-    side_below = "ниже" if h["bull"] else "выше"
-    bk_dir     = "выше" if h["bull"] else "ниже"
-    dir_long   = h["bull"]
+    fp  = lambda p: _fmt_price(symbol, p)
+    SEP = "═" * 46
+    lines = [SEP, f"  {symbol}  |  {ts_str}", SEP, "",
+             f"  Статус:      {_status}"]
+    if _type_str and entry_signal != "NO_TRADE":
+        lines.append(f"  Тип:         {_type_str}")
+    lines += [f"  Направление: {_dir}", ""]
 
-    # ── Mode classification ──────────────────────────────────────────────────
-    mode_entry    = act["valid"]
-    mode_no_trend = not has_trend
-    mode_broken   = has_trend and not m["structure_ok"]
-    mode_off      = mode_no_trend or mode_broken   # ВНЕ РЫНКА
-    # mode_watch  = has_trend and m["structure_ok"] and not mode_entry  # НАБЛЮДАЕМ
+    # ── ENTRY or WAIT ────────────────────────────────────────────────────────
+    if entry_signal in ("ENTRY", "WAIT"):
+        _dir_word  = "вверх" if side == "buy" else "вниз"
+        _long_short = "ЛОНГ" if side == "buy" else "ШОРТ"
 
-    # ── Status + direction labels (top lines, not block headers) ────────────
-    if mode_entry:
-        status_label = "ГОТОВ ВХОД"
-        dir_label    = "только LONG — короткая сторона не рассматривается" if dir_long \
-                       else "только SHORT — длинная сторона не рассматривается"
-    elif mode_no_trend:
-        status_label = "ВНЕ РЫНКА"
-        dir_label    = "направления нет — ни LONG, ни SHORT не рассматриваются"
-    elif mode_broken:
-        status_label = "ВНЕ РЫНКА"
-        dir_label    = "только LONG — но после восстановления структуры на 15m" if dir_long \
-                       else "только SHORT — но после восстановления структуры на 15m"
-    else:
-        status_label = "НАБЛЮДАЕМ"
-        dir_label    = "только LONG — короткая сторона не рассматривается" if dir_long \
-                       else "только SHORT — длинная сторона не рассматривается"
-
-    SEP   = "═" * 46
-    lines = [SEP, f"  {symbol}  |  {ts_str}", SEP, ""]
-    lines.append(f"  Статус:      {status_label}")
-    lines.append(f"  Направление: {dir_label}")
-    lines.append("")
-
-    # ── СЕЙЧАС НА РЫНКЕ ─────────────────────────────────────────────────────
-    lines.append("СЕЙЧАС НА РЫНКЕ")
-    if mode_entry:
-        struct = "бычий" if dir_long else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена откатила к средней зоне {pb_char}, структура удержалась. На 5m зафиксирован пробой с объёмом.")
-        lines.append("  (Проще: контекст, откат, пробой — всё сошлось.)")
-    elif mode_no_trend:
-        lines.append(f"  На 1H уверенного направленного движения нет — ADX {adx_word}, рынок не показывает ясного импульса.")
-        if m["near_ema"]:
-            local = f"  Локально на 15m цена у средней зоны (EMA20 ≈ {_fmt_price(symbol, m['ema20'])})"
-            if m["structure_ok"]:
-                local += f" {pb_char}"
-            else:
-                local += ", но структура пока не удержана"
-            if f["breakout"] and f["vol_strong"]:
-                local += "; на 5m есть движение, но без старшего контекста этого недостаточно."
-            elif f["breakout"]:
-                local += "; на 5m движение появилось, подтверждение ещё слабое."
-            else:
-                local += "; на 5m явного импульса пока нет."
-            lines.append(local)
-        elif f["vol_strong"]:
-            lines.append("  На 5m есть локальная активность, но без контекста сверху это не основание для позиции.")
-        lines.append("  (Проще: рынок не определился — вход без контекста это лотерея.)")
-    elif mode_broken:
-        struct = "бычий" if dir_long else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. Тренд есть. Но на 15m структура нарушена — цена {side_below} EMA50.")
-        lines.append("  (Проще: направление понятно, но опорная зона пробита. Вход преждевременный.)")
-    elif reason == "pullback_volume_strong":
-        struct = "бычий" if dir_long else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у зоны, но откат идёт с повышенным объёмом — давление на структуру.")
-        lines.append("  (Проще: уровень правильный, но движение к нему слишком агрессивное.)")
-    elif setup_zone and f["breakout"]:
-        struct = "бычий" if dir_long else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у зоны, на 5m появляется движение — но подтверждение ещё неполное.")
-        lines.append("  (Проще: всё почти сходится — ждём последнего условия.)")
-    elif setup_zone:
-        struct = "бычий" if dir_long else "медвежий"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена у средней зоны {pb_char} — структура держится, откат выглядит как коррекция.")
-        lines.append("  (Проще: контекст и уровень сошлись, ждём сигнала на 5m.)")
-    else:
-        struct   = "бычий" if dir_long else "медвежий"
-        move_dir = "растёт" if dir_long else "падает"
-        lines.append(f"  На 1H контекст {struct} — EMA20 {em_rel} EMA50, ADX {adx_word}. На 15m цена ещё не откатила к средней зоне — рынок {move_dir} без паузы.")
-        lines.append("  (Проще: тренд есть, но цена не в том месте.)")
-    # ATR regime note — only when not normal (adds soft volatility context)
-    atr_lbl = m.get("atr_label", "")
-    if "сжатие" in atr_lbl or "расширение" in atr_lbl:
-        lines.append(f"  Волатильность: {atr_lbl}.")
-    lines.append("")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # MODE C — ГОТОВ ВХОД
-    # ════════════════════════════════════════════════════════════════════════
-    if mode_entry:
-        lines.append("ПЛАН ВХОДА")
-        lines.append(f"  Вход можно рассматривать около {_fmt_price(symbol, act['entry'])}.")
-        lines.append(f"  Защитный выход:  {_fmt_price(symbol, act['sl'])}")
-        lines.append(f"  Первая цель:     {_fmt_price(symbol, act['tp1'])}")
-        lines.append(f"  Вторая цель:     {_fmt_price(symbol, act['tp2'])}")
+        lines.append("📊 СЕЙЧАС НА РЫНКЕ")
+        lines.append(f"  Тренд 1H направлен {_dir_word} и набирает силу — объём импульса подтверждает движение.")
+        if vwap and close:
+            _vwap_word  = "выше" if float(close) >= float(vwap) else "ниже"
+            _ctrl       = "покупатели" if side == "buy" else "продавцы"
+            lines.append(f"  Цена {_vwap_word} дневного уровня равновесия ({fp(vwap)}) — {_ctrl} контролируют день.")
+        if day_high and day_low:
+            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.")
         lines.append("")
 
-        lines.append("ГДЕ ИДЕЯ ЛОМАЕТСЯ")
-        lines.append("  Если цена пересечёт защитный выход — сценарий не работает, выходим.")
-        lines.append("")
-
-        lines.append("ГДЕ ЗАБРАТЬ ПРИБЫЛЬ")
-        lines.append(f"  Первая цель: {_fmt_price(symbol, act['tp1'])} — можно зафиксировать часть.")
-        lines.append(f"  Вторая цель: {_fmt_price(symbol, act['tp2'])} — если позиция всё ещё открыта.")
-        lines.append("")
-
-        lines.append("НЕ ДЕЛАТЬ")
-        lines.append(f"  Не входить, если цена уже ушла далеко от {_fmt_price(symbol, act['entry'])}.")
-        lines.append("  Не двигать стоп в убыточную сторону.")
-        lines.append("  Не увеличивать позицию после открытия.")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # MODE A — ВНЕ РЫНКА
-    # ════════════════════════════════════════════════════════════════════════
-    elif mode_off:
-        lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
-        if mode_no_trend:
-            lines.append("  Нет направленного контекста на 1H — оснований для позиции нет.")
-        else:
-            lines.append("  На 15m структура нарушена — сетап некачественный.")
-        lines.append("")
-
-        lines.append("ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ")
-        if mode_no_trend:
-            lines.append("  Уверенный импульс на 1H с расхождением EMA20/EMA50 и ADX ≥ 20.")
-            lines.append("  Только после этого — возврат к оценке зоны входа.")
-        else:
-            lines.append(f"  Цена должна вернуться {side_above} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} и закрепиться.")
-            lines.append("  После этого — спокойный откат к EMA20 и подтверждение на 5m.")
-        lines.append("")
-
-        lines.append("НЕ ДЕЛАТЬ")
-        if mode_no_trend:
-            lines.append("  Не открывать позицию ни в LONG, ни в SHORT.")
-            lines.append("  Не трактовать локальные движения на 5m как самостоятельный сигнал.")
-        elif dir_long:
-            lines.append("  Не открывать LONG — структура нарушена, вход преждевременный.")
-            lines.append("  Не открывать SHORT против бычьего сценария.")
-        else:
-            lines.append("  Не открывать SHORT — структура нарушена, вход преждевременный.")
-            lines.append("  Не открывать LONG против медвежьего сценария.")
-        lines.append("")
-
-        lines.append("КОГДА ВЕРНУТЬСЯ")
-        if mode_no_trend:
-            lines.append("  Пришлите новый скрин после закрытия текущей 1H свечи.")
-            lines.append("  Если на 1H по-прежнему нет импульса — сценарий по этому активу пока не актуален.")
-        else:
-            lines.append(f"  Вернитесь когда цена закрепится {side_above} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])}.")
-            lines.append("  До этого пересылать скрин нет смысла — условия не изменились.")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # MODE B — НАБЛЮДАЕМ
-    # ════════════════════════════════════════════════════════════════════════
-    else:
-        lines.append("СЕЙЧАС ОРДЕР НЕ СТАВИМ")
-        if reason == "pullback_volume_strong":
-            lines.append("  Откат к зоне слишком агрессивный — ждём ослабления давления.")
-        elif f["breakout"]:
-            lines.append("  Движение на 5m есть — но не все условия подтверждения выполнены.")
-        else:
-            lines.append("  Ждём подтверждающего импульса на 5m.")
-        lines.append("")
-
-        lines.append("ЗОНА НАБЛЮДЕНИЯ")
-        lines.append(f"  EMA20 (средняя зона цены на 15m) ≈ {_fmt_price(symbol, m['ema20'])}.")
-        if setup_zone:
-            if reason == "pullback_volume_strong":
-                lines.append("  Цена в зоне — но вход ещё не готов: откат к зоне слишком агрессивный.")
-            elif f["breakout"]:
-                lines.append("  Цена в зоне — но вход ещё не готов: на 5m движение есть, ждём подтверждения условий.")
-            else:
-                lines.append("  Цена в зоне — но вход ещё не готов: ждём подтверждающего импульса на 5m.")
-        else:
-            if zone_prox == "приближается к зоне":
-                lines.append("  Цена приближается к зоне.")
-            else:
-                lines.append("  Цена пока не добралась до зоны.")
-        lines.append("")
-
-        # Pending plan — show pre-computed levels when available
-        if pp.get("available"):
-            lines.append("ПЛАН ПРИ ПОДТВЕРЖДЕНИИ")
-            lines.append("  Уровни рассчитаны заранее. Точнее станут при появлении сигнала:")
-            lines.append(f"  Зона входа:        ≈ {_fmt_price(symbol, pp['entry_zone'])}")
-            lines.append(f"  Триггерная цена:   {_fmt_price(symbol, pp['trigger'])}")
-            lines.append(f"  Ориентир стопа:    {_fmt_price(symbol, pp['sl'])}")
-            lines.append(f"  Первая цель:       {_fmt_price(symbol, pp['tp1'])}")
-            lines.append(f"  Вторая цель:       {_fmt_price(symbol, pp['tp2'])}")
-            lines.append(f"  Сценарий ломается: цена уходит {side_below} {_fmt_price(symbol, pp['invalidation'])}")
+        if funding_warn or funding_block:
+            pct  = round(abs(funding_val) * 100, 3)
+            _fw  = "лонги переплачивают" if funding_val > 0 else "шорты переплачивают"
+            lines.append(f"⚠️ Ставка финансирования повышена ({pct}%, {_fw}) — учитывай при удержании позиции.")
             lines.append("")
 
-        lines.append("ЧТО НУЖНО ДЛЯ ВХОДА")
-        if reason == "pullback_volume_strong":
-            lines.append(f"  Новый откат к EMA20 с умеренным объёмом.")
-            lines.append(f"  Затем подтверждающий импульс на 5m {bk_dir} последней структуры.")
-        elif f["breakout"]:
-            lines.append(f"  Свеча на 5m должна закрыться {bk_dir} структуры с объёмом выше среднего.")
-            lines.append("  Все условия должны выполниться одновременно.")
+        if entry_signal == "ENTRY":
+            lines.append("✅ СТАВИМ ЛИМИТКУ")
+            lines.append(f"  Лимитка {_long_short} по цене {fp(close)}.")
         else:
-            lines.append(f"  Свеча на 5m должна закрыться {bk_dir} последней структуры.")
-            lines.append("  Объём на 5m должен быть выше среднего.")
+            lines.append("⏸️ ЖДЁМ ПОДТВЕРЖДЕНИЯ")
+            lines.append(f"  Сигнал формируется — ставим лимитку {_long_short} при подтверждении.")
         lines.append("")
 
-        lines.append("КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ")
-        if setup_zone:
-            lines.append(f"  Если цена уйдёт {side_below} EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} — сценарий отменяем.")
-        else:
-            lines.append(f"  Если цена пробьёт EMA50 (15m) ≈ {_fmt_price(symbol, m['ema50'])} — сценарий отменяем.")
+        if sl_p and tp1_p and tp2_p:
+            _arr = "📈" if side == "buy" else "📉"
+            lines.append("📋 ПЛАН")
+            lines.append(f"  {_arr} Вход:   {fp(close)}")
+            lines.append(f"  🛑 Стоп:   {fp(sl_p)}")
+            lines.append(f"  🎯 Цель 1: {fp(tp1_p)}")
+            lines.append(f"  🎯 Цель 2: {fp(tp2_p)}")
+            lines.append("")
+
+        lines.append(f"⏱ Закрыть через {max_hold} минут если уровни не достигнуты.")
         lines.append("")
+        lines.append("⚠️ ПРАВИЛА ВХОДА")
+        lines.append("  ├─ Плечо: макс 5x")
+        lines.append("  ├─ Стоп: обязателен, не двигать дальше")
+        lines.append("  ├─ Размер: 2-3% депозита на сделку")
+        lines.append("  └─ Это аналитика — не инвест-рекомендация")
 
-        lines.append("НЕ ДЕЛАТЬ")
-        if dir_long:
-            lines.append("  Не входить в SHORT. Ожидаемое движение цены к зоне — это подготовка к LONG, не short-идея.")
-            lines.append("  Не открывать LONG до подтверждения на 5m.")
-            lines.append("  Не гнаться за ценой, если она ушла от зоны.")
-        else:
-            lines.append("  Не входить в LONG. Ожидаемое движение цены к зоне — это подготовка к SHORT, не long-идея.")
-            lines.append("  Не открывать SHORT до подтверждения на 5m.")
-            lines.append("  Не гнаться за ценой, если она ушла от зоны.")
-        lines.append("")
-
-        lines.append("КОГДА ВЕРНУТЬСЯ")
-        if not setup_zone:
-            lines.append(f"  Пришлите скрин когда цена приблизится к ≈ {_fmt_price(symbol, m['ema20'])}.")
-            lines.append("  Или после закрытия ближайшей 15m свечи.")
-        elif reason == "pullback_volume_strong":
-            lines.append("  Пришлите новый скрин через 1-2 закрытых 15m свечи.")
-            lines.append("  Нужно убедиться, что давление на откате ослабло.")
-        elif f["breakout"]:
-            lines.append("  Пришлите скрин после закрытия текущей 5m свечи.")
-            lines.append("  Нужно видеть подтверждение закрытия, а не только движение в моменте.")
-        else:
-            lines.append("  Пришлите скрин после закрытия ближайшей 5m свечи.")
-
-    # Актуально до — next candle close for the relevant timeframe
-    if mode_entry or setup_zone:
-        until_str = _next_candle_close(captured_at, 5)
-    elif mode_no_trend:
-        until_str = _next_candle_close(captured_at, 60)
+    # ── NO_TRADE ─────────────────────────────────────────────────────────────
     else:
-        until_str = _next_candle_close(captured_at, 15)
-    until_label = "Повторный анализ после:" if (mode_entry or setup_zone) else "Актуально до:"
-    lines += ["", f"  {until_label} {until_str}", "", SEP]
+        # Primary reason — first match wins
+        if is_night:
+            why  = "Ночная сессия (01:00–07:00 UTC) — низкая ликвидность, широкие спреды."
+            what = "Подождать до 07:00 UTC — дневная сессия открывается нормально."
+        elif bias_1h == "NEUTRAL":
+            why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
+            what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
+        elif four_h_veto:
+            why  = "На 4H сильный тренд против 1H — входим только по направлению старшего таймфрейма."
+            what = "Дождаться выравнивания направлений на 4H и 1H."
+        elif not adx_rising:
+            why  = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
+            what = "Ждать когда ADX начнёт расти — это сигнал возобновления тренда."
+        elif vol_ratio < 1.3:
+            why  = f"Объём импульса слабый (×{vol_ratio:.2f}) — движение без подтверждения покупателей/продавцов."
+            what = "Ждать свечей с повышенным объёмом — только тогда движение реальное."
+        elif not bb_expanding:
+            why  = "Bollinger Bands сжаты — рынок в боковике, направленного движения нет."
+            what = "Ждать расширения полос — это сигнал выхода из консолидации."
+        elif not vwap_ok:
+            _need = "выше" if side == "buy" else "ниже"
+            why  = f"Цена на неправильной стороне дневного равновесия — для {'лонга' if side == 'buy' else 'шорта'} нужно {_need} {fp(vwap)}."
+            what = f"Подождать пока цена закрепится {_need} {fp(vwap)}."
+        elif oi_weak:
+            why  = "Открытый интерес падает при движении цены — позиции закрываются, сигнал слабый."
+            what = "Ждать стабилизации или роста открытого интереса."
+        else:
+            why  = "Условия входа не выполнены в полном объёме."
+            what = "Следить за следующей 15m свечой."
+
+        if side == "buy":
+            _dir_ctx = "Направление — LONG, но условия входа пока не созрели."
+        elif side == "sell":
+            _dir_ctx = "Направление — SHORT, но условия входа пока не созрели."
+        else:
+            _dir_ctx = ""
+
+        lines.append("📊 СЕЙЧАС НА РЫНКЕ")
+        if _dir_ctx:
+            lines.append(f"  {_dir_ctx}")
+        if day_high and day_low:
+            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.")
+        lines.append("")
+
+        lines.append("🚫 НЕТ СДЕЛКИ")
+        lines.append(f"  {why}")
+        lines.append("")
+
+        lines.append("👁 ЗА ЧЕМ СЛЕДИМ")
+        lines.append(f"  {what}")
+        lines.append("")
+
+        lines.append("❌ НЕ ДЕЛАТЬ")
+        if side == "buy":
+            lines.append("  Не входить в LONG без подтверждения условий выше.")
+            lines.append("  Не открывать SHORT против 1H направления.")
+        elif side == "sell":
+            lines.append("  Не входить в SHORT без подтверждения условий выше.")
+            lines.append("  Не открывать LONG против 1H направления.")
+        else:
+            lines.append("  Не входить ни в LONG, ни в SHORT — направления нет.")
+
+    # Expiry
+    tf_exp     = 5 if entry_signal == "ENTRY" else (15 if entry_signal == "WAIT" else 60)
+    next_close = _next_candle_close(captured_at, tf_exp)
+    lines += ["", "🔄 ПОВТОРНЫЙ АНАЛИЗ", f"  После {next_close}.", "", SEP]
     return "\n".join(lines)
 
 
-def _format_telegram(client_summary: str) -> str:
-    """Wrap client summary in a monospace block for Telegram HTML."""
-    return f"<pre>{client_summary}</pre>"
+# ── Operator report ───────────────────────────────────────────────────────────
 
-
-# ── Trader view ───────────────────────────────────────────────────────────────
-
-def build_trader_view(r: dict, symbol: str = "") -> list:
-    lines = []
-    h = r["1h"]
-    m = r["15m"]
-    f = r["5m"]
-    sig = r["signal"]
-    reason = sig.get("reason", "")
-
-    if h["bull"]:
-        lines.append(f"• 1H тренд бычий (ADX {h['adx']:.1f}) — торгуем только лонг")
-    elif h["bear"]:
-        lines.append(f"• 1H тренд медвежий (ADX {h['adx']:.1f}) — торгуем только шорт")
-    else:
-        lines.append(f"• 1H тренда нет (ADX {h['adx']:.1f}) — рынок в боковике, ждать")
-
-    if m["near_ema"]:
-        lines.append(f"• На 15m цена у EMA20 ({_fmt_price(symbol, m['ema20'])}) — зона пулбэка есть")
-    else:
-        dist = abs(m["close"] - m["ema20"])
-        lines.append(
-            f"• На 15m цена далеко от EMA20 (gap={_fmt_metric(dist)}, "
-            f"порог={_fmt_metric(m['pb_touch_threshold'])}) — сетапа нет"
-        )
-
-    if h["bull"] or h["bear"]:
-        if m["structure_ok"]:
-            side_word = "выше EMA50" if h["bull"] else "ниже EMA50"
-            lines.append(f"• Структура 15m в порядке — цена {side_word}")
-        else:
-            lines.append("• Структура 15m сломана — цена на неправильной стороне EMA50")
-
-    if m["pb_vol_weak"]:
-        lines.append(f"• Объём пулбэка слабый (ratio={m['vol_ratio_pb']:.2f}) — хороший признак")
-    else:
-        lines.append(f"• Объём пулбэка сильный (ratio={m['vol_ratio_pb']:.2f}) — движение агрессивное")
-
-    if f["breakout"]:
-        lines.append("• На 5m есть пробой — триггерная свеча вышла за структуру")
-    else:
-        lines.append("• На 5m пробоя нет — ждать триггерной свечи")
-
-    if f["vol_strong"]:
-        lines.append(f"• Объём триггера сильный (×{f['vol_ratio']:.2f})")
-    else:
-        lines.append(f"• Объём триггера слабый (×{f['vol_ratio']:.2f}, нужно ×1.3+)")
-
-    if sig.get("side"):
-        side_str = "LONG" if sig["side"] == "buy" else "SHORT"
-        lines.append(f"• Итог: бот видит сигнал {side_str} — все фильтры пройдены ✓")
-    elif reason == "no_trend_1h":
-        lines.append("• Итог: нет тренда. Ждать ADX ≥ 20 и расхождения DI на 1H")
-    elif reason == "no_pullback_15m":
-        lines.append(f"• Итог: нет сетапа. Ждать цены к EMA20(15m) ≈ {_fmt_price(symbol, m['ema20'])}")
-    elif reason == "pullback_volume_strong":
-        lines.append("• Итог: пулбэк слишком агрессивный. Ждать ослабления объёма")
-    elif reason == "no_breakout_5m":
-        lines.append("• Итог: сетап есть — ждать пробойной свечи на 5m")
-    elif reason == "breakout_volume_weak":
-        lines.append("• Итог: пробой есть, объём слабый — не входить")
-    elif reason == "di_not_confirmed_5m":
-        lines.append("• Итог: пробой и объём есть, DI против — не входить")
-
-    return lines
-
-
-def build_action_view(r: dict, symbol: str = "") -> list:
-    lines = []
-    act = r["action"]
-    sig = r["signal"]
-
-    if act["valid"]:
-        side_str = "LONG" if sig["side"] == "buy" else "SHORT"
-        lines.append(f"  Направление:  {side_str}  ({act['type']})")
-        lines.append(f"  Entry:        {_fmt_price(symbol, act['entry'])}")
-        lines.append(f"  SL:           {_fmt_price(symbol, act['sl'])}  (dist={_fmt_metric(act['sl_dist'])})")
-        lines.append(f"  TP1:          {_fmt_price(symbol, act['tp1'])}  (R×{act['r_multiple']})")
-        lines.append(f"  TP2:          {_fmt_price(symbol, act['tp2'])}  (R×{act['r_multiple'] * 1.5:.1f})")
-        lines.append(f"  Invalidation: позиция инвалидна если цена пересекла SL")
-    else:
-        lines.append(f"  Сигнала нет. {act.get('hint', '')}")
-
-    return lines
-
-
-# ── Report formatting ─────────────────────────────────────────────────────────
-
-def format_report(symbol: str, captured_at: str, r: dict) -> str:
-    h = r["1h"]
-    m = r["15m"]
-    f = r["5m"]
-    sig = r["signal"]
-    reason = sig.get("reason", "")
-    stage  = _stopped_stage(reason)
-    side   = sig.get("side")
-    trader = build_trader_view(r, symbol)
-    action = build_action_view(r, symbol)
+def format_report(symbol: str, captured_at: str, indicators: dict, eng: dict) -> str:
+    """Operator console report — indicator values + engine decision."""
+    h1  = indicators.get("1h", {})
+    h15 = indicators.get("15m", {})
+    h4  = indicators.get("4h", {})
 
     SEP  = "=" * 62
     THIN = "─" * 62
-    trend_str = "BULLISH" if h["bull"] else "BEARISH" if h["bear"] else "NONE (flat)"
+
+    def _f(v, fmt=".1f"):
+        return format(v, fmt) if isinstance(v, (int, float)) else str(v or "?")
 
     lines = [
         SEP,
         f"  CHART ANALYSIS: {symbol} @ {captured_at}",
         SEP,
         "",
-        f"── 1H TREND {THIN[11:]}",
-        f"  EMA20:  {_fmt_price(symbol, h['ema20']):<12} EMA50:  {_fmt_price(symbol, h['ema50'])}",
-        f"  ADX:    {h['adx']:<12.1f} +DI: {h['plus_di']:.1f}   -DI: {h['minus_di']:.1f}",
-        f"  Trend:  {trend_str}",
+        f"── 4H {THIN[5:]}",
+        f"  Bias: {eng['bias_4h']}  ADX: {_f(h4.get('adx'))}  "
+        f"+DI: {_f(h4.get('plus_di'))}  -DI: {_f(h4.get('minus_di'))}",
+        f"  EMA20: {h4.get('ema20', '?')}  EMA50: {h4.get('ema50', '?')}",
         "",
-        f"── 15m SETUP {THIN[12:]}",
-        f"  Close:  {_fmt_price(symbol, m['close']):<12} EMA20: {_fmt_price(symbol, m['ema20'])}   EMA50: {_fmt_price(symbol, m['ema50'])}",
-        f"  ATR:    {m['atr']:.4f}",
-        f"  Near EMA20:   gap={_fmt_metric(abs(m['close'] - m['ema20']))}  "
-        f"threshold={_fmt_metric(m['pb_touch_threshold'])}  {ok(m['near_ema'])}",
-        f"  Structure:    {ok(m['structure_ok'])}",
-        f"  Pullback vol: recent={m['vol_recent']:.0f}  prior={m['vol_prior']:.0f}  "
-        f"ratio={m['vol_ratio_pb']:.2f}  weak={ok(m['pb_vol_weak'])}",
+        f"── 1H {THIN[5:]}",
+        f"  Bias: {eng['bias_1h']}  ADX: {_f(h1.get('adx'))}  Rising: {ok(eng['adx_1h_rising'])}",
+        f"  +DI: {_f(h1.get('plus_di'))}  -DI: {_f(h1.get('minus_di'))}  RSI: {h1.get('rsi', '?')}",
+        f"  ATR_1H: {h1.get('atr', '?')}  BB_width: {_f(h1.get('bb_width_pct'), '.1f')}%",
         "",
-        f"── 5m TRIGGER {THIN[13:]}",
-        f"  Trigger close: {f['trigger_close']:.4f}",
-        f"  Breakout:      {ok(f['breakout'])}",
-        f"  Vol ratio:     trigger={f['trigger_vol']:.0f}  SMA={f['vol_sma']:.0f}  "
-        f"×{f['vol_ratio']:.2f}  strong={ok(f['vol_strong'])}",
-        f"  DI confirm:    +DI={f['plus_di']:.1f}  -DI={f['minus_di']:.1f}  {ok(f['di_confirm'])}",
+        f"── 15m {THIN[6:]}",
+        f"  Close: {h15.get('close', '?')}  ATR: {h15.get('atr', '?')}  RSI: {h15.get('rsi', '?')}",
+        f"  Vol_ratio_sig: {eng['vol_ratio_sig']:.2f}  BB_expanding: {ok(eng['bb_expanding'])}",
+        f"  BB_width: {_f(h15.get('bb_width_pct'), '.1f')}%",
+        f"  Swing highs: {h15.get('swing_highs', [])}",
+        f"  Swing lows:  {h15.get('swing_lows', [])}",
         "",
-        f"── BOT DECISION {THIN[15:]}",
-        f"  Result:       {'TRADE ' + side.upper() if side else 'NO TRADE'}",
-        f"  Reason:       {reason}",
-        f"  Stopped at:   {stage}",
+        f"── FAST/SWING ENGINE {THIN[20:]}",
+        f"  Style:        {eng['trade_style']}",
+        f"  Side:         {eng['side']}",
+        f"  Entry signal: {eng['entry_signal']}",
+        f"  VWAP ok:      {ok(eng['vwap_ok'])}  VWAP: {eng.get('vwap')}",
+        f"  4H veto:      {ok(eng['four_h_veto'])}",
+        f"  OI weak:      {ok(eng['oi_weak'])}  delta: {eng.get('oi_delta', 0):.4f}",
+        f"  Funding:      {round(eng.get('funding_val', 0) * 100, 4)}%"
+        f"  warn: {ok(eng['funding_warn'])}  block: {ok(eng['funding_block'])}",
+        f"  Night:        {ok(eng['is_night'])}",
         "",
-        f"── TRADER VIEW {THIN[14:]}",
+        f"── LEVELS {THIN[9:]}",
+        f"  SL:  {eng.get('sl_p')}",
+        f"  TP1: {eng.get('tp1_p')}",
+        f"  TP2: {eng.get('tp2_p')}",
+        "",
+        SEP,
     ]
-    for t in trader:
-        lines.append(f"  {t}")
-
-    lines += [
-        "",
-        f"── ACTION VIEW {THIN[14:]}",
-    ]
-    lines += action
-    lines += ["", SEP]
     return "\n".join(lines)
 
 
-# ── Annotated PNG ─────────────────────────────────────────────────────────────
+# ── Telegram helper ───────────────────────────────────────────────────────────
+
+def _format_telegram(text: str) -> str:
+    return f"<pre>{text}</pre>"
+
+
+# ── Annotated PNG (user screenshot + sidebar) ─────────────────────────────────
 
 def generate_annotated_png(image_path: str, summary_text: str, out_path: str) -> None:
     try:
@@ -863,84 +470,59 @@ def generate_annotated_png(image_path: str, summary_text: str, out_path: str) ->
     img = Image.open(image_path).convert("RGB")
     iw, ih = img.size
 
-    # Build panel lines (right sidebar, 380px wide)
-    PANEL_W = 400
-    PADDING = 14
+    PANEL_W   = 400
+    PADDING   = 14
     FONT_SIZE = 14
 
     try:
-        font = ImageFont.truetype("arial.ttf", FONT_SIZE)
+        font      = ImageFont.truetype("arial.ttf", FONT_SIZE)
         font_bold = ImageFont.truetype("arialbd.ttf", FONT_SIZE + 1)
     except Exception:
-        font = ImageFont.load_default()
+        font      = ImageFont.load_default()
         font_bold = font
 
-    # Wrap long lines to fit panel
     max_chars = (PANEL_W - PADDING * 2) // 8
-    wrapped = []
+    wrapped   = []
     for line in summary_text.split("\n"):
         if len(line) <= max_chars:
             wrapped.append(line)
         else:
             wrapped.extend(textwrap.wrap(line, width=max_chars) or [""])
 
-    line_h = FONT_SIZE + 4
+    line_h  = FONT_SIZE + 4
     panel_h = max(ih, len(wrapped) * line_h + PADDING * 2)
 
-    # New canvas: original image + right panel
     canvas = Image.new("RGB", (iw + PANEL_W, panel_h), (15, 15, 20))
     canvas.paste(img, (0, (panel_h - ih) // 2))
 
     draw = ImageDraw.Draw(canvas)
-
-    # Panel background with subtle border
     draw.rectangle([(iw, 0), (iw + PANEL_W, panel_h)], fill=(18, 20, 28))
     draw.line([(iw, 0), (iw, panel_h)], fill=(60, 80, 120), width=2)
 
-    # Color map for client summary lines
     _SECTION_HEADERS = {
-        "СЕЙЧАС НА РЫНКЕ",
-        "ПЛАН ВХОДА",
-        "ГДЕ ИДЕЯ ЛОМАЕТСЯ",
-        "ГДЕ ЗАБРАТЬ ПРИБЫЛЬ",
-        "СЕЙЧАС ОРДЕР НЕ СТАВИМ",
-        "ЗОНА НАБЛЮДЕНИЯ",
-        "ПЛАН ПРИ ПОДТВЕРЖДЕНИИ",
-        "ЧТО НУЖНО ДЛЯ ВХОДА",
-        "ЧТО НУЖНО ДЛЯ ПОЯВЛЕНИЯ СЦЕНАРИЯ",
-        "КОГДА ИДЕЯ ТЕРЯЕТ СМЫСЛ",
-        "НЕ ДЕЛАТЬ",
-        "КОГДА ВЕРНУТЬСЯ",
+        "📊 СЕЙЧАС НА РЫНКЕ", "✅ СТАВИМ ЛИМИТКУ", "⏸️ ЖДЁМ ПОДТВЕРЖДЕНИЯ",
+        "📋 ПЛАН", "🚫 НЕТ СДЕЛКИ", "👁 ЗА ЧЕМ СЛЕДИМ",
+        "❌ НЕ ДЕЛАТЬ", "⚠️ ПРАВИЛА ВХОДА", "🔄 ПОВТОРНЫЙ АНАЛИЗ",
     }
 
     def line_color(text: str) -> tuple:
-        stripped = text.strip()
+        s = text.strip()
         if "═" in text:
             return (100, 160, 255)
-        # Status lines — colored by mode
-        if stripped.startswith("Статус:"):
-            if "ГОТОВ ВХОД" in stripped:  return (80, 210, 120)   # green
-            if "НАБЛЮДАЕМ" in stripped:   return (220, 180, 60)   # amber
-            return (150, 150, 155)                                  # gray (ВНЕ РЫНКА)
-        if stripped.startswith("Направление:"):
-            if "только LONG" in stripped:   return (80, 210, 120)
-            if "только SHORT" in stripped:  return (210, 80,  80)
+        if s.startswith("Статус:"):
+            if "ВХОД" in s:    return (80, 210, 120)
+            if "НАБЛЮДАЕМ" in s: return (220, 180, 60)
             return (150, 150, 155)
-        if stripped in _SECTION_HEADERS:
-            return (80, 140, 210)
-        if stripped.startswith("Вход можно"):
-            return (255, 200, 80)
-        if stripped.startswith(("Первая цель:", "Вторая цель:", "Зона входа:", "Триггерная цена:")):
-            return (255, 200, 80)
-        if stripped.startswith(("Защитный выход:", "Ориентир стопа:", "Сценарий ломается:")):
-            return (220, 130, 80)
-        if stripped.startswith("Волатильность:"):
-            if "высокая" in stripped or "расширение" in stripped:
-                return (220, 130, 80)
-            if "низкая" in stripped or "сжатие" in stripped:
-                return (100, 160, 255)
-        if stripped.startswith("("):
-            return (145, 150, 165)
+        if s.startswith("Направление:"):
+            if "LONG"  in s: return (80, 210, 120)
+            if "SHORT" in s: return (210, 80,  80)
+            return (150, 150, 155)
+        if s.startswith("Тип:"): return (130, 180, 255)
+        if any(s.startswith(h) for h in _SECTION_HEADERS): return (80, 140, 210)
+        if s.startswith("🛑"): return (220, 130, 80)
+        if s.startswith("🎯"): return (255, 200, 80)
+        if s.startswith("📈") or s.startswith("📉"): return (255, 200, 80)
+        if s.startswith("("): return (145, 150, 165)
         return (190, 195, 210)
 
     y = PADDING
@@ -955,6 +537,8 @@ def generate_annotated_png(image_path: str, summary_text: str, out_path: str) ->
     print(f"Saved: {out_path}")
 
 
+# ── Chart PNG from OKX data ───────────────────────────────────────────────────
+
 def generate_chart_png(
     raw_15m: list,
     result: dict,
@@ -966,7 +550,6 @@ def generate_chart_png(
     direction: str = None,
     trade_style: str = None,
 ) -> None:
-    """Generate candlestick chart from OKX data with EMA + price level overlays."""
     try:
         import io
         import matplotlib
@@ -978,7 +561,6 @@ def generate_chart_png(
         print(f"WARNING: Missing library for chart: {e}")
         return
 
-    # ── Candle slices (chronological, last 60 bars) ────────────────────────
     candles = list(reversed(raw_15m))
     n_show  = min(60, len(candles))
     candles = candles[-n_show:]
@@ -990,14 +572,12 @@ def generate_chart_png(
     closes  = [float(c[4]) for c in candles]
     volumes = [float(c[5]) for c in candles]
 
-    # EMA + BB + SuperTrend on full history, then slice last n_show
     closes_full = np.array([float(c[4]) for c in list(reversed(raw_15m))])
     highs_full  = np.array([float(c[2]) for c in list(reversed(raw_15m))])
     lows_full   = np.array([float(c[3]) for c in list(reversed(raw_15m))])
     ema20_slice = calc_ema(closes_full, 20)[-n_show:]
     ema50_slice = calc_ema(closes_full, 50)[-n_show:]
 
-    # Bollinger Bands series
     bb_upper_arr = np.zeros(len(closes_full))
     bb_lower_arr = np.zeros(len(closes_full))
     for i in range(20, len(closes_full)):
@@ -1008,9 +588,8 @@ def generate_chart_png(
     bb_upper_slice = bb_upper_arr[-n_show:]
     bb_lower_slice = bb_lower_arr[-n_show:]
 
-    # SuperTrend series
     st_vals = np.zeros(len(closes_full))
-    st_dirs = np.zeros(len(closes_full))  # 1=up, -1=down
+    st_dirs = np.zeros(len(closes_full))
     _atr_st = np.zeros(len(closes_full))
     for i in range(1, len(closes_full)):
         tr = max(highs_full[i]-lows_full[i], abs(highs_full[i]-closes_full[i-1]), abs(lows_full[i]-closes_full[i-1]))
@@ -1033,9 +612,7 @@ def generate_chart_png(
 
     COL_EMA20 = "#2196F3"
     COL_EMA50 = "#FF9800"
-
-    # ── Figure: price chart (top) + volume (bottom) ────────────────────────
-    BG = "#0b0d14"
+    BG        = "#0b0d14"
     matplotlib.rcParams.update({"font.family": "DejaVu Sans", "font.size": 8})
     fig, (ax, ax_vol) = plt.subplots(
         2, 1, figsize=(10, 6.2), facecolor=BG,
@@ -1045,7 +622,6 @@ def generate_chart_png(
     ax.set_facecolor(BG)
     ax_vol.set_facecolor(BG)
 
-    # Candlesticks
     for i, (o, h, l, c) in enumerate(zip(opens, highs_c, lows_c, closes)):
         col = "#26a69a" if c >= o else "#ef5350"
         ax.plot([i, i], [l, h], color=col, linewidth=0.7, zorder=2)
@@ -1055,8 +631,7 @@ def generate_chart_png(
             facecolor=col, edgecolor=col, linewidth=0, zorder=3,
         ))
 
-    # EMA lines + inline price labels at right edge
-    R_MARGIN = 9  # extra x-units for labels
+    R_MARGIN = 9
     for arr, col, lbl in [(ema20_slice, COL_EMA20, "EMA20"), (ema50_slice, COL_EMA50, "EMA50")]:
         pts = [(i, v) for i, v in enumerate(arr) if v > 0]
         if not pts:
@@ -1065,13 +640,11 @@ def generate_chart_png(
         ax.plot(xi, yi, color=col, linewidth=1.2, zorder=4)
         last_x, last_y = pts[-1]
         ax.text(
-            last_x + 0.8, last_y,
-            f"{lbl}: {_fmt_price(symbol, last_y)}",
+            last_x + 0.8, last_y, f"{lbl}: {_fmt_price(symbol, last_y)}",
             color=col, fontsize=6.5, va="center", ha="left", zorder=7,
             bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.85),
         )
 
-    # Bollinger Bands
     bb_u_pts = [(i, v) for i, v in enumerate(bb_upper_slice) if v > 0]
     bb_l_pts = [(i, v) for i, v in enumerate(bb_lower_slice) if v > 0]
     if bb_u_pts and bb_l_pts:
@@ -1084,7 +657,6 @@ def generate_chart_png(
         ax.text(bb_l_pts[-1][0] + 0.5, bb_l_pts[-1][1], f" BB↓{_fmt_price(symbol, bb_l_pts[-1][1])}",
                 color="#7E57C2", fontsize=5.5, va="center", ha="left", zorder=7)
 
-    # SuperTrend — green when up, red when down
     for i in range(1, n_show):
         if st_vals_slice[i] == 0:
             continue
@@ -1096,19 +668,13 @@ def generate_chart_png(
         ax.text(n_show - 1 + 0.5, st_vals_slice[-1], f" ST{_fmt_price(symbol, st_vals_slice[-1])}",
                 color=col_st_last, fontsize=5.5, va="center", ha="left", zorder=7)
 
-    # ── Price levels ───────────────────────────────────────────────────────
-    pp  = result.get("pending_plan", {})
-    act = result.get("action", {})
-
+    # Levels: llm_levels (new engine) only
     level_keys = [
-        ("entry_zone", "Зона входа", "#4CAF50", "--"),
-        ("trigger",    "Триггер",    "#00E676", "-"),
-        ("sl",         "SL",         "#F44336", "--"),
-        ("tp1",        "TP1",        "#FFD700", "--"),
-        ("tp2",        "TP2",        "#FFA500", ":"),
+        ("sl",   "SL",   "#F44336", "--"),
+        ("tp1",  "TP1",  "#FFD700", "--"),
+        ("tp2",  "TP2",  "#FFA500", ":"),
     ]
-    # Prefer old-strategy levels, fall back to llm_context levels
-    src = pp if pp.get("available") else (act if act.get("valid") else (llm_levels or {}))
+    src = llm_levels or {}
     for key, label, col, ls in level_keys:
         if not src.get(key):
             continue
@@ -1117,24 +683,23 @@ def generate_chart_png(
         ax.text(n_show - 1, price, f"  {label}: {_fmt_price(symbol, price)}",
                 color=col, fontsize=7, va="bottom", ha="right", zorder=6)
 
-    # ── Entry price marker with explicit LONG/SHORT label ─────────────────
-    _entry_p = (llm_levels or {}).get("entry_price")
+    # Entry marker
+    _entry_p = src.get("entry_price")
     if _entry_p and direction and entry_signal in ("ENTRY", "WAIT"):
         _dir_text = "ВХОД LONG ▲" if direction == "buy" else "ВХОД SHORT ▼"
         _ecol = "#00E676" if direction == "buy" else "#FF5252"
         ax.axhline(y=_entry_p, color=_ecol, linestyle="-", linewidth=1.2, alpha=0.9, zorder=6)
         ax.text(
-            n_show // 2, _entry_p,
-            f"  {_dir_text}: {_fmt_price(symbol, _entry_p)}",
+            n_show // 2, _entry_p, f"  {_dir_text}: {_fmt_price(symbol, _entry_p)}",
             color=_ecol, fontsize=8, fontweight="bold", va="bottom", ha="center", zorder=8,
             bbox=dict(boxstyle="round,pad=0.2", facecolor="#0b0d14", edgecolor=_ecol, alpha=0.9),
         )
 
-    # ── Estimated levels (range mode, no confirmed signal) ────────────────
+    # Swing levels (range mode fallback when no new engine levels)
     if not src:
         h1_res  = result.get("1h", {})
         m15_res = result.get("15m", {})
-        if not (h1_res.get("bull") or h1_res.get("bear")):  # range mode only
+        if not (h1_res.get("bull") or h1_res.get("bear")):
             close_p = m15_res.get("close")
             sh_list = m15_res.get("swing_highs") or []
             sl_list = m15_res.get("swing_lows")  or []
@@ -1143,7 +708,6 @@ def generate_chart_png(
                 sl_p = float(sl_list[-1])
                 rng  = sh_p - sl_p
                 cp   = float(close_p)
-                # Only draw if range is meaningful (≥0.5% of price) and price is inside range
                 if rng > 0 and (rng / cp) >= 0.005:
                     pct = (cp - sl_p) / rng
                     if 0.0 <= pct < 0.25:
@@ -1163,9 +727,8 @@ def generate_chart_png(
                                     color=col, fontsize=6.5, va="bottom", ha="right", zorder=6,
                                     bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.75))
 
-    # ── Swing High / Swing Low (only if level is within ±8% of current price)
-    _cur = float(result.get("15m", {}).get("close") or closes[-1])
-    m15 = result.get("15m", {})
+    _cur    = float(result.get("15m", {}).get("close") or closes[-1])
+    m15     = result.get("15m", {})
     swing_highs = m15.get("swing_highs") or []
     swing_lows  = m15.get("swing_lows")  or []
     if swing_highs:
@@ -1183,7 +746,6 @@ def generate_chart_png(
                     color="#80CBC4", fontsize=6, va="top", ha="left", zorder=6,
                     bbox=dict(boxstyle="round,pad=0.1", facecolor=BG, edgecolor="none", alpha=0.8))
 
-    # ── Volume bars ────────────────────────────────────────────────────────
     vol_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(closes, opens)]
     ax_vol.bar(range(n_show), volumes, color=vol_colors, alpha=0.8, width=0.7, zorder=2)
     if len(volumes) >= 20:
@@ -1203,8 +765,6 @@ def generate_chart_png(
         color="#555", fontsize=5.5,
     )
 
-    # ── Axes ───────────────────────────────────────────────────────────────
-    # Clip y-axis to 2nd/98th percentile of visible candles — prevents spike distortion
     all_prices = lows_c + highs_c
     y_min = float(np.percentile(all_prices, 2))
     y_max = float(np.percentile(all_prices, 98))
@@ -1227,18 +787,12 @@ def generate_chart_png(
         color="#555", fontsize=6,
     )
 
-    # Build title with direction/signal badge if available
     _title_base = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
     ax.set_title(_title_base, color="#7788aa", fontsize=8, loc="left", pad=5)
     if entry_signal and entry_signal != "NO_TRADE" and direction:
-        _dir_label = "▲ LONG" if direction == "buy" else "▼ SHORT"
+        _dir_label   = "▲ LONG" if direction == "buy" else "▼ SHORT"
         _style_label = f" {trade_style}" if trade_style and trade_style != "NO_TRADE" else ""
-        if entry_signal == "ENTRY":
-            _badge_col = "#00E676"
-        elif entry_signal == "WAIT":
-            _badge_col = "#FFD700"
-        else:
-            _badge_col = "#888888"
+        _badge_col   = "#00E676" if entry_signal == "ENTRY" else ("#FFD700" if entry_signal == "WAIT" else "#888888")
         ax.text(
             0.99, 0.97, f"{_dir_label}{_style_label}  [{entry_signal}]",
             transform=ax.transAxes, color=_badge_col, fontsize=9, fontweight="bold",
@@ -1248,28 +802,60 @@ def generate_chart_png(
 
     plt.tight_layout(pad=0.4)
 
-    # ── Render chart to PIL Image ──────────────────────────────────────────
-    buf = io.BytesIO()
+    import io as _io
+    buf = _io.BytesIO()
     plt.savefig(buf, format="png", dpi=130, facecolor=BG, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
-    chart_img = Image.open(buf).convert("RGB")
-
+    from PIL import Image as _Image
+    chart_img = _Image.open(buf).convert("RGB")
     chart_img.save(out_path, quality=92)
     print(f"Saved: {out_path}")
 
 
+# ── Per-pair FAST/SWING parameters (walk-forward validated, March 2026) ───────
+
+_PAIR_PARAMS = {
+    "BTC-USDT": {"fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
+                 "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+                 "late_range": 4.0, "allowed_modes": ["SWING"]},
+    "ETH-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
+                 "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+                 "late_range": 7.0, "allowed_modes": ["FAST"]},
+    "SOL-USDT": {"fast_vol": 2.2, "fast_adx": 20, "fast_sl_k": 1.6,
+                 "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
+                 "late_range": 10.0, "allowed_modes": ["FAST"]},
+    "XRP-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
+                 "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+                 "late_range": 7.0, "allowed_modes": ["SWING"]},
+    "ADA-USDT": {"fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
+                 "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+                 "late_range": 7.0, "allowed_modes": ["FAST", "SWING"]},
+}
+_PAIR_PARAMS_DEFAULT = {
+    "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
+    "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
+    "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+}
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = None, send_telegram: bool = False, output_dir: Path = None) -> None:
+async def run(
+    symbol: str,
+    captured_at_iso: str,
+    limit: int,
+    image_path: str = None,
+    send_telegram: bool = False,
+    output_dir: Path = None,
+) -> None:
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
     is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1"
 
-    client          = OKXClient(api_key, secret_key, passphrase, is_demo)
-    params          = load_strategy_params()
-    min_sl_percent  = load_symbol_min_sl_percent(symbol)
+    client = OKXClient(api_key, secret_key, passphrase, is_demo)
+    params = load_strategy_params()
 
     captured_ms = ts_to_ms(captured_at_iso)
     after_ts    = captured_ms + 1
@@ -1295,91 +881,43 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
-    _pair_adx = params.get("adx_thresholds", {}).get(symbol)
-    if _pair_adx is not None:
-        params = {**params, "adx_threshold_1h": float(_pair_adx)}
+    # ── Compute indicators ───────────────────────────────────────────────────
+    result = compute_indicators(raw_1h, raw_15m, raw_5m, params, raw_4h=raw_4h)
 
-    result         = analyze(raw_1h, raw_15m, raw_5m, params, min_sl_percent, raw_4h=raw_4h)
-    report_text    = format_report(symbol, captured_at_iso, result)
-    client_summary = build_client_summary(symbol, captured_at_iso, result)
-
-    print(report_text)
-    print("\n── CLIENT SUMMARY " + "─" * 44)
-    print(client_summary)
-
-    # Save outputs — one folder per run
-    ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-    if output_dir is not None:
-        run_dir = Path(output_dir)  # caller already provides the exact folder
-    else:
-        run_dir = Path(__file__).parent / "analysis_output" / ts_label
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    report_path = run_dir / f"{symbol}_report.md"
-    snap_path   = run_dir / f"{symbol}_snapshot.json"
-    png_path    = run_dir / f"{symbol}_annotated.png"
-
-    report_path.write_text(report_text + "\n", encoding="utf-8")
-
-    # Expiry time: how long this analysis is valid
-    _act = result["action"]
-    _pp  = result["pending_plan"]
-    _r1h = result["1h"]
-    if _act.get("valid") or _pp.get("available"):
-        _tf_exp = 5
-    elif _r1h.get("bull") or _r1h.get("bear"):
-        _tf_exp = 15
-    else:
-        _tf_exp = 60
-    expiry_time = _next_candle_close(captured_at_iso, _tf_exp)
-
-    # Pre-compute LLM context — Python decides, LLM formats
     _h4  = result.get("4h", {})
     _h1  = result["1h"]
     _h15 = result["15m"]
-    _h5  = result["5m"]
-    _act = result["action"]
 
-    # Bias: EMA-only (matches backtest logic — no ADX requirement for direction)
+    # ── Bias (EMA-only, no ADX requirement) ──────────────────────────────────
     _ema20_4h = float(_h4.get("ema20") or 0)
     _ema50_4h = float(_h4.get("ema50") or 0)
     _ema20_1h = float(_h1.get("ema20") or 0)
     _ema50_1h = float(_h1.get("ema50") or 0)
-    _bias_4h = "UP" if _ema20_4h > _ema50_4h > 0 else ("DOWN" if _ema20_4h < _ema50_4h else "NEUTRAL")
-    _bias_1h = "UP" if _ema20_1h > _ema50_1h > 0 else ("DOWN" if _ema20_1h < _ema50_1h else "NEUTRAL")
+    _bias_4h  = "UP" if _ema20_4h > _ema50_4h > 0 else ("DOWN" if _ema20_4h < _ema50_4h else "NEUTRAL")
+    _bias_1h  = "UP" if _ema20_1h > _ema50_1h > 0 else ("DOWN" if _ema20_1h < _ema50_1h else "NEUTRAL")
+
     _adx_1h      = float(_h1.get("adx") or 0)
     _adx_4h      = float(_h4.get("adx") or 0)
-    _bb_width_1h = float(_h1.get("bb_width_pct") or 99.0)
-    # Per-pair ADX threshold — slow pairs (BTC/ETH) need lower threshold
-    _per_pair_adx = params.get("adx_thresholds", {})
-    adx_thresh_4h = float(_per_pair_adx.get(symbol, params.get("adx_threshold_4h", params.get("adx_threshold_1h", 25))))
-    scalp_enabled  = bool(params.get("scalp_enabled", True))
-    scalp_symbols  = params.get("scalp_symbols", ["XRP-USDT", "ETH-USDT"])
-    scalp_vol_min  = float(params.get("scalp_vol_ratio", 2.0))
-    _atr_15m = float(_h15.get("atr") or 0)
-    _close   = float(_h15.get("close") or 0)
-    _vol_ratio = min(float(_h15.get("vol_ratio_pb") or 0), 10.0)
-    _rsi_15m   = float(_h15.get("rsi") or 50)
+    _atr_15m     = float(_h15.get("atr") or 0)
+    _close       = float(_h15.get("close") or 0)
+    _rsi_15m     = float(_h15.get("rsi") or 50)
+    _plus_di_1h  = float(_h1.get("plus_di") or 0)
+    _minus_di_1h = float(_h1.get("minus_di") or 0)
+    _supertrend_dir = str(_h15.get("supertrend_dir") or "")
+    _swing_highs = _h15.get("swing_highs", [])
+    _swing_lows  = _h15.get("swing_lows",  [])
 
-    # Extra indicators already calculated — use for PULLBACK filter
-    _plus_di_1h     = float(_h1.get("plus_di") or 0)
-    _minus_di_1h    = float(_h1.get("minus_di") or 0)
-    _supertrend_dir = str(_h15.get("supertrend_dir") or "")   # "up" / "down"
-    _ce_long        = float(_h15.get("ce_long") or 0)
-    _ce_short       = float(_h15.get("ce_short") or 0)
-
-    # ATR 1H + ADX rising check
+    # ── ATR 1H + ADX rising ──────────────────────────────────────────────────
     if raw_1h and len(raw_1h) >= 14:
         _highs_1h, _lows_1h, _closes_1h = parse_candles(raw_1h)
         _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=14))
-        # ADX rising: last closed bar vs previous bar (bar[-2] vs bar[-3])
         _adx_1h_prev3, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-3)
         _adx_1h_rising = _adx_1h > float(_adx_1h_prev3)
     else:
-        _atr_1h = _atr_15m * 4  # fallback: rough 1H estimate
+        _atr_1h        = _atr_15m * 4
         _adx_1h_rising = False
 
-    # Vol ratio: impulse version — last 3 bars vs prior 15 on 15m
+    # ── Vol ratio (impulse: last 3 vs prior 15 on 15m) ───────────────────────
     if raw_15m and len(raw_15m) >= 20:
         _vols_imp  = [float(c[5]) for c in list(reversed(raw_15m))]
         _prior_imp = float(np.mean(_vols_imp[5:20]))
@@ -1387,86 +925,55 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     else:
         _vol_ratio_sig = 1.0
 
-    # OI delta: (current - previous) / previous from last 2 bars
+    # ── OI delta ─────────────────────────────────────────────────────────────
     _oi_delta = 0.0
     if _oi_hist and len(_oi_hist) >= 2:
-        def _parse_oi_entry(e):
-            if isinstance(e, dict):            return float(e.get("oi", 0) or e.get("oiCcy", 0))
+        def _parse_oi(e):
+            if isinstance(e, dict):                        return float(e.get("oi", 0) or e.get("oiCcy", 0))
             if isinstance(e, (list, tuple)) and len(e) >= 2: return float(e[1])
             return 0.0
-        _oic = _parse_oi_entry(_oi_hist[0])
-        _oip = _parse_oi_entry(_oi_hist[1])
+        _oic = _parse_oi(_oi_hist[0])
+        _oip = _parse_oi(_oi_hist[1])
         if _oip > 0:
             _oi_delta = (_oic - _oip) / _oip
 
-    # VWAP and daily High/Low from 15m candles (current UTC day only)
-    _captured_dt = datetime.fromisoformat(captured_at_iso.replace("Z", "+00:00"))
+    # ── VWAP + day levels ────────────────────────────────────────────────────
+    _captured_dt  = datetime.fromisoformat(captured_at_iso.replace("Z", "+00:00"))
     _day_start_ms = int(datetime(_captured_dt.year, _captured_dt.month, _captured_dt.day,
                                   tzinfo=timezone.utc).timestamp() * 1000)
-    _day_candles = [c for c in raw_15m if int(c[0]) >= _day_start_ms]
+    _day_candles  = [c for c in raw_15m if int(c[0]) >= _day_start_ms]
     if _day_candles:
-        _dc_closes = [float(c[4]) for c in _day_candles]
-        _dc_vols   = [float(c[5]) for c in _day_candles]
-        _dc_highs  = [float(c[2]) for c in _day_candles]
-        _dc_lows   = [float(c[3]) for c in _day_candles]
-        _vol_sum = sum(_dc_vols)
-        _vwap     = round(sum(c * v for c, v in zip(_dc_closes, _dc_vols)) / _vol_sum, 4) if _vol_sum > 0 else None
-        _day_high = round(max(_dc_highs), 4)
-        _day_low  = round(min(_dc_lows),  4)
+        _dc_closes  = [float(c[4]) for c in _day_candles]
+        _dc_vols    = [float(c[5]) for c in _day_candles]
+        _dc_highs   = [float(c[2]) for c in _day_candles]
+        _dc_lows    = [float(c[3]) for c in _day_candles]
+        _vol_sum    = sum(_dc_vols)
+        _vwap       = round(sum(c * v for c, v in zip(_dc_closes, _dc_vols)) / _vol_sum, 4) if _vol_sum > 0 else None
+        _day_high   = round(max(_dc_highs), 4)
+        _day_low    = round(min(_dc_lows),  4)
     else:
         _vwap = _day_high = _day_low = None
 
-    # Day position: 0.0 = day_low, 1.0 = day_high
     if _day_high and _day_low and _day_high != _day_low and _close:
         _day_position = round((_close - _day_low) / (_day_high - _day_low), 3)
     else:
         _day_position = None
 
-    # Night session: 01:00–06:59 UTC — low liquidity
+    # ── Session + daily range ─────────────────────────────────────────────────
     _signal_hour = _captured_dt.hour
     _is_night    = 1 <= _signal_hour < 7
 
-    # Dynamic TP multiplier: tighter in low-volatility days, wider in high-volatility days
     if _day_high and _day_low and _day_low > 0:
         _daily_range_pct = (_day_high - _day_low) / _day_low * 100
     else:
         _daily_range_pct = 0.0
-    if _daily_range_pct >= 4.0:
-        _tp1_mult = 1.0   # high volatility day — full 1:1
-    elif _daily_range_pct >= 2.0:
-        _tp1_mult = 0.8   # medium — 0.8:1
-    else:
-        _tp1_mult = 0.6   # low volatility — tight TP, hits more often
 
-    # ── FAST / SWING Signal Engine (backtest-validated, March 2026) ─────────────
-    # Per-pair specialization from 2×14d walk-forward test
-    _PAIR_PARAMS = {
-        "BTC-USDT": {"fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
-                     "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
-                     "late_range": 4.0, "allowed_modes": ["SWING"]},
-        "ETH-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
-                     "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
-                     "late_range": 7.0, "allowed_modes": ["FAST"]},
-        "SOL-USDT": {"fast_vol": 2.2, "fast_adx": 20, "fast_sl_k": 1.6,
-                     "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
-                     "late_range": 10.0, "allowed_modes": ["FAST"]},
-        "XRP-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
-                     "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-                     "late_range": 7.0, "allowed_modes": ["SWING"]},
-        "ADA-USDT": {"fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
-                     "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-                     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"]},
-    }
-    _pp = _PAIR_PARAMS.get(symbol, {
-        "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
-        "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
-        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
-    })
-
-    # BB expansion on 15m (>1.5% width = trending, not sideways)
+    # ── BB expansion ─────────────────────────────────────────────────────────
     _bb_expanding = float(_h15.get("bb_width_pct") or 0) > 1.5
 
-    # Trade style: FAST first, SWING fallback
+    # ── FAST / SWING engine ───────────────────────────────────────────────────
+    _pp = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
+
     _trade_style = "NO_TRADE"
     if (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
             and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding
@@ -1479,15 +986,13 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
                 and "SWING" in _pp["allowed_modes"]):
             _trade_style = "SWING"
 
-    # Night filter (01-07 UTC)
     if _is_night:
         _trade_style = "NO_TRADE"
 
-    # Late-move veto: daily range exhausted and price at extreme
     if _daily_range_pct > _pp["late_range"] and _day_position is not None and _day_position > 0.90:
         _trade_style = "NO_TRADE"
 
-    # Direction from 1H EMA bias
+    # Direction
     if _bias_1h == "UP":
         _side = "buy"
     elif _bias_1h == "DOWN":
@@ -1496,32 +1001,30 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         _trade_style = "NO_TRADE"
         _side = None
 
-    # 4H veto: strong opposing trend (ADX > 30 and 4H bias conflicts with 1H)
+    # 4H veto
     _4h_veto = float(_adx_4h) > 30 and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
     if _4h_veto:
         _trade_style = "NO_TRADE"
 
-    # VWAP filter: price must be on trend side of VWAP
+    # VWAP filter
     _vwap_ok = True
     if _vwap and _close and _side:
         if _side == "buy"  and _close < _vwap: _vwap_ok = False
         if _side == "sell" and _close > _vwap: _vwap_ok = False
 
-    # Side-aware funding filter (0.05% threshold)
-    _funding_val = _funding if _funding is not None else 0.0
-    _FUND_THRESH = 0.0005
+    # Funding (side-aware, 0.05% threshold)
+    _funding_val  = _funding if _funding is not None else 0.0
+    _FUND_THRESH  = 0.0005
     _funding_block = ((_side == "buy"  and _funding_val >  _FUND_THRESH) or
                       (_side == "sell" and _funding_val < -_FUND_THRESH))
     _funding_warn  = not _funding_block and abs(_funding_val) > _FUND_THRESH * 0.5
 
-    # OI weak: positions closing into the move = weaker signal
+    # OI weak
     _oi_weak = _oi_delta < -0.03
 
     # SL / TP
     _sl_p = _tp1_p = _tp2_p = None
     _sl_dist = 0.0
-    _swing_highs = _h15.get("swing_highs", [])
-    _swing_lows  = _h15.get("swing_lows",  [])
 
     if _trade_style == "FAST" and _side and _close:
         _sl_dist = max(_pp["fast_sl_k"] * _atr_15m, _close * 0.004)
@@ -1550,74 +1053,117 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
             _tp1_p   = round(_close - min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
             _tp2_p   = round(_close - min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
 
-    # Max hold by style
-    _max_hold_minutes = 120 if _trade_style == "FAST" else 240  # FAST: 2h, SWING: 4h
-    _tp1_mult = 1.0  # kept for snapshot compatibility
+    _max_hold_minutes = 120 if _trade_style == "FAST" else 240
 
     # Final entry signal
-    if (_trade_style == "NO_TRADE" or not _vwap_ok
-            or _4h_veto or _oi_weak
+    if (_trade_style == "NO_TRADE" or not _vwap_ok or _4h_veto or _oi_weak
             or not _sl_p or not _tp1_p):
         _entry_signal = "NO_TRADE"
     elif _funding_warn or _funding_block:
-        # Funding high — warn but don't block: profit covers funding cost for 2-4h trades
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
 
-    _high_risk_scalp = False  # FAST replaces SCALP
+    # ── Engine vars dict ──────────────────────────────────────────────────────
+    engine_vars = {
+        "trade_style":   _trade_style,
+        "entry_signal":  _entry_signal,
+        "side":          _side,
+        "bias_1h":       _bias_1h,
+        "bias_4h":       _bias_4h,
+        "adx_1h":        _adx_1h,
+        "adx_1h_rising": _adx_1h_rising,
+        "vol_ratio_sig": _vol_ratio_sig,
+        "bb_expanding":  _bb_expanding,
+        "vwap_ok":       _vwap_ok,
+        "four_h_veto":   _4h_veto,
+        "oi_weak":       _oi_weak,
+        "oi_delta":      _oi_delta,
+        "is_night":      _is_night,
+        "funding_warn":  _funding_warn,
+        "funding_block": _funding_block,
+        "funding_val":   _funding_val,
+        "close":         _close,
+        "sl_p":          _sl_p,
+        "tp1_p":         _tp1_p,
+        "tp2_p":         _tp2_p,
+        "vwap":          _vwap,
+        "day_high":      _day_high,
+        "day_low":       _day_low,
+        "max_hold_minutes": _max_hold_minutes,
+        "daily_range_pct":  _daily_range_pct,
+        "day_position":     _day_position,
+    }
+
+    # ── Build texts ───────────────────────────────────────────────────────────
+    engine_summary = build_engine_summary(symbol, captured_at_iso, engine_vars)
+    report_text    = format_report(symbol, captured_at_iso, result, engine_vars)
+
+    print(report_text)
+    print("\n── ENGINE SUMMARY " + "─" * 44)
+    print(engine_summary)
+
+    # ── Save outputs ──────────────────────────────────────────────────────────
+    ts_label = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    if output_dir is not None:
+        run_dir = Path(output_dir)
+    else:
+        run_dir = Path(__file__).parent / "analysis_output" / ts_label
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    report_path = run_dir / f"{symbol}_report.md"
+    snap_path   = run_dir / f"{symbol}_snapshot.json"
+    png_path    = run_dir / f"{symbol}_chart.png"
+
+    report_path.write_text(report_text + "\n", encoding="utf-8")
+
+    # Expiry
+    _tf_exp     = 5 if _entry_signal == "ENTRY" else (15 if _entry_signal == "WAIT" else 60)
+    expiry_time = _next_candle_close(captured_at_iso, _tf_exp)
 
     snapshot = {
-        "symbol":       symbol,
-        "captured_at":  captured_at_iso,
-        "expiry_time":  expiry_time,
+        "symbol":      symbol,
+        "captured_at": captured_at_iso,
+        "expiry_time": expiry_time,
         "llm_context": {
-            "bias_4h":          _bias_4h,
-            "bias_1h":          _bias_1h,
-            "adx_1h":           round(_adx_1h, 1),
-            "adx_4h":           round(_adx_4h, 1),
-            "plus_di_1h":       round(_plus_di_1h, 1),
-            "minus_di_1h":      round(_minus_di_1h, 1),
-            "supertrend_dir":   _supertrend_dir,
-            "rsi_1h":           _h1.get("rsi"),
-            "rsi_15m":          _h15.get("rsi"),
-            "volume_ratio_15m": round(_vol_ratio_sig, 2),
-            "bb_width_15m":     _h15.get("bb_width_pct"),
-            "day_position":     _day_position,
-            "trade_style_hint": _trade_style,
-            "adx_1h_rising":    _adx_1h_rising,
-            "oi_delta":         round(_oi_delta, 4),
-            "entry_signal":     _entry_signal,
-            "funding_rate":     round(_funding, 6) if _funding is not None else None,
-            "funding_blocked":  bool(_funding_block),
-            "open_interest":    round(_oi, 0) if _oi is not None else None,
-            "vwap_day":         _vwap,
-            "day_high":         _day_high,
-            "day_low":          _day_low,
-            "atr_1h":           round(_atr_1h, 4),
-            "atr_15m":          round(_atr_15m, 4),
-            "side":             _side,
-            "entry_price":      _close if _sl_p else None,
-            "sl_price":         _sl_p,
-            "tp1_price":        _tp1_p,
-            "tp2_price":        _tp2_p,
+            "bias_4h":           _bias_4h,
+            "bias_1h":           _bias_1h,
+            "adx_1h":            round(_adx_1h, 1),
+            "adx_4h":            round(_adx_4h, 1),
+            "adx_1h_rising":     _adx_1h_rising,
+            "plus_di_1h":        round(_plus_di_1h, 1),
+            "minus_di_1h":       round(_minus_di_1h, 1),
+            "supertrend_dir":    _supertrend_dir,
+            "rsi_1h":            _h1.get("rsi"),
+            "rsi_15m":           _h15.get("rsi"),
+            "volume_ratio_15m":  round(_vol_ratio_sig, 2),
+            "bb_width_15m":      _h15.get("bb_width_pct"),
+            "bb_expanding":      _bb_expanding,
+            "day_position":      _day_position,
+            "trade_style_hint":  _trade_style,
+            "oi_delta":          round(_oi_delta, 4),
+            "entry_signal":      _entry_signal,
+            "funding_rate":      round(_funding_val, 6),
+            "funding_blocked":   bool(_funding_block),
+            "open_interest":     round(_oi, 0) if _oi is not None else None,
+            "vwap_day":          _vwap,
+            "day_high":          _day_high,
+            "day_low":           _day_low,
+            "atr_1h":            round(_atr_1h, 4),
+            "atr_15m":           round(_atr_15m, 4),
+            "side":              _side,
+            "entry_price":       _close if _sl_p else None,
+            "sl_price":          _sl_p,
+            "tp1_price":         _tp1_p,
+            "tp2_price":         _tp2_p,
             "max_hold_minutes":  _max_hold_minutes,
             "daily_range_pct":   round(_daily_range_pct, 2),
-            "tp1_mult":          _tp1_mult,
             "is_night_session":  _is_night,
-            "high_risk_scalp":   _high_risk_scalp,
         },
-        "4h":           result.get("4h", {}),
-        "1h":           result["1h"],
-        "15m":          result["15m"],
-        "5m":           result["5m"],
-        "bot_decision": {
-            "side":             result["signal"].get("side"),
-            "reason":           result["signal"].get("reason"),
-            "stopped_at_stage": _stopped_stage(result["signal"].get("reason", "")),
-        },
-        "action":       result["action"],
-        "pending_plan": result["pending_plan"],
+        "4h":          result.get("4h", {}),
+        "1h":          result["1h"],
+        "15m":         result["15m"],
+        "5m":          result["5m"],
         "trader_notes": [],
     }
     snap_path.write_text(
@@ -1628,8 +1174,7 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
 
-    # Chart first — so LLM can see it as visual context
-    # Pass llm_context levels so chart shows SL/TP even when old strategy has no signal
+    # ── Chart ─────────────────────────────────────────────────────────────────
     _llm_levels = {
         "sl":          _sl_p,
         "tp1":         _tp1_p,
@@ -1644,65 +1189,35 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
         trade_style=_trade_style,
     )
 
-    # LLM only for actionable signals — NO_TRADE uses Python template (saves API calls)
+    # ── LLM (ENTRY/WAIT only) ─────────────────────────────────────────────────
     llm_text = None
     if _entry_signal in ("ENTRY", "WAIT"):
         from src.utils.llm_formatter import generate_client_text
         llm_image = str(png_path) if png_path.exists() else image_path
-        llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=client_summary)
-
-    if llm_text:
-        delivery_text = llm_text
-    else:
-        # Python template — patch status label to match entry_signal
-        _status_map = {"ENTRY": "ВХОД", "WAIT": "НАБЛЮДАЕМ", "NO_TRADE": "ВНЕ РЫНКА"}
-        _correct = _status_map.get(_entry_signal, "ВНЕ РЫНКА")
-        delivery_text = client_summary
-        for _old in ["ГОТОВ ВХОД", "НАБЛЮДАЕМ", "ВНЕ РЫНКА"]:
-            if f"  Статус:      {_old}" in delivery_text:
-                delivery_text = delivery_text.replace(f"  Статус:      {_old}", f"  Статус:      {_correct}", 1)
-                break
-
-        # Fix new-engine vs old-engine mismatches in Python template
-        # 1. Direction: new engine has a side but old engine said "нет направления"
-        if _side == "buy" and "направления нет" in delivery_text:
-            delivery_text = delivery_text.replace(
-                "направления нет — ни LONG, ни SHORT не рассматриваются",
-                "только LONG — короткая сторона не рассматривается", 1)
-        elif _side == "sell" and "направления нет" in delivery_text:
-            delivery_text = delivery_text.replace(
-                "направления нет — ни LONG, ни SHORT не рассматриваются",
-                "только SHORT — длинная сторона не рассматривается", 1)
-        # 2. Remove fake pending_plan levels when new engine has no SL/TP
-        if _sl_p is None:
-            delivery_text = re.sub(
-                r'  (Зона входа|Триггерная цена|Ориентир стопа|Первая цель|Вторая цель|Сценарий ломается):[^\n]*\n',
-                '', delivery_text)
-
-    # Append high-risk scalp warning for BTC/SOL
-    if _high_risk_scalp:
-        delivery_text += (
-            "\n\n⚠️ Внимание: BTC и SOL — широкий спред и быстрые развороты.\n"
-            "   Скальп на этих парах: плечо ≤3x, вход малой долей (до 30% депо)."
+        llm_text  = await generate_client_text(
+            symbol, captured_at_iso, snapshot, llm_image, client_summary=None
         )
 
-    # Save for downstream consumers (e.g. telegram_bot.py)
+    delivery_text = llm_text if llm_text else engine_summary
+
+    # Save delivery text
     summary_path = run_dir / f"{symbol}_client_summary.txt"
     summary_path.write_text(delivery_text, encoding="utf-8")
     print(f"Saved: {summary_path}")
 
+    # ── Telegram ──────────────────────────────────────────────────────────────
     if send_telegram:
         from src.utils.telegram import send_message
         tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
-        tg_chat  = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        tg_chat  = os.getenv("TELEGRAM_CHAT_ID",    "").strip()
         if not tg_token or not tg_chat:
-            print("Telegram: not sent — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set in .env")
+            print("Telegram: not sent — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set")
         else:
-            from src.utils.telegram import send_photo_to
             import html as _html
-            tg_text = _html.escape(delivery_text) if llm_text else _format_telegram(client_summary)
+            tg_text = _html.escape(delivery_text) if llm_text else _format_telegram(delivery_text)
             await send_message(tg_text)
             if image_path and os.path.exists(image_path):
+                from src.utils.telegram import send_photo_to
                 await send_photo_to(tg_chat, image_path)
             print("Telegram: sent.")
 
@@ -1711,12 +1226,12 @@ async def run(symbol: str, captured_at_iso: str, limit: int, image_path: str = N
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Chart Analyzer — bot + trader + action view for a historical snapshot"
+        description="Chart Analyzer — FAST/SWING engine + OKX data"
     )
-    parser.add_argument("--symbol",      required=True,  help="e.g. XRP-USDT")
-    parser.add_argument("--captured-at", required=True,  dest="captured_at",
+    parser.add_argument("--symbol",       required=True,  help="e.g. XRP-USDT")
+    parser.add_argument("--captured-at",  required=True,  dest="captured_at",
                         help="ISO UTC timestamp e.g. 2026-03-09T11:42:35Z")
-    parser.add_argument("--image",       default=None,   help="Path to screenshot (optional)")
+    parser.add_argument("--image",        default=None,   help="Path to screenshot (optional)")
     parser.add_argument("--limit",        type=int, default=100,
                         help="Candles to fetch per timeframe (default 100)")
     parser.add_argument("--send-telegram", action="store_true", dest="send_telegram",
