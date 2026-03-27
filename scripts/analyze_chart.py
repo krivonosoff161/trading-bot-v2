@@ -178,6 +178,8 @@ def compute_indicators(
 
     # ── 5m ──────────────────────────────────────────────────────────────────
     highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
+    ema20_5m = calc_ema(closes_5m, ema_fast)
+    rsi_5m   = calc_rsi(closes_5m, period=14)
 
     return {
         "1h": {
@@ -215,6 +217,8 @@ def compute_indicators(
         },
         "5m": {
             "trigger_close": round(float(closes_5m[-2]), 6),
+            "ema20":         round(float(ema20_5m[-2]), 6),
+            "rsi":           round(rsi_5m, 1),
         },
         "4h": h4_data,
     }
@@ -233,7 +237,6 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     vol_ratio     = eng["vol_ratio_sig"]
     bb_expanding  = eng["bb_expanding"]
     vwap_ok       = eng["vwap_ok"]
-    four_h_veto   = eng["four_h_veto"]
     oi_weak       = eng["oi_weak"]
     is_night      = eng["is_night"]
     funding_warn  = eng["funding_warn"]
@@ -247,6 +250,14 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     day_high      = eng["day_high"]
     day_low       = eng["day_low"]
     max_hold      = eng["max_hold_minutes"]
+    daily_range_pct = eng.get("daily_range_pct", 0.0)
+    day_position    = eng.get("day_position")
+    rsi_1h          = eng.get("rsi_1h", 50.0)
+    rsi_15m         = eng.get("rsi_15m", 50.0)
+    four_h_conflict = eng.get("four_h_conflict", False)
+    adx_4h_ok       = eng.get("adx_4h_ok", True)
+    five_m_trigger  = eng.get("five_m_trigger", True)
+    adx_4h          = eng.get("adx_4h", 0.0)
 
     try:
         dt     = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
@@ -290,7 +301,21 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             _ctrl       = "покупатели" if side == "buy" else "продавцы"
             lines.append(f"  Цена {_vwap_word} дневного уровня равновесия ({fp(vwap)}) — {_ctrl} контролируют день.")
         if day_high and day_low:
-            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.")
+            _range_note = ""
+            if daily_range_pct >= 20:
+                _range_note = f" ⚠️ Волатильность экстремальная ({daily_range_pct:.1f}% дня)."
+            elif daily_range_pct >= 8:
+                _range_note = f" Широкий день ({daily_range_pct:.1f}%)."
+            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.{_range_note}")
+        if day_position is not None:
+            if day_position <= 0.15:
+                lines.append(f"  Цена у дна дня ({int(day_position*100)}%) — потенциал вверх остаётся.")
+            elif day_position >= 0.85:
+                lines.append(f"  Цена у вершины дня ({int(day_position*100)}%) — потенциал вниз остаётся.")
+        if rsi_1h <= 25:
+            lines.append(f"  RSI 1H перепродан ({rsi_1h:.0f}) — возможен отскок.")
+        elif rsi_1h >= 75:
+            lines.append(f"  RSI 1H перекуплен ({rsi_1h:.0f}) — давление на рост снизится.")
         lines.append("")
 
         if funding_warn or funding_block:
@@ -333,9 +358,12 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         elif bias_1h == "NEUTRAL":
             why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
             what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
-        elif four_h_veto:
-            why  = "На 4H сильный тренд против 1H — входим только по направлению старшего таймфрейма."
-            what = "Дождаться выравнивания направлений на 4H и 1H."
+        elif four_h_conflict:
+            why  = "4H направление против 1H — SWING требует согласования таймфреймов."
+            what = "Ждать пока 4H и 1H совпадут по направлению — либо ждать FAST если объём появится."
+        elif not adx_4h_ok:
+            why  = f"На 4H нет выраженного тренда (ADX {adx_4h:.0f}) — SWING требует подтверждённого тренда на старшем ТФ."
+            what = "Ждать роста ADX 4H выше 20 — это сигнал что тренд формируется."
         elif not adx_rising:
             why  = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
             what = "Ждать когда ADX начнёт расти — это сигнал возобновления тренда."
@@ -345,6 +373,10 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         elif not bb_expanding:
             why  = "Bollinger Bands сжаты — рынок в боковике, направленного движения нет."
             what = "Ждать расширения полос — это сигнал выхода из консолидации."
+        elif not five_m_trigger:
+            _need5 = "выше" if side == "buy" else "ниже"
+            why  = f"Цена на 5m ещё не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
+            what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 на 5m — условие FAST выполнено."
         elif not vwap_ok:
             _need = "выше" if side == "buy" else "ниже"
             why  = f"Цена на неправильной стороне дневного равновесия — для {'лонга' if side == 'buy' else 'шорта'} нужно {_need} {fp(vwap)}."
@@ -367,7 +399,23 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         if _dir_ctx:
             lines.append(f"  {_dir_ctx}")
         if day_high and day_low:
-            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.")
+            _range_note = ""
+            if daily_range_pct >= 20:
+                _range_note = f" ⚠️ Волатильность экстремальная ({daily_range_pct:.1f}% дня)."
+            elif daily_range_pct >= 8:
+                _range_note = f" Широкий день ({daily_range_pct:.1f}%)."
+            lines.append(f"  Диапазон дня: {fp(day_low)} — {fp(day_high)}.{_range_note}")
+        if day_position is not None:
+            if day_position <= 0.10:
+                lines.append(f"  Цена у дна дня ({int(day_position*100)}%) — рядом с дневным минимумом.")
+            elif day_position >= 0.90:
+                lines.append(f"  Цена у вершины дня ({int(day_position*100)}%) — рядом с дневным максимумом.")
+            else:
+                lines.append(f"  Позиция в дне: {int(day_position*100)}% (0%=дно, 100%=вершина).")
+        if rsi_1h <= 25:
+            lines.append(f"  RSI 1H перепродан ({rsi_1h:.0f}) — осторожно с шортами.")
+        elif rsi_1h >= 75:
+            lines.append(f"  RSI 1H перекуплен ({rsi_1h:.0f}) — осторожно с лонгами.")
         lines.append("")
 
         lines.append("🚫 НЕТ СДЕЛКИ")
@@ -431,12 +479,17 @@ def format_report(symbol: str, captured_at: str, indicators: dict, eng: dict) ->
         f"  Swing highs: {h15.get('swing_highs', [])}",
         f"  Swing lows:  {h15.get('swing_lows', [])}",
         "",
+        f"── 5m {THIN[5:]}",
+        f"  Trigger close: {indicators.get('5m', {}).get('trigger_close', '?')}  "
+        f"EMA20: {indicators.get('5m', {}).get('ema20', '?')}  RSI: {indicators.get('5m', {}).get('rsi', '?')}",
+        "",
         f"── FAST/SWING ENGINE {THIN[20:]}",
         f"  Style:        {eng['trade_style']}",
         f"  Side:         {eng['side']}",
         f"  Entry signal: {eng['entry_signal']}",
         f"  VWAP ok:      {ok(eng['vwap_ok'])}  VWAP: {eng.get('vwap')}",
-        f"  4H veto:      {ok(eng['four_h_veto'])}",
+        f"  4H conflict:  {ok(eng.get('four_h_conflict', False))}  4H ADX ok: {ok(eng.get('adx_4h_ok', True))}",
+        f"  5m trigger:   {ok(eng.get('five_m_trigger', True))}  RSI_5m: {eng.get('rsi_5m', '?')}",
         f"  OI weak:      {ok(eng['oi_weak'])}  delta: {eng.get('oi_delta', 0):.4f}",
         f"  Funding:      {round(eng.get('funding_val', 0) * 100, 4)}%"
         f"  warn: {ok(eng['funding_warn'])}  block: {ok(eng['funding_block'])}",
@@ -887,6 +940,7 @@ async def run(
     _h4  = result.get("4h", {})
     _h1  = result["1h"]
     _h15 = result["15m"]
+    _h5  = result.get("5m", {})
 
     # ── Bias (EMA-only, no ADX requirement) ──────────────────────────────────
     _ema20_4h = float(_h4.get("ema20") or 0)
@@ -901,6 +955,7 @@ async def run(
     _atr_15m     = float(_h15.get("atr") or 0)
     _close       = float(_h15.get("close") or 0)
     _rsi_15m     = float(_h15.get("rsi") or 50)
+    _rsi_1h      = float(_h1.get("rsi") or 50)
     _plus_di_1h  = float(_h1.get("plus_di") or 0)
     _minus_di_1h = float(_h1.get("minus_di") or 0)
     _supertrend_dir = str(_h15.get("supertrend_dir") or "")
@@ -971,18 +1026,41 @@ async def run(
     # ── BB expansion ─────────────────────────────────────────────────────────
     _bb_expanding = float(_h15.get("bb_width_pct") or 0) > 1.5
 
+    # ── 4H context (SWING) + 5m trigger (FAST) ───────────────────────────────
+    _h4_available    = bool(_h4)
+    # SWING requires a live 4H trend and no direction conflict
+    _adx_4h_ok       = (not _h4_available) or float(_adx_4h) >= 20
+    _4h_dir_conflict = _h4_available and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
+    # FAST trigger: 5m close already moving in the 1H direction
+    _ema20_5m      = float(_h5.get("ema20") or 0)
+    _rsi_5m        = float(_h5.get("rsi") or 50)
+    _trigger_close = float(_h5.get("trigger_close") or 0)
+    if _ema20_5m > 0 and _bias_1h == "UP":
+        _5m_trigger_ok = _trigger_close > _ema20_5m
+    elif _ema20_5m > 0 and _bias_1h == "DOWN":
+        _5m_trigger_ok = _trigger_close < _ema20_5m
+    else:
+        _5m_trigger_ok = True  # no 5m data or no 1H direction — don't block
+
     # ── FAST / SWING engine ───────────────────────────────────────────────────
     _pp = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
 
     _trade_style = "NO_TRADE"
+    # FAST: short-term momentum — 1H trend + 15m impulse + 5m confirmation
+    # 4H context is irrelevant for a 2-hour trade
     if (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
             and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding
+            and _bias_1h != "NEUTRAL"
+            and _5m_trigger_ok
             and "FAST" in _pp["allowed_modes"]):
         _trade_style = "FAST"
+    # SWING: trend continuation — 4H trend must exist and align with 1H
     if _trade_style == "NO_TRADE":
         if (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
                 and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
                 and _bias_1h != "NEUTRAL"
+                and not _4h_dir_conflict
+                and _adx_4h_ok
                 and "SWING" in _pp["allowed_modes"]):
             _trade_style = "SWING"
 
@@ -1001,10 +1079,9 @@ async def run(
         _trade_style = "NO_TRADE"
         _side = None
 
-    # 4H veto
-    _4h_veto = float(_adx_4h) > 30 and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
-    if _4h_veto:
-        _trade_style = "NO_TRADE"
+    # 4H veto — informational only; SWING handles 4H via entry condition,
+    # FAST is 4H-agnostic by design
+    _4h_veto = _4h_dir_conflict
 
     # VWAP filter
     _vwap_ok = True
@@ -1056,7 +1133,7 @@ async def run(
     _max_hold_minutes = 120 if _trade_style == "FAST" else 240
 
     # Final entry signal
-    if (_trade_style == "NO_TRADE" or not _vwap_ok or _4h_veto or _oi_weak
+    if (_trade_style == "NO_TRADE" or not _vwap_ok or _oi_weak
             or not _sl_p or not _tp1_p):
         _entry_signal = "NO_TRADE"
     elif _funding_warn or _funding_block:
@@ -1091,8 +1168,15 @@ async def run(
         "day_high":      _day_high,
         "day_low":       _day_low,
         "max_hold_minutes": _max_hold_minutes,
-        "daily_range_pct":  _daily_range_pct,
-        "day_position":     _day_position,
+        "daily_range_pct":   _daily_range_pct,
+        "day_position":      _day_position,
+        "rsi_1h":            _rsi_1h,
+        "rsi_15m":           _rsi_15m,
+        "adx_4h":            _adx_4h,
+        "four_h_conflict":   _4h_dir_conflict,
+        "adx_4h_ok":         _adx_4h_ok,
+        "five_m_trigger":    _5m_trigger_ok,
+        "rsi_5m":            _rsi_5m,
     }
 
     # ── Build texts ───────────────────────────────────────────────────────────
@@ -1159,6 +1243,9 @@ async def run(
             "max_hold_minutes":  _max_hold_minutes,
             "daily_range_pct":   round(_daily_range_pct, 2),
             "is_night_session":  _is_night,
+            "adx_4h_ok":         _adx_4h_ok,
+            "four_h_conflict":   _4h_dir_conflict,
+            "five_m_trigger":    _5m_trigger_ok,
         },
         "4h":          result.get("4h", {}),
         "1h":          result["1h"],
