@@ -64,6 +64,16 @@ def add_user(chat_id: str, days: int, plan: str = "monthly") -> str:
     return new_expiry.isoformat()
 
 
+def remove_user(chat_id: str) -> bool:
+    """Remove user. Returns True if existed, False if not found."""
+    data = _load()
+    if str(chat_id) not in data:
+        return False
+    del data[str(chat_id)]
+    _save(data)
+    return True
+
+
 def list_users() -> list[dict]:
     """Return all users with their status."""
     data = _load()

@@ -39,7 +39,7 @@ from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: 
 from scripts.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
-from scripts.subscriptions import is_subscribed, add_user, list_users, get_status  # noqa: E402
+from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -521,6 +521,28 @@ async def _handle_text(msg: dict) -> None:
         for u in users:
             lines.append(f"  {u['chat_id']} — {u['plan']} — {u['status']}")
         await _send(chat_id, "\n".join(lines))
+        return
+
+    if text.startswith("/del ") and is_admin:
+        target_id = text.split()[1] if len(text.split()) == 2 else None
+        if target_id:
+            ok = remove_user(target_id)
+            await _send(chat_id, f"✅ Удалён: {target_id}" if ok else f"❌ Не найден: {target_id}")
+        else:
+            await _send(chat_id, "Формат: /del <chat_id>")
+        return
+
+    if text == "/admin" and is_admin:
+        await _send(chat_id, (
+            "🛠 Команды администратора:\n\n"
+            "/add <chat_id> <дней> — выдать/продлить доступ\n"
+            "  пример: /add 123456789 10\n\n"
+            "/del <chat_id> — удалить пользователя\n"
+            "  пример: /del 123456789\n\n"
+            "/users — список всех пользователей\n\n"
+            "Superadmin: expires=null, постоянный доступ.\n"
+            "Обычный: expires=дата, блокируется автоматически."
+        ))
         return
 
     # ── Access check — all non-admin traffic blocked here ────────────────────
