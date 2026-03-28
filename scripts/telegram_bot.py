@@ -647,12 +647,22 @@ async def handle_update(update: dict) -> None:
 
 _SCANNER_PAIRS  = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT"]
 _SCANNER_EXPIRY = {"ENTRY": 5, "WAIT": 15, "NO_TRADE": 60}  # minutes
+_SCANNER_LOG    = ROOT / "logs" / "scanner.log"
+
+
+def _scan_log(msg: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    line = f"[{ts}] {msg}\n"
+    print(line, end="")
+    _SCANNER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(_SCANNER_LOG, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
 async def _scanner_loop() -> None:
     """Background task: scan all pairs every N minutes, broadcast ENTRY signals."""
     await asyncio.sleep(30)  # let bot settle on startup
-    print("[Scanner] Started.")
+    _scan_log("Сканер запущен. Пары: " + ", ".join(_SCANNER_PAIRS))
 
     now = datetime.now(timezone.utc)
     next_check  = {p: now for p in _SCANNER_PAIRS}
@@ -663,6 +673,7 @@ async def _scanner_loop() -> None:
         hour = now.hour
 
         if 1 <= hour < 7:  # night block UTC
+            _scan_log("Ночной блок (01-07 UTC) — пауза 30 мин")
             await asyncio.sleep(30 * 60)
             continue
 
@@ -671,19 +682,29 @@ async def _scanner_loop() -> None:
                 continue
 
             try:
+                import shutil
                 captured_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                result = await analyze_run(pair, captured_at, limit=100, send_telegram=False)
+                ts_label    = now.strftime("%Y-%m-%d_%H-%M-%S")
+                scan_dir    = ROOT / "logs" / "scanner" / f"{ts_label}_{pair}"
+                result = await analyze_run(
+                    pair, captured_at, limit=100,
+                    send_telegram=False, output_dir=scan_dir,
+                )
             except Exception:
-                print(f"[Scanner] {pair} error:\n{traceback.format_exc()}")
+                err = traceback.format_exc().strip().splitlines()[-1]
+                _scan_log(f"ОШИБКА {pair}: {err}")
                 next_check[pair] = now + timedelta(minutes=15)
                 continue
 
             if result is None:
+                shutil.rmtree(scan_dir, ignore_errors=True)
+                _scan_log(f"{pair} — нет данных, пропуск")
                 next_check[pair] = now + timedelta(minutes=60)
                 continue
 
             signal = result.get("entry_signal", "NO_TRADE")
             next_check[pair] = now + timedelta(minutes=_SCANNER_EXPIRY.get(signal, 60))
+            next_str = next_check[pair].strftime("%H:%M UTC")
 
             if signal == "ENTRY" and last_signal[pair] != "ENTRY":
                 side    = result.get("side", "")
@@ -697,7 +718,10 @@ async def _scanner_loop() -> None:
                 for chat_id in active:
                     await _send(chat_id, msg)
                     await asyncio.sleep(0.3)
-                print(f"[Scanner] ENTRY {pair} ({side}) → {len(active)} subscribers")
+                _scan_log(f"{pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам. Следующая проверка: {next_str}")
+            else:
+                shutil.rmtree(scan_dir, ignore_errors=True)
+                _scan_log(f"{pair} — {signal}, сигналов нет. Следующая проверка: {next_str}")
 
             last_signal[pair] = signal
 
