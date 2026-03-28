@@ -484,6 +484,9 @@ def format_report(symbol: str, captured_at: str, indicators: dict, eng: dict) ->
         f"EMA20: {indicators.get('5m', {}).get('ema20', '?')}  RSI: {indicators.get('5m', {}).get('rsi', '?')}",
         "",
         f"── FAST/SWING ENGINE {THIN[20:]}",
+        f"  Regime:       {eng.get('regime', '?')}  "
+        f"DI_1H: {eng.get('di_spread_1h', '?')}  DI_4H: {eng.get('di_spread_4h', '?')}  "
+        f"4H↑: {ok(eng.get('adx_4h_rising', False))}",
         f"  Style:        {eng['trade_style']}",
         f"  Side:         {eng['side']}",
         f"  Entry signal: {eng['entry_signal']}",
@@ -869,27 +872,55 @@ def generate_chart_png(
 # ── Per-pair FAST/SWING parameters (walk-forward validated, March 2026) ───────
 
 _PAIR_PARAMS = {
-    "BTC-USDT": {"fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
-                 "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
-                 "late_range": 4.0, "allowed_modes": ["SWING"]},
-    "ETH-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
-                 "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
-                 "late_range": 7.0, "allowed_modes": ["FAST"]},
-    "SOL-USDT": {"fast_vol": 2.2, "fast_adx": 20, "fast_sl_k": 1.6,
-                 "swing_vol": 1.8, "swing_adx": 20, "swing_sl_k": 1.9,
-                 "late_range": 10.0, "allowed_modes": ["FAST"]},
-    "XRP-USDT": {"fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
-                 "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-                 "late_range": 7.0, "allowed_modes": ["SWING"]},
-    "ADA-USDT": {"fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
-                 "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-                 "late_range": 7.0, "allowed_modes": ["FAST", "SWING"]},
+    "BTC-USDT": {
+        "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
+        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        "late_range": 4.0, "allowed_modes": ["FAST", "SWING"],
+    },
+    "ETH-USDT": {
+        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
+        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+    },
+    "SOL-USDT": {
+        "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
+        "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
+        "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "late_range": 10.0, "allowed_modes": ["FAST", "SWING"],
+    },
+    "XRP-USDT": {
+        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
+        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+    },
+    "ADA-USDT": {
+        "fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
+        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
+        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+    },
 }
 _PAIR_PARAMS_DEFAULT = {
     "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
     "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
+    "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
 }
+
+
+# ── Regime detector ───────────────────────────────────────────────────────────
+
+def _detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
+                   di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
+    """TRENDING / RANGING / CHOPPY — identical logic to backtest_simulate.py."""
+    if adx_4h >= 25 and adx_4h_rising and di_spread_4h >= 10 and adx_1h >= 20:
+        return "TRENDING"
+    if adx_1h >= 20 and di_spread_1h < 8 and bb_width > 3.0:
+        return "CHOPPY"
+    return "RANGING"
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -962,15 +993,28 @@ async def run(
     _swing_highs = _h15.get("swing_highs", [])
     _swing_lows  = _h15.get("swing_lows",  [])
 
-    # ── ATR 1H + ADX rising ──────────────────────────────────────────────────
-    if raw_1h and len(raw_1h) >= 14:
+    # ── ATR 1H + ADX slope + DI spread ──────────────────────────────────────
+    if raw_1h and len(raw_1h) >= 15:
         _highs_1h, _lows_1h, _closes_1h = parse_candles(raw_1h)
         _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=14))
-        _adx_1h_prev3, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-3)
-        _adx_1h_rising = _adx_1h > float(_adx_1h_prev3)
+        _adx_1h_prev, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-2)
+        _adx_1h_rising = _adx_1h > float(_adx_1h_prev)
+        _di_spread_1h  = abs(_plus_di_1h - _minus_di_1h)
     else:
         _atr_1h        = _atr_15m * 4
         _adx_1h_rising = False
+        _di_spread_1h  = 0.0
+
+    # ── ADX 4H slope + DI spread ─────────────────────────────────────────────
+    if raw_4h and len(raw_4h) >= 15:
+        _highs_4h, _lows_4h, _closes_4h = parse_candles(raw_4h)
+        _adx_4h_curr, _pdi_4h, _mdi_4h = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-1)
+        _adx_4h_prev, _, _              = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-2)
+        _adx_4h_rising = float(_adx_4h_curr) > float(_adx_4h_prev)
+        _di_spread_4h  = abs(float(_pdi_4h) - float(_mdi_4h))
+    else:
+        _adx_4h_rising = False
+        _di_spread_4h  = 0.0
 
     # ── Vol ratio (impulse: last 3 vs prior 15 on 15m) ───────────────────────
     if raw_15m and len(raw_15m) >= 20:
@@ -1031,56 +1075,71 @@ async def run(
     # SWING requires a live 4H trend and no direction conflict
     _adx_4h_ok       = (not _h4_available) or float(_adx_4h) >= 20
     _4h_dir_conflict = _h4_available and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
-    # FAST trigger: 5m close already moving in the 1H direction
+    # FAST trigger: 5m EMA cross — bidirectional, no 1H bias lock
     _ema20_5m      = float(_h5.get("ema20") or 0)
     _rsi_5m        = float(_h5.get("rsi") or 50)
     _trigger_close = float(_h5.get("trigger_close") or 0)
-    if _ema20_5m > 0 and _bias_1h == "UP":
-        _5m_trigger_ok = _trigger_close > _ema20_5m
-    elif _ema20_5m > 0 and _bias_1h == "DOWN":
-        _5m_trigger_ok = _trigger_close < _ema20_5m
+    if _ema20_5m > 0:
+        _five_m_long  = _trigger_close > _ema20_5m
+        _five_m_short = _trigger_close < _ema20_5m
     else:
-        _5m_trigger_ok = True  # no 5m data or no 1H direction — don't block
+        _five_m_long  = True   # no 5m data — don't block
+        _five_m_short = True
 
-    # ── FAST / SWING engine ───────────────────────────────────────────────────
+    # ── FAST / SWING engine (regime-based) ───────────────────────────────────
     _pp = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
+    _bb_width_pct = float(_h15.get("bb_width_pct") or 0)
+
+    _regime = _detect_regime(_adx_1h, _adx_4h, _adx_4h_rising,
+                             _di_spread_4h, _di_spread_1h, _bb_width_pct)
 
     _trade_style = "NO_TRADE"
-    # FAST: short-term momentum — 1H trend + 15m impulse + 5m confirmation
-    # 4H context is irrelevant for a 2-hour trade
-    if (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
-            and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding
-            and _bias_1h != "NEUTRAL"
-            and _5m_trigger_ok
-            and "FAST" in _pp["allowed_modes"]):
-        _trade_style = "FAST"
-    # SWING: trend continuation — 4H trend must exist and align with 1H
-    if _trade_style == "NO_TRADE":
-        if (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
-                and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
-                and _bias_1h != "NEUTRAL"
-                and not _4h_dir_conflict
-                and _adx_4h_ok
-                and "SWING" in _pp["allowed_modes"]):
-            _trade_style = "SWING"
+    _side        = None
 
+    if _regime == "CHOPPY":
+        pass  # no trade in chaotic market
+
+    elif _regime == "TRENDING":
+        # FAST: with trend only (strong trend — no counter-trend signals)
+        _fast_base = (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
+                      and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding)
+        if "FAST" in _pp["allowed_modes"]:
+            if _fast_base and _five_m_long and _bias_1h == "UP":
+                _trade_style, _side = "FAST", "buy"
+            elif _fast_base and _five_m_short and _bias_1h == "DOWN":
+                _trade_style, _side = "FAST", "sell"
+
+        # SWING: trend continuation with DI spread + ADX slope quality filters
+        _swing_base = (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
+                       and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
+                       and not _4h_dir_conflict and _adx_4h_ok
+                       and _adx_4h_rising
+                       and _di_spread_4h >= 8 and _di_spread_1h >= 10)
+        if "SWING" in _pp["allowed_modes"] and _trade_style == "NO_TRADE":
+            if _swing_base and _bias_1h == "UP":
+                _trade_style, _side = "SWING", "buy"
+            elif _swing_base and _bias_1h == "DOWN":
+                _trade_style, _side = "SWING", "sell"
+
+    elif _regime == "RANGING":
+        # FAST only — both directions, lower thresholds, SWING disabled
+        _ranging_base = (_adx_1h >= _pp["ranging_fast_adx"] and _adx_1h_rising
+                         and _vol_ratio_sig >= _pp["ranging_fast_vol"] and _bb_expanding)
+        if "FAST" in _pp["allowed_modes"]:
+            if _ranging_base and _five_m_long:
+                _trade_style, _side = "FAST", "buy"
+            elif _ranging_base and _five_m_short:
+                _trade_style, _side = "FAST", "sell"
+
+    # Night filter
     if _is_night:
-        _trade_style = "NO_TRADE"
+        _trade_style, _side = "NO_TRADE", None
 
+    # Late-move veto
     if _daily_range_pct > _pp["late_range"] and _day_position is not None and _day_position > 0.90:
-        _trade_style = "NO_TRADE"
+        _trade_style, _side = "NO_TRADE", None
 
-    # Direction
-    if _bias_1h == "UP":
-        _side = "buy"
-    elif _bias_1h == "DOWN":
-        _side = "sell"
-    else:
-        _trade_style = "NO_TRADE"
-        _side = None
-
-    # 4H veto — informational only; SWING handles 4H via entry condition,
-    # FAST is 4H-agnostic by design
+    # 4H veto — informational only
     _4h_veto = _4h_dir_conflict
 
     # VWAP filter
@@ -1175,8 +1234,12 @@ async def run(
         "adx_4h":            _adx_4h,
         "four_h_conflict":   _4h_dir_conflict,
         "adx_4h_ok":         _adx_4h_ok,
-        "five_m_trigger":    _5m_trigger_ok,
+        "five_m_trigger":    (_five_m_long if _side == "buy" else _five_m_short) if _side else True,
         "rsi_5m":            _rsi_5m,
+        "regime":            _regime,
+        "di_spread_1h":      round(_di_spread_1h, 1),
+        "di_spread_4h":      round(_di_spread_4h, 1),
+        "adx_4h_rising":     _adx_4h_rising,
     }
 
     # ── Build texts ───────────────────────────────────────────────────────────
@@ -1245,7 +1308,8 @@ async def run(
             "is_night_session":  _is_night,
             "adx_4h_ok":         _adx_4h_ok,
             "four_h_conflict":   _4h_dir_conflict,
-            "five_m_trigger":    _5m_trigger_ok,
+            "five_m_trigger":    (_five_m_long if _side == "buy" else _five_m_short) if _side else True,
+            "regime":            _regime,
         },
         "4h":          result.get("4h", {}),
         "1h":          result["1h"],
