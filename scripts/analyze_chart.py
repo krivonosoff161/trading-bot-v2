@@ -102,13 +102,23 @@ def _fmt_price(symbol: str, price) -> str:
     return f"{float(price):.4f}"
 
 
+_MSK_OFFSET = 3  # UTC+3, no DST
+
+
+def _to_msk(dt) -> "datetime":
+    """Convert UTC datetime to Moscow time (UTC+3)."""
+    from datetime import timedelta
+    return dt + timedelta(hours=_MSK_OFFSET)
+
+
 def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
     try:
         dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
         total_min = dt.hour * 60 + dt.minute
         next_boundary = ((total_min // tf_minutes) + 1) * tf_minutes
-        h, m = divmod(next_boundary % (24 * 60), 60)
-        return f"{h:02d}:{m:02d} UTC"
+        h_utc, m = divmod(next_boundary % (24 * 60), 60)
+        h_msk = (h_utc + _MSK_OFFSET) % 24
+        return f"{h_msk:02d}:{m:02d} МСК"
     except Exception:
         return "—"
 
@@ -261,7 +271,7 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
 
     try:
         dt     = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
-        ts_str = dt.strftime("%d %b %Y  %H:%M UTC")
+        ts_str = _to_msk(dt).strftime("%d %b %Y  %H:%M МСК")
     except Exception:
         ts_str = captured_at
 
@@ -353,8 +363,8 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     else:
         # Primary reason — first match wins
         if is_night:
-            why  = "Ночная сессия (01:00–07:00 UTC) — низкая ликвидность, широкие спреды."
-            what = "Подождать до 07:00 UTC — дневная сессия открывается нормально."
+            why  = "Ночная сессия (04:00–10:00 МСК) — низкая ликвидность, широкие спреды."
+            what = "Подождать до 10:00 МСК — дневная сессия открывается нормально."
         elif bias_1h == "NEUTRAL":
             why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
             what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
@@ -843,7 +853,12 @@ def generate_chart_png(
         color="#555", fontsize=6,
     )
 
-    _title_base = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
+    try:
+        _dt_utc = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        _dt_msk = _to_msk(_dt_utc)
+        _title_base = f"{symbol} · 15m · {_dt_msk.strftime('%Y-%m-%d %H:%M')} МСК"
+    except Exception:
+        _title_base = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
     ax.set_title(_title_base, color="#7788aa", fontsize=8, loc="left", pad=5)
     if entry_signal and entry_signal != "NO_TRADE" and direction:
         _dir_label   = "▲ LONG" if direction == "buy" else "▼ SHORT"

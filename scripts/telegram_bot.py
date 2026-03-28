@@ -645,13 +645,13 @@ async def handle_update(update: dict) -> None:
 
 # ── Polling loop ───────────────────────────────────────────────────────────────
 
-_SCANNER_PAIRS  = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT"]
-_SCANNER_EXPIRY = {"ENTRY": 5, "WAIT": 15, "NO_TRADE": 15}  # minutes
-_SCANNER_LOG    = ROOT / "logs" / "scanner.log"
+_SCANNER_PAIRS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT"]
+_SCANNER_LOG      = ROOT / "logs" / "scanner.log"
+_SCANNER_INTERVAL = 15  # minutes
 
 
 def _scan_log(msg: str) -> None:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     line = f"[{ts}] {msg}\n"
     print(line, end="")
     _SCANNER_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -659,30 +659,46 @@ def _scan_log(msg: str) -> None:
         f.write(line)
 
 
-async def _scanner_loop() -> None:
-    """Background task: scan all pairs every N minutes, broadcast ENTRY signals."""
-    await asyncio.sleep(30)  # let bot settle on startup
-    _scan_log("Сканер запущен. Пары: " + ", ".join(_SCANNER_PAIRS))
+def _next_quarter(now: datetime) -> datetime:
+    """Next clock-aligned 15-min boundary: :00, :15, :30, :45."""
+    total_min = now.hour * 60 + now.minute
+    next_min  = ((total_min // _SCANNER_INTERVAL) + 1) * _SCANNER_INTERVAL
+    h, m = divmod(next_min % (24 * 60), 60)
+    return now.replace(hour=h, minute=m, second=2, microsecond=0)
 
-    now = datetime.now(timezone.utc)
-    next_check  = {p: now for p in _SCANNER_PAIRS}
+
+async def _scanner_loop() -> None:
+    """Background task: scan all pairs at :00/:15/:30/:45, broadcast ENTRY signals."""
+    import shutil
+
+    await asyncio.sleep(30)  # let bot settle on startup
+
+    now  = datetime.now(timezone.utc)
+    first_run = _next_quarter(now)
+    wait = (first_run - now).total_seconds()
+    msk_h = (first_run.hour + 3) % 24
+    _scan_log(f"Сканер запущен. Пары: {', '.join(_SCANNER_PAIRS)}. Первый запуск в {msk_h:02d}:{first_run.minute:02d} МСК")
+    await asyncio.sleep(max(wait, 0))
+
     last_signal = {p: None for p in _SCANNER_PAIRS}
 
     while True:
         now  = datetime.now(timezone.utc)
         hour = now.hour
 
-        if 1 <= hour < 7:  # night block UTC
-            _scan_log("Ночной блок (01-07 UTC) — пауза 30 мин")
-            await asyncio.sleep(30 * 60)
+        if 1 <= hour < 7:  # night block UTC (04:00-10:00 МСК)
+            wake = now.replace(hour=7, minute=0, second=2, microsecond=0)
+            if wake <= now:
+                wake += timedelta(days=1)
+            _scan_log("Ночной блок — пауза до 10:00 МСК")
+            await asyncio.sleep((wake - now).total_seconds())
             continue
 
-        for pair in _SCANNER_PAIRS:
-            if now < next_check[pair]:
-                continue
+        msk_str = f"{(now.hour+3)%24:02d}:{now.minute:02d} МСК"
+        _scan_log(f"── Цикл сканирования {msk_str} ──────────────────")
 
+        for pair in _SCANNER_PAIRS:
             try:
-                import shutil
                 captured_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
                 ts_label    = now.strftime("%Y-%m-%d_%H-%M-%S")
                 scan_dir    = ROOT / "logs" / "scanner" / f"{ts_label}_{pair}"
@@ -692,38 +708,38 @@ async def _scanner_loop() -> None:
                 )
             except Exception:
                 err = traceback.format_exc().strip().splitlines()[-1]
-                _scan_log(f"ОШИБКА {pair}: {err}")
-                next_check[pair] = now + timedelta(minutes=15)
+                _scan_log(f"  ОШИБКА {pair}: {err}")
                 continue
 
             if result is None:
-                shutil.rmtree(scan_dir, ignore_errors=True)
-                _scan_log(f"{pair} — нет данных, пропуск")
-                next_check[pair] = now + timedelta(minutes=60)
+                _scan_log(f"  {pair} — нет данных, пропуск")
                 continue
 
             signal = result.get("entry_signal", "NO_TRADE")
-            next_check[pair] = now + timedelta(minutes=_SCANNER_EXPIRY.get(signal, 60))
-            next_str = next_check[pair].strftime("%H:%M UTC")
 
             if signal == "ENTRY" and last_signal[pair] != "ENTRY":
-                side    = result.get("side", "")
-                text    = result.get("delivery_text", "")
-                until   = result.get("expiry_time", "")
-                arrow   = "🟢" if side == "buy" else "🔴"
-                header  = f"{arrow} <b>{pair}</b> — сигнал входа\n<i>Актуально до {until}</i>\n\n"
-                msg     = header + f"<pre>{text}</pre>"
-                active  = [u["chat_id"] for u in list_users()
-                           if u["status"] in ("active", "superadmin")]
+                side   = result.get("side", "")
+                text   = result.get("delivery_text", "")
+                until  = result.get("expiry_time", "")
+                arrow  = "🟢" if side == "buy" else "🔴"
+                header = f"{arrow} <b>{pair}</b> — сигнал входа\n<i>Актуально до {until}</i>\n\n"
+                msg    = header + f"<pre>{text}</pre>"
+                active = [u["chat_id"] for u in list_users()
+                          if u["status"] in ("active", "superadmin")]
                 for chat_id in active:
                     await _send(chat_id, msg)
                     await asyncio.sleep(0.3)
-                _scan_log(f"{pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам. Следующая проверка: {next_str}")
+                _scan_log(f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам")
             else:
                 shutil.rmtree(scan_dir, ignore_errors=True)
-                _scan_log(f"{pair} — {signal}, сигналов нет. Следующая проверка: {next_str}")
+                _scan_log(f"  {pair} — {signal}")
 
             last_signal[pair] = signal
+
+        # Sleep until next :00/:15/:30/:45
+        now      = datetime.now(timezone.utc)
+        next_run = _next_quarter(now)
+        await asyncio.sleep((next_run - now).total_seconds())
 
         await asyncio.sleep(60)  # check every minute which pairs are due
 
