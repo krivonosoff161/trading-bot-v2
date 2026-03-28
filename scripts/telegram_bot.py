@@ -726,8 +726,11 @@ async def _scanner_loop() -> None:
                 msg    = header + f"<pre>{text}</pre>"
                 active = [u["chat_id"] for u in list_users()
                           if u["status"] in ("active", "superadmin")]
+                png_path = scan_dir / f"{pair}_chart.png"
                 for chat_id in active:
                     await _send(chat_id, msg)
+                    if png_path.exists():
+                        await send_photo_to(chat_id, str(png_path))
                     await asyncio.sleep(0.3)
                 _scan_log(f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам")
             else:
