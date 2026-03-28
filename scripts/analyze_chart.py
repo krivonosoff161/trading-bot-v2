@@ -1374,6 +1374,15 @@ async def run(
 
     print(f"\nРезультаты: {run_dir}")
 
+    return {
+        "entry_signal":  _entry_signal,
+        "trade_style":   _trade_style,
+        "side":          _side,
+        "symbol":        symbol,
+        "expiry_time":   expiry_time,
+        "delivery_text": delivery_text,
+    }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
