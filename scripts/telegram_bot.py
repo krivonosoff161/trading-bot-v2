@@ -686,14 +686,7 @@ async def _scanner_loop() -> None:
         now  = datetime.now(timezone.utc)
         hour = now.hour
 
-        if 1 <= hour < 7:  # night block UTC (04:00-10:00 МСК)
-            wake = now.replace(hour=7, minute=0, second=2, microsecond=0)
-            if wake <= now:
-                wake += timedelta(days=1)
-            _scan_log("Ночной блок — пауза до 10:00 МСК")
-            await asyncio.sleep((wake - now).total_seconds())
-            continue
-
+        # No night block — scanner runs 24/7, disclaimer added to client summary
         msk_str = f"{(now.hour+3)%24:02d}:{now.minute:02d} МСК"
         _scan_log(f"── Цикл сканирования {msk_str} ──────────────────")
 

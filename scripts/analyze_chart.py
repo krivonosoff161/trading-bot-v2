@@ -362,10 +362,7 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     # ── NO_TRADE ─────────────────────────────────────────────────────────────
     else:
         # Primary reason — first match wins
-        if is_night:
-            why  = "Ночная сессия (04:00–10:00 МСК) — низкая ликвидность, широкие спреды."
-            what = "Подождать до 10:00 МСК — дневная сессия открывается нормально."
-        elif bias_1h == "NEUTRAL":
+        if bias_1h == "NEUTRAL":
             why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
             what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
         elif four_h_conflict:
@@ -445,6 +442,12 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             lines.append("  Не открывать LONG против 1H направления.")
         else:
             lines.append("  Не входить ни в LONG, ни в SHORT — направления нет.")
+
+    # Night session disclaimer
+    if is_night:
+        lines += ["", "⚠️ АЗИАТСКАЯ СЕССИЯ",
+                  "  Сейчас 01:00–07:00 UTC — ликвидность ниже дневной,",
+                  "  возможен расширенный спред. Повышенная осторожность."]
 
     # Expiry
     tf_exp     = 5 if entry_signal == "ENTRY" else (15 if entry_signal == "WAIT" else 60)
@@ -1146,9 +1149,7 @@ async def run(
             elif _ranging_base and _five_m_short:
                 _trade_style, _side = "FAST", "sell"
 
-    # Night filter
-    if _is_night:
-        _trade_style, _side = "NO_TRADE", None
+    # Night session — no hard block, disclaimer added to client summary
 
     # Late-move veto
     if _daily_range_pct > _pp["late_range"] and _day_position is not None and _day_position > 0.90:
