@@ -225,16 +225,15 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     four_h_conflict = bias_4h != "NEUTRAL" and bias_4h != bias_1h
     adx_4h_ok       = float(adx_4h) >= 20
 
-    # 5m trigger (FAST): price already moving in 1H direction on 5m EMA20
-    five_m_trigger = True  # default: don't block if no 5m data
-    if raw_5m and len(raw_5m) >= 21 and bias_1h != "NEUTRAL":
+    # 5m trigger (FAST): direction from 5m momentum, independent of 1H bias
+    five_m_long  = True  # default: don't block if no 5m data
+    five_m_short = True
+    if raw_5m and len(raw_5m) >= 21:
         h5, l5, c5 = parse_candles(raw_5m)
         ema20_5m      = calc_ema(c5, 20)
         trigger_close = float(c5[-1])
-        if bias_1h == "UP":
-            five_m_trigger = trigger_close > float(ema20_5m[-1])
-        else:
-            five_m_trigger = trigger_close < float(ema20_5m[-1])
+        five_m_long  = trigger_close > float(ema20_5m[-1])
+        five_m_short = trigger_close < float(ema20_5m[-1])
 
     # ATR on 15m and 1H
     atr_15m = float(calc_atr(h15, l15, c15, period=ADX_PERIOD))
@@ -274,54 +273,59 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     late_move = (daily_range_pct > pp["late_range"]
                  and day_position is not None and day_position > 0.90)
 
-    # ── Mode detection ────────────────────────────────────────────────────────
+    # ── Mode + Direction detection (both sides independently) ─────────────────
     trade_style = "NO_TRADE"
+    side        = None
 
-    # FAST: short-term momentum — 1H trend + 15m impulse + 5m confirmation
-    # 4H context is irrelevant for a 2-hour trade
+    fast_base = (float(adx_1h) >= pp["fast_adx"]
+                 and adx_1h_rising
+                 and vol_ratio >= pp["fast_vol"]
+                 and bb_expanding)
+
+    # FAST: direction from 5m momentum
+    # Strong 1H trend (ADX > 30): respect the trend — only trade with it
+    # Weak 1H trend (ADX <= 30): both directions allowed — 5m decides
+    FAST_STRONG_ADX = 30
+    strong_trend = float(adx_1h) > FAST_STRONG_ADX
+    fast_long_ok  = five_m_long  and (not strong_trend or bias_1h == "UP")
+    fast_short_ok = five_m_short and (not strong_trend or bias_1h == "DOWN")
+
     if mode in ("FAST", "COMBINED"):
-        if (float(adx_1h) >= pp["fast_adx"]
-                and adx_1h_rising
-                and vol_ratio >= pp["fast_vol"]
-                and bb_expanding
-                and bias_1h != "NEUTRAL"
-                and five_m_trigger):
-            trade_style = "FAST"
+        if fast_base and fast_long_ok:
+            trade_style, side = "FAST", "buy"
+        elif fast_base and fast_short_ok:
+            trade_style, side = "FAST", "sell"
 
-    # SWING: trend continuation — 4H trend must exist and align with 1H
+    swing_base = (float(adx_1h) >= pp["swing_adx"]
+                  and adx_1h_rising
+                  and vol_ratio >= pp["swing_vol"]
+                  and bb_expanding
+                  and not four_h_conflict
+                  and adx_4h_ok)
+
+    # SWING: direction from 1H + 4H alignment (trend-following by design)
     if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
-        if (float(adx_1h) >= pp["swing_adx"]
-                and adx_1h_rising
-                and vol_ratio >= pp["swing_vol"]
-                and bb_expanding
-                and bias_1h != "NEUTRAL"
-                and not four_h_conflict
-                and adx_4h_ok):
-            trade_style = "SWING"
+        if swing_base and bias_1h == "UP":
+            trade_style, side = "SWING", "buy"
+        elif swing_base and bias_1h == "DOWN":
+            trade_style, side = "SWING", "sell"
 
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
     if trade_style not in allowed:
-        trade_style = "NO_TRADE"
+        trade_style, side = "NO_TRADE", None
 
     # Night filter — block all signals 01-07 UTC
     if night_filter and is_night:
-        trade_style = "NO_TRADE"
+        trade_style, side = "NO_TRADE", None
 
     # Time block (e.g. 10:00 UTC = 0% WR)
     if time_block_h and signal_hour in time_block_h:
-        trade_style = "NO_TRADE"
+        trade_style, side = "NO_TRADE", None
 
     # Late-move veto
     if late_move:
-        trade_style = "NO_TRADE"
-
-    # ── Direction ─────────────────────────────────────────────────────────────
-    side = None
-    if bias_1h == "UP":    side = "buy"
-    elif bias_1h == "DOWN": side = "sell"
-    else:
-        trade_style = "NO_TRADE"
+        trade_style, side = "NO_TRADE", None
 
     # 4H veto — informational only; SWING handles 4H in condition, FAST is 4H-agnostic
     fourch_veto = four_h_conflict
