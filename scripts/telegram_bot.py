@@ -24,7 +24,7 @@ import re
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import aiohttp
@@ -645,6 +645,65 @@ async def handle_update(update: dict) -> None:
 
 # ── Polling loop ───────────────────────────────────────────────────────────────
 
+_SCANNER_PAIRS  = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT"]
+_SCANNER_EXPIRY = {"ENTRY": 5, "WAIT": 15, "NO_TRADE": 60}  # minutes
+
+
+async def _scanner_loop() -> None:
+    """Background task: scan all pairs every N minutes, broadcast ENTRY signals."""
+    await asyncio.sleep(30)  # let bot settle on startup
+    print("[Scanner] Started.")
+
+    now = datetime.now(timezone.utc)
+    next_check  = {p: now for p in _SCANNER_PAIRS}
+    last_signal = {p: None for p in _SCANNER_PAIRS}
+
+    while True:
+        now  = datetime.now(timezone.utc)
+        hour = now.hour
+
+        if 1 <= hour < 7:  # night block UTC
+            await asyncio.sleep(30 * 60)
+            continue
+
+        for pair in _SCANNER_PAIRS:
+            if now < next_check[pair]:
+                continue
+
+            try:
+                captured_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                result = await analyze_run(pair, captured_at, limit=100, send_telegram=False)
+            except Exception:
+                print(f"[Scanner] {pair} error:\n{traceback.format_exc()}")
+                next_check[pair] = now + timedelta(minutes=15)
+                continue
+
+            if result is None:
+                next_check[pair] = now + timedelta(minutes=60)
+                continue
+
+            signal = result.get("entry_signal", "NO_TRADE")
+            next_check[pair] = now + timedelta(minutes=_SCANNER_EXPIRY.get(signal, 60))
+
+            if signal == "ENTRY" and last_signal[pair] != "ENTRY":
+                side    = result.get("side", "")
+                text    = result.get("delivery_text", "")
+                until   = result.get("expiry_time", "")
+                arrow   = "🟢" if side == "buy" else "🔴"
+                header  = f"{arrow} <b>{pair}</b> — сигнал входа\n<i>Актуально до {until}</i>\n\n"
+                msg     = header + f"<pre>{text}</pre>"
+                active  = [u["chat_id"] for u in list_users()
+                           if u["status"] in ("active", "superadmin")]
+                for chat_id in active:
+                    await _send(chat_id, msg)
+                    await asyncio.sleep(0.3)
+                print(f"[Scanner] ENTRY {pair} ({side}) → {len(active)} subscribers")
+
+            last_signal[pair] = signal
+
+        await asyncio.sleep(60)  # check every minute which pairs are due
+
+
 async def main() -> None:
     if not BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
@@ -658,6 +717,8 @@ async def main() -> None:
 
     # On startup: send 24h reminders for any open trades
     await _check_and_send_reminders()
+
+    asyncio.create_task(_scanner_loop())
 
     offset = 0
     try:
