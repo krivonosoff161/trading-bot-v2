@@ -112,8 +112,8 @@ PAIR_PARAMS = {
         "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT":  {
-        "fast_vol": 2.8, "fast_adx": 24,
-        "swing_vol": 2.2, "swing_adx": 24,
+        "fast_vol": 3.2, "fast_adx": 26,
+        "swing_vol": 2.8, "swing_adx": 28,
         "sl_k": 1.7, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 10.0,
         "allowed_modes": ["FAST", "SWING"],
@@ -203,13 +203,17 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     h1h, l1h, c1h = parse_candles(raw_1h)
     h15, l15, c15 = parse_candles(raw_15m)
 
-    # ADX on 1H — current and previous bar for rising check
-    adx_1h,      _, _ = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-1)
-    adx_1h_prev, _, _ = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-2)
+    # ADX on 1H — slope + DI spread
+    adx_1h,      pdi_1h, mdi_1h = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-1)
+    adx_1h_prev, _,      _      = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-2)
     adx_1h_rising = float(adx_1h) > float(adx_1h_prev)
+    di_spread_1h  = abs(float(pdi_1h) - float(mdi_1h))
 
-    # ADX on 4H — late veto only
-    adx_4h, _, _ = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD)
+    # ADX on 4H — slope + DI spread for SWING quality
+    adx_4h,      pdi_4h, mdi_4h = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-1)
+    adx_4h_prev, _,      _      = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-2)
+    adx_4h_rising = float(adx_4h) > float(adx_4h_prev)
+    di_spread_4h  = abs(float(pdi_4h) - float(mdi_4h))
 
     # EMA bias on 1H (direction source)
     ema20_1h = calc_ema(c1h, 20)
@@ -225,15 +229,46 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     four_h_conflict = bias_4h != "NEUTRAL" and bias_4h != bias_1h
     adx_4h_ok       = float(adx_4h) >= 20
 
-    # 5m trigger (FAST): direction from 5m momentum, independent of 1H bias
-    five_m_long  = True  # default: don't block if no 5m data
-    five_m_short = True
-    if raw_5m and len(raw_5m) >= 21:
-        h5, l5, c5 = parse_candles(raw_5m)
-        ema20_5m      = calc_ema(c5, 20)
+    # 5m trigger (FAST): direction + quality filters
+    five_m_long   = True   # defaults: don't block if no 5m data
+    five_m_short  = True
+    cross_fresh   = True   # cross happened ≤ 2 bars ago
+    body_quality  = True   # trigger candle body/range > 0.55
+    vol_ratio_5m  = 1.0    # 5m volume ratio
+    if raw_5m and len(raw_5m) >= 22:
+        h5, l5, c5  = parse_candles(raw_5m)
+        o5          = [float(c[1]) for c in reversed(list(raw_5m))]  # open prices newest-first
+        ema20_5m    = calc_ema(c5, 20)
+        ema_val     = float(ema20_5m[-1])
         trigger_close = float(c5[-1])
-        five_m_long  = trigger_close > float(ema20_5m[-1])
-        five_m_short = trigger_close < float(ema20_5m[-1])
+        five_m_long  = trigger_close > ema_val
+        five_m_short = trigger_close < ema_val
+
+        # Cross freshness: EMA cross must have happened ≤ 5 bars ago (25 min)
+        # Scan every 10m, so cross can happen between checks — 5 bars gives enough window
+        n_fresh = 5
+        closes_hist = [float(c5[-(i+1)]) for i in range(n_fresh + 1)]
+        emas_hist   = [float(ema20_5m[-(i+1)]) for i in range(n_fresh + 1)]
+        above_hist  = [c > e for c, e in zip(closes_hist, emas_hist)]
+        if five_m_long:
+            # Current is above EMA — look back for a bar that was below
+            cross_fresh = any(not above_hist[i] for i in range(1, n_fresh + 1))
+        else:
+            # Current is below EMA — look back for a bar that was above
+            cross_fresh = any(above_hist[i] for i in range(1, n_fresh + 1))
+
+        # Trigger candle body quality: body > 55% of full range
+        hi  = float(h5[-1])
+        lo  = float(l5[-1])
+        op  = o5[-1]  # newest open
+        rng = hi - lo
+        body_quality = (abs(trigger_close - op) / rng > 0.55) if rng > 0 else False
+
+        # vol_ratio_5m: last 3 bars vs prev 15 bars
+        vols_5m      = [float(c[5]) for c in reversed(list(raw_5m))]
+        rec5         = np.mean(vols_5m[:3])   if len(vols_5m) >= 3  else 0
+        pri5         = np.mean(vols_5m[5:20]) if len(vols_5m) >= 20 else rec5
+        vol_ratio_5m = rec5 / pri5 if pri5 > 0 else 1.0
 
     # ATR on 15m and 1H
     atr_15m = float(calc_atr(h15, l15, c15, period=ADX_PERIOD))
@@ -277,16 +312,17 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     trade_style = "NO_TRADE"
     side        = None
 
+    # FAST base: 1H momentum + 15m volume + BB expansion
+    # + 5m quality filters: cross freshness, body quality, 5m volume
     fast_base = (float(adx_1h) >= pp["fast_adx"]
                  and adx_1h_rising
                  and vol_ratio >= pp["fast_vol"]
                  and bb_expanding)
 
-    # FAST: direction from 5m momentum
-    # Strong 1H trend (ADX > 30): respect the trend — only trade with it
-    # Weak 1H trend (ADX <= 30): both directions allowed — 5m decides
+    # Strong 1H trend (ADX > 30): FAST only with trend direction
+    # Weak trend (ADX ≤ 30): 5m decides direction (both sides)
     FAST_STRONG_ADX = 30
-    strong_trend = float(adx_1h) > FAST_STRONG_ADX
+    strong_trend  = float(adx_1h) > FAST_STRONG_ADX
     fast_long_ok  = five_m_long  and (not strong_trend or bias_1h == "UP")
     fast_short_ok = five_m_short and (not strong_trend or bias_1h == "DOWN")
 
@@ -296,12 +332,17 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         elif fast_base and fast_short_ok:
             trade_style, side = "FAST", "sell"
 
+    # SWING base: 1H + 4H trend quality
+    # + ADX 4H must be rising, DI spread confirms directional strength
     swing_base = (float(adx_1h) >= pp["swing_adx"]
                   and adx_1h_rising
                   and vol_ratio >= pp["swing_vol"]
                   and bb_expanding
                   and not four_h_conflict
-                  and adx_4h_ok)
+                  and adx_4h_ok
+                  and adx_4h_rising
+                  and di_spread_4h >= 8
+                  and di_spread_1h >= 10)
 
     # SWING: direction from 1H + 4H alignment (trend-following by design)
     if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
