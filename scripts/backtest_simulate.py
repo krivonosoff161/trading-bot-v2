@@ -98,8 +98,11 @@ CACHE_MAX_AGE = 23 * 3600
 # None = pair is OFF (DOGE excluded)
 PAIR_PARAMS = {
     "BTC-USDT":  {
+        # TRENDING regime
         "fast_vol": 1.6, "fast_adx": 18,
         "swing_vol": 1.3, "swing_adx": 18,
+        # RANGING regime (SWING disabled, FAST both directions, lower thresholds)
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
         "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 4.0,
         "allowed_modes": ["FAST", "SWING"],
@@ -107,6 +110,7 @@ PAIR_PARAMS = {
     "ETH-USDT":  {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.5, "swing_adx": 18,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
         "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
@@ -114,6 +118,7 @@ PAIR_PARAMS = {
     "SOL-USDT":  {
         "fast_vol": 3.2, "fast_adx": 26,
         "swing_vol": 2.8, "swing_adx": 28,
+        "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
         "sl_k": 1.7, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 10.0,
         "allowed_modes": ["FAST", "SWING"],
@@ -122,6 +127,7 @@ PAIR_PARAMS = {
     "XRP-USDT":  {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.4, "swing_adx": 18,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
         "sl_k": 1.6, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
@@ -179,6 +185,28 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     vol_sum = sum(vols)
     vwap = sum(c * v for c, v in zip(closes, vols)) / vol_sum if vol_sum > 0 else None
     return vwap, max(highs), min(lows)
+
+
+# ── Market regime detector ──────────────────────────────────────────────────────
+def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
+                  di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
+    """
+    Classify market into one of three regimes:
+      TRENDING — strong directional movement, SWING + FAST with trend
+      RANGING  — sideways bounded, FAST both directions, SWING off
+      CHOPPY   — volatile but no direction, no trade
+    """
+    # TRENDING: 4H confirms trend strength + direction conviction
+    if adx_4h >= 25 and adx_4h_rising and di_spread_4h >= 10 and adx_1h >= 20:
+        return "TRENDING"
+
+    # CHOPPY: ADX moving but DI lines too close — both buyers and sellers active
+    # Also catches high-volatility ranging (wide BB, no trend)
+    if adx_1h >= 20 and di_spread_1h < 8 and bb_width > 3.0:
+        return "CHOPPY"
+
+    # RANGING: default — low trend strength, bounded movement
+    return "RANGING"
 
 
 # ── Signal engine ───────────────────────────────────────────────────────────────
@@ -308,48 +336,57 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     late_move = (daily_range_pct > pp["late_range"]
                  and day_position is not None and day_position > 0.90)
 
-    # ── Mode + Direction detection (both sides independently) ─────────────────
+    # ── Regime detection ──────────────────────────────────────────────────────
+    regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
+                           di_spread_4h, di_spread_1h, bb_width)
+
+    # ── Mode + Direction by regime ────────────────────────────────────────────
     trade_style = "NO_TRADE"
     side        = None
 
-    # FAST base: 1H momentum + 15m volume + BB expansion
-    # + 5m quality filters: cross freshness, body quality, 5m volume
-    fast_base = (float(adx_1h) >= pp["fast_adx"]
-                 and adx_1h_rising
-                 and vol_ratio >= pp["fast_vol"]
-                 and bb_expanding)
+    if regime == "CHOPPY":
+        # No trade in chaotic market
+        pass
 
-    # Strong 1H trend (ADX > 30): FAST only with trend direction
-    # Weak trend (ADX ≤ 30): 5m decides direction (both sides)
-    FAST_STRONG_ADX = 30
-    strong_trend  = float(adx_1h) > FAST_STRONG_ADX
-    fast_long_ok  = five_m_long  and (not strong_trend or bias_1h == "UP")
-    fast_short_ok = five_m_short and (not strong_trend or bias_1h == "DOWN")
+    elif regime == "TRENDING":
+        # FAST: strong trend — only trade with 1H direction
+        fast_base = (float(adx_1h) >= pp["fast_adx"]
+                     and adx_1h_rising
+                     and vol_ratio >= pp["fast_vol"]
+                     and bb_expanding)
+        if mode in ("FAST", "COMBINED"):
+            if fast_base and five_m_long and bias_1h == "UP":
+                trade_style, side = "FAST", "buy"
+            elif fast_base and five_m_short and bias_1h == "DOWN":
+                trade_style, side = "FAST", "sell"
 
-    if mode in ("FAST", "COMBINED"):
-        if fast_base and fast_long_ok:
-            trade_style, side = "FAST", "buy"
-        elif fast_base and fast_short_ok:
-            trade_style, side = "FAST", "sell"
+        # SWING: trend continuation with quality filters
+        swing_base = (float(adx_1h) >= pp["swing_adx"]
+                      and adx_1h_rising
+                      and vol_ratio >= pp["swing_vol"]
+                      and bb_expanding
+                      and not four_h_conflict
+                      and adx_4h_ok
+                      and adx_4h_rising
+                      and di_spread_4h >= 8
+                      and di_spread_1h >= 10)
+        if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
+            if swing_base and bias_1h == "UP":
+                trade_style, side = "SWING", "buy"
+            elif swing_base and bias_1h == "DOWN":
+                trade_style, side = "SWING", "sell"
 
-    # SWING base: 1H + 4H trend quality
-    # + ADX 4H must be rising, DI spread confirms directional strength
-    swing_base = (float(adx_1h) >= pp["swing_adx"]
-                  and adx_1h_rising
-                  and vol_ratio >= pp["swing_vol"]
-                  and bb_expanding
-                  and not four_h_conflict
-                  and adx_4h_ok
-                  and adx_4h_rising
-                  and di_spread_4h >= 8
-                  and di_spread_1h >= 10)
-
-    # SWING: direction from 1H + 4H alignment (trend-following by design)
-    if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
-        if swing_base and bias_1h == "UP":
-            trade_style, side = "SWING", "buy"
-        elif swing_base and bias_1h == "DOWN":
-            trade_style, side = "SWING", "sell"
+    elif regime == "RANGING":
+        # FAST only — both directions, lower thresholds, SWING disabled
+        ranging_base = (float(adx_1h) >= pp["ranging_fast_adx"]
+                        and adx_1h_rising
+                        and vol_ratio >= pp["ranging_fast_vol"]
+                        and bb_expanding)
+        if mode in ("FAST", "COMBINED"):
+            if ranging_base and five_m_long:
+                trade_style, side = "FAST", "buy"
+            elif ranging_base and five_m_short:
+                trade_style, side = "FAST", "sell"
 
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
@@ -432,6 +469,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     return {
         "entry_signal":    entry_signal,
         "trade_style":     trade_style,
+        "regime":          regime,
         "side":            side,
         "close":           close,
         "sl":              sl_p,
@@ -451,7 +489,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     }
 
 
-RISK_PCT      = 0.03   # risk 3% of current balance per trade (6x leverage, 0.5% margin)
+RISK_PCT      = 0.03   # risk 3% of current balance per trade (10x leverage, 0.3% margin)
+LEVERAGE      = 10     # display only — changes margin math context
 FAST_ATR_CAP  = 0.7    # FAST TP capped at 0.7 × ATR_1H  (≈ realistic 2h move)
 SWING_ATR_CAP = 1.5    # SWING TP capped at 1.5 × ATR_1H (≈ realistic 4h move)
 
@@ -708,6 +747,7 @@ async def run():
                 "ts_ms":      ts_ms,
                 "hour":       dt.hour,
                 "style":      sig["trade_style"],
+                "regime":     sig["regime"],
                 "side":       sig["side"],
                 "close":      sig["close"],
                 "sl":         sig["sl"],
@@ -775,6 +815,15 @@ async def run():
             if sr:
                 wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
                 print(f"    {style:8}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
+
+        print(f"\n  По режиму рынка:")
+        for reg in ("TRENDING", "RANGING", "CHOPPY"):
+            sr  = [r for r in results if r.get("regime") == reg]
+            sw  = [r for r in sr if r["outcome"] == "TP"]
+            sl_ = [r for r in sr if r["outcome"] == "STOP"]
+            if sr:
+                wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
+                print(f"    {reg:8}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
         print(f"\n  По паре:")
         for sym in ALL_SYMBOLS:
@@ -856,7 +905,7 @@ async def run():
 
         total_pct = (balance - START) / START * 100
         sign = "+" if total_pct >= 0 else ""
-        print(f"\n  ── Симуляция баланса (1 позиция/пара, риск {int(RISK_PCT*100)}%/сделку) ───")
+        print(f"\n  ── Симуляция баланса (1 позиция/пара, риск {int(RISK_PCT*100)}%/сделку, плечо x{LEVERAGE}) ───")
         print(f"  Старт:            $1000")
         print(f"  Финиш:            ${balance:.0f}  ({sign}{total_pct:.1f}%)")
         print(f"  Макс. просадка:   {max_drawdown:.1f}%")
