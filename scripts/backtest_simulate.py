@@ -35,7 +35,7 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
-    find_swing_levels, calc_bollinger_bands,
+    find_swing_levels, calc_bollinger_bands, calc_rsi,
 )
 
 # ── Historical data helpers ─────────────────────────────────────────────────────
@@ -103,34 +103,47 @@ PAIR_PARAMS = {
         "swing_vol": 1.3, "swing_adx": 18,
         # RANGING regime (SWING disabled, FAST both directions, lower thresholds)
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        # BOUNCE regime (post-crash/pump reversal, fires only when trend engine = NO_TRADE)
+        "bounce_adx_min": 18, "bounce_vol": 1.5,
+        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
+        "bounce_sl_k": 1.7,
         "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 4.0,
-        "allowed_modes": ["FAST", "SWING"],
+        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
     },
     "ETH-USDT":  {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.5, "swing_adx": 18,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "bounce_adx_min": 18, "bounce_vol": 1.5,
+        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
+        "bounce_sl_k": 1.7,
         "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],
+        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
     },
     "SOL-USDT":  {
         "fast_vol": 3.2, "fast_adx": 26,
         "swing_vol": 2.8, "swing_adx": 28,
         "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "bounce_adx_min": 22, "bounce_vol": 2.0,
+        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.45,
+        "bounce_sl_k": 2.0,
         "sl_k": 1.7, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 10.0,
-        "allowed_modes": ["FAST", "SWING"],
+        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
     },
     "DOGE-USDT": None,                       # OFF — too noisy
     "XRP-USDT":  {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.4, "swing_adx": 18,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "bounce_adx_min": 18, "bounce_vol": 1.5,
+        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
+        "bounce_sl_k": 1.9,
         "sl_k": 1.6, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],
+        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
     },
 }
 
@@ -303,6 +316,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     atr_1h  = float(calc_atr(h1h, l1h, c1h, period=ADX_PERIOD))
     close   = float(c15[-1])
 
+    # RSI on 1H — used for BOUNCE detection
+    rsi_1h = float(calc_rsi(c1h, period=14))
+
     # Vol ratio on 15m: last 3 bars vs prev 15 bars
     vols_15m   = [float(c[5]) for c in list(reversed(raw_15m))]
     recent_vol = np.mean(vols_15m[:3])   if len(vols_15m) >= 3  else 0
@@ -388,6 +404,27 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             elif ranging_base and five_m_short:
                 trade_style, side = "FAST", "sell"
 
+    # BOUNCE: post-crash/pump reversal — fallback when trend engine = NO_TRADE
+    # Fires in RANGING (mature trend dying) when RSI extreme + volume spike + 5m reversal
+    if trade_style == "NO_TRADE" and regime == "RANGING" and "BOUNCE" in pp.get("allowed_modes", []):
+        b_adx  = pp.get("bounce_adx_min", 25)
+        b_vol  = pp.get("bounce_vol", 2.0)
+        b_rlow = pp.get("bounce_rsi_low", 42)
+        b_rhigh= pp.get("bounce_rsi_high", 58)
+        b_dpos = pp.get("bounce_day_pos", 0.45)
+
+        bounce_base = (float(adx_1h) >= b_adx   # trend was strong
+                       and not adx_1h_rising      # momentum exhausting
+                       and vol_ratio >= b_vol)     # reversal volume spike
+
+        if bounce_base:
+            if (rsi_1h < b_rlow and five_m_long
+                    and day_position is not None and day_position < b_dpos):
+                trade_style, side = "BOUNCE", "buy"
+            elif (rsi_1h > b_rhigh and five_m_short
+                    and day_position is not None and day_position > (1.0 - b_dpos)):
+                trade_style, side = "BOUNCE", "sell"
+
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
     if trade_style not in allowed:
@@ -439,6 +476,18 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             sl_p = round(close + sl_dist, 6)
             tp_p = round(close - tp_dist,  6)
 
+    elif trade_style == "BOUNCE" and side and close:
+        # Wider SL than FAST — trading against recent momentum, needs breathing room
+        bounce_sl_k = pp.get("bounce_sl_k", pp["sl_k"] * 1.2)
+        sl_dist  = max(bounce_sl_k * atr_15m, close * 0.005)
+        tp_dist  = min(sl_dist * pp["fast_tp_k"], atr_1h * FAST_ATR_CAP)
+        if side == "buy":
+            sl_p = round(close - sl_dist, 6)
+            tp_p = round(close + tp_dist, 6)
+        else:
+            sl_p = round(close + sl_dist, 6)
+            tp_p = round(close - tp_dist, 6)
+
     elif trade_style == "SWING" and side and close:
         # Structural SL: swing level + ATR buffer, at least sl_k*ATR
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
@@ -486,6 +535,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "fourch_veto":     fourch_veto,
         "late_move":       late_move,
         "oi_weak":         oi_weak,
+        "rsi_1h":          round(rsi_1h, 1),
     }
 
 
@@ -559,7 +609,7 @@ async def run():
 
     now_ms  = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     step_ms = INTERVAL_M * 60 * 1000
-    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}
+    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000, "BOUNCE": 120 * 60 * 1000}
 
     # Cache must cover all periods: DAYS_BACK + max offset + warmup for EMA-50 on 4H
     INDICATOR_WARMUP_DAYS = 10   # EMA-50 on 4H needs 50 bars = 8.3 days
@@ -808,7 +858,7 @@ async def run():
                       f"{len(sr)} сигналов | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
         print(f"\n  По стилю:")
-        for style in ("FAST", "SWING"):
+        for style in ("FAST", "SWING", "BOUNCE"):
             sr  = [r for r in results if r["style"] == style]
             sw  = [r for r in sr if r["outcome"] == "TP"]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
