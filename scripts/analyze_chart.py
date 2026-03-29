@@ -894,36 +894,42 @@ _PAIR_PARAMS = {
         "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
         "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         "late_range": 4.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ETH-USDT": {
         "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
         "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT": {
         "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
         "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
         "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
         "late_range": 10.0, "allowed_modes": ["FAST", "SWING"],
     },
     "XRP-USDT": {
         "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ADA-USDT": {
         "fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "DOGE-USDT": {
         "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
         "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.6,
+        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
 }
@@ -931,6 +937,7 @@ _PAIR_PARAMS_DEFAULT = {
     "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
     "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
     "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
+    "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
 }
 
@@ -939,10 +946,12 @@ _PAIR_PARAMS_DEFAULT = {
 
 def _detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
                    di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
-    """TRENDING / RANGING / CHOPPY — identical logic to backtest_simulate.py."""
-    if adx_4h >= 25 and adx_4h_rising and di_spread_4h >= 10 and adx_1h >= 20:
+    """TRENDING / RANGING / CHOPPY."""
+    trend_4h = adx_4h >= 22 and di_spread_4h >= 10
+    trend_1h = adx_1h >= 18 and di_spread_1h >= 8
+    if trend_4h and trend_1h:
         return "TRENDING"
-    if adx_1h >= 20 and di_spread_1h < 8 and bb_width > 3.0:
+    if bb_width >= 3.0 and di_spread_1h < 6 and adx_4h < 22:
         return "CHOPPY"
     return "RANGING"
 
@@ -1124,51 +1133,65 @@ async def run(
         pass  # no trade in chaotic market
 
     elif _regime == "TRENDING":
-        # FAST: with trend only (strong trend — no counter-trend signals)
-        _fast_base = (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
-                      and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding)
-        if "FAST" in _pp["allowed_modes"]:
-            if _fast_base and _five_m_long and _bias_1h == "UP":
-                _trade_style, _side = "FAST", "buy"
-            elif _fast_base and _five_m_short and _bias_1h == "DOWN":
-                _trade_style, _side = "FAST", "sell"
-
-        # SWING: trend continuation with DI spread + ADX slope quality filters
+        # SWING first (clean trend continuation), FAST as fallback
         _swing_base = (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
                        and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
                        and not _4h_dir_conflict and _adx_4h_ok
-                       and _adx_4h_rising
-                       and _di_spread_4h >= 8 and _di_spread_1h >= 10)
-        if "SWING" in _pp["allowed_modes"] and _trade_style == "NO_TRADE":
+                       and _di_spread_4h >= 8 and _di_spread_1h >= 8)
+        if "SWING" in _pp["allowed_modes"]:
             if _swing_base and _bias_1h == "UP":
                 _trade_style, _side = "SWING", "buy"
             elif _swing_base and _bias_1h == "DOWN":
                 _trade_style, _side = "SWING", "sell"
 
-    elif _regime == "RANGING":
-        # FAST only — both directions, lower thresholds, SWING disabled
-        _ranging_base = (_adx_1h >= _pp["ranging_fast_adx"] and _adx_1h_rising
-                         and _vol_ratio_sig >= _pp["ranging_fast_vol"] and _bb_expanding)
-        if "FAST" in _pp["allowed_modes"]:
-            if _ranging_base and _five_m_long:
+        _fast_base = (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
+                      and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding)
+        if "FAST" in _pp["allowed_modes"] and _trade_style == "NO_TRADE":
+            if _fast_base and _five_m_long and _bias_1h == "UP":
                 _trade_style, _side = "FAST", "buy"
-            elif _ranging_base and _five_m_short:
+            elif _fast_base and _five_m_short and _bias_1h == "DOWN":
+                _trade_style, _side = "FAST", "sell"
+
+    elif _regime == "RANGING":
+        # Mean reversion: ADX ceiling, stable/falling ADX, price at extremes
+        _adx_ceil = _pp.get("ranging_adx_max", 22)
+        _bb_corridor = 0.8 <= _bb_width_pct <= 2.5
+        _ranging_base = (
+            _adx_1h <= _adx_ceil and not _adx_1h_rising
+            and _vol_ratio_sig >= _pp.get("ranging_fast_vol", 1.3)
+            and _bb_corridor and _day_position is not None
+        )
+        _buy_pos_ok  = _day_position <= _pp.get("ranging_buy_pos_max",  0.35)
+        _sell_pos_ok = _day_position >= _pp.get("ranging_sell_pos_min", 0.65)
+        if "FAST" in _pp["allowed_modes"]:
+            if _ranging_base and _five_m_long and _buy_pos_ok:
+                _trade_style, _side = "FAST", "buy"
+            elif _ranging_base and _five_m_short and _sell_pos_ok:
                 _trade_style, _side = "FAST", "sell"
 
     # Night session — no hard block, disclaimer added to client summary
 
-    # Late-move veto
-    if _daily_range_pct > _pp["late_range"] and _day_position is not None and _day_position > 0.90:
-        _trade_style, _side = "NO_TRADE", None
+    # Late-move veto — symmetric for long and short
+    if _day_position is not None and _daily_range_pct > _pp["late_range"]:
+        if _side == "buy"  and _day_position > 0.90:
+            _trade_style, _side = "NO_TRADE", None
+        if _side == "sell" and _day_position < 0.10:
+            _trade_style, _side = "NO_TRADE", None
 
     # 4H veto — informational only
     _4h_veto = _4h_dir_conflict
 
-    # VWAP filter
+    # VWAP filter — regime-aware
     _vwap_ok = True
     if _vwap and _close and _side:
-        if _side == "buy"  and _close < _vwap: _vwap_ok = False
-        if _side == "sell" and _close > _vwap: _vwap_ok = False
+        if _regime == "RANGING":
+            # fade mode: buy below VWAP (expect reversion up), sell above VWAP
+            if _side == "buy"  and _close > _vwap: _vwap_ok = False
+            if _side == "sell" and _close < _vwap: _vwap_ok = False
+        else:
+            # trend follow: buy above VWAP, sell below VWAP
+            if _side == "buy"  and _close < _vwap: _vwap_ok = False
+            if _side == "sell" and _close > _vwap: _vwap_ok = False
 
     # Funding (side-aware, 0.05% threshold)
     _funding_val  = _funding if _funding is not None else 0.0
