@@ -468,3 +468,63 @@ async def generate_client_text(
     except Exception as exc:
         print(f"LLM: error — {exc}")
         return None
+
+
+# ── Educational Q&A ────────────────────────────────────────────────────────────
+
+_EDU_SYSTEM_PROMPT = """\
+Ты — обучающий ассистент по крипторынку. Отвечаешь на вопросы о терминах и механизмах.
+Язык: русский, простые слова, аналогии из жизни.
+
+ЗАПРЕЩЕНО:
+- предсказывать цены или движение рынка
+- давать торговые рекомендации ("купи", "продай", "сейчас хороший момент")
+- называть конкретные монеты как "хорошую инвестицию"
+- придумывать статистику и цифры
+- отвечать на вопросы не про крипто/трейдинг
+
+ЕСЛИ не знаешь точно — пиши: "Точно не знаю, лучше проверить в официальных источниках."
+ЕСЛИ спрашивают про сигнал/анализ — пиши: "Для анализа графика нажми кнопку Анализ."
+ЕСЛИ вопрос не про крипту — пиши: "Я отвечаю только на вопросы про крипторынок."
+
+Формат ответа: до 200 слов, без списков если можно обойтись, живой текст.
+"""
+
+
+async def generate_edu_text(question: str) -> str | None:
+    """Answer a user's educational question via Qwen. Returns None on error."""
+    if not _API_KEY or not _FOLDER_ID:
+        print("LLM edu: YANDEX_API_KEY or YANDEX_FOLDER_ID not set — skipping")
+        return None
+
+    payload = {
+        "model": _MODEL_URI,
+        "max_tokens": 400,
+        "messages": [
+            {"role": "system", "content": _EDU_SYSTEM_PROMPT},
+            {"role": "user",   "content": question},
+        ],
+    }
+    headers = {
+        "Authorization": f"Api-Key {_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _API_URL, json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"LLM edu: HTTP {resp.status} — {body[:200]}")
+                    return None
+                data = await resp.json()
+        body = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {})
+        print(f"LLM edu: OK — {tokens.get('total_tokens', '?')} tokens")
+        return body or None
+    except Exception as exc:
+        print(f"LLM edu: error — {exc}")
+        return None
