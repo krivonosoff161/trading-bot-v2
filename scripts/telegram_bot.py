@@ -92,6 +92,8 @@ START_TEXT = """\
 # In-memory state per chat_id: {status, image_path, started_at, msg_date}
 # status: idle | awaiting_symbol | processing
 _state: dict[str, dict] = {}
+_edu_cooldown: dict[str, float] = {}   # chat_id → last edu answer timestamp
+_EDU_COOLDOWN_SEC = 180                # 3 min between questions
 
 # Persistent HTTP session — one per bot lifetime, not per request
 _SESSION: aiohttp.ClientSession | None = None
@@ -139,6 +141,7 @@ async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool 
     parts.append("\nВыбери пару:")
     buttons = [[{"text": sym, "callback_data": sym}] for sym in SYMBOLS]
     buttons.append([{"text": "Другая пара", "callback_data": "__manual__"}])
+    buttons.append([{"text": "💡 Совет", "callback_data": "__edu__"}])
     await _tg(
         "sendMessage",
         chat_id=chat_id,
@@ -260,6 +263,16 @@ async def _run_and_deliver(chat_id: str, image_path: str, symbol: str, captured_
             pass
     finally:
         _reset(chat_id)
+
+
+async def _run_edu(chat_id: str, question: str) -> None:
+    from src.utils.llm_formatter import generate_edu_text
+    await _send(chat_id, "💭 Думаю...")
+    answer = await generate_edu_text(question)
+    if answer:
+        await _send(chat_id, answer)
+    else:
+        await _send(chat_id, "Не смог ответить — попробуй переформулировать вопрос.")
 
 
 async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at: str) -> None:
@@ -416,6 +429,21 @@ async def _handle_callback(cbq: dict) -> None:
         _state[chat_id] = {"status": "awaiting_symbol", "image_path": None,
                            "started_at": time.time(), "msg_date": int(time.time())}
         await _send_pair_keyboard(chat_id)
+        return
+
+    # ── Edu button ─────────────────────────────────────────────────────────
+    if data == "__edu__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        _reset(chat_id)
+        _state[chat_id] = {"status": "edu_awaiting", "started_at": time.time()}
+        await _send(chat_id, (
+            "💡 Напиши вопрос — объясню простыми словами.\n\n"
+            "Примеры:\n"
+            "• что такое funding rate?\n"
+            "• объясни плечо 10x\n"
+            "• зачем нужен стоп-лосс?\n"
+            "• что значит лонг и шорт?"
+        ))
         return
 
     # ── Feedback callbacks — handled regardless of current state ──────────
@@ -599,6 +627,17 @@ async def _handle_text(msg: dict) -> None:
             await _start_analysis(chat_id, symbol)
         else:
             await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
+        return
+
+    if status == "edu_awaiting":
+        last = _edu_cooldown.get(chat_id, 0)
+        if time.time() - last < _EDU_COOLDOWN_SEC:
+            remaining = int(_EDU_COOLDOWN_SEC - (time.time() - last))
+            await _send(chat_id, f"⏳ Подожди ещё {remaining} сек. перед следующим вопросом.")
+            return
+        _reset(chat_id)
+        _edu_cooldown[chat_id] = time.time()
+        asyncio.create_task(_run_edu(chat_id, text))
         return
 
     # idle — trigger on "анализ", hint otherwise
