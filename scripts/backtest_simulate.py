@@ -98,67 +98,44 @@ CACHE_MAX_AGE = 23 * 3600
 # None = pair is OFF (DOGE excluded)
 PAIR_PARAMS = {
     "BTC-USDT":  {
-        # TRENDING regime
-        "fast_vol": 1.6, "fast_adx": 18,
-        "swing_vol": 1.3, "swing_adx": 18,
-        # RANGING regime: mean reversion — ADX ceiling, price at extremes
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
+        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
+        "ranging_fast_vol": 1.3,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        # BOUNCE regime (post-crash/pump reversal, fires only when trend engine = NO_TRADE)
-        "bounce_adx_min": 18, "bounce_vol": 1.5,
-        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
-        "bounce_sl_k": 1.7,
-        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 4.0,
-        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
+        "allowed_modes": ["FAST", "SWING"],
     },
     "ETH-USDT":  {
-        "fast_vol": 1.8, "fast_adx": 18,
-        "swing_vol": 1.5, "swing_adx": 18,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
+        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
+        "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
-        "bounce_adx_min": 18, "bounce_vol": 1.5,
-        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
-        "bounce_sl_k": 1.7,
-        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
+        "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT":  {
-        "fast_vol": 3.2, "fast_adx": 26,
-        "swing_vol": 2.8, "swing_adx": 28,
-        "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
+        "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
+        "ranging_fast_vol": 2.0,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "bounce_adx_min": 22, "bounce_vol": 2.0,
-        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.45,
-        "bounce_sl_k": 2.0,
-        "sl_k": 1.7, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 10.0,
-        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
+        "allowed_modes": ["FAST", "SWING"],
     },
     "DOGE-USDT": {
-        "fast_vol": 2.0, "fast_adx": 18,
-        "swing_vol": 1.6, "swing_adx": 20,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.6,
+        "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
+        "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
+        "ranging_fast_vol": 1.6,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "bounce_adx_min": 18, "bounce_vol": 1.8,
-        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
-        "bounce_sl_k": 1.8,
-        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
     },
     "XRP-USDT":  {
-        "fast_vol": 1.8, "fast_adx": 18,
-        "swing_vol": 1.4, "swing_adx": 18,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
+        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
+        "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        "bounce_adx_min": 18, "bounce_vol": 1.5,
-        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
-        "bounce_sl_k": 1.9,
-        "sl_k": 1.6, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
         "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING", "BOUNCE"],
+        "allowed_modes": ["FAST", "SWING"],
     },
 }
 
@@ -422,27 +399,6 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             elif ranging_base and five_m_short and _sell_pos_ok:
                 trade_style, side = "FAST", "sell"
 
-    # BOUNCE: post-crash/pump reversal — fallback when trend engine = NO_TRADE
-    # Fires in RANGING (mature trend dying) when RSI extreme + volume spike + 5m reversal
-    if trade_style == "NO_TRADE" and regime == "RANGING" and "BOUNCE" in pp.get("allowed_modes", []):
-        b_adx  = pp.get("bounce_adx_min", 25)
-        b_vol  = pp.get("bounce_vol", 2.0)
-        b_rlow = pp.get("bounce_rsi_low", 42)
-        b_rhigh= pp.get("bounce_rsi_high", 58)
-        b_dpos = pp.get("bounce_day_pos", 0.45)
-
-        bounce_base = (float(adx_1h) >= b_adx   # trend was strong
-                       and not adx_1h_rising      # momentum exhausting
-                       and vol_ratio >= b_vol)     # reversal volume spike
-
-        if bounce_base:
-            if (rsi_1h < b_rlow and five_m_long
-                    and day_position is not None and day_position < b_dpos):
-                trade_style, side = "BOUNCE", "buy"
-            elif (rsi_1h > b_rhigh and five_m_short
-                    and day_position is not None and day_position > (1.0 - b_dpos)):
-                trade_style, side = "BOUNCE", "sell"
-
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
     if trade_style not in allowed:
@@ -489,55 +445,55 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # OI dropping >3% = positions being closed, not new money = weaker signal
     oi_weak = oi_delta < -0.03
 
-    # ── SL / TP ───────────────────────────────────────────────────────────────
+    # ── SL / TP (matches prod analyze_chart.py formulas) ─────────────────────
     sl_p = tp_p = None
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
-        sl_dist  = max(pp["sl_k"] * atr_15m, close * 0.004)
-        tp_dist  = min(sl_dist * pp["fast_tp_k"], atr_1h * FAST_ATR_CAP)
-        if side == "buy":
-            sl_p = round(close - sl_dist, 6)
-            tp_p = round(close + tp_dist,  6)
-        else:
-            sl_p = round(close + sl_dist, 6)
-            tp_p = round(close - tp_dist,  6)
-
-    elif trade_style == "BOUNCE" and side and close:
-        # Wider SL than FAST — trading against recent momentum, needs breathing room
-        bounce_sl_k = pp.get("bounce_sl_k", pp["sl_k"] * 1.2)
-        sl_dist  = max(bounce_sl_k * atr_15m, close * 0.005)
-        tp_dist  = min(sl_dist * pp["fast_tp_k"], atr_1h * FAST_ATR_CAP)
-        if side == "buy":
-            sl_p = round(close - sl_dist, 6)
-            tp_p = round(close + tp_dist, 6)
-        else:
-            sl_p = round(close + sl_dist, 6)
-            tp_p = round(close - tp_dist, 6)
-
-    elif trade_style == "SWING" and side and close:
-        # Structural SL: swing level + ATR buffer, at least sl_k*ATR
+        atr_sl_dist = max(pp["fast_sl_k"] * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
-            atr_sl    = close - pp["sl_k"] * atr_15m
+            atr_sl    = close - atr_sl_dist
+            struct_sl = (swings["recent_lows"][-1] - 0.2 * atr_15m
+                         if swings["recent_lows"] else None)
+            sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
+            sl_dist = close - sl_p
+            tp_p    = round(close + sl_dist * 0.8, 6)
+        else:
+            atr_sl    = close + atr_sl_dist
+            struct_sl = (swings["recent_highs"][-1] + 0.2 * atr_15m
+                         if swings["recent_highs"] else None)
+            sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
+            sl_dist = sl_p - close
+            tp_p    = round(close - sl_dist * 0.8, 6)
+
+    elif trade_style == "SWING" and side and close:
+        swings = find_swing_levels(h15, l15, lookback=3, count=4)
+        if side == "buy":
+            atr_sl    = close - pp["swing_sl_k"] * atr_15m
             struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_dist = min(sl_dist * pp["swing_tp_k"], atr_1h * SWING_ATR_CAP)
-            tp_p    = round(close + tp_dist, 6)
+            tp_p    = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)
         else:
-            atr_sl    = close + pp["sl_k"] * atr_15m
+            atr_sl    = close + pp["swing_sl_k"] * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_dist = min(sl_dist * pp["swing_tp_k"], atr_1h * SWING_ATR_CAP)
-            tp_p    = round(close - tp_dist, 6)
+            tp_p    = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)
+
+    # R/R validation — block if TP doesn't cover SL
+    rr_ok = True
+    if sl_p and tp_p and sl_dist > 0:
+        rr = abs(tp_p - close) / sl_dist
+        if rr < 0.75:
+            rr_ok = False
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
-               or funding_block or oi_weak
+               or funding_block or oi_weak or not rr_ok
                or not sl_p or not tp_p)
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
