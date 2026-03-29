@@ -1205,7 +1205,7 @@ async def run(
             _tp1_p   = round(_close - min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
             _tp2_p   = round(_close - min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
 
-    _max_hold_minutes = 120 if _trade_style == "FAST" else 240
+    _max_hold_minutes = (240 if _is_night else 120) if _trade_style == "FAST" else 240
 
     # Final entry signal
     if (_trade_style == "NO_TRADE" or not _vwap_ok or _oi_weak
