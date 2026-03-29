@@ -144,7 +144,7 @@ async def execute_signal(result: dict) -> bool:
         existing.append(pos_record)
         _save_positions(existing)
 
-        print(f"auto_execute: ✅ {symbol} {side.upper()} {contracts} contracts "
+        print(f"auto_execute: OK {symbol} {side.upper()} {contracts} contracts "
               f"| SL={sl_price} TP={tp1_price} | hold={max_hold}min")
         return True
 
@@ -179,7 +179,7 @@ async def check_and_close_timeouts() -> None:
 
             ok = await client.close_position(symbol, pos_side)
             if ok:
-                print(f"auto_execute timeout: ✅ closed {symbol} after {pos.get('contracts')} contracts")
+                print(f"auto_execute timeout: closed {symbol} after {pos.get('contracts')} contracts")
             else:
                 print(f"auto_execute timeout: ❌ failed to close {symbol} — keeping in tracker")
                 remaining.append(pos)
