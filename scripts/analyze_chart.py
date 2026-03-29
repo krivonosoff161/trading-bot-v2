@@ -920,6 +920,12 @@ _PAIR_PARAMS = {
         "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
+    "DOGE-USDT": {
+        "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
+        "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.6,
+        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+    },
 }
 _PAIR_PARAMS_DEFAULT = {
     "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,

@@ -689,7 +689,7 @@ async def handle_update(update: dict) -> None:
 
 # ── Polling loop ───────────────────────────────────────────────────────────────
 
-_SCANNER_PAIRS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "ADA-USDT"]
+_SCANNER_PAIRS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 _SCANNER_LOG      = ROOT / "logs" / "scanner.log"
 _SCANNER_INTERVAL = 15  # minutes
 
