@@ -1179,15 +1179,21 @@ async def run(
     _sl_dist = 0.0
 
     if _trade_style == "FAST" and _side and _close:
-        _sl_dist = max(_pp["fast_sl_k"] * _atr_15m, _close * 0.004)
+        _atr_sl_dist = max(_pp["fast_sl_k"] * _atr_15m, _close * 0.004)
         if _side == "buy":
-            _sl_p  = round(_close - _sl_dist, 4)
-            _tp1_p = round(_close + _sl_dist * 0.8, 4)
-            _tp2_p = round(_close + _sl_dist * 1.5, 4)
+            _atr_sl   = _close - _atr_sl_dist
+            _struct   = (_swing_lows[-1]  - 0.2 * _atr_15m) if _swing_lows  else None
+            _sl_p     = round(min(_struct, _atr_sl) if _struct and _struct < _close else _atr_sl, 4)
+            _sl_dist  = _close - _sl_p
+            _tp1_p    = round(_close + _sl_dist * 0.8, 4)
+            _tp2_p    = round(_close + _sl_dist * 1.5, 4)
         else:
-            _sl_p  = round(_close + _sl_dist, 4)
-            _tp1_p = round(_close - _sl_dist * 0.8, 4)
-            _tp2_p = round(_close - _sl_dist * 1.5, 4)
+            _atr_sl   = _close + _atr_sl_dist
+            _struct   = (_swing_highs[-1] + 0.2 * _atr_15m) if _swing_highs else None
+            _sl_p     = round(max(_struct, _atr_sl) if _struct and _struct > _close else _atr_sl, 4)
+            _sl_dist  = _sl_p - _close
+            _tp1_p    = round(_close - _sl_dist * 0.8, 4)
+            _tp2_p    = round(_close - _sl_dist * 1.5, 4)
 
     elif _trade_style == "SWING" and _side and _close:
         if _side == "buy":
