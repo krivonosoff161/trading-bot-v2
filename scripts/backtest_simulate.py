@@ -101,8 +101,9 @@ PAIR_PARAMS = {
         # TRENDING regime
         "fast_vol": 1.6, "fast_adx": 18,
         "swing_vol": 1.3, "swing_adx": 18,
-        # RANGING regime (SWING disabled, FAST both directions, lower thresholds)
+        # RANGING regime: mean reversion — ADX ceiling, price at extremes
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         # BOUNCE regime (post-crash/pump reversal, fires only when trend engine = NO_TRADE)
         "bounce_adx_min": 18, "bounce_vol": 1.5,
         "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
@@ -115,6 +116,7 @@ PAIR_PARAMS = {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.5, "swing_adx": 18,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
         "bounce_adx_min": 18, "bounce_vol": 1.5,
         "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
         "bounce_sl_k": 1.7,
@@ -126,6 +128,7 @@ PAIR_PARAMS = {
         "fast_vol": 3.2, "fast_adx": 26,
         "swing_vol": 2.8, "swing_adx": 28,
         "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
         "bounce_adx_min": 22, "bounce_vol": 2.0,
         "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.45,
         "bounce_sl_k": 2.0,
@@ -133,11 +136,23 @@ PAIR_PARAMS = {
         "late_range": 10.0,
         "allowed_modes": ["FAST", "SWING", "BOUNCE"],
     },
-    "DOGE-USDT": None,                       # OFF — too noisy
+    "DOGE-USDT": {
+        "fast_vol": 2.0, "fast_adx": 18,
+        "swing_vol": 1.6, "swing_adx": 20,
+        "ranging_fast_adx": 14, "ranging_fast_vol": 1.6,
+        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+        "bounce_adx_min": 18, "bounce_vol": 1.8,
+        "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
+        "bounce_sl_k": 1.8,
+        "sl_k": 1.4, "fast_tp_k": 0.8, "swing_tp_k": 1.5,
+        "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],
+    },
     "XRP-USDT":  {
         "fast_vol": 1.8, "fast_adx": 18,
         "swing_vol": 1.4, "swing_adx": 18,
         "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         "bounce_adx_min": 18, "bounce_vol": 1.5,
         "bounce_rsi_low": 50, "bounce_rsi_high": 50, "bounce_day_pos": 0.50,
         "bounce_sl_k": 1.9,
@@ -209,16 +224,17 @@ def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
       RANGING  — sideways bounded, FAST both directions, SWING off
       CHOPPY   — volatile but no direction, no trade
     """
-    # TRENDING: 4H confirms trend strength + direction conviction
-    if adx_4h >= 25 and adx_4h_rising and di_spread_4h >= 10 and adx_1h >= 20:
+    # TRENDING: both timeframes show direction conviction (no adx_4h_rising requirement)
+    trend_4h = adx_4h >= 22 and di_spread_4h >= 10
+    trend_1h = adx_1h >= 18 and di_spread_1h >= 8
+    if trend_4h and trend_1h:
         return "TRENDING"
 
-    # CHOPPY: ADX moving but DI lines too close — both buyers and sellers active
-    # Also catches high-volatility ranging (wide BB, no trend)
-    if adx_1h >= 20 and di_spread_1h < 8 and bb_width > 3.0:
+    # CHOPPY: volatile with no direction — wide BB, DI lines converged, weak 4H trend
+    if bb_width >= 3.0 and di_spread_1h < 6 and adx_4h < 22:
         return "CHOPPY"
 
-    # RANGING: default — low trend strength, bounded movement
+    # RANGING: default — sideways bounded movement
     return "RANGING"
 
 
@@ -348,9 +364,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     signal_hour = dt_last.hour
     is_night    = 1 <= signal_hour < 7
 
-    # Late-move veto: day already moved a lot and price is at the top
-    late_move = (daily_range_pct > pp["late_range"]
-                 and day_position is not None and day_position > 0.90)
+    # Late-move veto: symmetric — block long at top AND short at bottom
+    late_move = False  # evaluated per-side after signal is known
 
     # ── Regime detection ──────────────────────────────────────────────────────
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
@@ -393,15 +408,18 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 trade_style, side = "SWING", "sell"
 
     elif regime == "RANGING":
-        # FAST only — both directions, lower thresholds, SWING disabled
-        ranging_base = (float(adx_1h) >= pp["ranging_fast_adx"]
-                        and adx_1h_rising
+        # Mean reversion: ADX ceiling (not floor), ADX stable/falling, price at extremes
+        _adx_ceil   = pp.get("ranging_adx_max", 22)
+        _bb_corridor = 0.8 <= bb_width <= 2.5
+        ranging_base = (float(adx_1h) <= _adx_ceil and not adx_1h_rising
                         and vol_ratio >= pp["ranging_fast_vol"]
-                        and bb_expanding)
+                        and _bb_corridor and day_position is not None)
+        _buy_pos_ok  = day_position <= pp.get("ranging_buy_pos_max",  0.35)
+        _sell_pos_ok = day_position >= pp.get("ranging_sell_pos_min", 0.65)
         if mode in ("FAST", "COMBINED"):
-            if ranging_base and five_m_long:
+            if ranging_base and five_m_long and _buy_pos_ok:
                 trade_style, side = "FAST", "buy"
-            elif ranging_base and five_m_short:
+            elif ranging_base and five_m_short and _sell_pos_ok:
                 trade_style, side = "FAST", "sell"
 
     # BOUNCE: post-crash/pump reversal — fallback when trend engine = NO_TRADE
@@ -438,18 +456,27 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     if time_block_h and signal_hour in time_block_h:
         trade_style, side = "NO_TRADE", None
 
-    # Late-move veto
-    if late_move:
-        trade_style, side = "NO_TRADE", None
+    # Late-move veto — symmetric
+    if daily_range_pct > pp["late_range"] and day_position is not None:
+        if side == "buy"  and day_position > 0.90:
+            trade_style, side = "NO_TRADE", None
+        if side == "sell" and day_position < 0.10:
+            trade_style, side = "NO_TRADE", None
 
     # 4H veto — informational only; SWING handles 4H in condition, FAST is 4H-agnostic
     fourch_veto = four_h_conflict
 
-    # ── VWAP filter ───────────────────────────────────────────────────────────
+    # ── VWAP filter — regime-aware ────────────────────────────────────────────
     vwap_ok = True
     if vwap and close and side:
-        if side == "buy"  and close < vwap: vwap_ok = False
-        if side == "sell" and close > vwap: vwap_ok = False
+        if regime == "RANGING":
+            # fade mode: buy below VWAP (reversion up), sell above VWAP
+            if side == "buy"  and close > vwap: vwap_ok = False
+            if side == "sell" and close < vwap: vwap_ok = False
+        else:
+            # follow mode: buy above VWAP, sell below VWAP
+            if side == "buy"  and close < vwap: vwap_ok = False
+            if side == "sell" and close > vwap: vwap_ok = False
 
     # ── Side-aware funding filter ─────────────────────────────────────────────
     funding_val   = funding if funding is not None else 0.0
