@@ -434,6 +434,11 @@ async def _handle_callback(cbq: dict) -> None:
     # ── Edu button ─────────────────────────────────────────────────────────
     if data == "__edu__":
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        last = _edu_cooldown.get(chat_id, 0)
+        remaining = int(_EDU_COOLDOWN_SEC - (time.time() - last))
+        if remaining > 0:
+            await _send(chat_id, f"⏳ Следующий вопрос через {remaining} сек.")
+            return
         _reset(chat_id)
         _state[chat_id] = {"status": "edu_awaiting", "started_at": time.time()}
         await _send(chat_id, (
