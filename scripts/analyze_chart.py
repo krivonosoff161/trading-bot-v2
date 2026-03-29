@@ -978,25 +978,39 @@ async def run(
     after_ts    = captured_ms + 1
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
-    raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist = await asyncio.gather(
-        client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
-        client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
-        client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
-        client.get_history_candles(symbol, "5m",  after=after_ts, limit=limit),
-        client.get_funding_rate(symbol),
-        client.get_open_interest(symbol),
-        client.get_oi_history(symbol, period="1H", limit=5),
-    )
-    await client.close()
+    try:
+        raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist = await asyncio.gather(
+            client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
+            client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
+            client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
+            client.get_history_candles(symbol, "5m",  after=after_ts, limit=limit),
+            client.get_funding_rate(symbol),
+            client.get_open_interest(symbol),
+            client.get_oi_history(symbol, period="1H", limit=5),
+        )
+    finally:
+        await client.close()
 
     if not raw_1h or not raw_15m or not raw_5m:
         print("ERROR: No candle data returned. Check symbol and captured-at timestamp.")
+        return
+
+    # Validate minimum bar counts before any calculations
+    if len(raw_1h) < 20 or len(raw_15m) < 20 or len(raw_5m) < 5:
+        print(f"ERROR: Not enough candles — 1H:{len(raw_1h)} 15m:{len(raw_15m)} 5m:{len(raw_5m)}")
         return
 
     c1h  = confirm_label(raw_1h)
     c15m = confirm_label(raw_15m)
     c5m  = confirm_label(raw_5m)
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
+
+    # Funding/OI are live — disable for historical requests (>15min from now)
+    _is_live = abs(datetime.now(timezone.utc).timestamp() * 1000 - captured_ms) <= 15 * 60 * 1000
+    if not _is_live:
+        _funding = None
+        _oi      = None
+        _oi_hist = None
 
     # ── Compute indicators ───────────────────────────────────────────────────
     result = compute_indicators(raw_1h, raw_15m, raw_5m, params, raw_4h=raw_4h)
@@ -1072,10 +1086,11 @@ async def run(
             _oi_delta = (_oic - _oip) / _oip
 
     # ── VWAP + day levels ────────────────────────────────────────────────────
+    # raw_15m is newest-first; [0] may be forming — skip it for day level calcs
     _captured_dt  = datetime.fromisoformat(captured_at_iso.replace("Z", "+00:00"))
     _day_start_ms = int(datetime(_captured_dt.year, _captured_dt.month, _captured_dt.day,
                                   tzinfo=timezone.utc).timestamp() * 1000)
-    _day_candles  = [c for c in raw_15m if int(c[0]) >= _day_start_ms]
+    _day_candles  = [c for c in raw_15m[1:] if int(c[0]) >= _day_start_ms]
     if _day_candles:
         _dc_closes  = [float(c[4]) for c in _day_candles]
         _dc_vols    = [float(c[5]) for c in _day_candles]
