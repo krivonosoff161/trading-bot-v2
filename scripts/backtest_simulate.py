@@ -335,11 +335,11 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # RSI on 1H — used for BOUNCE detection
     rsi_1h = float(calc_rsi(c1h, period=14))
 
-    # Vol ratio on 15m: last 3 bars vs prev 15 bars
-    vols_15m   = [float(c[5]) for c in list(reversed(raw_15m))]
-    recent_vol = np.mean(vols_15m[:3])   if len(vols_15m) >= 3  else 0
+    # Vol ratio on 15m: last 3 closed bars vs prior 15 — raw_15m is newest-first
+    vols_15m   = [float(c[5]) for c in raw_15m]          # newest-first, no reversal
+    recent_vol = np.mean(vols_15m[1:4])  if len(vols_15m) >= 4  else 0   # skip forming [0]
     prior_vol  = np.mean(vols_15m[5:20]) if len(vols_15m) >= 20 else recent_vol
-    vol_ratio  = recent_vol / prior_vol if prior_vol > 0 else 1.0
+    vol_ratio  = recent_vol / max(prior_vol, 1e-9)
 
     # BB Width on 15m — expansion regime filter
     bb          = calc_bollinger_bands(c15, period=20, std_mult=2.0)

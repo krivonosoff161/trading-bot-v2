@@ -893,42 +893,42 @@ _PAIR_PARAMS = {
     "BTC-USDT": {
         "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
         "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.3,
+        "ranging_fast_vol": 1.3,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         "late_range": 4.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ETH-USDT": {
         "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
         "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT": {
         "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
         "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
-        "ranging_fast_adx": 18, "ranging_fast_vol": 2.0,
+        "ranging_fast_vol": 2.0,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
         "late_range": 10.0, "allowed_modes": ["FAST", "SWING"],
     },
     "XRP-USDT": {
         "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.4,
+        "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ADA-USDT": {
         "fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
+        "ranging_fast_vol": 1.5,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "DOGE-USDT": {
         "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
         "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
-        "ranging_fast_adx": 14, "ranging_fast_vol": 1.6,
+        "ranging_fast_vol": 1.6,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
@@ -936,7 +936,7 @@ _PAIR_PARAMS = {
 _PAIR_PARAMS_DEFAULT = {
     "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
     "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
-    "ranging_fast_adx": 15, "ranging_fast_vol": 1.5,
+    "ranging_fast_vol": 1.5,
     "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
 }
@@ -1049,11 +1049,13 @@ async def run(
         _adx_4h_rising = False
         _di_spread_4h  = 0.0
 
-    # ── Vol ratio (impulse: last 3 vs prior 15 on 15m) ───────────────────────
+    # ── Vol ratio (impulse: last 3 closed vs prior 15 on 15m) ───────────────
+    # raw_15m is newest-first; [0] may be forming bar — skip it
     if raw_15m and len(raw_15m) >= 20:
-        _vols_imp  = [float(c[5]) for c in list(reversed(raw_15m))]
-        _prior_imp = float(np.mean(_vols_imp[5:20]))
-        _vol_ratio_sig = float(np.mean(_vols_imp[:3])) / max(_prior_imp, 1e-9)
+        _vols_imp      = [float(c[5]) for c in raw_15m]   # newest-first
+        _recent_imp    = float(np.mean(_vols_imp[1:4]))    # last 3 closed bars
+        _prior_imp     = float(np.mean(_vols_imp[5:20]))   # prior 15 closed bars
+        _vol_ratio_sig = _recent_imp / max(_prior_imp, 1e-9)
     else:
         _vol_ratio_sig = 1.0
 
@@ -1242,11 +1244,18 @@ async def run(
 
     _max_hold_minutes = (240 if _is_night else 120) if _trade_style == "FAST" else 240
 
-    # Final entry signal
+    # R/R validation — block ENTRY if TP2 doesn't cover SL distance
+    _rr_ok = True
+    if _sl_p and _tp2_p and _sl_dist > 0:
+        _rr2 = abs(_tp2_p - _close) / _sl_dist
+        if _rr2 < 1.0:
+            _rr_ok = False
+
+    # Final entry signal — funding_block = hard NO_TRADE, not WAIT
     if (_trade_style == "NO_TRADE" or not _vwap_ok or _oi_weak
-            or not _sl_p or not _tp1_p):
+            or _funding_block or not _rr_ok or not _sl_p or not _tp1_p):
         _entry_signal = "NO_TRADE"
-    elif _funding_warn or _funding_block:
+    elif _funding_warn:
         _entry_signal = "WAIT"
     else:
         _entry_signal = "ENTRY"
