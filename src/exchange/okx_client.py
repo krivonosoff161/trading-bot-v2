@@ -289,6 +289,23 @@ class OKXClient:
         logger.error("Close failed | symbol={} response={}", symbol, data)
         return False
 
+    async def get_balance(self) -> float:
+        """Return available USDT equity on the account."""
+        data = await self._get("/api/v5/account/balance", {"ccy": "USDT"})
+        try:
+            return float(data["data"][0]["details"][0]["availEq"])
+        except (KeyError, IndexError, TypeError, ValueError):
+            logger.error("get_balance: unexpected response={}", data)
+            return 0.0
+
+    async def get_positions(self, symbol: str) -> list:
+        """Return open positions for symbol. Empty list if none."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/account/positions", {"instId": inst_id})
+        if data.get("code") == "0":
+            return [p for p in data.get("data", []) if float(p.get("pos", 0)) != 0]
+        return []
+
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for symbol."""
         inst_id = f"{symbol}-SWAP"

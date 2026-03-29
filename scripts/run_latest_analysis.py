@@ -116,7 +116,7 @@ def main() -> int:
     print(f"Запускаю анализ для {symbol} ...")
     print()
 
-    asyncio.run(
+    result = asyncio.run(
         run(
             symbol=symbol,
             captured_at_iso=captured_at,
@@ -125,6 +125,14 @@ def main() -> int:
             send_telegram=send_telegram,
         )
     )
+
+    # Auto-execute if ENTRY signal and AUTO_TRADE enabled
+    if result and result.get("entry_signal") == "ENTRY":
+        from scripts.auto_execute import AUTO_TRADE, execute_signal
+        if AUTO_TRADE:
+            print()
+            print(f"AUTO_TRADE включён — открываю позицию {symbol} ...")
+            asyncio.run(execute_signal(result))
 
     print()
     print("Готово.")

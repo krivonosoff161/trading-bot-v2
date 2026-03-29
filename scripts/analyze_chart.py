@@ -1397,6 +1397,10 @@ async def run(
         "symbol":        symbol,
         "expiry_time":   expiry_time,
         "delivery_text": delivery_text,
+        "entry_price":   _close,
+        "sl_price":      _sl_p,
+        "tp1_price":     _tp1_p,
+        "max_hold_min":  _max_hold_minutes,
     }
 
 

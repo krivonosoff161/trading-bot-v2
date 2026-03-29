@@ -770,11 +770,24 @@ async def _scanner_loop() -> None:
                         await send_photo_to(chat_id, str(png_path))
                     await asyncio.sleep(0.3)
                 _scan_log(f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам")
+                # Auto-execute on operator demo account
+                try:
+                    from scripts.auto_execute import execute_signal
+                    await execute_signal(result)
+                except Exception:
+                    pass
             else:
                 shutil.rmtree(scan_dir, ignore_errors=True)
                 _scan_log(f"  {pair} — {signal}")
 
             last_signal[pair] = signal
+
+        # Check timeouts on auto-positions
+        try:
+            from scripts.auto_execute import check_and_close_timeouts
+            await check_and_close_timeouts()
+        except Exception:
+            pass
 
         # Sleep until next :00/:15/:30/:45
         now      = datetime.now(timezone.utc)
