@@ -181,8 +181,8 @@ def _bias(bull: bool, bear: bool) -> str:
 
 def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     day_candles = [c for c in raw_15m if int(c[0]) >= day_start_ms]
-    if not day_candles:
-        return None, None, None
+    if len(day_candles) < 4:
+        return None, None, None  # too few bars — day_position unreliable
     closes = [float(c[4]) for c in day_candles]
     vols   = [float(c[5]) for c in day_candles]
     highs  = [float(c[2]) for c in day_candles]
@@ -347,6 +347,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # ── Regime detection ──────────────────────────────────────────────────────
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
                            di_spread_4h, di_spread_1h, bb_width)
+    if regime == "TRENDING" and four_h_conflict:
+        regime = "RANGING"
 
     # ── Mode + Direction by regime ────────────────────────────────────────────
     trade_style = "NO_TRADE"
