@@ -27,7 +27,7 @@ load_dotenv()
 
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
-    calc_adx, calc_atr, calc_ema, calc_sma, parse_candles, parse_volumes,
+    calc_adx, calc_atr, calc_ema, parse_candles,
     find_swing_levels, atr_regime, calc_bollinger_bands, calc_supertrend,
     calc_chandelier_exit, calc_rsi,
 )
@@ -41,15 +41,6 @@ def load_strategy_params() -> dict:
         cfg = yaml.safe_load(f)
     return cfg.get("strategy", {})
 
-
-def load_symbol_min_sl_percent(symbol: str) -> float:
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    with open(config_path, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    for s in cfg.get("trading", {}).get("symbols", []):
-        if s.get("id") == symbol:
-            return float(s.get("min_sl_percent", 0.003))
-    return 0.003
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -268,6 +259,7 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     adx_4h_ok       = eng.get("adx_4h_ok", True)
     five_m_trigger  = eng.get("five_m_trigger", True)
     adx_4h          = eng.get("adx_4h", 0.0)
+    regime          = eng.get("regime", "RANGING")
 
     try:
         dt     = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
@@ -305,7 +297,12 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         _long_short = "ЛОНГ" if side == "buy" else "ШОРТ"
 
         lines.append("📊 СЕЙЧАС НА РЫНКЕ")
-        lines.append(f"  Тренд 1H направлен {_dir_word} и набирает силу — объём импульса подтверждает движение.")
+        if regime == "RANGING":
+            _zone = "дна" if side == "buy" else "вершины"
+            _expect = "отскок вверх" if side == "buy" else "откат вниз"
+            lines.append(f"  Рынок в диапазоне. Цена у {_zone} дневного диапазона — ожидаем {_expect} к VWAP.")
+        else:
+            lines.append(f"  Тренд 1H направлен {_dir_word} и набирает силу — объём импульса подтверждает движение.")
         if vwap and close:
             _vwap_word  = "выше" if float(close) >= float(vwap) else "ниже"
             _ctrl       = "покупатели" if side == "buy" else "продавцы"
@@ -361,39 +358,65 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
 
     # ── NO_TRADE ─────────────────────────────────────────────────────────────
     else:
-        # Primary reason — first match wins
-        if bias_1h == "NEUTRAL":
-            why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
-            what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
-        elif four_h_conflict:
-            why  = "4H направление против 1H — SWING требует согласования таймфреймов."
-            what = "Ждать пока 4H и 1H совпадут по направлению — либо ждать FAST если объём появится."
-        elif not adx_4h_ok:
-            why  = f"На 4H нет выраженного тренда (ADX {adx_4h:.0f}) — SWING требует подтверждённого тренда на старшем ТФ."
-            what = "Ждать роста ADX 4H выше 20 — это сигнал что тренд формируется."
-        elif not adx_rising:
-            why  = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
-            what = "Ждать когда ADX начнёт расти — это сигнал возобновления тренда."
-        elif vol_ratio < 1.3:
-            why  = f"Объём импульса слабый (×{vol_ratio:.2f}) — движение без подтверждения покупателей/продавцов."
-            what = "Ждать свечей с повышенным объёмом — только тогда движение реальное."
-        elif not bb_expanding:
-            why  = "Bollinger Bands сжаты — рынок в боковике, направленного движения нет."
-            what = "Ждать расширения полос — это сигнал выхода из консолидации."
-        elif not five_m_trigger:
-            _need5 = "выше" if side == "buy" else "ниже"
-            why  = f"Цена на 5m ещё не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
-            what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 на 5m — условие FAST выполнено."
-        elif not vwap_ok:
-            _need = "выше" if side == "buy" else "ниже"
-            why  = f"Цена на неправильной стороне дневного равновесия — для {'лонга' if side == 'buy' else 'шорта'} нужно {_need} {fp(vwap)}."
-            what = f"Подождать пока цена закрепится {_need} {fp(vwap)}."
-        elif oi_weak:
-            why  = "Открытый интерес падает при движении цены — позиции закрываются, сигнал слабый."
-            what = "Ждать стабилизации или роста открытого интереса."
+        # Primary reason — first match wins, branched by regime
+        if regime == "RANGING":
+            if side is None:
+                why  = "Цена в середине дневного диапазона — ждём пока уйдёт в крайние зоны (< 35% или > 65%)."
+                what = "Следить за приближением к дневным экстремумам — только оттуда берём отскок."
+            elif adx_rising:
+                why  = f"ADX на 1H растёт ({adx_1h:.1f}) — рынок выходит из диапазона, mean reversion опасен."
+                what = "Ждать пока ADX стабилизируется или начнёт падать — тогда диапазонная логика снова в силе."
+            elif not five_m_trigger:
+                _need5 = "выше" if side == "buy" else "ниже"
+                why  = f"5m не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
+                what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 — условие выполнено."
+            elif not vwap_ok:
+                _need = "ниже" if side == "buy" else "выше"
+                why  = f"Для отскока {'вверх' if side == 'buy' else 'вниз'} нужна цена {_need} VWAP ({fp(vwap)})."
+                what = f"Ждать пока цена опустится {_need} {fp(vwap)} — тогда направление отскока подтверждено."
+            elif vol_ratio < 1.3:
+                why  = f"Объём слабый (×{vol_ratio:.2f}) — нет импульса для отскока."
+                what = "Ждать свечи с повышенным объёмом у экстремума диапазона."
+            elif oi_weak:
+                why  = "Открытый интерес падает — позиции закрываются, отскок ненадёжен."
+                what = "Ждать стабилизации OI перед входом."
+            else:
+                why  = "Условия mean reversion не выполнены."
+                what = "Следить за следующей 15m свечой у экстремума диапазона."
         else:
-            why  = "Условия входа не выполнены в полном объёме."
-            what = "Следить за следующей 15m свечой."
+            # TRENDING / CHOPPY reasons
+            if bias_1h == "NEUTRAL":
+                why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
+                what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
+            elif four_h_conflict:
+                why  = "4H направление против 1H — SWING требует согласования таймфреймов."
+                what = "Ждать пока 4H и 1H совпадут по направлению — либо ждать FAST если объём появится."
+            elif not adx_4h_ok:
+                why  = f"На 4H нет выраженного тренда (ADX {adx_4h:.0f}) — SWING требует подтверждённого тренда на старшем ТФ."
+                what = "Ждать роста ADX 4H выше 20 — это сигнал что тренд формируется."
+            elif not adx_rising:
+                why  = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
+                what = "Ждать когда ADX начнёт расти — это сигнал возобновления тренда."
+            elif vol_ratio < 1.3:
+                why  = f"Объём импульса слабый (×{vol_ratio:.2f}) — движение без подтверждения покупателей/продавцов."
+                what = "Ждать свечей с повышенным объёмом — только тогда движение реальное."
+            elif not bb_expanding:
+                why  = "Bollinger Bands сжаты — рынок в боковике, направленного движения нет."
+                what = "Ждать расширения полос — это сигнал выхода из консолидации."
+            elif not five_m_trigger:
+                _need5 = "выше" if side == "buy" else "ниже"
+                why  = f"Цена на 5m ещё не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
+                what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 на 5m — условие FAST выполнено."
+            elif not vwap_ok:
+                _need = "выше" if side == "buy" else "ниже"
+                why  = f"Цена на неправильной стороне дневного равновесия — для {'лонга' if side == 'buy' else 'шорта'} нужно {_need} {fp(vwap)}."
+                what = f"Подождать пока цена закрепится {_need} {fp(vwap)}."
+            elif oi_weak:
+                why  = "Открытый интерес падает при движении цены — позиции закрываются, сигнал слабый."
+                what = "Ждать стабилизации или роста открытого интереса."
+            else:
+                why  = "Условия входа не выполнены в полном объёме."
+                what = "Следить за следующей 15m свечой."
 
         if side == "buy":
             _dir_ctx = "Направление — LONG, но условия входа пока не созрели."
@@ -544,11 +567,9 @@ def generate_annotated_png(image_path: str, summary_text: str, out_path: str) ->
     FONT_SIZE = 14
 
     try:
-        font      = ImageFont.truetype("arial.ttf", FONT_SIZE)
-        font_bold = ImageFont.truetype("arialbd.ttf", FONT_SIZE + 1)
+        font = ImageFont.truetype("arial.ttf", FONT_SIZE)
     except Exception:
-        font      = ImageFont.load_default()
-        font_bold = font
+        font = ImageFont.load_default()
 
     max_chars = (PANEL_W - PADDING * 2) // 8
     wrapped   = []
@@ -1091,6 +1112,8 @@ async def run(
     _day_start_ms = int(datetime(_captured_dt.year, _captured_dt.month, _captured_dt.day,
                                   tzinfo=timezone.utc).timestamp() * 1000)
     _day_candles  = [c for c in raw_15m[1:] if int(c[0]) >= _day_start_ms]
+    if len(_day_candles) < 4:
+        _day_candles = []  # too few bars — day_position / VWAP / late_move unreliable
     if _day_candles:
         _dc_closes  = [float(c[4]) for c in _day_candles]
         _dc_vols    = [float(c[5]) for c in _day_candles]
@@ -1137,11 +1160,16 @@ async def run(
         _five_m_short = True
 
     # ── FAST / SWING engine (regime-based) ───────────────────────────────────
-    _pp = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
+    if symbol not in _PAIR_PARAMS:
+        raise ValueError(f"Unsupported symbol: {symbol}. Add to _PAIR_PARAMS before use.")
+    _pp = _PAIR_PARAMS[symbol]
     _bb_width_pct = float(_h15.get("bb_width_pct") or 0)
 
     _regime = _detect_regime(_adx_1h, _adx_4h, _adx_4h_rising,
                              _di_spread_4h, _di_spread_1h, _bb_width_pct)
+    # Downgrade TRENDING to RANGING when 4H/1H bias conflict — trend is transitional
+    if _regime == "TRENDING" and _4h_dir_conflict:
+        _regime = "RANGING"
 
     _trade_style = "NO_TRADE"
     _side        = None
