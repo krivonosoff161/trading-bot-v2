@@ -457,14 +457,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_p    = round(close + sl_dist * 0.8, 6)
+            tp_p    = round(close + sl_dist * 0.6, 6)
         else:
             atr_sl    = close + atr_sl_dist
             struct_sl = (swings["recent_highs"][-1] + 0.2 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_p    = round(close - sl_dist * 0.8, 6)
+            tp_p    = round(close - sl_dist * 0.6, 6)
 
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
@@ -487,7 +487,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     rr_ok = True
     if sl_p and tp_p and sl_dist > 0:
         rr = abs(tp_p - close) / sl_dist
-        if rr < 0.75:
+        if rr < 0.50:   # FAST TP=0.6R, SWING TP=1.0R — block only truly bad R/R
             rr_ok = False
 
     # ── Final signal ──────────────────────────────────────────────────────────
@@ -554,29 +554,38 @@ def calc_pnl(outcome, side, entry, sl, tp, exit_price, balance):
     return 0.0
 
 
-def check_outcome(raw_forward, side, sl, tp, signal_ts_ms, max_hold_ms):
-    """Returns (outcome, elapsed_mins, exit_price)."""
+def check_outcome(raw_forward, side, sl, tp, signal_ts_ms, max_hold_ms, entry_price=None):
+    """Returns (outcome, elapsed_mins, exit_price, mfe_r).
+    mfe_r = max favorable excursion in R units within hold window.
+    """
     if not raw_forward:
-        return "NO_DATA", None, None
+        return "NO_DATA", None, None, 0.0
+    sl_dist  = abs((entry_price or 0) - sl) if entry_price else 0
     last_close = None
+    mfe = 0.0   # max favorable excursion in price units
     for c in reversed(raw_forward):
         ts_c = int(c[0])
         if ts_c <= signal_ts_ms:
             continue
         elapsed_ms = ts_c - signal_ts_ms
-        if elapsed_ms > max_hold_ms:
-            return "TIME_EXIT", elapsed_ms // 60000, last_close
-        last_close = float(c[4])
         high = float(c[2])
         low  = float(c[3])
+        # track MFE
+        if entry_price and sl_dist > 0:
+            favorable = (high - entry_price) if side == "buy" else (entry_price - low)
+            mfe = max(mfe, favorable)
+        if elapsed_ms > max_hold_ms:
+            mfe_r = round(mfe / sl_dist, 2) if sl_dist > 0 else 0.0
+            return "TIME_EXIT", elapsed_ms // 60000, last_close, mfe_r
+        last_close = float(c[4])
         mins = elapsed_ms // 60000
         if side == "buy":
-            if low  <= sl:  return "STOP", mins, sl
-            if high >= tp:  return "TP",   mins, tp
+            if low  <= sl:  return "STOP", mins, sl,   round(mfe / sl_dist, 2) if sl_dist > 0 else 0.0
+            if high >= tp:  return "TP",   mins, tp,   round(mfe / sl_dist, 2) if sl_dist > 0 else 0.0
         else:
-            if high >= sl:  return "STOP", mins, sl
-            if low  <= tp:  return "TP",   mins, tp
-    return "OPEN", None, None
+            if high >= sl:  return "STOP", mins, sl,   round(mfe / sl_dist, 2) if sl_dist > 0 else 0.0
+            if low  <= tp:  return "TP",   mins, tp,   round(mfe / sl_dist, 2) if sl_dist > 0 else 0.0
+    return "OPEN", None, None, 0.0
 
 
 # ── Main ────────────────────────────────────────────────────────────────────────
@@ -591,7 +600,7 @@ async def run():
 
     now_ms  = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     step_ms = INTERVAL_M * 60 * 1000
-    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000, "BOUNCE": 120 * 60 * 1000}
+    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 300 * 60 * 1000}
 
     # Cache must cover all periods: DAYS_BACK + max offset + warmup for EMA-50 on 4H
     INDICATOR_WARMUP_DAYS = 10   # EMA-50 on 4H needs 50 bars = 8.3 days
@@ -768,10 +777,15 @@ async def run():
             await asyncio.sleep(0.1)
 
             max_h   = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
-            outcome, elapsed, exit_price = check_outcome(
+            outcome, elapsed, exit_price, mfe_r = check_outcome(
                 raw_fwd, sig["side"], sig["sl"], sig["tp"],
-                ts_ms, max_h,
+                ts_ms, max_h, entry_price=sig["close"],
             )
+            sl_dist_abs = abs(sig["close"] - sig["sl"])
+            exit_r = 0.0
+            if exit_price and sl_dist_abs > 0:
+                direction  = 1 if sig["side"] == "buy" else -1
+                exit_r = round(direction * (exit_price - sig["close"]) / sl_dist_abs, 2)
             dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             results.append({
                 "symbol":     symbol,
@@ -788,6 +802,8 @@ async def run():
                 "sl_dist":    abs(sig["close"] - sig["sl"]) / sig["close"],
                 "outcome":    outcome,
                 "elapsed_m":  elapsed,
+                "mfe_r":      mfe_r,
+                "exit_r":     exit_r,
                 "day_pos":    sig["day_position"],
                 "bb_width":   sig["bb_width"],
             })
@@ -833,6 +849,20 @@ async def run():
         print(f"  Winrate (TP+SL):  {winrate}%  ({len(wins)}/{total_r})  [без TIME_EXIT]")
         print(f"  Profit Factor:    {pf}")
         print(f"  Max серия стопов: {max_dd}")
+
+        # TIME_EXIT diagnostics
+        if time_x:
+            tx_mfe   = [r["mfe_r"]  for r in time_x if r.get("mfe_r")  is not None]
+            tx_exit  = [r["exit_r"] for r in time_x if r.get("exit_r") is not None]
+            avg_mfe  = round(sum(tx_mfe)  / len(tx_mfe),  2) if tx_mfe  else 0
+            avg_exit = round(sum(tx_exit) / len(tx_exit), 2) if tx_exit else 0
+            pos_exit = sum(1 for x in tx_exit if x >  0)
+            half_r   = sum(1 for x in tx_mfe  if x >= 0.5)
+            print(f"  ⏱ TIME_EXIT диагностика:")
+            print(f"    avg mfe_r:  {avg_mfe}R  (пик внутри окна)")
+            print(f"    avg exit_r: {avg_exit}R  (итог при выходе)")
+            print(f"    exit > 0R:  {pos_exit}/{len(time_x)}  ({pos_exit*100//len(time_x)}%)")
+            print(f"    mfe ≥ 0.5R: {half_r}/{len(time_x)}  ({half_r*100//len(time_x)}%)")
 
         for side in ("buy", "sell"):
             sr  = [r for r in results if r["side"] == side]
