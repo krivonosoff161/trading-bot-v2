@@ -186,6 +186,7 @@ def compute_indicators(
         "1h": {
             "ema20":        round(float(ema20_1h[-2]), 6),
             "ema50":        round(float(ema50_1h[-2]), 6),
+            "ema20_series": [round(float(x), 6) for x in ema20_1h[-6:]],
             "adx":          round(adx, 2),
             "plus_di":      round(plus_di, 2),
             "minus_di":     round(minus_di, 2),
@@ -916,6 +917,7 @@ _PAIR_PARAMS = {
         "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_vol": 1.3,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
+        "drift_vol_min": 1.0,
         "late_range": 4.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ETH-USDT": {
@@ -923,6 +925,7 @@ _PAIR_PARAMS = {
         "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
+        "drift_vol_min": 1.1,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "SOL-USDT": {
@@ -930,6 +933,7 @@ _PAIR_PARAMS = {
         "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
         "ranging_fast_vol": 2.0,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+        "drift_vol_min": 2.0,
         "late_range": 10.0, "allowed_modes": ["FAST", "SWING"],
     },
     "XRP-USDT": {
@@ -937,6 +941,7 @@ _PAIR_PARAMS = {
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
+        "drift_vol_min": 1.1,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "ADA-USDT": {
@@ -944,6 +949,7 @@ _PAIR_PARAMS = {
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "ranging_fast_vol": 1.5,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
+        "drift_vol_min": 1.1,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
     "DOGE-USDT": {
@@ -951,6 +957,7 @@ _PAIR_PARAMS = {
         "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
         "ranging_fast_vol": 1.6,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+        "drift_vol_min": 1.3,
         "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
     },
 }
@@ -959,6 +966,7 @@ _PAIR_PARAMS_DEFAULT = {
     "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
     "ranging_fast_vol": 1.5,
     "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+    "drift_vol_min": 1.1,
     "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
 }
 
@@ -967,11 +975,14 @@ _PAIR_PARAMS_DEFAULT = {
 
 def _detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
                    di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
-    """TRENDING / RANGING / CHOPPY."""
+    """TRENDING / DRIFT / RANGING / CHOPPY."""
     trend_4h = adx_4h >= 22 and di_spread_4h >= 10
     trend_1h = adx_1h >= 18 and di_spread_1h >= 8
     if trend_4h and trend_1h:
         return "TRENDING"
+    drift = 12 <= adx_1h <= 26 and di_spread_1h >= 5
+    if drift:
+        return "DRIFT"
     if bb_width >= 3.0 and di_spread_1h < 6 and adx_4h < 22:
         return "CHOPPY"
     return "RANGING"
@@ -1212,6 +1223,33 @@ async def run(
             if _ranging_base and _five_m_long and _buy_pos_ok:
                 _trade_style, _side = "FAST", "buy"
             elif _ranging_base and _five_m_short and _sell_pos_ok:
+                _trade_style, _side = "FAST", "sell"
+
+    elif _regime == "DRIFT":
+        # Persistent directional move without full trend confirmation.
+        _ema_slope_up = (
+            len(_h1.get("ema20_series") or []) >= 4
+            and _h1["ema20_series"][-1] > _h1["ema20_series"][-2]
+            and _h1["ema20_series"][-2] > _h1["ema20_series"][-3]
+            and _h1["ema20_series"][-3] > _h1["ema20_series"][-4]
+        )
+        _ema_slope_down = (
+            len(_h1.get("ema20_series") or []) >= 4
+            and _h1["ema20_series"][-1] < _h1["ema20_series"][-2]
+            and _h1["ema20_series"][-2] < _h1["ema20_series"][-3]
+            and _h1["ema20_series"][-3] < _h1["ema20_series"][-4]
+        )
+        _ema_drift_dir = "UP" if _ema_slope_up else ("DOWN" if _ema_slope_down else "FLAT")
+        _drift_vwap_ok = (
+            (_ema_drift_dir == "UP" and _close > _vwap)
+            or (_ema_drift_dir == "DOWN" and _close < _vwap)
+        ) if _vwap else False
+        _drift_vol_ok = _vol_ratio_sig >= _pp.get("drift_vol_min", 1.0)
+        _drift_base = _ema_drift_dir != "FLAT" and _drift_vwap_ok and _drift_vol_ok
+        if "FAST" in _pp["allowed_modes"]:
+            if _drift_base and _five_m_long and _ema_drift_dir == "UP":
+                _trade_style, _side = "FAST", "buy"
+            elif _drift_base and _five_m_short and _ema_drift_dir == "DOWN":
                 _trade_style, _side = "FAST", "sell"
 
     # Night session — no hard block, disclaimer added to client summary
