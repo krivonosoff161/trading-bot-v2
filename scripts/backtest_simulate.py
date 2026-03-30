@@ -102,6 +102,7 @@ PAIR_PARAMS = {
         "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_vol": 1.3,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
+        "drift_vol_min": 1.0,
         "late_range": 4.0,
         "allowed_modes": ["FAST", "SWING"],
     },
@@ -110,6 +111,7 @@ PAIR_PARAMS = {
         "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
         "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
+        "drift_vol_min": 1.1,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
     },
@@ -118,6 +120,7 @@ PAIR_PARAMS = {
         "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
         "ranging_fast_vol": 2.0,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+        "drift_vol_min": 2.0,
         "late_range": 10.0,
         "allowed_modes": ["FAST", "SWING"],
     },
@@ -126,6 +129,7 @@ PAIR_PARAMS = {
         "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
         "ranging_fast_vol": 1.6,
         "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
+        "drift_vol_min": 1.3,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
     },
@@ -134,6 +138,7 @@ PAIR_PARAMS = {
         "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
         "ranging_fast_vol": 1.4,
         "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
+        "drift_vol_min": 1.1,
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
     },
@@ -196,16 +201,24 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
                   di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
     """
-    Classify market into one of three regimes:
+    Classify market into one of four regimes:
       TRENDING — strong directional movement, SWING + FAST with trend
+      DRIFT    — persistent directional move without acceleration (new)
       RANGING  — sideways bounded, FAST both directions, SWING off
       CHOPPY   — volatile but no direction, no trade
     """
-    # TRENDING: both timeframes show direction conviction (no adx_4h_rising requirement)
+    # TRENDING: both timeframes show direction conviction
     trend_4h = adx_4h >= 22 and di_spread_4h >= 10
     trend_1h = adx_1h >= 18 and di_spread_1h >= 8
     if trend_4h and trend_1h:
         return "TRENDING"
+
+    # DRIFT: 1H has persistent direction without full trend confirmation
+    # Catches: ranging_adx_high (ADX 20-26 not in full trend),
+    #          trending_adx_not_rising, trending_vol_low dead zones
+    drift = 12 <= adx_1h <= 26 and di_spread_1h >= 5
+    if drift:
+        return "DRIFT"
 
     # CHOPPY: volatile with no direction — wide BB, DI lines converged, weak 4H trend
     if bb_width >= 3.0 and di_spread_1h < 6 and adx_4h < 22:
@@ -353,10 +366,11 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # ── Mode + Direction by regime ────────────────────────────────────────────
     trade_style = "NO_TRADE"
     side        = None
+    _drop       = None   # first filter that killed this tick
 
     if regime == "CHOPPY":
         # No trade in chaotic market
-        pass
+        _drop = "choppy"
 
     elif regime == "TRENDING":
         # SWING first (clean trend continuation) — matches prod priority
@@ -385,6 +399,27 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             elif fast_base and five_m_short and bias_1h == "DOWN":
                 trade_style, side = "FAST", "sell"
 
+        # Diagnose why no signal fired in TRENDING
+        if trade_style == "NO_TRADE":
+            _swing_adx_ok = float(adx_1h) >= pp["swing_adx"]
+            _fast_adx_ok  = float(adx_1h) >= pp["fast_adx"]
+            if not _swing_adx_ok and not _fast_adx_ok:
+                _drop = "trending_adx_low"
+            elif not adx_1h_rising:
+                _drop = "trending_adx_not_rising"
+            elif not bb_expanding:
+                _drop = "trending_bb_flat"
+            elif vol_ratio < pp["swing_vol"] and vol_ratio < pp["fast_vol"]:
+                _drop = "trending_vol_low"
+            elif four_h_conflict or not adx_4h_ok:
+                _drop = "trending_4h_block"
+            elif di_spread_4h < 8 or di_spread_1h < 8:
+                _drop = "trending_di_spread"
+            elif bias_1h == "NEUTRAL":
+                _drop = "trending_neutral_bias"
+            else:
+                _drop = "trending_no_5m"
+
     elif regime == "RANGING":
         # Mean reversion: ADX ceiling (not floor), ADX stable/falling, price at extremes
         _adx_ceil   = pp.get("ranging_adx_max", 22)
@@ -392,33 +427,91 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         ranging_base = (float(adx_1h) <= _adx_ceil and not adx_1h_rising
                         and vol_ratio >= pp["ranging_fast_vol"]
                         and _bb_corridor and day_position is not None)
-        _buy_pos_ok  = day_position <= pp.get("ranging_buy_pos_max",  0.35)
-        _sell_pos_ok = day_position >= pp.get("ranging_sell_pos_min", 0.65)
+        _buy_pos_ok  = day_position is not None and day_position <= pp.get("ranging_buy_pos_max",  0.35)
+        _sell_pos_ok = day_position is not None and day_position >= pp.get("ranging_sell_pos_min", 0.65)
         if mode in ("FAST", "COMBINED"):
             if ranging_base and five_m_long and _buy_pos_ok:
                 trade_style, side = "FAST", "buy"
             elif ranging_base and five_m_short and _sell_pos_ok:
                 trade_style, side = "FAST", "sell"
 
+        # Diagnose why no signal fired in RANGING
+        if trade_style == "NO_TRADE":
+            if float(adx_1h) > _adx_ceil:
+                _drop = "ranging_adx_high"
+            elif adx_1h_rising:
+                _drop = "ranging_adx_rising"
+            elif not _bb_corridor:
+                _drop = "ranging_bb_outside"
+            elif vol_ratio < pp["ranging_fast_vol"]:
+                _drop = "ranging_vol_low"
+            elif day_position is None:
+                _drop = "ranging_day_pos_none"
+            else:
+                _drop = "ranging_day_pos_wrong"  # price not at extreme (0.35–0.65)
+
+    elif regime == "DRIFT":
+        # Persistent directional move without acceleration.
+        # Entry: EMA20_1H slope same direction 3 closed bars + price on VWAP side + 5m trigger.
+        # No bb_expanding required — FAST only.
+        ema_slope_up   = (len(ema20_1h) >= 4
+                          and ema20_1h[-1] > ema20_1h[-2]
+                          and ema20_1h[-2] > ema20_1h[-3]
+                          and ema20_1h[-3] > ema20_1h[-4])
+        ema_slope_down = (len(ema20_1h) >= 4
+                          and ema20_1h[-1] < ema20_1h[-2]
+                          and ema20_1h[-2] < ema20_1h[-3]
+                          and ema20_1h[-3] < ema20_1h[-4])
+        ema_drift_dir  = "UP" if ema_slope_up else ("DOWN" if ema_slope_down else "FLAT")
+
+        vwap_side_ok = False
+        if vwap:
+            if ema_drift_dir == "UP"   and close > vwap: vwap_side_ok = True
+            if ema_drift_dir == "DOWN" and close < vwap: vwap_side_ok = True
+
+        drift_vol_ok  = vol_ratio >= pp.get("drift_vol_min", 1.0)
+        drift_base    = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok
+
+        if mode in ("FAST", "COMBINED"):
+            if drift_base and five_m_long  and ema_drift_dir == "UP":
+                trade_style, side = "FAST", "buy"
+            elif drift_base and five_m_short and ema_drift_dir == "DOWN":
+                trade_style, side = "FAST", "sell"
+
+        if trade_style == "NO_TRADE":
+            if ema_drift_dir == "FLAT":
+                _drop = "drift_ema_flat"
+            elif not vwap_side_ok:
+                _drop = "drift_vwap_wrong"
+            elif not drift_vol_ok:
+                _drop = "drift_vol_low"
+            else:
+                _drop = "drift_no_5m"
+
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
     if trade_style not in allowed:
         trade_style, side = "NO_TRADE", None
+        _drop = _drop or "allowed_modes"
 
     # Night filter — block all signals 01-07 UTC
     if night_filter and is_night:
         trade_style, side = "NO_TRADE", None
+        _drop = _drop or "night"
 
     # Time block (e.g. 10:00 UTC = 0% WR)
     if time_block_h and signal_hour in time_block_h:
         trade_style, side = "NO_TRADE", None
+        _drop = _drop or "time_block"
 
     # Late-move veto — symmetric
     if daily_range_pct > pp["late_range"] and day_position is not None:
         if side == "buy"  and day_position > 0.90:
             trade_style, side = "NO_TRADE", None
+            _drop = _drop or "late_move"
         if side == "sell" and day_position < 0.10:
             trade_style, side = "NO_TRADE", None
+            _drop = _drop or "late_move"
 
     # 4H veto — informational only; SWING handles 4H in condition, FAST is 4H-agnostic
     fourch_veto = four_h_conflict
@@ -492,6 +585,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         if rr < 0.50:   # FAST TP=0.6R, SWING TP=1.0R — block only truly bad R/R
             rr_ok = False
 
+    # ── Drop reason for post-regime filters ──────────────────────────────────
+    if not vwap_ok:        _drop = _drop or "vwap"
+    if funding_block:      _drop = _drop or "funding"
+    if oi_weak:            _drop = _drop or "oi_weak"
+    if not rr_ok:          _drop = _drop or "rr_low"
+    if not sl_p or not tp_p:
+        _drop = _drop or "no_sl_tp"
+
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
                or funding_block or oi_weak or not rr_ok
@@ -501,6 +602,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     return {
         "entry_signal":    entry_signal,
+        "drop_reason":     _drop if entry_signal == "NO_TRADE" else None,
         "trade_style":     trade_style,
         "regime":          regime,
         "side":            side,
@@ -742,8 +844,10 @@ async def run():
 
         def _process_symbol(symbol, ts_list):
             sym_results = []
+            sym_funnel  = {}
+            total_ticks = 0
             if PAIR_PARAMS.get(symbol) is None:
-                return sym_results
+                return sym_results, sym_funnel, total_ticks
             funding_hist = candle_cache[symbol].get("funding_history", [])
             oi_hist      = candle_cache[symbol].get("oi_history", [])
             h4_all  = candle_cache[symbol]["4h"]   # sorted oldest→newest
@@ -778,21 +882,34 @@ async def run():
                     time_block_h=time_block_h,
                     raw_5m=raw_5m,
                 )
-                if sig is None or sig["entry_signal"] != "ENTRY":
+                if sig is None:
                     continue
-                if not sig["sl"] or not sig["tp"]:
+                total_ticks += 1
+                if sig["entry_signal"] != "ENTRY" or not sig["sl"] or not sig["tp"]:
+                    reason = sig.get("drop_reason") or "unknown"
+                    sym_funnel[reason] = sym_funnel.get(reason, 0) + 1
                     continue
                 sym_results.append((ts_ms, sig))
-            return sym_results
+            return sym_results, sym_funnel, total_ticks
 
         # Collect signals
-        pending = []
+        pending      = []
+        pset_funnel  = {}
+        pset_ticks   = 0
         for symbol in SYMBOLS:
-            for ts_ms, sig in _process_symbol(symbol, pset_timestamps):
+            sym_res, sym_funnel, sym_ticks = _process_symbol(symbol, pset_timestamps)
+            for ts_ms, sig in sym_res:
                 pending.append((symbol, ts_ms, sig))
+            for k, v in sym_funnel.items():
+                pset_funnel[k] = pset_funnel.get(k, 0) + v
+            pset_ticks += sym_ticks
         for symbol in EXTRA_SYMBOLS:
-            for ts_ms, sig in _process_symbol(symbol, pset_timestamps[::6]):
+            sym_res, sym_funnel, sym_ticks = _process_symbol(symbol, pset_timestamps[::6])
+            for ts_ms, sig in sym_res:
                 pending.append((symbol, ts_ms, sig))
+            for k, v in sym_funnel.items():
+                pset_funnel[k] = pset_funnel.get(k, 0) + v
+            pset_ticks += sym_ticks
 
         # Fetch outcomes
         print(f"  Найдено сигналов: {len(pending)} — загружаю outcomes...")
@@ -837,12 +954,12 @@ async def run():
                 "bb_width":   sig["bb_width"],
             })
 
-        all_set_results[pset["label"]] = results
+        all_set_results[pset["label"]] = (results, pset_funnel, pset_ticks)
 
     await client.close()
 
     # ── Report ─────────────────────────────────────────────────────────────────
-    def _report(label, results):
+    def _report(label, results, funnel=None, total_ticks=0):
         wins   = [r for r in results if r["outcome"] == "TP"]
         losses = [r for r in results if r["outcome"] == "STOP"]
         time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
@@ -912,7 +1029,7 @@ async def run():
                 print(f"    {style:8}: {len(sr):3} | ✅{len(sw)} ❌{len(sl_)} | {wr}%")
 
         print(f"\n  По режиму рынка:")
-        for reg in ("TRENDING", "RANGING", "CHOPPY"):
+        for reg in ("TRENDING", "DRIFT", "RANGING", "CHOPPY"):
             sr  = [r for r in results if r.get("regime") == reg]
             sw  = [r for r in sr if r["outcome"] == "TP"]
             sl_ = [r for r in sr if r["outcome"] == "STOP"]
@@ -1015,8 +1132,17 @@ async def run():
             parts = "  ".join(f"{s.split('-')[0]}:{n}" for s, n in skip_by_sym.items())
             print(f"  Пропущено по паре: {parts}")
 
-    for label, res in all_set_results.items():
-        _report(label, res)
+        # ── Signal funnel ────────────────────────────────────────────────────
+        if funnel and total_ticks > 0:
+            entry_cnt = len(results)
+            print(f"\n  Воронка отсева ({total_ticks} тиков → {entry_cnt} ENTRY):")
+            for reason, cnt in sorted(funnel.items(), key=lambda x: -x[1]):
+                pct = cnt * 100 // total_ticks
+                bar = "▓" * (pct // 2)
+                print(f"    {reason:30} {cnt:5}  {pct:2}%  {bar}")
+
+    for label, (res, funnel, ticks) in all_set_results.items():
+        _report(label, res, funnel, ticks)
 
 
 if __name__ == "__main__":
