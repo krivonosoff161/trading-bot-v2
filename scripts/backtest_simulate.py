@@ -81,12 +81,12 @@ def _get_oi_delta(oi_history: list, ts_ms: int) -> float:
     return 0.0
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"]
+SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
 DAYS_BACK  = 14
-INTERVAL_M = 10
+INTERVAL_M = 15  # matches live scanner cadence (every :00/:15/:30/:45)
 OUTCOME_H  = 24
 ADX_PERIOD = 14
 
@@ -602,7 +602,34 @@ async def run():
 
     now_ms  = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     step_ms = INTERVAL_M * 60 * 1000
-    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 300 * 60 * 1000}
+    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}  # matches prod
+
+    # ── Report metadata header ─────────────────────────────────────────────────
+    try:
+        import subprocess
+        _git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        _git_dirty = subprocess.check_output(
+            ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        _git_label = f"{_git_hash}{' (dirty)' if _git_dirty else ''}"
+    except Exception:
+        _git_label = "unknown"
+    _run_ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    print("=" * 62)
+    print("  BACKTEST CONFIG")
+    print("=" * 62)
+    print(f"  Run:       {_run_ts}")
+    print(f"  Git HEAD:  {_git_label}")
+    print(f"  Symbols:   {', '.join(ALL_SYMBOLS)}")
+    print(f"  Cadence:   {INTERVAL_M}m  (live: 15m)")
+    print(f"  Hold:      FAST={hold_ms['FAST']//60000}m  SWING={hold_ms['SWING']//60000}m  (matches prod)")
+    print(f"  Position:  one per pair (any side)")
+    print(f"  Fees:      NOT modeled  |  Slippage: NOT modeled")
+    print(f"  Entry:     market at next scan (no fill delay)")
+    print("=" * 62)
+    print()
 
     # Cache must cover all periods: DAYS_BACK + max offset + warmup for EMA-50 on 4H
     INDICATOR_WARMUP_DAYS = 10   # EMA-50 on 4H needs 50 bars = 8.3 days
@@ -941,9 +968,9 @@ async def run():
             ts      = r["ts_ms"]
             elapsed = r.get("elapsed_m")
             max_hold_ms_sym = hold_ms.get(r["style"], hold_ms["SWING"])
-            pos_key = (sym, side_r)
+            pos_key = sym  # one position per pair (any side)
 
-            # Block only same pair + same direction
+            # Block same pair regardless of direction — matches real bot behaviour
             if pos_close_ms.get(pos_key, 0) > ts:
                 r["executed"] = False
                 skipped += 1
