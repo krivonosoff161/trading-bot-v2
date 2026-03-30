@@ -357,32 +357,31 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         pass
 
     elif regime == "TRENDING":
-        # FAST: strong trend — only trade with 1H direction
-        fast_base = (float(adx_1h) >= pp["fast_adx"]
-                     and adx_1h_rising
-                     and vol_ratio >= pp["fast_vol"]
-                     and bb_expanding)
-        if mode in ("FAST", "COMBINED"):
-            if fast_base and five_m_long and bias_1h == "UP":
-                trade_style, side = "FAST", "buy"
-            elif fast_base and five_m_short and bias_1h == "DOWN":
-                trade_style, side = "FAST", "sell"
-
-        # SWING: trend continuation with quality filters
+        # SWING first (clean trend continuation) — matches prod priority
         swing_base = (float(adx_1h) >= pp["swing_adx"]
                       and adx_1h_rising
                       and vol_ratio >= pp["swing_vol"]
                       and bb_expanding
                       and not four_h_conflict
                       and adx_4h_ok
-                      and adx_4h_rising
                       and di_spread_4h >= 8
-                      and di_spread_1h >= 10)
-        if mode in ("SWING", "COMBINED") and trade_style == "NO_TRADE":
+                      and di_spread_1h >= 8)    # was 10, prod uses 8
+        if mode in ("SWING", "COMBINED"):
             if swing_base and bias_1h == "UP":
                 trade_style, side = "SWING", "buy"
             elif swing_base and bias_1h == "DOWN":
                 trade_style, side = "SWING", "sell"
+
+        # FAST fallback — 1H momentum only
+        fast_base = (float(adx_1h) >= pp["fast_adx"]
+                     and adx_1h_rising
+                     and vol_ratio >= pp["fast_vol"]
+                     and bb_expanding)
+        if mode in ("FAST", "COMBINED") and trade_style == "NO_TRADE":
+            if fast_base and five_m_long and bias_1h == "UP":
+                trade_style, side = "FAST", "buy"
+            elif fast_base and five_m_short and bias_1h == "DOWN":
+                trade_style, side = "FAST", "sell"
 
     elif regime == "RANGING":
         # Mean reversion: ADX ceiling (not floor), ADX stable/falling, price at extremes
@@ -822,12 +821,16 @@ async def run():
 
         signals_per_day = round(len(results) / DAYS_BACK, 1)
 
+        # Honest WR: TP / all signals (including TIME_EXIT)
+        wr_all = len(wins) * 100 // len(results) if results else 0
+
         print(f"\n{'='*60}")
         print(f"  {label}")
         print(f"{'='*60}")
         print(f"  Сигналов всего:   {len(results)}  ({signals_per_day}/день)")
         print(f"  ✅ TP:  {len(wins)}  ❌ SL: {len(losses)}  ⏱ TIME: {len(time_x)}")
-        print(f"  Winrate:          {winrate}%  ({len(wins)}/{total_r})")
+        print(f"  Winrate (TP/all): {wr_all}%  ({len(wins)}/{len(results)})")
+        print(f"  Winrate (TP+SL):  {winrate}%  ({len(wins)}/{total_r})  [без TIME_EXIT]")
         print(f"  Profit Factor:    {pf}")
         print(f"  Max серия стопов: {max_dd}")
 

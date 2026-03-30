@@ -995,9 +995,9 @@ async def run(
         print("ERROR: No candle data returned. Check symbol and captured-at timestamp.")
         return
 
-    # Validate minimum bar counts before any calculations
-    if len(raw_1h) < 20 or len(raw_15m) < 20 or len(raw_5m) < 5:
-        print(f"ERROR: Not enough candles — 1H:{len(raw_1h)} 15m:{len(raw_15m)} 5m:{len(raw_5m)}")
+    # Validate minimum bar counts — EMA50 needs 50+, ADX needs 14+, swing needs room
+    if len(raw_1h) < 50 or len(raw_15m) < 50 or len(raw_5m) < 20:
+        print(f"ERROR: Not enough candles — 1H:{len(raw_1h)} 15m:{len(raw_15m)} 5m:{len(raw_5m)} (need 50/50/20)")
         return
 
     c1h  = confirm_label(raw_1h)
