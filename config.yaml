@@ -2,49 +2,7 @@ trading:
   leverage: 5
   poll_interval: 10     # seconds between each bot tick
 
-  symbols:
-    - id: BTC-USDT
-      target_margin_usdt: 200   # BTC: 200 * 5x = 1000 USDT notional (1 contract ~850 USDT at 85k)
-      min_sl_percent: 0.003     # minimum SL 0.3% (OKX mark price drift protection)
-
-    - id: SOL-USDT
-      target_margin_usdt: 100
-      min_sl_percent: 0.005     # SOL is more volatile
-
-    # ETH and XRP disabled — no_trend_1h blocks all trades, not useful for this pattern
-
 strategy:
-  # Timeframe: 1H trend
   ema_fast: 20
   ema_slow: 50
   adx_period: 14
-  adx_threshold_1h: 25         # minimum ADX on 1H to confirm trend (default, overridden per-pair)
-  adx_threshold_4h: 25         # minimum ADX on 4H to confirm trend (default, overridden per-pair)
-
-  # Per-pair ADX thresholds — slow pairs need lower threshold to catch grinding trends
-  adx_thresholds:
-    BTC-USDT:  20
-    ETH-USDT:  20
-    SOL-USDT:  22
-    DOGE-USDT: 25
-    XRP-USDT:  22
-  scalp_enabled: true           # SCALP enabled — only XRP/ETH, vol_ratio >= 2.0
-  scalp_symbols:                # pairs allowed for SCALP (others = NO_TRADE)
-    - XRP-USDT
-    - ETH-USDT
-  scalp_vol_ratio: 2.0          # minimum volume ratio for SCALP (raised from 1.5)
-
-  # Timeframe: 15m pullback setup
-  pullback_touch_atr: 0.5      # price must be within 0.5 * ATR(15m) of EMA20
-  pullback_volume_bars: 2      # bars to compare pullback vs impulse volume
-  pullback_volume_factor: 2.0  # pullback volume must be < impulse volume * factor
-
-  # Timeframe: 5m entry trigger
-  breakout_lookback_5m: 3      # breakout of last N candles high/low
-  trigger_volume_ma_period: 20 # SMA period for volume baseline
-  trigger_volume_factor: 1.1   # breakout volume must be > avg * factor
-
-  # SL / TP
-  sl_buffer_atr: 0.2           # extra buffer beyond setup low/high (in ATR units)
-  sl_min_atr: 1.2              # minimum SL distance = 1.2 * ATR(15m)
-  tp_r_multiple: 2.0           # TP = entry +/- SL_dist * R
