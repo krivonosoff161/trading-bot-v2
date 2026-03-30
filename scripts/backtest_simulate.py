@@ -544,6 +544,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
+        tp_mult = 0.6
         atr_sl_dist = max(pp["fast_sl_k"] * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
@@ -552,14 +553,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_p    = round(close + sl_dist * 0.6, 6)
+            tp_p    = round(close + sl_dist * tp_mult, 6)
         else:
             atr_sl    = close + atr_sl_dist
             struct_sl = (swings["recent_highs"][-1] + 0.2 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_p    = round(close - sl_dist * 0.6, 6)
+            tp_p    = round(close - sl_dist * tp_mult, 6)
 
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
@@ -582,7 +583,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     rr_ok = True
     if sl_p and tp_p and sl_dist > 0:
         rr = abs(tp_p - close) / sl_dist
-        if rr < 0.50:   # FAST TP=0.6R, SWING TP=1.0R — block only truly bad R/R
+        rr_floor = 0.50
+        if rr < rr_floor:   # FAST TP=0.6R, SWING TP=1.0R
             rr_ok = False
 
     # ── Drop reason for post-regime filters ──────────────────────────────────
