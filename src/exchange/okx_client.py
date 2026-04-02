@@ -128,6 +128,22 @@ class OKXClient:
             return ticker
         return None
 
+    async def get_books(self, symbol: str, size: int = 5) -> Optional[dict]:
+        """Get top-of-book depth snapshot."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/market/books", {"instId": inst_id, "sz": str(size)})
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"][0]
+        return None
+
+    async def get_trades(self, symbol: str, limit: int = 100) -> list:
+        """Get recent public trades (newest first)."""
+        inst_id = f"{symbol}-SWAP"
+        data = await self._get("/api/v5/market/trades", {"instId": inst_id, "limit": str(limit)})
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
     async def get_price(self, symbol: str) -> Optional[float]:
         """Get last price as float."""
         ticker = await self.get_ticker(symbol)

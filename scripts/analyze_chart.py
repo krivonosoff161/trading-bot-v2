@@ -114,6 +114,48 @@ def _next_candle_close(captured_at: str, tf_minutes: int) -> str:
         return "—"
 
 
+def _build_micro_snapshot(book: dict | None, trades: list | None) -> dict:
+    """Summarize microstructure from books5 + recent trades."""
+    if not book and not trades:
+        return {}
+    bids = book.get("bids", []) if book else []
+    asks = book.get("asks", []) if book else []
+    bid_sum = sum(float(level[1]) for level in bids[:5]) if bids else 0.0
+    ask_sum = sum(float(level[1]) for level in asks[:5]) if asks else 0.0
+    denom = bid_sum + ask_sum
+    obi = (bid_sum - ask_sum) / denom if denom > 0 else 0.0
+    best_bid = float(bids[0][0]) if bids else 0.0
+    best_ask = float(asks[0][0]) if asks else 0.0
+    mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0.0
+    spread_bps = ((best_ask - best_bid) / mid * 10000) if mid > 0 else 0.0
+    buy_vol = sell_vol = 0.0
+    buy_count = sell_count = 0
+    for trade in trades or []:
+        side = (trade.get("side") or "").lower()
+        size = float(trade.get("sz", 0) or 0)
+        if side == "buy":
+            buy_vol += size
+            buy_count += 1
+        elif side == "sell":
+            sell_vol += size
+            sell_count += 1
+    delta_denom = buy_vol + sell_vol
+    trade_delta = (buy_vol - sell_vol) / delta_denom if delta_denom > 0 else 0.0
+    return {
+        "obi_top5": round(obi, 4),
+        "spread_bps": round(spread_bps, 2),
+        "bid_sum_5": round(bid_sum, 4),
+        "ask_sum_5": round(ask_sum, 4),
+        "trade_delta_100": round(trade_delta, 4),
+        "buy_vol_100": round(buy_vol, 4),
+        "sell_vol_100": round(sell_vol, 4),
+        "buy_count_100": buy_count,
+        "sell_count_100": sell_count,
+        "best_bid": best_bid or None,
+        "best_ask": best_ask or None,
+    }
+
+
 # ── Indicators ────────────────────────────────────────────────────────────────
 
 def compute_indicators(
@@ -1008,10 +1050,11 @@ async def run(
 
     captured_ms = ts_to_ms(captured_at_iso)
     after_ts    = captured_ms + 1
+    _is_live    = abs(datetime.now(timezone.utc).timestamp() * 1000 - captured_ms) <= 15 * 60 * 1000
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
     try:
-        raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist = await asyncio.gather(
+        raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist, _books5, _trades100 = await asyncio.gather(
             client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
             client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
             client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
@@ -1019,6 +1062,8 @@ async def run(
             client.get_funding_rate(symbol),
             client.get_open_interest(symbol),
             client.get_oi_history(symbol, period="1H", limit=5),
+            client.get_books(symbol, size=5) if _is_live else asyncio.sleep(0, result=None),
+            client.get_trades(symbol, limit=100) if _is_live else asyncio.sleep(0, result=[]),
         )
     finally:
         await client.close()
@@ -1038,11 +1083,12 @@ async def run(
     print(f"Latest bar status:  1H={c1h}  15m={c15m}  5m={c5m}\n")
 
     # Funding/OI are live — disable for historical requests (>15min from now)
-    _is_live = abs(datetime.now(timezone.utc).timestamp() * 1000 - captured_ms) <= 15 * 60 * 1000
     if not _is_live:
         _funding = None
         _oi      = None
         _oi_hist = None
+        _books5  = None
+        _trades100 = []
 
     # ── Compute indicators ───────────────────────────────────────────────────
     result = compute_indicators(raw_1h, raw_15m, raw_5m, params, raw_4h=raw_4h)
@@ -1252,6 +1298,17 @@ async def run(
             elif _drift_base and _five_m_short and _ema_drift_dir == "DOWN":
                 _trade_style, _side = "FAST", "sell"
 
+    _strong_4h_veto = (
+        _trade_style == "FAST"
+        and _side is not None
+        and _bias_4h != "NEUTRAL"
+        and _di_spread_4h >= 8
+        and ((_side == "buy" and _bias_4h == "DOWN")
+             or (_side == "sell" and _bias_4h == "UP"))
+    )
+    if _strong_4h_veto:
+        _trade_style, _side = "NO_TRADE", None
+
     # Night session — no hard block, disclaimer added to client summary
 
     # Late-move veto — symmetric for long and short
@@ -1262,7 +1319,7 @@ async def run(
             _trade_style, _side = "NO_TRADE", None
 
     # 4H veto — informational only
-    _4h_veto = _4h_dir_conflict
+    _4h_veto = _4h_dir_conflict or _strong_4h_veto
 
     # VWAP filter — regime-aware
     _vwap_ok = True
@@ -1341,6 +1398,8 @@ async def run(
     else:
         _entry_signal = "ENTRY"
 
+    _micro = _build_micro_snapshot(_books5, _trades100)
+
     # ── Engine vars dict ──────────────────────────────────────────────────────
     engine_vars = {
         "trade_style":   _trade_style,
@@ -1381,6 +1440,8 @@ async def run(
         "di_spread_1h":      round(_di_spread_1h, 1),
         "di_spread_4h":      round(_di_spread_4h, 1),
         "adx_4h_rising":     _adx_4h_rising,
+        "strong_4h_veto":    _strong_4h_veto,
+        "micro":             _micro,
     }
 
     # ── Build texts ───────────────────────────────────────────────────────────
@@ -1451,7 +1512,12 @@ async def run(
             "four_h_conflict":   _4h_dir_conflict,
             "five_m_trigger":    (_five_m_long if _side == "buy" else _five_m_short) if _side else True,
             "regime":            _regime,
+            "strong_4h_veto":    _strong_4h_veto,
+            "obi_top5":          _micro.get("obi_top5"),
+            "trade_delta_100":   _micro.get("trade_delta_100"),
+            "spread_bps":        _micro.get("spread_bps"),
         },
+        "microstructure": _micro,
         "4h":          result.get("4h", {}),
         "1h":          result["1h"],
         "15m":         result["15m"],
@@ -1526,6 +1592,8 @@ async def run(
         "sl_price":      _sl_p,
         "tp1_price":     _tp1_p,
         "max_hold_min":  _max_hold_minutes,
+        "strong_4h_veto": _strong_4h_veto,
+        "microstructure": _micro,
     }
 
 
