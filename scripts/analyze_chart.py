@@ -1594,6 +1594,13 @@ async def run(
         "max_hold_min":  _max_hold_minutes,
         "strong_4h_veto": _strong_4h_veto,
         "microstructure": _micro,
+        # signal log context (used by telegram_bot signal_log.jsonl)
+        "regime":        _regime,
+        "adx_1h":        round(float(_adx_1h), 1),
+        "adx_4h":        round(float(_adx_4h), 1),
+        "day_position":  _day_position,
+        "vol_ratio":     round(float(_vol_ratio_sig), 3),
+        "funding":       round(float(_funding_val), 6),
     }
 
 
