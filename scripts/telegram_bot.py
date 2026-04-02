@@ -46,8 +46,9 @@ from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
 
-TEMP_DIR   = Path(__file__).parent / "tg_temp"
-USERS_ROOT = ROOT / "logs" / "users"
+TEMP_DIR    = Path(__file__).parent / "tg_temp"
+USERS_ROOT  = ROOT / "logs" / "users"
+SIGNAL_LOG  = Path(__file__).parent / "signal_log.jsonl"   # append-only, never edit inline
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
@@ -774,6 +775,32 @@ async def _scanner_loop() -> None:
                     f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам | "
                     f"obi5={micro.get('obi_top5')} delta100={micro.get('trade_delta_100')} spread_bps={micro.get('spread_bps')}"
                 )
+                # Append-only signal log — DO NOT edit inline; outcomes written to signal_labels.jsonl
+                _style  = result.get("trade_style", "")
+                _ts_now = int(datetime.now(timezone.utc).timestamp() * 1000)
+                _entry  = {
+                    "signal_id":       f"{_ts_now}_{pair}_{side}_{_style}",
+                    "ts_ms":           _ts_now,
+                    "symbol":          pair,
+                    "side":            side,
+                    "regime":          result.get("regime", ""),
+                    "style":           _style,
+                    "close":           result.get("entry_price"),
+                    "sl":              result.get("sl_price"),
+                    "tp":              result.get("tp1_price"),
+                    "max_hold_min":    result.get("max_hold_min"),
+                    "adx_1h":          result.get("adx_1h"),
+                    "adx_4h":          result.get("adx_4h"),
+                    "day_position":    result.get("day_position"),
+                    "vol_ratio":       result.get("vol_ratio"),
+                    "funding":         result.get("funding"),
+                    "strong_4h_veto":  result.get("strong_4h_veto"),
+                    "obi5":            micro.get("obi_top5"),
+                    "trade_delta_100": micro.get("trade_delta_100"),
+                    "spread_bps":      micro.get("spread_bps"),
+                }
+                with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
+                    _lf.write(json.dumps(_entry) + "\n")
                 # Auto-execute on operator demo account
                 try:
                     from scripts.auto_execute import execute_signal
