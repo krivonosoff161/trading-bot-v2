@@ -1,0 +1,425 @@
+[32m2026-04-02 17:59:34.317[0m | [1mINFO    [0m | [36msrc.exchange.okx_client[0m:[36m__init__[0m:[36m29[0m - [1mOKXClient initialized | demo=False[0m
+[32m2026-04-02 18:04:40.956[0m | [1mINFO    [0m | [36msrc.exchange.okx_client[0m:[36mclose[0m:[36m39[0m - [1mOKXClient session closed[0m
+==============================================================
+  BACKTEST CONFIG
+==============================================================
+  Run:       2026-04-02 14:59 UTC
+  Git HEAD:  378ae4d (dirty)
+  Symbols:   BTC-USDT, ETH-USDT, SOL-USDT, XRP-USDT, DOGE-USDT
+  Cadence:   15m  (live: 15m)
+  Hold:      FAST=480m  SWING=720m
+  TimeBlock: off
+  Position:  one per pair (any side)
+  Fees:      NOT modeled  |  Slippage: NOT modeled
+  Entry:     market at next scan (no fill delay)
+==============================================================
+
+Загрузка свечей из кэша (backtest_candle_cache.pkl)...
+  Кэш загружен: 6 пар
+  BTC-USDT: 1H=1584 баров, 15m=6336 баров  [active]
+  ETH-USDT: 1H=1584 баров, 15m=6336 баров  [active]
+  SOL-USDT: 1H=1584 баров, 15m=6336 баров  [active]
+  XRP-USDT: 1H=1584 баров, 15m=6336 баров  [active]
+  DOGE-USDT: 1H=1584 баров, 15m=6336 баров  [active]
+
+  Найдено сигналов: 161 — загружаю outcomes...
+    20/161 (BTC-USDT)
+    40/161 (ETH-USDT)
+    60/161 (ETH-USDT)
+    80/161 (SOL-USDT)
+    100/161 (XRP-USDT)
+    120/161 (XRP-USDT)
+    140/161 (DOGE-USDT)
+    160/161 (DOGE-USDT)
+    161/161 (DOGE-USDT)
+  Найдено сигналов: 159 — загружаю outcomes...
+    20/159 (BTC-USDT)
+    40/159 (BTC-USDT)
+    60/159 (ETH-USDT)
+    80/159 (SOL-USDT)
+    100/159 (XRP-USDT)
+    120/159 (XRP-USDT)
+    140/159 (DOGE-USDT)
+    159/159 (DOGE-USDT)
+  Найдено сигналов: 170 — загружаю outcomes...
+    20/170 (BTC-USDT)
+    40/170 (ETH-USDT)
+    60/170 (ETH-USDT)
+    80/170 (SOL-USDT)
+    100/170 (XRP-USDT)
+    120/170 (XRP-USDT)
+    140/170 (XRP-USDT)
+    160/170 (DOGE-USDT)
+    170/170 (DOGE-USDT)
+  Найдено сигналов: 180 — загружаю outcomes...
+    20/180 (BTC-USDT)
+    40/180 (BTC-USDT)
+    60/180 (ETH-USDT)
+    80/180 (SOL-USDT)
+    100/180 (XRP-USDT)
+    120/180 (XRP-USDT)
+    140/180 (XRP-USDT)
+    160/180 (DOGE-USDT)
+    180/180 (DOGE-USDT)
+
+============================================================
+  OVERALL | full 56d (все периоды объединены)
+============================================================
+  Сигналов всего:   670  (12.0/день)
+  ✅ TP:  351  ❌ SL: 199  ⏱ TIME: 120
+  Winrate (TP/all): 52%  (351/670)
+  Winrate (TP+SL):  63%  (351/550)  [без TIME_EXIT]
+  Profit Factor:    1.06
+  Max серия стопов: 9
+  ⏱ TIME_EXIT диагностика:
+    avg mfe_r:  0.34R  (пик внутри окна)
+    avg exit_r: -0.1R  (итог при выходе)
+    exit > 0R:  48/120  (40%)
+    mfe ≥ 0.5R: 22/120  (18%)
+  LONG:  257 сигналов | ✅127 ❌89 | 58%
+  SHORT:  413 сигналов | ✅224 ❌110 | 67%
+
+  По стилю:
+    FAST    : 657 | ✅342 ❌195 | 63%
+    SWING   :  13 | ✅9 ❌4 | 69%
+
+  По режиму рынка:
+    TRENDING:  20 | ✅13 ❌4 | 76%
+    DRIFT   : 641 | ✅331 ❌193 | 63%
+    RANGING :   9 | ✅7 ❌2 | 77%
+
+  По паре:
+    BTC-USDT    : 155 | ✅87 ❌41 | 67%
+    ETH-USDT    : 134 | ✅63 ❌47 | 57%
+    SOL-USDT    :  69 | ✅32 ❌16 | 66%
+    XRP-USDT    : 188 | ✅92 ❌64 | 58%
+    DOGE-USDT   : 124 | ✅77 ❌31 | 71%
+
+  Лучший час:  18:00 UTC — 66% (18 сигналов)
+  Худший час:  17:00 UTC — 0% (15 сигналов)
+
+  PASS/FAIL:
+    Winrate ≥55%:      ✅  63%
+    Profit Factor ≥1.3:❌  1.06
+    Сигналов/день ≥2:  ✅  12.0
+    Max серия SL ≤5:   ❌  9
+
+  ── Симуляция баланса (1 позиция/пара, риск 3%/сделку, плечо x10) ───
+  Старт:            $1000
+  Финиш:            $1389  (+38.9%)
+  Макс. просадка:   35.8%
+  Исполнено:        268  |  Пропущено: 402 (позиция занята)
+  Пропущено по паре: XRP:123  DOGE:68  BTC:94  SOL:32  ETH:85
+
+  Воронка отсева (26880 тиков → 670 ENTRY):
+    ranging_adx_high                9897  36%  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+    drift_vol_low                   3419  12%  ▓▓▓▓▓▓
+    ranging_vol_low                 2834  10%  ▓▓▓▓▓
+    trending_adx_not_rising         1620   6%  ▓▓▓
+    trending_vol_low                1606   5%  ▓▓
+    drift_ema_flat                  1240   4%  ▓▓
+    ranging_bb_outside              1138   4%  ▓▓
+    trending_bb_flat                 816   3%  ▓
+    drift_vwap_wrong                 580   2%  ▓
+    drift_delta_wrong                511   1%  
+    ranging_adx_rising               460   1%  
+    ranging_day_pos_wrong            456   1%  
+    choppy                           366   1%  
+    trending_adx_low                 312   1%  
+    night                            311   1%  
+    rr_low                           308   1%  
+    drift_no_5m                      109   0%  
+    strong_4h_veto                    95   0%  
+    late_move                         91   0%  
+    vwap                              22   0%  
+    ranging_day_pos_none              14   0%  
+    trending_no_5m                     4   0%  
+    oi_weak                            1   0%  
+
+============================================================
+  COMBINED | period1 (last 14d)
+============================================================
+  Сигналов всего:   161  (11.5/день)
+  ✅ TP:  77  ❌ SL: 69  ⏱ TIME: 15
+  Winrate (TP/all): 47%  (77/161)
+  Winrate (TP+SL):  52%  (77/146)  [без TIME_EXIT]
+  Profit Factor:    0.67
+  Max серия стопов: 9
+  ⏱ TIME_EXIT диагностика:
+    avg mfe_r:  0.34R  (пик внутри окна)
+    avg exit_r: -0.19R  (итог при выходе)
+    exit > 0R:  3/15  (20%)
+    mfe ≥ 0.5R: 3/15  (20%)
+  LONG:  62 сигналов | ✅20 ❌35 | 36%
+  SHORT:  99 сигналов | ✅57 ❌34 | 62%
+
+  По стилю:
+    FAST    : 156 | ✅73 ❌68 | 51%
+    SWING   :   5 | ✅4 ❌1 | 80%
+
+  По режиму рынка:
+    TRENDING:   5 | ✅4 ❌1 | 80%
+    DRIFT   : 154 | ✅73 ❌66 | 52%
+    RANGING :   2 | ✅0 ❌2 | 0%
+
+  По паре:
+    BTC-USDT    :  38 | ✅21 ❌13 | 61%
+    ETH-USDT    :  34 | ✅15 ❌16 | 48%
+    SOL-USDT    :  12 | ✅3 ❌9 | 25%
+    XRP-USDT    :  54 | ✅31 ❌16 | 65%
+    DOGE-USDT   :  23 | ✅7 ❌15 | 31%
+
+  Лучший час:  15:00 UTC — 71% (21 сигналов)
+  Худший час:  17:00 UTC — 0% (6 сигналов)
+
+  PASS/FAIL:
+    Winrate ≥55%:      ❌  52%
+    Profit Factor ≥1.3:❌  0.67
+    Сигналов/день ≥2:  ✅  11.5
+    Max серия SL ≤5:   ❌  9
+
+  ── Симуляция баланса (1 позиция/пара, риск 3%/сделку, плечо x10) ───
+  Старт:            $1000
+  Финиш:            $665  (-33.5%)
+  Макс. просадка:   35.8%
+  Исполнено:        73  |  Пропущено: 88 (позиция занята)
+  Пропущено по паре: SOL:4  XRP:32  DOGE:11  ETH:22  BTC:19
+
+  Воронка отсева (6720 тиков → 161 ENTRY):
+    ranging_adx_high                2086  31%  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+    drift_vol_low                    926  13%  ▓▓▓▓▓▓
+    ranging_vol_low                  662   9%  ▓▓▓▓
+    trending_adx_not_rising          516   7%  ▓▓▓
+    ranging_bb_outside               436   6%  ▓▓▓
+    trending_bb_flat                 421   6%  ▓▓▓
+    trending_vol_low                 305   4%  ▓▓
+    drift_ema_flat                   304   4%  ▓▓
+    drift_vwap_wrong                 216   3%  ▓
+    drift_delta_wrong                138   2%  ▓
+    ranging_adx_rising               104   1%  
+    trending_adx_low                 104   1%  
+    rr_low                            95   1%  
+    ranging_day_pos_wrong             83   1%  
+    night                             72   1%  
+    drift_no_5m                       34   0%  
+    strong_4h_veto                    21   0%  
+    choppy                            17   0%  
+    vwap                               8   0%  
+    late_move                          7   0%  
+    trending_no_5m                     2   0%  
+    oi_weak                            1   0%  
+    ranging_day_pos_none               1   0%  
+
+============================================================
+  COMBINED | period2 (14d-28d ago)
+============================================================
+  Сигналов всего:   159  (11.4/день)
+  ✅ TP:  114  ❌ SL: 17  ⏱ TIME: 28
+  Winrate (TP/all): 71%  (114/159)
+  Winrate (TP+SL):  87%  (114/131)  [без TIME_EXIT]
+  Profit Factor:    4.0
+  Max серия стопов: 6
+  ⏱ TIME_EXIT диагностика:
+    avg mfe_r:  0.35R  (пик внутри окна)
+    avg exit_r: -0.1R  (итог при выходе)
+    exit > 0R:  12/28  (42%)
+    mfe ≥ 0.5R: 6/28  (21%)
+  LONG:  81 сигналов | ✅54 ❌14 | 79%
+  SHORT:  78 сигналов | ✅60 ❌3 | 95%
+
+  По стилю:
+    FAST    : 151 | ✅109 ❌14 | 88%
+    SWING   :   8 | ✅5 ❌3 | 62%
+
+  По режиму рынка:
+    TRENDING:  12 | ✅6 ❌3 | 66%
+    DRIFT   : 144 | ✅105 ❌14 | 88%
+    RANGING :   3 | ✅3 ❌0 | 100%
+
+  По паре:
+    BTC-USDT    :  40 | ✅29 ❌8 | 78%
+    ETH-USDT    :  32 | ✅24 ❌3 | 88%
+    SOL-USDT    :  22 | ✅15 ❌0 | 100%
+    XRP-USDT    :  26 | ✅18 ❌3 | 85%
+    DOGE-USDT   :  39 | ✅28 ❌3 | 90%
+
+  Лучший час:  09:00 UTC — 100% (10 сигналов)
+  Худший час:  22:00 UTC — 25% (4 сигналов)
+
+  PASS/FAIL:
+    Winrate ≥55%:      ✅  87%
+    Profit Factor ≥1.3:✅  4.0
+    Сигналов/день ≥2:  ✅  11.4
+    Max серия SL ≤5:   ❌  6
+
+  ── Симуляция баланса (1 позиция/пара, риск 3%/сделку, плечо x10) ───
+  Старт:            $1000
+  Финиш:            $1705  (+70.5%)
+  Макс. просадка:   5.9%
+  Исполнено:        61  |  Пропущено: 98 (позиция занята)
+  Пропущено по паре: ETH:21  XRP:16  DOGE:23  BTC:27  SOL:11
+
+  Воронка отсева (6720 тиков → 159 ENTRY):
+    ranging_adx_high                2894  43%  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+    drift_vol_low                    781  11%  ▓▓▓▓▓
+    ranging_vol_low                  654   9%  ▓▓▓▓
+    trending_vol_low                 398   5%  ▓▓
+    trending_adx_not_rising          384   5%  ▓▓
+    drift_ema_flat                   292   4%  ▓▓
+    ranging_bb_outside               180   2%  ▓
+    trending_bb_flat                 149   2%  ▓
+    drift_delta_wrong                136   2%  ▓
+    drift_vwap_wrong                 126   1%  
+    ranging_day_pos_wrong            115   1%  
+    rr_low                            89   1%  
+    choppy                            89   1%  
+    night                             80   1%  
+    ranging_adx_rising                60   0%  
+    trending_adx_low                  52   0%  
+    strong_4h_veto                    34   0%  
+    late_move                         20   0%  
+    drift_no_5m                       14   0%  
+    vwap                               8   0%  
+    ranging_day_pos_none               5   0%  
+    trending_no_5m                     1   0%  
+
+============================================================
+  COMBINED | period3 (28d-42d ago)
+============================================================
+  Сигналов всего:   170  (12.1/день)
+  ✅ TP:  79  ❌ SL: 47  ⏱ TIME: 44
+  Winrate (TP/all): 46%  (79/170)
+  Winrate (TP+SL):  62%  (79/126)  [без TIME_EXIT]
+  Profit Factor:    1.01
+  Max серия стопов: 7
+  ⏱ TIME_EXIT диагностика:
+    avg mfe_r:  0.34R  (пик внутри окна)
+    avg exit_r: -0.12R  (итог при выходе)
+    exit > 0R:  17/44  (38%)
+    mfe ≥ 0.5R: 9/44  (20%)
+  LONG:  44 сигналов | ✅21 ❌14 | 60%
+  SHORT:  126 сигналов | ✅58 ❌33 | 63%
+
+  По стилю:
+    FAST    : 170 | ✅79 ❌47 | 62%
+
+  По режиму рынка:
+    DRIFT   : 166 | ✅75 ❌47 | 61%
+    RANGING :   4 | ✅4 ❌0 | 100%
+
+  По паре:
+    BTC-USDT    :  35 | ✅18 ❌7 | 72%
+    ETH-USDT    :  37 | ✅12 ❌13 | 48%
+    SOL-USDT    :  14 | ✅6 ❌2 | 75%
+    XRP-USDT    :  54 | ✅23 ❌18 | 56%
+    DOGE-USDT   :  30 | ✅20 ❌7 | 74%
+
+  Лучший час:  23:00 UTC — 100% (4 сигналов)
+  Худший час:  20:00 UTC — 0% (5 сигналов)
+
+  PASS/FAIL:
+    Winrate ≥55%:      ✅  62%
+    Profit Factor ≥1.3:❌  1.01
+    Сигналов/день ≥2:  ✅  12.1
+    Max серия SL ≤5:   ❌  7
+
+  ── Симуляция баланса (1 позиция/пара, риск 3%/сделку, плечо x10) ───
+  Старт:            $1000
+  Финиш:            $1182  (+18.2%)
+  Макс. просадка:   13.7%
+  Исполнено:        64  |  Пропущено: 106 (позиция занята)
+  Пропущено по паре: BTC:21  XRP:37  DOGE:17  ETH:24  SOL:7
+
+  Воронка отсева (6720 тиков → 170 ENTRY):
+    ranging_adx_high                2640  39%  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+    drift_vol_low                    918  13%  ▓▓▓▓▓▓
+    ranging_vol_low                  729  10%  ▓▓▓▓▓
+    ranging_bb_outside               357   5%  ▓▓
+    drift_ema_flat                   288   4%  ▓▓
+    trending_vol_low                 244   3%  ▓
+    ranging_adx_rising               208   3%  ▓
+    trending_adx_not_rising          200   2%  ▓
+    trending_bb_flat                 186   2%  ▓
+    choppy                           183   2%  ▓
+    drift_vwap_wrong                 159   2%  ▓
+    ranging_day_pos_wrong            140   2%  ▓
+    drift_delta_wrong                121   1%  
+    night                             51   0%  
+    rr_low                            33   0%  
+    trending_adx_low                  28   0%  
+    late_move                         22   0%  
+    drift_no_5m                       20   0%  
+    strong_4h_veto                    18   0%  
+    ranging_day_pos_none               2   0%  
+    vwap                               2   0%  
+    trending_no_5m                     1   0%  
+
+============================================================
+  COMBINED | period4 (42d-56d ago)
+============================================================
+  Сигналов всего:   180  (12.9/день)
+  ✅ TP:  81  ❌ SL: 66  ⏱ TIME: 33
+  Winrate (TP/all): 45%  (81/180)
+  Winrate (TP+SL):  55%  (81/147)  [без TIME_EXIT]
+  Profit Factor:    0.74
+  Max серия стопов: 7
+  ⏱ TIME_EXIT диагностика:
+    avg mfe_r:  0.34R  (пик внутри окна)
+    avg exit_r: -0.05R  (итог при выходе)
+    exit > 0R:  16/33  (48%)
+    mfe ≥ 0.5R: 4/33  (12%)
+  LONG:  70 сигналов | ✅32 ❌26 | 55%
+  SHORT:  110 сигналов | ✅49 ❌40 | 55%
+
+  По стилю:
+    FAST    : 180 | ✅81 ❌66 | 55%
+
+  По режиму рынка:
+    TRENDING:   3 | ✅3 ❌0 | 100%
+    DRIFT   : 177 | ✅78 ❌66 | 54%
+
+  По паре:
+    BTC-USDT    :  42 | ✅19 ❌13 | 59%
+    ETH-USDT    :  31 | ✅12 ❌15 | 44%
+    SOL-USDT    :  21 | ✅8 ❌5 | 61%
+    XRP-USDT    :  54 | ✅20 ❌27 | 42%
+    DOGE-USDT   :  32 | ✅22 ❌6 | 78%
+
+  Лучший час:  07:00 UTC — 78% (14 сигналов)
+  Худший час:  11:00 UTC — 0% (15 сигналов)
+
+  PASS/FAIL:
+    Winrate ≥55%:      ✅  55%
+    Profit Factor ≥1.3:❌  0.74
+    Сигналов/день ≥2:  ✅  12.9
+    Max серия SL ≤5:   ❌  7
+
+  ── Симуляция баланса (1 позиция/пара, риск 3%/сделку, плечо x10) ───
+  Старт:            $1000
+  Финиш:            $1036  (+3.6%)
+  Макс. просадка:   15.3%
+  Исполнено:        70  |  Пропущено: 110 (позиция занята)
+  Пропущено по паре: XRP:38  DOGE:17  BTC:27  SOL:10  ETH:18
+
+  Воронка отсева (6720 тиков → 180 ENTRY):
+    ranging_adx_high                2277  33%  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+    drift_vol_low                    794  11%  ▓▓▓▓▓
+    ranging_vol_low                  789  11%  ▓▓▓▓▓
+    trending_vol_low                 659   9%  ▓▓▓▓
+    trending_adx_not_rising          520   7%  ▓▓▓
+    drift_ema_flat                   356   5%  ▓▓
+    ranging_bb_outside               165   2%  ▓
+    trending_adx_low                 128   1%  
+    ranging_day_pos_wrong            118   1%  
+    drift_delta_wrong                116   1%  
+    night                            108   1%  
+    rr_low                            91   1%  
+    ranging_adx_rising                88   1%  
+    drift_vwap_wrong                  79   1%  
+    choppy                            77   1%  
+    trending_bb_flat                  60   0%  
+    late_move                         42   0%  
+    drift_no_5m                       41   0%  
+    strong_4h_veto                    22   0%  
+    ranging_day_pos_none               6   0%  
+    vwap                               4   0%  
