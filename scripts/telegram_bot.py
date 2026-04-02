@@ -695,11 +695,31 @@ _SCANNER_LOG      = ROOT / "logs" / "scanner.log"
 _SCANNER_INTERVAL = 15  # minutes
 
 
+_SCANNER_LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB
+_SCANNER_LOG_BACKUPS   = 3                  # keep scanner.log.1 / .2 / .3
+
+
+def _rotate_scan_log() -> None:
+    """Rotate scanner.log if ≥ 5 MB: .3 dropped, .2→.3, .1→.2, current→.1."""
+    if not _SCANNER_LOG.exists() or _SCANNER_LOG.stat().st_size < _SCANNER_LOG_MAX_BYTES:
+        return
+    for i in range(_SCANNER_LOG_BACKUPS, 0, -1):
+        src = Path(f"{_SCANNER_LOG}.{i}")
+        dst = Path(f"{_SCANNER_LOG}.{i + 1}")
+        if src.exists():
+            if i == _SCANNER_LOG_BACKUPS:
+                src.unlink()
+            else:
+                src.rename(dst)
+    _SCANNER_LOG.rename(Path(f"{_SCANNER_LOG}.1"))
+
+
 def _scan_log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     line = f"[{ts}] {msg}\n"
     print(line, end="")
     _SCANNER_LOG.parent.mkdir(parents=True, exist_ok=True)
+    _rotate_scan_log()
     with open(_SCANNER_LOG, "a", encoding="utf-8") as f:
         f.write(line)
 
