@@ -107,10 +107,14 @@ SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
-DAYS_BACK  = 14
-INTERVAL_M = 15  # matches live scanner cadence (every :00/:15/:30/:45)
-OUTCOME_H  = 24
-ADX_PERIOD = 14
+DAYS_BACK    = 14
+INTERVAL_M   = 15  # matches live scanner cadence (every :00/:15/:30/:45)
+OUTCOME_H    = 24
+ADX_PERIOD   = 14
+
+# ── Hold time (change here between runs: baseline / extended / long_hold) ───────
+HOLD_FAST_M  = 120   # baseline=120  extended=180  long_hold=480
+HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
 
 # ── Candle cache ────────────────────────────────────────────────────────────────
 CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
@@ -169,31 +173,31 @@ PAIR_PARAMS = {
 # ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
     {
-        "label":         "COMBINED | period1 (last 14d) | 10UTC block",
+        "label":         "COMBINED | period1 (last 14d)",
         "mode":          "COMBINED",
         "night_filter":  True,
-        "time_block_h":  [10],
+        "time_block_h":  [],
         "offset_days":   0,               # current 14 days
     },
     {
-        "label":         "COMBINED | period2 (14d-28d ago) | 10UTC block",
+        "label":         "COMBINED | period2 (14d-28d ago)",
         "mode":          "COMBINED",
         "night_filter":  True,
-        "time_block_h":  [10],
+        "time_block_h":  [],
         "offset_days":   14,
     },
     {
-        "label":         "COMBINED | period3 (28d-42d ago) | 10UTC block",
+        "label":         "COMBINED | period3 (28d-42d ago)",
         "mode":          "COMBINED",
         "night_filter":  True,
-        "time_block_h":  [10],
+        "time_block_h":  [],
         "offset_days":   28,
     },
     {
-        "label":         "COMBINED | period4 (42d-56d ago) | 10UTC block",
+        "label":         "COMBINED | period4 (42d-56d ago)",
         "mode":          "COMBINED",
         "night_filter":  True,
-        "time_block_h":  [10],
+        "time_block_h":  [],
         "offset_days":   42,
     },
 ]
@@ -749,7 +753,7 @@ async def run():
 
     now_ms  = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     step_ms = INTERVAL_M * 60 * 1000
-    hold_ms = {"FAST": 120 * 60 * 1000, "SWING": 240 * 60 * 1000}  # matches prod
+    hold_ms = {"FAST": HOLD_FAST_M * 60 * 1000, "SWING": HOLD_SWING_M * 60 * 1000}
 
     # ── Report metadata header ─────────────────────────────────────────────────
     try:
@@ -771,7 +775,8 @@ async def run():
     print(f"  Git HEAD:  {_git_label}")
     print(f"  Symbols:   {', '.join(ALL_SYMBOLS)}")
     print(f"  Cadence:   {INTERVAL_M}m  (live: 15m)")
-    print(f"  Hold:      FAST={hold_ms['FAST']//60000}m  SWING={hold_ms['SWING']//60000}m  (matches prod)")
+    print(f"  Hold:      FAST={HOLD_FAST_M}m  SWING={HOLD_SWING_M}m")
+    print(f"  TimeBlock: off")
     print(f"  Position:  one per pair (any side)")
     print(f"  Fees:      NOT modeled  |  Slippage: NOT modeled")
     print(f"  Entry:     market at next scan (no fill delay)")
