@@ -488,6 +488,18 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             else:
                 _drop = "drift_no_5m"
 
+    strong_4h_veto = (
+        trade_style == "FAST"
+        and side is not None
+        and bias_4h != "NEUTRAL"
+        and di_spread_4h >= 8
+        and ((side == "buy" and bias_4h == "DOWN")
+             or (side == "sell" and bias_4h == "UP"))
+    )
+    if strong_4h_veto:
+        trade_style, side = "NO_TRADE", None
+        _drop = _drop or "strong_4h_veto"
+
     # Per-pair mode restriction
     allowed = pp.get("allowed_modes", ["FAST", "SWING"])
     if trade_style not in allowed:
@@ -514,7 +526,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             _drop = _drop or "late_move"
 
     # 4H veto — informational only; SWING handles 4H in condition, FAST is 4H-agnostic
-    fourch_veto = four_h_conflict
+    fourch_veto = four_h_conflict or strong_4h_veto
 
     # ── VWAP filter — regime-aware ────────────────────────────────────────────
     vwap_ok = True
@@ -621,6 +633,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "oi_delta":        round(oi_delta, 4),
         "day_position":    round(day_position, 3) if day_position else None,
         "fourch_veto":     fourch_veto,
+        "strong_4h_veto":  strong_4h_veto,
         "late_move":       late_move,
         "oi_weak":         oi_weak,
         "rsi_1h":          round(rsi_1h, 1),

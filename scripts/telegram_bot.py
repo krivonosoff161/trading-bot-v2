@@ -758,6 +758,7 @@ async def _scanner_loop() -> None:
                 side   = result.get("side", "")
                 text   = result.get("delivery_text", "")
                 until  = result.get("expiry_time", "")
+                micro  = result.get("microstructure", {}) or {}
                 arrow  = "🟢" if side == "buy" else "🔴"
                 header = f"{arrow} <b>{pair}</b> — сигнал входа\n<i>Актуально до {until}</i>\n\n"
                 msg    = header + f"<pre>{text}</pre>"
@@ -769,7 +770,10 @@ async def _scanner_loop() -> None:
                     if png_path.exists():
                         await send_photo_to(chat_id, str(png_path))
                     await asyncio.sleep(0.3)
-                _scan_log(f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам")
+                _scan_log(
+                    f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам | "
+                    f"obi5={micro.get('obi_top5')} delta100={micro.get('trade_delta_100')} spread_bps={micro.get('spread_bps')}"
+                )
                 # Auto-execute on operator demo account
                 try:
                     from scripts.auto_execute import execute_signal
