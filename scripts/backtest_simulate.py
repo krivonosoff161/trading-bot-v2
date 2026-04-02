@@ -80,6 +80,28 @@ def _get_oi_delta(oi_history: list, ts_ms: int) -> float:
         return (cur_oi - prev_oi) / prev_oi
     return 0.0
 
+
+def _candle_vol_delta(raw_5m: list) -> float:
+    """Signed volume bias from last 3 closed 5m bars.
+    Returns value in [-1, +1]: +1 = all volume bullish, -1 = all bearish.
+    Proxy for taker buy/sell delta; avoids downloading millions of raw trades.
+    """
+    if not raw_5m or len(raw_5m) < 3:
+        return 0.0
+    total_vol  = 0.0
+    signed_vol = 0.0
+    for candle in raw_5m[:3]:   # newest 3 bars (newest-first order)
+        o = float(candle[1])
+        c = float(candle[4])
+        v = float(candle[5])
+        direction  = 1.0 if c >= o else -1.0
+        signed_vol += direction * v
+        total_vol  += v
+    if total_vol == 0:
+        return 0.0
+    return signed_vol / total_vol
+
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
@@ -232,7 +254,7 @@ def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                    mode="SWING", night_filter=False, oi_delta=0.0,
-                   time_block_h=None, raw_5m=None):
+                   time_block_h=None, raw_5m=None, trade_delta_15m=0.0):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -470,7 +492,13 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             if ema_drift_dir == "DOWN" and close < vwap: vwap_side_ok = True
 
         drift_vol_ok  = vol_ratio >= pp.get("drift_vol_min", 1.0)
-        drift_base    = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok
+        # Soft delta veto: block only when 5m candles strongly oppose drift direction.
+        # trade_delta_15m in [-1, +1]; threshold -0.3/+0.3 = 30% signed bias.
+        delta_opposes = (
+            (ema_drift_dir == "UP"   and trade_delta_15m < -0.3)
+            or (ema_drift_dir == "DOWN" and trade_delta_15m >  0.3)
+        )
+        drift_base    = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok and not delta_opposes
 
         if mode in ("FAST", "COMBINED"):
             if drift_base and five_m_long  and ema_drift_dir == "UP":
@@ -485,6 +513,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 _drop = "drift_vwap_wrong"
             elif not drift_vol_ok:
                 _drop = "drift_vol_low"
+            elif delta_opposes:
+                _drop = "drift_delta_wrong"
             else:
                 _drop = "drift_no_5m"
 
@@ -886,8 +916,9 @@ async def run():
                 raw_15m = list(reversed(h15_all[max(0, i15 - 96):i15]))
                 raw_5m  = list(reversed(h5_all [max(0, i5  - 30):i5 ])) if h5_all else None
 
-                hist_funding = _get_hist_funding(funding_hist, ts_ms)
-                oi_delta     = _get_oi_delta(oi_hist, ts_ms)
+                hist_funding    = _get_hist_funding(funding_hist, ts_ms)
+                oi_delta        = _get_oi_delta(oi_hist, ts_ms)
+                trade_delta_15m = _candle_vol_delta(raw_5m)
 
                 sig = compute_signal(
                     raw_4h, raw_1h, raw_15m,
@@ -896,6 +927,7 @@ async def run():
                     oi_delta=oi_delta,
                     time_block_h=time_block_h,
                     raw_5m=raw_5m,
+                    trade_delta_15m=trade_delta_15m,
                 )
                 if sig is None:
                     continue
@@ -974,7 +1006,7 @@ async def run():
     await client.close()
 
     # ── Report ─────────────────────────────────────────────────────────────────
-    def _report(label, results, funnel=None, total_ticks=0):
+    def _report(label, results, funnel=None, total_ticks=0, days_back=DAYS_BACK):
         wins   = [r for r in results if r["outcome"] == "TP"]
         losses = [r for r in results if r["outcome"] == "STOP"]
         time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
@@ -996,7 +1028,7 @@ async def run():
             else: consec = 0
             max_dd = max(max_dd, consec)
 
-        signals_per_day = round(len(results) / DAYS_BACK, 1)
+        signals_per_day = round(len(results) / days_back, 1)
 
         # Honest WR: TP / all signals (including TIME_EXIT)
         wr_all = len(wins) * 100 // len(results) if results else 0
@@ -1156,6 +1188,23 @@ async def run():
                 bar = "▓" * (pct // 2)
                 print(f"    {reason:30} {cnt:5}  {pct:2}%  {bar}")
 
+    # ── OVERALL: aggregate across all periods ──────────────────────────────────
+    overall_results = []
+    overall_funnel  = {}
+    overall_ticks   = 0
+    for res, funnel, ticks in all_set_results.values():
+        overall_results.extend(res)
+        overall_ticks += ticks
+        for k, v in funnel.items():
+            overall_funnel[k] = overall_funnel.get(k, 0) + v
+    total_days = DAYS_BACK * len(PARAM_SETS)
+    _report(
+        f"OVERALL | full {total_days}d (все периоды объединены)",
+        overall_results, overall_funnel, overall_ticks,
+        days_back=total_days,
+    )
+
+    # ── Per-period breakdown ────────────────────────────────────────────────────
     for label, (res, funnel, ticks) in all_set_results.items():
         _report(label, res, funnel, ticks)
 

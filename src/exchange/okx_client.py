@@ -194,6 +194,21 @@ class OKXClient:
             return data["data"]
         return []
 
+    async def get_history_trades(self, symbol: str, after: str = None, limit: int = 100) -> list:
+        """Get historical public trades (newest first).
+        after = tradeId — returns trades with ID strictly less than after (i.e., older).
+        Each trade: {tradeId, side ('buy'|'sell'), sz, px, ts (ms)}.
+        Max 100 per call; paginate via after=oldest_tradeId_from_last_batch.
+        """
+        inst_id = f"{symbol}-SWAP"
+        params: dict = {"instId": inst_id, "limit": str(limit)}
+        if after is not None:
+            params["after"] = str(after)
+        data = await self._get("/api/v5/market/history-trades", params)
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
     async def get_funding_rate_history(self, symbol: str, limit: int = 100) -> list:
         """Get historical funding rates (newest first).
         Covers ~33 days at 8h intervals with limit=100.
