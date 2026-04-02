@@ -52,10 +52,16 @@ def _load_jsonl(path: Path) -> list:
     return out
 
 
-async def run() -> None:
+async def run(logger=None) -> None:
+    """Label pending signals. Optional logger(str) callback for external log sinks."""
+    def _log(msg: str) -> None:
+        print(msg)
+        if logger:
+            logger(msg)
+
     signals = _load_jsonl(SIGNAL_LOG)
     if not signals:
-        print("signal_log.jsonl пустой или не существует.")
+        _log("signal_log.jsonl пустой или не существует.")
         return
 
     labeled_ids = {r["signal_id"] for r in _load_jsonl(SIGNAL_LABELS)}
@@ -72,10 +78,10 @@ async def run() -> None:
     ]
 
     if not pending:
-        print("Нет записей для лейблинга.")
+        _log("Нет записей для лейблинга.")
         return
 
-    print(f"Лейблинг {len(pending)} сигналов...")
+    _log(f"Лейблинг {len(pending)} сигналов...")
 
     client = OKXClient(
         api_key=os.getenv("OKX_API_KEY", ""),
@@ -85,48 +91,57 @@ async def run() -> None:
     )
 
     labeled = 0
-    with open(SIGNAL_LABELS, "a", encoding="utf-8") as out_f:
-        for sig in pending:
-            ts_ms       = sig["ts_ms"]
-            symbol      = sig["symbol"]
-            side        = sig["side"]
-            close       = float(sig["close"])
-            sl          = float(sig["sl"])
-            tp          = float(sig["tp"])
-            max_hold_ms = int((sig.get("max_hold_min") or 240) * 60_000)
+    try:
+        with open(SIGNAL_LABELS, "a", encoding="utf-8") as out_f:
+            for sig in pending:
+                try:
+                    ts_ms       = sig["ts_ms"]
+                    symbol      = sig["symbol"]
+                    side        = sig["side"]
+                    close       = float(sig["close"])
+                    sl          = float(sig["sl"])
+                    tp          = float(sig["tp"])
+                    max_hold_ms = int((sig.get("max_hold_min") or 240) * 60_000)
 
-            fwd_end_ms = ts_ms + OUTCOME_H * 3_600_000 + 15 * 60_000
-            raw_fwd = await client.get_history_candles(symbol, "5m", after=fwd_end_ms, limit=288)
-            await asyncio.sleep(0.2)
+                    fwd_end_ms = ts_ms + OUTCOME_H * 3_600_000 + 15 * 60_000
+                    raw_fwd = await client.get_history_candles(symbol, "5m", after=fwd_end_ms, limit=288)
+                    await asyncio.sleep(0.2)
 
-            outcome, elapsed_m, exit_price, mfe_r = check_outcome(
-                raw_fwd, side, sl, tp, ts_ms, max_hold_ms, entry_price=close,
-            )
+                    outcome, elapsed_m, exit_price, mfe_r = check_outcome(
+                        raw_fwd, side, sl, tp, ts_ms, max_hold_ms, entry_price=close,
+                    )
 
-            sl_dist = abs(close - sl)
-            exit_r  = None
-            if exit_price is not None and sl_dist > 0:
-                direction = 1 if side == "buy" else -1
-                exit_r    = round(direction * (exit_price - close) / sl_dist, 2)
+                    sl_dist = abs(close - sl)
+                    exit_r  = None
+                    if exit_price is not None and sl_dist > 0:
+                        direction = 1 if side == "buy" else -1
+                        exit_r    = round(direction * (exit_price - close) / sl_dist, 2)
 
-            label = {
-                "signal_id": sig["signal_id"],
-                "ts_ms":     ts_ms,
-                "symbol":    symbol,
-                "side":      side,
-                "outcome":   outcome,
-                "elapsed_m": elapsed_m,
-                "exit_price": exit_price,
-                "exit_r":    exit_r,
-                "mfe_r":     mfe_r,
-                "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            }
-            out_f.write(json.dumps(label) + "\n")
-            labeled += 1
-            print(f"  {symbol} {side} {datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).strftime('%m-%d %H:%M')} → {outcome}  exit_r={exit_r}  mfe_r={mfe_r}")
+                    label = {
+                        "signal_id":  sig["signal_id"],
+                        "ts_ms":      ts_ms,
+                        "symbol":     symbol,
+                        "side":       side,
+                        "outcome":    outcome,
+                        "elapsed_m":  elapsed_m,
+                        "exit_price": exit_price,
+                        "exit_r":     exit_r,
+                        "mfe_r":      mfe_r,
+                        "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    }
+                    out_f.write(json.dumps(label) + "\n")
+                    labeled += 1
+                    _log(
+                        f"  {symbol} {side} "
+                        f"{datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).strftime('%m-%d %H:%M')}"
+                        f" → {outcome}  exit_r={exit_r}  mfe_r={mfe_r}"
+                    )
+                except Exception as e:
+                    _log(f"  ОШИБКА {sig.get('signal_id','?')}: {e} — пропуск")
+    finally:
+        await client.close()
 
-    await client.close()
-    print(f"\nГотово: {labeled} записей → {SIGNAL_LABELS.name}")
+    _log(f"Готово: {labeled} записей → {SIGNAL_LABELS.name}")
 
 
 if __name__ == "__main__":
