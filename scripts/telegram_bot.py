@@ -797,10 +797,12 @@ async def _scanner_loop() -> None:
                 )
                 # Append-only signal log — DO NOT edit inline; outcomes written to signal_labels.jsonl
                 _style  = result.get("trade_style", "")
-                _ts_now = int(datetime.now(timezone.utc).timestamp() * 1000)
+                # Use captured_at timestamp (start of this scan cycle), not datetime.now()
+                # to avoid skew from analyze latency, network, image sending, etc.
+                _ts_ms  = int(datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp() * 1000)
                 _entry  = {
-                    "signal_id":       f"{_ts_now}_{pair}_{side}_{_style}",
-                    "ts_ms":           _ts_now,
+                    "signal_id":       f"{_ts_ms}_{pair}_{side}_{_style}",
+                    "ts_ms":           _ts_ms,
                     "symbol":          pair,
                     "side":            side,
                     "regime":          result.get("regime", ""),
@@ -858,7 +860,7 @@ async def _label_outcomes_loop() -> None:
         try:
             from scripts.label_outcomes import run as _label_run
             _scan_log("[label_outcomes] запуск...")
-            await _label_run()
+            await _label_run(logger=_scan_log)
             _scan_log("[label_outcomes] готово")
         except Exception as e:
             _scan_log(f"[label_outcomes] ошибка: {e}")
