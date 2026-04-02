@@ -828,6 +828,20 @@ async def _scanner_loop() -> None:
         await asyncio.sleep(60)  # check every minute which pairs are due
 
 
+async def _label_outcomes_loop() -> None:
+    """Run label_outcomes.run() once every 24h. First run after 1h delay."""
+    await asyncio.sleep(3600)   # wait 1h after bot start before first run
+    while True:
+        try:
+            from scripts.label_outcomes import run as _label_run
+            _scan_log("[label_outcomes] запуск...")
+            await _label_run()
+            _scan_log("[label_outcomes] готово")
+        except Exception as e:
+            _scan_log(f"[label_outcomes] ошибка: {e}")
+        await asyncio.sleep(24 * 3600)
+
+
 async def main() -> None:
     if not BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
@@ -843,6 +857,7 @@ async def main() -> None:
     await _check_and_send_reminders()
 
     asyncio.create_task(_scanner_loop())
+    asyncio.create_task(_label_outcomes_loop())
 
     offset = 0
     try:
