@@ -799,8 +799,11 @@ async def _scanner_loop() -> None:
                     "trade_delta_100": micro.get("trade_delta_100"),
                     "spread_bps":      micro.get("spread_bps"),
                 }
-                with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
-                    _lf.write(json.dumps(_entry) + "\n")
+                try:
+                    with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
+                        _lf.write(json.dumps(_entry) + "\n")
+                except Exception as _e:
+                    _scan_log(f"  [signal_log] ошибка записи: {_e}")
                 # Auto-execute on operator demo account
                 try:
                     from scripts.auto_execute import execute_signal
