@@ -384,11 +384,11 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
 
         if sl_p and tp1_p and tp2_p:
             _arr = "📈" if side == "buy" else "📉"
-            lines.append("📋 ПЛАН")
-            lines.append(f"  {_arr} Вход:   {fp(close)}")
-            lines.append(f"  🛑 Стоп:   {fp(sl_p)}")
-            lines.append(f"  🎯 Цель 1: {fp(tp1_p)}")
-            lines.append(f"  🎯 Цель 2: {fp(tp2_p)}")
+            lines.append("📋 ИСПОЛНЕНИЕ (авто + ручное)")
+            lines.append(f"  {_arr} Вход:            {fp(close)}")
+            lines.append(f"  🛑 Стоп:            {fp(sl_p)}")
+            lines.append(f"  🎯 Цель (авто):     {fp(tp1_p)}")
+            lines.append(f"  🎯 Цель 2 (ручная): {fp(tp2_p)}")
             lines.append("")
 
         lines.append(f"⏱ Закрыть через {max_hold} минут если уровни не достигнуты.")
@@ -578,9 +578,9 @@ def format_report(symbol: str, captured_at: str, indicators: dict, eng: dict) ->
         f"  Night:        {ok(eng['is_night'])}",
         "",
         f"── LEVELS {THIN[9:]}",
-        f"  SL:  {eng.get('sl_p')}",
-        f"  TP1: {eng.get('tp1_p')}",
-        f"  TP2: {eng.get('tp2_p')}",
+        f"  SL:           {eng.get('sl_p')}",
+        f"  TP1 (auto):   {eng.get('tp1_p')}",
+        f"  TP2 (manual): {eng.get('tp2_p')}",
         "",
         SEP,
     ]
