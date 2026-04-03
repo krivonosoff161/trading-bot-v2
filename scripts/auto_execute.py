@@ -29,6 +29,10 @@ AUTO_TRADE       = os.getenv("AUTO_TRADE", "false").lower() == "true"
 AUTO_TRADE_PCT   = float(os.getenv("AUTO_TRADE_PCT", "0.02"))    # 2% of balance
 AUTO_LEVERAGE    = int(os.getenv("AUTO_TRADE_LEVERAGE", "10"))
 
+# Max allowed price movement AGAINST the trade since signal was generated.
+# Directional: skip short if price dropped too far, skip long if price rose too far.
+MAX_WORSE_DEVIATION_PCT = 0.003   # 0.3% — tune per-symbol later if needed
+
 POSITIONS_FILE   = ROOT / "logs" / "auto_positions.json"
 
 # OKX contract sizes (ctVal) — contracts per unit
@@ -104,24 +108,61 @@ async def execute_signal(result: dict) -> bool:
             print(f"auto_execute: {symbol} already has open position — skip")
             return False
 
+        # Deviation guard — check current price vs signal price
+        current_price = await client.get_price(symbol)
+        if current_price is None:
+            print(f"auto_execute: {symbol} could not fetch current price — skip")
+            return False
+
+        deviation_pct = (current_price - float(entry_price)) / float(entry_price)
+        # Directional: bad deviation = price moved AGAINST the trade
+        # sell: bad if current < signal (price dropped, worse short entry)
+        # buy:  bad if current > signal (price rose, worse long entry)
+        worse_deviation = (-deviation_pct) if side == "sell" else deviation_pct
+        skipped = worse_deviation > MAX_WORSE_DEVIATION_PCT
+
+        print(
+            f"auto_execute: {symbol} {side.upper()} | "
+            f"signal={entry_price} current={current_price:.4f} "
+            f"dev={deviation_pct:+.3%} worse={worse_deviation:.3%} "
+            f"{'SKIP — price moved too far' if skipped else 'OK — within threshold'}"
+        )
+        if skipped:
+            return False
+
+        # Recalculate TP/SL anchored to current_price, preserving original risk distance
+        orig_sl_dist = abs(float(entry_price) - float(sl_price))
+        if side == "sell":
+            fill_sl  = round(current_price + orig_sl_dist, 4)
+            fill_tp1 = round(current_price - orig_sl_dist * 0.8, 4)
+        else:
+            fill_sl  = round(current_price - orig_sl_dist, 4)
+            fill_tp1 = round(current_price + orig_sl_dist * 0.8, 4)
+
+        print(
+            f"auto_execute: TP/SL recalc from fill | "
+            f"orig SL={sl_price} TP={tp1_price} → "
+            f"new SL={fill_sl} TP={fill_tp1} (anchor={current_price:.4f})"
+        )
+
         # Get balance and calculate size
-        balance   = await client.get_balance()
+        balance = await client.get_balance()
         if balance < 10:
             print(f"auto_execute: balance too low ({balance:.2f} USDT) — skip")
             return False
 
-        contracts = _calc_contracts(symbol, float(entry_price), balance)
+        contracts = _calc_contracts(symbol, current_price, balance)
 
         # Set leverage
         await client.set_leverage(symbol, AUTO_LEVERAGE)
 
-        # Place order with OCO
+        # Place order with OCO using recalculated levels
         order = await client.place_market_order(
             symbol   = symbol,
             side     = side,
             size     = contracts,
-            tp_price = str(tp1_price),
-            sl_price = str(sl_price),
+            tp_price = str(fill_tp1),
+            sl_price = str(fill_sl),
         )
         if not order:
             print(f"auto_execute: order failed for {symbol}")
@@ -131,14 +172,17 @@ async def execute_signal(result: dict) -> bool:
         now = datetime.now(timezone.utc)
         close_after = now.timestamp() + max_hold * 60
         pos_record  = {
-            "symbol":      symbol,
-            "side":        side,
-            "entry_time":  now.isoformat(),
-            "close_after": close_after,
-            "contracts":   contracts,
-            "sl":          str(sl_price),
-            "tp1":         str(tp1_price),
-            "ord_id":      order.get("ordId", ""),
+            "symbol":        symbol,
+            "side":          side,
+            "entry_time":    now.isoformat(),
+            "close_after":   close_after,
+            "contracts":     contracts,
+            "signal_entry":  float(entry_price),
+            "fill_anchor":   current_price,
+            "deviation_pct": round(deviation_pct, 5),
+            "sl":            str(fill_sl),
+            "tp1":           str(fill_tp1),
+            "ord_id":        order.get("ordId", ""),
         }
         existing = _load_positions()
         existing.append(pos_record)
