@@ -1263,8 +1263,8 @@ async def run(
             and _vol_ratio_sig >= _pp.get("ranging_fast_vol", 1.3)
             and _bb_corridor and _day_position is not None
         )
-        _buy_pos_ok  = _day_position <= _pp.get("ranging_buy_pos_max",  0.35)
-        _sell_pos_ok = _day_position >= _pp.get("ranging_sell_pos_min", 0.65)
+        _buy_pos_ok  = _day_position is not None and _day_position <= _pp.get("ranging_buy_pos_max",  0.35)
+        _sell_pos_ok = _day_position is not None and _day_position >= _pp.get("ranging_sell_pos_min", 0.65)
         if "FAST" in _pp["allowed_modes"]:
             if _ranging_base and _five_m_long and _buy_pos_ok:
                 _trade_style, _side = "FAST", "buy"
