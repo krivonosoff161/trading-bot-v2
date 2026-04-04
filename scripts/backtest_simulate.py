@@ -538,11 +538,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     oi_weak = oi_delta < -0.03
 
     # ── SL / TP (matches prod analyze_chart.py formulas) ─────────────────────
-    sl_p = tp_p = None
+    sl_p = tp_p = tp2_p = None
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
-        tp_mult = 0.8   # matches prod TP1 = 0.8R
         atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
@@ -551,14 +550,16 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_p    = round(close + sl_dist * tp_mult, 6)
+            tp_p    = round(close + sl_dist * 0.8, 6)   # TP1
+            tp2_p   = round(close + sl_dist * 1.5, 6)   # TP2
         else:
             atr_sl    = close + atr_sl_dist
             struct_sl = (swings["recent_highs"][-1] + 0.2 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_p    = round(close - sl_dist * tp_mult, 6)
+            tp_p    = round(close - sl_dist * 0.8, 6)   # TP1
+            tp2_p   = round(close - sl_dist * 1.5, 6)   # TP2
 
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
@@ -568,21 +569,21 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_p    = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)
+            tp_p    = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)    # TP1
+            tp2_p   = round(close + min(sl_dist * 2.5, atr_1h * 1.2), 6)    # TP2
         else:
             atr_sl    = close + entry_cfg.get("sl_k", 1.8) * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_p    = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)
+            tp_p    = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)    # TP1
+            tp2_p   = round(close - min(sl_dist * 2.5, atr_1h * 1.2), 6)    # TP2
 
-    # R/R validation — block if TP doesn't cover SL
+    # R/R validation — block if TP2 < 1.0R (matches prod analyze_chart.py)
     rr_ok = True
-    if sl_p and tp_p and sl_dist > 0:
-        rr = abs(tp_p - close) / sl_dist
-        rr_floor = 0.50
-        if rr < rr_floor:   # FAST TP=0.6R, SWING TP=1.0R
+    if sl_p and tp2_p and sl_dist > 0:
+        if abs(tp2_p - close) / sl_dist < 1.0:
             rr_ok = False
 
     # ── Drop reason for post-regime filters ──────────────────────────────────
