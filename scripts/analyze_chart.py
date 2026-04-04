@@ -953,64 +953,129 @@ def generate_chart_png(
 
 # ── Per-pair FAST/SWING parameters (walk-forward validated, March 2026) ───────
 
+# ── Per-regime parameter packs ────────────────────────────────────────────────
+# Structure: regimes → style → params.  Per-pair entries are sparse overrides.
+# _mode_cfg() merges default + pair override at runtime.
+
+_PAIR_PARAMS_DEFAULT = {
+    "allowed_modes": ["FAST", "SWING"],
+    "late_range": 7.0,
+    "regimes": {
+        "trending": {
+            # Confirmed trend (ADX+DI on both TFs). bb_expanding NOT required —
+            # in a mature trend bands are already wide; require minimum width instead.
+            "fast": {
+                "adx": 18, "vol": 0.8, "sl_k": 1.3,
+                "bb_width_min": 0.5, "require_bb_expanding": False,
+            },
+            "swing": {
+                "adx": 18, "vol": 0.8, "sl_k": 1.6,
+                "bb_width_min": 0.8, "require_bb_expanding": False,
+            },
+        },
+        "drift": {
+            # Directional drift without full trend confirmation — volume matters more.
+            "fast":  {"vol": 1.1, "sl_k": 1.3},
+            "swing": {"vol": 1.1, "sl_k": 1.6},
+        },
+        "ranging": {
+            # Mean-reversion — price at extremes, BB corridor, low ADX.
+            "fast": {
+                "vol": 1.5, "adx_max": 22,
+                "buy_pos_max": 0.35, "sell_pos_min": 0.65,
+                "bb_width_min": 0.8, "bb_width_max": 2.5, "sl_k": 1.3,
+            },
+        },
+    },
+}
+
 _PAIR_PARAMS = {
     "BTC-USDT": {
-        "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
-        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_vol": 1.3,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        "drift_vol_min": 1.0,
-        "late_range": 4.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 4.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 18, "vol": 0.7, "sl_k": 1.2, "bb_width_min": 0.4},
+                "swing": {"adx": 18, "vol": 0.7, "sl_k": 1.6, "bb_width_min": 0.7},
+            },
+            "drift":   {"fast": {"vol": 1.0, "sl_k": 1.2}},
+            "ranging": {"fast": {"vol": 1.3, "adx_max": 20,
+                                 "buy_pos_max": 0.30, "sell_pos_min": 0.70, "sl_k": 1.2}},
+        },
     },
     "ETH-USDT": {
-        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
-        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_vol": 1.4,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
-        "drift_vol_min": 1.1,
-        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 18, "vol": 0.6, "sl_k": 1.3, "bb_width_min": 0.3},
+                "swing": {"adx": 18, "vol": 0.6, "sl_k": 1.6, "bb_width_min": 0.6},
+            },
+            "drift":   {"fast": {"vol": 1.1, "sl_k": 1.3}},
+            "ranging": {"fast": {"vol": 1.4, "adx_max": 20,
+                                 "buy_pos_max": 0.32, "sell_pos_min": 0.68, "sl_k": 1.3}},
+        },
     },
     "SOL-USDT": {
-        "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
-        "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
-        "ranging_fast_vol": 2.0,
-        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "drift_vol_min": 2.0,
-        "late_range": 10.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 10.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 26, "vol": 1.5, "sl_k": 1.6, "bb_width_min": 0.8},
+                "swing": {"adx": 28, "vol": 1.5, "sl_k": 1.9, "bb_width_min": 1.2},
+            },
+            "drift":   {"fast": {"vol": 2.0, "sl_k": 1.6}},
+            "ranging": {"fast": {"vol": 2.0, "adx_max": 22,
+                                 "buy_pos_max": 0.35, "sell_pos_min": 0.65, "sl_k": 1.6}},
+        },
     },
     "XRP-USDT": {
-        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
-        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "ranging_fast_vol": 1.4,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        "drift_vol_min": 1.1,
-        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 18, "vol": 0.8, "sl_k": 1.4, "bb_width_min": 0.4},
+                "swing": {"adx": 18, "vol": 0.8, "sl_k": 1.8, "bb_width_min": 0.8},
+            },
+            "drift":   {"fast": {"vol": 1.1, "sl_k": 1.4}},
+            "ranging": {"fast": {"vol": 1.4, "adx_max": 20,
+                                 "buy_pos_max": 0.30, "sell_pos_min": 0.70, "sl_k": 1.4}},
+        },
     },
     "ADA-USDT": {
-        "fast_vol": 1.8, "fast_adx": 20, "fast_sl_k": 1.4,
-        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "ranging_fast_vol": 1.5,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
-        "drift_vol_min": 1.1,
-        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 20, "vol": 0.8, "sl_k": 1.4, "bb_width_min": 0.5},
+                "swing": {"adx": 18, "vol": 0.8, "sl_k": 1.8, "bb_width_min": 0.8},
+            },
+            "drift":   {"fast": {"vol": 1.1, "sl_k": 1.4}},
+            "ranging": {"fast": {"vol": 1.5, "adx_max": 20,
+                                 "buy_pos_max": 0.32, "sell_pos_min": 0.68, "sl_k": 1.4}},
+        },
     },
     "DOGE-USDT": {
-        "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
-        "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
-        "ranging_fast_vol": 1.6,
-        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "drift_vol_min": 1.3,
-        "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
+        "late_range": 7.0,
+        "allowed_modes": ["FAST", "SWING"],
+        "regimes": {
+            "trending": {
+                "fast":  {"adx": 18, "vol": 1.0, "sl_k": 1.4, "bb_width_min": 0.5},
+                "swing": {"adx": 20, "vol": 1.0, "sl_k": 1.8, "bb_width_min": 0.8},
+            },
+            "drift":   {"fast": {"vol": 1.3, "sl_k": 1.4}},
+            "ranging": {"fast": {"vol": 1.6, "adx_max": 22,
+                                 "buy_pos_max": 0.35, "sell_pos_min": 0.65, "sl_k": 1.4}},
+        },
     },
 }
-_PAIR_PARAMS_DEFAULT = {
-    "fast_vol": 2.0, "fast_adx": 20, "fast_sl_k": 1.4,
-    "swing_vol": 1.5, "swing_adx": 20, "swing_sl_k": 1.8,
-    "ranging_fast_vol": 1.5,
-    "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-    "drift_vol_min": 1.1,
-    "late_range": 7.0, "allowed_modes": ["FAST", "SWING"],
-}
+
+
+def _mode_cfg(pp: dict, regime: str, style: str) -> dict:
+    """Resolve effective config for regime+style: default → pair sparse override."""
+    base = dict(_PAIR_PARAMS_DEFAULT["regimes"].get(regime, {}).get(style, {}))
+    base.update(pp.get("regimes", {}).get(regime, {}).get(style, {}))
+    return base
 
 
 # ── Regime detector ───────────────────────────────────────────────────────────
@@ -1230,49 +1295,64 @@ async def run(
 
     _trade_style = "NO_TRADE"
     _side        = None
+    _entry_cfg   = {}   # resolved regime+style params, used for SL/TP sl_k
 
     if _regime == "CHOPPY":
         pass  # no trade in chaotic market
 
     elif _regime == "TRENDING":
-        # SWING first (clean trend continuation), FAST as fallback
-        _swing_base = (_adx_1h >= _pp["swing_adx"] and _adx_1h_rising
-                       and _vol_ratio_sig >= _pp["swing_vol"] and _bb_expanding
-                       and not _4h_dir_conflict and _adx_4h_ok
-                       and _di_spread_4h >= 8 and _di_spread_1h >= 8)
+        # Each style has its own param pack — no hard bb_expanding gate.
+        def _bb_ok(cfg: dict) -> bool:
+            if _bb_width_pct < cfg.get("bb_width_min", 0.0):
+                return False
+            if cfg.get("require_bb_expanding", False) and not _bb_expanding:
+                return False
+            return True
+
+        # SWING first (clean trend continuation)
+        _cfg_sw = _mode_cfg(_pp, "trending", "swing")
+        _swing_base = (
+            _adx_1h >= _cfg_sw.get("adx", 18) and _adx_1h_rising
+            and _vol_ratio_sig >= _cfg_sw["vol"] and _bb_ok(_cfg_sw)
+            and not _4h_dir_conflict and _adx_4h_ok
+            and _di_spread_4h >= 8 and _di_spread_1h >= 8
+        )
         if "SWING" in _pp["allowed_modes"]:
             if _swing_base and _bias_1h == "UP":
-                _trade_style, _side = "SWING", "buy"
+                _trade_style, _side, _entry_cfg = "SWING", "buy", _cfg_sw
             elif _swing_base and _bias_1h == "DOWN":
-                _trade_style, _side = "SWING", "sell"
+                _trade_style, _side, _entry_cfg = "SWING", "sell", _cfg_sw
 
-        _fast_base = (_adx_1h >= _pp["fast_adx"] and _adx_1h_rising
-                      and _vol_ratio_sig >= _pp["fast_vol"] and _bb_expanding)
+        # FAST as fallback
+        _cfg_f = _mode_cfg(_pp, "trending", "fast")
+        _fast_base = (
+            _adx_1h >= _cfg_f.get("adx", 18) and _adx_1h_rising
+            and _vol_ratio_sig >= _cfg_f["vol"] and _bb_ok(_cfg_f)
+        )
         if "FAST" in _pp["allowed_modes"] and _trade_style == "NO_TRADE":
             if _fast_base and _five_m_long and _bias_1h == "UP":
-                _trade_style, _side = "FAST", "buy"
+                _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_f
             elif _fast_base and _five_m_short and _bias_1h == "DOWN":
-                _trade_style, _side = "FAST", "sell"
+                _trade_style, _side, _entry_cfg = "FAST", "sell", _cfg_f
 
     elif _regime == "RANGING":
-        # Mean reversion: ADX ceiling, stable/falling ADX, price at extremes
-        _adx_ceil = _pp.get("ranging_adx_max", 22)
-        _bb_corridor = 0.8 <= _bb_width_pct <= 2.5
+        _cfg_r = _mode_cfg(_pp, "ranging", "fast")
+        _bb_corridor = _cfg_r.get("bb_width_min", 0.8) <= _bb_width_pct <= _cfg_r.get("bb_width_max", 2.5)
         _ranging_base = (
-            _adx_1h <= _adx_ceil and not _adx_1h_rising
-            and _vol_ratio_sig >= _pp.get("ranging_fast_vol", 1.3)
+            _adx_1h <= _cfg_r.get("adx_max", 22) and not _adx_1h_rising
+            and _vol_ratio_sig >= _cfg_r["vol"]
             and _bb_corridor and _day_position is not None
         )
-        _buy_pos_ok  = _day_position is not None and _day_position <= _pp.get("ranging_buy_pos_max",  0.35)
-        _sell_pos_ok = _day_position is not None and _day_position >= _pp.get("ranging_sell_pos_min", 0.65)
+        _buy_pos_ok  = _day_position is not None and _day_position <= _cfg_r.get("buy_pos_max",  0.35)
+        _sell_pos_ok = _day_position is not None and _day_position >= _cfg_r.get("sell_pos_min", 0.65)
         if "FAST" in _pp["allowed_modes"]:
             if _ranging_base and _five_m_long and _buy_pos_ok:
-                _trade_style, _side = "FAST", "buy"
+                _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_r
             elif _ranging_base and _five_m_short and _sell_pos_ok:
-                _trade_style, _side = "FAST", "sell"
+                _trade_style, _side, _entry_cfg = "FAST", "sell", _cfg_r
 
     elif _regime == "DRIFT":
-        # Persistent directional move without full trend confirmation.
+        _cfg_d = _mode_cfg(_pp, "drift", "fast")
         _ema_slope_up = (
             len(_h1.get("ema20_series") or []) >= 4
             and _h1["ema20_series"][-1] > _h1["ema20_series"][-2]
@@ -1290,13 +1370,12 @@ async def run(
             (_ema_drift_dir == "UP" and _close > _vwap)
             or (_ema_drift_dir == "DOWN" and _close < _vwap)
         ) if _vwap else False
-        _drift_vol_ok = _vol_ratio_sig >= _pp.get("drift_vol_min", 1.0)
-        _drift_base = _ema_drift_dir != "FLAT" and _drift_vwap_ok and _drift_vol_ok
+        _drift_base = _ema_drift_dir != "FLAT" and _drift_vwap_ok and _vol_ratio_sig >= _cfg_d["vol"]
         if "FAST" in _pp["allowed_modes"]:
             if _drift_base and _five_m_long and _ema_drift_dir == "UP":
-                _trade_style, _side = "FAST", "buy"
+                _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_d
             elif _drift_base and _five_m_short and _ema_drift_dir == "DOWN":
-                _trade_style, _side = "FAST", "sell"
+                _trade_style, _side, _entry_cfg = "FAST", "sell", _cfg_d
 
     _strong_4h_veto = (
         _trade_style == "FAST"
@@ -1322,14 +1401,15 @@ async def run(
     _4h_veto = _4h_dir_conflict or _strong_4h_veto
 
     # VWAP filter — regime-aware
+    # TRENDING: skip — ADX+DI already confirm direction; VWAP lags in strong moves.
+    # DRIFT:    trend-follow (buy above, sell below).
+    # RANGING:  fade (buy below, sell above).
     _vwap_ok = True
-    if _vwap and _close and _side:
+    if _vwap and _close and _side and _regime != "TRENDING":
         if _regime == "RANGING":
-            # fade mode: buy below VWAP (expect reversion up), sell above VWAP
             if _side == "buy"  and _close > _vwap: _vwap_ok = False
             if _side == "sell" and _close < _vwap: _vwap_ok = False
-        else:
-            # trend follow: buy above VWAP, sell below VWAP
+        else:  # DRIFT
             if _side == "buy"  and _close < _vwap: _vwap_ok = False
             if _side == "sell" and _close > _vwap: _vwap_ok = False
 
@@ -1348,7 +1428,8 @@ async def run(
     _sl_dist = 0.0
 
     if _trade_style == "FAST" and _side and _close:
-        _atr_sl_dist = max(_pp["fast_sl_k"] * _atr_15m, _close * 0.004)
+        _sl_k = _entry_cfg.get("sl_k", 1.4)
+        _atr_sl_dist = max(_sl_k * _atr_15m, _close * 0.004)
         if _side == "buy":
             _atr_sl   = _close - _atr_sl_dist
             _struct   = (_swing_lows[-1]  - 0.2 * _atr_15m) if _swing_lows  else None
@@ -1365,15 +1446,16 @@ async def run(
             _tp2_p    = round(_close - _sl_dist * 1.5, 4)
 
     elif _trade_style == "SWING" and _side and _close:
+        _sl_k = _entry_cfg.get("sl_k", 1.8)
         if _side == "buy":
-            _atr_sl  = _close - _pp["swing_sl_k"] * _atr_15m
+            _atr_sl  = _close - _sl_k * _atr_15m
             _struct  = (_swing_lows[-1] - 0.3 * _atr_15m) if _swing_lows else None
             _sl_p    = round(min(_struct, _atr_sl) if _struct else _atr_sl, 4)
             _sl_dist = _close - _sl_p
             _tp1_p   = round(_close + min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
             _tp2_p   = round(_close + min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
         else:
-            _atr_sl  = _close + _pp["swing_sl_k"] * _atr_15m
+            _atr_sl  = _close + _sl_k * _atr_15m
             _struct  = (_swing_highs[-1] + 0.3 * _atr_15m) if _swing_highs else None
             _sl_p    = round(max(_struct, _atr_sl) if _struct else _atr_sl, 4)
             _sl_dist = _sl_p - _close
