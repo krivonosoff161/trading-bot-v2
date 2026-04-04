@@ -427,33 +427,34 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
                 why  = "Условия mean reversion не выполнены."
                 what = "Следить за следующей 15m свечой у экстремума диапазона."
         else:
-            # TRENDING / CHOPPY reasons
+            # TRENDING / DRIFT / CHOPPY reasons
+            _pp_sum = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
+            _cfg_f  = _mode_cfg(_pp_sum, "trending", "fast")
+            _cfg_sw = _mode_cfg(_pp_sum, "trending", "swing")
+            _t_vol  = min(_cfg_f["vol"], _cfg_sw["vol"])
+            _t_bb   = _cfg_f.get("bb_width_min", 0.5)
             if bias_1h == "NEUTRAL":
                 why  = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
                 what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
             elif four_h_conflict:
                 why  = "4H направление против 1H — SWING требует согласования таймфреймов."
-                what = "Ждать пока 4H и 1H совпадут по направлению — либо ждать FAST если объём появится."
+                what = "Ждать пока 4H и 1H совпадут по направлению."
             elif not adx_4h_ok:
                 why  = f"На 4H нет выраженного тренда (ADX {adx_4h:.0f}) — SWING требует подтверждённого тренда на старшем ТФ."
-                what = "Ждать роста ADX 4H выше 20 — это сигнал что тренд формируется."
+                what = "Ждать роста ADX 4H выше 20."
             elif not adx_rising:
                 why  = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
                 what = "Ждать когда ADX начнёт расти — это сигнал возобновления тренда."
-            elif vol_ratio < 1.3:
-                why  = f"Объём импульса слабый (×{vol_ratio:.2f}) — движение без подтверждения покупателей/продавцов."
-                what = "Ждать свечей с повышенным объёмом — только тогда движение реальное."
-            elif not bb_expanding:
-                why  = "Bollinger Bands сжаты — рынок в боковике, направленного движения нет."
-                what = "Ждать расширения полос — это сигнал выхода из консолидации."
+            elif vol_ratio < _t_vol:
+                why  = f"Объём импульса слабый (×{vol_ratio:.2f}, нужно ×{_t_vol:.1f}) — движение без подтверждения."
+                what = "Ждать свечей с повышенным объёмом."
+            elif bb_width_pct < _t_bb:
+                why  = f"Bollinger Bands слишком узкие ({bb_width_pct:.2f}%, нужно >{_t_bb:.1f}%) — консолидация внутри тренда."
+                what = "Ждать расширения полос — выход из консолидации даст сигнал."
             elif not five_m_trigger:
                 _need5 = "выше" if side == "buy" else "ниже"
-                why  = f"Цена на 5m ещё не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
-                what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 на 5m — условие FAST выполнено."
-            elif not vwap_ok:
-                _need = "выше" if side == "buy" else "ниже"
-                why  = f"Цена на неправильной стороне дневного равновесия — для {'лонга' if side == 'buy' else 'шорта'} нужно {_need} {fp(vwap)}."
-                what = f"Подождать пока цена закрепится {_need} {fp(vwap)}."
+                why  = f"5m не подтвердила движение — FAST ждёт пробоя EMA20 на 5m {_need5}."
+                what = f"Следить за 5m: как только trigger_close окажется {_need5} EMA20 — условие выполнено."
             elif oi_weak:
                 why  = "Открытый интерес падает при движении цены — позиции закрываются, сигнал слабый."
                 what = "Ждать стабилизации или роста открытого интереса."

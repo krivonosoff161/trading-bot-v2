@@ -37,6 +37,8 @@ from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
     find_swing_levels, calc_bollinger_bands, calc_rsi,
 )
+# Single source of truth for pair params — same as prod analyze_chart.py
+from scripts.analyze_chart import _PAIR_PARAMS as PAIR_PARAMS, _PAIR_PARAMS_DEFAULT, _mode_cfg
 
 # ── Historical data helpers ─────────────────────────────────────────────────────
 
@@ -120,55 +122,7 @@ HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
 CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
 CACHE_MAX_AGE = 23 * 3600
 
-# ── Per-pair thresholds ─────────────────────────────────────────────────────────
-# None = pair is OFF (DOGE excluded)
-PAIR_PARAMS = {
-    "BTC-USDT":  {
-        "fast_vol": 1.6, "fast_adx": 18, "fast_sl_k": 1.2,
-        "swing_vol": 1.3, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_vol": 1.3,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        "drift_vol_min": 1.0,
-        "late_range": 4.0,
-        "allowed_modes": ["FAST", "SWING"],
-    },
-    "ETH-USDT":  {
-        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.3,
-        "swing_vol": 1.5, "swing_adx": 18, "swing_sl_k": 1.6,
-        "ranging_fast_vol": 1.4,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.32, "ranging_sell_pos_min": 0.68,
-        "drift_vol_min": 1.1,
-        "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],
-    },
-    "SOL-USDT":  {
-        "fast_vol": 3.2, "fast_adx": 26, "fast_sl_k": 1.6,
-        "swing_vol": 2.8, "swing_adx": 28, "swing_sl_k": 1.9,
-        "ranging_fast_vol": 2.0,
-        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "drift_vol_min": 2.0,
-        "late_range": 10.0,
-        "allowed_modes": ["FAST", "SWING"],
-    },
-    "DOGE-USDT": {
-        "fast_vol": 2.0, "fast_adx": 18, "fast_sl_k": 1.4,
-        "swing_vol": 1.6, "swing_adx": 20, "swing_sl_k": 1.8,
-        "ranging_fast_vol": 1.6,
-        "ranging_adx_max": 22, "ranging_buy_pos_max": 0.35, "ranging_sell_pos_min": 0.65,
-        "drift_vol_min": 1.3,
-        "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],
-    },
-    "XRP-USDT":  {
-        "fast_vol": 1.8, "fast_adx": 18, "fast_sl_k": 1.4,
-        "swing_vol": 1.4, "swing_adx": 18, "swing_sl_k": 1.8,
-        "ranging_fast_vol": 1.4,
-        "ranging_adx_max": 20, "ranging_buy_pos_max": 0.30, "ranging_sell_pos_min": 0.70,
-        "drift_vol_min": 1.1,
-        "late_range": 7.0,
-        "allowed_modes": ["FAST", "SWING"],
-    },
-}
+# PAIR_PARAMS and _mode_cfg imported from scripts.analyze_chart — single source of truth.
 
 # ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
@@ -392,51 +346,53 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # ── Mode + Direction by regime ────────────────────────────────────────────
     trade_style = "NO_TRADE"
     side        = None
+    entry_cfg   = {}     # resolved regime+style params, used for sl_k
     _drop       = None   # first filter that killed this tick
 
     if regime == "CHOPPY":
-        # No trade in chaotic market
         _drop = "choppy"
 
     elif regime == "TRENDING":
-        # SWING first (clean trend continuation) — matches prod priority
-        swing_base = (float(adx_1h) >= pp["swing_adx"]
-                      and adx_1h_rising
-                      and vol_ratio >= pp["swing_vol"]
-                      and bb_expanding
-                      and not four_h_conflict
-                      and adx_4h_ok
-                      and di_spread_4h >= 8
-                      and di_spread_1h >= 8)    # was 10, prod uses 8
+        def _bb_ok(cfg: dict) -> bool:
+            if bb_width < cfg.get("bb_width_min", 0.0):
+                return False
+            if cfg.get("require_bb_expanding", False) and not bb_expanding:
+                return False
+            return True
+
+        cfg_sw = _mode_cfg(pp, "trending", "swing")
+        swing_base = (
+            float(adx_1h) >= cfg_sw.get("adx", 18) and adx_1h_rising
+            and vol_ratio >= cfg_sw["vol"] and _bb_ok(cfg_sw)
+            and not four_h_conflict and adx_4h_ok
+            and di_spread_4h >= 8 and di_spread_1h >= 8
+        )
         if mode in ("SWING", "COMBINED"):
             if swing_base and bias_1h == "UP":
-                trade_style, side = "SWING", "buy"
+                trade_style, side, entry_cfg = "SWING", "buy", cfg_sw
             elif swing_base and bias_1h == "DOWN":
-                trade_style, side = "SWING", "sell"
+                trade_style, side, entry_cfg = "SWING", "sell", cfg_sw
 
-        # FAST fallback — 1H momentum only
-        fast_base = (float(adx_1h) >= pp["fast_adx"]
-                     and adx_1h_rising
-                     and vol_ratio >= pp["fast_vol"]
-                     and bb_expanding)
+        cfg_f = _mode_cfg(pp, "trending", "fast")
+        fast_base = (
+            float(adx_1h) >= cfg_f.get("adx", 18) and adx_1h_rising
+            and vol_ratio >= cfg_f["vol"] and _bb_ok(cfg_f)
+        )
         if mode in ("FAST", "COMBINED") and trade_style == "NO_TRADE":
             if fast_base and five_m_long and bias_1h == "UP":
-                trade_style, side = "FAST", "buy"
+                trade_style, side, entry_cfg = "FAST", "buy", cfg_f
             elif fast_base and five_m_short and bias_1h == "DOWN":
-                trade_style, side = "FAST", "sell"
+                trade_style, side, entry_cfg = "FAST", "sell", cfg_f
 
-        # Diagnose why no signal fired in TRENDING
         if trade_style == "NO_TRADE":
-            _swing_adx_ok = float(adx_1h) >= pp["swing_adx"]
-            _fast_adx_ok  = float(adx_1h) >= pp["fast_adx"]
-            if not _swing_adx_ok and not _fast_adx_ok:
+            if not (float(adx_1h) >= cfg_f.get("adx", 18)):
                 _drop = "trending_adx_low"
             elif not adx_1h_rising:
                 _drop = "trending_adx_not_rising"
-            elif not bb_expanding:
-                _drop = "trending_bb_flat"
-            elif vol_ratio < pp["swing_vol"] and vol_ratio < pp["fast_vol"]:
+            elif vol_ratio < cfg_f["vol"] and vol_ratio < cfg_sw["vol"]:
                 _drop = "trending_vol_low"
+            elif bb_width < cfg_f.get("bb_width_min", 0.0):
+                _drop = "trending_bb_narrow"
             elif four_h_conflict or not adx_4h_ok:
                 _drop = "trending_4h_block"
             elif di_spread_4h < 8 or di_spread_1h < 8:
@@ -447,21 +403,22 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 _drop = "trending_no_5m"
 
     elif regime == "RANGING":
-        # Mean reversion: ADX ceiling (not floor), ADX stable/falling, price at extremes
-        _adx_ceil   = pp.get("ranging_adx_max", 22)
-        _bb_corridor = 0.8 <= bb_width <= 2.5
-        ranging_base = (float(adx_1h) <= _adx_ceil and not adx_1h_rising
-                        and vol_ratio >= pp["ranging_fast_vol"]
-                        and _bb_corridor and day_position is not None)
-        _buy_pos_ok  = day_position is not None and day_position <= pp.get("ranging_buy_pos_max",  0.35)
-        _sell_pos_ok = day_position is not None and day_position >= pp.get("ranging_sell_pos_min", 0.65)
+        cfg_r = _mode_cfg(pp, "ranging", "fast")
+        _adx_ceil    = cfg_r.get("adx_max", 22)
+        _bb_corridor = cfg_r.get("bb_width_min", 0.8) <= bb_width <= cfg_r.get("bb_width_max", 2.5)
+        ranging_base = (
+            float(adx_1h) <= _adx_ceil and not adx_1h_rising
+            and vol_ratio >= cfg_r["vol"]
+            and _bb_corridor and day_position is not None
+        )
+        _buy_pos_ok  = day_position is not None and day_position <= cfg_r.get("buy_pos_max",  0.35)
+        _sell_pos_ok = day_position is not None and day_position >= cfg_r.get("sell_pos_min", 0.65)
         if mode in ("FAST", "COMBINED"):
             if ranging_base and five_m_long and _buy_pos_ok:
-                trade_style, side = "FAST", "buy"
+                trade_style, side, entry_cfg = "FAST", "buy", cfg_r
             elif ranging_base and five_m_short and _sell_pos_ok:
-                trade_style, side = "FAST", "sell"
+                trade_style, side, entry_cfg = "FAST", "sell", cfg_r
 
-        # Diagnose why no signal fired in RANGING
         if trade_style == "NO_TRADE":
             if float(adx_1h) > _adx_ceil:
                 _drop = "ranging_adx_high"
@@ -469,17 +426,15 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 _drop = "ranging_adx_rising"
             elif not _bb_corridor:
                 _drop = "ranging_bb_outside"
-            elif vol_ratio < pp["ranging_fast_vol"]:
+            elif vol_ratio < cfg_r["vol"]:
                 _drop = "ranging_vol_low"
             elif day_position is None:
                 _drop = "ranging_day_pos_none"
             else:
-                _drop = "ranging_day_pos_wrong"  # price not at extreme (0.35–0.65)
+                _drop = "ranging_day_pos_wrong"
 
     elif regime == "DRIFT":
-        # Persistent directional move without acceleration.
-        # Entry: EMA20_1H slope same direction 3 closed bars + price on VWAP side + 5m trigger.
-        # No bb_expanding required — FAST only.
+        cfg_d = _mode_cfg(pp, "drift", "fast")
         ema_slope_up   = (len(ema20_1h) >= 4
                           and ema20_1h[-1] > ema20_1h[-2]
                           and ema20_1h[-2] > ema20_1h[-3]
@@ -495,20 +450,18 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             if ema_drift_dir == "UP"   and close > vwap: vwap_side_ok = True
             if ema_drift_dir == "DOWN" and close < vwap: vwap_side_ok = True
 
-        drift_vol_ok  = vol_ratio >= pp.get("drift_vol_min", 1.0)
-        # Soft delta veto: block only when 5m candles strongly oppose drift direction.
-        # trade_delta_15m in [-1, +1]; threshold -0.3/+0.3 = 30% signed bias.
+        drift_vol_ok  = vol_ratio >= cfg_d["vol"]
         delta_opposes = (
             (ema_drift_dir == "UP"   and trade_delta_15m < -0.3)
             or (ema_drift_dir == "DOWN" and trade_delta_15m >  0.3)
         )
-        drift_base    = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok and not delta_opposes
+        drift_base = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok and not delta_opposes
 
         if mode in ("FAST", "COMBINED"):
             if drift_base and five_m_long  and ema_drift_dir == "UP":
-                trade_style, side = "FAST", "buy"
+                trade_style, side, entry_cfg = "FAST", "buy", cfg_d
             elif drift_base and five_m_short and ema_drift_dir == "DOWN":
-                trade_style, side = "FAST", "sell"
+                trade_style, side, entry_cfg = "FAST", "sell", cfg_d
 
         if trade_style == "NO_TRADE":
             if ema_drift_dir == "FLAT":
@@ -563,14 +516,13 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     fourch_veto = four_h_conflict or strong_4h_veto
 
     # ── VWAP filter — regime-aware ────────────────────────────────────────────
+    # TRENDING: skip — ADX+DI confirm direction; VWAP lags in strong moves.
     vwap_ok = True
-    if vwap and close and side:
+    if vwap and close and side and regime != "TRENDING":
         if regime == "RANGING":
-            # fade mode: buy below VWAP (reversion up), sell above VWAP
             if side == "buy"  and close > vwap: vwap_ok = False
             if side == "sell" and close < vwap: vwap_ok = False
-        else:
-            # follow mode: buy above VWAP, sell below VWAP
+        else:  # DRIFT
             if side == "buy"  and close < vwap: vwap_ok = False
             if side == "sell" and close > vwap: vwap_ok = False
 
@@ -591,7 +543,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     if trade_style == "FAST" and side and close:
         tp_mult = 0.6
-        atr_sl_dist = max(pp["fast_sl_k"] * atr_15m, close * 0.004)
+        atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
             atr_sl    = close - atr_sl_dist
@@ -611,14 +563,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
-            atr_sl    = close - pp["swing_sl_k"] * atr_15m
+            atr_sl    = close - entry_cfg.get("sl_k", 1.8) * atr_15m
             struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
             sl_dist = close - sl_p
             tp_p    = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)
         else:
-            atr_sl    = close + pp["swing_sl_k"] * atr_15m
+            atr_sl    = close + entry_cfg.get("sl_k", 1.8) * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
