@@ -47,8 +47,7 @@ api_keys.yaml
 # Backtest outputs (generated data, not source)
 scripts/backtest_result.txt
 scripts/qwen_analysis_pack.txt
-scripts/backtest_run_soft_tighten.txt
-scripts/backtest_run_hard_tighten.txt
+scripts/backtest_run_*.txt
 
 # Signal pipeline data (live runtime data)
 scripts/signal_log.jsonl
