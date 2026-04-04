@@ -189,7 +189,7 @@ async def execute_signal(result: dict) -> bool:
         _save_positions(existing)
 
         print(f"auto_execute: OK {symbol} {side.upper()} {contracts} contracts "
-              f"| SL={sl_price} TP={tp1_price} | hold={max_hold}min")
+              f"| SL={fill_sl} TP={fill_tp1} | hold={max_hold}min")
         return True
 
     finally:
