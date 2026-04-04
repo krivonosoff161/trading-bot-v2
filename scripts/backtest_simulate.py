@@ -542,7 +542,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
-        tp_mult = 0.6
+        tp_mult = 0.8   # matches prod TP1 = 0.8R
         atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
@@ -623,6 +623,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "late_move":       late_move,
         "oi_weak":         oi_weak,
         "rsi_1h":          round(rsi_1h, 1),
+        "is_night":        is_night,
     }
 
 
@@ -926,7 +927,11 @@ async def run():
                     symbol, "5m", after=fwd_end, limit=288)
             await asyncio.sleep(0.1)
 
-            max_h   = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
+            # FAST night hold matches prod: 240m at night (01-07 UTC), 120m otherwise
+            if sig["trade_style"] == "FAST":
+                max_h = (240 if sig.get("is_night") else HOLD_FAST_M) * 60 * 1000
+            else:
+                max_h = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
             outcome, elapsed, exit_price, mfe_r = check_outcome(
                 raw_fwd, sig["side"], sig["sl"], sig["tp"],
                 ts_ms, max_h, entry_price=sig["close"],
