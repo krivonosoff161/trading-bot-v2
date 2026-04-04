@@ -103,6 +103,50 @@ _SESSION: aiohttp.ClientSession | None = None
 _ANALYSIS_SEM = asyncio.Semaphore(3)
 
 
+def _append_signal_log_entry(
+    result: dict,
+    *,
+    captured_at: str,
+    symbol: str,
+    source: str,
+) -> None:
+    """Append one ENTRY signal to signal_log.jsonl for later outcome labeling."""
+    if (result or {}).get("entry_signal") != "ENTRY":
+        return
+
+    side = result.get("side")
+    style = result.get("trade_style") or result.get("trade_style_hint") or ""
+    if not side or not style:
+        return
+
+    micro = result.get("microstructure", {}) or {}
+    ts_ms = int(datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp() * 1000)
+    entry = {
+        "signal_id":       f"{ts_ms}_{symbol}_{side}_{style}",
+        "source":          source,
+        "ts_ms":           ts_ms,
+        "symbol":          symbol,
+        "side":            side,
+        "regime":          result.get("regime", ""),
+        "style":           style,
+        "close":           result.get("entry_price"),
+        "sl":              result.get("sl_price"),
+        "tp":              result.get("tp1_price"),
+        "max_hold_min":    result.get("max_hold_min") or result.get("max_hold_minutes"),
+        "adx_1h":          result.get("adx_1h"),
+        "adx_4h":          result.get("adx_4h"),
+        "day_position":    result.get("day_position"),
+        "vol_ratio":       result.get("vol_ratio") or result.get("volume_ratio_15m"),
+        "funding":         result.get("funding") if result.get("funding") is not None else result.get("funding_rate"),
+        "strong_4h_veto":  result.get("strong_4h_veto"),
+        "obi5":            micro.get("obi_top5"),
+        "trade_delta_100": micro.get("trade_delta_100"),
+        "spread_bps":      micro.get("spread_bps"),
+    }
+    with open(SIGNAL_LOG, "a", encoding="utf-8") as lf:
+        lf.write(json.dumps(entry) + "\n")
+
+
 # ── Telegram API helpers ───────────────────────────────────────────────────────
 
 async def _get_session() -> aiohttp.ClientSession:
@@ -330,6 +374,18 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
         snap = json.loads(snap_path.read_text(encoding="utf-8"))
         ctx = snap.get("llm_context", {})
         entry_signal = ctx.get("entry_signal", "")
+        if entry_signal == "ENTRY":
+            try:
+                _manual_result = dict(ctx)
+                _manual_result["microstructure"] = snap.get("microstructure", {}) or {}
+                _append_signal_log_entry(
+                    _manual_result,
+                    captured_at=captured_at,
+                    symbol=snap.get("symbol", symbol),
+                    source="manual",
+                )
+            except Exception as _e:
+                print(f"[signal_log/manual] error | symbol={symbol} err={_e}")
         if entry_signal in ("ENTRY", "WAIT"):
             style = ctx.get("trade_style_hint", "")
             max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
@@ -799,35 +855,13 @@ async def _scanner_loop() -> None:
                     f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам | "
                     f"obi5={micro.get('obi_top5')} delta100={micro.get('trade_delta_100')} spread_bps={micro.get('spread_bps')}"
                 )
-                # Append-only signal log — DO NOT edit inline; outcomes written to signal_labels.jsonl
-                _style  = result.get("trade_style", "")
-                # Use captured_at timestamp (start of this scan cycle), not datetime.now()
-                # to avoid skew from analyze latency, network, image sending, etc.
-                _ts_ms  = int(datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp() * 1000)
-                _entry  = {
-                    "signal_id":       f"{_ts_ms}_{pair}_{side}_{_style}",
-                    "ts_ms":           _ts_ms,
-                    "symbol":          pair,
-                    "side":            side,
-                    "regime":          result.get("regime", ""),
-                    "style":           _style,
-                    "close":           result.get("entry_price"),
-                    "sl":              result.get("sl_price"),
-                    "tp":              result.get("tp1_price"),
-                    "max_hold_min":    result.get("max_hold_min"),
-                    "adx_1h":          result.get("adx_1h"),
-                    "adx_4h":          result.get("adx_4h"),
-                    "day_position":    result.get("day_position"),
-                    "vol_ratio":       result.get("vol_ratio"),
-                    "funding":         result.get("funding"),
-                    "strong_4h_veto":  result.get("strong_4h_veto"),
-                    "obi5":            micro.get("obi_top5"),
-                    "trade_delta_100": micro.get("trade_delta_100"),
-                    "spread_bps":      micro.get("spread_bps"),
-                }
                 try:
-                    with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
-                        _lf.write(json.dumps(_entry) + "\n")
+                    _append_signal_log_entry(
+                        result,
+                        captured_at=captured_at,
+                        symbol=pair,
+                        source="scanner",
+                    )
                 except Exception as _e:
                     _scan_log(f"  [signal_log] ошибка записи: {_e}")
                 # Auto-execute on operator demo account
