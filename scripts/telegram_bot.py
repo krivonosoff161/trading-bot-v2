@@ -748,6 +748,7 @@ async def _scanner_loop() -> None:
     last_signal = {p: None for p in _SCANNER_PAIRS}
 
     while True:
+      try:
         now  = datetime.now(timezone.utc)
         hour = now.hour
 
@@ -787,9 +788,12 @@ async def _scanner_loop() -> None:
                           if u["status"] in ("active", "superadmin")]
                 png_path = scan_dir / f"{pair}_chart.png"
                 for chat_id in active:
-                    await _send(chat_id, msg)
-                    if png_path.exists():
-                        await send_photo_to(chat_id, str(png_path))
+                    try:
+                        await _send(chat_id, msg)
+                        if png_path.exists():
+                            await send_photo_to(chat_id, str(png_path))
+                    except Exception as _send_err:
+                        _scan_log(f"  [{pair}] ошибка отправки {chat_id}: {_send_err}")
                     await asyncio.sleep(0.3)
                 _scan_log(
                     f"  {pair} — СИГНАЛ ВХОДА ({side.upper()}) → отправлено {len(active)} клиентам | "
@@ -850,7 +854,9 @@ async def _scanner_loop() -> None:
         next_run = _next_quarter(now)
         await asyncio.sleep((next_run - now).total_seconds())
 
-        await asyncio.sleep(60)  # check every minute which pairs are due
+      except Exception:
+        _scan_log(f"  [scanner_loop] необработанная ошибка:\n{traceback.format_exc().strip()}")
+        await asyncio.sleep(60)  # pause before next cycle on unexpected crash
 
 
 async def _label_outcomes_loop() -> None:
