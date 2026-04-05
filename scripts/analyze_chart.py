@@ -1135,7 +1135,8 @@ async def run(
 
     print(f"Fetching candles for {symbol} ending at {captured_at_iso} ...")
     try:
-        raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist, _books5, _trades100 = await asyncio.gather(
+        (raw_4h, raw_1h, raw_15m, raw_5m, _funding, _oi, _oi_hist, _books5, _trades100,
+         _raw_mark15, _raw_idx15) = await asyncio.gather(
             client.get_history_candles(symbol, "4H",  after=after_ts, limit=60),
             client.get_history_candles(symbol, "1H",  after=after_ts, limit=limit),
             client.get_history_candles(symbol, "15m", after=after_ts, limit=limit),
@@ -1145,6 +1146,8 @@ async def run(
             client.get_oi_history(symbol, period="1H", limit=5),
             client.get_books(symbol, size=5) if _is_live else asyncio.sleep(0, result=None),
             client.get_trades(symbol, limit=100) if _is_live else asyncio.sleep(0, result=[]),
+            client.get_history_mark_price_candles(symbol, "15m", after=after_ts, limit=10),
+            client.get_history_index_candles(symbol, "15m", after=after_ts, limit=10),
         )
     finally:
         await client.close()
@@ -1487,9 +1490,34 @@ async def run(
         if _rr2 < 0.8:
             _rr_ok = False
 
+    # perp_div_4bar: futures 1h change vs index 1h change
+    # Positive = futures running ahead of spot (overheated).
+    # Backtest: SHORT + perp_div > 0 → WR 66% vs 79% when div < 0.
+    _perp_div_4bar = None
+    if raw_15m and len(raw_15m) >= 5 and _raw_idx15 and len(_raw_idx15) >= 5:
+        try:
+            perp_now   = float(raw_15m[0][4])
+            perp_4back = float(raw_15m[4][4])
+            idx_now    = float(_raw_idx15[0][4])
+            idx_4back  = float(_raw_idx15[4][4])
+            if perp_4back > 0 and idx_4back > 0:
+                _perp_div_4bar = (
+                    (perp_now - perp_4back) / perp_4back * 100
+                    - (idx_now - idx_4back) / idx_4back * 100
+                )
+        except (IndexError, ValueError, ZeroDivisionError):
+            pass
+
+    _perp_div_short_veto = (
+        _side == "sell"
+        and _perp_div_4bar is not None
+        and _perp_div_4bar > 0.0
+    )
+
     # Final entry signal — funding_block = hard NO_TRADE, not WAIT
     if (_trade_style == "NO_TRADE" or not _vwap_ok or _oi_weak
-            or _funding_block or not _rr_ok or not _sl_p or not _tp1_p):
+            or _funding_block or not _rr_ok or not _sl_p or not _tp1_p
+            or _perp_div_short_veto):
         _entry_signal = "NO_TRADE"
     elif _funding_warn:
         _entry_signal = "WAIT"
@@ -1538,8 +1566,10 @@ async def run(
         "di_spread_1h":      round(_di_spread_1h, 1),
         "di_spread_4h":      round(_di_spread_4h, 1),
         "adx_4h_rising":     _adx_4h_rising,
-        "strong_4h_veto":    _strong_4h_veto,
-        "micro":             _micro,
+        "strong_4h_veto":       _strong_4h_veto,
+        "perp_div_4bar":        round(_perp_div_4bar, 4) if _perp_div_4bar is not None else None,
+        "perp_div_short_veto":  _perp_div_short_veto,
+        "micro":                _micro,
     }
 
     # ── Build texts ───────────────────────────────────────────────────────────
