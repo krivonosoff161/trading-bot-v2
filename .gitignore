@@ -46,8 +46,12 @@ api_keys.yaml
 
 # Backtest outputs (generated data, not source)
 scripts/backtest_result.txt
+scripts/backtest_*.txt
 scripts/qwen_analysis_pack.txt
 scripts/backtest_run_*.txt
+scripts/backtest_runs/*
+!scripts/backtest_runs/.gitkeep
+scripts/_sweep_variants/
 
 # Signal pipeline data (live runtime data)
 scripts/signal_log.jsonl

@@ -121,6 +121,7 @@ HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
 # ── Candle cache ────────────────────────────────────────────────────────────────
 CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
 CACHE_MAX_AGE = 23 * 3600
+BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 
 # PAIR_PARAMS and _mode_cfg imported from scripts.analyze_chart — single source of truth.
 
@@ -157,6 +158,39 @@ PARAM_SETS = [
 ]
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
+
+class _TeeStream:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for stream in self._streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self._streams:
+            stream.flush()
+
+    def isatty(self):
+        primary = self._streams[0]
+        return getattr(primary, "isatty", lambda: False)()
+
+
+def _enable_run_log():
+    BACKTEST_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = BACKTEST_RUNS_DIR / f"backtest_auto_{stamp}.txt"
+
+    orig_stdout = sys.stdout
+    orig_stderr = sys.stderr
+    log_handle = open(log_path, "w", encoding="utf-8", newline="")
+
+    sys.stdout = _TeeStream(orig_stdout, log_handle)
+    sys.stderr = _TeeStream(orig_stderr, log_handle)
+    print(f"[backtest] saving output -> {log_path}")
+    return log_handle, orig_stdout, orig_stderr
+
 
 def _bias(bull: bool, bear: bool) -> str:
     if bull: return "UP"
@@ -1173,4 +1207,10 @@ async def run():
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    _log_handle, _orig_stdout, _orig_stderr = _enable_run_log()
+    try:
+        asyncio.run(run())
+    finally:
+        sys.stdout = _orig_stdout
+        sys.stderr = _orig_stderr
+        _log_handle.close()
