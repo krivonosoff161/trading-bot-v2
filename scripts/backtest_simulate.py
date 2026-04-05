@@ -104,6 +104,45 @@ def _candle_vol_delta(raw_5m: list) -> float:
     return signed_vol / total_vol
 
 
+def _calc_basis_and_perp_div(mark_15m: list, index_15m: list,
+                              last_price: float, raw_15m: list) -> tuple:
+    """Compute basis_pct and perp_div_4bar at signal time.
+
+    basis_pct     = (perp_last - mark_close) / mark_close * 100
+                    Positive → perp trading at premium to fair value.
+    perp_div_4bar = (perp 4-bar change) - (index 4-bar change)  [pct]
+                    perp = raw_15m (actual futures last price)
+                    index = index_15m (spot composite)
+                    Positive → futures running ahead of spot (divergence risk).
+
+    All lists newest-first. Returns (basis_pct, perp_div_4bar) or (None, None).
+    """
+    if not mark_15m or not index_15m or len(index_15m) < 5:
+        return None, None
+    if not raw_15m or len(raw_15m) < 5:
+        return None, None
+
+    mark_close = float(mark_15m[0][4])   # most recent mark price bar close
+    basis_pct  = (last_price - mark_close) / mark_close * 100 if mark_close else None
+
+    # perp_div: futures (raw_15m) change vs index change over last 4 bars (=1h)
+    try:
+        perp_now   = float(raw_15m[0][4])   # perp futures close now
+        perp_4back = float(raw_15m[4][4])   # perp futures close 1h ago
+        idx_now    = float(index_15m[0][4])
+        idx_4back  = float(index_15m[4][4])
+        if perp_4back > 0 and idx_4back > 0:
+            perp_chg      = (perp_now - perp_4back) / perp_4back * 100
+            idx_chg       = (idx_now  - idx_4back)  / idx_4back  * 100
+            perp_div_4bar = perp_chg - idx_chg
+        else:
+            perp_div_4bar = None
+    except (IndexError, ValueError, ZeroDivisionError):
+        perp_div_4bar = None
+
+    return basis_pct, perp_div_4bar
+
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
@@ -118,9 +157,15 @@ ADX_PERIOD   = 14
 HOLD_FAST_M  = 120   # baseline=120  extended=180  long_hold=480
 HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
 
+# ── Fair-value filters ───────────────────────────────────────────────────────
+# Block SHORT signals when perp is running ahead of spot (overheated longs).
+# None = disabled. Hypothesis: SHORT + perp_div > 0 → WR 66% vs 79%.
+PERP_DIV_SHORT_VETO = 0.0   # pct; 0.0 = block any positive divergence for shorts
+
 # ── Candle cache ────────────────────────────────────────────────────────────────
-CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache.pkl"
-CACHE_MAX_AGE = 23 * 3600
+CACHE_FILE       = Path(__file__).parent / "backtest_candle_cache.pkl"
+CACHE_MI_FILE    = Path(__file__).parent / "backtest_mark_index_cache.pkl"
+CACHE_MAX_AGE    = 23 * 3600
 BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 
 # PAIR_PARAMS and _mode_cfg imported from scripts.analyze_chart — single source of truth.
@@ -866,6 +911,64 @@ async def run():
         print(f"  {sym}: 1H={len(h1)} баров, 15m={len(h15)} баров  [{status}]")
     print()
 
+    # ── Load or fetch mark/index candles ──────────────────────────────────────
+    mi_cache: dict = {}
+
+    async def _fetch_mi_history(symbol: str, bar: str, endpoint_fn, since_ms: int) -> list:
+        """Fetch full history from a mark/index candle endpoint. Returns sorted oldest-first."""
+        all_candles: list = []
+        after_ms = None
+        while True:
+            async with _api_sem:
+                batch = await endpoint_fn(symbol, bar=bar, after=after_ms, limit=100)
+            await asyncio.sleep(0.2)
+            if not batch:
+                break
+            all_candles.extend(batch)
+            oldest_ts = int(batch[-1][0])
+            if oldest_ts <= since_ms:
+                break
+            after_ms = oldest_ts
+        all_candles = [c for c in all_candles if int(c[0]) >= since_ms]
+        all_candles.sort(key=lambda c: int(c[0]))
+        return all_candles
+
+    async def _fetch_mi_symbol(symbol: str) -> tuple:
+        mark15 = await _fetch_mi_history(
+            symbol, "15m", client.get_history_mark_price_candles, cache_start_ms)
+        idx15  = await _fetch_mi_history(
+            symbol, "15m", client.get_history_index_candles, cache_start_ms)
+        print(f"  {symbol}: mark_15m={len(mark15)}, index_15m={len(idx15)}")
+        return symbol, mark15, idx15
+
+    try:
+        _mi_tmp = pickle.load(open(CACHE_MI_FILE, "rb")) if CACHE_MI_FILE.exists() else {}
+        mi_valid = (
+            CACHE_MI_FILE.exists()
+            and (time.time() - CACHE_MI_FILE.stat().st_mtime) < CACHE_MAX_AGE
+            and all(s in _mi_tmp for s in ALL_SYMBOLS)
+            and "mark_15m" in _mi_tmp.get("BTC-USDT", {})
+            and _mi_tmp.get("_cache_start_ms", now_ms) <= cache_start_ms
+        )
+    except Exception:
+        mi_valid = False
+
+    if mi_valid:
+        print(f"Загрузка mark/index из кэша ({CACHE_MI_FILE.name})...")
+        with open(CACHE_MI_FILE, "rb") as f:
+            mi_cache = pickle.load(f)
+        print(f"  MI-кэш загружен: {sum(1 for k in mi_cache if k != '_cache_start_ms')} пар")
+    else:
+        print(f"Загрузка mark/index свечей для {len(ALL_SYMBOLS)} пар...")
+        mi_results = await asyncio.gather(*[_fetch_mi_symbol(s) for s in ALL_SYMBOLS])
+        for symbol, mark15, idx15 in mi_results:
+            mi_cache[symbol] = {"mark_15m": mark15, "index_15m": idx15}
+        mi_cache["_cache_start_ms"] = cache_start_ms
+        with open(CACHE_MI_FILE, "wb") as f:
+            pickle.dump(mi_cache, f)
+        print(f"  MI-кэш сохранён → {CACHE_MI_FILE.name}")
+    print()
+
     # ── Run param sets ─────────────────────────────────────────────────────────
     all_set_results = {}
     for pset in PARAM_SETS:
@@ -892,11 +995,16 @@ async def run():
             h1_all  = candle_cache[symbol]["1h"]
             h15_all = candle_cache[symbol]["15m"]
             h5_all  = candle_cache[symbol].get("5m", [])
+            # Mark/index 15m (may be absent if mi_cache missing this symbol)
+            mark15_all = mi_cache.get(symbol, {}).get("mark_15m", [])
+            idx15_all  = mi_cache.get(symbol, {}).get("index_15m", [])
             # Pre-build timestamp index for fast bisect lookup
-            h4_ts  = [int(c[0]) for c in h4_all]
-            h1_ts  = [int(c[0]) for c in h1_all]
-            h15_ts = [int(c[0]) for c in h15_all]
-            h5_ts  = [int(c[0]) for c in h5_all]
+            h4_ts    = [int(c[0]) for c in h4_all]
+            h1_ts    = [int(c[0]) for c in h1_all]
+            h15_ts   = [int(c[0]) for c in h15_all]
+            h5_ts    = [int(c[0]) for c in h5_all]
+            mark15_ts = [int(c[0]) for c in mark15_all]
+            idx15_ts  = [int(c[0]) for c in idx15_all]
 
             for ts_ms in ts_list:
                 # Slice: candles visible at ts_ms (ts < ts_ms), newest-first
@@ -904,14 +1012,23 @@ async def run():
                 i1  = bisect.bisect_left(h1_ts,  ts_ms)
                 i15 = bisect.bisect_left(h15_ts, ts_ms)
                 i5  = bisect.bisect_left(h5_ts,  ts_ms)
-                raw_4h  = list(reversed(h4_all [max(0, i4  - 60):i4 ]))
-                raw_1h  = list(reversed(h1_all [max(0, i1  - 60):i1 ]))
-                raw_15m = list(reversed(h15_all[max(0, i15 - 96):i15]))
-                raw_5m  = list(reversed(h5_all [max(0, i5  - 30):i5 ])) if h5_all else None
+                im  = bisect.bisect_left(mark15_ts, ts_ms)
+                ii  = bisect.bisect_left(idx15_ts,  ts_ms)
+                raw_4h   = list(reversed(h4_all [max(0, i4  - 60):i4 ]))
+                raw_1h   = list(reversed(h1_all [max(0, i1  - 60):i1 ]))
+                raw_15m  = list(reversed(h15_all[max(0, i15 - 96):i15]))
+                raw_5m   = list(reversed(h5_all [max(0, i5  - 30):i5 ])) if h5_all else None
+                raw_mark = list(reversed(mark15_all[max(0, im - 10):im])) if mark15_all else []
+                raw_idx  = list(reversed(idx15_all [max(0, ii - 10):ii])) if idx15_all else []
 
                 hist_funding    = _get_hist_funding(funding_hist, ts_ms)
                 oi_delta        = _get_oi_delta(oi_hist, ts_ms)
                 trade_delta_15m = _candle_vol_delta(raw_5m)
+
+                # last price at signal time = close of most recent 15m bar
+                last_price = float(raw_15m[0][4]) if raw_15m else 0.0
+                basis_pct, perp_div_4bar = _calc_basis_and_perp_div(
+                    raw_mark, raw_idx, last_price, raw_15m)
 
                 sig = compute_signal(
                     raw_4h, raw_1h, raw_15m,
@@ -929,6 +1046,16 @@ async def run():
                     reason = sig.get("drop_reason") or "unknown"
                     sym_funnel[reason] = sym_funnel.get(reason, 0) + 1
                     continue
+                # perp_div SHORT veto: block shorts when futures running ahead of spot
+                if (PERP_DIV_SHORT_VETO is not None
+                        and sig["side"] == "sell"
+                        and perp_div_4bar is not None
+                        and perp_div_4bar > PERP_DIV_SHORT_VETO):
+                    sym_funnel["perp_div_short_veto"] = sym_funnel.get("perp_div_short_veto", 0) + 1
+                    continue
+                # Attach fair-value features
+                sig["basis_pct"]    = basis_pct
+                sig["perp_div_4bar"] = perp_div_4bar
                 sym_results.append((ts_ms, sig))
             return sym_results, sym_funnel, total_ticks
 
@@ -994,8 +1121,10 @@ async def run():
                 "elapsed_m":  elapsed,
                 "mfe_r":      mfe_r,
                 "exit_r":     exit_r,
-                "day_pos":    sig["day_position"],
-                "bb_width":   sig["bb_width"],
+                "day_pos":       sig["day_position"],
+                "bb_width":      sig["bb_width"],
+                "basis_pct":     sig.get("basis_pct"),
+                "perp_div_4bar": sig.get("perp_div_4bar"),
             })
 
         all_set_results[pset["label"]] = (results, pset_funnel, pset_ticks)
@@ -1204,6 +1333,13 @@ async def run():
     # ── Per-period breakdown ────────────────────────────────────────────────────
     for label, (res, funnel, ticks) in all_set_results.items():
         _report(label, res, funnel, ticks)
+
+    # ── Save results JSON for distribution analysis ────────────────────────────
+    import json as _json
+    _results_path = BACKTEST_RUNS_DIR / "backtest_results_latest.json"
+    with open(_results_path, "w", encoding="utf-8") as _f:
+        _json.dump(overall_results, _f, ensure_ascii=False, default=str)
+    print(f"\n  Results JSON -> {_results_path.name}  ({len(overall_results)} записей)")
 
 
 if __name__ == "__main__":
