@@ -1465,11 +1465,11 @@ async def run(
 
     _max_hold_minutes = (240 if _is_night else 120) if _trade_style == "FAST" else 240
 
-    # R/R validation — block ENTRY if TP2 doesn't cover SL distance
+    # R/R validation — block ENTRY if TP2 doesn't cover 0.8× SL distance
     _rr_ok = True
     if _sl_p and _tp2_p and _sl_dist > 0:
         _rr2 = abs(_tp2_p - _close) / _sl_dist
-        if _rr2 < 1.0:
+        if _rr2 < 0.8:
             _rr_ok = False
 
     # Final entry signal — funding_block = hard NO_TRADE, not WAIT
