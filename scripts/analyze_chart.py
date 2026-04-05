@@ -385,19 +385,33 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
 
         if sl_p and tp1_p and tp2_p:
             _arr = "📈" if side == "buy" else "📉"
+            _sl_pct = abs(close - sl_p) / close * 100
             lines.append("📋 ИСПОЛНЕНИЕ (авто + ручное)")
             lines.append(f"  {_arr} Вход:            {fp(close)}")
-            lines.append(f"  🛑 Стоп:            {fp(sl_p)}")
+            lines.append(f"  🛑 Стоп:            {fp(sl_p)}  (−{_sl_pct:.2f}% от входа)")
             lines.append(f"  🎯 Цель (авто):     {fp(tp1_p)}")
             lines.append(f"  🎯 Цель 2 (ручная): {fp(tp2_p)}")
             lines.append("")
 
+            # Position sizing hint — dynamic per signal
+            _ex_notional = round(1000 * 0.01 / (_sl_pct / 100))
+            _ex_margin   = round(_ex_notional / 10)
+            _risk_note   = "0.5-1% депозита (СВИНГ — стоп шире)" if trade_style == "SWING" else "1% депозита (СКАЛЬП)"
+        else:
+            _sl_pct      = None
+            _risk_note   = "0.5-1% депозита (СВИНГ — стоп шире)" if trade_style == "SWING" else "1% депозита (СКАЛЬП)"
+            _ex_notional = None
+            _ex_margin   = None
+
         lines.append(f"⏱ Закрыть через {max_hold} минут если уровни не достигнуты.")
         lines.append("")
         lines.append("⚠️ ПРАВИЛА ВХОДА")
-        lines.append("  ├─ Плечо: макс 5x")
-        lines.append("  ├─ Стоп: обязателен, не двигать дальше")
-        lines.append("  ├─ Размер: 2-3% депозита на сделку")
+        lines.append("  ├─ Плечо: 10x")
+        lines.append("  ├─ Стоп: не двигать дальше")
+        lines.append(f"  ├─ Риск: {_risk_note}")
+        if _sl_pct and _ex_notional:
+            lines.append(f"  ├─ Размер: 1% ÷ {_sl_pct:.2f}% = ${_ex_notional} нотионала на $1000")
+            lines.append(f"  │          → маржа ${_ex_margin} при 10x")
         lines.append("  └─ Это аналитика — не инвест-рекомендация")
 
     # ── NO_TRADE ─────────────────────────────────────────────────────────────
