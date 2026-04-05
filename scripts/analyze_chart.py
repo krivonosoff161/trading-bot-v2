@@ -296,6 +296,7 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     max_hold      = eng["max_hold_minutes"]
     daily_range_pct = eng.get("daily_range_pct", 0.0)
     day_position    = eng.get("day_position")
+    bb_width_pct    = eng.get("bb_width_15m", 0.0)
     rsi_1h          = eng.get("rsi_1h", 50.0)
     rsi_15m         = eng.get("rsi_15m", 50.0)
     four_h_conflict = eng.get("four_h_conflict", False)
