@@ -153,26 +153,6 @@ class OKXClient:
 
     # --- Account ---
 
-    async def get_balance(self) -> Optional[float]:
-        """Get USDT balance."""
-        data = await self._get("/api/v5/account/balance", {"ccy": "USDT"})
-        if data.get("code") == "0" and data.get("data"):
-            details = data["data"][0].get("details", [])
-            for d in details:
-                if d.get("ccy") == "USDT":
-                    balance = float(d.get("availBal", 0))
-                    logger.debug("Balance | usdt={}", balance)
-                    return balance
-        return None
-
-    async def get_positions(self, symbol: str) -> list:
-        """Get open positions for symbol."""
-        inst_id = f"{symbol}-SWAP"
-        data = await self._get("/api/v5/account/positions", {"instId": inst_id})
-        if data.get("code") == "0":
-            return data.get("data", [])
-        return []
-
     async def get_history_candles(
         self, symbol: str, bar: str = "5m",
         after: int = None, before: int = None, limit: int = 100,
@@ -321,10 +301,16 @@ class OKXClient:
         return False
 
     async def get_balance(self) -> float:
-        """Return available USDT equity on the account."""
+        """Return available USDT cash balance (availBal)."""
         data = await self._get("/api/v5/account/balance", {"ccy": "USDT"})
         try:
-            return float(data["data"][0]["details"][0]["availEq"])
+            details = data["data"][0].get("details", [])
+            for d in details:
+                if d.get("ccy") == "USDT":
+                    bal = float(d.get("availBal", 0))
+                    logger.debug("Balance | availBal={}", bal)
+                    return bal
+            return 0.0
         except (KeyError, IndexError, TypeError, ValueError):
             logger.error("get_balance: unexpected response={}", data)
             return 0.0
