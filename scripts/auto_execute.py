@@ -185,6 +185,7 @@ async def execute_signal(result: dict) -> bool:
             "ord_id":        order.get("ordId", ""),
         }
         existing = _load_positions()
+        existing = [p for p in existing if p["symbol"] != symbol]  # drop stale same-symbol records
         existing.append(pos_record)
         _save_positions(existing)
 
