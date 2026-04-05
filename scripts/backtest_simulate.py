@@ -580,10 +580,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             tp_p    = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 6)    # TP1
             tp2_p   = round(close - min(sl_dist * 2.5, atr_1h * 1.2), 6)    # TP2
 
-    # R/R validation — block if TP2 < 1.0R (matches prod analyze_chart.py)
+    # R/R validation — block if TP2 < 0.8R (matches prod analyze_chart.py)
     rr_ok = True
     if sl_p and tp2_p and sl_dist > 0:
-        if abs(tp2_p - close) / sl_dist < 1.0:
+        if abs(tp2_p - close) / sl_dist < 0.8:
             rr_ok = False
 
     # ── Drop reason for post-regime filters ──────────────────────────────────
