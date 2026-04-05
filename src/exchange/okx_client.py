@@ -174,6 +174,42 @@ class OKXClient:
             return data["data"]
         return []
 
+    async def get_history_mark_price_candles(
+        self, symbol: str, bar: str = "15m",
+        after: int = None, limit: int = 100,
+    ) -> list:
+        """Get historical mark-price candles (newest-first).
+        instId must be SWAP format: BTC-USDT-SWAP.
+        after = return candles OLDER than this timestamp ms (exclusive).
+        Each candle: [ts, open, high, low, close] — no volume.
+        """
+        inst_id = f"{symbol}-SWAP"
+        params: dict = {"instId": inst_id, "bar": bar, "limit": str(limit)}
+        if after is not None:
+            params["after"] = str(after)
+        data = await self._get("/api/v5/market/history-mark-price-candles", params)
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
+    async def get_history_index_candles(
+        self, symbol: str, bar: str = "15m",
+        after: int = None, limit: int = 100,
+    ) -> list:
+        """Get historical index-price candles (newest-first).
+        instId must be spot format: BTC-USDT (no -SWAP).
+        after = return candles OLDER than this timestamp ms (exclusive).
+        Each candle: [ts, open, high, low, close] — no volume.
+        """
+        inst_id = symbol  # already in BTC-USDT format
+        params: dict = {"instId": inst_id, "bar": bar, "limit": str(limit)}
+        if after is not None:
+            params["after"] = str(after)
+        data = await self._get("/api/v5/market/history-index-candles", params)
+        if data.get("code") == "0" and data.get("data"):
+            return data["data"]
+        return []
+
     async def get_history_trades(self, symbol: str, after: str = None, limit: int = 100) -> list:
         """Get historical public trades (newest first).
         after = tradeId — returns trades with ID strictly less than after (i.e., older).
