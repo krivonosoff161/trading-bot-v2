@@ -214,17 +214,42 @@ async def check_and_close_timeouts() -> None:
                 continue
 
             symbol   = pos["symbol"]
-            pos_side = "long" if pos["side"] == "buy" else "short"
+            our_side = pos["side"]          # "buy" or "sell"
+            our_fill = pos.get("fill_anchor", 0.0)
+            pos_side = "long" if our_side == "buy" else "short"
 
-            # Check if still open
             open_pos = await client.get_positions(symbol)
             if not open_pos:
                 print(f"auto_execute timeout: {symbol} already closed")
                 continue
 
+            # Safety: verify the open position belongs to this bot before closing.
+            # In net mode: pos > 0 = long (buy), pos < 0 = short (sell).
+            # avgPx must match our recorded fill_anchor within 0.5% tolerance.
+            matched = None
+            for p in open_pos:
+                p_size = float(p.get("pos", 0))
+                p_side = "buy" if p_size > 0 else "sell"
+                if p_side != our_side:
+                    continue
+                avg_px = float(p.get("avgPx", 0))
+                if avg_px > 0 and our_fill > 0:
+                    if abs(avg_px - our_fill) / our_fill > 0.005:  # >0.5% diff — not our fill
+                        continue
+                matched = p
+                break
+
+            if matched is None:
+                print(
+                    f"auto_execute timeout: {symbol} — open position does NOT match "
+                    f"our side={our_side} fill={our_fill:.4f} "
+                    f"— SKIP close to avoid touching a manual position"
+                )
+                continue  # drop from tracker — our position is already gone
+
             ok = await client.close_position(symbol, pos_side)
             if ok:
-                print(f"auto_execute timeout: closed {symbol} after {pos.get('contracts')} contracts")
+                print(f"auto_execute timeout: closed {symbol} {our_side} {pos.get('contracts')} contracts")
             else:
                 print(f"auto_execute timeout: ❌ failed to close {symbol} — keeping in tracker")
                 remaining.append(pos)
