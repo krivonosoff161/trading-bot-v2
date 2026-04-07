@@ -1428,7 +1428,7 @@ async def run(
         if _regime == "RANGING":
             if _side == "buy"  and _close > _vwap: _vwap_ok = False
             if _side == "sell" and _close < _vwap: _vwap_ok = False
-        else:  # DRIFT
+        elif _regime == "DRIFT":
             if _side == "buy"  and _close < _vwap: _vwap_ok = False
             if _side == "sell" and _close > _vwap: _vwap_ok = False
 
