@@ -716,36 +716,36 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     }
 
 
-RISK_PCT      = 0.03   # risk 3% of current balance per trade (10x leverage, 0.3% margin)
-LEVERAGE      = 10     # display only — changes margin math context
+NOTIONAL_RATIO = 1.5   # notional = balance × 1.5 (e.g. $1500 at $1000 balance, 10x leverage)
+LEVERAGE       = 10    # display only — changes margin math context
 FAST_ATR_CAP  = 0.7    # FAST TP capped at 0.7 × ATR_1H  (≈ realistic 2h move)
 SWING_ATR_CAP = 1.5    # SWING TP capped at 1.5 × ATR_1H (≈ realistic 4h move)
 
 
 def calc_pnl(outcome, side, entry, sl, tp, exit_price, balance):
     """Calculate P&L in dollars for one trade outcome.
-    TP:        full close at TP → +R * risk_amount
-    STOP:      full close at SL → -risk_amount
-    TIME_EXIT: close at last candle in hold window → market P&L
+    Notional-based sizing: position = balance × NOTIONAL_RATIO.
+    P&L = price_move_pct × notional (clipped at SL/TP bounds).
     """
-    sl_dist = abs(entry - sl)
-    if sl_dist == 0:
+    if entry <= 0:
         return 0.0
-    risk_amount = balance * RISK_PCT
-    direction   = 1 if side == "buy" else -1
+    notional  = balance * NOTIONAL_RATIO
+    direction = 1 if side == "buy" else -1
+    sl_dist   = abs(entry - sl)
+    sl_pct    = sl_dist / entry if entry > 0 else 0
 
     if outcome == "STOP":
-        return -risk_amount
+        return -sl_pct * notional
     if outcome == "TP":
-        r = abs(tp - entry) / sl_dist
-        return risk_amount * r
+        tp_dist = abs(tp - entry)
+        return (tp_dist / entry) * notional
     if outcome == "TIME_EXIT":
         if exit_price is None:
             return 0.0
         price_move = direction * (exit_price - entry)
         tp_dist    = abs(tp - entry)
         price_move = max(-sl_dist, min(tp_dist, price_move))
-        return risk_amount * (price_move / sl_dist)
+        return (price_move / entry) * notional
     return 0.0
 
 
@@ -1299,7 +1299,7 @@ async def run():
 
         total_pct = (balance - START) / START * 100
         sign = "+" if total_pct >= 0 else ""
-        print(f"\n  ── Симуляция баланса (1 позиция/пара, риск {int(RISK_PCT*100)}%/сделку, плечо x{LEVERAGE}) ───")
+        print(f"\n  ── Симуляция баланса (1 позиция/пара, нотионал {NOTIONAL_RATIO}×баланс, плечо x{LEVERAGE}) ───")
         print(f"  Старт:            $1000")
         print(f"  Финиш:            ${balance:.0f}  ({sign}{total_pct:.1f}%)")
         print(f"  Макс. просадка:   {max_drawdown:.1f}%")
