@@ -6,6 +6,35 @@
 
 ---
 
+## Rejected / Tested Hypotheses
+
+### Independent ATR TP/SL from entry price
+- Date: 2026-04-07
+- Hypothesis: decouple `TP` from `SL` completely and compute both independently from entry price:
+  - `SL = entry ± sl_k * ATR`
+  - `TP1 = entry ± tp1_k * ATR`
+  - `TP2 = entry ± tp2_k * ATR`
+- Motivation:
+  - current linked model keeps `TP1` too close on FAST
+  - wanted more realistic fixed ATR targets and better nominal R:R
+- What was tested:
+  - independent ATR-based `TP1/TP2`
+  - then full `entry ± ATR` model for both `SL` and `TP`
+  - production formula, backtest formula, and auto-execute fill recalculation were all aligned
+- Result on 56d backtest:
+  - current working version: `605 signals`, `WR 81%`, `PF 2.64`, `+178.0%`, `DD 17.7%`
+  - independent `entry ± ATR`: `759 signals`, `WR 57%`, `PF 1.53`, `+94.3%`, `DD 28.7%`
+- Failure mode:
+  - `TIME_EXIT` dropped, but was replaced by a large increase in `STOP`
+  - max losing streak worsened from `3` to `9`
+  - weak period `P4` fell below viability (`PF 0.89`)
+- Conclusion:
+  - not a production improvement in the current engine
+  - this does not fix the real bottleneck, which is signal quality / timing, especially in `DRIFT`
+  - do not revive this as a global rewrite without a new isolated research cycle
+
+---
+
 ## P0 — Ближайшие практические задачи
 *Брать как только появятся данные / условия*
 
