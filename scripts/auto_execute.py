@@ -2,7 +2,7 @@
 Auto-executor — opens positions on OKX demo account when ENTRY signal fires.
 
 Triggered by scanner and run_latest_analysis.py.
-Reads AUTO_TRADE, AUTO_TRADE_PCT, AUTO_TRADE_LEVERAGE from .env.
+Reads AUTO_TRADE, AUTO_TRADE_LEVERAGE, AUTO_TRADE_NOTIONAL_RATIO from .env.
 Saves open positions to logs/auto_positions.json for timeout tracking.
 """
 
@@ -27,10 +27,8 @@ from src.exchange.okx_client import OKXClient  # noqa: E402
 
 AUTO_TRADE       = os.getenv("AUTO_TRADE", "false").lower() == "true"
 AUTO_LEVERAGE    = int(os.getenv("AUTO_TRADE_LEVERAGE", "10"))
-# Risk per trade as % of balance. Contracts sized so that hitting SL = RISK_PCT × balance.
-RISK_PCT         = float(os.getenv("AUTO_TRADE_RISK_PCT", "0.01"))   # 1% default
-# Hard cap: single position notional ≤ this fraction of balance (safety ceiling).
-MAX_NOTIONAL_PCT = 0.50
+# Notional per trade = balance × NOTIONAL_RATIO. At $1000 balance + 1.5 ratio → $1500 notional.
+NOTIONAL_RATIO   = float(os.getenv("AUTO_TRADE_NOTIONAL_RATIO", "1.5"))
 
 # Max allowed price movement AGAINST the trade since signal was generated.
 # Directional: skip short if price dropped too far, skip long if price rose too far.
@@ -72,37 +70,14 @@ def _save_positions(positions: list[dict]) -> None:
     POSITIONS_FILE.write_text(json.dumps(positions, indent=2), encoding="utf-8")
 
 
-def _calc_contracts(symbol: str, entry_price: float, sl_price: float, balance: float) -> int:
+def _calc_contracts(symbol: str, entry_price: float, balance: float) -> int:
     """
-    Size position so that hitting SL costs exactly RISK_PCT × balance.
-
-    risk_usdt   = balance × RISK_PCT
-    contracts   = risk_usdt / (sl_dist_per_unit × ct_val)
-
-    Returns 0 if even 1 contract exceeds 3× the risk budget (signal should be skipped).
-    Hard cap: notional per trade ≤ MAX_NOTIONAL_PCT × balance.
+    Size position as fixed notional: balance × NOTIONAL_RATIO.
+    At $1000 balance with ratio 1.5 → $1500 notional per trade.
     """
     ct_val   = _CT_VAL.get(symbol, 1.0)
-    sl_dist  = abs(entry_price - sl_price)
-    if sl_dist <= 0:
-        return 0
-
-    risk_usdt    = balance * RISK_PCT
-    risk_per_ct  = sl_dist * ct_val          # $ lost per contract if SL hit
-    if risk_per_ct <= 0:
-        return 0
-
-    # Skip if minimum 1 contract already risks more than 3× budget
-    if risk_per_ct > risk_usdt * 3:
-        return 0
-
-    contracts = int(round(risk_usdt / risk_per_ct))
-    contracts = max(1, contracts)
-
-    # Notional cap: don't put more than MAX_NOTIONAL_PCT of balance into one trade
-    max_contracts = max(1, int(balance * MAX_NOTIONAL_PCT / (entry_price * ct_val)))
-    contracts = min(contracts, max_contracts)
-
+    target_notional = balance * NOTIONAL_RATIO
+    contracts = max(1, round(target_notional / (entry_price * ct_val)))
     return contracts
 
 
@@ -179,16 +154,14 @@ async def execute_signal(result: dict) -> bool:
             print(f"auto_execute: balance too low ({balance:.2f} USDT) — skip")
             return False
 
-        contracts_int = _calc_contracts(symbol, current_price, fill_sl, balance)
-        if contracts_int == 0:
-            print(f"auto_execute: {symbol} — min contract exceeds 3× risk budget (RISK_PCT={RISK_PCT:.1%}) — skip")
-            return False
+        contracts_int = _calc_contracts(symbol, current_price, balance)
         contracts = str(contracts_int)
 
+        notional_actual = contracts_int * current_price * _CT_VAL.get(symbol, 1.0)
         risk_actual = contracts_int * abs(current_price - fill_sl) * _CT_VAL.get(symbol, 1.0)
         print(
-            f"auto_execute: sizing | risk_budget={balance * RISK_PCT:.2f} USDT "
-            f"actual_risk={risk_actual:.2f} USDT | {contracts_int} contracts"
+            f"auto_execute: sizing | notional={notional_actual:.0f} USDT "
+            f"risk_at_sl={risk_actual:.2f} USDT | {contracts_int} contracts"
         )
 
         # Set leverage
