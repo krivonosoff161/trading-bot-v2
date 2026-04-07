@@ -447,9 +447,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             and di_spread_4h >= 8 and di_spread_1h >= 8
         )
         if mode in ("SWING", "COMBINED"):
-            if swing_base and bias_1h == "UP":
+            if swing_base and bias_1h == "UP" and five_m_long:
                 trade_style, side, entry_cfg = "SWING", "buy", cfg_sw
-            elif swing_base and bias_1h == "DOWN":
+            elif swing_base and bias_1h == "DOWN" and five_m_short:
                 trade_style, side, entry_cfg = "SWING", "sell", cfg_sw
 
         cfg_f = _mode_cfg(pp, "trending", "fast")
@@ -595,13 +595,13 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     fourch_veto = four_h_conflict or strong_4h_veto
 
     # ── VWAP filter — regime-aware ────────────────────────────────────────────
-    # TRENDING: skip — ADX+DI confirm direction; VWAP lags in strong moves.
+    # TRENDING: skip for this isolated run; we are testing only the 5m trigger effect.
     vwap_ok = True
-    if vwap and close and side and regime != "TRENDING":
+    if vwap and close and side:
         if regime == "RANGING":
             if side == "buy"  and close > vwap: vwap_ok = False
             if side == "sell" and close < vwap: vwap_ok = False
-        else:  # DRIFT
+        elif regime == "DRIFT":
             if side == "buy"  and close < vwap: vwap_ok = False
             if side == "sell" and close > vwap: vwap_ok = False
 
