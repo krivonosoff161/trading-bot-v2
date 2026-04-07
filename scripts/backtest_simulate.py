@@ -595,15 +595,24 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     fourch_veto = four_h_conflict or strong_4h_veto
 
     # ── VWAP filter — regime-aware ────────────────────────────────────────────
-    # TRENDING: skip for this isolated run; we are testing only the 5m trigger effect.
+    # Matches analyze_chart.py: TRENDING and DRIFT both use trend-follow VWAP.
     vwap_ok = True
     if vwap and close and side:
         if regime == "RANGING":
             if side == "buy"  and close > vwap: vwap_ok = False
             if side == "sell" and close < vwap: vwap_ok = False
-        elif regime == "DRIFT":
+        elif regime in ("TRENDING", "DRIFT"):
             if side == "buy"  and close < vwap: vwap_ok = False
             if side == "sell" and close > vwap: vwap_ok = False
+
+    # ── DRIFT 1H ADX lower-bound filter ──────────────────────────────────────
+    # Hypothesis A: ADX_1H 12-14 = barely drifting → mostly TIME_EXIT.
+    # Post-classification veto — regime label stays DRIFT, ENTRY blocked.
+    _DRIFT_ADX1H_MIN = 15.0
+    drift_adx1h_veto = regime == "DRIFT" and adx_1h < _DRIFT_ADX1H_MIN
+    if drift_adx1h_veto:
+        trade_style, side = "NO_TRADE", None
+        _drop = _drop or "drift_adx1h_low"
 
     # ── Side-aware funding filter ─────────────────────────────────────────────
     funding_val   = funding if funding is not None else 0.0
