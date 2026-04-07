@@ -1312,6 +1312,13 @@ async def run(
     if _regime == "TRENDING" and _4h_dir_conflict:
         _regime = "RANGING"
 
+    # DRIFT lower-bound filter: require ADX_1H >= 15 before allowing entry.
+    # Hypothesis A: ADX_1H 12-14 is too weak — market is barely drifting,
+    # entries produce mostly TIME_EXIT with no real directional follow-through.
+    # Post-classification veto — regime label stays DRIFT, ENTRY blocked.
+    _DRIFT_ADX1H_MIN = 15.0
+    _drift_adx1h_veto = _regime == "DRIFT" and _adx_1h < _DRIFT_ADX1H_MIN
+
     _trade_style = "NO_TRADE"
     _side        = None
     _entry_cfg   = {}   # resolved regime+style params, used for SL/TP sl_k
@@ -1517,7 +1524,7 @@ async def run(
     # Final entry signal — funding_block = hard NO_TRADE, not WAIT
     if (_trade_style == "NO_TRADE" or not _vwap_ok or _oi_weak
             or _funding_block or not _rr_ok or not _sl_p or not _tp1_p
-            or _perp_div_short_veto):
+            or _perp_div_short_veto or _drift_adx1h_veto):
         _entry_signal = "NO_TRADE"
     elif _funding_warn:
         _entry_signal = "WAIT"
@@ -1569,6 +1576,7 @@ async def run(
         "strong_4h_veto":       _strong_4h_veto,
         "perp_div_4bar":        round(_perp_div_4bar, 4) if _perp_div_4bar is not None else None,
         "perp_div_short_veto":  _perp_div_short_veto,
+        "drift_adx1h_veto":     _drift_adx1h_veto,
         "micro":                _micro,
     }
 
