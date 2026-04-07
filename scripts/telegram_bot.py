@@ -785,7 +785,10 @@ def _next_quarter(now: datetime) -> datetime:
     total_min = now.hour * 60 + now.minute
     next_min  = ((total_min // _SCANNER_INTERVAL) + 1) * _SCANNER_INTERVAL
     h, m = divmod(next_min % (24 * 60), 60)
-    return now.replace(hour=h, minute=m, second=2, microsecond=0)
+    result = now.replace(hour=h, minute=m, second=2, microsecond=0)
+    if result <= now:   # crossed midnight: next_run is earlier in the same day
+        result += timedelta(days=1)
+    return result
 
 
 async def _scanner_loop() -> None:
@@ -886,7 +889,7 @@ async def _scanner_loop() -> None:
         # Sleep until next :00/:15/:30/:45
         now      = datetime.now(timezone.utc)
         next_run = _next_quarter(now)
-        await asyncio.sleep((next_run - now).total_seconds())
+        await asyncio.sleep(max(1.0, (next_run - now).total_seconds()))
 
       except Exception:
         _scan_log(f"  [scanner_loop] необработанная ошибка:\n{traceback.format_exc().strip()}")
