@@ -175,28 +175,28 @@ PARAM_SETS = [
     {
         "label":         "COMBINED | period1 (last 14d)",
         "mode":          "COMBINED",
-        "night_filter":  True,
+        "night_filter":  False,
         "time_block_h":  [],
         "offset_days":   0,               # current 14 days
     },
     {
         "label":         "COMBINED | period2 (14d-28d ago)",
         "mode":          "COMBINED",
-        "night_filter":  True,
+        "night_filter":  False,
         "time_block_h":  [],
         "offset_days":   14,
     },
     {
         "label":         "COMBINED | period3 (28d-42d ago)",
         "mode":          "COMBINED",
-        "night_filter":  True,
+        "night_filter":  False,
         "time_block_h":  [],
         "offset_days":   28,
     },
     {
         "label":         "COMBINED | period4 (42d-56d ago)",
         "mode":          "COMBINED",
-        "night_filter":  True,
+        "night_filter":  False,
         "time_block_h":  [],
         "offset_days":   42,
     },
@@ -638,16 +638,18 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            tp_p    = round(close + sl_dist * 0.8, 6)   # TP1
-            tp2_p   = round(close + sl_dist * 1.5, 6)   # TP2
+            _tp1_k  = 0.4 if regime == "DRIFT" else 0.8
+            tp_p    = round(close + sl_dist * _tp1_k, 6)   # TP1
+            tp2_p   = round(close + sl_dist * 1.5, 6)      # TP2
         else:
             atr_sl    = close + atr_sl_dist
             struct_sl = (swings["recent_highs"][-1] + 0.2 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            tp_p    = round(close - sl_dist * 0.8, 6)   # TP1
-            tp2_p   = round(close - sl_dist * 1.5, 6)   # TP2
+            _tp1_k  = 0.4 if regime == "DRIFT" else 0.8
+            tp_p    = round(close - sl_dist * _tp1_k, 6)   # TP1
+            tp2_p   = round(close - sl_dist * 1.5, 6)      # TP2
 
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)

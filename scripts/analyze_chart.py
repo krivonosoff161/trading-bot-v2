@@ -1461,14 +1461,16 @@ async def run(
             _struct   = (_swing_lows[-1]  - 0.2 * _atr_15m) if _swing_lows  else None
             _sl_p     = round(min(_struct, _atr_sl) if _struct and _struct < _close else _atr_sl, 4)
             _sl_dist  = _close - _sl_p
-            _tp1_p    = round(_close + _sl_dist * 0.8, 4)
+            _tp1_k    = 0.4 if _regime == "DRIFT" else 0.8
+            _tp1_p    = round(_close + _sl_dist * _tp1_k, 4)
             _tp2_p    = round(_close + _sl_dist * 1.5, 4)
         else:
             _atr_sl   = _close + _atr_sl_dist
             _struct   = (_swing_highs[-1] + 0.2 * _atr_15m) if _swing_highs else None
             _sl_p     = round(max(_struct, _atr_sl) if _struct and _struct > _close else _atr_sl, 4)
             _sl_dist  = _sl_p - _close
-            _tp1_p    = round(_close - _sl_dist * 0.8, 4)
+            _tp1_k    = 0.4 if _regime == "DRIFT" else 0.8
+            _tp1_p    = round(_close - _sl_dist * _tp1_k, 4)
             _tp2_p    = round(_close - _sl_dist * 1.5, 4)
 
     elif _trade_style == "SWING" and _side and _close:
