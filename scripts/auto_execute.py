@@ -52,7 +52,7 @@ def _make_client() -> OKXClient:
         api_key    = os.getenv("OKX_API_KEY",    "").strip("'\""),
         secret_key = os.getenv("OKX_SECRET_KEY", "").strip("'\""),
         passphrase = os.getenv("OKX_PASSPHRASE", "").strip("'\""),
-        is_demo    = True,
+        is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1",
     )
 
 
