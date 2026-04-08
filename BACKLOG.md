@@ -33,6 +33,26 @@
   - this does not fix the real bottleneck, which is signal quality / timing, especially in `DRIFT`
   - do not revive this as a global rewrite without a new isolated research cycle
 
+### BB + Volume 1m/5m Manual Scalp Strategy
+- Дата: 2026-04-08
+- Источник: пользователь торговал вручную 8 апреля — 11 сделок пока бот дал 2 сигнала
+
+**Принцип торговли:**
+- Таймфреймы: 1m и 5m (вход), 15m+ для контекста
+- Инструмент: Bollinger Bands + Volume
+- Логика:
+  - Пробой BB **с объёмом** → вход по тренду (continuation)
+  - Пробой BB **без объёма** → fade (разворот внутрь полосы)
+  - Падение объёма на импульсе → предупреждение разворота
+- Трёхуровневая структура: 4H/1H контекст → 15m сетап → 1m/5m точка входа
+
+**Что можно бэктестить:**
+- BB breakout с vol-фильтром на 5m: `(close > BB_upper AND vol > vol_ma * 1.5)` → long
+- Fade BB: `(close > BB_upper AND vol < vol_ma * 0.8)` → short (или наоборот)
+- Отдельный движок, не мешать с текущим DRIFT/TRENDING
+
+**Когда брать:** после закрытия текущей фазы (nonight + DRIFT TP1=0.4R замёрджены и проверены в live). Требует отдельного backtester на 1m/5m свечах.
+
 ---
 
 ## P0 — Ближайшие практические задачи
