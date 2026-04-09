@@ -1543,7 +1543,7 @@ async def run(
     # Checks if last 5m bar is at BB band with low volume in the signal direction.
     # Only meaningful when ADX_1H < 20 (ranging) — backtest shows edge in fade mode.
     _5m_fade_hint = None
-    if _entry_signal in ("ENTRY", "WAIT") and _side and len(raw_5m) >= 22:
+    if _side and len(raw_5m) >= 22:
         try:
             _raw5    = list(reversed(raw_5m[1:22]))  # skip forming bar, chrono order
             _c5      = [float(b[4]) for b in _raw5]
@@ -1682,6 +1682,7 @@ async def run(
             "four_h_conflict":   _4h_dir_conflict,
             "five_m_trigger":    (_five_m_long if _side == "buy" else _five_m_short) if _side else True,
             "regime":            _regime,
+            "5m_fade_hint":      _5m_fade_hint,
             "strong_4h_veto":    _strong_4h_veto,
             "obi_top5":          _micro.get("obi_top5"),
             "trade_delta_100":   _micro.get("trade_delta_100"),
