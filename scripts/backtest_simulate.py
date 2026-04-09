@@ -880,7 +880,7 @@ async def run():
             and all(s in _tmp for s in ALL_SYMBOLS)
             and "4h" in _tmp.get("BTC-USDT", {})    # new cache structure check
             and "5m" in _tmp.get("BTC-USDT", {})    # 5m trigger requires 5m data
-            and _tmp.get("_cache_start_ms", now_ms) <= cache_start_ms  # covers full range
+            and _tmp.get("_cache_start_ms", cache_start_ms) <= cache_start_ms  # covers full range
         )
     except Exception:
         cache_valid = False
@@ -952,7 +952,7 @@ async def run():
             and (time.time() - CACHE_MI_FILE.stat().st_mtime) < CACHE_MAX_AGE
             and all(s in _mi_tmp for s in ALL_SYMBOLS)
             and "mark_15m" in _mi_tmp.get("BTC-USDT", {})
-            and _mi_tmp.get("_cache_start_ms", now_ms) <= cache_start_ms
+            and _mi_tmp.get("_cache_start_ms", cache_start_ms) <= cache_start_ms
         )
     except Exception:
         mi_valid = False
