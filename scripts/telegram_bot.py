@@ -142,6 +142,7 @@ def _append_signal_log_entry(
         "obi5":            micro.get("obi_top5"),
         "trade_delta_100": micro.get("trade_delta_100"),
         "spread_bps":      micro.get("spread_bps"),
+        "is_demo":         os.getenv("OKX_IS_DEMO", "1") == "1",
     }
     with open(SIGNAL_LOG, "a", encoding="utf-8") as lf:
         lf.write(json.dumps(entry) + "\n")
