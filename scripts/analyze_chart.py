@@ -403,6 +403,12 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             _ex_notional = None
             _ex_margin   = None
 
+        _fade_hint = eng.get("5m_fade_hint")
+        if _fade_hint:
+            _fh_dir = "ЛОНГ" if _fade_hint == "LONG" else "ШОРТ"
+            lines.append(f"📍 5m вход: цена у BB, объём низкий — откат к середине ожидается. Вход {_fh_dir} сейчас оптимален.")
+            lines.append("")
+
         lines.append(f"⏱ Закрыть через {max_hold} минут если уровни не достигнуты.")
         lines.append("")
         lines.append("⚠️ ПРАВИЛА ВХОДА")
@@ -1533,6 +1539,31 @@ async def run(
     else:
         _entry_signal = "ENTRY"
 
+    # ── 5m BB fade entry hint ─────────────────────────────────────────────────
+    # Checks if last 5m bar is at BB band with low volume in the signal direction.
+    # Only meaningful when ADX_1H < 20 (ranging) — backtest shows edge in fade mode.
+    _5m_fade_hint = None
+    if _entry_signal in ("ENTRY", "WAIT") and _side and len(raw_5m) >= 22:
+        try:
+            _raw5    = list(reversed(raw_5m[1:22]))  # skip forming bar, chrono order
+            _c5      = [float(b[4]) for b in _raw5]
+            _v5      = [float(b[5]) for b in _raw5]
+            _bb5_mid = sum(_c5[-20:]) / 20
+            _bb5_std = (sum((x - _bb5_mid) ** 2 for x in _c5[-20:]) / 20) ** 0.5
+            _bb5_up  = _bb5_mid + 2.0 * _bb5_std
+            _bb5_lo  = _bb5_mid - 2.0 * _bb5_std
+            _vol_ma5 = sum(_v5[-20:]) / 20
+            _vol_low = _vol_ma5 > 0 and _v5[-1] < _vol_ma5 * 0.8
+            _at_lo   = _bb5_lo > 0 and _c5[-1] <= _bb5_lo * 1.002
+            _at_hi   = _bb5_up > 0 and _c5[-1] >= _bb5_up * 0.998
+            _ranging5 = _adx_1h < 20
+            if _side == "buy"  and _at_lo and _vol_low and _ranging5:
+                _5m_fade_hint = "LONG"
+            elif _side == "sell" and _at_hi and _vol_low and _ranging5:
+                _5m_fade_hint = "SHORT"
+        except Exception:
+            pass
+
     _micro = _build_micro_snapshot(_books5, _trades100)
 
     # ── Engine vars dict ──────────────────────────────────────────────────────
@@ -1579,6 +1610,7 @@ async def run(
         "perp_div_4bar":        round(_perp_div_4bar, 4) if _perp_div_4bar is not None else None,
         "perp_div_short_veto":  _perp_div_short_veto,
         "drift_adx1h_veto":     _drift_adx1h_veto,
+        "5m_fade_hint":         _5m_fade_hint,
         "micro":                _micro,
     }
 
