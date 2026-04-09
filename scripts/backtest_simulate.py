@@ -148,7 +148,7 @@ SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
-DAYS_BACK    = 14
+DAYS_BACK    = 12
 INTERVAL_M   = 15  # matches live scanner cadence (every :00/:15/:30/:45)
 OUTCOME_H    = 24
 ADX_PERIOD   = 14
@@ -163,8 +163,8 @@ HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
 PERP_DIV_SHORT_VETO = 0.0   # pct; 0.0 = block any positive divergence for shorts
 
 # ── Candle cache ────────────────────────────────────────────────────────────────
-CACHE_FILE       = Path(__file__).parent / "backtest_candle_cache.pkl"
-CACHE_MI_FILE    = Path(__file__).parent / "backtest_mark_index_cache.pkl"
+CACHE_FILE       = Path(__file__).parent / "backtest_candle_cache_35d.pkl"
+CACHE_MI_FILE    = Path(__file__).parent / "backtest_mark_index_cache_35d.pkl"
 CACHE_MAX_AGE    = 23 * 3600
 BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 
@@ -173,32 +173,25 @@ BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 # ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
     {
-        "label":         "COMBINED | period1 (last 14d)",
+        "label":         "COMBINED | period1 (last 12d)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
-        "offset_days":   0,               # current 14 days
+        "offset_days":   0,
     },
     {
-        "label":         "COMBINED | period2 (14d-28d ago)",
+        "label":         "COMBINED | period2 (12d-24d ago)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
-        "offset_days":   14,
+        "offset_days":   12,
     },
     {
-        "label":         "COMBINED | period3 (28d-42d ago)",
+        "label":         "COMBINED | period3 (24d-35d ago)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
-        "offset_days":   28,
-    },
-    {
-        "label":         "COMBINED | period4 (42d-56d ago)",
-        "mode":          "COMBINED",
-        "night_filter":  False,
-        "time_block_h":  [],
-        "offset_days":   42,
+        "offset_days":   24,
     },
 ]
 
