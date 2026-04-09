@@ -257,7 +257,7 @@ async def _send_feedback_entry_buttons(chat_id: str, entry_id: str, symbol: str,
         chat_id=chat_id,
         text=f"📊 Сигнал по {label} — вошёл в сделку?",
         reply_markup={"inline_keyboard": [
-            [{"text": "☑️ SL выставил, плечо ≤5x", "callback_data": f"fb_ack:{entry_id}"}],
+            [{"text": "☑️ SL выставил, плечо 10x", "callback_data": f"fb_ack:{entry_id}"}],
             [
                 {"text": "✅ Вошёл",      "callback_data": f"fb_in:{entry_id}"},
                 {"text": "⏭ Пропустил",  "callback_data": f"fb_skip:{entry_id}"},
@@ -389,14 +389,13 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
         if entry_signal in ("ENTRY", "WAIT"):
             style = ctx.get("trade_style_hint", "")
             max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
-            leverage = 3 if style == "SCALP" else 5
             disclaimer = (
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "⚠️ ПРАВИЛА ВХОДА\n"
-                f"├─ Плечо: макс {leverage}x\n"
+                "├─ Плечо: 10x (выставляется автоматически)\n"
                 "├─ Стоп: обязателен, не двигать дальше\n"
                 f"├─ Время: закрыть через {max_hours}ч если уровни не достигнуты\n"
-                "├─ Размер: 2-3% депозита на сделку\n"
+                "├─ Размер: нотионал = 1.5× баланс\n"
                 "└─ Это аналитика, не инвест-рекомендация\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             )
