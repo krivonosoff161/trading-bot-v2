@@ -117,6 +117,20 @@ async def run(logger=None) -> None:
                         direction = 1 if side == "buy" else -1
                         exit_r    = round(direction * (exit_price - close) / sl_dist, 2)
 
+                    # Compute MAE (max adverse excursion in R units)
+                    mae_r = 0.0
+                    if sl_dist > 0:
+                        mae = 0.0
+                        for _c in reversed(raw_fwd):
+                            _ts = int(_c[0])
+                            if _ts <= ts_ms:
+                                continue
+                            if _ts > ts_ms + max_hold_ms:
+                                break
+                            _unf = (close - float(_c[3])) if side == "buy" else (float(_c[2]) - close)
+                            mae  = max(mae, _unf)
+                        mae_r = round(mae / sl_dist, 2)
+
                     label = {
                         "signal_id":  sig["signal_id"],
                         "ts_ms":      ts_ms,
@@ -127,6 +141,7 @@ async def run(logger=None) -> None:
                         "exit_price": exit_price,
                         "exit_r":     exit_r,
                         "mfe_r":      mfe_r,
+                        "mae_r":      mae_r,
                         "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     }
                     out_f.write(json.dumps(label) + "\n")

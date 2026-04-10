@@ -910,6 +910,31 @@ async def _scanner_loop() -> None:
                         await asyncio.sleep(0.2)
                     last_fade_sent[pair] = hour_bucket
                     _scan_log(f"  {pair} — BB FADE {_dir} → отправлено {len(active)} клиентам")
+                    try:
+                        _fade_side = "sell" if fade_hint == "SHORT" else "buy"
+                        _fade_ms   = int(datetime.fromisoformat(
+                            captured_at.replace("Z", "+00:00")).timestamp() * 1000)
+                        _fade_rec  = {
+                            "signal_id":    f"{_fade_ms}_{pair}_FADE_{_fade_side}",
+                            "source":       "bb_fade",
+                            "ts_ms":        _fade_ms,
+                            "symbol":       pair,
+                            "side":         _fade_side,
+                            "regime":       result.get("regime", "RANGING"),
+                            "style":        "FADE",
+                            "close":        fade_data.get("entry"),
+                            "sl":           fade_data.get("sl"),
+                            "tp":           fade_data.get("tp"),
+                            "max_hold_min": 60,
+                            "adx_1h":       result.get("adx_1h"),
+                            "funding":      result.get("funding") if result.get("funding") is not None
+                                            else result.get("funding_rate"),
+                            "is_demo":      os.getenv("OKX_IS_DEMO", "1") == "1",
+                        }
+                        with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
+                            _lf.write(json.dumps(_fade_rec) + "\n")
+                    except Exception as _fe:
+                        _scan_log(f"  [{pair}] FADE signal_log ошибка: {_fe}")
                     fade_root = ROOT / "logs" / "fade"
                     fade_root.mkdir(parents=True, exist_ok=True)
                     fade_dir = fade_root / scan_dir.name
