@@ -404,9 +404,13 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             _ex_margin   = None
 
         _fade_hint = eng.get("5m_fade_hint")
-        if _fade_hint:
+        _fade_data = eng.get("5m_fade_data", {})
+        if _fade_hint and _fade_data:
             _fh_dir = "ЛОНГ" if _fade_hint == "LONG" else "ШОРТ"
-            lines.append(f"📍 5m вход: цена у BB, объём низкий — откат к середине ожидается. Вход {_fh_dir} сейчас оптимален.")
+            _fh_arr = "↗️" if _fade_hint == "LONG" else "↘️"
+            lines.append(f"📍 BB FADE 5m — {_fh_arr} {_fh_dir}")
+            lines.append(f"   Вход: {fp(_fade_data['entry'])}  🛑 SL: {fp(_fade_data['sl'])}  🎯 TP: {fp(_fade_data['tp'])}  (R:R ≈{_fade_data['rr']:.1f})")
+            lines.append(f"   Объём низкий, цена у BB — откат к середине. Макс. удержание: 60 мин.")
             lines.append("")
 
         lines.append(f"⏱ Закрыть через {max_hold} минут если уровни не достигнуты.")
@@ -520,6 +524,18 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         lines.append("👁 ЗА ЧЕМ СЛЕДИМ")
         lines.append(f"  {what}")
         lines.append("")
+
+        # BB FADE hint — standalone manual signal when main strategy is silent
+        _fade_hint_no = eng.get("5m_fade_hint")
+        _fade_data_no = eng.get("5m_fade_data", {})
+        if _fade_hint_no and _fade_data_no:
+            _fh_dir = "ЛОНГ" if _fade_hint_no == "LONG" else "ШОРТ"
+            _fh_arr = "↗️" if _fade_hint_no == "LONG" else "↘️"
+            lines.append(f"📍 BB FADE 5m — РУЧНОЙ ВХОД {_fh_arr} {_fh_dir}")
+            lines.append(f"   Вход: {fp(_fade_data_no['entry'])}  🛑 SL: {fp(_fade_data_no['sl'])}  🎯 TP: {fp(_fade_data_no['tp'])}  (R:R ≈{_fade_data_no['rr']:.1f})")
+            lines.append(f"   ADX низкий, цена у BB {'верхней' if _fade_hint_no == 'SHORT' else 'нижней'} полосы, объём слабый.")
+            lines.append(f"   ⚠️ Ручной вход — проверь 1m и стакан. Макс. удержание: 60 мин.")
+            lines.append("")
 
         lines.append("❌ НЕ ДЕЛАТЬ")
         if side == "buy":
@@ -1548,27 +1564,44 @@ async def run(
         _entry_signal = "ENTRY"
 
     # ── 5m BB fade entry hint ─────────────────────────────────────────────────
-    # Checks if last 5m bar is at BB band with low volume in the signal direction.
-    # Only meaningful when ADX_1H < 20 (ranging) — backtest shows edge in fade mode.
+    # Standalone fade detection — fires even when main strategy has no signal.
+    # Conditions: ADX_1H < 20, price at BB band, vol < 70% avg, R:R >= 1.0 (BB_mid >= 1 ATR away).
     _5m_fade_hint = None
-    if _side and len(raw_5m) >= 22:
+    _5m_fade_data: dict = {}
+    if len(raw_5m) >= 22:
         try:
             _raw5    = list(reversed(raw_5m[1:22]))  # skip forming bar, chrono order
             _c5      = [float(b[4]) for b in _raw5]
             _v5      = [float(b[5]) for b in _raw5]
+            _h5      = [float(b[2]) for b in _raw5]
+            _l5      = [float(b[3]) for b in _raw5]
             _bb5_mid = sum(_c5[-20:]) / 20
             _bb5_std = (sum((x - _bb5_mid) ** 2 for x in _c5[-20:]) / 20) ** 0.5
             _bb5_up  = _bb5_mid + 2.0 * _bb5_std
             _bb5_lo  = _bb5_mid - 2.0 * _bb5_std
             _vol_ma5 = sum(_v5[-20:]) / 20
-            _vol_low = _vol_ma5 > 0 and _v5[-1] < _vol_ma5 * 0.8
+            _vol_low = _vol_ma5 > 0 and _v5[-1] < _vol_ma5 * 0.70
             _at_lo   = _bb5_lo > 0 and _c5[-1] <= _bb5_lo * 1.002
             _at_hi   = _bb5_up > 0 and _c5[-1] >= _bb5_up * 0.998
             _ranging5 = _adx_1h < 20
-            if _side == "buy"  and _at_lo and _vol_low and _ranging5:
-                _5m_fade_hint = "LONG"
-            elif _side == "sell" and _at_hi and _vol_low and _ranging5:
-                _5m_fade_hint = "SHORT"
+            # ATR_5m — simple mean of last 14 true ranges
+            _tr5 = [max(_h5[i] - _l5[i],
+                        abs(_h5[i] - _c5[i - 1]),
+                        abs(_l5[i] - _c5[i - 1])) for i in range(1, min(15, len(_c5)))]
+            _atr5 = sum(_tr5) / len(_tr5) if _tr5 else 0.0
+            if _ranging5 and _vol_low and _atr5 > 0:
+                if _at_hi and (_c5[-1] - _bb5_mid) >= _atr5:  # R:R gate: mid >= 1 ATR away
+                    _5m_fade_hint = "SHORT"
+                    _5m_fade_data = {
+                        "entry": _c5[-1], "sl": _c5[-1] + _atr5,
+                        "tp": _bb5_mid,   "rr": (_c5[-1] - _bb5_mid) / _atr5,
+                    }
+                elif _at_lo and (_bb5_mid - _c5[-1]) >= _atr5:
+                    _5m_fade_hint = "LONG"
+                    _5m_fade_data = {
+                        "entry": _c5[-1], "sl": _c5[-1] - _atr5,
+                        "tp": _bb5_mid,   "rr": (_bb5_mid - _c5[-1]) / _atr5,
+                    }
         except Exception:
             pass
 
@@ -1619,6 +1652,7 @@ async def run(
         "perp_div_short_veto":  _perp_div_short_veto,
         "drift_adx1h_veto":     _drift_adx1h_veto,
         "5m_fade_hint":         _5m_fade_hint,
+        "5m_fade_data":         _5m_fade_data,
         "micro":                _micro,
     }
 
@@ -1691,6 +1725,7 @@ async def run(
             "five_m_trigger":    (_five_m_long if _side == "buy" else _five_m_short) if _side else True,
             "regime":            _regime,
             "5m_fade_hint":      _5m_fade_hint,
+            "5m_fade_data":      _5m_fade_data,
             "strong_4h_veto":    _strong_4h_veto,
             "obi_top5":          _micro.get("obi_top5"),
             "trade_delta_100":   _micro.get("trade_delta_100"),
