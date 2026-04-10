@@ -1,9 +1,16 @@
 """
-BB+Volume 5m backtest — standalone engine.
+BB+Volume 5m backtest — FADE only engine (v2).
 
-Strategy (from consensus research in docs/research_bb_volume_5m_sources.md):
-  BREAKOUT: close crosses BB band + volume spike + 1H EMA50 trend filter
-  FADE:     close touches BB band + volume contraction + ADX_1H < 20
+Strategy: FADE only — close pokes BB band with low volume in ranging market.
+  Entry:  close > BB_upper (short) or close < BB_lower (long)
+          + vol < vol_ma × FADE_VOL_MULT
+          + ADX_1H < per-pair threshold
+          + BB_mid at least FADE_MIN_DIST_ATR away (R:R quality gate)
+  SL:     ATR-based
+  TP:     fixed ATR multiple (not BB_mid) → stable R:R = 2.0
+  Max hold: 12 bars (60 min)
+
+BREAKOUT removed — PF 1.02 over 1163 trades = no edge in this form.
 
 Data source: scripts/backtest_candle_cache_35d.pkl
 Run: python -u scripts/bt_bb_volume_5m.py
@@ -30,33 +37,34 @@ VOL_MA_PERIOD = 20
 ATR_PERIOD    = 14
 
 # Higher timeframe context
-EMA_1H_PERIOD = 50
 ADX_1H_PERIOD = 14
 
-# Breakout params
-BREAKOUT_VOL_MULT = {
-    "BTC-USDT":  2.0,
-    "ETH-USDT":  2.0,
-    "SOL-USDT":  2.5,
-    "XRP-USDT":  2.5,
-    "DOGE-USDT": 3.0,
+# FADE: per-pair config
+# adx_max  — ADX_1H ceiling (market must be ranging)
+# vol_mult — volume must be below vol_ma × this (low vol = no breakout)
+# sl_atr   — SL distance in ATR units
+# tp_atr   — TP distance in ATR units (fixed R:R, not BB_mid)
+# min_dist — BB_mid must be >= this × ATR from entry (R:R quality gate)
+# tp_atr=0 means TP = BB_mid (natural mean reversion target)
+# min_dist = minimum distance from entry to BB_mid in ATR units (R:R gate)
+# adx_max=0 disables the pair entirely
+# tp_atr=0 means TP = BB_mid (natural mean reversion target)
+# min_dist = minimum distance from entry to BB_mid in ATR units (R:R gate, ≥1.0 → R:R≥1.0)
+# adx_max=0 disables the pair entirely
+FADE_PARAMS = {
+    "BTC-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
+    "ETH-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
+    "SOL-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
+    "XRP-USDT":  {"adx_max": 0,  "vol_mult": 0.60, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},  # disabled
+    "DOGE-USDT": {"adx_max": 22, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
 }
-BREAKOUT_SL_ATR  = 1.5
-BREAKOUT_TP_ATR  = 2.5
-BREAKOUT_MAX_HOLD = 15   # bars × 5m = 75 min
-
-# Fade params
-FADE_ADX_MAX    = 20
-FADE_VOL_MULT   = 0.8    # vol < vol_ma × this
-FADE_SL_ATR     = 1.0
-FADE_MAX_HOLD   = 12     # bars × 5m = 60 min
+FADE_MAX_HOLD = 12   # bars × 5m = 60 min
 
 # Period split (days from most recent)
 DAYS_BACK   = 12
 NUM_PERIODS = 3
 
 BARS_5M_PER_DAY = 288    # 24×60/5
-BARS_1H_PER_DAY = 24
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +201,13 @@ def simulate_symbol(sym: str, data: dict) -> list:
     n5 = len(ts5)
     n1 = len(ts1)
 
-    # Precompute 1H indicators series
-    ema50_1h = _ema_series(c1, EMA_1H_PERIOD)
-    adx_1h   = _adx_series(h1, l1, c1, ADX_1H_PERIOD)
+    fp = FADE_PARAMS.get(sym, FADE_PARAMS["BTC-USDT"])
+
+    # Precompute 1H ADX series
+    adx_1h = _adx_series(h1, l1, c1, ADX_1H_PERIOD)
 
     # Precompute 5m series
-    atr5   = _atr_series(h5, l5, c5, ATR_PERIOD)
+    atr5 = _atr_series(h5, l5, c5, ATR_PERIOD)
 
     # BB series: middle, upper, lower
     bb_mid = np.zeros(n5)
@@ -217,62 +226,36 @@ def simulate_symbol(sym: str, data: dict) -> list:
     for i in range(VOL_MA_PERIOD - 1, n5):
         vol_ma[i] = float(np.mean(v5[i - VOL_MA_PERIOD + 1: i + 1]))
 
-    breakout_mult = BREAKOUT_VOL_MULT.get(sym, 2.0)
+    trades   = []
+    in_trade = False
+    active   = None
 
-    trades = []
-    in_trade       = False
-    active         = None
-    pending_bo     = None  # (side, atr_val) — breakout confirmed next open
-
-    warmup = max(BB_PERIOD, VOL_MA_PERIOD, ATR_PERIOD, EMA_1H_PERIOD + 5) + 5
+    warmup = max(BB_PERIOD, VOL_MA_PERIOD, ATR_PERIOD, ADX_1H_PERIOD * 2) + 5
 
     for i in range(warmup, n5 - 1):
-        # --- enter breakout from previous bar signal ---
-        if pending_bo is not None and not in_trade:
-            side, atr_val = pending_bo
-            pending_bo = None
-            entry = float(o5[i])   # open of confirmation bar
-            if side == "LONG":
-                sl = entry - BREAKOUT_SL_ATR * atr_val
-                tp = entry + BREAKOUT_TP_ATR * atr_val
-            else:
-                sl = entry + BREAKOUT_SL_ATR * atr_val
-                tp = entry - BREAKOUT_TP_ATR * atr_val
-            active   = TradeResult(side, entry, sl, tp, ts5[i], "BREAKOUT")
-            in_trade = True
-
         # --- manage open trade ---
         if in_trade:
             active.bars_held += 1
             hi = h5[i]
             lo = l5[i]
 
-            max_hold = BREAKOUT_MAX_HOLD if active.signal_type == "BREAKOUT" else FADE_MAX_HOLD
-
-            # Check SL/TP (SL priority in same bar)
-            sl_hit = (active.side == "LONG" and lo <= active.sl) or \
+            sl_hit = (active.side == "LONG"  and lo <= active.sl) or \
                      (active.side == "SHORT" and hi >= active.sl)
-            tp_hit = (active.side == "LONG" and hi >= active.tp) or \
+            tp_hit = (active.side == "LONG"  and hi >= active.tp) or \
                      (active.side == "SHORT" and lo <= active.tp)
 
             if sl_hit:
-                active.exit_p  = active.sl
-                active.outcome = "SL"
-                trades.append(active)
-                in_trade = False
+                active.exit_p, active.outcome = active.sl, "SL"
+                trades.append(active); in_trade = False
             elif tp_hit:
-                active.exit_p  = active.tp
-                active.outcome = "TP"
-                trades.append(active)
-                in_trade = False
-            elif active.bars_held >= max_hold:
-                active.exit_p  = c5[i]
-                active.outcome = "TIME"
-                trades.append(active)
-                in_trade = False
+                active.exit_p, active.outcome = active.tp, "TP"
+                trades.append(active); in_trade = False
+            elif active.bars_held >= FADE_MAX_HOLD:
+                active.exit_p, active.outcome = c5[i], "TIME"
+                trades.append(active); in_trade = False
             continue
 
-        # --- look for new signal ---
+        # --- look for FADE signal ---
         cur_close  = c5[i]
         cur_vol    = v5[i]
         cur_atr    = atr5[i]
@@ -284,42 +267,37 @@ def simulate_symbol(sym: str, data: dict) -> list:
         if cur_atr == 0 or cur_vol_ma == 0 or cur_bb_up == 0:
             continue
 
-        # Get 1H bar valid at this 5m timestamp
-        # Last 1H bar that CLOSED before this 5m bar open
+        # 1H ADX: last closed bar before this 5m bar
         idx1 = np.searchsorted(ts1, ts5[i], side='left') - 1
-        if idx1 < EMA_1H_PERIOD * 2:
+        if idx1 < ADX_1H_PERIOD * 2:
             continue
-        cur_ema50_1h = ema50_1h[idx1]
-        cur_adx_1h   = adx_1h[idx1]
+        cur_adx_1h = adx_1h[idx1]
 
-        if cur_ema50_1h == 0:
+        # Base FADE conditions
+        adx_ok = cur_adx_1h < fp["adx_max"]
+        vol_ok = cur_vol < cur_vol_ma * fp["vol_mult"]
+        if not (adx_ok and vol_ok):
             continue
 
-        # --- BREAKOUT signals (enter at open of NEXT bar) ---
-        if cur_vol > cur_vol_ma * breakout_mult:
-            if cur_close > cur_bb_up and cur_close > cur_ema50_1h:
-                pending_bo = ("LONG", cur_atr)
-                continue
-            if cur_close < cur_bb_lo and cur_close < cur_ema50_1h:
-                pending_bo = ("SHORT", cur_atr)
+        # FADE SHORT: close above upper band
+        if cur_close > cur_bb_up:
+            dist = cur_close - cur_bb_mid
+            if dist >= fp["min_dist"] * cur_atr:   # R:R gate: BB_mid must be ≥1 ATR away
+                sl = cur_close + fp["sl_atr"] * cur_atr
+                tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close - fp["tp_atr"] * cur_atr
+                active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "FADE")
+                in_trade = True
                 continue
 
-        # --- FADE signals (ranging only) ---
-        if cur_adx_1h < FADE_ADX_MAX and cur_vol < cur_vol_ma * FADE_VOL_MULT:
-            if cur_close > cur_bb_up:
-                sl = cur_close + FADE_SL_ATR * cur_atr
-                tp = cur_bb_mid
-                if tp < cur_close:  # TP must be in profit direction
-                    active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "FADE")
-                    in_trade = True
-                    continue
-            if cur_close < cur_bb_lo:
-                sl = cur_close - FADE_SL_ATR * cur_atr
-                tp = cur_bb_mid
-                if tp > cur_close:
-                    active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "FADE")
-                    in_trade = True
-                    continue
+        # FADE LONG: close below lower band
+        if cur_close < cur_bb_lo:
+            dist = cur_bb_mid - cur_close
+            if dist >= fp["min_dist"] * cur_atr:   # R:R gate
+                sl = cur_close - fp["sl_atr"] * cur_atr
+                tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close + fp["tp_atr"] * cur_atr
+                active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "FADE")
+                in_trade = True
+                continue
 
     return trades
 
@@ -384,24 +362,14 @@ def main():
     combined = [t for trades in all_trades.values() for t in trades]
 
     # Overall
-    print("\n[OVERALL]")
+    print("\n[OVERALL — FADE only]")
     print(_stats_line("ALL", combined))
-    bo = [t for t in combined if t.signal_type == "BREAKOUT"]
-    fa = [t for t in combined if t.signal_type == "FADE"]
-    print(_stats_line("  BREAKOUT", bo))
-    print(_stats_line("  FADE",     fa))
 
     # Per symbol
     print("\n[BY SYMBOL]")
     for sym in SYMBOLS:
         trades = all_trades.get(sym, [])
         print(_stats_line(sym, trades))
-        bo_s = [t for t in trades if t.signal_type == "BREAKOUT"]
-        fa_s = [t for t in trades if t.signal_type == "FADE"]
-        if bo_s:
-            print(_stats_line("  breakout", bo_s))
-        if fa_s:
-            print(_stats_line("  fade",     fa_s))
 
     # Period split — use timestamps from first symbol that has trades
     ref_sym = next((s for s in SYMBOLS if all_trades.get(s)), None)
@@ -422,10 +390,11 @@ def main():
 
     print("\n[PARAMS]")
     print(f"  BB({BB_PERIOD}, {BB_STD})  vol_ma({VOL_MA_PERIOD})  ATR({ATR_PERIOD})")
-    print(f"  Breakout: vol > vol_ma x [BTC/ETH 2.0, SOL/XRP 2.5, DOGE 3.0]")
-    print(f"            SL={BREAKOUT_SL_ATR}xATR  TP={BREAKOUT_TP_ATR}xATR  max={BREAKOUT_MAX_HOLD}bars")
-    print(f"  Fade:     ADX_1H<{FADE_ADX_MAX}, vol<vol_ma*{FADE_VOL_MULT}")
-    print(f"            SL={FADE_SL_ATR}xATR  TP=BB_mid  max={FADE_MAX_HOLD}bars")
+    print(f"  FADE per-pair (ADX_max / vol_mult / SL_atr / TP_atr / min_dist):")
+    for s, fp in FADE_PARAMS.items():
+        print(f"    {s}: ADX<{fp['adx_max']}  vol<{fp['vol_mult']}x  "
+              f"SL={fp['sl_atr']}R  TP={fp['tp_atr']}R  min_dist={fp['min_dist']}ATR")
+    print(f"  Max hold: {FADE_MAX_HOLD} bars (60 min)")
     print("=" * 70)
 
 
