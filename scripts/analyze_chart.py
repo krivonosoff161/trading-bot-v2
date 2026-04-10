@@ -1802,6 +1802,8 @@ async def run(
         "symbol":        symbol,
         "expiry_time":   expiry_time,
         "delivery_text": delivery_text,
+        "5m_fade_hint":  _5m_fade_hint,
+        "5m_fade_data":  _5m_fade_data,
         "entry_price":   _close,
         "sl_price":      _sl_p,
         "tp1_price":     _tp1_p,

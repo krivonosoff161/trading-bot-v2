@@ -804,7 +804,8 @@ async def _scanner_loop() -> None:
     _scan_log(f"Сканер запущен. Пары: {', '.join(_SCANNER_PAIRS)}. Первый запуск в {msk_h:02d}:{first_run.minute:02d} МСК")
     await asyncio.sleep(max(wait, 0))
 
-    last_signal = {p: None for p in _SCANNER_PAIRS}
+    last_signal     = {p: None  for p in _SCANNER_PAIRS}
+    last_fade_sent  = {p: None  for p in _SCANNER_PAIRS}  # ts_label[:13] of last FADE hint sent
 
     while True:
       try:
@@ -874,8 +875,45 @@ async def _scanner_loop() -> None:
                 except Exception:
                     pass
             else:
-                shutil.rmtree(scan_dir, ignore_errors=True)
-                _scan_log(f"  {pair} — {signal}")
+                # Check for BB FADE hint even when main signal is NO_TRADE
+                fade_hint = result.get("5m_fade_hint")
+                fade_data = result.get("5m_fade_data") or {}
+                hour_bucket = ts_label[:13]  # "YYYY-MM-DD_HH" — once per hour per pair
+                if (fade_hint and fade_data
+                        and last_fade_sent[pair] != hour_bucket):
+                    _dir  = "ЛОНГ" if fade_hint == "LONG" else "ШОРТ"
+                    _arr  = "↗️" if fade_hint == "LONG" else "↘️"
+                    _band = "нижней" if fade_hint == "LONG" else "верхней"
+                    def _fp(v):
+                        if v is None: return "?"
+                        if v >= 1000: return f"{v:.1f}"
+                        if v >= 10:   return f"{v:.3f}"
+                        return f"{v:.5f}"
+                    _until = result.get("expiry_time", "")
+                    fade_msg = (
+                        f"📍 <b>BB FADE — {_arr} {pair} {_dir}</b>\n"
+                        f"Вход: {_fp(fade_data['entry'])}  "
+                        f"🛑 SL: {_fp(fade_data['sl'])}  "
+                        f"🎯 TP: {_fp(fade_data['tp'])}  "
+                        f"(R:R ≈{fade_data['rr']:.1f})\n"
+                        f"ADX низкий — боковик. Цена у {_band} BB, объём слабый.\n"
+                        f"⚠️ Ручной вход — проверь 1m и стакан. Макс. 60 мин.\n"
+                        f"<i>Актуально до {_until}</i>"
+                    )
+                    active = [u["chat_id"] for u in list_users()
+                              if u["status"] in ("active", "superadmin")]
+                    for chat_id in active:
+                        try:
+                            await _send(chat_id, fade_msg)
+                        except Exception as _e:
+                            _scan_log(f"  [{pair}] FADE ошибка отправки {chat_id}: {_e}")
+                        await asyncio.sleep(0.2)
+                    last_fade_sent[pair] = hour_bucket
+                    _scan_log(f"  {pair} — BB FADE {_dir} → отправлено {len(active)} клиентам")
+                    shutil.rmtree(scan_dir, ignore_errors=True)
+                else:
+                    shutil.rmtree(scan_dir, ignore_errors=True)
+                    _scan_log(f"  {pair} — {signal}")
 
             last_signal[pair] = signal
 
