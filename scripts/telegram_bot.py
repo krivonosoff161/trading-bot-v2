@@ -910,7 +910,13 @@ async def _scanner_loop() -> None:
                         await asyncio.sleep(0.2)
                     last_fade_sent[pair] = hour_bucket
                     _scan_log(f"  {pair} — BB FADE {_dir} → отправлено {len(active)} клиентам")
-                    shutil.rmtree(scan_dir, ignore_errors=True)
+                    fade_root = ROOT / "logs" / "fade"
+                    fade_root.mkdir(parents=True, exist_ok=True)
+                    fade_dir = fade_root / scan_dir.name
+                    try:
+                        scan_dir.rename(fade_dir)
+                    except Exception:
+                        shutil.rmtree(scan_dir, ignore_errors=True)
                 else:
                     shutil.rmtree(scan_dir, ignore_errors=True)
                     _scan_log(f"  {pair} — {signal}")
