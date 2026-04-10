@@ -1028,12 +1028,13 @@ _PAIR_PARAMS = {
     "ETH-USDT": {
         "late_range": 7.0,
         "allowed_modes": ["FAST", "SWING"],
+        "drift_bias_check": True,   # DRIFT only if micro slope aligns with structural bias_1h
         "regimes": {
             "trending": {
-                "fast":  {"adx": 18, "vol": 0.6, "sl_k": 1.3, "bb_width_min": 0.3},
-                "swing": {"adx": 18, "vol": 0.6, "sl_k": 1.6, "bb_width_min": 0.6},
+                "fast":  {"adx": 22, "vol": 1.0, "sl_k": 1.3, "bb_width_min": 0.7},
+                "swing": {"adx": 22, "vol": 1.0, "sl_k": 1.6, "bb_width_min": 0.9},
             },
-            "drift":   {"fast": {"vol": 1.3, "sl_k": 1.3}},
+            "drift":   {"fast": {"vol": 1.8, "sl_k": 1.3}},
             "ranging": {"fast": {"vol": 1.4, "adx_max": 20,
                                  "buy_pos_max": 0.32, "sell_pos_min": 0.68, "sl_k": 1.3}},
         },
@@ -1223,13 +1224,15 @@ async def run(
     # ── ADX 4H slope + DI spread ─────────────────────────────────────────────
     if raw_4h and len(raw_4h) >= 15:
         _highs_4h, _lows_4h, _closes_4h = parse_candles(raw_4h)
-        _adx_4h_curr, _pdi_4h, _mdi_4h = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-1)
-        _adx_4h_prev, _, _              = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-2)
-        _adx_4h_rising = float(_adx_4h_curr) > float(_adx_4h_prev)
-        _di_spread_4h  = abs(float(_pdi_4h) - float(_mdi_4h))
+        _adx_4h_curr, _pdi_4h,   _mdi_4h   = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-1)
+        _adx_4h_prev, _pdi_4h_c, _mdi_4h_c = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-2)
+        _adx_4h_rising       = float(_adx_4h_curr) > float(_adx_4h_prev)
+        _di_spread_4h        = abs(float(_pdi_4h)   - float(_mdi_4h))
+        _di_spread_4h_closed = abs(float(_pdi_4h_c) - float(_mdi_4h_c))   # Fix 1: confirmed bar
     else:
-        _adx_4h_rising = False
-        _di_spread_4h  = 0.0
+        _adx_4h_rising       = False
+        _di_spread_4h        = 0.0
+        _di_spread_4h_closed = 0.0
 
     # ── Vol ratio (impulse: last 3 closed vs prior 15 on 15m) ───────────────
     # raw_15m is newest-first; [0] may be forming bar — skip it
@@ -1402,7 +1405,12 @@ async def run(
             (_ema_drift_dir == "UP" and _close > _vwap)
             or (_ema_drift_dir == "DOWN" and _close < _vwap)
         ) if _vwap else False
-        _drift_base = _ema_drift_dir != "FLAT" and _drift_vwap_ok and _vol_ratio_sig >= _cfg_d["vol"]
+        _drift_bias_ok = True
+        if _pp.get("drift_bias_check", False):
+            _drift_bias_ok = not (_ema_drift_dir == "UP"   and _bias_1h == "DOWN") \
+                         and not (_ema_drift_dir == "DOWN" and _bias_1h == "UP")
+        _drift_base = (_ema_drift_dir != "FLAT" and _drift_vwap_ok
+                       and _vol_ratio_sig >= _cfg_d["vol"] and _drift_bias_ok)
         if "FAST" in _pp["allowed_modes"]:
             if _drift_base and _five_m_long and _ema_drift_dir == "UP":
                 _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_d
@@ -1413,7 +1421,7 @@ async def run(
         _trade_style == "FAST"
         and _side is not None
         and _bias_4h != "NEUTRAL"
-        and _di_spread_4h >= 8
+        and _di_spread_4h_closed >= 8   # Fix 1: use confirmed closed bar, not forming
         and ((_side == "buy" and _bias_4h == "DOWN")
              or (_side == "sell" and _bias_4h == "UP"))
     )
