@@ -310,9 +310,11 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # ADX on 4H — slope + DI spread for SWING quality
     adx_4h,      pdi_4h, mdi_4h = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-1)
-    adx_4h_prev, _,      _      = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-2)
-    adx_4h_rising = float(adx_4h) > float(adx_4h_prev)
-    di_spread_4h  = abs(float(pdi_4h) - float(mdi_4h))
+    adx_4h_prev, pdi_4h_c, mdi_4h_c = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-2)
+    adx_4h_rising    = float(adx_4h) > float(adx_4h_prev)
+    di_spread_4h     = abs(float(pdi_4h) - float(mdi_4h))
+    # Fix 1: use closed (confirmed) 4H bar for veto — forming bar DI is unreliable mid-candle
+    di_spread_4h_closed = abs(float(pdi_4h_c) - float(mdi_4h_c))
 
     # EMA bias on 1H (direction source)
     ema20_1h = calc_ema(c1h, 20)
@@ -386,6 +388,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # BB Width on 15m — expansion regime filter
     bb          = calc_bollinger_bands(c15, period=20, std_mult=2.0)
     bb_width    = bb["width_pct"]
+    bb_pct_b    = bb["pct_b"]        # Fix 3: 0=at lower band, 50=middle, 100=at upper band
     bb_expanding = bb_width > 1.5   # < 1.5% of price = sideways, skip
 
     # VWAP and day levels
@@ -527,7 +530,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             (ema_drift_dir == "UP"   and trade_delta_15m < -0.3)
             or (ema_drift_dir == "DOWN" and trade_delta_15m >  0.3)
         )
-        drift_base = ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok and not delta_opposes
+        # Per-pair: require DRIFT direction to align with structural bias_1h
+        drift_bias_ok = True
+        if pp.get("drift_bias_check", False):
+            drift_bias_ok = not (ema_drift_dir == "UP"   and bias_1h == "DOWN") \
+                        and not (ema_drift_dir == "DOWN" and bias_1h == "UP")
+
+        drift_base = (ema_drift_dir != "FLAT" and vwap_side_ok and drift_vol_ok
+                      and not delta_opposes and drift_bias_ok)
 
         if mode in ("FAST", "COMBINED"):
             if drift_base and five_m_long  and ema_drift_dir == "UP":
@@ -551,7 +561,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         trade_style == "FAST"
         and side is not None
         and bias_4h != "NEUTRAL"
-        and di_spread_4h >= 8
+        and di_spread_4h_closed >= 8   # Fix 1: use confirmed closed bar, not forming
         and ((side == "buy" and bias_4h == "DOWN")
              or (side == "sell" and bias_4h == "UP"))
     )
