@@ -35,7 +35,7 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
-    find_swing_levels, calc_bollinger_bands, calc_rsi,
+    find_swing_levels, calc_bollinger_bands, calc_rsi, calc_slope,
 )
 # Single source of truth for pair params — same as prod analyze_chart.py
 from scripts.analyze_chart import _PAIR_PARAMS as PAIR_PARAMS, _PAIR_PARAMS_DEFAULT, _mode_cfg
@@ -320,6 +320,13 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     ema20_1h = calc_ema(c1h, 20)
     ema50_1h = calc_ema(c1h, 50)
     bias_1h  = _bias(ema20_1h[-1] > ema50_1h[-1], ema20_1h[-1] < ema50_1h[-1])
+
+    # Slope: linear regression angle (Drozdov method)
+    # 1H slope → SWING confirmation; 15m slope → FAST confirmation
+    slope_1h      = calc_slope(c1h,      period=5)
+    slope_1h_prev = calc_slope(c1h[:-1], period=5)
+    slope_15m      = calc_slope(c15,      period=5)
+    slope_15m_prev = calc_slope(c15[:-1], period=5)
 
     # EMA bias on 4H (veto reference)
     ema20_4h = calc_ema(c4h, 20)
@@ -617,6 +624,23 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         trade_style, side = "NO_TRADE", None
         _drop = _drop or "drift_adx1h_low"
 
+    # ── Slope veto (Drozdov): price angle must confirm direction ─────────────
+    # FAST uses 15m slope (matches trade duration), SWING uses 1H slope.
+    # Condition: slope accelerating (current > prev) in trade direction.
+    # Applied only to TRENDING/DRIFT — RANGING is mean-reversion, slope n/a.
+    _SLOPE_MIN = 30.0
+    if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT"):
+        sl_cur  = slope_15m      if trade_style == "FAST" else slope_1h
+        sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
+        slope_ok = False
+        if side == "buy":
+            slope_ok = sl_cur >= _SLOPE_MIN and sl_cur > sl_prev
+        elif side == "sell":
+            slope_ok = sl_cur <= -_SLOPE_MIN and sl_cur < sl_prev
+        if not slope_ok:
+            trade_style, side = "NO_TRADE", None
+            _drop = _drop or "slope_weak"
+
     # ── Side-aware funding filter ─────────────────────────────────────────────
     funding_val   = funding if funding is not None else 0.0
     FUND_THRESH   = 0.0005   # 0.05%
@@ -717,6 +741,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "late_move":       late_move,
         "oi_weak":         oi_weak,
         "rsi_1h":          round(rsi_1h, 1),
+        "slope_1h":        round(slope_1h, 1),
+        "slope_1h_prev":   round(slope_1h_prev, 1),
+        "slope_15m":       round(slope_15m, 1),
+        "slope_15m_prev":  round(slope_15m_prev, 1),
         "is_night":        is_night,
     }
 
@@ -1137,6 +1165,9 @@ async def run():
                 "exit_r":     exit_r,
                 "day_pos":       sig["day_position"],
                 "bb_width":      sig["bb_width"],
+                "slope_1h":      sig.get("slope_1h"),
+                "slope_1h_prev": sig.get("slope_1h_prev"),
+                "slope_15m":     sig.get("slope_15m"),
                 "basis_pct":     sig.get("basis_pct"),
                 "perp_div_4bar": sig.get("perp_div_4bar"),
             })
