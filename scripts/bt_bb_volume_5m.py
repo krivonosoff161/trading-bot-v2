@@ -54,8 +54,8 @@ ADX_1H_PERIOD = 14
 FADE_PARAMS = {
     "BTC-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
     "ETH-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
-    "SOL-USDT":  {"adx_max": 20, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
-    "XRP-USDT":  {"adx_max": 0,  "vol_mult": 0.60, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},  # disabled
+    "SOL-USDT":  {"adx_max": 0,  "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},  # disabled: PF<1
+    "XRP-USDT":  {"adx_max": 0,  "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},  # disabled: PF<1
     "DOGE-USDT": {"adx_max": 22, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
 }
 FADE_MAX_HOLD = 12   # bars × 5m = 60 min
@@ -95,6 +95,29 @@ def _ema_series(arr: np.ndarray, period: int) -> np.ndarray:
     for i in range(period, len(arr)):
         out[i] = arr[i] * k + out[i - 1] * (1 - k)
     return out
+
+
+def _bias_1h_series(closes_1h: np.ndarray, ema_fast: int = 20, ema_slow: int = 50) -> np.ndarray:
+    """Returns bias per 1H bar: 1=UP, -1=DOWN, 0=NEUTRAL (EMA20 vs EMA50)."""
+    n   = len(closes_1h)
+    k_f = 2.0 / (ema_fast + 1)
+    k_s = 2.0 / (ema_slow  + 1)
+    ema_f = np.zeros(n)
+    ema_s = np.zeros(n)
+    if n > ema_slow:
+        ema_f[ema_fast - 1] = float(np.mean(closes_1h[:ema_fast]))
+        ema_s[ema_slow - 1] = float(np.mean(closes_1h[:ema_slow]))
+        for i in range(ema_fast, n):
+            ema_f[i] = closes_1h[i] * k_f + ema_f[i - 1] * (1 - k_f)
+        for i in range(ema_slow, n):
+            ema_s[i] = closes_1h[i] * k_s + ema_s[i - 1] * (1 - k_s)
+    bias = np.zeros(n, dtype=int)
+    for i in range(ema_slow, n):
+        if ema_f[i] > ema_s[i]:
+            bias[i] = 1    # UP
+        elif ema_f[i] < ema_s[i]:
+            bias[i] = -1   # DOWN
+    return bias
 
 
 def _atr_series(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
@@ -302,9 +325,15 @@ def simulate_symbol(sym: str, data: dict) -> list:
         slope_now  = _slope_at(c5, i,     period=5)
         slope_prev = _slope_at(c5, i - 1, period=5)
 
-        # FADE SHORT: close above upper band + slope decelerating
-        if cur_close > cur_bb_up:
-            slope_fading = slope_now < slope_prev   # upward push losing steam
+        # "Walking the band" check: signal bar is NOT a big thrust candle
+        # Thrust = high-low > 1.5× ATR (price blasting through BB → trend, not fade)
+        # Walk = small bars consolidating at BB edge → exhaustion, fade valid
+        cur_bar_range = h5[i] - l5[i]
+        not_thrust = cur_bar_range < 1.5 * cur_atr
+
+        # FADE SHORT: close above upper band + not a thrust + slope decelerating
+        if cur_close > cur_bb_up and not_thrust:
+            slope_fading = slope_now < slope_prev
             dist = cur_close - cur_bb_mid
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
                 sl = cur_close + fp["sl_atr"] * cur_atr
@@ -313,9 +342,9 @@ def simulate_symbol(sym: str, data: dict) -> list:
                 in_trade = True
                 continue
 
-        # FADE LONG: close below lower band + slope decelerating
-        if cur_close < cur_bb_lo:
-            slope_fading = slope_now > slope_prev   # downward push losing steam
+        # FADE LONG: close below lower band + not a thrust + slope decelerating
+        if cur_close < cur_bb_lo and not_thrust:
+            slope_fading = slope_now > slope_prev
             dist = cur_bb_mid - cur_close
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
                 sl = cur_close - fp["sl_atr"] * cur_atr
@@ -358,10 +387,11 @@ def _stats_line(label: str, trades: list) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    print("Loading cache …")
-    with open(CACHE_FILE, "rb") as f:
-        cache = pickle.load(f)
+def main(cache: dict = None):
+    if cache is None:
+        print("Loading cache …")
+        with open(CACHE_FILE, "rb") as f:
+            cache = pickle.load(f)
 
     cache_start_ms = cache.get("_cache_start_ms", 0)
     print(f"Cache start: {cache_start_ms}")
@@ -423,5 +453,35 @@ def main():
     print("=" * 70)
 
 
+def optimize_adx(cache: dict, symbols: list, adx_range: list) -> None:
+    """Grid search over ADX thresholds per symbol."""
+    print("\n" + "=" * 70)
+    print("ADX THRESHOLD OPTIMIZATION (per pair)")
+    print("=" * 70)
+    for sym in symbols:
+        data = cache.get(sym, {})
+        if not data.get("5m") or not data.get("1h"):
+            continue
+        print(f"\n  {sym}:")
+        print(f"  {'ADX<':>6}  {'n':>4}  {'WR':>6}  {'PF':>6}  {'avg_R':>7}")
+        print(f"  {'-'*42}")
+        orig = FADE_PARAMS[sym]["adx_max"]
+        for adx_val in adx_range:
+            FADE_PARAMS[sym]["adx_max"] = adx_val
+            trades = simulate_symbol(sym, data)
+            s = _stats(trades)
+            pf_str = f"{s['pf']:6.2f}" if s['n'] > 0 else "   —  "
+            wr_str = f"{s['wr']:5.1f}%" if s['n'] > 0 else "   —  "
+            ar_str = f"{s['avg_r']:+.3f}" if s['n'] > 0 else "    — "
+            marker = " ◄" if s['n'] >= 5 and s['pf'] >= 2.0 else ""
+            print(f"  {adx_val:>6}  {s['n']:>4}  {wr_str:>6}  {pf_str:>6}  {ar_str:>7}{marker}")
+        FADE_PARAMS[sym]["adx_max"] = orig  # restore
+    print("=" * 70)
+
+
 if __name__ == "__main__":
-    main()
+    print("Loading cache …")
+    with open(CACHE_FILE, "rb") as _f:
+        _cache = pickle.load(_f)
+    main(_cache)
+    optimize_adx(_cache, ["XRP-USDT", "SOL-USDT"], adx_range=[10, 13, 15, 18, 20, 22, 25, 28])

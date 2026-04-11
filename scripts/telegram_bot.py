@@ -782,6 +782,8 @@ async def handle_update(update: dict) -> None:
 # ── Polling loop ───────────────────────────────────────────────────────────────
 
 _SCANNER_PAIRS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
+# BB FADE disabled for SOL/XRP: backtest 35d WR<30%, PF<1 at any ADX threshold
+_FADE_PAIRS       = {"BTC-USDT", "ETH-USDT", "DOGE-USDT"}
 _SCANNER_LOG      = ROOT / "logs" / "scanner.log"
 _SCANNER_INTERVAL = 15  # minutes
 
@@ -915,6 +917,7 @@ async def _scanner_loop() -> None:
                 fade_data = result.get("5m_fade_data") or {}
                 hour_bucket = ts_label[:13]  # "YYYY-MM-DD_HH" — once per hour per pair
                 if (fade_hint and fade_data
+                        and pair in _FADE_PAIRS
                         and last_fade_sent[pair] != hour_bucket):
                     _dir  = "ЛОНГ" if fade_hint == "LONG" else "ШОРТ"
                     _arr  = "↗️" if fade_hint == "LONG" else "↘️"
