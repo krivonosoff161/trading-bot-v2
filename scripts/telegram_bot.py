@@ -1056,5 +1056,23 @@ async def main() -> None:
             await _SESSION.close()
 
 
+def _rotate_bot_log() -> None:
+    """Rotate logs/telegram_bot.log if >= 5 MB on startup."""
+    log = ROOT / "logs" / "telegram_bot.log"
+    max_bytes = 5 * 1024 * 1024
+    backups   = 3
+    if not log.exists() or log.stat().st_size < max_bytes:
+        return
+    for i in range(backups, 0, -1):
+        src = Path(f"{log}.{i}")
+        dst = Path(f"{log}.{i + 1}")
+        if i == backups and dst.exists():
+            dst.unlink()
+        if src.exists():
+            src.rename(dst)
+    log.rename(Path(f"{log}.1"))
+
+
 if __name__ == "__main__":
+    _rotate_bot_log()
     asyncio.run(main())
