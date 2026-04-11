@@ -76,3 +76,12 @@ docs/чотка 2.png
 docs/чотка.png
 docs/photo_2026-03-25_19-19-10.jpg
 scripts/backtest_candle_cache.pkl
+scripts/backtest_candle_cache_*.pkl
+scripts/backtest_mark_index_cache_*.pkl
+
+# Generated reports and journals
+scripts/journal.xlsx
+*.xlsx
+
+# Claude session memory
+.claude/
