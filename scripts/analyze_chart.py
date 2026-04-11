@@ -1851,6 +1851,8 @@ async def run(
         "day_position":  _day_position,
         "vol_ratio":     round(float(_vol_ratio_sig), 3),
         "funding":       round(float(_funding_val), 6),
+        "slope_1h":      round(float(_slope_1h), 1),
+        "slope_15m":     round(float(_slope_15m), 1),
     }
 
 

@@ -139,6 +139,8 @@ def _append_signal_log_entry(
         "vol_ratio":       result.get("vol_ratio") or result.get("volume_ratio_15m"),
         "funding":         result.get("funding") if result.get("funding") is not None else result.get("funding_rate"),
         "strong_4h_veto":  result.get("strong_4h_veto"),
+        "slope_1h":        result.get("slope_1h"),
+        "slope_15m":       result.get("slope_15m"),
         "obi5":            micro.get("obi_top5"),
         "trade_delta_100": micro.get("trade_delta_100"),
         "spread_bps":      micro.get("spread_bps"),
