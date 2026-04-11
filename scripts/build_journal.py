@@ -90,8 +90,10 @@ def build() -> None:
             "exit_r":   lab.get("exit_r"),
             "mfe_r":    lab.get("mfe_r"),
             "mae_r":    lab.get("mae_r"),
-            "adx_1h":   sig.get("adx_1h"),
-            "funding":  sig.get("funding") or 0.0,
+            "adx_1h":    sig.get("adx_1h"),
+            "slope_1h":  sig.get("slope_1h"),
+            "slope_15m": sig.get("slope_15m"),
+            "funding":   sig.get("funding") or 0.0,
         })
 
     wb = openpyxl.Workbook()
@@ -106,7 +108,8 @@ def _build_sheet1(wb, rows: list) -> None:
     ws.title = "Журнал"
 
     headers = ["Дата", "Пара", "Канал", "Режим", "Стиль", "Сторона",
-               "Вход", "SL", "TP", "Hold(мин)", "Исход", "R", "MFE_R", "MAE_R", "ADX_1H", "Финанс."]
+               "Вход", "SL", "TP", "Hold(мин)", "Исход", "R", "MFE_R", "MAE_R",
+               "ADX_1H", "Slope_1H°", "Slope_15m°", "Финанс."]
 
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -122,6 +125,8 @@ def _build_sheet1(wb, rows: list) -> None:
             row["side"], row["entry"], row["sl"], row["tp"], row["hold_min"],
             row["outcome"], row["exit_r"], row["mfe_r"], row["mae_r"],
             round(row["adx_1h"], 1) if row["adx_1h"] else "",
+            round(row["slope_1h"], 1) if row["slope_1h"] is not None else "",
+            round(row["slope_15m"], 1) if row["slope_15m"] is not None else "",
             row["funding"],
         ]
         for col, val in enumerate(vals, 1):
@@ -131,7 +136,7 @@ def _build_sheet1(wb, rows: list) -> None:
             if col == 3 and row["channel"] == "BB FADE":
                 cell.fill = FILL_FADE
 
-    _set_col_widths(ws, [14, 12, 9, 10, 7, 8, 10, 10, 10, 10, 10, 7, 7, 7, 8, 10])
+    _set_col_widths(ws, [14, 12, 9, 10, 7, 8, 10, 10, 10, 10, 10, 7, 7, 7, 8, 9, 10, 10])
     ws.freeze_panes = "A2"
 
 
