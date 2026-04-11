@@ -271,3 +271,22 @@ def calc_chandelier_exit(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray
     ce_short = round(lowest_low   + multiplier * current_atr, 6)
 
     return {"ce_long": ce_long, "ce_short": ce_short, "atr": round(current_atr, 6)}
+
+
+def calc_slope(closes: np.ndarray, period: int = 5) -> float:
+    """Linear regression slope angle (degrees) for the last `period` closes.
+
+    Drozdov method: both x and y are min-max normalized to [0,1] before OLS.
+    This makes the angle scale-independent (works on BTC and DOGE alike).
+    Returns 0.0 for flat series or insufficient data.
+    """
+    if len(closes) < period:
+        return 0.0
+    y = closes[-period:].astype(float)
+    y_range = float(y.max() - y.min())
+    if y_range == 0.0:
+        return 0.0
+    x_sc = np.linspace(0.0, 1.0, period)
+    y_sc = (y - y.min()) / y_range
+    slope = float(np.polyfit(x_sc, y_sc, 1)[0])
+    return float(np.degrees(np.arctan(slope)))
