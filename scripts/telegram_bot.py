@@ -1056,23 +1056,37 @@ async def main() -> None:
             await _SESSION.close()
 
 
-def _rotate_bot_log() -> None:
-    """Rotate logs/telegram_bot.log if >= 5 MB on startup."""
-    log = ROOT / "logs" / "telegram_bot.log"
-    max_bytes = 5 * 1024 * 1024
-    backups   = 3
-    if not log.exists() or log.stat().st_size < max_bytes:
-        return
-    for i in range(backups, 0, -1):
-        src = Path(f"{log}.{i}")
-        dst = Path(f"{log}.{i + 1}")
-        if i == backups and dst.exists():
-            dst.unlink()
-        if src.exists():
-            src.rename(dst)
-    log.rename(Path(f"{log}.1"))
+def _setup_rotating_log() -> None:
+    """Redirect stdout to rotating log file (5 MB, 3 backups).
+    Python owns the file — no bat-redirect conflict on Windows.
+    """
+    import logging
+    import logging.handlers
+
+    log_path = ROOT / "logs" / "telegram_bot.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    class _StreamToHandler:
+        def __init__(self, h):
+            self._h = h
+            self._rec = logging.LogRecord("bot", logging.INFO, "", 0, "", (), None)
+        def write(self, msg):
+            msg = msg.rstrip()
+            if msg:
+                self._rec.msg = msg
+                self._h.emit(self._rec)
+        def flush(self):
+            self._h.flush()
+
+    sys.stdout = _StreamToHandler(handler)
+    sys.stderr = _StreamToHandler(handler)
 
 
 if __name__ == "__main__":
-    _rotate_bot_log()
+    _setup_rotating_log()
     asyncio.run(main())
