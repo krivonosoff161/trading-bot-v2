@@ -71,6 +71,23 @@ BARS_5M_PER_DAY = 288    # 24×60/5
 # Indicator helpers (standalone, no external deps)
 # ---------------------------------------------------------------------------
 
+def _slope_at(closes: np.ndarray, i: int, period: int = 5) -> float:
+    """Linear regression angle (degrees) at bar i using last `period` closes.
+    Drozdov min-max normalization. Returns 0.0 if flat or not enough data.
+    For BB FADE: we check slope is DECELERATING (current < previous for SHORT).
+    """
+    if i < period - 1:
+        return 0.0
+    y = closes[i - period + 1: i + 1].astype(float)
+    y_range = float(y.max() - y.min())
+    if y_range == 0.0:
+        return 0.0
+    x_sc = np.linspace(0.0, 1.0, period)
+    y_sc = (y - y.min()) / y_range
+    slope = float(np.polyfit(x_sc, y_sc, 1)[0])
+    return float(np.degrees(np.arctan(slope)))
+
+
 def _ema_series(arr: np.ndarray, period: int) -> np.ndarray:
     out = np.zeros(len(arr))
     k = 2.0 / (period + 1)
@@ -279,20 +296,28 @@ def simulate_symbol(sym: str, data: dict) -> list:
         if not (adx_ok and vol_ok):
             continue
 
-        # FADE SHORT: close above upper band
+        # Slope deceleration filter (5m):
+        # FADE SHORT → price pushed up through BB but 5m slope is now weaker than prev bar
+        # FADE LONG  → price pushed down through BB but 5m slope is now less negative than prev bar
+        slope_now  = _slope_at(c5, i,     period=5)
+        slope_prev = _slope_at(c5, i - 1, period=5)
+
+        # FADE SHORT: close above upper band + slope decelerating
         if cur_close > cur_bb_up:
+            slope_fading = slope_now < slope_prev   # upward push losing steam
             dist = cur_close - cur_bb_mid
-            if dist >= fp["min_dist"] * cur_atr:   # R:R gate: BB_mid must be ≥1 ATR away
+            if dist >= fp["min_dist"] * cur_atr and slope_fading:
                 sl = cur_close + fp["sl_atr"] * cur_atr
                 tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close - fp["tp_atr"] * cur_atr
                 active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "FADE")
                 in_trade = True
                 continue
 
-        # FADE LONG: close below lower band
+        # FADE LONG: close below lower band + slope decelerating
         if cur_close < cur_bb_lo:
+            slope_fading = slope_now > slope_prev   # downward push losing steam
             dist = cur_bb_mid - cur_close
-            if dist >= fp["min_dist"] * cur_atr:   # R:R gate
+            if dist >= fp["min_dist"] * cur_atr and slope_fading:
                 sl = cur_close - fp["sl_atr"] * cur_atr
                 tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close + fp["tp_atr"] * cur_atr
                 active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "FADE")
