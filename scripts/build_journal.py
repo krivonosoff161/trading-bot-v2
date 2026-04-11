@@ -144,10 +144,10 @@ def _build_sheet2(wb, rows: list) -> None:
     ws = wb.create_sheet("Симулятор")
 
     headers = [
-        "Нотионал$", "Плечо",                            # A, B — user input
+        "Капитал$", "Плечо",                             # A, B — user input
         "Дата", "Пара", "Канал", "Сторона",              # C-F — data
         "Вход", "SL", "TP", "Исход", "R", "MAE_R",      # G-L — data
-        "Маржа$", "Цена ликв.", "Реальный исход",        # M-O — formula
+        "Позиция$", "Цена ликв.", "Реальный исход",      # M-O — formula
         "P&L$", "P&L%", "Комиссия$", "Финанс.$", "Чистый P&L$",  # P-T — formula
     ]
 
@@ -165,7 +165,7 @@ def _build_sheet2(wb, rows: list) -> None:
 
     for r, row in enumerate(rows, 2):
         # Input columns — yellow, prefilled with defaults
-        ws.cell(row=r, column=1, value=1000).fill = FILL_INPUT  # Нотионал$
+        ws.cell(row=r, column=1, value=100).fill  = FILL_INPUT  # Капитал$ (твои деньги)
         ws.cell(row=r, column=2, value=10).fill   = FILL_INPUT  # Плечо
 
         # Data columns C-L
@@ -183,8 +183,8 @@ def _build_sheet2(wb, rows: list) -> None:
         if not (row["entry"] and row["sl"] and row["tp"]):
             continue
 
-        # M: Маржа = Нотионал / Плечо (блокируется на счёте)
-        ws.cell(row=r, column=13, value=f"=A{r}/B{r}")
+        # M: Позиция$ = Капитал × Плечо (реальный размер на бирже)
+        ws.cell(row=r, column=13, value=f"=A{r}*B{r}")
 
         # N: Цена ликвидации (isolated margin, MMR=0.5% + taker fee 0.05% = 0.0055)
         # LONG:  entry * (1 - 1/leverage + 0.0055)
@@ -206,23 +206,23 @@ def _build_sheet2(wb, rows: list) -> None:
             f'J{r})))'
         ))
 
-        # P: P&L$ = если ликвидация → -Маржа(M), иначе нотионал(A) * sl_pct * exit_R
+        # P: P&L$ = если ликвидация → -Капитал(A), иначе Позиция(M) * sl_pct * exit_R
         ws.cell(row=r, column=16, value=(
-            f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-M{r},'
-            f'A{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
+            f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-A{r},'
+            f'M{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
         ))
 
-        # Q: P&L% = P&L$ / Маржа(M) * 100  (% от заблокированного капитала)
+        # Q: P&L% = P&L$ / Капитал(A) * 100  (% от вложенного капитала)
         ws.cell(row=r, column=17, value=(
-            f'=IF(OR(P{r}="",M{r}=0),"",P{r}/M{r}*100)'
+            f'=IF(OR(P{r}="",A{r}=0),"",P{r}/A{r}*100)'
         ))
 
-        # R: Комиссия$ = нотионал(A) * 0.1% (тейкер вход + выход, 0.05%×2)
-        ws.cell(row=r, column=18, value=f'=IF(M{r}="","",A{r}*0.001)')
+        # R: Комиссия$ = Позиция(M) * 0.1% (тейкер вход + выход, 0.05%×2)
+        ws.cell(row=r, column=18, value=f'=IF(M{r}="","",M{r}*0.001)')
 
-        # S: Финансирование$ = нотионал(A) * ставка_финансирования
+        # S: Финансирование$ = Позиция(M) * ставка_финансирования
         funding = row["funding"] or 0.0
-        ws.cell(row=r, column=19, value=f'=IF(M{r}="","",A{r}*{funding})')
+        ws.cell(row=r, column=19, value=f'=IF(M{r}="","",M{r}*{funding})')
 
         # T: Чистый P&L$ = P&L - Комиссия - Финансирование
         ws.cell(row=r, column=20, value=f'=IF(P{r}="","",P{r}-R{r}-S{r})')

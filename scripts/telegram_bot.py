@@ -389,6 +389,39 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                 )
             except Exception as _e:
                 print(f"[signal_log/manual] error | symbol={symbol} err={_e}")
+
+        # Log BB FADE hint from manual analysis (even when main signal is NO_TRADE)
+        _fade_hint = ctx.get("5m_fade_hint")
+        _fade_data = ctx.get("5m_fade_data") or {}
+        if _fade_hint and _fade_data:
+            try:
+                _fade_side = "sell" if _fade_hint == "SHORT" else "buy"
+                _fade_ms   = int(datetime.fromisoformat(
+                    captured_at.replace("Z", "+00:00")).timestamp() * 1000)
+                _fade_rec  = {
+                    "signal_id":    f"{_fade_ms}_{symbol}_FADE_{_fade_side}_manual",
+                    "source":       "bb_fade",
+                    "ts_ms":        _fade_ms,
+                    "symbol":       snap.get("symbol", symbol),
+                    "side":         _fade_side,
+                    "regime":       ctx.get("regime", "RANGING"),
+                    "style":        "FADE",
+                    "close":        _fade_data.get("entry"),
+                    "sl":           _fade_data.get("sl"),
+                    "tp":           _fade_data.get("tp"),
+                    "max_hold_min": 60,
+                    "adx_1h":       ctx.get("adx_1h"),
+                    "funding":      ctx.get("funding_rate"),
+                    "slope_1h":     ctx.get("slope_1h"),
+                    "slope_15m":    ctx.get("slope_15m"),
+                    "is_demo":      os.getenv("OKX_IS_DEMO", "1") == "1",
+                }
+                with open(SIGNAL_LOG, "a", encoding="utf-8") as _lf:
+                    _lf.write(json.dumps(_fade_rec) + "\n")
+                print(f"[signal_log/fade_manual] {symbol} {_fade_hint} logged")
+            except Exception as _fe:
+                print(f"[signal_log/fade_manual] error | symbol={symbol} err={_fe}")
+
         if entry_signal in ("ENTRY", "WAIT"):
             style = ctx.get("trade_style_hint", "")
             max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
