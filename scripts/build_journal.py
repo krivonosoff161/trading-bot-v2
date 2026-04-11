@@ -139,10 +139,10 @@ def _build_sheet2(wb, rows: list) -> None:
     ws = wb.create_sheet("Симулятор")
 
     headers = [
-        "Маржа$", "Плечо",                              # A, B — user input
+        "Нотионал$", "Плечо",                            # A, B — user input
         "Дата", "Пара", "Канал", "Сторона",              # C-F — data
         "Вход", "SL", "TP", "Исход", "R", "MAE_R",      # G-L — data
-        "Нотионал$", "Цена ликв.", "Реальный исход",     # M-O — formula
+        "Маржа$", "Цена ликв.", "Реальный исход",        # M-O — formula
         "P&L$", "P&L%", "Комиссия$", "Финанс.$", "Чистый P&L$",  # P-T — formula
     ]
 
@@ -160,9 +160,8 @@ def _build_sheet2(wb, rows: list) -> None:
 
     for r, row in enumerate(rows, 2):
         # Input columns — yellow, prefilled with defaults
-        for col in (1, 2):
-            cell = ws.cell(row=r, column=col, value=10)
-            cell.fill = FILL_INPUT
+        ws.cell(row=r, column=1, value=1000).fill = FILL_INPUT  # Нотионал$
+        ws.cell(row=r, column=2, value=10).fill   = FILL_INPUT  # Плечо
 
         # Data columns C-L
         data = {
@@ -179,16 +178,16 @@ def _build_sheet2(wb, rows: list) -> None:
         if not (row["entry"] and row["sl"] and row["tp"]):
             continue
 
-        # M: Нотионал = Маржа * Плечо
-        ws.cell(row=r, column=13, value=f"=A{r}*B{r}")
+        # M: Маржа = Нотионал / Плечо (блокируется на счёте)
+        ws.cell(row=r, column=13, value=f"=A{r}/B{r}")
 
-        # N: Цена ликвидации (isolated margin, MM=0.5%)
-        # LONG:  entry * (1 - 1/leverage + 0.005)
-        # SHORT: entry * (1 + 1/leverage - 0.005)
+        # N: Цена ликвидации (isolated margin, MMR=0.5% + taker fee 0.05% = 0.0055)
+        # LONG:  entry * (1 - 1/leverage + 0.0055)
+        # SHORT: entry * (1 + 1/leverage - 0.0055)
         ws.cell(row=r, column=14, value=(
             f'=IF(F{r}="LONG",'
-            f'G{r}*(1-1/B{r}+0.005),'
-            f'G{r}*(1+1/B{r}-0.005))'
+            f'G{r}*(1-1/B{r}+0.0055),'
+            f'G{r}*(1+1/B{r}-0.0055))'
         ))
 
         # O: Реальный исход — проверяем ликвидацию по MAE
@@ -202,23 +201,23 @@ def _build_sheet2(wb, rows: list) -> None:
             f'J{r})))'
         ))
 
-        # P: P&L$ = если ликвидация → -Маржа, иначе нотионал * sl_pct * exit_R
+        # P: P&L$ = если ликвидация → -Маржа(M), иначе нотионал(A) * sl_pct * exit_R
         ws.cell(row=r, column=16, value=(
-            f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-A{r},'
-            f'M{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
+            f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-M{r},'
+            f'A{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
         ))
 
-        # Q: P&L% = P&L$ / Маржа * 100
+        # Q: P&L% = P&L$ / Маржа(M) * 100  (% от заблокированного капитала)
         ws.cell(row=r, column=17, value=(
-            f'=IF(OR(P{r}="",A{r}=0),"",P{r}/A{r}*100)'
+            f'=IF(OR(P{r}="",M{r}=0),"",P{r}/M{r}*100)'
         ))
 
-        # R: Комиссия$ = нотионал * 0.1% (тейкер вход + выход)
-        ws.cell(row=r, column=18, value=f'=IF(M{r}="","",M{r}*0.001)')
+        # R: Комиссия$ = нотионал(A) * 0.1% (тейкер вход + выход, 0.05%×2)
+        ws.cell(row=r, column=18, value=f'=IF(M{r}="","",A{r}*0.001)')
 
-        # S: Финансирование$ = нотионал * ставка_финансирования
+        # S: Финансирование$ = нотионал(A) * ставка_финансирования
         funding = row["funding"] or 0.0
-        ws.cell(row=r, column=19, value=f'=IF(M{r}="","",M{r}*{funding})')
+        ws.cell(row=r, column=19, value=f'=IF(M{r}="","",A{r}*{funding})')
 
         # T: Чистый P&L$ = P&L - Комиссия - Финансирование
         ws.cell(row=r, column=20, value=f'=IF(P{r}="","",P{r}-R{r}-S{r})')
