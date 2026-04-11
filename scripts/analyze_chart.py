@@ -29,7 +29,7 @@ from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_adx, calc_atr, calc_ema, parse_candles,
     find_swing_levels, atr_regime, calc_bollinger_bands, calc_supertrend,
-    calc_chandelier_exit, calc_rsi,
+    calc_chandelier_exit, calc_rsi, calc_slope,
 )
 
 
@@ -207,6 +207,10 @@ def compute_indicators(
     _bull_1h = float(ema20_1h[-2]) > float(ema50_1h[-2])
     _bear_1h = float(ema20_1h[-2]) < float(ema50_1h[-2])
 
+    # Slope 1H (SWING confirmation)
+    slope_1h      = calc_slope(closes_1h,      period=5)
+    slope_1h_prev = calc_slope(closes_1h[:-1], period=5)
+
     # ── 15m ─────────────────────────────────────────────────────────────────
     highs_15m, lows_15m, closes_15m = parse_candles(raw_15m)
     atr_15m   = calc_atr(highs_15m, lows_15m, closes_15m, period=adx_period)
@@ -218,6 +222,10 @@ def compute_indicators(
     atr_pct, atr_lbl = atr_regime(highs_15m, lows_15m, closes_15m, period=adx_period)
     supertrend_15m = calc_supertrend(highs_15m, lows_15m, closes_15m, period=14, multiplier=3.0)
     cur_close = closes_15m[-2]
+
+    # Slope 15m (FAST confirmation)
+    slope_15m      = calc_slope(closes_15m,      period=5)
+    slope_15m_prev = calc_slope(closes_15m[:-1], period=5)
 
     # ── 5m ──────────────────────────────────────────────────────────────────
     highs_5m, lows_5m, closes_5m = parse_candles(raw_5m)
@@ -1237,6 +1245,18 @@ async def run(
         _adx_1h_rising = False
         _di_spread_1h  = 0.0
 
+    # ── Slope (Drozdov): acceleration filter ─────────────────────────────────
+    # 1H slope for SWING; 15m slope for FAST.
+    # TRENDING/DRIFT only — RANGING is mean-reversion, slope n/a.
+    _slope_1h      = calc_slope(_closes_1h,      period=5) if raw_1h and len(raw_1h) >= 6 else 0.0
+    _slope_1h_prev = calc_slope(_closes_1h[:-1], period=5) if raw_1h and len(raw_1h) >= 7 else 0.0
+    if raw_15m and len(raw_15m) >= 7:
+        _highs_15m_s, _lows_15m_s, _closes_15m_s = parse_candles(raw_15m)
+        _slope_15m      = calc_slope(_closes_15m_s,      period=5)
+        _slope_15m_prev = calc_slope(_closes_15m_s[:-1], period=5)
+    else:
+        _slope_15m = _slope_15m_prev = 0.0
+
     # ── ADX 4H slope + DI spread ─────────────────────────────────────────────
     if raw_4h and len(raw_4h) >= 15:
         _highs_4h, _lows_4h, _closes_4h = parse_candles(raw_4h)
@@ -1432,6 +1452,20 @@ async def run(
                 _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_d
             elif _drift_base and _five_m_short and _ema_drift_dir == "DOWN":
                 _trade_style, _side, _entry_cfg = "FAST", "sell", _cfg_d
+
+    # Slope veto: acceleration filter for TRENDING/DRIFT
+    # FAST uses 15m slope, SWING uses 1H slope (matches trade duration).
+    _SLOPE_MIN = 30.0
+    if _trade_style != "NO_TRADE" and _side and _regime in ("TRENDING", "DRIFT"):
+        _sl_cur  = _slope_15m      if _trade_style == "FAST" else _slope_1h
+        _sl_prev = _slope_15m_prev if _trade_style == "FAST" else _slope_1h_prev
+        _slope_ok = False
+        if _side == "buy":
+            _slope_ok = _sl_cur >= _SLOPE_MIN and _sl_cur > _sl_prev
+        elif _side == "sell":
+            _slope_ok = _sl_cur <= -_SLOPE_MIN and _sl_cur < _sl_prev
+        if not _slope_ok:
+            _trade_style, _side = "NO_TRADE", None
 
     _strong_4h_veto = (
         _trade_style == "FAST"
