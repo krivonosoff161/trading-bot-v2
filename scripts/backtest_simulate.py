@@ -36,6 +36,7 @@ from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
     find_swing_levels, calc_bollinger_bands, calc_rsi, calc_slope,
+    calc_supertrend,
 )
 # Single source of truth for pair params — same as prod analyze_chart.py
 from scripts.analyze_chart import _PAIR_PARAMS as PAIR_PARAMS, _PAIR_PARAMS_DEFAULT, _mode_cfg
@@ -328,6 +329,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     slope_15m      = calc_slope(c15,      period=5)
     slope_15m_prev = calc_slope(c15[:-1], period=5)
 
+    # Supertrend on 1H — direction without volume dependency
+    # Used as fallback in DRIFT when EMA slope is FLAT (slow/lazy moves)
+    st_1h = calc_supertrend(h1h, l1h, c1h, period=14, multiplier=3.0)
+
     # EMA bias on 4H (veto reference)
     ema20_4h = calc_ema(c4h, 20)
     ema50_4h = calc_ema(c4h, 50)
@@ -528,7 +533,19 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                           and ema20_1h[-1] < ema20_1h[-2]
                           and ema20_1h[-2] < ema20_1h[-3]
                           and ema20_1h[-3] < ema20_1h[-4])
-        ema_drift_dir  = "UP" if ema_slope_up else ("DOWN" if ema_slope_down else "FLAT")
+        # Supertrend fallback: when EMA slope is FLAT (4-bar requirement too strict
+        # for slow/lazy directional moves), use Supertrend direction instead.
+        _st_dir = st_1h["direction"]   # "up" or "down"
+        if ema_slope_up:
+            ema_drift_dir = "UP"
+        elif ema_slope_down:
+            ema_drift_dir = "DOWN"
+        elif _st_dir == "up":
+            ema_drift_dir = "UP"
+        elif _st_dir == "down":
+            ema_drift_dir = "DOWN"
+        else:
+            ema_drift_dir = "FLAT"
 
         vwap_side_ok = False
         if vwap:
