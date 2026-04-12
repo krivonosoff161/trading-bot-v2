@@ -6,6 +6,49 @@
 
 ---
 
+## ✅ ТЕКУЩИЙ ЛУЧШИЙ БЭКТЕСТ (эталон)
+
+**Дата:** 2026-04-12  
+**Git commit:** `c79bf10` (prod) / `9e7619e` (backtest)  
+**Период:** 36 дней, 5 пар (BTC/ETH/SOL/XRP/DOGE)
+
+### Активные улучшения (относительно предыдущего baseline):
+| Изменение | Коммит | Эффект |
+|---|---|---|
+| calc_slope фильтр (Drozdov) | `976b40e` | сигналов 13.7→5.6/д, WR 87→88% |
+| four_h_conflict → DI>=12 | `184722c` | +13 сигналов, WR стабилен |
+| Supertrend DRIFT fallback | `d95d76c` | +22 сигнала, SHORT WR 93% |
+| SL ×1.2 + hold 150/300m | `9e7619e` | PF 3.35→3.83, DD 4.4% |
+
+### Итоговые метрики (OVERALL 36d):
+| Метрика | Значение |
+|---|---|
+| Сигналов/день | **6.5** |
+| WR (TP+SL) | **89%** |
+| Profit Factor | **3.83** |
+| Симуляция баланса | **+67.3%** за 36д |
+| Макс. просадка | **4.4%** |
+| FAST WR | 89% |
+| SWING WR | 89% |
+
+### BB FADE (bt_bb_volume_5m.py, коммит `cda5c1e`):
+| Метрика | Значение |
+|---|---|
+| Пары | BTC + ETH + DOGE |
+| n | 25 |
+| WR | 68% |
+| PF | 5.54 |
+| avg_R | +1.285 |
+
+### Параметры прода (analyze_chart.py):
+- FAST hold: **150m** (240m ночью), SWING hold: **300m**
+- SL: `sl_k × 1.2 × ATR_15m`
+- FAST TP1: 0.8R (TRENDING/RANGING) / 0.4R (DRIFT)
+- SWING TP1: `min(1.0R, ATR_1H × 0.5)`
+- BB FADE пары: BTC, ETH, DOGE (XRP/SOL отключены — PF < 1 на любом ADX)
+
+---
+
 ## Rejected / Tested Hypotheses
 
 ### Independent ATR TP/SL from entry price
