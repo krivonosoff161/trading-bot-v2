@@ -1534,7 +1534,7 @@ async def run(
     _sl_dist = 0.0
 
     if _trade_style == "FAST" and _side and _close:
-        _sl_k = _entry_cfg.get("sl_k", 1.4)
+        _sl_k = _entry_cfg.get("sl_k", 1.4) * 1.2
         _atr_sl_dist = max(_sl_k * _atr_15m, _close * 0.004)
         if _side == "buy":
             _atr_sl   = _close - _atr_sl_dist
@@ -1554,7 +1554,7 @@ async def run(
             _tp2_p    = round(_close - _sl_dist * 1.5, 4)
 
     elif _trade_style == "SWING" and _side and _close:
-        _sl_k = _entry_cfg.get("sl_k", 1.8)
+        _sl_k = _entry_cfg.get("sl_k", 1.8) * 1.2
         if _side == "buy":
             _atr_sl  = _close - _sl_k * _atr_15m
             _struct  = (_swing_lows[-1] - 0.3 * _atr_15m) if _swing_lows else None
@@ -1570,7 +1570,7 @@ async def run(
             _tp1_p   = round(_close - min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
             _tp2_p   = round(_close - min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
 
-    _max_hold_minutes = (240 if _is_night else 120) if _trade_style == "FAST" else 240
+    _max_hold_minutes = (240 if _is_night else 150) if _trade_style == "FAST" else 300
 
     # R/R validation — block ENTRY if TP2 doesn't cover 0.8× SL distance
     _rr_ok = True
