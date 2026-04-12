@@ -1333,7 +1333,10 @@ async def run(
     _h4_available    = bool(_h4)
     # SWING requires a live 4H trend and no direction conflict
     _adx_4h_ok       = (not _h4_available) or float(_adx_4h) >= 20
-    _4h_dir_conflict = _h4_available and _bias_4h != "NEUTRAL" and _bias_4h != _bias_1h
+    # Conflict only when 4H is actively trending against 1H (DI spread >= 12).
+    # Below threshold: 4H is transitioning (EMA lagged) — allow entry.
+    _4h_dir_conflict = (_h4_available and _bias_4h != "NEUTRAL"
+                        and _bias_4h != _bias_1h and _di_spread_4h_closed >= 12)
     # FAST trigger: 5m EMA cross — bidirectional, no 1H bias lock
     _ema20_5m      = float(_h5.get("ema20") or 0)
     _rsi_5m        = float(_h5.get("rsi") or 50)
