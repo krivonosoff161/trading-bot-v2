@@ -1614,7 +1614,8 @@ async def run(
             _bb5_up  = _bb5_mid + 2.0 * _bb5_std
             _bb5_lo  = _bb5_mid - 2.0 * _bb5_std
             _vol_ma5 = sum(_v5[-20:]) / 20
-            _vol_low = _vol_ma5 > 0 and _v5[-1] < _vol_ma5 * 0.70
+            _vol_low      = _vol_ma5 > 0 and _v5[-1] < _vol_ma5 * 0.70
+            _vol_declining = len(_v5) >= 2 and _v5[-1] < _v5[-2]  # volume shrinking = impulse fading
             _at_lo   = _bb5_lo > 0 and _c5[-1] <= _bb5_lo * 1.002
             _at_hi   = _bb5_up > 0 and _c5[-1] >= _bb5_up * 0.998
             _ranging5 = _adx_1h < 20
@@ -1623,18 +1624,22 @@ async def run(
                         abs(_h5[i] - _c5[i - 1]),
                         abs(_l5[i] - _c5[i - 1])) for i in range(1, min(15, len(_c5)))]
             _atr5 = sum(_tr5) / len(_tr5) if _tr5 else 0.0
-            if _ranging5 and _vol_low and _atr5 > 0:
+            if _ranging5 and _vol_low and _vol_declining and _atr5 > 0:
                 if _at_hi and (_c5[-1] - _bb5_mid) >= _atr5:  # R:R gate: mid >= 1 ATR away
                     _5m_fade_hint = "SHORT"
                     _5m_fade_data = {
-                        "entry": _c5[-1], "sl": _c5[-1] + _atr5,
-                        "tp": _bb5_mid,   "rr": (_c5[-1] - _bb5_mid) / _atr5,
+                        "entry": _c5[-1],
+                        "sl":    _bb5_up + _atr5,   # SL behind BB band, not from entry
+                        "tp":    _bb5_mid,
+                        "rr":    (_c5[-1] - _bb5_mid) / (_bb5_up + _atr5 - _c5[-1]),
                     }
                 elif _at_lo and (_bb5_mid - _c5[-1]) >= _atr5:
                     _5m_fade_hint = "LONG"
                     _5m_fade_data = {
-                        "entry": _c5[-1], "sl": _c5[-1] - _atr5,
-                        "tp": _bb5_mid,   "rr": (_bb5_mid - _c5[-1]) / _atr5,
+                        "entry": _c5[-1],
+                        "sl":    _bb5_lo - _atr5,   # SL behind BB band, not from entry
+                        "tp":    _bb5_mid,
+                        "rr":    (_bb5_mid - _c5[-1]) / (_c5[-1] - (_bb5_lo - _atr5)),
                     }
         except Exception:
             pass
