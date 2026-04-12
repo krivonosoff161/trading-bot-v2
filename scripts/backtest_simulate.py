@@ -334,7 +334,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     bias_4h  = _bias(ema20_4h[-1] > ema50_4h[-1], ema20_4h[-1] < ema50_4h[-1])
 
     # 4H alignment context (SWING)
-    four_h_conflict = bias_4h != "NEUTRAL" and bias_4h != bias_1h
+    # Conflict only when 4H is actively trending against 1H (DI spread >= 12).
+    # Below threshold: 4H is transitioning (EMA lagged) — allow entry.
+    four_h_conflict = (bias_4h != "NEUTRAL" and bias_4h != bias_1h
+                       and di_spread_4h_closed >= 12)
     adx_4h_ok       = float(adx_4h) >= 20
 
     # 5m trigger (FAST): direction + quality filters
