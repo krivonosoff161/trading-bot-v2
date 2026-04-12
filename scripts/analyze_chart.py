@@ -1240,10 +1240,12 @@ async def run(
         _adx_1h_prev, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-2)
         _adx_1h_rising = _adx_1h > float(_adx_1h_prev)
         _di_spread_1h  = abs(_plus_di_1h - _minus_di_1h)
+        _st_1h = calc_supertrend(_highs_1h, _lows_1h, _closes_1h, period=14, multiplier=3.0)
     else:
         _atr_1h        = _atr_15m * 4
         _adx_1h_rising = False
         _di_spread_1h  = 0.0
+        _st_1h = {"direction": "up"}  # no data — don't block
 
     # ── Slope (Drozdov): acceleration filter ─────────────────────────────────
     # 1H slope for SWING; 15m slope for FAST.
@@ -1439,7 +1441,18 @@ async def run(
             and _h1["ema20_series"][-2] < _h1["ema20_series"][-3]
             and _h1["ema20_series"][-3] < _h1["ema20_series"][-4]
         )
-        _ema_drift_dir = "UP" if _ema_slope_up else ("DOWN" if _ema_slope_down else "FLAT")
+        # Supertrend fallback: when EMA slope is FLAT use Supertrend direction.
+        _st_dir_1h = _st_1h["direction"]
+        if _ema_slope_up:
+            _ema_drift_dir = "UP"
+        elif _ema_slope_down:
+            _ema_drift_dir = "DOWN"
+        elif _st_dir_1h == "up":
+            _ema_drift_dir = "UP"
+        elif _st_dir_1h == "down":
+            _ema_drift_dir = "DOWN"
+        else:
+            _ema_drift_dir = "FLAT"
         _drift_vwap_ok = (
             (_ema_drift_dir == "UP" and _close > _vwap)
             or (_ema_drift_dir == "DOWN" and _close < _vwap)
