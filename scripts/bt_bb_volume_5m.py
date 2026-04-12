@@ -316,7 +316,9 @@ def simulate_symbol(sym: str, data: dict) -> list:
         # Base FADE conditions
         adx_ok = cur_adx_1h < fp["adx_max"]
         vol_ok = cur_vol < cur_vol_ma * fp["vol_mult"]
-        if not (adx_ok and vol_ok):
+        # Volume must be declining (not growing) — rising vol at BB = trend continuation
+        vol_declining = v5[i] < v5[i - 1]
+        if not (adx_ok and vol_ok and vol_declining):
             continue
 
         # Slope deceleration filter (5m):
@@ -336,7 +338,8 @@ def simulate_symbol(sym: str, data: dict) -> list:
             slope_fading = slope_now < slope_prev
             dist = cur_close - cur_bb_mid
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
-                sl = cur_close + fp["sl_atr"] * cur_atr
+                # SL behind the BB band, not from entry price
+                sl = cur_bb_up + fp["sl_atr"] * cur_atr
                 tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close - fp["tp_atr"] * cur_atr
                 active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "FADE")
                 in_trade = True
@@ -347,7 +350,8 @@ def simulate_symbol(sym: str, data: dict) -> list:
             slope_fading = slope_now > slope_prev
             dist = cur_bb_mid - cur_close
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
-                sl = cur_close - fp["sl_atr"] * cur_atr
+                # SL behind the BB band, not from entry price
+                sl = cur_bb_lo - fp["sl_atr"] * cur_atr
                 tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close + fp["tp_atr"] * cur_atr
                 active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "FADE")
                 in_trade = True
