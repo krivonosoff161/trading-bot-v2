@@ -155,8 +155,8 @@ OUTCOME_H    = 24
 ADX_PERIOD   = 14
 
 # ── Hold time (change here between runs: baseline / extended / long_hold) ───────
-HOLD_FAST_M  = 120   # baseline=120  extended=180  long_hold=480
-HOLD_SWING_M = 240   # baseline=240  extended=360  long_hold=720
+HOLD_FAST_M  = 150   # baseline=120  extended=180  long_hold=480
+HOLD_SWING_M = 300   # baseline=240  extended=360  long_hold=720
 
 # ── Fair-value filters ───────────────────────────────────────────────────────
 # Block SHORT signals when perp is running ahead of spot (overheated longs).
@@ -677,7 +677,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     sl_dist = 0.0
 
     if trade_style == "FAST" and side and close:
-        atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * atr_15m, close * 0.004)
+        atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * 1.2 * atr_15m, close * 0.004)
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
             atr_sl    = close - atr_sl_dist
@@ -701,7 +701,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     elif trade_style == "SWING" and side and close:
         swings = find_swing_levels(h15, l15, lookback=3, count=4)
         if side == "buy":
-            atr_sl    = close - entry_cfg.get("sl_k", 1.8) * atr_15m
+            atr_sl    = close - entry_cfg.get("sl_k", 1.8) * 1.2 * atr_15m
             struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
@@ -709,7 +709,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             tp_p    = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 6)    # TP1
             tp2_p   = round(close + min(sl_dist * 2.5, atr_1h * 1.2), 6)    # TP2
         else:
-            atr_sl    = close + entry_cfg.get("sl_k", 1.8) * atr_15m
+            atr_sl    = close + entry_cfg.get("sl_k", 1.8) * 1.2 * atr_15m
             struct_sl = (swings["recent_highs"][-1] + 0.3 * atr_15m
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl else atr_sl, 6)
