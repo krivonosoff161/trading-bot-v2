@@ -390,6 +390,28 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                 )
             except Exception as _e:
                 print(f"[signal_log/manual] error | symbol={symbol} err={_e}")
+        else:
+            # Log NO_TRADE manual requests for live funnel analysis
+            try:
+                _nt = {
+                    "ts_ms":        int(datetime.fromisoformat(
+                                        captured_at.replace("Z", "+00:00")).timestamp() * 1000),
+                    "ts_dt":        captured_at[:16],
+                    "symbol":       snap.get("symbol", symbol),
+                    "entry_signal": entry_signal,
+                    "drop_reason":  ctx.get("drop_reason") or "",
+                    "regime":       ctx.get("regime") or "",
+                    "adx_1h":       ctx.get("adx_1h") or "",
+                    "adx_4h":       ctx.get("adx_4h") or "",
+                    "vol_ratio":    ctx.get("vol_ratio") or "",
+                    "slope_15m":    ctx.get("slope_15m") or "",
+                    "slope_1h":     ctx.get("slope_1h") or "",
+                    "source":       "manual",
+                }
+                with open(NOTRADE_LOG, "a", encoding="utf-8") as _lf:
+                    _lf.write(json.dumps(_nt) + "\n")
+            except Exception:
+                pass
 
         # Log BB FADE hint from manual analysis (even when main signal is NO_TRADE)
         _fade_hint = ctx.get("5m_fade_hint")
