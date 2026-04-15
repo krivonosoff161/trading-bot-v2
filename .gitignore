@@ -82,6 +82,7 @@ scripts/backtest_mark_index_cache_*.pkl
 # Generated reports and journals
 scripts/journal.xlsx
 *.xlsx
+scripts/pattern_db.csv
 
 # Claude session memory
 .claude/
