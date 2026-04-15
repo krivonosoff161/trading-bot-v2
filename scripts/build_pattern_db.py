@@ -29,8 +29,8 @@ from scripts.backtest_simulate import (
     _calc_basis_and_perp_div,
 )
 
-CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache_35d.pkl"
-CACHE_MI_FILE = Path(__file__).parent / "backtest_mark_index_cache_35d.pkl"
+CACHE_FILE    = Path(__file__).parent / "backtest_candle_cache_65d.pkl"
+CACHE_MI_FILE = Path(__file__).parent / "backtest_mark_index_cache_65d.pkl"
 OUTPUT_CSV    = Path(__file__).parent / "pattern_db.csv"
 INTERVAL_M    = 15
 
