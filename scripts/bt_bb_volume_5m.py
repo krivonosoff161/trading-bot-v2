@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Parameters
 # ---------------------------------------------------------------------------
 
-CACHE_FILE = Path(__file__).parent / "backtest_candle_cache_35d.pkl"
+CACHE_FILE = Path(__file__).parent / "backtest_candle_cache_65d.pkl"
 SYMBOLS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 
 # BB + volume
@@ -58,10 +58,11 @@ FADE_PARAMS = {
     "XRP-USDT":  {"adx_max": 0,  "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},  # disabled: PF<1
     "DOGE-USDT": {"adx_max": 22, "vol_mult": 0.70, "sl_atr": 1.0, "tp_atr": 0, "min_dist": 1.0},
 }
-FADE_MAX_HOLD = 12   # bars × 5m = 60 min
+FADE_MAX_HOLD = 12   # bars × 5m = 60 min  (baseline: mid-band TP)
+FADE_MAX_HOLD_B2B = 36  # bars × 5m = 180 min (band-to-band: further target)
 
 # Period split (days from most recent)
-DAYS_BACK   = 12
+DAYS_BACK   = 21
 NUM_PERIODS = 3
 
 BARS_5M_PER_DAY = 288    # 24×60/5
@@ -231,7 +232,7 @@ class TradeResult:
 # Simulate one symbol
 # ---------------------------------------------------------------------------
 
-def simulate_symbol(sym: str, data: dict) -> list:
+def simulate_symbol(sym: str, data: dict, band_to_band: bool = False) -> list:
     raw_5m = data["5m"]
     raw_1h = data["1h"]
 
@@ -269,6 +270,7 @@ def simulate_symbol(sym: str, data: dict) -> list:
     trades   = []
     in_trade = False
     active   = None
+    max_hold = FADE_MAX_HOLD_B2B if band_to_band else FADE_MAX_HOLD
 
     warmup = max(BB_PERIOD, VOL_MA_PERIOD, ATR_PERIOD, ADX_1H_PERIOD * 2) + 5
 
@@ -290,7 +292,7 @@ def simulate_symbol(sym: str, data: dict) -> list:
             elif tp_hit:
                 active.exit_p, active.outcome = active.tp, "TP"
                 trades.append(active); in_trade = False
-            elif active.bars_held >= FADE_MAX_HOLD:
+            elif active.bars_held >= max_hold:
                 active.exit_p, active.outcome = c5[i], "TIME"
                 trades.append(active); in_trade = False
             continue
@@ -338,9 +340,11 @@ def simulate_symbol(sym: str, data: dict) -> list:
             slope_fading = slope_now < slope_prev
             dist = cur_close - cur_bb_mid
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
-                # SL behind the BB band, not from entry price
                 sl = cur_bb_up + fp["sl_atr"] * cur_atr
-                tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close - fp["tp_atr"] * cur_atr
+                if band_to_band:
+                    tp = cur_bb_lo   # full range: upper → lower band
+                else:
+                    tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close - fp["tp_atr"] * cur_atr
                 active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "FADE")
                 in_trade = True
                 continue
@@ -350,12 +354,140 @@ def simulate_symbol(sym: str, data: dict) -> list:
             slope_fading = slope_now > slope_prev
             dist = cur_bb_mid - cur_close
             if dist >= fp["min_dist"] * cur_atr and slope_fading:
-                # SL behind the BB band, not from entry price
                 sl = cur_bb_lo - fp["sl_atr"] * cur_atr
-                tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close + fp["tp_atr"] * cur_atr
+                if band_to_band:
+                    tp = cur_bb_up   # full range: lower → upper band
+                else:
+                    tp = cur_bb_mid if fp["tp_atr"] == 0 else cur_close + fp["tp_atr"] * cur_atr
                 active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "FADE")
                 in_trade = True
                 continue
+
+    return trades
+
+
+# ---------------------------------------------------------------------------
+# Walking-the-band detector
+# ---------------------------------------------------------------------------
+
+# Minimum bars "walking" a BB band before entry signal
+WALK_BARS     = 3   # 3+ bars touching the band (shadow) = exhaustion pattern
+WALK_MAX_HOLD = 36  # bars × 5m = 180 min (band-to-band takes longer)
+
+
+def simulate_symbol_walk(sym: str, data: dict) -> list:
+    """
+    Detect 'walking the band' exhaustion pattern:
+      - N consecutive bars where close is within WALK_PROXIMITY of a BB band
+      - ADX_1H < adx_max (ranging market)
+      - Volume declining over the walk
+      - Entry: bar that closes BACK inside the bands (reversal confirmation)
+      - TP: opposite band | SL: band + sl_atr × ATR
+    """
+    raw_5m = data["5m"]
+    raw_1h = data["1h"]
+
+    ts5, o5, h5, l5, c5, v5 = _parse(raw_5m)
+    ts1, o1, h1, l1, c1, _  = _parse(raw_1h)
+
+    n5 = len(ts5)
+    fp = FADE_PARAMS.get(sym, FADE_PARAMS["BTC-USDT"])
+    if fp["adx_max"] == 0:
+        return []
+
+    adx_1h = _adx_series(h1, l1, c1, ADX_1H_PERIOD)
+    atr5   = _atr_series(h5, l5, c5, ATR_PERIOD)
+
+    bb_mid = np.zeros(n5)
+    bb_up  = np.zeros(n5)
+    bb_lo  = np.zeros(n5)
+    for i in range(BB_PERIOD - 1, n5):
+        sl = c5[i - BB_PERIOD + 1: i + 1]
+        m  = float(np.mean(sl))
+        s  = float(np.std(sl, ddof=0))
+        bb_mid[i] = m
+        bb_up[i]  = m + BB_STD * s
+        bb_lo[i]  = m - BB_STD * s
+
+    trades   = []
+    in_trade = False
+    active   = None
+    warmup   = max(BB_PERIOD, ATR_PERIOD, ADX_1H_PERIOD * 2) + WALK_BARS + 2
+
+    for i in range(warmup, n5 - 1):
+        if in_trade:
+            active.bars_held += 1
+            hi = h5[i]
+            lo = l5[i]
+            sl_hit = (active.side == "LONG"  and lo <= active.sl) or \
+                     (active.side == "SHORT" and hi >= active.sl)
+            tp_hit = (active.side == "LONG"  and hi >= active.tp) or \
+                     (active.side == "SHORT" and lo <= active.tp)
+            if sl_hit:
+                active.exit_p, active.outcome = active.sl, "SL"
+                trades.append(active); in_trade = False
+            elif tp_hit:
+                active.exit_p, active.outcome = active.tp, "TP"
+                trades.append(active); in_trade = False
+            elif active.bars_held >= WALK_MAX_HOLD:
+                active.exit_p, active.outcome = c5[i], "TIME"
+                trades.append(active); in_trade = False
+            continue
+
+        cur_close = c5[i]
+        cur_atr   = atr5[i]
+        cur_bb_up = bb_up[i]
+        cur_bb_lo = bb_lo[i]
+        if cur_atr == 0 or cur_bb_up == 0:
+            continue
+
+        # 1H ADX check
+        idx1 = np.searchsorted(ts1, ts5[i], side='left') - 1
+        if idx1 < ADX_1H_PERIOD * 2:
+            continue
+        if adx_1h[idx1] >= fp["adx_max"]:
+            continue
+
+        # Walking = shadow touched the band (low <= bb_lo or high >= bb_up)
+        # More precise than proximity — actual wick/body contact with the band
+        def _walked_lower(lookback):
+            for j in range(1, lookback + 1):
+                if bb_lo[i - j] == 0:
+                    return False
+                if l5[i - j] > bb_lo[i - j]:   # low must touch or breach lower band
+                    return False
+            return True
+
+        def _walked_upper(lookback):
+            for j in range(1, lookback + 1):
+                if bb_up[i - j] == 0:
+                    return False
+                if h5[i - j] < bb_up[i - j]:   # high must touch or breach upper band
+                    return False
+            return True
+
+        # Volume declining WITHIN the walk bars only (not comparing to entry bar)
+        # walk bars: i-1 (most recent) ... i-WALK_BARS (oldest) — each older bar >= newer bar
+        vol_walk_declining = all(v5[i - j - 1] >= v5[i - j] for j in range(1, WALK_BARS))
+        # Entry bar must spike vs avg volume during walk (reversal confirmation)
+        avg_walk_vol = float(np.mean([v5[i - j] for j in range(1, WALK_BARS + 1)]))
+        vol_spike = avg_walk_vol > 0 and v5[i] > avg_walk_vol * 1.5
+
+        # LONG: was walking lower band, now closes back inside + volume spike
+        if _walked_lower(WALK_BARS) and cur_close > cur_bb_lo and vol_walk_declining and vol_spike:
+            sl = cur_bb_lo - fp["sl_atr"] * cur_atr
+            tp = cur_bb_up
+            active   = TradeResult("LONG", cur_close, sl, tp, ts5[i], "WALK")
+            in_trade = True
+            continue
+
+        # SHORT: was walking upper band, now closes back inside + volume spike
+        if _walked_upper(WALK_BARS) and cur_close < cur_bb_up and vol_walk_declining and vol_spike:
+            sl = cur_bb_up + fp["sl_atr"] * cur_atr
+            tp = cur_bb_lo
+            active   = TradeResult("SHORT", cur_close, sl, tp, ts5[i], "WALK")
+            in_trade = True
+            continue
 
     return trades
 
@@ -401,6 +533,8 @@ def main(cache: dict = None):
     print(f"Cache start: {cache_start_ms}")
 
     all_trades: dict[str, list] = {}
+    all_trades_b2b: dict[str, list] = {}
+    all_trades_walk: dict[str, list] = {}
 
     for sym in SYMBOLS:
         data = cache.get(sym, {})
@@ -408,53 +542,61 @@ def main(cache: dict = None):
             print(f"[SKIP] {sym}: missing 5m or 1h data")
             continue
         print(f"Simulating {sym} …", flush=True)
-        trades = simulate_symbol(sym, data)
-        all_trades[sym] = trades
+        all_trades[sym]      = simulate_symbol(sym, data, band_to_band=False)
+        all_trades_b2b[sym]  = simulate_symbol(sym, data, band_to_band=True)
+        all_trades_walk[sym] = simulate_symbol_walk(sym, data)
 
     # -----------------------------------------------------------------------
     # Report
     # -----------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("BB+Volume 5m — Backtest Results (35d)")
-    print("=" * 70)
+    combined      = [t for trades in all_trades.values()      for t in trades]
+    combined_b2b  = [t for trades in all_trades_b2b.values()  for t in trades]
+    combined_walk = [t for trades in all_trades_walk.values() for t in trades]
 
-    combined = [t for trades in all_trades.values() for t in trades]
-
-    # Overall
-    print("\n[OVERALL — FADE only]")
-    print(_stats_line("ALL", combined))
-
-    # Per symbol
-    print("\n[BY SYMBOL]")
-    for sym in SYMBOLS:
-        trades = all_trades.get(sym, [])
-        print(_stats_line(sym, trades))
-
-    # Period split — use timestamps from first symbol that has trades
     ref_sym = next((s for s in SYMBOLS if all_trades.get(s)), None)
+    ts_periods = []
     if ref_sym:
-        raw_5m = cache[ref_sym]["5m"]
-        ts5, *_ = _parse(raw_5m)
-        latest_ts = int(ts5[-1])
+        ts5, *_ = _parse(cache[ref_sym]["5m"])
+        latest_ts  = int(ts5[-1])
         ms_per_day = 86_400_000
-
-        print("\n[BY PERIOD]")
         for p in range(NUM_PERIODS):
             ts_end   = latest_ts - p * DAYS_BACK * ms_per_day
             ts_start = ts_end - DAYS_BACK * ms_per_day
-            label    = f"P{p + 1} (last {(p + 1) * DAYS_BACK}d — {p * DAYS_BACK}d ago)"
-            subset   = [t for t in combined
-                        if ts_start <= t.ts_entry <= ts_end]
-            print(_stats_line(label, subset))
+            ts_periods.append((ts_start, ts_end, f"P{p+1} ({p*DAYS_BACK}–{(p+1)*DAYS_BACK}d ago)"))
+
+    def _report(label, trades_by_sym, combined_trades):
+        print("\n" + "=" * 70)
+        print(f"BB+Volume 5m — {label}")
+        print("=" * 70)
+        print("\n[OVERALL]")
+        print(_stats_line("ALL", combined_trades))
+        print("\n[BY SYMBOL]")
+        for sym in SYMBOLS:
+            print(_stats_line(sym, trades_by_sym.get(sym, [])))
+        if ts_periods:
+            print("\n[BY PERIOD]")
+            for ts_start, ts_end, plabel in ts_periods:
+                subset = [t for t in combined_trades if ts_start <= t.ts_entry <= ts_end]
+                print(_stats_line(plabel, subset))
+        print("=" * 70)
+
+    _report("TP = BB mid  (hold 60m)", all_trades, combined)
+    _report("TP = opposite band  (hold 180m)", all_trades_b2b, combined_b2b)
+    _report(f"Walking the band ({WALK_BARS}+ bars, hold 180m)", all_trades_walk, combined_walk)
+
+    print("\n[COMPARISON]")
+    s1 = _stats(combined)
+    s2 = _stats(combined_b2b)
+    s3 = _stats(combined_walk)
+    print(f"  {'':25s}  {'n':>4}  {'WR':>6}  {'PF':>6}  {'avg_R':>7}  {'TIME':>5}")
+    print(f"  {'BB mid (baseline)':25s}  {s1['n']:>4}  {s1['wr']:>5.1f}%  {s1['pf']:>6.2f}  {s1['avg_r']:>+7.3f}  {s1['time_exit_pct']:>4.0f}%")
+    print(f"  {'Band-to-band (1 touch)':25s}  {s2['n']:>4}  {s2['wr']:>5.1f}%  {s2['pf']:>6.2f}  {s2['avg_r']:>+7.3f}  {s2['time_exit_pct']:>4.0f}%")
+    print(f"  {f'Walk ({WALK_BARS}+ bars) opp band':25s}  {s3['n']:>4}  {s3['wr']:>5.1f}%  {s3['pf']:>6.2f}  {s3['avg_r']:>+7.3f}  {s3['time_exit_pct']:>4.0f}%")
 
     print("\n[PARAMS]")
     print(f"  BB({BB_PERIOD}, {BB_STD})  vol_ma({VOL_MA_PERIOD})  ATR({ATR_PERIOD})")
-    print(f"  FADE per-pair (ADX_max / vol_mult / SL_atr / TP_atr / min_dist):")
     for s, fp in FADE_PARAMS.items():
-        print(f"    {s}: ADX<{fp['adx_max']}  vol<{fp['vol_mult']}x  "
-              f"SL={fp['sl_atr']}R  TP={fp['tp_atr']}R  min_dist={fp['min_dist']}ATR")
-    print(f"  Max hold: {FADE_MAX_HOLD} bars (60 min)")
-    print("=" * 70)
+        print(f"    {s}: ADX<{fp['adx_max']}  vol<{fp['vol_mult']}x  SL={fp['sl_atr']}ATR  min_dist={fp['min_dist']}ATR")
 
 
 def optimize_adx(cache: dict, symbols: list, adx_range: list) -> None:
@@ -483,9 +625,43 @@ def optimize_adx(cache: dict, symbols: list, adx_range: list) -> None:
     print("=" * 70)
 
 
+def optimize_bb_walk(cache: dict) -> None:
+    """Grid search: BB period × BB std for walking-the-band strategy."""
+    global BB_PERIOD, BB_STD
+    periods = [10, 15, 20, 25, 30]
+    stds    = [1.5, 2.0, 2.5]
+    print("\n" + "=" * 70)
+    print("BB PARAMETER GRID (walking-the-band, all active pairs)")
+    print("=" * 70)
+    print(f"  {'period':>6}  {'std':>4}  {'n':>4}  {'WR':>6}  {'PF':>6}  {'avg_R':>7}")
+    print(f"  {'-'*48}")
+    best_pf = 0.0
+    for period in periods:
+        for std in stds:
+            BB_PERIOD = period
+            BB_STD    = std
+            all_t = []
+            for sym in SYMBOLS:
+                data = cache.get(sym, {})
+                if data.get("5m") and data.get("1h"):
+                    all_t.extend(simulate_symbol_walk(sym, data))
+            s = _stats(all_t)
+            marker = " ***" if s["n"] >= 10 and s["pf"] >= 1.5 else ""
+            if s["pf"] > best_pf and s["n"] >= 10:
+                best_pf = s["pf"]
+            pf_str = f"{s['pf']:6.2f}" if s["n"] > 0 else "     -"
+            wr_str = f"{s['wr']:5.1f}%" if s["n"] > 0 else "     -"
+            ar_str = f"{s['avg_r']:+.3f}" if s["n"] > 0 else "      -"
+            print(f"  {period:>6}  {std:>4.1f}  {s['n']:>4}  {wr_str}  {pf_str}  {ar_str}{marker}")
+    # restore defaults
+    BB_PERIOD = 20
+    BB_STD    = 2.0
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     print("Loading cache …")
     with open(CACHE_FILE, "rb") as _f:
         _cache = pickle.load(_f)
     main(_cache)
-    optimize_adx(_cache, ["XRP-USDT", "SOL-USDT"], adx_range=[10, 13, 15, 18, 20, 22, 25, 28])
+    optimize_bb_walk(_cache)
