@@ -37,6 +37,41 @@ OUTCOME_H     = 24          # max forward window to fetch (hours)
 BUFFER_MS     = 3_600_000   # 1h extra buffer before attempting label
 
 
+def _compute_mae_r(raw_forward, side: str, entry: float, sl: float, tp: float,
+                   signal_ts_ms: int, max_hold_ms: int) -> float:
+    sl_dist = abs(entry - sl)
+    if not raw_forward or sl_dist <= 0:
+        return 0.0
+
+    mae = 0.0
+    for c in reversed(raw_forward):
+        ts_c = int(c[0])
+        if ts_c <= signal_ts_ms:
+            continue
+        if ts_c - signal_ts_ms > max_hold_ms:
+            break
+
+        high = float(c[2])
+        low = float(c[3])
+
+        if side == "buy":
+            if low <= sl:
+                mae = max(mae, entry - sl)
+                break
+            mae = max(mae, entry - low)
+            if high >= tp:
+                break
+        else:
+            if high >= sl:
+                mae = max(mae, sl - entry)
+                break
+            mae = max(mae, high - entry)
+            if low <= tp:
+                break
+
+    return round(max(0.0, mae) / sl_dist, 2)
+
+
 def _load_jsonl(path: Path) -> list:
     if not path.exists():
         return []
@@ -117,19 +152,9 @@ async def run(logger=None) -> None:
                         direction = 1 if side == "buy" else -1
                         exit_r    = round(direction * (exit_price - close) / sl_dist, 2)
 
-                    # Compute MAE (max adverse excursion in R units)
-                    mae_r = 0.0
-                    if sl_dist > 0:
-                        mae = 0.0
-                        for _c in reversed(raw_fwd):
-                            _ts = int(_c[0])
-                            if _ts <= ts_ms:
-                                continue
-                            if _ts > ts_ms + max_hold_ms:
-                                break
-                            _unf = (close - float(_c[3])) if side == "buy" else (float(_c[2]) - close)
-                            mae  = max(mae, _unf)
-                        mae_r = round(mae / sl_dist, 2)
+                    mae_r = _compute_mae_r(
+                        raw_fwd, side, close, sl, tp, ts_ms, max_hold_ms,
+                    )
 
                     label = {
                         "signal_id":  sig["signal_id"],
