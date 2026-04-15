@@ -26,7 +26,10 @@ from pathlib import Path
 
 import numpy as np
 
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
@@ -158,6 +161,13 @@ ADX_PERIOD   = 14
 HOLD_FAST_M  = 150   # baseline=120  extended=180  long_hold=480
 HOLD_SWING_M = 300   # baseline=240  extended=360  long_hold=720
 
+# Research-only toggles. Defaults preserve baseline behavior.
+BT_WEAK_TREND = os.getenv("BT_WEAK_TREND", "0") == "1"
+BT_WEAK_TREND_ADX_MIN = float(os.getenv("BT_WEAK_TREND_ADX_MIN", "20"))
+BT_WEAK_TREND_ADX_MAX = float(os.getenv("BT_WEAK_TREND_ADX_MAX", "26"))
+BT_WEAK_TREND_SLOPE_MIN = float(os.getenv("BT_WEAK_TREND_SLOPE_MIN", "40"))
+BT_WEAK_TREND_SLOPE_ACCEL = float(os.getenv("BT_WEAK_TREND_SLOPE_ACCEL", "5"))
+
 # ── Fair-value filters ───────────────────────────────────────────────────────
 # Block SHORT signals when perp is running ahead of spot (overheated longs).
 # None = disabled. Hypothesis: SHORT + perp_div > 0 → WR 66% vs 79%.
@@ -252,19 +262,30 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 
 # ── Market regime detector ──────────────────────────────────────────────────────
 def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
-                  di_spread_4h: float, di_spread_1h: float, bb_width: float) -> str:
+                  di_spread_4h: float, di_spread_1h: float, bb_width: float,
+                  adx_1h_rising: bool = False, st_1h_dir: str = "") -> str:
     """
     Classify market into one of four regimes:
       TRENDING — strong directional movement, SWING + FAST with trend
       DRIFT    — persistent directional move without acceleration (new)
-      RANGING  — sideways bounded, FAST both directions, SWING off
-      CHOPPY   — volatile but no direction, no trade
+      WEAK_TREND — research-only transition state, traded as stricter DRIFT
+      RANGING    — sideways bounded, FAST both directions, SWING off
+      CHOPPY     — volatile but no direction, no trade
     """
     # TRENDING: both timeframes show direction conviction
     trend_4h = adx_4h >= 22 and di_spread_4h >= 10
     trend_1h = adx_1h >= 18 and di_spread_1h >= 8
     if trend_4h and trend_1h:
         return "TRENDING"
+
+    weak_trend = (
+        BT_WEAK_TREND
+        and BT_WEAK_TREND_ADX_MIN <= adx_1h <= BT_WEAK_TREND_ADX_MAX
+        and di_spread_1h >= 8
+        and (adx_1h_rising or st_1h_dir in ("up", "down"))
+    )
+    if weak_trend:
+        return "WEAK_TREND"
 
     # DRIFT: 1H has persistent direction without full trend confirmation
     # Catches: ranging_adx_high (ADX 20-26 not in full trend),
@@ -434,7 +455,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # ── Regime detection ──────────────────────────────────────────────────────
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
-                           di_spread_4h, di_spread_1h, bb_width)
+                           di_spread_4h, di_spread_1h, bb_width,
+                           adx_1h_rising=adx_1h_rising,
+                           st_1h_dir=st_1h["direction"])
     if regime == "TRENDING" and four_h_conflict:
         regime = "RANGING"
 
@@ -528,7 +551,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             else:
                 _drop = "ranging_day_pos_wrong"
 
-    elif regime == "DRIFT":
+    elif regime in ("DRIFT", "WEAK_TREND"):
         cfg_d = _mode_cfg(pp, "drift", "fast")
         ema_slope_up   = (len(ema20_1h) >= 4
                           and ema20_1h[-1] > ema20_1h[-2]
@@ -636,7 +659,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         if regime == "RANGING":
             if side == "buy"  and close > vwap: vwap_ok = False
             if side == "sell" and close < vwap: vwap_ok = False
-        elif regime in ("TRENDING", "DRIFT"):
+        elif regime in ("TRENDING", "DRIFT", "WEAK_TREND"):
             if side == "buy"  and close < vwap: vwap_ok = False
             if side == "sell" and close > vwap: vwap_ok = False
 
@@ -644,7 +667,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # Hypothesis A: ADX_1H 12-14 = barely drifting → mostly TIME_EXIT.
     # Post-classification veto — regime label stays DRIFT, ENTRY blocked.
     _DRIFT_ADX1H_MIN = 15.0
-    drift_adx1h_veto = regime == "DRIFT" and adx_1h < _DRIFT_ADX1H_MIN
+    drift_adx1h_veto = regime in ("DRIFT", "WEAK_TREND") and adx_1h < _DRIFT_ADX1H_MIN
     if drift_adx1h_veto:
         trade_style, side = "NO_TRADE", None
         _drop = _drop or "drift_adx1h_low"
@@ -654,14 +677,16 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # Condition: slope accelerating (current > prev) in trade direction.
     # Applied only to TRENDING/DRIFT — RANGING is mean-reversion, slope n/a.
     _SLOPE_MIN = 30.0
-    if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT"):
+    if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT", "WEAK_TREND"):
         sl_cur  = slope_15m      if trade_style == "FAST" else slope_1h
         sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
+        slope_min = BT_WEAK_TREND_SLOPE_MIN if regime == "WEAK_TREND" else _SLOPE_MIN
+        slope_accel = BT_WEAK_TREND_SLOPE_ACCEL if regime == "WEAK_TREND" else 0.0
         slope_ok = False
         if side == "buy":
-            slope_ok = sl_cur >= _SLOPE_MIN and sl_cur > sl_prev
+            slope_ok = sl_cur >= slope_min and sl_cur > sl_prev + slope_accel
         elif side == "sell":
-            slope_ok = sl_cur <= -_SLOPE_MIN and sl_cur < sl_prev
+            slope_ok = sl_cur <= -slope_min and sl_cur < sl_prev - slope_accel
         if not slope_ok:
             trade_style, side = "NO_TRADE", None
             _drop = _drop or "slope_weak"
@@ -690,7 +715,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            _tp1_k  = 0.4 if regime == "DRIFT" else 0.8
+            _tp1_k  = 0.4 if regime in ("DRIFT", "WEAK_TREND") else 0.8
             tp_p    = round(close + sl_dist * _tp1_k, 6)   # TP1
             tp2_p   = round(close + sl_dist * 1.5, 6)      # TP2
         else:
@@ -699,7 +724,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            _tp1_k  = 0.4 if regime == "DRIFT" else 0.8
+            _tp1_k  = 0.4 if regime in ("DRIFT", "WEAK_TREND") else 0.8
             tp_p    = round(close - sl_dist * _tp1_k, 6)   # TP1
             tp2_p   = round(close - sl_dist * 1.5, 6)      # TP2
 
