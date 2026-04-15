@@ -56,6 +56,7 @@ scripts/_sweep_variants/
 # Signal pipeline data (live runtime data)
 scripts/signal_log.jsonl
 scripts/signal_labels.jsonl
+scripts/signal_log_notrade.jsonl
 
 # Video analysis artifacts
 docs/*.mp4

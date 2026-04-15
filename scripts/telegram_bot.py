@@ -48,7 +48,8 @@ BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
 
 TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
-SIGNAL_LOG  = Path(__file__).parent / "signal_log.jsonl"   # append-only, never edit inline
+SIGNAL_LOG      = Path(__file__).parent / "signal_log.jsonl"       # append-only, never edit inline
+NOTRADE_LOG     = Path(__file__).parent / "signal_log_notrade.jsonl"  # live funnel analysis
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
@@ -912,6 +913,26 @@ async def _scanner_loop() -> None:
                 except Exception:
                     pass
             else:
+                # Log NO_TRADE tick for live funnel analysis
+                try:
+                    _nt = {
+                        "ts_ms":       int(captured_at.timestamp() * 1000),
+                        "ts_dt":       captured_at.strftime("%Y-%m-%d %H:%M"),
+                        "symbol":      pair,
+                        "entry_signal": signal,
+                        "drop_reason": result.get("drop_reason") or "",
+                        "regime":      result.get("regime") or "",
+                        "adx_1h":      result.get("adx_1h") or "",
+                        "adx_4h":      result.get("adx_4h") or "",
+                        "vol_ratio":   result.get("vol_ratio") or "",
+                        "slope_15m":   result.get("slope_15m") or "",
+                        "slope_1h":    result.get("slope_1h") or "",
+                    }
+                    with open(NOTRADE_LOG, "a", encoding="utf-8") as _lf:
+                        _lf.write(json.dumps(_nt) + "\n")
+                except Exception:
+                    pass
+
                 # Check for BB FADE hint even when main signal is NO_TRADE
                 fade_hint = result.get("5m_fade_hint")
                 fade_data = result.get("5m_fade_data") or {}
