@@ -149,7 +149,7 @@ SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
-DAYS_BACK    = 12
+DAYS_BACK    = 21
 INTERVAL_M   = 15  # matches live scanner cadence (every :00/:15/:30/:45)
 OUTCOME_H    = 24
 ADX_PERIOD   = 14
@@ -164,8 +164,8 @@ HOLD_SWING_M = 300   # baseline=240  extended=360  long_hold=720
 PERP_DIV_SHORT_VETO = 0.0   # pct; 0.0 = block any positive divergence for shorts
 
 # ── Candle cache ────────────────────────────────────────────────────────────────
-CACHE_FILE       = Path(__file__).parent / "backtest_candle_cache_35d.pkl"
-CACHE_MI_FILE    = Path(__file__).parent / "backtest_mark_index_cache_35d.pkl"
+CACHE_FILE       = Path(__file__).parent / "backtest_candle_cache_65d.pkl"
+CACHE_MI_FILE    = Path(__file__).parent / "backtest_mark_index_cache_65d.pkl"
 CACHE_MAX_AGE    = 23 * 3600
 BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 
@@ -174,25 +174,25 @@ BACKTEST_RUNS_DIR = Path(__file__).parent / "backtest_runs"
 # ── Param sets ──────────────────────────────────────────────────────────────────
 PARAM_SETS = [
     {
-        "label":         "COMBINED | period1 (last 12d)",
+        "label":         "COMBINED | period1 (last 21d)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
         "offset_days":   0,
     },
     {
-        "label":         "COMBINED | period2 (12d-24d ago)",
+        "label":         "COMBINED | period2 (21d-42d ago)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
-        "offset_days":   12,
+        "offset_days":   21,
     },
     {
-        "label":         "COMBINED | period3 (24d-35d ago)",
+        "label":         "COMBINED | period3 (42d-63d ago)",
         "mode":          "COMBINED",
         "night_filter":  False,
         "time_block_h":  [],
-        "offset_days":   24,
+        "offset_days":   42,
     },
 ]
 
