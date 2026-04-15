@@ -22,7 +22,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 _LOG_FILE = Path(__file__).parent / "tape" / "tape.log"
