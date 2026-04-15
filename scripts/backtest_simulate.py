@@ -155,13 +155,17 @@ ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 DAYS_BACK    = 21
 INTERVAL_M   = 15  # matches live scanner cadence (every :00/:15/:30/:45)
 OUTCOME_H    = 24
-ADX_PERIOD   = 14
+
+# Research-only toggles. Defaults preserve baseline behavior.
+BT_REGIME_SCORE = os.getenv("BT_REGIME_SCORE", "0") == "1"   # multi-factor regime upgrade
+BT_REGIME_SCORE_MIN = int(os.getenv("BT_REGIME_SCORE_MIN", "3"))  # min score to upgrade RANGING→DRIFT
+BT_ADX_PERIOD = int(os.getenv("BT_ADX_PERIOD", "9"))             # 9=fast reaction (default), 14=standard
+
+ADX_PERIOD   = BT_ADX_PERIOD
 
 # ── Hold time (change here between runs: baseline / extended / long_hold) ───────
 HOLD_FAST_M  = 150   # baseline=120  extended=180  long_hold=480
 HOLD_SWING_M = 300   # baseline=240  extended=360  long_hold=720
-
-# Research-only toggles. Defaults preserve baseline behavior.
 BT_WEAK_TREND = os.getenv("BT_WEAK_TREND", "0") == "1"
 BT_WEAK_TREND_ADX_MIN = float(os.getenv("BT_WEAK_TREND_ADX_MIN", "20"))
 BT_WEAK_TREND_ADX_MAX = float(os.getenv("BT_WEAK_TREND_ADX_MAX", "26"))
@@ -460,6 +464,19 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                            st_1h_dir=st_1h["direction"])
     if regime == "TRENDING" and four_h_conflict:
         regime = "RANGING"
+
+    # ── Regime score upgrade (research toggle BT_REGIME_SCORE) ───────────────
+    # Catches early trends where ADX_4H lags but faster indicators already confirm.
+    # Upgrades RANGING → DRIFT when ≥ BT_REGIME_SCORE_MIN factors agree.
+    if BT_REGIME_SCORE and regime == "RANGING":
+        rs = 0
+        if di_spread_1h >= 8:              rs += 1  # DI diverging (reacts before ADX)
+        if abs(slope_1h) >= 25:            rs += 1  # price slope strong
+        if bias_1h in ("UP", "DOWN"):      rs += 1  # EMA 20/50 aligned
+        if vol_ratio >= 0.8:               rs += 1  # volume present
+        if adx_1h >= 20:                   rs += 1  # ADX not flat (even if lagging)
+        if rs >= BT_REGIME_SCORE_MIN:
+            regime = "DRIFT"
 
     # ── Mode + Direction by regime ────────────────────────────────────────────
     trade_style = "NO_TRADE"
