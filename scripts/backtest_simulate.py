@@ -285,7 +285,8 @@ def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
 
 def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                    mode="SWING", night_filter=False, oi_delta=0.0,
-                   time_block_h=None, raw_5m=None, trade_delta_15m=0.0):
+                   time_block_h=None, raw_5m=None, trade_delta_15m=0.0,
+                   _debug=False):
     """
     mode="FAST"     — fast intraday only (1-2h hold)
     mode="SWING"    — intraday swing only (2-4h hold)
@@ -426,6 +427,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # Late-move veto: symmetric — block long at top AND short at bottom
     late_move = False  # evaluated per-side after signal is known
+
+    # debug-only fields (populated later in respective blocks)
+    ema_drift_dir    = ""
+    drift_adx1h_veto = False
 
     # ── Regime detection ──────────────────────────────────────────────────────
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
@@ -738,7 +743,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
 
-    return {
+    out = {
         "entry_signal":    entry_signal,
         "drop_reason":     _drop if entry_signal == "NO_TRADE" else None,
         "trade_style":     trade_style,
@@ -767,6 +772,19 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "slope_15m_prev":  round(slope_15m_prev, 1),
         "is_night":        is_night,
     }
+    if _debug:
+        out.update({
+            "di_spread_1h":     round(di_spread_1h, 1),
+            "di_spread_4h":     round(di_spread_4h, 1),
+            "bias_4h":          bias_4h,
+            "vwap_ok":          vwap_ok,
+            "vwap":             round(vwap, 4) if vwap else None,
+            "ema_drift_dir":    ema_drift_dir,
+            "signal_hour":      signal_hour,
+            "bb_pct_b":         round(bb_pct_b, 1),
+            "drift_adx1h_veto": drift_adx1h_veto,
+        })
+    return out
 
 
 NOTIONAL_RATIO = 1.5   # notional = balance × 1.5 (e.g. $1500 at $1000 balance, 10x leverage)
