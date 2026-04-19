@@ -294,7 +294,7 @@ def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
     # DRIFT: 1H has persistent direction without full trend confirmation
     # Catches: ranging_adx_high (ADX 20-26 not in full trend),
     #          trending_adx_not_rising, trending_vol_low dead zones
-    drift = 12 <= adx_1h <= 26 and di_spread_1h >= 5
+    drift = 12 <= adx_1h <= 30 and di_spread_1h >= 5
     if drift:
         return "DRIFT"
 

@@ -1134,7 +1134,7 @@ def _detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
     trend_1h = adx_1h >= 18 and di_spread_1h >= 8
     if trend_4h and trend_1h:
         return "TRENDING"
-    drift = 12 <= adx_1h <= 26 and di_spread_1h >= 5
+    drift = 12 <= adx_1h <= 30 and di_spread_1h >= 5
     if drift:
         return "DRIFT"
     if bb_width >= 3.0 and di_spread_1h < 6 and adx_4h < 22:
