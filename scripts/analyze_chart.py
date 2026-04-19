@@ -1483,6 +1483,14 @@ async def run(
         if not _slope_ok:
             _trade_style, _side = "NO_TRADE", None
 
+    # DRIFT SHORT veto — live 11d stats: n=17, WR 29%, PF 0.18, avg -0.554R.
+    # Why: DRIFT has no clear trend → shorts hit mean-reversion bounce.
+    # Backtest side_adj edge is lowest here (+0.27 vs +0.71 TRENDING).
+    # TRENDING SHORT and FADE SHORT are untouched.
+    _drift_short_veto = _regime == "DRIFT" and _side == "sell"
+    if _drift_short_veto:
+        _trade_style, _side = "NO_TRADE", None
+
     _strong_4h_veto = (
         _trade_style == "FAST"
         and _side is not None
@@ -1706,6 +1714,7 @@ async def run(
         "perp_div_4bar":        round(_perp_div_4bar, 4) if _perp_div_4bar is not None else None,
         "perp_div_short_veto":  _perp_div_short_veto,
         "drift_adx1h_veto":     _drift_adx1h_veto,
+        "drift_short_veto":     _drift_short_veto,
         "5m_fade_hint":         _5m_fade_hint,
         "5m_fade_data":         _5m_fade_data,
         "micro":                _micro,

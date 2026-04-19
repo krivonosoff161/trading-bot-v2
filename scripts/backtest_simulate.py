@@ -689,6 +689,15 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         trade_style, side = "NO_TRADE", None
         _drop = _drop or "drift_adx1h_low"
 
+    # ── DRIFT SHORT veto (Stage 1) ───────────────────────────────────────────
+    # Live 11d: DRIFT SELL n=17 WR 29% PF 0.18 avg -0.554R → biggest bleeder.
+    # DRIFT = no clear trend → shorts eat mean-reversion bounces.
+    # TRENDING SHORT and FADE SHORT keep their edge.
+    drift_short_veto = regime in ("DRIFT", "WEAK_TREND") and side == "sell"
+    if drift_short_veto:
+        trade_style, side = "NO_TRADE", None
+        _drop = _drop or "drift_short_veto"
+
     # ── Slope veto (Drozdov): price angle must confirm direction ─────────────
     # FAST uses 15m slope (matches trade duration), SWING uses 1H slope.
     # Condition: slope accelerating (current > prev) in trade direction.
