@@ -232,7 +232,8 @@ class TradeResult:
 # Simulate one symbol
 # ---------------------------------------------------------------------------
 
-def simulate_symbol(sym: str, data: dict, band_to_band: bool = False) -> list:
+def simulate_symbol(sym: str, data: dict, band_to_band: bool = False,
+                    vol_mult_override: float = None) -> list:
     raw_5m = data["5m"]
     raw_1h = data["1h"]
 
@@ -242,7 +243,9 @@ def simulate_symbol(sym: str, data: dict, band_to_band: bool = False) -> list:
     n5 = len(ts5)
     n1 = len(ts1)
 
-    fp = FADE_PARAMS.get(sym, FADE_PARAMS["BTC-USDT"])
+    fp = dict(FADE_PARAMS.get(sym, FADE_PARAMS["BTC-USDT"]))  # copy to avoid mutation
+    if vol_mult_override is not None:
+        fp["vol_mult"] = vol_mult_override
 
     # Precompute 1H ADX series
     adx_1h = _adx_series(h1, l1, c1, ADX_1H_PERIOD)
@@ -535,6 +538,7 @@ def main(cache: dict = None):
     all_trades: dict[str, list] = {}
     all_trades_b2b: dict[str, list] = {}
     all_trades_walk: dict[str, list] = {}
+    all_trades_vol10: dict[str, list] = {}   # relaxed vol_mult=1.0 test
 
     for sym in SYMBOLS:
         data = cache.get(sym, {})
@@ -542,16 +546,18 @@ def main(cache: dict = None):
             print(f"[SKIP] {sym}: missing 5m or 1h data")
             continue
         print(f"Simulating {sym} …", flush=True)
-        all_trades[sym]      = simulate_symbol(sym, data, band_to_band=False)
-        all_trades_b2b[sym]  = simulate_symbol(sym, data, band_to_band=True)
-        all_trades_walk[sym] = simulate_symbol_walk(sym, data)
+        all_trades[sym]       = simulate_symbol(sym, data, band_to_band=False)
+        all_trades_b2b[sym]   = simulate_symbol(sym, data, band_to_band=True)
+        all_trades_walk[sym]  = simulate_symbol_walk(sym, data)
+        all_trades_vol10[sym] = simulate_symbol(sym, data, vol_mult_override=1.0)
 
     # -----------------------------------------------------------------------
     # Report
     # -----------------------------------------------------------------------
-    combined      = [t for trades in all_trades.values()      for t in trades]
-    combined_b2b  = [t for trades in all_trades_b2b.values()  for t in trades]
-    combined_walk = [t for trades in all_trades_walk.values() for t in trades]
+    combined       = [t for trades in all_trades.values()       for t in trades]
+    combined_b2b   = [t for trades in all_trades_b2b.values()   for t in trades]
+    combined_walk  = [t for trades in all_trades_walk.values()  for t in trades]
+    combined_vol10 = [t for trades in all_trades_vol10.values() for t in trades]
 
     ref_sym = next((s for s in SYMBOLS if all_trades.get(s)), None)
     ts_periods = []
@@ -581,6 +587,7 @@ def main(cache: dict = None):
         print("=" * 70)
 
     _report("TP = BB mid  (hold 60m)", all_trades, combined)
+    _report("TP = BB mid, vol_mult=1.0  (hold 60m)", all_trades_vol10, combined_vol10)
     _report("TP = opposite band  (hold 180m)", all_trades_b2b, combined_b2b)
     _report(f"Walking the band ({WALK_BARS}+ bars, hold 180m)", all_trades_walk, combined_walk)
 
@@ -588,8 +595,10 @@ def main(cache: dict = None):
     s1 = _stats(combined)
     s2 = _stats(combined_b2b)
     s3 = _stats(combined_walk)
+    s4 = _stats(combined_vol10)
     print(f"  {'':25s}  {'n':>4}  {'WR':>6}  {'PF':>6}  {'avg_R':>7}  {'TIME':>5}")
     print(f"  {'BB mid (baseline)':25s}  {s1['n']:>4}  {s1['wr']:>5.1f}%  {s1['pf']:>6.2f}  {s1['avg_r']:>+7.3f}  {s1['time_exit_pct']:>4.0f}%")
+    print(f"  {'BB mid vol_mult=1.0':25s}  {s4['n']:>4}  {s4['wr']:>5.1f}%  {s4['pf']:>6.2f}  {s4['avg_r']:>+7.3f}  {s4['time_exit_pct']:>4.0f}%")
     print(f"  {'Band-to-band (1 touch)':25s}  {s2['n']:>4}  {s2['wr']:>5.1f}%  {s2['pf']:>6.2f}  {s2['avg_r']:>+7.3f}  {s2['time_exit_pct']:>4.0f}%")
     print(f"  {f'Walk ({WALK_BARS}+ bars) opp band':25s}  {s3['n']:>4}  {s3['wr']:>5.1f}%  {s3['pf']:>6.2f}  {s3['avg_r']:>+7.3f}  {s3['time_exit_pct']:>4.0f}%")
 
