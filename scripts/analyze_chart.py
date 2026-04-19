@@ -395,10 +395,10 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             _arr = "📈" if side == "buy" else "📉"
             _sl_pct = abs(close - sl_p) / close * 100
             lines.append("📋 ИСПОЛНЕНИЕ (авто + ручное)")
-            lines.append(f"  {_arr} Вход:            {fp(close)}")
-            lines.append(f"  🛑 Стоп:            {fp(sl_p)}  (−{_sl_pct:.2f}% от входа)")
-            lines.append(f"  🎯 Цель (авто):     {fp(tp1_p)}")
-            lines.append(f"  🎯 Цель 2 (ручная): {fp(tp2_p)}")
+            lines.append(f"  {_arr} Вход:   {fp(close)}")
+            lines.append(f"  🛑 Стоп:   {fp(sl_p)}  (−{_sl_pct:.2f}% от входа)")
+            lines.append(f"  🎯 Цель:   {fp(tp1_p)}   — основная фиксация")
+            lines.append(f"  🔝 Стретч: {fp(tp2_p)}   — если импульс сохранится")
             lines.append("")
 
             # Position sizing hint — dynamic per signal

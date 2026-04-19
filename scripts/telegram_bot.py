@@ -446,15 +446,24 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                 print(f"[signal_log/fade_manual] error | symbol={symbol} err={_fe}")
 
         if entry_signal in ("ENTRY", "WAIT"):
-            style = ctx.get("trade_style_hint", "")
-            max_hours = 2 if style == "SCALP" else 8 if style == "PULLBACK" else 16
+            # Use real engine value, not ad-hoc lookup (was bug: default 16h).
+            max_hold_min = int(ctx.get("max_hold_minutes") or 150)
+            _h, _m = divmod(max_hold_min, 60)
+            if _h and _m:
+                _time_str = f"{_h}ч {_m}мин"
+            elif _h:
+                _time_str = f"{_h}ч"
+            else:
+                _time_str = f"{_m}мин"
             disclaimer = (
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "⚠️ ПРАВИЛА ВХОДА\n"
                 "├─ Плечо: 10x (выставляется автоматически)\n"
                 "├─ Стоп: обязателен, не двигать дальше\n"
-                f"├─ Время: закрыть через {max_hours}ч если уровни не достигнуты\n"
+                f"├─ Время: закрыть через {_time_str} если уровни не достигнуты\n"
                 "├─ Размер: нотионал = 1.5× баланс\n"
+                "├─ Цель = основная фиксация (закрываем тут)\n"
+                "├─ Стретч = опционально, только если импульс сохранится\n"
                 "└─ Это аналитика, не инвест-рекомендация\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             )
