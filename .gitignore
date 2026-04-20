@@ -15,6 +15,7 @@ __pycache__/
 venv/
 env/
 .venv/
+.pytest_cache/
 
 # Logs
 logs/
@@ -24,6 +25,7 @@ logs_archive/
 # Analyzer working folders
 scripts/tape/
 scripts/tg_temp/
+scripts/analysis_output/
 обучение проба/*
 !обучение проба/.gitkeep
 
