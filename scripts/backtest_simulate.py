@@ -267,7 +267,8 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
 # ── Market regime detector ──────────────────────────────────────────────────────
 def detect_regime(adx_1h: float, adx_4h: float, adx_4h_rising: bool,
                   di_spread_4h: float, di_spread_1h: float, bb_width: float,
-                  adx_1h_rising: bool = False, st_1h_dir: str = "") -> str:
+                  adx_1h_rising: bool = False, st_1h_dir: str = "",
+                  di_spread_15m: float = 0.0) -> str:
     """
     Classify market into one of four regimes:
       TRENDING — strong directional movement, SWING + FAST with trend
@@ -334,6 +335,10 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     adx_1h_prev, _,      _      = calc_adx(h1h, l1h, c1h, period=ADX_PERIOD, bar_index=-2)
     adx_1h_rising = float(adx_1h) > float(adx_1h_prev)
     di_spread_1h  = abs(float(pdi_1h) - float(mdi_1h))
+
+    # ADX on 15m — faster DI spread for V-bottom recovery detection
+    _, pdi_15m, mdi_15m = calc_adx(h15, l15, c15, period=ADX_PERIOD, bar_index=-1)
+    di_spread_15m = abs(float(pdi_15m) - float(mdi_15m))
 
     # ADX on 4H — slope + DI spread for SWING quality
     adx_4h,      pdi_4h, mdi_4h = calc_adx(h4h, l4h, c4h, period=ADX_PERIOD, bar_index=-1)
@@ -461,7 +466,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
                            di_spread_4h, di_spread_1h, bb_width,
                            adx_1h_rising=adx_1h_rising,
-                           st_1h_dir=st_1h["direction"])
+                           st_1h_dir=st_1h["direction"],
+                           di_spread_15m=di_spread_15m)
     if regime == "TRENDING" and four_h_conflict:
         regime = "RANGING"
 
@@ -546,12 +552,19 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             and vol_ratio >= cfg_r["vol"]
             and _bb_corridor and day_position is not None
         )
+        # V6C: V-bottom recovery — ADX slightly above ceiling, 15m DI already confirms direction
+        ranging_recovery = (
+            _adx_ceil < float(adx_1h) <= 28 and not adx_1h_rising
+            and di_spread_15m >= 12
+            and vol_ratio >= cfg_r["vol"]
+            and day_position is not None
+        )
         _buy_pos_ok  = day_position is not None and day_position <= cfg_r.get("buy_pos_max",  0.35)
         _sell_pos_ok = day_position is not None and day_position >= cfg_r.get("sell_pos_min", 0.65)
         if mode in ("FAST", "COMBINED"):
-            if ranging_base and five_m_long and _buy_pos_ok:
+            if (ranging_base or ranging_recovery) and five_m_long and _buy_pos_ok:
                 trade_style, side, entry_cfg = "FAST", "buy", cfg_r
-            elif ranging_base and five_m_short and _sell_pos_ok:
+            elif (ranging_base or ranging_recovery) and five_m_short and _sell_pos_ok:
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_r
 
         if trade_style == "NO_TRADE":
