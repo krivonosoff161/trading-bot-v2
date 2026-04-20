@@ -1233,11 +1233,14 @@ async def run(
     _swing_highs = _h15.get("swing_highs", [])
     _swing_lows  = _h15.get("swing_lows",  [])
 
+    # ADX period from config — must match backtest_simulate.py ADX_PERIOD
+    _adx_period = int(params.get("adx_period", 14))
+
     # ── ATR 1H + ADX slope + DI spread ──────────────────────────────────────
     if raw_1h and len(raw_1h) >= 15:
         _highs_1h, _lows_1h, _closes_1h = parse_candles(raw_1h)
-        _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=14))
-        _adx_1h_prev, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=14, bar_index=-2)
+        _atr_1h = float(calc_atr(_highs_1h, _lows_1h, _closes_1h, period=_adx_period))
+        _adx_1h_prev, _, _ = calc_adx(_highs_1h, _lows_1h, _closes_1h, period=_adx_period, bar_index=-2)
         _adx_1h_rising = _adx_1h > float(_adx_1h_prev)
         _di_spread_1h  = abs(_plus_di_1h - _minus_di_1h)
         _st_1h = calc_supertrend(_highs_1h, _lows_1h, _closes_1h, period=14, multiplier=3.0)
@@ -1259,11 +1262,18 @@ async def run(
     else:
         _slope_15m = _slope_15m_prev = 0.0
 
+    # ── DI spread on 15m — fast response for V-bottom recovery detection ──────
+    if raw_15m and len(raw_15m) >= 15:
+        _, _pdi_15m, _mdi_15m = calc_adx(_highs_15m_s, _lows_15m_s, _closes_15m_s, period=_adx_period, bar_index=-1)
+        _di_spread_15m = abs(float(_pdi_15m) - float(_mdi_15m))
+    else:
+        _di_spread_15m = 0.0
+
     # ── ADX 4H slope + DI spread ─────────────────────────────────────────────
     if raw_4h and len(raw_4h) >= 15:
         _highs_4h, _lows_4h, _closes_4h = parse_candles(raw_4h)
-        _adx_4h_curr, _pdi_4h,   _mdi_4h   = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-1)
-        _adx_4h_prev, _pdi_4h_c, _mdi_4h_c = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=14, bar_index=-2)
+        _adx_4h_curr, _pdi_4h,   _mdi_4h   = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=_adx_period, bar_index=-1)
+        _adx_4h_prev, _pdi_4h_c, _mdi_4h_c = calc_adx(_highs_4h, _lows_4h, _closes_4h, period=_adx_period, bar_index=-2)
         _adx_4h_rising       = float(_adx_4h_curr) > float(_adx_4h_prev)
         _di_spread_4h        = abs(float(_pdi_4h)   - float(_mdi_4h))
         _di_spread_4h_closed = abs(float(_pdi_4h_c) - float(_mdi_4h_c))   # Fix 1: confirmed bar
@@ -1419,12 +1429,19 @@ async def run(
             and _vol_ratio_sig >= _cfg_r["vol"]
             and _bb_corridor and _day_position is not None
         )
+        # V6C: V-bottom recovery — ADX slightly above ceiling, 15m DI already confirms direction
+        _ranging_recovery = (
+            _cfg_r.get("adx_max", 22) < _adx_1h <= 28 and not _adx_1h_rising
+            and _di_spread_15m >= 12
+            and _vol_ratio_sig >= _cfg_r["vol"]
+            and _day_position is not None
+        )
         _buy_pos_ok  = _day_position is not None and _day_position <= _cfg_r.get("buy_pos_max",  0.35)
         _sell_pos_ok = _day_position is not None and _day_position >= _cfg_r.get("sell_pos_min", 0.65)
         if "FAST" in _pp["allowed_modes"]:
-            if _ranging_base and _five_m_long and _buy_pos_ok:
+            if (_ranging_base or _ranging_recovery) and _five_m_long and _buy_pos_ok:
                 _trade_style, _side, _entry_cfg = "FAST", "buy", _cfg_r
-            elif _ranging_base and _five_m_short and _sell_pos_ok:
+            elif (_ranging_base or _ranging_recovery) and _five_m_short and _sell_pos_ok:
                 _trade_style, _side, _entry_cfg = "FAST", "sell", _cfg_r
 
     elif _regime == "DRIFT":
