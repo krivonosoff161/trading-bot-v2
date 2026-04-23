@@ -65,6 +65,7 @@ docs/*.mp4
 docs/video*_frames/
 docs/video*_transcript_*.txt
 !docs/video2_transcript_medium.txt
+docs/инста*/
 
 # Client subscriptions data
 scripts/subscriptions.json
