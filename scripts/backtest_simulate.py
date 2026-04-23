@@ -322,8 +322,8 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     if pp is None:
         return None   # pair is OFF
 
-    if not raw_4h or len(raw_4h) < 20: return None
-    if not raw_1h or len(raw_1h) < 20: return None
+    if not raw_4h or len(raw_4h) < 50: return None  # need 50 bars for calc_ema(c4h, 50)
+    if not raw_1h or len(raw_1h) < 50: return None  # need 50 bars for calc_ema(c1h, 50)
     if not raw_15m or len(raw_15m) < 30: return None
 
     h4h, l4h, c4h = parse_candles(raw_4h)
@@ -352,6 +352,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     ema20_1h = calc_ema(c1h, 20)
     ema50_1h = calc_ema(c1h, 50)
     bias_1h  = _bias(ema20_1h[-1] > ema50_1h[-1], ema20_1h[-1] < ema50_1h[-1])
+
+    _pdi_1h_f = float(pdi_1h)
+    _mdi_1h_f = float(mdi_1h)
 
     # Slope: linear regression angle (Drozdov method)
     # 1H slope → SWING confirmation; 15m slope → FAST confirmation
