@@ -148,7 +148,7 @@ def _calc_basis_and_perp_div(mark_15m: list, index_15m: list,
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
+SYMBOLS       = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "ADA-USDT"]
 EXTRA_SYMBOLS = []
 ALL_SYMBOLS   = SYMBOLS + EXTRA_SYMBOLS
 
