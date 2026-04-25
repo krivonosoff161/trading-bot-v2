@@ -163,9 +163,15 @@ BT_ADX_PERIOD = int(os.getenv("BT_ADX_PERIOD", "9"))             # 9=fast reacti
 
 ADX_PERIOD   = BT_ADX_PERIOD
 
-# ── Hold time (change here between runs: baseline / extended / long_hold) ───────
-HOLD_FAST_M  = 150   # baseline=120  extended=180  long_hold=480
-HOLD_SWING_M = 300   # baseline=240  extended=360  long_hold=720
+# ── Hold time — configurable via env for param sweep ────────────────────────────
+HOLD_FAST_M  = int(os.getenv("BT_HOLD_FAST_M",  "150"))
+HOLD_SWING_M = int(os.getenv("BT_HOLD_SWING_M", "300"))
+
+# ── Slope filter — configurable via env for param sweep ─────────────────────────
+BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
+
+# ── Run tag for named JSON output (param sweep) ──────────────────────────────────
+BT_RUN_TAG = os.getenv("BT_RUN_TAG", "latest")
 BT_WEAK_TREND = os.getenv("BT_WEAK_TREND", "0") == "1"
 BT_WEAK_TREND_ADX_MIN = float(os.getenv("BT_WEAK_TREND_ADX_MIN", "20"))
 BT_WEAK_TREND_ADX_MAX = float(os.getenv("BT_WEAK_TREND_ADX_MAX", "26"))
@@ -686,13 +692,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     fourch_veto = four_h_conflict or strong_4h_veto
 
     # ── VWAP filter — regime-aware ────────────────────────────────────────────
-    # Matches analyze_chart.py: TRENDING and DRIFT both use trend-follow VWAP.
+    # Matches analyze_chart.py: TRENDING skips VWAP (ADX+DI already confirm direction).
+    # DRIFT: trend-follow. RANGING: fade.
     vwap_ok = True
     if vwap and close and side:
         if regime == "RANGING":
             if side == "buy"  and close > vwap: vwap_ok = False
             if side == "sell" and close < vwap: vwap_ok = False
-        elif regime in ("TRENDING", "DRIFT", "WEAK_TREND"):
+        elif regime in ("DRIFT", "WEAK_TREND"):
             if side == "buy"  and close < vwap: vwap_ok = False
             if side == "sell" and close > vwap: vwap_ok = False
 
@@ -718,7 +725,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # FAST uses 15m slope (matches trade duration), SWING uses 1H slope.
     # Condition: slope accelerating (current > prev) in trade direction.
     # Applied only to TRENDING/DRIFT — RANGING is mean-reversion, slope n/a.
-    _SLOPE_MIN = 30.0
+    _SLOPE_MIN = BT_SLOPE_MIN
     if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT", "WEAK_TREND"):
         sl_cur  = slope_15m      if trade_style == "FAST" else slope_1h
         sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
@@ -1486,7 +1493,7 @@ async def run():
 
     # ── Save results JSON for distribution analysis ────────────────────────────
     import json as _json
-    _results_path = BACKTEST_RUNS_DIR / "backtest_results_latest.json"
+    _results_path = BACKTEST_RUNS_DIR / f"backtest_results_{BT_RUN_TAG}.json"
     with open(_results_path, "w", encoding="utf-8") as _f:
         _json.dump(overall_results, _f, ensure_ascii=False, default=str)
     print(f"\n  Results JSON -> {_results_path.name}  ({len(overall_results)} записей)")

@@ -1404,9 +1404,9 @@ async def run(
             and _di_spread_4h >= 8 and _di_spread_1h >= 8
         )
         if "SWING" in _pp["allowed_modes"]:
-            if _swing_base and _bias_1h == "UP":
+            if _swing_base and _bias_1h == "UP" and _five_m_long:
                 _trade_style, _side, _entry_cfg = "SWING", "buy", _cfg_sw
-            elif _swing_base and _bias_1h == "DOWN":
+            elif _swing_base and _bias_1h == "DOWN" and _five_m_short:
                 _trade_style, _side, _entry_cfg = "SWING", "sell", _cfg_sw
 
         # FAST as fallback
@@ -1488,7 +1488,7 @@ async def run(
 
     # Slope veto: acceleration filter for TRENDING/DRIFT
     # FAST uses 15m slope, SWING uses 1H slope (matches trade duration).
-    _SLOPE_MIN = 30.0
+    _SLOPE_MIN = float(params.get("slope_min", 30.0))
     if _trade_style != "NO_TRADE" and _side and _regime in ("TRENDING", "DRIFT"):
         _sl_cur  = _slope_15m      if _trade_style == "FAST" else _slope_1h
         _sl_prev = _slope_15m_prev if _trade_style == "FAST" else _slope_1h_prev
