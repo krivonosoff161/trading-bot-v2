@@ -1488,7 +1488,8 @@ async def run(
 
     # Slope veto: acceleration filter for TRENDING/DRIFT
     # FAST uses 15m slope, SWING uses 1H slope (matches trade duration).
-    _SLOPE_MIN = float(params.get("slope_min", 30.0))
+    _SLOPE_MIN      = float(params.get("slope_min", 30.0))
+    _HOLD_FAST_M    = int(params.get("hold_fast_minutes", 150))
     if _trade_style != "NO_TRADE" and _side and _regime in ("TRENDING", "DRIFT"):
         _sl_cur  = _slope_15m      if _trade_style == "FAST" else _slope_1h
         _sl_prev = _slope_15m_prev if _trade_style == "FAST" else _slope_1h_prev
@@ -1595,7 +1596,7 @@ async def run(
             _tp1_p   = round(_close - min(_sl_dist * 1.0, _atr_1h * 0.5), 4)
             _tp2_p   = round(_close - min(_sl_dist * 2.5, _atr_1h * 1.2), 4)
 
-    _max_hold_minutes = (240 if _is_night else 150) if _trade_style == "FAST" else 300
+    _max_hold_minutes = (240 if _is_night else _HOLD_FAST_M) if _trade_style == "FAST" else 300
 
     # R/R validation — block ENTRY if TP2 doesn't cover 0.8× SL distance
     _rr_ok = True
