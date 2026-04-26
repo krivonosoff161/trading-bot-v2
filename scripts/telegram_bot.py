@@ -39,7 +39,9 @@ from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: 
 from scripts.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
+from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
 from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status  # noqa: E402
+from src.utils.llm_formatter import generate_premium_analysis  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
 SIGNAL_LOG      = Path(__file__).parent / "signal_log.jsonl"       # append-only, never edit inline
 NOTRADE_LOG     = Path(__file__).parent / "signal_log_notrade.jsonl"  # live funnel analysis
+PREMIUM_LOG     = Path(__file__).parent / "premium_log.jsonl"         # premium screenshot analysis
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
@@ -96,6 +99,16 @@ START_TEXT = """\
 _state: dict[str, dict] = {}
 _edu_cooldown: dict[str, float] = {}   # chat_id → last edu answer timestamp
 _EDU_COOLDOWN_SEC = 180                # 3 min between questions
+
+# Premium: chat_id → category key while user is expected to send a screenshot
+_premium_state: dict[str, str] = {}
+
+# Persistent bottom keyboard — set once on /start, stays in chat forever
+_MAIN_REPLY_KB = {
+    "keyboard":        [[{"text": "🔍 Анализ"}]],
+    "resize_keyboard": True,
+    "persistent":      True,
+}
 
 # Persistent HTTP session — one per bot lifetime, not per request
 _SESSION: aiohttp.ClientSession | None = None
@@ -197,6 +210,77 @@ async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool 
         text="\n".join(parts),
         reply_markup={"inline_keyboard": buttons},
     )
+
+
+async def _send_main_menu(chat_id: str) -> None:
+    """Top-level menu: OKX crypto scanner or Premium screenshot analysis."""
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text="Выберите тип анализа:",
+        reply_markup={"inline_keyboard": [
+            [{"text": "📊 OKX Крипто-анализ",        "callback_data": "__start_analysis__"}],
+            [{"text": "⭐ Premium — анализ скрина",  "callback_data": "__premium__"}],
+        ]},
+    )
+
+
+async def _send_premium_categories(chat_id: str) -> None:
+    """Show asset class selection for Premium screenshot analysis."""
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=(
+            "⭐ Premium анализ\n\n"
+            "ИИ анализирует ваш скриншот графика.\n"
+            "Выберите тип актива:"
+        ),
+        reply_markup={"inline_keyboard": [
+            [
+                {"text": "₿ Крипта",   "callback_data": "premium_cat_CRYPTO"},
+                {"text": "🌐 Форекс",  "callback_data": "premium_cat_FOREX"},
+            ],
+            [
+                {"text": "📈 Акции",   "callback_data": "premium_cat_STOCKS"},
+                {"text": "🛢 Ресурсы", "callback_data": "premium_cat_COMMODITIES"},
+            ],
+            [{"text": "📊 Фонды",      "callback_data": "premium_cat_FUNDS"}],
+        ]},
+    )
+
+
+async def _run_premium_analysis(chat_id: str, image_path: str, category: str) -> None:
+    """Send screenshot to Gemma 3 27B IT and deliver analysis to user."""
+    cat_name = PREMIUM_CATEGORY_NAMES.get(category, category)
+    try:
+        await _send(chat_id, f"⭐ Анализирую {cat_name}... ⏳")
+        result = await generate_premium_analysis(category, Path(image_path).read_bytes())
+        if result:
+            await _send(chat_id, result)
+        else:
+            await _send(chat_id, "Не удалось получить анализ. Попробуй позже.")
+        try:
+            record = {
+                "ts":       datetime.now(timezone.utc).isoformat(),
+                "chat_id":  chat_id,
+                "category": category,
+                "response": result or "",
+            }
+            with open(PREMIUM_LOG, "a", encoding="utf-8") as lf:
+                lf.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as _le:
+            print(f"[premium_log] error: {_le}")
+    except Exception:
+        tb = traceback.format_exc()
+        print(f"ERROR _run_premium_analysis | chat_id={chat_id}\n{tb}")
+        try:
+            await _send(chat_id, "Произошла ошибка. Попробуй позже.")
+        except Exception:
+            pass
+    finally:
+        Path(image_path).unlink(missing_ok=True)
+        _premium_state.pop(chat_id, None)
+        _state.pop(chat_id, None)
 
 
 # ── Image validation ──────────────────────────────────────────────────────────
@@ -520,6 +604,13 @@ async def _handle_image(msg: dict, file_id: str) -> None:
         await _send(chat_id, f"⚠️ {err}")
         return
 
+    # Premium screenshot routing — intercept before regular symbol selection
+    if chat_id in _premium_state:
+        category = _premium_state.pop(chat_id)
+        _state[chat_id] = {"status": "processing"}
+        asyncio.create_task(_run_premium_analysis(chat_id, str(dest), category))
+        return
+
     msg_date = msg.get("date", int(time.time()))
     captured_at = datetime.fromtimestamp(msg_date, tz=timezone.utc).strftime("%H:%M UTC")
     _state[chat_id] = {
@@ -553,6 +644,23 @@ async def _handle_callback(cbq: dict) -> None:
         _state[chat_id] = {"status": "awaiting_symbol", "image_path": None,
                            "started_at": time.time(), "msg_date": int(time.time())}
         await _send_pair_keyboard(chat_id)
+        return
+
+    # ── Premium: show category menu ────────────────────────────────────────
+    if data == "__premium__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        await _send_premium_categories(chat_id)
+        return
+
+    # ── Premium: category selected → await screenshot ──────────────────────
+    if data.startswith("premium_cat_"):
+        category = data[len("premium_cat_"):]
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        if category not in PREMIUM_CATEGORY_NAMES:
+            return
+        _premium_state[chat_id] = category
+        cat_name = PREMIUM_CATEGORY_NAMES[category]
+        await _send(chat_id, f"📸 {cat_name} выбрана.\n\nОтправьте скриншот графика.")
         return
 
     # ── Edu button ─────────────────────────────────────────────────────────
@@ -635,13 +743,18 @@ async def _handle_text(msg: dict) -> None:
     # ── /start — show banner to everyone, no access check ────────────────────
     if text == "/start":
         if is_subscribed(chat_id):
-            # Subscribed: show banner + start analysis + chat link
+            # Subscribed: show banner + set persistent bottom keyboard
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
                 text=START_TEXT,
+                reply_markup=_MAIN_REPLY_KB,
+            )
+            await _tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text="Нажми «🔍 Анализ» внизу чтобы начать.",
                 reply_markup={"inline_keyboard": [
-                    [{"text": "📊 Начать анализ", "callback_data": "__start_analysis__"}],
                     [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
                 ]},
             )
@@ -769,17 +882,11 @@ async def _handle_text(msg: dict) -> None:
         asyncio.create_task(_run_edu(chat_id, text))
         return
 
-    # idle — trigger on "анализ", hint otherwise
+    # idle — "анализ" (or bottom keyboard button) → show main menu
     if "анализ" in text.lower():
-        _state[chat_id] = {
-            "status":     "awaiting_symbol",
-            "image_path": None,
-            "started_at": time.time(),
-            "msg_date":   int(time.time()),
-        }
-        await _send_pair_keyboard(chat_id, welcome=True)
+        await _send_main_menu(chat_id)
     else:
-        await _send(chat_id, "Напиши «Анализ» чтобы начать.")
+        await _send(chat_id, "Нажми кнопку «🔍 Анализ» внизу чтобы начать.")
 
 
 async def handle_update(update: dict) -> None:

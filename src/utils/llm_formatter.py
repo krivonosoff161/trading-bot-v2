@@ -489,6 +489,59 @@ async def generate_client_text(
         return None
 
 
+# ── Premium vision (Gemma 3 27B IT) ───────────────────────────────────────────
+
+_GEMMA_MODEL_URI = os.getenv("YANDEX_GEMMA_MODEL_URI", "").strip("'\"")
+_GEMMA_MAX_TOKENS = 500
+_GEMMA_TIMEOUT   = 90
+
+
+async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | None:
+    """Call Gemma 3 27B IT (vision) to analyze a chart screenshot."""
+    if not _API_KEY or not _GEMMA_MODEL_URI:
+        print("Gemma: YANDEX_API_KEY or YANDEX_GEMMA_MODEL_URI not set — skipping")
+        return None
+
+    from scripts.premium_prompts import PREMIUM_SYSTEM_PROMPTS, PREMIUM_USER_PROMPT
+    system_prompt = PREMIUM_SYSTEM_PROMPTS.get(category, PREMIUM_SYSTEM_PROMPTS["CRYPTO"])
+    b64 = base64.b64encode(image_bytes).decode()
+
+    payload = {
+        "model": _GEMMA_MODEL_URI,
+        "max_tokens": _GEMMA_MAX_TOKENS,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": PREMIUM_USER_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ],
+    }
+    headers = {
+        "Authorization": f"Api-Key {_API_KEY}",
+        "Content-Type":  "application/json",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _API_URL, json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"Gemma: HTTP {resp.status} — {body[:200]}")
+                    return None
+                data = await resp.json()
+        body = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {})
+        print(f"Gemma: OK — {tokens.get('total_tokens', '?')} tokens")
+        return body or None
+    except Exception as exc:
+        print(f"Gemma: error — {exc}")
+        return None
+
+
 # ── Educational Q&A ────────────────────────────────────────────────────────────
 
 _EDU_SYSTEM_PROMPT = """\
