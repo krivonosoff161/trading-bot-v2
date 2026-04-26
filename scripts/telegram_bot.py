@@ -553,6 +553,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             )
             await _send(chat_id, disclaimer)
             entry_id = save_entry(chat_id, symbol, snap, str(snap_path))
+            style = ctx.get("trade_style") or ctx.get("trade_style_hint") or ""
             await _send_feedback_entry_buttons(chat_id, entry_id, symbol, style)
 
     except Exception:
