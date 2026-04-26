@@ -52,7 +52,6 @@ TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
 SIGNAL_LOG      = Path(__file__).parent / "signal_log.jsonl"       # append-only, never edit inline
 NOTRADE_LOG     = Path(__file__).parent / "signal_log_notrade.jsonl"  # live funnel analysis
-PREMIUM_LOG     = Path(__file__).parent / "premium_log.jsonl"         # premium screenshot analysis
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
@@ -260,13 +259,14 @@ async def _run_premium_analysis(chat_id: str, image_path: str, category: str) ->
         else:
             await _send(chat_id, "Не удалось получить анализ. Попробуй позже.")
         try:
+            user_dir = USERS_ROOT / str(chat_id)
+            user_dir.mkdir(parents=True, exist_ok=True)
             record = {
                 "ts":       datetime.now(timezone.utc).isoformat(),
-                "chat_id":  chat_id,
                 "category": category,
                 "response": result or "",
             }
-            with open(PREMIUM_LOG, "a", encoding="utf-8") as lf:
+            with open(user_dir / "premium_log.jsonl", "a", encoding="utf-8") as lf:
                 lf.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as _le:
             print(f"[premium_log] error: {_le}")
