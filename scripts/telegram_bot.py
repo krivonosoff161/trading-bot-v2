@@ -887,7 +887,12 @@ async def _handle_text(msg: dict) -> None:
     if "анализ" in text.lower():
         await _send_main_menu(chat_id)
     else:
-        await _send(chat_id, "Нажми кнопку «🔍 Анализ» внизу чтобы начать.")
+        await _tg(
+            "sendMessage",
+            chat_id=chat_id,
+            text="Нажми кнопку «🔍 Анализ» внизу чтобы начать.",
+            reply_markup=_MAIN_REPLY_KB,
+        )
 
 
 async def handle_update(update: dict) -> None:
