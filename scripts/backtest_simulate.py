@@ -170,6 +170,10 @@ HOLD_SWING_M = int(os.getenv("BT_HOLD_SWING_M", "300"))
 # ── Slope filter — configurable via env for param sweep ─────────────────────────
 BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
 
+# ── DRIFT-specific filters — configurable via env for param sweep ────────────────
+BT_DRIFT_TP1_K   = float(os.getenv("BT_DRIFT_TP1_K",  "0.4"))   # TP1 multiplier (live: 0.4R)
+BT_DRIFT_MAX_VOL = float(os.getenv("BT_DRIFT_MAX_VOL", "999"))   # vol_ratio cap (999 = no cap)
+
 # ── Run tag for named JSON output (param sweep) ──────────────────────────────────
 BT_RUN_TAG = os.getenv("BT_RUN_TAG", "latest")
 BT_WEAK_TREND = os.getenv("BT_WEAK_TREND", "0") == "1"
@@ -619,7 +623,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             if ema_drift_dir == "UP"   and close > vwap: vwap_side_ok = True
             if ema_drift_dir == "DOWN" and close < vwap: vwap_side_ok = True
 
-        drift_vol_ok  = vol_ratio >= cfg_d["vol"]
+        drift_vol_ok  = vol_ratio >= cfg_d["vol"] and vol_ratio <= BT_DRIFT_MAX_VOL
         delta_opposes = (
             (ema_drift_dir == "UP"   and trade_delta_15m < -0.3)
             or (ema_drift_dir == "DOWN" and trade_delta_15m >  0.3)
@@ -764,7 +768,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_lows"] else None)
             sl_p    = round(min(struct_sl, atr_sl) if struct_sl and struct_sl < close else atr_sl, 6)
             sl_dist = close - sl_p
-            _tp1_k  = 0.4 if regime in ("DRIFT", "WEAK_TREND") else 0.8
+            _tp1_k  = BT_DRIFT_TP1_K if regime in ("DRIFT", "WEAK_TREND") else 0.8
             tp_p    = round(close + sl_dist * _tp1_k, 6)   # TP1
             tp2_p   = round(close + sl_dist * 1.5, 6)      # TP2
         else:
@@ -773,7 +777,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                          if swings["recent_highs"] else None)
             sl_p    = round(max(struct_sl, atr_sl) if struct_sl and struct_sl > close else atr_sl, 6)
             sl_dist = sl_p - close
-            _tp1_k  = 0.4 if regime in ("DRIFT", "WEAK_TREND") else 0.8
+            _tp1_k  = BT_DRIFT_TP1_K if regime in ("DRIFT", "WEAK_TREND") else 0.8
             tp_p    = round(close - sl_dist * _tp1_k, 6)   # TP1
             tp2_p   = round(close - sl_dist * 1.5, 6)      # TP2
 
