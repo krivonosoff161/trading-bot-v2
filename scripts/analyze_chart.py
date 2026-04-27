@@ -1361,9 +1361,7 @@ async def run(
         _five_m_short = True
 
     # ── FAST / SWING engine (regime-based) ───────────────────────────────────
-    if symbol not in _PAIR_PARAMS:
-        raise ValueError(f"Unsupported symbol: {symbol}. Add to _PAIR_PARAMS before use.")
-    _pp = _PAIR_PARAMS[symbol]
+    _pp = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
     _bb_width_pct = float(_h15.get("bb_width_pct") or 0)
 
     _regime = _detect_regime(_adx_1h, _adx_4h, _adx_4h_rising,
