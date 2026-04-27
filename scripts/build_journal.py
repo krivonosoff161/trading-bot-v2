@@ -5,8 +5,9 @@ Run once a day after label_outcomes.py:
     python scripts/label_outcomes.py
     python scripts/build_journal.py
 
-Output: scripts/journal.xlsx  (two sheets: Журнал + Симулятор)
+Output: scripts/journal.xlsx  (three sheets: Журнал + Симулятор + Реальные сделки)
 """
+import asyncio
 import json
 import os
 import sys
@@ -16,6 +17,14 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
+
+from dotenv import load_dotenv
+load_dotenv()
+
+try:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment
     from openpyxl.utils import get_column_letter
@@ -23,9 +32,12 @@ except ImportError:
     print("openpyxl не установлен. Запустите: pip install openpyxl")
     sys.exit(1)
 
+from src.exchange.okx_client import OKXClient
+
 SIGNAL_LOG    = Path(__file__).parent / "signal_log.jsonl"
 SIGNAL_LABELS = Path(__file__).parent / "signal_labels.jsonl"
 JOURNAL_PATH  = Path(__file__).parent / "journal.xlsx"
+CONFIG_PATH   = Path(__file__).parent.parent / "config.yaml"
 
 # Excel fill colors
 FILL_HEADER   = PatternFill("solid", fgColor="1F4E79")
@@ -35,9 +47,14 @@ FILL_STOP     = PatternFill("solid", fgColor="FFC7CE")
 FILL_TIME     = PatternFill("solid", fgColor="FFEB9C")
 FILL_FADE     = PatternFill("solid", fgColor="E2EFDA")
 FILL_SUMMARY  = PatternFill("solid", fgColor="D9E1F2")
+FILL_PROFIT   = PatternFill("solid", fgColor="C6EFCE")
+FILL_LOSS     = PatternFill("solid", fgColor="FFC7CE")
+FILL_SIGNAL   = PatternFill("solid", fgColor="D9EAD3")
 
 FONT_HEADER   = Font(color="FFFFFF", bold=True)
 FONT_BOLD     = Font(bold=True)
+
+_SIGNAL_MATCH_WINDOW_MS = 30 * 60 * 1000  # ±30 min
 
 
 def _load_jsonl(path: Path) -> list:
@@ -61,10 +78,116 @@ def _fmt_dt(ts_ms) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%d.%m %H:%M")
 
 
+def _load_config_symbols() -> list:
+    if yaml is None or not CONFIG_PATH.exists():
+        return []
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("real_trades_symbols") or []
+    except Exception:
+        return []
+
+
 def _set_col_widths(ws, widths: list) -> None:
     for col, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
+
+# ---------------------------------------------------------------------------
+# Real trades — OKX fetch + helpers
+# ---------------------------------------------------------------------------
+
+_BOT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
+
+
+async def _fetch_all_by_insttype(client: OKXClient) -> list | None:
+    """Fetch all SWAP positions in one paginated call. Returns None only if all retries fail."""
+    all_positions: list = []
+    after: str | None = None
+    while True:
+        params: dict = {"instType": "SWAP", "limit": "100"}
+        if after:
+            params["after"] = after
+        data: dict = {}
+        for attempt in range(3):
+            data = await client._get("/api/v5/account/positions-history", params)
+            if data.get("code") == "0":
+                break
+            await asyncio.sleep(3)
+        if data.get("code") != "0":
+            return None
+        batch = data.get("data") or []
+        all_positions.extend(batch)
+        if len(batch) < 100:
+            break
+        after = batch[-1]["posId"]
+    return all_positions
+
+
+async def _fetch_by_symbols(client: OKXClient, symbols: list) -> list:
+    """Fetch positions per symbol. No deduplication — same posId can appear multiple
+    times for partial closes, each is a distinct settlement record."""
+    all_positions: list = []
+    for symbol in symbols:
+        after: str | None = None
+        while True:
+            params: dict = {"instId": f"{symbol}-SWAP", "limit": "100"}
+            if after:
+                params["after"] = after
+            data = await client._get("/api/v5/account/positions-history", params)
+            batch = data.get("data") or []
+            all_positions.extend(batch)
+            if len(batch) < 100:
+                break
+            after = batch[-1]["posId"]
+    return all_positions
+
+
+async def _fetch_real_trades_async(symbols: list) -> list:
+    api_key    = os.getenv("OKX_API_KEY", "")
+    secret_key = os.getenv("OKX_SECRET_KEY", "")
+    passphrase = os.getenv("OKX_PASSPHRASE", "")
+    is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1"
+
+    if not api_key:
+        print("OKX credentials not found — пропускаем вкладку Реальные сделки")
+        return []
+
+    client = OKXClient(api_key, secret_key, passphrase, is_demo=is_demo)
+    try:
+        result = await _fetch_all_by_insttype(client)
+        if result is not None:
+            return result
+        # instType endpoint unavailable — fall back to per-symbol
+        print("instType=SWAP endpoint недоступен — загружаем по символам")
+        return await _fetch_by_symbols(client, symbols)
+    finally:
+        await client.close()
+
+
+def _load_real_trades(symbols: list) -> list:
+    try:
+        return asyncio.run(_fetch_real_trades_async(symbols))
+    except Exception as e:
+        print(f"Ошибка загрузки реальных сделок: {e}")
+        return []
+
+
+def _match_signal(signals: list, symbol: str, open_ms: int) -> str:
+    for sig in signals:
+        if sig.get("symbol") != symbol:
+            continue
+        if abs(sig.get("ts_ms", 0) - open_ms) <= _SIGNAL_MATCH_WINDOW_MS:
+            dt   = datetime.fromtimestamp(sig["ts_ms"] / 1000, tz=timezone.utc).strftime("%H:%M")
+            side = "BUY" if sig.get("side") == "buy" else "SELL"
+            return f"✓ {dt} {side}"
+    return "—"
+
+
+# ---------------------------------------------------------------------------
+# build()
+# ---------------------------------------------------------------------------
 
 def build() -> None:
     signals = _load_jsonl(SIGNAL_LOG)
@@ -96,12 +219,22 @@ def build() -> None:
             "funding":   sig.get("funding") or 0.0,
         })
 
+    sig_symbols    = {s.get("symbol", "") for s in signals if s.get("symbol")}
+    config_symbols = _load_config_symbols()
+    all_symbols    = list(sig_symbols | set(_BOT_SYMBOLS) | set(config_symbols))
+    real_trades    = _load_real_trades(all_symbols)
+
     wb = openpyxl.Workbook()
     _build_sheet1(wb, rows)
     _build_sheet2(wb, rows)
+    _build_sheet3(wb, real_trades, signals)
     wb.save(JOURNAL_PATH)
     print(f"Журнал: {JOURNAL_PATH}  ({len(rows)} сигналов, {sum(1 for r in rows if r['outcome'])} закрыто)")
 
+
+# ---------------------------------------------------------------------------
+# Sheet 1 — Журнал
+# ---------------------------------------------------------------------------
 
 def _build_sheet1(wb, rows: list) -> None:
     ws = wb.active
@@ -140,6 +273,10 @@ def _build_sheet1(wb, rows: list) -> None:
     ws.freeze_panes = "A2"
 
 
+# ---------------------------------------------------------------------------
+# Sheet 2 — Симулятор
+# ---------------------------------------------------------------------------
+
 def _build_sheet2(wb, rows: list) -> None:
     ws = wb.create_sheet("Симулятор")
 
@@ -157,18 +294,15 @@ def _build_sheet2(wb, rows: list) -> None:
         cell.font = FONT_HEADER
         cell.alignment = Alignment(horizontal="center")
 
-    # Mark input column headers
     for col in (1, 2):
         ws.cell(row=1, column=col).fill = PatternFill("solid", fgColor="F4B942")
 
     outcome_fill = {"TP": FILL_TP, "STOP": FILL_STOP, "TIME_EXIT": FILL_TIME}
 
     for r, row in enumerate(rows, 2):
-        # Input columns — yellow, prefilled with defaults
-        ws.cell(row=r, column=1, value=100).fill  = FILL_INPUT  # Капитал$ (твои деньги)
-        ws.cell(row=r, column=2, value=10).fill   = FILL_INPUT  # Плечо
+        ws.cell(row=r, column=1, value=100).fill  = FILL_INPUT
+        ws.cell(row=r, column=2, value=10).fill   = FILL_INPUT
 
-        # Data columns C-L
         data = {
             3:  row["dt"],       4: row["symbol"],  5: row["channel"],
             6:  row["side"],     7: row["entry"],   8: row["sl"],
@@ -183,21 +317,12 @@ def _build_sheet2(wb, rows: list) -> None:
         if not (row["entry"] and row["sl"] and row["tp"]):
             continue
 
-        # M: Позиция$ = Капитал × Плечо (реальный размер на бирже)
         ws.cell(row=r, column=13, value=f"=A{r}*B{r}")
-
-        # N: Цена ликвидации (isolated margin, MMR=0.5% + taker fee 0.05% = 0.0055)
-        # LONG:  entry * (1 - 1/leverage + 0.0055)
-        # SHORT: entry * (1 + 1/leverage - 0.0055)
         ws.cell(row=r, column=14, value=(
             f'=IF(F{r}="LONG",'
             f'G{r}*(1-1/B{r}+0.0055),'
             f'G{r}*(1+1/B{r}-0.0055))'
         ))
-
-        # O: Реальный исход — проверяем ликвидацию по MAE
-        # LONG ликвидация: цена упала ниже liq_price = entry - mae*sl_dist <= N
-        # SHORT ликвидация: цена выросла выше liq_price = entry + mae*sl_dist >= N
         ws.cell(row=r, column=15, value=(
             f'=IF(J{r}="","",IF(AND(L{r}<>"",F{r}="LONG",'
             f'G{r}-L{r}*ABS(G{r}-H{r})<=N{r}),"ЛИКВИДАЦИЯ",'
@@ -205,52 +330,130 @@ def _build_sheet2(wb, rows: list) -> None:
             f'G{r}+L{r}*ABS(H{r}-G{r})>=N{r}),"ЛИКВИДАЦИЯ",'
             f'J{r})))'
         ))
-
-        # P: P&L$ = если ликвидация → -Капитал(A), иначе Позиция(M) * sl_pct * exit_R
         ws.cell(row=r, column=16, value=(
             f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-A{r},'
             f'M{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
         ))
-
-        # Q: P&L% = P&L$ / Капитал(A) * 100  (% от вложенного капитала)
         ws.cell(row=r, column=17, value=(
             f'=IF(OR(P{r}="",A{r}=0),"",P{r}/A{r}*100)'
         ))
-
-        # R: Комиссия$ = Позиция(M) * 0.1% (тейкер вход + выход, 0.05%×2)
         ws.cell(row=r, column=18, value=f'=IF(M{r}="","",M{r}*0.001)')
-
-        # S: Финансирование$ = Позиция(M) * ставка_финансирования
         funding = row["funding"] or 0.0
         ws.cell(row=r, column=19, value=f'=IF(M{r}="","",M{r}*{funding})')
-
-        # T: Чистый P&L$ = P&L - Комиссия - Финансирование
         ws.cell(row=r, column=20, value=f'=IF(P{r}="","",P{r}-R{r}-S{r})')
 
-    # Summary box
-    last_r    = len(rows) + 1
-    sum_r     = last_r + 2
-    n_closed  = sum(1 for r in rows if r["outcome"] in ("TP", "STOP", "TIME_EXIT"))
-    n_tp      = sum(1 for r in rows if r["outcome"] == "TP")
-    wr_str    = f"{n_tp}/{n_closed} = {n_tp/n_closed*100:.0f}%" if n_closed else "—"
+    last_r   = len(rows) + 1
+    sum_r    = last_r + 2
+    n_closed = sum(1 for r in rows if r["outcome"] in ("TP", "STOP", "TIME_EXIT"))
+    n_tp     = sum(1 for r in rows if r["outcome"] == "TP")
+    wr_str   = f"{n_tp}/{n_closed} = {n_tp/n_closed*100:.0f}%" if n_closed else "—"
 
     summary = [
         ("Всего сигналов", len(rows), None),
         ("Закрыто", n_closed, None),
         ("WR", wr_str, None),
-        ("P&L$ (брутто)", f"=SUM(P2:P{last_r})", 16),
-        ("Чистый P&L$", f"=SUM(T2:T{last_r})", 20),
+        ("P&L$ (брутто)", None, 16),
+        ("Чистый P&L$",  None, 20),
     ]
     for i, (label, val, sum_col) in enumerate(summary):
         cell_l = ws.cell(row=sum_r + i, column=1, value=label)
         cell_l.font = FONT_BOLD
         cell_l.fill = FILL_SUMMARY
-        cell_v = ws.cell(row=sum_r + i, column=2,
-                         value=val if sum_col is None else f"=SUM({get_column_letter(sum_col)}2:{get_column_letter(sum_col)}{last_r})")
+        cell_v = ws.cell(
+            row=sum_r + i, column=2,
+            value=val if sum_col is None else f"=SUM({get_column_letter(sum_col)}2:{get_column_letter(sum_col)}{last_r})",
+        )
         cell_v.fill = FILL_SUMMARY
 
     _set_col_widths(ws, [9, 7, 14, 12, 9, 8, 10, 10, 10, 10, 7, 7, 11, 12, 14, 9, 7, 10, 10, 12])
     ws.freeze_panes = "C2"
+
+
+# ---------------------------------------------------------------------------
+# Sheet 3 — Реальные сделки
+# ---------------------------------------------------------------------------
+
+def _build_sheet3(wb, real_trades: list, signals: list) -> None:
+    ws = wb.create_sheet("Реальные сделки")
+
+    headers = [
+        "Откр.", "Закр.", "Пара", "Направл.", "Плечо",
+        "Вход", "Выход", "Hold(мин)",
+        "P&L брутто", "Комиссия", "Финансир.", "NET P&L", "P&L%",
+        "Сигнал бота",
+    ]
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = FILL_HEADER
+        cell.font = FONT_HEADER
+        cell.alignment = Alignment(horizontal="center")
+
+    if not real_trades:
+        ws.cell(row=2, column=1, value="Нет данных (OKX не вернул позиции)")
+        _set_col_widths(ws, [13, 13, 12, 9, 6, 10, 10, 9, 11, 10, 10, 11, 7, 16])
+        return
+
+    processed = []
+    for pos in real_trades:
+        open_ms  = int(pos.get("cTime") or 0)
+        close_ms = int(pos.get("uTime") or 0)
+        inst_id  = pos.get("instId", "")
+        symbol   = inst_id.replace("-SWAP", "")
+
+        open_px      = float(pos.get("openAvgPx")   or 0)
+        close_px     = float(pos.get("closeAvgPx")  or 0)
+        gross_pnl    = float(pos.get("pnl")         or 0)   # price-move P&L before fees
+        fee          = float(pos.get("fee")          or 0)   # commission (negative)
+        funding      = float(pos.get("fundingFee")   or 0)
+        realized_pnl = float(pos.get("realizedPnl") or 0)   # gross_pnl + fee
+        net_pnl      = realized_pnl + funding                # true net
+        pnl_pct      = float(pos.get("pnlRatio")    or 0) * 100
+        lever        = int(float(pos.get("lever")    or 1))
+        hold_min     = round((close_ms - open_ms) / 60_000) if close_ms > open_ms else 0
+
+        direction    = (pos.get("direction") or "long").upper()
+        signal_match = _match_signal(signals, symbol, open_ms)
+
+        processed.append({
+            "open_ms":   open_ms,
+            "open_dt":   _fmt_dt(open_ms),
+            "close_dt":  _fmt_dt(close_ms),
+            "symbol":    symbol,
+            "direction": direction,
+            "lever":     lever,
+            "open_px":   open_px,
+            "close_px":  close_px,
+            "hold_min":  hold_min,
+            "pnl":       round(gross_pnl, 4),
+            "fee":       round(fee, 4),
+            "funding":   round(funding, 4),
+            "net_pnl":   round(net_pnl, 4),
+            "pnl_pct":   round(pnl_pct, 2),
+            "signal":    signal_match,
+        })
+
+    processed.sort(key=lambda x: x["open_ms"], reverse=True)
+
+    for r, row in enumerate(processed, 2):
+        vals = [
+            row["open_dt"], row["close_dt"], row["symbol"], row["direction"],
+            row["lever"], row["open_px"], row["close_px"], row["hold_min"],
+            row["pnl"], row["fee"], row["funding"], row["net_pnl"],
+            row["pnl_pct"], row["signal"],
+        ]
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=col, value=val)
+            if col == 12:  # NET P&L
+                cell.fill = FILL_PROFIT if row["net_pnl"] >= 0 else FILL_LOSS
+            if col == 14 and row["signal"] != "—":
+                cell.fill = FILL_SIGNAL
+
+    n_matched = sum(1 for r in processed if r["signal"] != "—")
+    _set_col_widths(ws, [13, 13, 12, 9, 6, 10, 10, 9, 11, 10, 10, 11, 7, 16])
+    ws.freeze_panes = "A2"
+
+    print(f"Реальные сделки: {len(processed)} позиций, {n_matched} совпали с сигналами бота")
 
 
 if __name__ == "__main__":

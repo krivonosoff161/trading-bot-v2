@@ -2,6 +2,12 @@ trading:
   leverage: 5
   poll_interval: 10     # seconds between each bot tick
 
+# Pairs to include in "Реальные сделки" journal tab.
+# Bot pairs (BTC/ETH/SOL/DOGE/XRP) are always included automatically.
+# Add here any pairs you trade manually that are NOT in the bot list.
+real_trades_symbols: ["POPCAT-USDT"]
+# Add here any pairs you trade manually that are NOT in the bot list (BTC/ETH/SOL/DOGE/XRP).
+
 strategy:
   ema_fast: 20
   ema_slow: 50
