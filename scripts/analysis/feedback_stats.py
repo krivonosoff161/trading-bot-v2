@@ -1,4 +1,4 @@
-"""View feedback statistics from feedback_log.jsonl.
+"""View feedback statistics from feedback logs.
 
 Usage:
     python scripts/feedback_stats.py
@@ -9,9 +9,9 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from scripts.feedback import load_entries
+from scripts.analysis.feedback import load_all_entries
 
-entries = load_entries()
+entries = load_all_entries()
 
 if not entries:
     print("Нет записей в feedback_log.jsonl")

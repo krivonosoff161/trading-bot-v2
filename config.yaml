@@ -36,7 +36,7 @@ pump_engine:
   # Paper trading
   paper_tp_pct: 1.5
   paper_sl_pct: 0.8
-  paper_max_hold_min: 15
+  paper_max_hold_min: 9999  # effectively disabled — SL/TP are the only exits
   paper_position_usd: 100.0
   paper_balance_usd: 1000.0
   max_open_positions: 3

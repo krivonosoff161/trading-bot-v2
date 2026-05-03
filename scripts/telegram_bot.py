@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv()
 
 from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: E402
-from scripts.feedback import (  # noqa: E402
+from scripts.analysis.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
 from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
