@@ -213,6 +213,8 @@ def _build_header(symbol: str, captured_at: str, entry_signal: str, trade_style:
                   bias_1h: str, bias_4h: str, side: str | None = None) -> str:
     status = _STATUS_LABELS.get(entry_signal, "НАБЛЮДАЕМ")
     style  = _STYLE_LABELS.get(trade_style, "")
+    if trade_style == "SWING" and side == "sell":
+        style = style.replace("📈", "📉")
     # For SCALP, bias_1h is NEUTRAL by design — use side from llm_context instead
     bias   = bias_1h if bias_1h != "NEUTRAL" else bias_4h
     if side == "buy":
@@ -299,9 +301,18 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
             "WAIT":     "РЕЖИМ 2 — ЖДЁМ",
             "NO_TRADE": "РЕЖИМ 3 — НЕТ ТОРГОВЛИ",
         }.get(entry_signal, "РЕЖИМ 2 — ЖДЁМ")
+    side_raw = ctx.get("side")
+    side_label = ("ЛОНГ (покупка) — вход на рост" if side_raw == "buy"
+                  else "ШОРТ (продажа) — вход на снижение" if side_raw == "sell"
+                  else None)
+
     lines = [
         f"РЕЖИМ: {mode_cmd}",
         f"Пара: {symbol}  |  Цена: {close}  |  Время: {captured_at}",
+    ]
+    if side_label:
+        lines.append(f"Тип сделки: {side_label}")
+    lines += [
         "",
         f"Тренд на 4H: {trend_str(bias_4h, adx_4h)}",
         f"Тренд на 1H: {trend_str(bias_1h, adx_1h)}",
