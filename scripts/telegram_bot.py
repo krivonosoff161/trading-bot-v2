@@ -930,7 +930,7 @@ _SCANNER_PAIRS    = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"
 # BB FADE disabled for SOL/XRP: backtest 35d WR<30%, PF<1 at any ADX threshold
 _FADE_PAIRS       = {"BTC-USDT", "ETH-USDT", "DOGE-USDT"}
 _SCANNER_LOG      = ROOT / "logs" / "scanner.log"
-_SCANNER_INTERVAL = 15  # minutes
+_SCANNER_INTERVAL = 5   # minutes (was 15 — earlier entry, catch slope before candle exhausts)
 
 
 _SCANNER_LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB
@@ -963,12 +963,12 @@ def _scan_log(msg: str) -> None:
 
 
 def _next_quarter(now: datetime) -> datetime:
-    """Next clock-aligned 15-min boundary: :00, :15, :30, :45."""
+    """Next clock-aligned N-min boundary based on _SCANNER_INTERVAL."""
     total_min = now.hour * 60 + now.minute
     next_min  = ((total_min // _SCANNER_INTERVAL) + 1) * _SCANNER_INTERVAL
     h, m = divmod(next_min % (24 * 60), 60)
     result = now.replace(hour=h, minute=m, second=2, microsecond=0)
-    if result <= now:   # crossed midnight: next_run is earlier in the same day
+    if result <= now:
         result += timedelta(days=1)
     return result
 
