@@ -96,7 +96,7 @@ class WSFeed:
         for sym in self.pairs:
             for bar in self.bars:
                 try:
-                    rows = await self._rest_history(sym, bar.replace("candle", ""), 50)
+                    rows = await self._rest_history(sym, bar.replace("candle", ""), 60)
                     closed = [row for row in rows if len(row) > 8 and row[8] == "1"]
                     closed.reverse()
                     buf = self.buffers[sym][bar]
