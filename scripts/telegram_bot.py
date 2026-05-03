@@ -1196,8 +1196,8 @@ async def main() -> None:
     # On startup: send 24h reminders for any open trades
     await _check_and_send_reminders()
 
-    asyncio.create_task(_scanner_loop())
-    asyncio.create_task(_label_outcomes_loop())
+    # scanner moved to scripts/ws/ws_scanner.py
+    # label_outcomes runs separately via maintenance/update journal workflow
 
     offset = 0
     try:
