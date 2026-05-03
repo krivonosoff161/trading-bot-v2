@@ -89,5 +89,10 @@ scripts/journal.xlsx
 *.xlsx
 scripts/pattern_db.csv
 
+# Pump research artifacts
+scripts/ws/cache/*
+!scripts/ws/cache/.gitkeep
+docs/статисика.csv
+
 # Claude session memory
 .claude/
