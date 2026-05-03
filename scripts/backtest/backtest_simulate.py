@@ -21,6 +21,7 @@ import os
 import pickle
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -173,6 +174,17 @@ BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
 # ── DRIFT-specific filters — configurable via env for param sweep ────────────────
 BT_DRIFT_TP1_K   = float(os.getenv("BT_DRIFT_TP1_K",  "0.4"))   # TP1 multiplier (live: 0.4R)
 BT_DRIFT_MAX_VOL = float(os.getenv("BT_DRIFT_MAX_VOL", "999"))   # vol_ratio cap (999 = no cap)
+BT_DRIFT_VWAP_STRETCH = float(os.getenv("BT_DRIFT_VWAP_STRETCH", "999.0"))
+BT_DRIFT_ETH_BLOCK_HOURS = [
+    int(h) for h in os.getenv("BT_DRIFT_ETH_BLOCK_HOURS", "").split(",")
+    if h.strip().isdigit()
+]
+BT_DRIFT_MOVE_FROM_BASE = float(os.getenv("BT_DRIFT_MOVE_FROM_BASE", "999.0"))
+BT_DRIFT_VOL_DECAY_MIN = float(os.getenv("BT_DRIFT_VOL_DECAY_MIN", "0.0"))
+BT_LATE_SCORE_MAX = int(os.getenv("BT_LATE_SCORE_MAX", "99"))
+BT_HOUR_ANALYSIS = os.getenv("BT_HOUR_ANALYSIS", "0") == "1"
+BT_DIST_ANALYSIS = os.getenv("BT_DIST_ANALYSIS", "0") == "1"
+BT_TEST_ID = os.getenv("BT_TEST_ID", "BASELINE")
 
 # ── Run tag for named JSON output (param sweep) ──────────────────────────────────
 BT_RUN_TAG = os.getenv("BT_RUN_TAG", "latest")
@@ -272,6 +284,34 @@ def _calc_vwap_and_day(raw_15m: list, day_start_ms: int):
     vol_sum = sum(vols)
     vwap = sum(c * v for c, v in zip(closes, vols)) / vol_sum if vol_sum > 0 else None
     return vwap, max(highs), min(lows)
+
+
+def _percentile_map(values: list[float]) -> dict:
+    if not values:
+        return {}
+    arr = np.asarray(values, dtype=float)
+    return {
+        "p25": round(float(np.percentile(arr, 25)), 2),
+        "p50": round(float(np.percentile(arr, 50)), 2),
+        "p75": round(float(np.percentile(arr, 75)), 2),
+        "p90": round(float(np.percentile(arr, 90)), 2),
+        "mean": round(float(np.mean(arr)), 2),
+    }
+
+
+def _current_test_config() -> dict:
+    return {
+        "BT_DRIFT_VWAP_STRETCH": BT_DRIFT_VWAP_STRETCH,
+        "BT_DRIFT_ETH_BLOCK_HOURS": ",".join(str(h) for h in BT_DRIFT_ETH_BLOCK_HOURS),
+        "BT_DRIFT_MOVE_FROM_BASE": BT_DRIFT_MOVE_FROM_BASE,
+        "BT_DRIFT_VOL_DECAY_MIN": BT_DRIFT_VOL_DECAY_MIN,
+        "BT_LATE_SCORE_MAX": BT_LATE_SCORE_MAX,
+        "BT_HOLD_FAST_M": HOLD_FAST_M,
+        "BT_HOLD_SWING_M": HOLD_SWING_M,
+        "BT_SLOPE_MIN": BT_SLOPE_MIN,
+        "BT_DRIFT_TP1_K": BT_DRIFT_TP1_K,
+        "BT_DRIFT_MAX_VOL": BT_DRIFT_MAX_VOL,
+    }
 
 
 # ── Market regime detector ──────────────────────────────────────────────────────
@@ -467,6 +507,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     signal_hour = dt_last.hour
     is_night    = 1 <= signal_hour < 7
+    swings_15m  = find_swing_levels(h15, l15, lookback=3, count=4)
 
     # Late-move veto: symmetric — block long at top AND short at bottom
     late_move = False  # evaluated per-side after signal is known
@@ -474,6 +515,11 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # debug-only fields (populated later in respective blocks)
     ema_drift_dir    = ""
     drift_adx1h_veto = False
+    vwap_stretch = None
+    trigger_vol_ratio = None
+    move_from_base = None
+    late_score = 0
+    is_drift_regime = False
 
     # ── Regime detection ──────────────────────────────────────────────────────
     regime = detect_regime(float(adx_1h), float(adx_4h), adx_4h_rising,
@@ -595,6 +641,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 _drop = "ranging_day_pos_wrong"
 
     elif regime in ("DRIFT", "WEAK_TREND"):
+        is_drift_regime = True
         cfg_d = _mode_cfg(pp, "drift", "fast")
         ema_slope_up   = (len(ema20_1h) >= 4
                           and ema20_1h[-1] > ema20_1h[-2]
@@ -654,6 +701,51 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 _drop = "drift_delta_wrong"
             else:
                 _drop = "drift_no_5m"
+
+    if regime in ("DRIFT", "WEAK_TREND") and atr_15m > 0:
+        if vwap:
+            vwap_stretch = abs(close - vwap) / atr_15m
+        prior_mean = float(np.mean(vols_15m[5:20])) if len(vols_15m) >= 20 else 0.0
+        if prior_mean > 0 and len(vols_15m) > 1:
+            trigger_vol_ratio = vols_15m[1] / prior_mean
+
+        if side == "buy" and swings_15m["recent_lows"]:
+            move_from_base = (close - swings_15m["recent_lows"][-1]) / atr_15m
+        elif side == "sell" and swings_15m["recent_highs"]:
+            move_from_base = (swings_15m["recent_highs"][-1] - close) / atr_15m
+
+        if trade_style == "FAST" and side:
+            if vwap_stretch is not None and vwap_stretch > BT_DRIFT_VWAP_STRETCH:
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "drift_vwap_stretch"
+
+            if (trade_style == "FAST" and side and symbol == "ETH-USDT"
+                    and signal_hour in BT_DRIFT_ETH_BLOCK_HOURS):
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "drift_eth_hour"
+
+            if (trade_style == "FAST" and side and move_from_base is not None
+                    and move_from_base > BT_DRIFT_MOVE_FROM_BASE):
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "drift_late_from_base"
+
+            if (trade_style == "FAST" and side and BT_DRIFT_VOL_DECAY_MIN > 0
+                    and trigger_vol_ratio is not None
+                    and trigger_vol_ratio < BT_DRIFT_VOL_DECAY_MIN):
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "drift_vol_decay"
+
+            if trade_style == "FAST" and side and BT_LATE_SCORE_MAX < 99:
+                late_score = 0
+                if vwap_stretch is not None and vwap_stretch > 1.25:
+                    late_score += 1
+                if move_from_base is not None and move_from_base > 1.5:
+                    late_score += 1
+                if trigger_vol_ratio is not None and trigger_vol_ratio < 0.9:
+                    late_score += 1
+                if late_score > BT_LATE_SCORE_MAX:
+                    trade_style, side = "NO_TRADE", None
+                    _drop = _drop or f"drift_late_score_{late_score}"
 
     strong_4h_veto = (
         trade_style == "FAST"
@@ -761,7 +853,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     if trade_style == "FAST" and side and close:
         atr_sl_dist = max(entry_cfg.get("sl_k", 1.4) * 1.2 * atr_15m, close * 0.004)
-        swings = find_swing_levels(h15, l15, lookback=3, count=4)
+        swings = swings_15m
         if side == "buy":
             atr_sl    = close - atr_sl_dist
             struct_sl = (swings["recent_lows"][-1] - 0.2 * atr_15m
@@ -782,7 +874,7 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             tp2_p   = round(close - sl_dist * 1.5, 6)      # TP2
 
     elif trade_style == "SWING" and side and close:
-        swings = find_swing_levels(h15, l15, lookback=3, count=4)
+        swings = swings_15m
         if side == "buy":
             atr_sl    = close - entry_cfg.get("sl_k", 1.8) * 1.2 * atr_15m
             struct_sl = (swings["recent_lows"][-1] - 0.3 * atr_15m
@@ -849,6 +941,12 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
         "slope_15m":       round(slope_15m, 1),
         "slope_15m_prev":  round(slope_15m_prev, 1),
         "is_night":        is_night,
+        "signal_hour":     signal_hour,
+        "is_drift_regime": is_drift_regime,
+        "vwap_stretch":    round(vwap_stretch, 3) if vwap_stretch is not None else None,
+        "move_from_base":  round(move_from_base, 3) if move_from_base is not None else None,
+        "trigger_vol_ratio": round(trigger_vol_ratio, 3) if trigger_vol_ratio is not None else None,
+        "late_score":      late_score,
     }
     if _debug:
         out.update({
@@ -858,7 +956,6 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
             "vwap_ok":          vwap_ok,
             "vwap":             round(vwap, 4) if vwap else None,
             "ema_drift_dir":    ema_drift_dir,
-            "signal_hour":      signal_hour,
             "bb_pct_b":         round(bb_pct_b, 1),
             "drift_adx1h_veto": drift_adx1h_veto,
         })
@@ -959,6 +1056,10 @@ async def run():
     except Exception:
         _git_label = "unknown"
     _run_ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    cfg_parts = [f"{k}={v}" for k, v in _current_test_config().items()]
+    print("═" * 90)
+    print(f"  TEST: {BT_TEST_ID} | Config: {', '.join(cfg_parts)} | Tag: {BT_RUN_TAG}")
+    print("═" * 90)
     print("=" * 62)
     print("  BACKTEST CONFIG")
     print("=" * 62)
@@ -1143,10 +1244,18 @@ async def run():
 
         def _process_symbol(symbol, ts_list):
             sym_results = []
-            sym_funnel  = {}
+            sym_funnel  = defaultdict(int)
+            drift_meta = {
+                "candidates": 0,
+                "blocked": 0,
+                "blocked_by_reason": defaultdict(int),
+                "blocked_by_symbol": defaultdict(int),
+                "hours_seen": defaultdict(int),
+                "hours_blocked": defaultdict(int),
+            }
             total_ticks = 0
             if PAIR_PARAMS.get(symbol) is None:
-                return sym_results, sym_funnel, total_ticks
+                return sym_results, sym_funnel, total_ticks, drift_meta
             funding_hist = candle_cache[symbol].get("funding_history", [])
             oi_hist      = candle_cache[symbol].get("oi_history", [])
             h4_all  = candle_cache[symbol]["4h"]   # sorted oldest→newest
@@ -1200,40 +1309,81 @@ async def run():
                 if sig is None:
                     continue
                 total_ticks += 1
+                if sig.get("is_drift_regime"):
+                    drift_meta["candidates"] += 1
+                    drift_meta["hours_seen"][sig["signal_hour"]] += 1
                 if sig["entry_signal"] != "ENTRY" or not sig["sl"] or not sig["tp"]:
                     reason = sig.get("drop_reason") or "unknown"
-                    sym_funnel[reason] = sym_funnel.get(reason, 0) + 1
+                    sym_funnel[reason] += 1
+                    if sig.get("is_drift_regime"):
+                        drift_meta["blocked"] += 1
+                        drift_meta["blocked_by_reason"][reason] += 1
+                        drift_meta["blocked_by_symbol"][symbol] += 1
+                        drift_meta["hours_blocked"][sig["signal_hour"]] += 1
                     continue
                 # perp_div SHORT veto: block shorts when futures running ahead of spot
                 if (PERP_DIV_SHORT_VETO is not None
                         and sig["side"] == "sell"
                         and perp_div_4bar is not None
                         and perp_div_4bar > PERP_DIV_SHORT_VETO):
-                    sym_funnel["perp_div_short_veto"] = sym_funnel.get("perp_div_short_veto", 0) + 1
+                    sym_funnel["perp_div_short_veto"] += 1
+                    if sig.get("is_drift_regime"):
+                        drift_meta["blocked"] += 1
+                        drift_meta["blocked_by_reason"]["perp_div_short_veto"] += 1
+                        drift_meta["blocked_by_symbol"][symbol] += 1
+                        drift_meta["hours_blocked"][sig["signal_hour"]] += 1
                     continue
                 # Attach fair-value features
                 sig["basis_pct"]    = basis_pct
                 sig["perp_div_4bar"] = perp_div_4bar
                 sym_results.append((ts_ms, sig))
-            return sym_results, sym_funnel, total_ticks
+            return sym_results, sym_funnel, total_ticks, drift_meta
 
         # Collect signals
         pending      = []
-        pset_funnel  = {}
+        pset_funnel  = defaultdict(int)
         pset_ticks   = 0
+        pset_drift_meta = {
+            "candidates": 0,
+            "blocked": 0,
+            "blocked_by_reason": defaultdict(int),
+            "blocked_by_symbol": defaultdict(int),
+            "hours_seen": defaultdict(int),
+            "hours_blocked": defaultdict(int),
+        }
         for symbol in SYMBOLS:
-            sym_res, sym_funnel, sym_ticks = _process_symbol(symbol, pset_timestamps)
+            sym_res, sym_funnel, sym_ticks, drift_meta = _process_symbol(symbol, pset_timestamps)
             for ts_ms, sig in sym_res:
                 pending.append((symbol, ts_ms, sig))
             for k, v in sym_funnel.items():
-                pset_funnel[k] = pset_funnel.get(k, 0) + v
+                pset_funnel[k] += v
+            pset_drift_meta["candidates"] += drift_meta["candidates"]
+            pset_drift_meta["blocked"] += drift_meta["blocked"]
+            for k, v in drift_meta["blocked_by_reason"].items():
+                pset_drift_meta["blocked_by_reason"][k] += v
+            for k, v in drift_meta["blocked_by_symbol"].items():
+                pset_drift_meta["blocked_by_symbol"][k] += v
+            for k, v in drift_meta["hours_seen"].items():
+                pset_drift_meta["hours_seen"][k] += v
+            for k, v in drift_meta["hours_blocked"].items():
+                pset_drift_meta["hours_blocked"][k] += v
             pset_ticks += sym_ticks
         for symbol in EXTRA_SYMBOLS:
-            sym_res, sym_funnel, sym_ticks = _process_symbol(symbol, pset_timestamps[::6])
+            sym_res, sym_funnel, sym_ticks, drift_meta = _process_symbol(symbol, pset_timestamps[::6])
             for ts_ms, sig in sym_res:
                 pending.append((symbol, ts_ms, sig))
             for k, v in sym_funnel.items():
-                pset_funnel[k] = pset_funnel.get(k, 0) + v
+                pset_funnel[k] += v
+            pset_drift_meta["candidates"] += drift_meta["candidates"]
+            pset_drift_meta["blocked"] += drift_meta["blocked"]
+            for k, v in drift_meta["blocked_by_reason"].items():
+                pset_drift_meta["blocked_by_reason"][k] += v
+            for k, v in drift_meta["blocked_by_symbol"].items():
+                pset_drift_meta["blocked_by_symbol"][k] += v
+            for k, v in drift_meta["hours_seen"].items():
+                pset_drift_meta["hours_seen"][k] += v
+            for k, v in drift_meta["hours_blocked"].items():
+                pset_drift_meta["hours_blocked"][k] += v
             pset_ticks += sym_ticks
 
         # Fetch outcomes
@@ -1286,14 +1436,18 @@ async def run():
                 "slope_15m":     sig.get("slope_15m"),
                 "basis_pct":     sig.get("basis_pct"),
                 "perp_div_4bar": sig.get("perp_div_4bar"),
+                "vwap_stretch":  sig.get("vwap_stretch"),
+                "move_from_base": sig.get("move_from_base"),
+                "trigger_vol_ratio": sig.get("trigger_vol_ratio"),
+                "late_score":    sig.get("late_score", 0),
             })
 
-        all_set_results[pset["label"]] = (results, pset_funnel, pset_ticks)
+        all_set_results[pset["label"]] = (results, pset_funnel, pset_ticks, pset_drift_meta)
 
     await client.close()
 
     # ── Report ─────────────────────────────────────────────────────────────────
-    def _report(label, results, funnel=None, total_ticks=0, days_back=DAYS_BACK):
+    def _report(label, results, funnel=None, total_ticks=0, days_back=DAYS_BACK, drift_meta=None):
         wins   = [r for r in results if r["outcome"] == "TP"]
         losses = [r for r in results if r["outcome"] == "STOP"]
         time_x = [r for r in results if r["outcome"] == "TIME_EXIT"]
@@ -1396,6 +1550,97 @@ async def run():
                 print(f"\n  Лучший час:  {best:02d}:00 UTC — {hour_wr[best]}% ({hour_total[best]} сигналов)")
                 print(f"  Худший час:  {worst:02d}:00 UTC — {hour_wr[worst]}% ({hour_total[worst]} сигналов)")
 
+        drift_results = [r for r in results if r.get("regime") in ("DRIFT", "WEAK_TREND")]
+        if drift_meta is None:
+            drift_meta = {
+                "candidates": len(drift_results),
+                "blocked": 0,
+                "blocked_by_reason": defaultdict(int),
+                "blocked_by_symbol": defaultdict(int),
+                "hours_seen": defaultdict(int),
+                "hours_blocked": defaultdict(int),
+            }
+        drift_wins = [r for r in drift_results if r["outcome"] == "TP"]
+        drift_losses = [r for r in drift_results if r["outcome"] == "STOP"]
+        drift_pf = round(sum(_r(r) for r in drift_wins) / len(drift_losses), 2) if drift_losses else 99.0
+        drift_wr = len(drift_wins) * 100 // (len(drift_wins) + len(drift_losses)) if (len(drift_wins) + len(drift_losses)) > 0 else 0
+        drift_avg_r = round(sum(r.get("exit_r", 0.0) for r in drift_results) / len(drift_results), 2) if drift_results else 0.0
+        drift_blocked = drift_meta.get("blocked", 0)
+        drift_candidates = drift_meta.get("candidates", len(drift_results) + drift_blocked)
+        print(f"\n  ─── DRIFT BREAKDOWN {'─' * 45}")
+        print(f"  Total DRIFT signals:   {drift_candidates}")
+        print(f"  Blocked by new filter: {drift_blocked}  ({(drift_blocked * 100 // drift_candidates) if drift_candidates else 0}%)")
+        print(f"  Remaining DRIFT:       {len(drift_results)}")
+        print(f"\n  DRIFT WR:  {drift_wr}%")
+        print(f"  DRIFT PF:  {drift_pf}")
+        print(f"  DRIFT avg_R: {drift_avg_r}")
+        print(f"\n  По парам:")
+        for sym in ALL_SYMBOLS:
+            sr = [r for r in drift_results if r["symbol"] == sym]
+            if not sr:
+                continue
+            sw = [r for r in sr if r["outcome"] == "TP"]
+            sl_ = [r for r in sr if r["outcome"] == "STOP"]
+            sym_pf = round(sum(_r(r) for r in sw) / len(sl_), 2) if sl_ else 99.0
+            sym_wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
+            print(f"  {sym.split('-')[0]:4} n={len(sr):2} WR={sym_wr:2}% PF={sym_pf}")
+
+        print(f"\n  По периодам:")
+        if label.startswith("OVERALL"):
+            base_ts = min((x["ts_ms"] for x in results), default=0)
+            for idx in range(len(PARAM_SETS)):
+                p_label = f"P{idx + 1}"
+                sr = [
+                    r for r in drift_results
+                    if idx * DAYS_BACK <= ((r["ts_ms"] - base_ts) // (24 * 3600 * 1000)) < (idx + 1) * DAYS_BACK
+                ] if results else []
+                sw = [r for r in sr if r["outcome"] == "TP"]
+                sl_ = [r for r in sr if r["outcome"] == "STOP"]
+                p_wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
+                print(f"  {p_label}: DRIFT n={len(sr):2} WR={p_wr}%")
+        else:
+            sw = [r for r in drift_results if r["outcome"] == "TP"]
+            sl_ = [r for r in drift_results if r["outcome"] == "STOP"]
+            p_wr = len(sw) * 100 // (len(sw) + len(sl_)) if (len(sw) + len(sl_)) > 0 else 0
+            print(f"  {label}: DRIFT n={len(drift_results):2} WR={p_wr}%")
+
+        if BT_HOUR_ANALYSIS:
+            drift_by_hour = defaultdict(list)
+            for r in drift_results:
+                drift_by_hour[r["hour"]].append(r)
+            print(f"\n  ─── DRIFT HOUR ANALYSIS (UTC) {'─' * 31}")
+            print("  hour | n  | WR% | blocked")
+            for hour in range(24):
+                rows = drift_by_hour.get(hour, [])
+                sw = sum(1 for r in rows if r["outcome"] == "TP")
+                sl_ = sum(1 for r in rows if r["outcome"] == "STOP")
+                hr_wr = sw * 100 // (sw + sl_) if (sw + sl_) > 0 else 0
+                blocked = drift_meta["hours_blocked"].get(hour, 0)
+                print(f"  {hour:02d}   | {len(rows):2} | {hr_wr:3}% | {blocked:2}")
+
+        if BT_DIST_ANALYSIS:
+            if any(r.get("vwap_stretch") is not None for r in drift_results):
+                winners = [r["vwap_stretch"] for r in drift_results if r["outcome"] == "TP" and r.get("vwap_stretch") is not None]
+                losers = [r["vwap_stretch"] for r in drift_results if r["outcome"] != "TP" and r.get("vwap_stretch") is not None]
+                if winners or losers:
+                    w_map = _percentile_map(winners)
+                    l_map = _percentile_map(losers)
+                    print(f"\n  ─── DRIFT METRIC DISTRIBUTION {'─' * 33}")
+                    print("  Metric: vwap_stretch [abs(close-vwap)/atr_15m]")
+                    print("           winners (TP)    losers (SL/TIME)")
+                    for key in ("p25", "p50", "p75", "p90", "mean"):
+                        print(f"  {key}:     {w_map.get(key, 'n/a')}            {l_map.get(key, 'n/a')}")
+            if any(r.get('move_from_base') is not None for r in drift_results):
+                winners = [r["move_from_base"] for r in drift_results if r["outcome"] == "TP" and r.get("move_from_base") is not None]
+                losers = [r["move_from_base"] for r in drift_results if r["outcome"] != "TP" and r.get("move_from_base") is not None]
+                if winners or losers:
+                    w_map = _percentile_map(winners)
+                    l_map = _percentile_map(losers)
+                    print("\n  Metric: move_from_base [distance from last swing / atr_15m]")
+                    print("           winners (TP)    losers (SL/TIME)")
+                    for key in ("p25", "p50", "p75", "mean"):
+                        print(f"  {key}:     {w_map.get(key, 'n/a')}            {l_map.get(key, 'n/a')}")
+
         print(f"\n  PASS/FAIL:")
         print(f"    Winrate ≥55%:      {'✅' if winrate >= 55 else '❌'}  {winrate}%")
         print(f"    Profit Factor ≥1.3:{'✅' if pf >= 1.3  else '❌'}  {pf}")
@@ -1467,7 +1712,7 @@ async def run():
             print(f"  Пропущено по паре: {parts}")
 
         # ── Signal funnel ────────────────────────────────────────────────────
-        if funnel and total_ticks > 0:
+        if False and funnel and total_ticks > 0:
             entry_cnt = len(results)
             print(f"\n  Воронка отсева ({total_ticks} тиков → {entry_cnt} ENTRY):")
             for reason, cnt in sorted(funnel.items(), key=lambda x: -x[1]):
@@ -1476,24 +1721,85 @@ async def run():
                 print(f"    {reason:30} {cnt:5}  {pct:2}%  {bar}")
 
     # ── OVERALL: aggregate across all periods ──────────────────────────────────
+        if funnel and total_ticks > 0:
+            drift_total = drift_meta.get("candidates", 0) if drift_meta else 0
+            trend_total = sum(1 for r in results if r.get("regime") == "TRENDING")
+            ranging_total = sum(1 for r in results if r.get("regime") == "RANGING")
+            print(f"\n  ─── SIGNAL FUNNEL {'─' * 45}")
+            print(f"  All evaluated:           {total_ticks}")
+            print(f"  → REGIME not DRIFT:      {max(total_ticks - drift_total, 0)}")
+            for key in (
+                "drift_vol_low", "drift_vwap_stretch", "drift_eth_hour",
+                "drift_late_from_base", "drift_vol_decay", "slope_weak",
+                "drift_adx1h_low", "drift_short_veto"
+            ):
+                if funnel.get(key):
+                    print(f"  → DRIFT: {key:20} {funnel.get(key, 0)}")
+            print(f"  → DRIFT passed all filters: {len(drift_results)}")
+            print(f"  {'─' * 57}")
+            print(f"  TRENDING passed: {trend_total}")
+            print(f"  RANGING passed:  {ranging_total}")
+            print(f"  TOTAL ENTRIES:   {len(results)}")
+
+        return {
+            "label": label,
+            "overall_n": len(results),
+            "overall_wr": wr_all,
+            "overall_pf": pf,
+            "sim_pct": round(total_pct, 1),
+            "drift_n": len(drift_results),
+            "drift_wr": drift_wr,
+            "drift_pf": drift_pf,
+        }
+
     overall_results = []
-    overall_funnel  = {}
+    overall_funnel  = defaultdict(int)
     overall_ticks   = 0
-    for res, funnel, ticks in all_set_results.values():
+    overall_drift_meta = {
+        "candidates": 0,
+        "blocked": 0,
+        "blocked_by_reason": defaultdict(int),
+        "blocked_by_symbol": defaultdict(int),
+        "hours_seen": defaultdict(int),
+        "hours_blocked": defaultdict(int),
+    }
+    for res, funnel, ticks, drift_meta in all_set_results.values():
         overall_results.extend(res)
         overall_ticks += ticks
         for k, v in funnel.items():
-            overall_funnel[k] = overall_funnel.get(k, 0) + v
+            overall_funnel[k] += v
+        overall_drift_meta["candidates"] += drift_meta["candidates"]
+        overall_drift_meta["blocked"] += drift_meta["blocked"]
+        for k, v in drift_meta["blocked_by_reason"].items():
+            overall_drift_meta["blocked_by_reason"][k] += v
+        for k, v in drift_meta["blocked_by_symbol"].items():
+            overall_drift_meta["blocked_by_symbol"][k] += v
+        for k, v in drift_meta["hours_seen"].items():
+            overall_drift_meta["hours_seen"][k] += v
+        for k, v in drift_meta["hours_blocked"].items():
+            overall_drift_meta["hours_blocked"][k] += v
     total_days = DAYS_BACK * len(PARAM_SETS)
-    _report(
+    sweep_rows = []
+    overall_summary = _report(
         f"OVERALL | full {total_days}d (все периоды объединены)",
         overall_results, overall_funnel, overall_ticks,
         days_back=total_days,
+        drift_meta=overall_drift_meta,
     )
+    overall_summary["tag"] = BT_RUN_TAG
+    sweep_rows.append(overall_summary)
 
     # ── Per-period breakdown ────────────────────────────────────────────────────
-    for label, (res, funnel, ticks) in all_set_results.items():
-        _report(label, res, funnel, ticks)
+    for label, (res, funnel, ticks, drift_meta) in all_set_results.items():
+        _report(label, res, funnel, ticks, drift_meta=drift_meta)
+
+    print(f"\n  ─── SWEEP SUMMARY {'─' * 43}")
+    print("  Tag              | DRIFT_n | DRIFT_WR | DRIFT_PF | OVERALL_WR | OVERALL_PF | Sim")
+    for row in sweep_rows:
+        print(
+            f"  {row['tag'][:16]:16} | {row['drift_n']:7} | {row['drift_wr']:8}% | "
+            f"{row['drift_pf']:8} | {row['overall_wr']:10}% | {row['overall_pf']:10} | {row['sim_pct']:+.1f}%"
+        )
 
     # ── Save results JSON for distribution analysis ────────────────────────────
     import json as _json
@@ -1501,7 +1807,10 @@ async def run():
     with open(_results_path, "w", encoding="utf-8") as _f:
         _json.dump(overall_results, _f, ensure_ascii=False, default=str)
     print(f"\n  Results JSON -> {_results_path.name}  ({len(overall_results)} записей)")
-
+    _summary_path = BACKTEST_RUNS_DIR / f"{BT_RUN_TAG}_summary.json"
+    with open(_summary_path, "w", encoding="utf-8") as _f:
+        _json.dump(overall_summary, _f, ensure_ascii=False, indent=2)
+    print(f"  Summary JSON -> {_summary_path.name}")
 
 if __name__ == "__main__":
     _log_handle, _orig_stdout, _orig_stderr = _enable_run_log()

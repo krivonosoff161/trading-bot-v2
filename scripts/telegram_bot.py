@@ -50,8 +50,8 @@ BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
 
 TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
-SIGNAL_LOG      = Path(__file__).parent / "signal_log.jsonl"       # append-only, never edit inline
-NOTRADE_LOG     = Path(__file__).parent / "signal_log_notrade.jsonl"  # live funnel analysis
+SIGNAL_LOG      = ROOT / "logs" / "signals" / "signal_log.jsonl"
+NOTRADE_LOG     = ROOT / "logs" / "signals" / "signal_log_notrade.jsonl"
 
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
