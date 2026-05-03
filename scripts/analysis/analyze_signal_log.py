@@ -5,10 +5,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCRIPTS = Path(__file__).parent
-LOG     = SCRIPTS / "signal_log.jsonl"
-LABELS  = SCRIPTS / "signal_labels.jsonl"
-OUT_DIR = SCRIPTS / "backtest_runs"
+_ROOT   = Path(__file__).resolve().parents[2]
+LOG     = _ROOT / "logs" / "signals" / "signal_log.jsonl"
+LABELS  = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
+OUT_DIR = Path(__file__).parent / "backtest_runs"
 
 
 def load() -> list[dict]:

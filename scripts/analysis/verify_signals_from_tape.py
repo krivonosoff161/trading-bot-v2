@@ -28,10 +28,10 @@ try:
 except AttributeError:
     pass
 
-ROOT        = Path(__file__).parent
-SIGNAL_LOG  = ROOT / "signal_log.jsonl"
-LABEL_LOG   = ROOT / "signal_labels.jsonl"
-TAPE_DIR    = ROOT / "tape"
+ROOT        = Path(__file__).resolve().parents[2]
+SIGNAL_LOG  = ROOT / "logs" / "signals" / "signal_log.jsonl"
+LABEL_LOG   = ROOT / "logs" / "signals" / "signal_labels.jsonl"
+TAPE_DIR    = Path(__file__).parent / "tape"
 
 HORIZONS_M  = [150, 300, 480, 720, 1440]
 

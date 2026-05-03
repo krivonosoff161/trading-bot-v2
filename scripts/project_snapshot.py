@@ -59,8 +59,8 @@ def last_log_line():
 
 # ── 4. Signal stats ──────────────────────────────────────────────────────────
 def signal_stats(days=7):
-    sig_file = ROOT / "scripts" / "signal_log.jsonl"
-    lbl_file = ROOT / "scripts" / "signal_labels.jsonl"
+    sig_file = ROOT / "logs" / "signals" / "signal_log.jsonl"
+    lbl_file = ROOT / "logs" / "signals" / "signal_labels.jsonl"
 
     signals = {}
     try:

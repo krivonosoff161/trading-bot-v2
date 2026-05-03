@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -27,9 +29,17 @@ from src.strategy.signal_engine import _format_telegram, build_analysis_snapshot
 from src.utils.llm_formatter import generate_client_text
 from src.utils.telegram import send_message_to, send_photo_to
 
-SIGNAL_LOG = ROOT / "scripts" / "signal_log.jsonl"
-NOTRADE_LOG = ROOT / "scripts" / "signal_log_notrade.jsonl"
+SIGNAL_LOG = ROOT / "logs" / "signals" / "signal_log.jsonl"
+NOTRADE_LOG = ROOT / "logs" / "signals" / "signal_log_notrade.jsonl"
 SCANNER_LOG_DIR = ROOT / "logs" / "scanner"
+
+_log_file = ROOT / "logs" / "ws_scanner.log"
+_handler = logging.handlers.RotatingFileHandler(
+    _log_file, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+logging.basicConfig(level=logging.INFO, handlers=[_handler, logging.StreamHandler(sys.stdout)],
+                    format="%(message)s")
+_logger = logging.getLogger("ws_scanner")
 
 
 def _now() -> str:
@@ -37,7 +47,7 @@ def _now() -> str:
 
 
 def _scan_log(text: str) -> None:
-    print(f"[{_now()}] {text}")
+    _logger.info(f"[{_now()}] {text}")
 
 
 def _load_strategy_params() -> dict:

@@ -31,8 +31,9 @@ load_dotenv()
 from src.exchange.okx_client import OKXClient
 from scripts.backtest_simulate import check_outcome
 
-SIGNAL_LOG    = Path(__file__).parent / "signal_log.jsonl"
-SIGNAL_LABELS = Path(__file__).parent / "signal_labels.jsonl"
+_ROOT         = Path(__file__).resolve().parents[2]
+SIGNAL_LOG    = _ROOT / "logs" / "signals" / "signal_log.jsonl"
+SIGNAL_LABELS = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
 OUTCOME_H     = 24          # max forward window to fetch (hours)
 BUFFER_MS     = 3_600_000   # 1h extra buffer before attempting label
 

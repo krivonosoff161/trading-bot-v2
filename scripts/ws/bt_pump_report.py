@@ -33,8 +33,8 @@ TAPE_SIGNALS_PATH = DEFAULT_CACHE_DIR / "phase2_signal_table_tape.pkl"
 COIN_SCREENER_LATEST_PATH = DEFAULT_CACHE_DIR / "coin_screener_latest.json"
 COIN_SCREENER_BACKTEST_PATH = DEFAULT_CACHE_DIR / "coin_screener_backtest.json"
 EQUITY_FILTER_PATH = DEFAULT_CACHE_DIR / "equity_filter_suite.csv"
-SIGNAL_LOG_PATH = Path(__file__).resolve().parents[1] / "signal_log.jsonl"
-SIGNAL_LABELS_PATH = Path(__file__).resolve().parents[1] / "signal_labels.jsonl"
+SIGNAL_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "signals" / "signal_log.jsonl"
+SIGNAL_LABELS_PATH = Path(__file__).resolve().parents[2] / "logs" / "signals" / "signal_labels.jsonl"
 
 
 @dataclass(slots=True)

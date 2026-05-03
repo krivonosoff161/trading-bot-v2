@@ -34,8 +34,9 @@ except ImportError:
 
 from src.exchange.okx_client import OKXClient
 
-SIGNAL_LOG    = Path(__file__).parent / "signal_log.jsonl"
-SIGNAL_LABELS = Path(__file__).parent / "signal_labels.jsonl"
+_ROOT         = Path(__file__).resolve().parent.parent
+SIGNAL_LOG    = _ROOT / "logs" / "signals" / "signal_log.jsonl"
+SIGNAL_LABELS = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
 JOURNAL_PATH  = Path(__file__).parent / "journal.xlsx"
 CONFIG_PATH   = Path(__file__).parent.parent / "config.yaml"
 
