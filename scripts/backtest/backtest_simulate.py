@@ -31,7 +31,7 @@ try:
     sys.stdout.reconfigure(encoding="utf-8")
 except AttributeError:
     pass
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dotenv import load_dotenv
 load_dotenv()
