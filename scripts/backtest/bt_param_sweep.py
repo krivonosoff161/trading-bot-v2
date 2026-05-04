@@ -38,6 +38,7 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR  = Path(__file__).parent
+ROOT_DIR    = SCRIPT_DIR.parent.parent
 BACKTEST_PY = SCRIPT_DIR / "backtest_simulate.py"
 RUNS_DIR    = SCRIPT_DIR / "backtest_runs"
 
@@ -204,7 +205,7 @@ def run_config(cfg: dict) -> bool:
     result = subprocess.run(
         [sys.executable, str(BACKTEST_PY)],
         env=env,
-        cwd=str(SCRIPT_DIR),
+        cwd=str(ROOT_DIR),
     )
     return result.returncode == 0
 
