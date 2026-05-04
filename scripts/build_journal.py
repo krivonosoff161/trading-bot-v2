@@ -99,53 +99,46 @@ def _set_col_widths(ws, widths: list) -> None:
 # Real trades — OKX fetch + helpers
 # ---------------------------------------------------------------------------
 
-_BOT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
-
-
-async def _fetch_all_by_insttype(client: OKXClient) -> list | None:
-    """Fetch all SWAP positions in one paginated call. Returns None only if all retries fail."""
-    all_positions: list = []
+async def _discover_inst_ids(client: OKXClient) -> set:
+    """Discover all SWAP instIds traded via fills-history (works without instId filter)."""
+    inst_ids: set = set()
     after: str | None = None
-    while True:
+    for _ in range(20):  # max 2000 fills = covers ~3 months for active traders
         params: dict = {"instType": "SWAP", "limit": "100"}
         if after:
             params["after"] = after
-        data: dict = {}
-        for attempt in range(3):
-            data = await client._get("/api/v5/account/positions-history", params)
-            if data.get("code") == "0":
-                break
-            await asyncio.sleep(3)
+        data = await client._get("/api/v5/trade/fills-history", params)
         if data.get("code") != "0":
-            return None
+            break
         batch = data.get("data") or []
-        all_positions.extend(batch)
+        for f in batch:
+            inst_id = f.get("instId", "")
+            if inst_id.endswith("-SWAP"):
+                inst_ids.add(inst_id)
+        if len(batch) < 100:
+            break
+        after = batch[-1]["tradeId"]
+    return inst_ids
+
+
+async def _fetch_positions_for_inst(client: OKXClient, inst_id: str) -> list:
+    """Fetch all closed positions for one instId."""
+    positions: list = []
+    after: str | None = None
+    while True:
+        params: dict = {"instId": inst_id, "limit": "100"}
+        if after:
+            params["after"] = after
+        data = await client._get("/api/v5/account/positions-history", params)
+        batch = data.get("data") or []
+        positions.extend(batch)
         if len(batch) < 100:
             break
         after = batch[-1]["posId"]
-    return all_positions
+    return positions
 
 
-async def _fetch_by_symbols(client: OKXClient, symbols: list) -> list:
-    """Fetch positions per symbol. No deduplication — same posId can appear multiple
-    times for partial closes, each is a distinct settlement record."""
-    all_positions: list = []
-    for symbol in symbols:
-        after: str | None = None
-        while True:
-            params: dict = {"instId": f"{symbol}-SWAP", "limit": "100"}
-            if after:
-                params["after"] = after
-            data = await client._get("/api/v5/account/positions-history", params)
-            batch = data.get("data") or []
-            all_positions.extend(batch)
-            if len(batch) < 100:
-                break
-            after = batch[-1]["posId"]
-    return all_positions
-
-
-async def _fetch_real_trades_async(symbols: list) -> list:
+async def _fetch_real_trades_async() -> list:
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
@@ -157,19 +150,23 @@ async def _fetch_real_trades_async(symbols: list) -> list:
 
     client = OKXClient(api_key, secret_key, passphrase, is_demo=is_demo)
     try:
-        result = await _fetch_all_by_insttype(client)
-        if result is not None:
-            return result
-        # instType endpoint unavailable — fall back to per-symbol
-        print("instType=SWAP endpoint недоступен — загружаем по символам")
-        return await _fetch_by_symbols(client, symbols)
+        inst_ids = await _discover_inst_ids(client)
+        if not inst_ids:
+            print("Нет сделок за последний период")
+            return []
+        print(f"Найдено пар: {len(inst_ids)} — {', '.join(sorted(inst_ids))}")
+        all_positions: list = []
+        for inst_id in sorted(inst_ids):
+            positions = await _fetch_positions_for_inst(client, inst_id)
+            all_positions.extend(positions)
+        return all_positions
     finally:
         await client.close()
 
 
-def _load_real_trades(symbols: list) -> list:
+def _load_real_trades() -> list:
     try:
-        return asyncio.run(_fetch_real_trades_async(symbols))
+        return asyncio.run(_fetch_real_trades_async())
     except Exception as e:
         print(f"Ошибка загрузки реальных сделок: {e}")
         return []
@@ -220,10 +217,7 @@ def build() -> None:
             "funding":   sig.get("funding") or 0.0,
         })
 
-    sig_symbols    = {s.get("symbol", "") for s in signals if s.get("symbol")}
-    config_symbols = _load_config_symbols()
-    all_symbols    = list(sig_symbols | set(_BOT_SYMBOLS) | set(config_symbols))
-    real_trades    = _load_real_trades(all_symbols)
+    real_trades    = _load_real_trades()
 
     wb = openpyxl.Workbook()
     _build_sheet1(wb, rows)
