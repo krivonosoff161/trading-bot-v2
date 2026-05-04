@@ -54,6 +54,8 @@ scripts/backtest_run_*.txt
 scripts/backtest_runs/*
 !scripts/backtest_runs/.gitkeep
 scripts/_sweep_variants/
+scripts/backtest/backtest_runs/*
+!scripts/backtest/backtest_runs/.gitkeep
 
 # Signal pipeline data (live runtime data)
 scripts/signal_log.jsonl
@@ -82,6 +84,8 @@ docs/photo_2026-03-25_19-19-10.jpg
 scripts/backtest_candle_cache.pkl
 scripts/backtest_candle_cache_*.pkl
 scripts/backtest_mark_index_cache_*.pkl
+scripts/backtest/backtest_candle_cache_*.pkl
+scripts/backtest/backtest_mark_index_cache_*.pkl
 scripts/pattern_db.csv
 
 # Generated reports and journals
