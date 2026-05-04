@@ -16,11 +16,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
+import logging.handlers
 import os
 import pickle
 import signal
 import sys
 import time
+import traceback
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -46,6 +49,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_DIR = _PROJECT_ROOT / "logs" / "pump"
 SIGNALS_LOG = LOG_DIR / "pump_signals.jsonl"
 LABELS_LOG = LOG_DIR / "pump_labels.jsonl"
+ENGINE_LOG = LOG_DIR / "ws_pump_engine.log"
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 STATE_PATH = CACHE_DIR / "engine_state.pkl"
 
@@ -117,6 +121,39 @@ class OpenPosition:
 
 def _now() -> str:
     return datetime.utcnow().strftime("%H:%M:%S")
+
+
+def _setup_rotating_log() -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    handler = logging.handlers.RotatingFileHandler(
+        ENGINE_LOG,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    class _StreamToHandler:
+        def __init__(self, stream_handler: logging.Handler):
+            self._handler = stream_handler
+            self._record = logging.LogRecord("pump_engine", logging.INFO, "", 0, "", (), None)
+
+        def write(self, msg: str) -> None:
+            msg = msg.rstrip()
+            if msg:
+                self._record.msg = msg
+                self._handler.emit(self._record)
+
+        def flush(self) -> None:
+            self._handler.flush()
+
+    sys.stdout = _StreamToHandler(handler)
+    sys.stderr = _StreamToHandler(handler)
+
+
+def _format_exception(exc: BaseException) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
 
 
 def _ts_utc(dt: pd.Timestamp) -> str:
@@ -344,7 +381,7 @@ class PumpEngine:
                             continue
                         exc = task.exception()
                         if exc:
-                            print(f"[{_now()}] Loop error: {exc}")
+                            print(f"[{_now()}] Loop error in {task.get_name()}:\n{_format_exception(exc)}")
                     self.reconnect_event.set()
 
                 for task in pending:
@@ -370,7 +407,7 @@ class PumpEngine:
             print(f"[{_now()}] CONNECTED public+business")
             return True
         except Exception as exc:
-            print(f"[{_now()}] CONNECT failed: {exc}")
+            print(f"[{_now()}] CONNECT failed:\n{_format_exception(exc)}")
             await self._close_connections()
             return False
 
@@ -450,7 +487,7 @@ class PumpEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(f"[{_now()}] public drain error: {exc}")
+            print(f"[{_now()}] public drain error:\n{_format_exception(exc)}")
 
     async def _drain_biz(self) -> None:
         if not self.ws_biz:
@@ -467,7 +504,7 @@ class PumpEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            print(f"[{_now()}] business drain error: {exc}")
+            print(f"[{_now()}] business drain error:\n{_format_exception(exc)}")
 
     async def _handle(self, raw: str) -> None:
         try:
@@ -618,7 +655,8 @@ class PumpEngine:
             print(
                 f"[{_now()}] Heartbeat pairs={len(self.universe)} "
                 f"active_pending={sum(len(v) for v in self.pending_signals.values())} "
-                f"open_positions={len(self.open_positions)}"
+                f"open_positions={len(self.open_positions)} "
+                f"stale_pairs={len(stale_symbols)}"
             )
             if self.universe and len(stale_symbols) == len(self.universe):
                 print(f"[{_now()}] Heartbeat detected all pairs stale >60s")
@@ -1176,6 +1214,7 @@ class PumpEngine:
 
 
 if __name__ == "__main__":
+    _setup_rotating_log()
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true")
     parser.add_argument(

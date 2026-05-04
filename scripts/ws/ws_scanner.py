@@ -134,12 +134,22 @@ class WSScanner:
                     loop.add_signal_handler(getattr(signal, sig_name), self.stop_event.set)
                 except NotImplementedError:
                     pass
-        task = asyncio.create_task(self.feed.start())
+        task = asyncio.create_task(self.feed.start(), name="ws_feed.start")
+        stop_waiter = asyncio.create_task(self.stop_event.wait(), name="ws_scanner.stop_waiter")
         try:
-            await self.stop_event.wait()
+            done, pending = await asyncio.wait(
+                {task, stop_waiter},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                exc = task.exception()
+                if exc:
+                    raise exc
+                raise RuntimeError("WSFeed stopped unexpectedly")
         finally:
+            stop_waiter.cancel()
             await self.feed.stop()
-            await task
+            await asyncio.gather(task, stop_waiter, return_exceptions=True)
             await self.client.close()
             _scan_log("WS scanner stopped")
 
