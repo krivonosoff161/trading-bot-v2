@@ -23,13 +23,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from src.exchange.okx_client import OKXClient
-from scripts.backtest_simulate import check_outcome
+from scripts.backtest.backtest_simulate import check_outcome
 
 _ROOT         = Path(__file__).resolve().parents[2]
 SIGNAL_LOG    = _ROOT / "logs" / "signals" / "signal_log.jsonl"
