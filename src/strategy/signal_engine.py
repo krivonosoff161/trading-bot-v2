@@ -1025,6 +1025,19 @@ def compute_signal(
     if drift_short_veto:
         trade_style, side = "NO_TRADE", None
 
+    # D2: DRIFT trigger-bar volume decay veto (trigger vol must be ≥0.9× prior baseline)
+    if trade_style == "FAST" and side and regime == "DRIFT":
+        if candles_15m and len(candles_15m) >= 20:
+            _vols_d2 = [float(c[5]) for c in candles_15m]
+            _prior_vol_d2 = float(np.mean(_vols_d2[5:20]))
+            if _prior_vol_d2 > 0 and _vols_d2[1] / _prior_vol_d2 < 0.9:
+                trade_style, side = "NO_TRADE", None
+
+    # B3: ETH DRIFT hour veto — avoid low-liquidity UTC hours 22–01
+    if trade_style == "FAST" and side and regime == "DRIFT" and symbol == "ETH-USDT":
+        if signal_hour in (22, 23, 0, 1):
+            trade_style, side = "NO_TRADE", None
+
     strong_4h_veto = trade_style == "FAST" and side is not None and bias_4h != "NEUTRAL" and di_spread_4h_closed >= 8 and ((side == "buy" and bias_4h == "DOWN") or (side == "sell" and bias_4h == "UP"))
     if strong_4h_veto:
         trade_style, side = "NO_TRADE", None
