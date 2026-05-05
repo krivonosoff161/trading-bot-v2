@@ -5,7 +5,7 @@ Run once a day after label_outcomes.py:
     python scripts/label_outcomes.py
     python scripts/build_journal.py
 
-Output: scripts/journal.xlsx  (three sheets: Журнал + Симулятор + Реальные сделки)
+Output: scripts/journal.xlsx  (four sheets: Журнал + Симулятор + Реальные сделки + Памп)
 """
 import asyncio
 import json
@@ -34,11 +34,13 @@ except ImportError:
 
 from src.exchange.okx_client import OKXClient
 
-_ROOT         = Path(__file__).resolve().parent.parent
-SIGNAL_LOG    = _ROOT / "logs" / "signals" / "signal_log.jsonl"
-SIGNAL_LABELS = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
-JOURNAL_PATH  = Path(__file__).parent / "journal.xlsx"
-CONFIG_PATH   = Path(__file__).parent.parent / "config.yaml"
+_ROOT            = Path(__file__).resolve().parent.parent
+SIGNAL_LOG       = _ROOT / "logs" / "signals" / "signal_log.jsonl"
+SIGNAL_LABELS    = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
+PUMP_SIGNALS_LOG = _ROOT / "logs" / "pump" / "pump_signals.jsonl"
+PUMP_LABELS_LOG  = _ROOT / "logs" / "pump" / "pump_labels.jsonl"
+JOURNAL_PATH     = Path(__file__).parent / "journal.xlsx"
+CONFIG_PATH      = Path(__file__).parent.parent / "config.yaml"
 
 # Excel fill colors
 FILL_HEADER   = PatternFill("solid", fgColor="1F4E79")
@@ -172,6 +174,31 @@ def _load_real_trades() -> list:
         return []
 
 
+def _load_pump_trades() -> list:
+    entries = {r["signal_id"]: r for r in _load_jsonl(PUMP_SIGNALS_LOG) if r.get("type") == "ENTRY"}
+    out = []
+    for rec in _load_jsonl(PUMP_LABELS_LOG):
+        if rec.get("type") != "EXIT":
+            continue
+        entry = entries.get(rec.get("signal_id", ""), {})
+        opened = rec.get("opened_at", "")
+        out.append({
+            "dt":        opened[:16].replace("T", " ") if opened else "",
+            "sym":       rec.get("sym", ""),
+            "tier":      entry.get("screener_tier", ""),
+            "outcome":   rec.get("exit_reason", ""),
+            "entry_px":  rec.get("entry_price"),
+            "exit_px":   rec.get("exit_price"),
+            "hold_min":  rec.get("hold_min"),
+            "gross_pnl": rec.get("gross_pnl_pct"),
+            "fee_pct":   rec.get("fee_pct"),
+            "net_pnl":   rec.get("net_pnl_pct"),
+            "vol_ratio": entry.get("vol_ratio"),
+        })
+    out.sort(key=lambda x: x["dt"], reverse=True)
+    return out
+
+
 def _match_signal(signals: list, symbol: str, open_ms: int) -> str:
     for sig in signals:
         if sig.get("symbol") != symbol:
@@ -218,11 +245,13 @@ def build() -> None:
         })
 
     real_trades    = _load_real_trades()
+    pump_trades    = _load_pump_trades()
 
     wb = openpyxl.Workbook()
     _build_sheet1(wb, rows)
     _build_sheet2(wb, rows)
     _build_sheet3(wb, real_trades, signals)
+    _build_sheet4(wb, pump_trades)
     wb.save(JOURNAL_PATH)
     print(f"Журнал: {JOURNAL_PATH}  ({len(rows)} сигналов, {sum(1 for r in rows if r['outcome'])} закрыто)")
 
@@ -449,6 +478,62 @@ def _build_sheet3(wb, real_trades: list, signals: list) -> None:
     ws.freeze_panes = "A2"
 
     print(f"Реальные сделки: {len(processed)} позиций, {n_matched} совпали с сигналами бота")
+
+
+# ---------------------------------------------------------------------------
+# Sheet 4 — Памп (pump paper trades)
+# ---------------------------------------------------------------------------
+
+def _build_sheet4(wb, pump_trades: list) -> None:
+    ws = wb.create_sheet("Памп")
+
+    headers = ["Дата", "Пара", "Тир", "Исход", "Вход", "Выход",
+               "Hold(мин)", "P&L% брутто", "Комиссия%", "NET P&L%", "Vol ratio"]
+
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = FILL_HEADER
+        cell.font = FONT_HEADER
+        cell.alignment = Alignment(horizontal="center")
+
+    for r, row in enumerate(pump_trades, 2):
+        vals = [
+            row["dt"], row["sym"], row["tier"], row["outcome"],
+            row["entry_px"], row["exit_px"], row["hold_min"],
+            row["gross_pnl"], row["fee_pct"], row["net_pnl"],
+            round(row["vol_ratio"], 2) if row["vol_ratio"] else "",
+        ]
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=col, value=val)
+            if col == 4:
+                if row["outcome"] == "TP":
+                    cell.fill = FILL_TP
+                elif row["outcome"] == "SL":
+                    cell.fill = FILL_STOP
+
+    if pump_trades:
+        n_tp  = sum(1 for t in pump_trades if t["outcome"] == "TP")
+        n     = len(pump_trades)
+        wr    = n_tp / n * 100
+        wins  = [t["net_pnl"] for t in pump_trades if t["outcome"] == "TP"  and t["net_pnl"] is not None]
+        losses = [abs(t["net_pnl"]) for t in pump_trades if t["outcome"] == "SL" and t["net_pnl"] is not None]
+        pf    = sum(wins) / sum(losses) if losses else float("inf")
+        avg   = sum(t["net_pnl"] for t in pump_trades if t["net_pnl"] is not None) / n
+
+        sum_row = n + 3
+        for i, (label, val) in enumerate([
+            ("Всего сделок", n),
+            ("WR",           f"{n_tp}/{n} = {wr:.0f}%"),
+            ("Profit Factor", f"{pf:.2f}"),
+            ("Avg NET P&L%", f"{avg:+.3f}%"),
+        ]):
+            ws.cell(row=sum_row + i, column=1, value=label).fill = FILL_SUMMARY
+            ws.cell(row=sum_row + i, column=1).font = FONT_BOLD
+            ws.cell(row=sum_row + i, column=2, value=val).fill = FILL_SUMMARY
+
+    _set_col_widths(ws, [16, 12, 6, 8, 12, 12, 9, 11, 10, 10, 10])
+    ws.freeze_panes = "A2"
+    print(f"Памп: {len(pump_trades)} сделок")
 
 
 if __name__ == "__main__":
