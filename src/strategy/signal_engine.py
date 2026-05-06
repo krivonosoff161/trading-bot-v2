@@ -1013,7 +1013,7 @@ def compute_signal(
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_d
 
     slope_min = float(config.get("slope_min", 30.0))
-    hold_fast_m = int(config.get("hold_fast_minutes", 150))
+    hold_fast_m = 60 if regime == "DRIFT" else int(config.get("hold_fast_minutes", 90))
     if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT"):
         sl_cur = slope_15m if trade_style == "FAST" else slope_1h
         sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
@@ -1036,6 +1036,11 @@ def compute_signal(
     # B3: ETH DRIFT hour veto — avoid low-liquidity UTC hours 22–01
     if trade_style == "FAST" and side and regime == "DRIFT" and symbol == "ETH-USDT":
         if signal_hour in (22, 23, 0, 1):
+            trade_style, side = "NO_TRADE", None
+
+    # D3: BTC DRIFT late-entry veto — skip when vol_ratio_sig > 3.0 (chasing exhausted move)
+    if trade_style == "FAST" and side and regime == "DRIFT" and symbol == "BTC-USDT":
+        if vol_ratio_sig > 3.0:
             trade_style, side = "NO_TRADE", None
 
     strong_4h_veto = trade_style == "FAST" and side is not None and bias_4h != "NEUTRAL" and di_spread_4h_closed >= 8 and ((side == "buy" and bias_4h == "DOWN") or (side == "sell" and bias_4h == "UP"))
@@ -1079,7 +1084,7 @@ def compute_signal(
             struct = (swing_lows[-1] - 0.2 * atr_15m) if swing_lows else None
             sl_p = round(min(struct, atr_sl) if struct and struct < close else atr_sl, 4)
             sl_dist = close - sl_p
-            tp1_k = 0.4 if regime == "DRIFT" else 0.8
+            tp1_k = 0.5 if regime == "DRIFT" else 0.8
             tp1_p = round(close + sl_dist * tp1_k, 4)
             tp2_p = round(close + sl_dist * 1.5, 4)
         else:
@@ -1087,7 +1092,7 @@ def compute_signal(
             struct = (swing_highs[-1] + 0.2 * atr_15m) if swing_highs else None
             sl_p = round(max(struct, atr_sl) if struct and struct > close else atr_sl, 4)
             sl_dist = sl_p - close
-            tp1_k = 0.4 if regime == "DRIFT" else 0.8
+            tp1_k = 0.5 if regime == "DRIFT" else 0.8
             tp1_p = round(close - sl_dist * tp1_k, 4)
             tp2_p = round(close - sl_dist * 1.5, 4)
     elif trade_style == "SWING" and side and close:
