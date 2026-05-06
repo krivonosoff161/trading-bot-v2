@@ -109,6 +109,13 @@ def _candle_vol_delta(raw_5m: list) -> float:
     return signed_vol / total_vol
 
 
+def _fast_hold_minutes(sig: dict) -> int:
+    """Hold override only for DRIFT FAST; TRENDING FAST keeps the general setting."""
+    if sig.get("trade_style") == "FAST" and sig.get("regime") in ("DRIFT", "WEAK_TREND"):
+        return BT_FAST_HOLD_MIN
+    return HOLD_FAST_M
+
+
 def _calc_basis_and_perp_div(mark_15m: list, index_15m: list,
                               last_price: float, raw_15m: list) -> tuple:
     """Compute basis_pct and perp_div_4bar at signal time.
@@ -167,6 +174,7 @@ ADX_PERIOD   = BT_ADX_PERIOD
 # ── Hold time — configurable via env for param sweep ────────────────────────────
 HOLD_FAST_M  = int(os.getenv("BT_HOLD_FAST_M",  "150"))
 HOLD_SWING_M = int(os.getenv("BT_HOLD_SWING_M", "300"))
+BT_FAST_HOLD_MIN = int(os.getenv("BT_FAST_HOLD_MIN", str(HOLD_FAST_M)))
 
 # ── Slope filter — configurable via env for param sweep ─────────────────────────
 BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
@@ -174,6 +182,7 @@ BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
 # ── DRIFT-specific filters — configurable via env for param sweep ────────────────
 BT_DRIFT_TP1_K   = float(os.getenv("BT_DRIFT_TP1_K",  "0.4"))   # TP1 multiplier (live: 0.4R)
 BT_DRIFT_MAX_VOL = float(os.getenv("BT_DRIFT_MAX_VOL", "999"))   # vol_ratio cap (999 = no cap)
+BT_DRIFT_BTC_VOL_MAX = float(os.getenv("BT_DRIFT_BTC_VOL_MAX", "999"))
 BT_DRIFT_VWAP_STRETCH = float(os.getenv("BT_DRIFT_VWAP_STRETCH", "999.0"))
 BT_DRIFT_ETH_BLOCK_HOURS = [
     int(h) for h in os.getenv("BT_DRIFT_ETH_BLOCK_HOURS", "").split(",")
@@ -307,10 +316,12 @@ def _current_test_config() -> dict:
         "BT_DRIFT_VOL_DECAY_MIN": BT_DRIFT_VOL_DECAY_MIN,
         "BT_LATE_SCORE_MAX": BT_LATE_SCORE_MAX,
         "BT_HOLD_FAST_M": HOLD_FAST_M,
+        "BT_FAST_HOLD_MIN": BT_FAST_HOLD_MIN,
         "BT_HOLD_SWING_M": HOLD_SWING_M,
         "BT_SLOPE_MIN": BT_SLOPE_MIN,
         "BT_DRIFT_TP1_K": BT_DRIFT_TP1_K,
         "BT_DRIFT_MAX_VOL": BT_DRIFT_MAX_VOL,
+        "BT_DRIFT_BTC_VOL_MAX": BT_DRIFT_BTC_VOL_MAX,
     }
 
 
@@ -735,6 +746,11 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 trade_style, side = "NO_TRADE", None
                 _drop = _drop or "drift_vol_decay"
 
+            if (trade_style == "FAST" and side and symbol == "BTC-USDT"
+                    and vol_ratio > BT_DRIFT_BTC_VOL_MAX):
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "drift_btc_vol_high"
+
             if trade_style == "FAST" and side and BT_LATE_SCORE_MAX < 99:
                 late_score = 0
                 if vwap_stretch is not None and vwap_stretch > 1.25:
@@ -1067,7 +1083,7 @@ async def run():
     print(f"  Git HEAD:  {_git_label}")
     print(f"  Symbols:   {', '.join(ALL_SYMBOLS)}")
     print(f"  Cadence:   {INTERVAL_M}m  (live: 15m)")
-    print(f"  Hold:      FAST={HOLD_FAST_M}m  SWING={HOLD_SWING_M}m")
+    print(f"  Hold:      FAST={HOLD_FAST_M}m  DRIFT_FAST={BT_FAST_HOLD_MIN}m  SWING={HOLD_SWING_M}m")
     print(f"  TimeBlock: off")
     print(f"  Position:  one per pair (any side)")
     print(f"  Fees:      NOT modeled  |  Slippage: NOT modeled")
@@ -1399,7 +1415,8 @@ async def run():
 
             # FAST night hold matches prod: 240m at night (01-07 UTC), 120m otherwise
             if sig["trade_style"] == "FAST":
-                max_h = (240 if sig.get("is_night") else HOLD_FAST_M) * 60 * 1000
+                fast_hold_m = _fast_hold_minutes(sig)
+                max_h = (240 if sig.get("is_night") else fast_hold_m) * 60 * 1000
             else:
                 max_h = hold_ms.get(sig["trade_style"], hold_ms["SWING"])
             outcome, elapsed, exit_price, mfe_r = check_outcome(
@@ -1663,7 +1680,13 @@ async def run():
             side_r  = r["side"]
             ts      = r["ts_ms"]
             elapsed = r.get("elapsed_m")
-            max_hold_ms_sym = hold_ms.get(r["style"], hold_ms["SWING"])
+            if r["style"] == "FAST":
+                max_hold_ms_sym = _fast_hold_minutes({
+                    "trade_style": r["style"],
+                    "regime": r.get("regime"),
+                }) * 60 * 1000
+            else:
+                max_hold_ms_sym = hold_ms.get(r["style"], hold_ms["SWING"])
             pos_key = sym  # one position per pair (any side)
 
             # Block same pair regardless of direction — matches real bot behaviour
@@ -1730,7 +1753,7 @@ async def run():
             print(f"  → REGIME not DRIFT:      {max(total_ticks - drift_total, 0)}")
             for key in (
                 "drift_vol_low", "drift_vwap_stretch", "drift_eth_hour",
-                "drift_late_from_base", "drift_vol_decay", "slope_weak",
+                "drift_late_from_base", "drift_vol_decay", "drift_btc_vol_high", "slope_weak",
                 "drift_adx1h_low", "drift_short_veto"
             ):
                 if funnel.get(key):
