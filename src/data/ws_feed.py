@@ -12,6 +12,7 @@ import aiohttp
 import pandas as pd
 
 WS_BUSINESS_URL = "wss://ws.okx.com:8443/ws/v5/business"
+REST_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
 REST_HISTORY_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles"
 
 Candle = tuple[int, float, float, float, float, float]
@@ -96,7 +97,7 @@ class WSFeed:
         for sym in self.pairs:
             for bar in self.bars:
                 try:
-                    rows = await self._rest_history(sym, bar.replace("candle", ""), 60)
+                    rows = await self._rest_candles(sym, bar.replace("candle", ""), 60)
                     closed = [row for row in rows if len(row) > 8 and row[8] == "1"]
                     closed.reverse()
                     buf = self.buffers[sym][bar]
@@ -189,6 +190,18 @@ class WSFeed:
                     await result
             except Exception as exc:
                 print(f"[{_now()}] WSFeed callback error {bar} {sym}: {exc}")
+
+    async def _rest_candles(self, sym: str, bar: str, limit: int) -> list:
+        assert self.session is not None
+        async with self.session.get(
+            REST_CANDLES_URL,
+            params={"instId": sym, "bar": bar, "limit": str(limit)},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            body = await resp.json(content_type=None)
+        if body.get("code") != "0":
+            raise RuntimeError(body.get("msg") or f"candles failed for {sym} {bar}")
+        return body.get("data", [])
 
     async def _rest_history(self, sym: str, bar: str, limit: int) -> list:
         assert self.session is not None

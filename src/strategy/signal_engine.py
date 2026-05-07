@@ -1013,7 +1013,7 @@ def compute_signal(
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_d
 
     slope_min = float(config.get("slope_min", 30.0))
-    hold_fast_m = 60 if regime == "DRIFT" else int(config.get("hold_fast_minutes", 90))
+    hold_fast_m = int(config.get("hold_drift_minutes", 75)) if regime == "DRIFT" else int(config.get("hold_fast_minutes", 90))
     if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT"):
         sl_cur = slope_15m if trade_style == "FAST" else slope_1h
         sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
