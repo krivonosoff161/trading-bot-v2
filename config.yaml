@@ -14,6 +14,7 @@ strategy:
   adx_period: 9
   slope_min: 35
   hold_fast_minutes: 90
+  hold_drift_minutes: 75
 
 pump_engine:
   # Detection
@@ -36,6 +37,8 @@ pump_engine:
   # Paper trading
   paper_tp_pct: 1.5
   paper_sl_pct: 0.8
+  sl_atr_mult: 1.5
+  tp_atr_mult: 2.5
   paper_max_hold_min: 9999  # effectively disabled — SL/TP are the only exits
   paper_position_usd: 100.0
   paper_balance_usd: 1000.0
@@ -50,3 +53,10 @@ pump_engine:
   heartbeat_interval: 30
   state_ttl_min: 10
   reconnect_delays: [2, 4, 8, 16, 32, 60]
+
+screener_live:
+  vol_spike_min: 2.0
+  price_move_min_pct: 1.0
+  inactivity_bars: 3
+  min_vol_24h_usd: 1000000
+  warmup_bars: 15
