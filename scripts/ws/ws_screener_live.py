@@ -91,6 +91,7 @@ class LiveScreener:
         self.feed: WSFeed | None = None
         self.pairs: list[str] = []
         self.active_universe: set[str] = set()
+        self.active_meta: dict[str, dict[str, str]] = {}
         self.inactive_counts: dict[str, int] = {}
 
     def get_active(self) -> list[str]:
@@ -196,12 +197,17 @@ class LiveScreener:
                 self.inactive_counts[sym] = 0
                 if sym not in self.active_universe:
                     self.active_universe.add(sym)
+                    self.active_meta[sym] = {
+                        "direction": "up" if current[4] > current[1] else "down",
+                        "added_at": _ts_utc(),
+                    }
                     change_label = "добавлена"
             else:
                 next_count = self.inactive_counts.get(sym, 0) + 1
                 self.inactive_counts[sym] = next_count
                 if sym in self.active_universe and next_count >= int(self.config["inactivity_bars"]):
                     self.active_universe.remove(sym)
+                    self.active_meta.pop(sym, None)
                     change_label = "удалена"
 
             if change_label is None:
@@ -218,11 +224,17 @@ class LiveScreener:
         payload = {
             "updated_at": _ts_utc(),
             "active": sorted(self.active_universe),
+            "symbols": {sym: self.active_meta[sym] for sym in sorted(self.active_universe) if sym in self.active_meta},
             "all_monitored": len(self.pairs),
         }
         tmp_path = CACHE_PATH.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_path.replace(CACHE_PATH)
+        for _attempt in range(5):
+            try:
+                tmp_path.replace(CACHE_PATH)
+                break
+            except PermissionError:
+                await asyncio.sleep(0.1)
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
