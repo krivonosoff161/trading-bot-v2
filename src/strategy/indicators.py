@@ -290,3 +290,41 @@ def calc_slope(closes: np.ndarray, period: int = 5) -> float:
     y_sc = (y - y.min()) / y_range
     slope = float(np.polyfit(x_sc, y_sc, 1)[0])
     return float(np.degrees(np.arctan(slope)))
+
+
+def find_fvg(candles: list, direction: str, lookback: int = 30) -> list[dict]:
+    """Find recent Fair Value Gaps sorted by proximity to current price.
+
+    Input candles must be chronological (oldest first) in OKX format:
+    [ts, open, high, low, close, ...].
+    """
+    if len(candles) < 3:
+        return []
+
+    current_price = float(candles[-1][4])
+    start = max(0, len(candles) - lookback - 2)
+    gaps: list[dict] = []
+
+    for i in range(start, len(candles) - 2):
+        high_0 = float(candles[i][2])
+        low_0 = float(candles[i][3])
+        high_2 = float(candles[i + 2][2])
+        low_2 = float(candles[i + 2][3])
+
+        if direction == "bull" and high_0 < low_2:
+            low_gap, high_gap = high_0, low_2
+        elif direction == "bear" and low_0 > high_2:
+            low_gap, high_gap = high_2, low_0
+        else:
+            continue
+
+        gaps.append(
+            {
+                "low": round(low_gap, 6),
+                "high": round(high_gap, 6),
+                "mid": round((low_gap + high_gap) / 2.0, 6),
+                "age_bars": len(candles) - (i + 3),
+            }
+        )
+
+    return sorted(gaps, key=lambda gap: abs(gap["mid"] - current_price))
