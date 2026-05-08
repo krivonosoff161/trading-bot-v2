@@ -117,6 +117,7 @@ class PumpEngineV2:
         self.universe_lock = asyncio.Lock()
 
         self.target_universe: list[str] = []
+        self.universe_meta: dict[str, dict[str, str]] = {}
         self.subscribed_pairs: list[str] = []
         self.last_signal_wall: dict[str, float] = {}
         self.open_positions: dict[str, OpenPosition] = {}
@@ -139,7 +140,9 @@ class PumpEngineV2:
         )
 
         try:
-            initial_active = self._read_active_universe()
+            initial_meta = self._read_active_universe()
+            initial_active = sorted(initial_meta)
+            self.universe_meta = initial_meta
             if initial_active:
                 await self._ensure_pairs_ready(initial_active)
                 await self.feed.warmup()
@@ -181,7 +184,9 @@ class PumpEngineV2:
 
     async def _refresh_universe(self) -> None:
         async with self.universe_lock:
-            active = self._read_active_universe()
+            active_meta = self._read_active_universe()
+            self.universe_meta = active_meta
+            active = sorted(active_meta)
             self.target_universe = list(active)
             keep_open = {sym for sym in self.open_positions}
             desired_subscription = sorted(set(active) | keep_open)
@@ -290,7 +295,7 @@ class PumpEngineV2:
             return
         self.last_signal_wall[sym] = now_wall
 
-        side = "buy" if current[4] > current[1] else "sell"
+        side = self._side_from_universe(sym)
         await self._open_position(
             sym=sym,
             candle=current,
@@ -465,17 +470,24 @@ class PumpEngineV2:
                 f"| open={len(self.open_positions)} | stale={stale}"
             )
 
-    def _read_active_universe(self) -> list[str]:
+    def _read_active_universe(self) -> dict[str, dict[str, str]]:
         if not ACTIVE_UNIVERSE_PATH.exists():
-            return []
+            return {}
         try:
             payload = json.loads(ACTIVE_UNIVERSE_PATH.read_text(encoding="utf-8"))
         except Exception:
-            return []
+            return {}
+        meta = payload.get("symbols", {})
+        if isinstance(meta, dict) and meta:
+            return {str(sym): info for sym, info in meta.items() if isinstance(info, dict)}
         active = payload.get("active", [])
         if not isinstance(active, list):
-            return []
-        return [str(sym) for sym in active]
+            return {}
+        return {str(sym): {"direction": "up"} for sym in active}
+
+    def _side_from_universe(self, sym: str) -> str:
+        direction = str(self.universe_meta.get(sym, {}).get("direction", "up")).lower()
+        return "buy" if direction == "up" else "sell"
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
