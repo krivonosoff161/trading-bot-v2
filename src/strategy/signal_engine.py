@@ -18,6 +18,7 @@ from src.strategy.indicators import (
     calc_rsi,
     calc_slope,
     calc_supertrend,
+    find_fvg,
     find_swing_levels,
     parse_candles,
 )
@@ -972,6 +973,13 @@ def compute_signal(
             elif fast_base and five_m_short and bias_1h == "DOWN":
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_f
 
+        if trade_style == "FAST" and side and config.get("trending_require_fvg", False):
+            _fvg_dir = "bull" if side == "buy" else "bear"
+            _fvg_gaps = find_fvg(candles_15m, _fvg_dir, lookback=10)
+            _close = float(candles_15m[-1][4]) if candles_15m else 0.0
+            if not any(gap["low"] <= _close <= gap["high"] for gap in _fvg_gaps):
+                trade_style, side = "NO_TRADE", None
+
     elif regime == "RANGING":
         cfg_r = _mode_cfg(pp, "ranging", "fast")
         bb_corridor = cfg_r.get("bb_width_min", 0.8) <= bb_width_pct <= cfg_r.get("bb_width_max", 2.5)
@@ -1013,7 +1021,12 @@ def compute_signal(
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_d
 
     slope_min = float(config.get("slope_min", 30.0))
-    hold_fast_m = int(config.get("hold_drift_minutes", 75)) if regime == "DRIFT" else int(config.get("hold_fast_minutes", 90))
+    if regime == "DRIFT":
+        hold_fast_m = int(config.get("hold_drift_minutes", 75))
+    elif regime == "TRENDING":
+        hold_fast_m = int(config.get("hold_trending_fast_minutes", config.get("hold_fast_minutes", 90)))
+    else:
+        hold_fast_m = int(config.get("hold_fast_minutes", 90))
     if trade_style != "NO_TRADE" and side and regime in ("TRENDING", "DRIFT"):
         sl_cur = slope_15m if trade_style == "FAST" else slope_1h
         sl_prev = slope_15m_prev if trade_style == "FAST" else slope_1h_prev
