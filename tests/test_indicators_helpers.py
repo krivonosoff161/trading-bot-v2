@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.strategy.indicators import atr_regime, find_swing_levels
+from src.strategy.indicators import atr_regime, find_fvg, find_swing_levels
 
 
 def test_find_swing_levels_excludes_forming_candle_from_right_window() -> None:
@@ -26,3 +26,18 @@ def test_atr_regime_returns_expected_shape() -> None:
     assert 0.0 <= pct <= 100.0
     assert isinstance(label, str)
     assert label
+
+
+def test_find_fvg_returns_nearest_gap_for_direction() -> None:
+    candles = [
+        [0, 10, 11, 9, 10, 1],
+        [1, 10, 10.5, 9.8, 10.2, 1],
+        [2, 10.3, 12.5, 12.0, 12.2, 1],
+        [3, 12.1, 12.2, 11.8, 12.0, 1],
+    ]
+
+    gaps = find_fvg(candles, "bull", lookback=4)
+
+    assert gaps
+    assert gaps[0]["low"] == 11.0
+    assert gaps[0]["high"] == 12.0
