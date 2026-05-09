@@ -45,7 +45,7 @@ Trading Bot V2 — OKX фьючерсный скальпинг бот + Telegram
 ## Текущая архитектура
 
 ### Запущенные процессы (start_all.bat):
-1. `scripts/telegram_bot.py` — Telegram бот, 4 подписчика
+1. `scripts/telegram_bot.py` — Telegram бот (количество пользователей не фиксировать в Git-документах)
 2. `scripts/ws/ws_scanner.py` — WS сканер 5 пар (BTC/ETH/SOL/XRP/DOGE)
 3. `scripts/ws/ws_main_screener.py` — **shadow-mode**, 29 пар, пишет main_signals.jsonl
 4. `scripts/ws/ws_screener_live.py` — 232 пары, пишет active_universe.json
@@ -82,7 +82,7 @@ MAIN WS— shadow-mode, 29 пар, ws_main_screener.py (без Telegram пока
 1. **ws_main_screener shadow-mode** — работает с 09.05, нужно проанализировать main_signals.jsonl через 24-48ч
 2. **Переработка LLM промта** — добавить режим BB FADE (5-й режим), осознание TRENDING/DRIFT
 3. **Переработка Telegram UI** — убрать мёртвый _scanner_loop() из telegram_bot.py
-4. **ADA в бэктест** — в PAIR_PARAMS есть, нужно добавить в SYMBOLS бэктеста
+4. **Delta alignment / NOT aligned** — проверить гипотезу, что SCANNER-сделки с delta NOT aligned дают лучшее качество, чем aligned. ADA уже есть в `SYMBOLS` основных backtest-скриптов; не предлагать повторно "добавить ADA", сначала сверять с кодом.
 
 ---
 

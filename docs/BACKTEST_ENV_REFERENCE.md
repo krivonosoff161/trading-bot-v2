@@ -9,8 +9,8 @@
 
 | Скрипт | Назначение | Требует |
 |---|---|---|
-| `scripts/backtest/backtest_simulate.py` | Полный бэктест на истории | .pkl кэш или OKX API |
-| `scripts/backtest/bt_sweep_drift.py` | Sweep DRIFT конфигов | .pkl кэш |
+| `scripts/backtest/backtest_simulate.py` | Полный бэктест на истории | .pkl кэш + OKX public history calls for outcomes |
+| `scripts/backtest/bt_sweep_drift.py` | Sweep DRIFT конфигов | .pkl кэш + запуск `backtest_simulate.py` |
 | `scripts/backtest/bt_param_sweep.py` | Generic multi-config sweep | .pkl кэш |
 | `scripts/backtest/bt_entry_filters.py` | Sweep entry фильтров, TP1→BE→TP2 | .pkl кэш |
 
@@ -55,21 +55,22 @@
 | `scripts/backtest_candle_cache_65d.pkl` | Свечи 15m/1H/4H, 5 пар | 65 дней |
 | `scripts/backtest/backtest_candle_cache_65d.pkl` | То же, для bt_* скриптов | 65 дней |
 
-Если кэш есть локально — бэктест не делает REST запросов.
-Если кэша нет — скачивает через OKX API (нужны ключи в .env).
+Даже если candle/mark кэши есть локально, `backtest_simulate.py` всё равно делает OKX REST-запросы для forward outcome candles (`client.get_history_candles(..., "5m", after=fwd_end, limit=288)`).
+Если кэша нет или он невалиден — скрипт дополнительно скачивает candle/mark/index данные через OKX API.
 
 ---
 
 ## Формулы метрик
 
 ```python
-WR  = wins / total                          # wins = исходы с exit_r > 0
-PF  = sum(exit_r > 0) / abs(sum(exit_r < 0))  # profit factor
-sim = product(1 + exit_r * leverage) - 1   # симуляция баланса, leverage=5
+WR(TP+SL) = TP / (TP + SL)                 # TIME_EXIT исключён, используется в части отчетов
+honest_WR = TP / all_signals               # TIME_EXIT включён в знаменатель
+PF = sum(positive pnl/exit_r) / abs(sum(negative pnl/exit_r))
+sim = симуляция баланса по фактическому PnL/exit_r выбранного скрипта
 DD  = max drawdown от пика баланса
 ```
 
-**Важно:** TIME_EXIT включается в расчёт WR/PF через знак exit_r (положительный или отрицательный). Не исключать TIME_EXIT из статистики.
+**Важно:** в проекте встречаются оба определения WR. Для research-отчетов всегда явно указывать, какая формула использована: `WR(TP+SL)` или `honest_WR`. TIME_EXIT нельзя скрывать: минимум показывать `te_pct` и отдельную диагностику MFE/exit_r.
 
 ---
 
