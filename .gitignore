@@ -47,6 +47,7 @@ api_keys.yaml
 *_files/
 
 # Backtest outputs (generated data, not source)
+scripts/backtest/*.json
 scripts/backtest_result.txt
 scripts/backtest_*.txt
 scripts/qwen_analysis_pack.txt
