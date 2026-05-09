@@ -114,7 +114,7 @@ class WSScanner:
         passphrase = os.getenv("OKX_PASSPHRASE", "")
         is_demo = os.getenv("OKX_IS_DEMO", "1") == "1"
         self.params = _load_strategy_params()
-        self.feed = WSFeed()
+        self.feed = WSFeed(bars=["candle5m", "candle15m", "candle1H"])
         self.client = OKXClient(api_key, secret_key, passphrase, is_demo)
         self.cooldown_sec = 120
         self.last_signal_wall: dict[str, float] = {}

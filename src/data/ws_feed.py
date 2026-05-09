@@ -28,6 +28,12 @@ def _chunked(items: list[dict], size: int) -> list[list[dict]]:
 
 
 class WSFeed:
+    BAR_BUFFER_SIZES = {
+        "candle5m": 180,
+        "candle15m": 120,
+        "candle1H": 100,
+        "candle4H": 80,
+    }
     PAIRS = [
         "BTC-USDT-SWAP",
         "ETH-USDT-SWAP",
@@ -35,7 +41,7 @@ class WSFeed:
         "XRP-USDT-SWAP",
         "DOGE-USDT-SWAP",
     ]
-    BARS = ["candle1m", "candle5m", "candle15m", "candle1H"]
+    BARS = ["candle1m", "candle5m", "candle15m", "candle1H", "candle4H"]
 
     def __init__(
         self,
@@ -49,7 +55,7 @@ class WSFeed:
         self.buffer_size = int(buffer_size)
         self.reconnect_delays = list(reconnect_delays or [2, 4, 8, 16, 32, 60])
         self.buffers: dict[str, dict[str, deque[Candle]]] = {
-            sym: {bar: deque(maxlen=self.buffer_size) for bar in self.bars} for sym in self.pairs
+            sym: self._make_bar_buffers() for sym in self.pairs
         }
         self.callbacks: dict[str, list[Callback]] = defaultdict(list)
         self.last_close_ts: dict[str, dict[str, int]] = defaultdict(dict)
@@ -97,7 +103,7 @@ class WSFeed:
         for sym in self.pairs:
             for bar in self.bars:
                 try:
-                    rows = await self._rest_candles(sym, bar.replace("candle", ""), 60)
+                    rows = await self._rest_candles(sym, bar.replace("candle", ""), self._warmup_limit_for_bar(bar))
                     closed = [row for row in rows if len(row) > 8 and row[8] == "1"]
                     closed.reverse()
                     buf = self.buffers[sym][bar]
@@ -120,6 +126,21 @@ class WSFeed:
         if bar not in self.bars:
             raise ValueError(f"Unsupported bar: {bar}")
         self.callbacks[bar].append(callback)
+
+    def ensure_pair(self, sym: str) -> None:
+        if sym in self.buffers:
+            return
+        self.pairs.append(sym)
+        self.buffers[sym] = self._make_bar_buffers()
+
+    def _make_bar_buffers(self) -> dict[str, deque[Candle]]:
+        return {bar: deque(maxlen=self._buffer_size_for_bar(bar)) for bar in self.bars}
+
+    def _buffer_size_for_bar(self, bar: str) -> int:
+        return int(self.BAR_BUFFER_SIZES.get(bar, self.buffer_size))
+
+    def _warmup_limit_for_bar(self, bar: str) -> int:
+        return self._buffer_size_for_bar(bar)
 
     async def _connect(self) -> bool:
         try:

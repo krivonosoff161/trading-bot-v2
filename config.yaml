@@ -62,3 +62,11 @@ screener_live:
   inactivity_bars: 3
   min_vol_24h_usd: 1000000
   warmup_bars: 15
+
+main_screener:
+  top_n_pairs: 24
+  universe_refresh_hours: 8
+  cooldown_minutes: 60
+  warmup_bars: 20
+  prefilter_vol_ratio_min: 0.5
+  prefilter_adx_min: 10
