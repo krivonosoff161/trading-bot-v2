@@ -1,6 +1,6 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-04
+**Последнее обновление:** 2026-05-09
 
 ---
 
@@ -53,10 +53,16 @@ analyze_chart.py считает, llm_formatter.py объясняет.
 - [x] D2+B3 DRIFT фильтры — DRIFT WR 74%→89%, sim +144.1% ✅ 03.05
 - [x] Вкладка "Реальные сделки" в journal.xlsx ✅ 03.05
 - [x] label_outcomes.py — авто-лейблинг через OKX history ✅ 03.05
+- [x] bt_entry_filters.py — sweep 14 фильтров × 5 hold, TP1→BE→TP2 структура ✅ 08.05
+- [x] TRENDING FAST FVG фильтр + hold_trending_fast=120m (PF=3.61 на бэктесте) ✅ 08.05
+- [x] ws_feed.py — candle4H поддержка, per-bar буферы ✅ 09.05
+- [x] ws_main_screener.py — shadow-mode WS скринер 29 пар (5m/15m/1H/4H) ✅ 09.05
+- [x] Логи очищены → свежий старт для новой системы ✅ 09.05
 
 **В работе / остаток S2.3:**
 - [ ] ADA в бэктест (в PAIR_PARAMS есть, нужно добавить в SYMBOLS)
 - [ ] 100+ labeled сигналов → analyze_signal_log.py полный прогон
+- [ ] ws_main_screener shadow-режим → анализ что поймал за 24-48ч → решение о переключении
 
 **Критерий перехода к S3:** 100+ labeled сигналов, понятен edge на реальных данных.
 
@@ -97,7 +103,7 @@ WebSocket движок для alt-coin памп-скальпинга.
 ### Логи pump engine
 - `logs/pump/pump_signals.jsonl` — все ENTRY сигналы
 - `logs/pump/pump_labels.jsonl` — исходы (paper P&L)
-- `logs/pump/ws_pump_engine.log` — движок (ротирующий 5MB×5)
+- `logs/pump/ws_pump_engine_v2.log` — движок (ротирующий 5MB×5)
 - `logs/ws_scanner.log` — WS сканер
 
 ---

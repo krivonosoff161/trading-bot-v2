@@ -4,7 +4,7 @@
 
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
-**Последнее ревью:** 2026-05-08
+**Последнее ревью:** 2026-05-09
 
 **Условные обозначения:**
 - ✅ Внедрено в прод
@@ -58,6 +58,12 @@
 ---
 
 ## P0 — Ближайшие практические задачи
+
+### ⏳ Переработка пользовательской системы (LLM промт + Telegram UI)
+- Текущая проблема: LLM не знает о режимах (TRENDING/DRIFT/RANGING), два параллельных источника сигналов, мёртвый `_scanner_loop()` в telegram_bot.py
+- Что нужно: новый режим 5 для BB FADE в промте, осознание TRENDING/DRIFT в тексте, чистый Telegram UI без legacy кода
+- **Зависит от:** ws_main_screener проработал 24-48ч в shadow-режиме → есть что оценивать
+- **Когда:** следующая сессия после анализа логов main_screener
 
 ### ⏳ ADA в бэктест
 - В PAIR_PARAMS уже есть, в backtest SYMBOLS нет
@@ -250,6 +256,10 @@
 - ✅ bt_sweep_drift.py + bt_param_sweep.py — sweep harness
 - ✅ Библиотека промптов (три сценария в WAIT/NO_TRADE) — коммит 11125c5
 - ✅ Persistent keyboard "🔍 Анализ" в Telegram
+- ✅ bt_entry_filters.py — sweep 14 фильтров × 5 hold, TP1→BE→TP2 структура (08.05)
+- ✅ TRENDING FAST FVG фильтр + hold_trending_fast_minutes=120 (08.05)
+- ✅ WSFeed candle4H + per-bar буферы (09.05)
+- ✅ ws_main_screener.py — shadow-mode WS скринер, 29 пар (09.05)
 
 ---
 
