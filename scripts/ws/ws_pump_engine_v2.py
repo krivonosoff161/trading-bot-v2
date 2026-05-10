@@ -344,12 +344,15 @@ class PumpEngineV2:
         if vol_spike_1m < float(self.config["vol_mult"]) or price_pct_1m < float(self.config["price_pct"]):
             return
 
+        # Stagnation filter: high vol but price barely moved → MM wash trading
+        if vol_spike_1m >= 2.0 and price_pct_1m < 0.5:
+            return
+
         atr = sum(abs(row[2] - row[3]) for row in previous) / 10.0
         if atr <= 0:
             return
 
-        ct_val = self.ctval.get(sym, 1.0)
-        dollar_vol = float(current[4] * current[5] * ct_val)
+        dollar_vol = current[6]  # row[7] = volCcyQuote (exact USDT volume)
         if dollar_vol < float(self.config["min_usd_vol"]):
             return
 
@@ -451,7 +454,7 @@ class PumpEngineV2:
         if not pos:
             return
 
-        ts_ms, _open, high, low, close, _vol = candle
+        ts_ms, _open, high, low, close, _vol, _vol_usd = candle
         exit_reason: str | None = None
         exit_price: float | None = None
 
