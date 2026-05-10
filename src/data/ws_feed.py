@@ -50,14 +50,15 @@ class WSFeed:
         buffer_size: int = 120,
         reconnect_delays: list[int] | None = None,
     ) -> None:
-        self.pairs = list(pairs or self.PAIRS)
-        self.bars = list(bars or self.BARS)
+        self.pairs = list(pairs if pairs is not None else self.PAIRS)
+        self.bars = list(bars if bars is not None else self.BARS)
         self.buffer_size = int(buffer_size)
         self.reconnect_delays = list(reconnect_delays or [2, 4, 8, 16, 32, 60])
         self.buffers: dict[str, dict[str, deque[Candle]]] = {
             sym: self._make_bar_buffers() for sym in self.pairs
         }
         self.callbacks: dict[str, list[Callback]] = defaultdict(list)
+        self.update_callbacks: dict[str, list[Callback]] = defaultdict(list)
         self.last_close_ts: dict[str, dict[str, int]] = defaultdict(dict)
         self.last_msg_ts: dict[str, pd.Timestamp] = {}
         self.session: aiohttp.ClientSession | None = None
@@ -127,6 +128,12 @@ class WSFeed:
             raise ValueError(f"Unsupported bar: {bar}")
         self.callbacks[bar].append(callback)
 
+    def on_candle_update(self, bar: str, callback: Callback) -> None:
+        """Called on every live update of an incomplete candle (row[8]=='0')."""
+        if bar not in self.bars:
+            raise ValueError(f"Unsupported bar: {bar}")
+        self.update_callbacks[bar].append(callback)
+
     def ensure_pair(self, sym: str) -> None:
         if sym in self.buffers:
             return
@@ -194,14 +201,20 @@ class WSFeed:
 
         self.last_msg_ts[sym] = pd.Timestamp.utcnow()
         for row in msg.get("data", []):
-            if len(row) < 9 or row[8] != "1":
+            if len(row) < 9:
                 continue
             candle = self._parse_candle(row)
-            if self.last_close_ts[sym].get(bar) == candle[0]:
-                continue
-            self.last_close_ts[sym][bar] = candle[0]
-            self.buffers[sym][bar].append(candle)
-            await self._dispatch(bar, sym, candle)
+            if row[8] == "0":
+                # Live updating candle — dispatch to update callbacks only
+                if self.update_callbacks.get(bar):
+                    await self._dispatch_update(bar, sym, candle)
+            elif row[8] == "1":
+                # Closed candle — add to buffer and dispatch close callbacks
+                if self.last_close_ts[sym].get(bar) == candle[0]:
+                    continue
+                self.last_close_ts[sym][bar] = candle[0]
+                self.buffers[sym][bar].append(candle)
+                await self._dispatch(bar, sym, candle)
 
     async def _dispatch(self, bar: str, sym: str, candle: Candle) -> None:
         for callback in self.callbacks.get(bar, []):
@@ -211,6 +224,15 @@ class WSFeed:
                     await result
             except Exception as exc:
                 print(f"[{_now()}] WSFeed callback error {bar} {sym}: {exc}")
+
+    async def _dispatch_update(self, bar: str, sym: str, candle: Candle) -> None:
+        for callback in self.update_callbacks.get(bar, []):
+            try:
+                result = callback(sym, candle)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                print(f"[{_now()}] WSFeed update callback error {bar} {sym}: {exc}")
 
     async def _rest_candles(self, sym: str, bar: str, limit: int) -> list:
         assert self.session is not None

@@ -195,13 +195,21 @@ class LiveScreener:
         async with self.state_lock:
             if qualifies:
                 self.inactive_counts[sym] = 0
+                direction = "up" if current[4] > current[1] else "down"
                 if sym not in self.active_universe:
                     self.active_universe.add(sym)
                     self.active_meta[sym] = {
-                        "direction": "up" if current[4] > current[1] else "down",
+                        "direction": direction,
+                        "vol_spike": round(vol_spike, 2),
+                        "last_spike_at": _ts_utc(),
                         "added_at": _ts_utc(),
                     }
                     change_label = "добавлена"
+                else:
+                    # Update direction and score on every new spike
+                    self.active_meta[sym]["direction"] = direction
+                    self.active_meta[sym]["vol_spike"] = round(vol_spike, 2)
+                    self.active_meta[sym]["last_spike_at"] = _ts_utc()
             else:
                 next_count = self.inactive_counts.get(sym, 0) + 1
                 self.inactive_counts[sym] = next_count
