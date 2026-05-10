@@ -1095,7 +1095,7 @@ class PumpEngine:
         pos = self.open_positions.get(sym)
         if not pos:
             return
-        ts_ms, _open, high, low, close, _vol = candle
+        ts_ms, _open, high, low, close, _vol, *_ = candle
         exit_reason = None
         exit_price = None
         if low <= pos.sl_price:
