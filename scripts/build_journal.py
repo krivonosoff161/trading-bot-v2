@@ -448,33 +448,58 @@ def _build_main_ws(wb, rows: list) -> None:
 # ── Sheet 4: Памп ────────────────────────────────────────────────────────────
 # A=date B=pair C=entry D=sl E=tp F=outcome G=hold_min H=signal_hour I=net_pnl_pct
 
+_PUMP_V2_DATE = "10.05"  # first date of new orchestrator
+
 def _build_pump(wb, rows: list) -> None:
     ws = wb.create_sheet("Памп")
     _hdr(ws, 1, [
         "Дата", "Пара", "Вход", "SL", "TP",
         "Исход", "Hold(мин)", "Час UTC", "NET P&L%",
     ])
-    for r, row in enumerate(rows, 2):
+
+    excel_row = 2
+    separator_written = False
+    for row in rows:
+        # Insert separator between old engine and new orchestrator
+        day = row["dt"][:5] if row["dt"] else ""
+        if not separator_written and day and day < _PUMP_V2_DATE:
+            sep_fill = _fill("FFD966")  # gold
+            sep_font = Font(bold=True, color="7F4F00")
+            for c in range(1, 10):
+                cell = ws.cell(row=excel_row, column=c)
+                cell.fill = sep_fill
+                cell.font = sep_font
+            ws.cell(row=excel_row, column=1,
+                    value="▲ Новый оркестратор (с 10.05.2026) ▲").font = sep_font
+            ws.cell(row=excel_row, column=1).fill = sep_fill
+            ws.merge_cells(start_row=excel_row, start_column=1,
+                           end_row=excel_row, end_column=9)
+            ws.cell(row=excel_row, column=1).alignment = ALIGN_C
+            excel_row += 1
+            separator_written = True
+
         vals = [
             row["dt"], row["pair"], row["entry"], row["sl"], row["tp"],
             row["outcome"], row["hold"], row["hour"], row["net_pnl"],
         ]
         for c, val in enumerate(vals, 1):
-            cell = ws.cell(row=r, column=c, value=val)
+            cell = ws.cell(row=excel_row, column=c, value=val)
             if c == 6 and row["outcome"] in OUTCOME_FILL:
                 cell.fill = OUTCOME_FILL[row["outcome"]]
+        excel_row += 1
 
     n = len(rows)
     if n:
         n_tp   = sum(1 for r in rows if r["outcome"] == "TP")
-        n_sl   = n - n_tp
+        n_sl   = sum(1 for r in rows if r["outcome"] == "SL")
         wr     = n_tp / n * 100
         wins   = [r["net_pnl"] for r in rows if r["outcome"] == "TP"  and r["net_pnl"] is not None]
         losses = [abs(r["net_pnl"]) for r in rows if r["outcome"] == "SL" and r["net_pnl"] is not None]
         pf     = sum(wins) / sum(losses) if losses else 999.0
         avg    = sum(r["net_pnl"] for r in rows if r["net_pnl"] is not None) / n
 
-        sr = n + 3
+        # +1 for separator row if it was written
+        sr = excel_row + 2
         for i, (lbl, val) in enumerate([
             ("Всего сделок",  n),
             ("WR",            f"{n_tp}/{n} = {wr:.0f}%"),
