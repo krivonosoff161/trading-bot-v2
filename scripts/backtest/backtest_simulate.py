@@ -40,7 +40,7 @@ from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
     calc_atr, calc_adx, calc_ema, parse_candles, parse_volumes,
     find_swing_levels, calc_bollinger_bands, calc_rsi, calc_slope,
-    calc_supertrend,
+    calc_supertrend, find_fvg,
 )
 # Single source of truth for pair params — same as prod analyze_chart.py
 from scripts.analyze_chart import _PAIR_PARAMS as PAIR_PARAMS, _PAIR_PARAMS_DEFAULT, _mode_cfg
@@ -182,16 +182,17 @@ BT_SLOPE_MIN = float(os.getenv("BT_SLOPE_MIN", "35"))
 # ── DRIFT-specific filters — configurable via env for param sweep ────────────────
 BT_DRIFT_TP1_K   = float(os.getenv("BT_DRIFT_TP1_K",  "0.4"))   # TP1 multiplier (live: 0.4R)
 BT_DRIFT_MAX_VOL = float(os.getenv("BT_DRIFT_MAX_VOL", "999"))   # vol_ratio cap (999 = no cap)
-BT_DRIFT_BTC_VOL_MAX = float(os.getenv("BT_DRIFT_BTC_VOL_MAX", "999"))
+BT_DRIFT_BTC_VOL_MAX = float(os.getenv("BT_DRIFT_BTC_VOL_MAX", "3.0"))    # prod D3: >3.0 veto
 BT_DRIFT_VWAP_STRETCH = float(os.getenv("BT_DRIFT_VWAP_STRETCH", "999.0"))
 BT_DRIFT_ETH_BLOCK_HOURS = [
-    int(h) for h in os.getenv("BT_DRIFT_ETH_BLOCK_HOURS", "").split(",")
+    int(h) for h in os.getenv("BT_DRIFT_ETH_BLOCK_HOURS", "22,23,0,1").split(",")
     if h.strip().isdigit()
-]
+]                                                                            # prod B3: hours veto
 BT_DRIFT_MOVE_FROM_BASE = float(os.getenv("BT_DRIFT_MOVE_FROM_BASE", "999.0"))
-BT_DRIFT_VOL_DECAY_MIN = float(os.getenv("BT_DRIFT_VOL_DECAY_MIN", "0.0"))
+BT_DRIFT_VOL_DECAY_MIN = float(os.getenv("BT_DRIFT_VOL_DECAY_MIN", "0.9"))  # prod D2: <0.9 veto
 BT_LATE_SCORE_MAX = int(os.getenv("BT_LATE_SCORE_MAX", "99"))
 BT_HOUR_ANALYSIS = os.getenv("BT_HOUR_ANALYSIS", "0") == "1"
+BT_TRENDING_REQUIRE_FVG = os.getenv("BT_TRENDING_REQUIRE_FVG", "1") == "1"  # prod: trending_require_fvg=true
 BT_DIST_ANALYSIS = os.getenv("BT_DIST_ANALYSIS", "0") == "1"
 BT_TEST_ID = os.getenv("BT_TEST_ID", "BASELINE")
 
@@ -594,6 +595,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
                 trade_style, side, entry_cfg = "FAST", "buy", cfg_f
             elif fast_base and five_m_short and bias_1h == "DOWN":
                 trade_style, side, entry_cfg = "FAST", "sell", cfg_f
+
+        if trade_style == "FAST" and side and BT_TRENDING_REQUIRE_FVG:
+            _fvg_dir = "bull" if side == "buy" else "bear"
+            _fvg_gaps = find_fvg(raw_15m, _fvg_dir, lookback=10)
+            _close = float(raw_15m[-1][4]) if raw_15m else 0.0
+            if not any(gap["low"] <= _close <= gap["high"] for gap in _fvg_gaps):
+                trade_style, side = "NO_TRADE", None
+                _drop = _drop or "trending_no_fvg"
 
         if trade_style == "NO_TRADE":
             if not (float(adx_1h) >= cfg_f.get("adx", 18)):
