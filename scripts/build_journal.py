@@ -309,6 +309,23 @@ def _build_screener(wb, rows: list) -> None:
             cell = ws.cell(row=r, column=c, value=val)
             if c == 10 and row["outcome"] in OUTCOME_FILL:
                 cell.fill = OUTCOME_FILL[row["outcome"]]
+
+    # Summary block using Excel formulas — live, always up to date
+    sr = len(rows) + 3
+    summary = [
+        ("Всего сигналов", f"=COUNTA(A2:A10000)"),
+        ("TP",             f'=COUNTIF(J2:J10000,"TP")'),
+        ("SL",             f'=COUNTIF(J2:J10000,"SL")'),
+        ("TIME_EXIT",      f'=COUNTIF(J2:J10000,"TIME_EXIT")'),
+        ("WR% (TP vs SL)", f'=IF(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL")=0,"",'
+                           f'ROUND(COUNTIF(J2:J10000,"TP")/(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL"))*100,1))'),
+        ("Avg R",          f'=IF(COUNTA(K2:K10000)=0,"",ROUND(AVERAGE(K2:K10000),2))'),
+    ]
+    for i, (lbl, val) in enumerate(summary):
+        ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+        ws.cell(row=sr + i, column=1).font = FONT_BOLD
+        ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
+
     _set_widths(ws, [13, 15, 7, 10, 8, 10, 10, 10, 9, 11, 7, 7, 7, 8, 10, 10])
     ws.freeze_panes = "A2"
 
@@ -496,6 +513,23 @@ def _build_real(wb, rows: list) -> None:
 
     if not rows:
         ws.cell(row=2, column=1, value="Нет данных (OKX не вернул позиции)")
+
+    # Summary block — Excel formulas, column G=net_pnl$, I=hold_min
+    sr = max(len(rows), 1) + 3
+    summary = [
+        ("Всего позиций",   f"=COUNTA(A2:A10000)"),
+        ("Побед",           f'=COUNTIF(G2:G10000,">0")'),
+        ("Потерь",          f'=COUNTIF(G2:G10000,"<0")'),
+        ("NET P&L$",        f"=ROUND(SUM(G2:G10000),2)"),
+        ("Прибыль$",        f'=ROUND(SUMIF(G2:G10000,">0",G2:G10000),2)'),
+        ("Убыток$",         f'=ROUND(SUMIF(G2:G10000,"<0",G2:G10000),2)'),
+        ("Avg hold WIN(мин)",  f'=ROUND(AVERAGEIF(G2:G10000,">0",I2:I10000),0)'),
+        ("Avg hold LOSS(мин)", f'=ROUND(AVERAGEIF(G2:G10000,"<0",I2:I10000),0)'),
+    ]
+    for i, (lbl, val) in enumerate(summary):
+        ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+        ws.cell(row=sr + i, column=1).font = FONT_BOLD
+        ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
 
     _set_widths(ws, [13, 12, 8, 11, 11, 7, 11, 8, 10])
     ws.freeze_panes = "A2"
