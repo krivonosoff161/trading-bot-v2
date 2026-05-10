@@ -47,6 +47,11 @@ DEFAULT_CONFIG = {
     "max_open_positions": 3,
     "fee_rt_pct": 0.10,
     "heartbeat_interval": 30,
+    # Circuit breaker
+    "cb_max_consecutive_sl": 3,    # SL подряд → cooldown
+    "cb_cooldown_min": 30,         # минут cooldown после серии потерь
+    "cb_hourly_sl_limit": 3,       # SL за час → blacklist до конца сессии
+    "cb_daily_loss_pct": 5.0,      # дневной убыток % → halt all
 }
 
 
@@ -123,6 +128,14 @@ class PumpEngineV2:
         self.open_positions: dict[str, OpenPosition] = {}
         self.last_tick_ts: dict[str, pd.Timestamp] = {}
         self.ctval: dict[str, float] = {}
+
+        # Circuit breaker state
+        self.cb_consecutive_sl: dict[str, int] = {}
+        self.cb_cooldown_until: dict[str, float] = {}   # wall time
+        self.cb_blacklist: set[str] = set()              # session-long ban
+        self.cb_recent_sl_ts: dict[str, list[float]] = {}  # SL timestamps for hourly check
+        self.cb_daily_pnl_pct: float = 0.0
+        self.cb_halted: bool = False
 
     async def run(self) -> None:
         feed_task: asyncio.Task[None] | None = None
@@ -255,6 +268,54 @@ class PumpEngineV2:
         for chunk in _chunked(args, 45):
             await self.feed.ws.send_str(json.dumps({"op": op, "args": chunk}))
 
+    def _cb_check(self, sym: str) -> bool:
+        """Return False if sym is blocked by circuit breaker."""
+        if self.cb_halted:
+            return False
+        if sym in self.cb_blacklist:
+            return False
+        until = self.cb_cooldown_until.get(sym, 0.0)
+        if time.time() < until:
+            return False
+        return True
+
+    def _cb_record_exit(self, sym: str, is_sl: bool, net_pct: float) -> None:
+        """Update circuit breaker state after a trade closes."""
+        self.cb_daily_pnl_pct += net_pct
+
+        if self.cb_daily_pnl_pct <= -float(self.config["cb_daily_loss_pct"]):
+            self.cb_halted = True
+            self._log(f"CB HALT | daily_pnl={self.cb_daily_pnl_pct:.2f}% — all trading stopped")
+            return
+
+        if not is_sl:
+            self.cb_consecutive_sl[sym] = 0
+            return
+
+        # Track consecutive SL
+        self.cb_consecutive_sl[sym] = self.cb_consecutive_sl.get(sym, 0) + 1
+
+        # Track SL timestamps for hourly limit
+        now = time.time()
+        sl_ts = self.cb_recent_sl_ts.setdefault(sym, [])
+        sl_ts.append(now)
+        sl_ts[:] = [t for t in sl_ts if now - t < 3600]  # keep last 1 hour only
+
+        hourly_limit = int(self.config["cb_hourly_sl_limit"])
+        if len(sl_ts) >= hourly_limit:
+            self.cb_blacklist.add(sym)
+            self._log(f"CB BLACKLIST | {sym} | {len(sl_ts)} SL in 1h — banned for session")
+            return
+
+        consec_limit = int(self.config["cb_max_consecutive_sl"])
+        if self.cb_consecutive_sl[sym] >= consec_limit:
+            cooldown_sec = float(self.config["cb_cooldown_min"]) * 60
+            self.cb_cooldown_until[sym] = now + cooldown_sec
+            self._log(
+                f"CB COOLDOWN | {sym} | {self.cb_consecutive_sl[sym]} SL in a row "
+                f"— blocked {self.config['cb_cooldown_min']}m"
+            )
+
     async def _on_candle_close(self, sym: str, candle: Candle) -> None:
         self.last_tick_ts[sym] = pd.Timestamp.utcnow()
         self._check_position(sym, candle)
@@ -264,6 +325,8 @@ class PumpEngineV2:
         if sym in self.open_positions:
             return
         if len(self.open_positions) >= int(self.config["max_open_positions"]):
+            return
+        if not self._cb_check(sym):
             return
 
         history = self.feed.get_candles(sym, "candle1m", 11)
@@ -437,6 +500,7 @@ class PumpEngineV2:
 
         self._log(f"CLOSE | {sym:<18} | {exit_reason} | pnl={net:+.2f}% | hold={hold_min:.0f}m")
         del self.open_positions[sym]
+        self._cb_record_exit(sym, is_sl=(exit_reason == "SL"), net_pct=net)
         if sym not in self.target_universe:
             asyncio.create_task(self._prune_inactive_symbol(sym))
 
