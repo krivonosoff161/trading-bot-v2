@@ -119,59 +119,197 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 **Цель:** поднять WR с 40% до >55% минимальными изменениями.
 **Критерий выхода:** 50+ новых paper сделок с WR >55%.
 
-- [ ] **B.5.1 — Circuit breaker** (~30 строк в `_on_candle_close` / отдельный метод):
+- [x] **B.5.1 — Circuit breaker** (добавлен в `ws_pump_engine_v2.py` 10.05.2026):
   - Per-pair: ≥3 SL подряд → cooldown 30 мин (сбрасывается при TP)
   - Per-pair: ≥3 SL за последний час → blacklist пары до конца сессии
   - Global: daily_pnl < -5% → halt_all, запись в лог + TG алерт
 
-- [ ] **B.5.2 — USD объём фильтр** (1 строка в `_on_candle_close`):
-  - Сейчас: `current[5]` (vol в контрактах, разный масштаб у разных пар)
-  - Надо: `current[7]` (volCcyQuote = USDT объём, универсальный)
-  - Требует: обновить `_parse_candle` в `src/data/ws_feed.py` чтобы возвращать row[7]
-    ИЛИ читать напрямую из сырого буфера (не менять Candle tuple)
+- [ ] **B.5.2 — Stagnation filter + USD vol** (в `ws_pump_engine_v2.py`):
+  - Stagnation: vol_ratio высокий, но price_change < 0.5% → BLOCK (фейковый объём от MM)
+  - USD vol: переключить `min_usd_vol` фильтр с `current[5]` (контракты) на `current[7]` (USDT)
+  - Требует: читать row[7] из сырого WS буфера напрямую (не менять Candle tuple в ws_feed.py)
 
-- [ ] **B.5.3 — Поднять prefilter_vol_ratio_min** (в config.yaml):
-  - Текущий: 0.5 (слишком низкий, пропускает шум)
-  - Новый: 1.0 (только реальные всплески)
+- [x] **B.5.3 — Поднять prefilter_vol_ratio_min** (config.yaml 10.05.2026):
+  - Было: 0.5 → Стало: 1.0 (только реальные всплески)
 
 ---
 
 ### 🔜 Фаза C — Новый движок: `ws_smart_pump.py` (после B.5, при WR>55%)
+
 **Цель:** WR > 60%, PF > 2.0. Параллельный paper trading, старый движок не трогаем.
+**Файл:** `scripts/ws/ws_smart_pump.py`
+**Архитектурное решение (10.05.2026, review GPT + Qwen + Claude):** многослойный фильтр с 7 источниками данных.
 
-**C.1 — Скелет + агрегатор данных:**
-  - Новый файл `scripts/ws/ws_smart_pump.py`
-  - Per-pair state dict (Qwen структура 10.05.2026):
-    ```
-    {candle:{close,vol_usd,ts}, metrics:{taker_ratio,oi_change_5m_pct,funding,vol_oi_ratio},
-     status:{in_cooldown, cooldown_until, consecutive_losses, position_open}}
-    ```
-  - Подписки: candle1m (существующий WSFeed) + open-interest + funding-rate (Business WS)
-  - Staleness check: если OI или funding старше 10 сек → пропустить сигнал для этой пары
-  - Dynamic subscription: подписываться на OI/funding только для пар прошедших vol prefilter
-    (избежать 200 пар × 3 канала = 600 подписок → лимиты OKX)
+---
 
-**C.2 — Фильтры входа (AND логика):**
-  - Price spike: >3% за 1m (базовый триггер, как сейчас)
-  - USD vol: row[7] >= $50,000 за минуту (против шума на мелких парах)
-  - OI sync: ΔOI >+1.5% за 5м И ΔPrice >+1% (новые лонги входят, не шорт-сквиз)
-  - Vol/OI ratio: < 15 (anti-brushing: если объём >> OI → MM гоняет сам с собой)
-  - Funding gate: funding_rate в диапазоне (-0.01%, +0.05%) (не перегрет, не сквизуемый)
+#### Слои данных (7 штук)
 
-**C.3 — Taker ratio (опционально, сложно):**
-  - Вариант A (сложный): WS канал `trades` + скользящее окно 60 сек, порог taker_buy > 0.60
-  - Вариант B (прокси): если цена растёт И vol высокий → считаем takers были buyers
-  - Решение: начать с Варианта B, A — только если WR стагнирует после C.2
+| Слой | Источник | Обновление | max_age_sec |
+|------|----------|------------|-------------|
+| CandleFeed | OKX WS candle1m (row[7]=USDT vol) | каждую свечу | 90s |
+| OIStream | OKX Business WS `open-interest` | динамически | 15s |
+| FundingCache | OKX Business WS `funding-rate` | каждые 8ч | 3600s |
+| TradesAgg | OKX Business WS `trades` (side field) | потоком | 90s |
+| MarketContext | candle1m BTC/ETH/SOL/BNB | каждую свечу | 120s |
+| PairMetadata | CoinGecko REST (кэш 24ч) | при старте | — |
+| NewsStream | CryptoPanic REST (кэш 5мин) | по запросу | 300s |
 
-**C.4 — Circuit breaker (усиленная версия):**
-  - Per-pair: ≥3 SL подряд → cooldown 30 мин
-  - Per-pair: ≥3 SL за 1 час → blacklist до конца сессии
-  - Global: daily_pnl_pct < -5% → halt_all
+**DataFreshness контракт:** перед открытием позиции проверять возраст каждого слоя. Если любой слой старше max_age_sec → пропустить сигнал, логировать причину.
 
-**C.5 — Параллельный paper run:**
-  - ws_smart_pump.py пишет в `logs/pump/pump_smart_signals.jsonl`
-  - ws_pump_engine_v2.py продолжает работать для сравнения
-  - Критерий победы: 50+ сделок, WR smart > WR old, PF > 2.0
+**Dynamic subscription:** подписываться на OI/trades только для пар прошедших prefilter → избегать 200 пар × 3 канала = 600 подписок.
+
+---
+
+#### PairMetadata (сетевая классификация)
+
+Каждая пара тегируется при старте через CoinGecko:
+```
+parent_network: "SOL" | "ETH" | "BTC" | "BNB" | "OTHER"
+```
+Примеры: BONK→SOL, SHIB→ETH, ORDI→BTC, CAKE→BNB.
+Зачем: SOL-токены реагируют на движение SOL, не BTC — нужен правильный контекст.
+
+---
+
+#### Typed contracts (dataclasses, шаг 1 перед кодом)
+
+```python
+@dataclass
+class PairState:
+    sym: str
+    parent_network: str          # "SOL" | "ETH" | "BTC" | "BNB"
+    candle_close: float
+    vol_usd: float               # row[7] из WS
+    price_change_1m_pct: float
+    oi_now: float
+    oi_5m_ago: float
+    funding_rate: float
+    taker_buy_ratio_60s: float   # buy_vol / total_vol (WS trades)
+    cvd_delta: float             # cumulative buy - sell volume
+    news_score: float            # 0.0–1.0 от CryptoPanic
+    ts_candle: float
+    ts_oi: float
+    ts_trades: float
+
+@dataclass
+class SignalCandidate:
+    sym: str
+    direction: str               # "long"
+    trigger_reason: str          # "vol_spike+oi_sync"
+    gate_passed: bool
+    gate_blocked_by: str | None  # причина блока
+    ts: float
+
+@dataclass
+class GateDecision:
+    passed: bool
+    reason: str
+    score: float                 # 0.0–1.0 (для будущего ML)
+```
+
+---
+
+#### Фильтры входа (3 слоя AND логика)
+
+**Слой 1 — Prefilter (быстрый, без deep data):**
+- `price_change_1m_pct >= 3.0%` (базовый триггер)
+- `vol_ratio >= 2.0` (vol/baseline_15bar)
+- `NOT stagnation`: vol_ratio высокий, но price_change < 0.5% → BLOCK (MM wash)
+
+**Слой 2 — Deep Gate (требует OI + trades + funding):**
+- `vol_usd >= $50,000` (row[7], USDT vol, против шума мелких пар)
+- `ΔOI_5m >= +1.5% AND ΔPrice >= +1.0%` (новые лонги входят, а не шорт-сквиз)
+- `vol_oi_ratio < 15` (anti-brushing: vol >> OI → MM сам с собой торгует)
+- `funding_rate IN (-0.01%, +0.05%)` (не перегрет, не в зоне сквиза)
+- `taker_buy_ratio_60s >= 0.60` (покупатели доминируют по объёму)
+- `cvd_delta > 0` (нет скрытой дистрибуции при росте цены)
+
+**Слой 3 — Context Gate (сеть + макро):**
+- `parent_network_regime != BEARISH` (SOL/ETH/BNB/BTC контекст не медвежий)
+- `BTC_1m_slope >= -1.5%` (нет резкого слива BTC пока памп идёт)
+- `news_score_boost`: если есть новость по токену → score +0.2 (не блокирует, усиливает)
+
+---
+
+#### Архитектурные компоненты
+
+```
+ExchangeGateway (абстракция)
+  └── OKXGateway (конкретная реализация)
+       ├── WSFeed (candle1m — уже есть)
+       ├── OIStream (WS open-interest, dynamic sub)
+       ├── FundingCache (WS funding-rate)
+       └── TradesAggregator (WS trades, CVD + taker_ratio)
+
+PairMetadata (CoinGecko REST, кэш 24ч)
+MarketContext (BTC/ETH/SOL/BNB 1m candles)
+NewsStream (CryptoPanic REST, кэш 5мин)
+
+DataAggregator → объединяет все слои в PairState
+PairStateManager → per-pair словарь состояний
+SignalGate → все три слоя фильтров → GateDecision
+CircuitBreaker → перенесён из v2, усиленный
+PositionManager → paper SL/TP, логирование
+```
+
+**ExchangeGateway правило:** в SignalGate нет строк типа `"BTC-USDT"` или `okx.subscribe(...)`. Только методы gateway. Позволит добавить Binance/Bybit без переписывания логики.
+
+---
+
+#### C.1 — Скелет + typed contracts + ExchangeGateway
+- Новый файл `scripts/ws/ws_smart_pump.py`
+- Определить все dataclasses (PairState, SignalCandidate, GateDecision)
+- Реализовать ExchangeGateway + OKXGateway skeleton
+- Подключить существующий WSFeed для candle1m
+
+#### C.2 — PairMetadata + MarketContext
+- CoinGeckoClient: batch REST → parent_network tag для всех пар
+- MarketContext: отдельный candle feed для BTC/ETH/SOL/BNB, вычислять slope 1m
+
+#### C.3 — Shadow mode (логирование без позиций)
+- SignalGate: prefilter only → пишет `logs/pump/smart_pump_candidates.jsonl`
+- Цель: накопить 200+ candidate записей, проверить quality prefilter
+- Формат: `{sym, ts, trigger, gate_passed, blocked_by, pair_state}`
+
+#### C.4 — OIStream + FundingCache + DataFreshness
+- Dynamic subscription: подписываться на OI только при pricechange > 2%
+- FundingCache: одна подписка на все пары, словарь sym→rate
+- DataFreshness check перед каждым GateDecision
+
+#### C.5 — TradesAggregator (CVD + taker_ratio)
+- WS канал `trades`: парсить side="buy"/"sell"
+- Скользящее окно 60 сек: накапливать buy_vol и sell_vol
+- taker_buy_ratio = buy_vol / (buy_vol + sell_vol)
+- cvd_delta = running sum(buy_vol - sell_vol)
+
+#### C.6 — NewsStream
+- CryptoPanic API (бесплатный tier, rate limit учесть)
+- Кэш 5 мин, score 0.0–1.0 по sentiment
+- Только boost, не блокировщик
+
+#### C.7 — Полный SignalGate (все 3 слоя) + PositionManager
+- Все фильтры включены, параллельный paper run
+- Пишет в `logs/pump/pump_smart_signals.jsonl`
+- ws_pump_engine_v2.py продолжает работать для сравнения
+
+**Критерий победы Phase C:** 50+ сделок в pump_smart_signals.jsonl, WR > 60%, PF > 2.0.
+
+---
+
+#### 12-шаговый порядок реализации
+
+1. Typed contracts (PairState, SignalCandidate, GateDecision)
+2. ExchangeGateway + OKXGateway скелет
+3. PairMetadata + CoinGeckoClient
+4. CandleFeed интеграция (существующий WSFeed + row[7])
+5. **Shadow mode** (prefilter only → jsonl) — запустить и собирать данные
+6. OIStream WS dynamic subscription
+7. FundingCache WS
+8. TradesAggregator (CVD + taker_ratio)
+9. MarketContext (parent network regime)
+10. SignalGate полный (все 3 слоя)
+11. PositionManager + CircuitBreaker
+12. NewsStream (последним — не критичный путь)
 
 ---
 
@@ -185,10 +323,11 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 ### Бэклог Pump Engine (не в текущих фазах)
 - **DUMP сигналы (шорты):** нужен отдельный backtest на исторических данных, нет данных сейчас
 - **Trailing SL:** внедрить после paper данных докажут пользу, не раньше
-- **Taker ratio через WS trades:** вариант A из C.3 — сложная агрегация, defer до нужды
 - **Ликвидации (liquidation-orders канал):** двойственная интерпретация (лонг-ликв → цена вниз, шорт-ликв → вверх), риск ошибки направления, defer
 - **Dynamic pair switching с hysteresis:** Phase D, нет рабочей базы
 - **Шорты DUMP:** после Phase C
+- **Multi-exchange (Binance/Bybit):** ExchangeGateway абстракция готова в C.2, но добавлять только после Phase C доказала WR
+- **Taker ratio Вариант A (WS trades агрегация):** включён в Phase C.5 как основной путь
 
 ---
 
@@ -226,9 +365,10 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 - Шорты по DUMP — нет backtest
 - Dynamic pair switching — нет рабочей базы
 - Leverage — paper trading x1, живые деньги только в Фазе D
-- Taker ratio через WS trades — Вариант A (C.3), только если WR стагнирует
 - Ликвидации канал — неоднозначная интерпретация, не трогаем
 - Снижение vol thresholds — тестировали, ухудшает PF
+- Multi-exchange — только после Phase C доказала WR > 60%
+- NewsStream (CryptoPanic) — шаг 12, не критичный путь, добавляется последним
 
 ---
 
