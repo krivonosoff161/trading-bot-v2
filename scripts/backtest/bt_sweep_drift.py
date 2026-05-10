@@ -26,40 +26,75 @@ BACKTEST_PY = SCRIPT_DIR / "backtest_simulate.py"
 RUNS_DIR    = SCRIPT_DIR / "backtest_runs"
 
 CONFIGS = [
+    # 0. BASELINE: текущий прод (D2+B3+D3+FVG), TP1=0.4R, hold=75m
     {
-        "tag":           "baseline",
-        "drift_tp1_k":   0.4,
-        "hold_fast_m":   150,
-        "drift_max_vol": 999,
-        "desc":          "Current prod: DRIFT TP1=0.4R, hold=150m, no vol cap",
+        "tag": "BASE_prod",
+        "desc": "Prod: D2+B3+D3+FVG, TP1=0.4R, hold=75m",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "1",
     },
+    # 1. TP1=0.5R: ранний фикс прибыли
     {
-        "tag":           "fix_tp1",
-        "drift_tp1_k":   0.8,
-        "hold_fast_m":   150,
-        "drift_max_vol": 999,
-        "desc":          "Fix R/R: DRIFT TP1 0.4R to 0.8R (breakeven WR 71% to 56%)",
+        "tag": "TP1_0.5R",
+        "desc": "TP1=0.5R (был 0.4R), все фильтры prod",
+        "drift_tp1_k": 0.5, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "1",
     },
+    # 2. Ablation D2: выключаем vol_decay фильтр
     {
-        "tag":           "fix_hold",
-        "drift_tp1_k":   0.4,
-        "hold_fast_m":   90,
-        "drift_max_vol": 999,
-        "desc":          "Cut TIME_EXIT: DRIFT max_hold 150m to 90m (all 16 live TE were >=124m)",
+        "tag": "NO_D2_vol",
+        "desc": "Без D2 (vol_decay выключен)",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.0,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "1",
     },
+    # 3. Ablation B3: выключаем блок ночных часов ETH
     {
-        "tag":           "fix_vol",
-        "drift_tp1_k":   0.4,
-        "hold_fast_m":   150,
-        "drift_max_vol": 3.0,
-        "desc":          "Cap vol: DRIFT max_vol_ratio=3.0 (vol>3x had WR 60% vs 73%)",
+        "tag": "NO_B3_ETH",
+        "desc": "Без B3 (ETH ночные часы не блокируются)",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "", "drift_hold_m": 75, "trending_require_fvg": "1",
     },
+    # 4. Ablation D3: выключаем BTC vol cap
     {
-        "tag":           "fix_all",
-        "drift_tp1_k":   0.8,
-        "hold_fast_m":   90,
-        "drift_max_vol": 3.0,
-        "desc":          "All three fixes combined",
+        "tag": "NO_D3_BTCvol",
+        "desc": "Без D3 (BTC vol>3.0 не блокирует)",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 999, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "1",
+    },
+    # 5. Ablation FVG: выключаем FVG для TRENDING
+    {
+        "tag": "NO_FVG",
+        "desc": "Без FVG фильтра (TRENDING FAST входит везде)",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "0",
+    },
+    # 6. Грязный бэктест: все фильтры выключены
+    {
+        "tag": "NO_FILTERS",
+        "desc": "Без всех фильтров D2+B3+D3+FVG (dirty baseline)",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 999, "drift_vol_decay_min": 0.0,
+        "drift_eth_block_hours": "", "drift_hold_m": 75, "trending_require_fvg": "0",
+    },
+    # 7. Hold=90m: дольше держим
+    {
+        "tag": "HOLD_90m",
+        "desc": "Hold=90m вместо 75m, prod фильтры",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 90, "trending_require_fvg": "1",
+    },
+    # 8. Комбо: TP1=0.5R + hold=75m
+    {
+        "tag": "AGG_0.5R_75m",
+        "desc": "TP1=0.5R + Hold=75m, prod фильтры",
+        "drift_tp1_k": 0.5, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "1",
+    },
+    # 9. Vol фильтры без FVG
+    {
+        "tag": "VOL_noFVG",
+        "desc": "D2+B3+D3 включены, FVG выключен",
+        "drift_tp1_k": 0.4, "drift_btc_vol_max": 3.0, "drift_vol_decay_min": 0.9,
+        "drift_eth_block_hours": "22,23,0,1", "drift_hold_m": 75, "trending_require_fvg": "0",
     },
 ]
 
@@ -169,14 +204,21 @@ def run_config(cfg: dict) -> bool:
     tag = cfg["tag"]
     print(f"\n{'='*60}")
     print(f"  {tag}  —  {cfg['desc']}")
-    print(f"  drift_tp1={cfg['drift_tp1_k']}R  hold={cfg['hold_fast_m']}m  max_vol={cfg['drift_max_vol']}")
+    print(
+        f"  tp1={cfg['drift_tp1_k']}R  hold={cfg['drift_hold_m']}m"
+        f"  D2={cfg['drift_vol_decay_min']}  D3_btc={cfg['drift_btc_vol_max']}"
+        f"  B3_eth={cfg['drift_eth_block_hours'] or 'off'}  FVG={cfg['trending_require_fvg']}"
+    )
     print("=" * 60)
 
     env = os.environ.copy()
-    env["BT_DRIFT_TP1_K"]   = str(cfg["drift_tp1_k"])
-    env["BT_HOLD_FAST_M"]   = str(cfg["hold_fast_m"])
-    env["BT_DRIFT_MAX_VOL"] = str(cfg["drift_max_vol"])
-    env["BT_RUN_TAG"]       = tag
+    env["BT_DRIFT_TP1_K"]           = str(cfg["drift_tp1_k"])
+    env["BT_DRIFT_BTC_VOL_MAX"]     = str(cfg["drift_btc_vol_max"])
+    env["BT_DRIFT_VOL_DECAY_MIN"]   = str(cfg["drift_vol_decay_min"])
+    env["BT_DRIFT_ETH_BLOCK_HOURS"] = str(cfg["drift_eth_block_hours"])
+    env["BT_FAST_HOLD_MIN"]         = str(cfg["drift_hold_m"])
+    env["BT_TRENDING_REQUIRE_FVG"]  = str(cfg["trending_require_fvg"])
+    env["BT_RUN_TAG"]               = tag
 
     result = subprocess.run(
         [sys.executable, str(BACKTEST_PY)],
