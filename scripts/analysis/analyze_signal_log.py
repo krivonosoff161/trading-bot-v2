@@ -50,8 +50,10 @@ def metrics(rows: list[dict]) -> dict:
     tp   = [r for r in rows if r["outcome"] == "TP"]
     sl   = [r for r in rows if r["outcome"] == "STOP"]
     te   = [r for r in rows if r["outcome"] == "TIME_EXIT"]
+    n    = len(rows)
     denom = len(tp) + len(sl)
-    wr    = round(len(tp) / denom * 100, 1) if denom else 0.0
+    wr        = round(len(tp) / denom * 100, 1) if denom else 0.0
+    honest_wr = round(len(tp) / n * 100, 1) if n else 0.0
 
     def avg(lst, key):
         vals = [fv(r, key) for r in lst if fv(r, key) is not None]
@@ -64,13 +66,13 @@ def metrics(rows: list[dict]) -> dict:
     pf = round(gw / gl, 2) if gl > 0 else 99.0
 
     return {
-        "n": len(rows), "n_tp": len(tp), "n_sl": len(sl), "n_te": len(te),
-        "wr": wr, "pf": pf,
-        "avg_exit_r":    avg(rows, "exit_r"),
-        "avg_mfe_tp":    avg(tp,   "mfe_r"),
-        "avg_mfe_te":    avg(te,   "mfe_r"),
-        "avg_elapsed_tp": avg(tp,  "elapsed_m"),
-        "avg_elapsed_te": avg(te,  "elapsed_m"),
+        "n": n, "n_tp": len(tp), "n_sl": len(sl), "n_te": len(te),
+        "wr": wr, "honest_wr": honest_wr, "pf": pf,
+        "avg_exit_r":     avg(rows, "exit_r"),
+        "avg_mfe_tp":     avg(tp,   "mfe_r"),
+        "avg_mfe_te":     avg(te,   "mfe_r"),
+        "avg_elapsed_tp": avg(tp,   "elapsed_m"),
+        "avg_elapsed_te": avg(te,   "elapsed_m"),
     }
 
 
@@ -105,8 +107,9 @@ def main():
         if not m:
             continue
         lines.append(
-            f"  {label:8s}  n={m['n']:3d}  WR={m['wr']:5.1f}%  PF={m['pf']:5.2f}"
-            f"  avg_R={m['avg_exit_r'] or 0:+.3f}"
+            f"  {label:8s}  n={m['n']:3d}"
+            f"  WR(TP+SL)={m['wr']:5.1f}%  honest_WR={m['honest_wr']:5.1f}%"
+            f"  PF={m['pf']:5.2f}  avg_R={m['avg_exit_r'] or 0:+.3f}"
             f"  TP={m['n_tp']}  SL={m['n_sl']}  TIME={m['n_te']}"
         )
 
