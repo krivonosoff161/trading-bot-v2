@@ -124,10 +124,11 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
   - Per-pair: ≥3 SL за последний час → blacklist пары до конца сессии
   - Global: daily_pnl < -5% → halt_all, запись в лог + TG алерт
 
-- [ ] **B.5.2 — Stagnation filter + USD vol** (в `ws_pump_engine_v2.py`):
-  - Stagnation: vol_ratio высокий, но price_change < 0.5% → BLOCK (фейковый объём от MM)
-  - USD vol: переключить `min_usd_vol` фильтр с `current[5]` (контракты) на `current[7]` (USDT)
-  - Требует: читать row[7] из сырого WS буфера напрямую (не менять Candle tuple в ws_feed.py)
+- [x] **B.5.2 — Stagnation filter + USD vol** (выполнено 10.05.2026):
+  - Stagnation: vol_ratio >= 2 И price_change < 0.5% → BLOCK (фейковый объём MM)
+  - USD vol: Candle расширен до 7 полей (добавлен row[7] = volCcyQuote USDT)
+  - dollar_vol теперь `current[6]` — точный USDT объём вместо ct_val аппроксимации
+  - Исправлен _check_position unpacking в v2 и старом engine
 
 - [x] **B.5.3 — Поднять prefilter_vol_ratio_min** (config.yaml 10.05.2026):
   - Было: 0.5 → Стало: 1.0 (только реальные всплески)
