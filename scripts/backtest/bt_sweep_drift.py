@@ -305,7 +305,11 @@ def main():
     if dry_run:
         print("DRY RUN — configs:")
         for cfg in CONFIGS:
-            print(f"  {cfg['tag']:12s}  tp1={cfg['drift_tp1_k']}R  hold={cfg['hold_fast_m']}m  max_vol={cfg['drift_max_vol']}")
+            print(
+                f"  {cfg['tag']:20s}  tp1={cfg['drift_tp1_k']}R  hold={cfg['drift_hold_m']}m"
+                f"  D2={cfg['drift_vol_decay_min']}  D3={cfg['drift_btc_vol_max']}"
+                f"  FVG={cfg['trending_require_fvg']}"
+            )
             print(f"    {cfg['desc']}")
         return
 
