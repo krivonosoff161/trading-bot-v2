@@ -15,7 +15,7 @@ WS_BUSINESS_URL = "wss://ws.okx.com:8443/ws/v5/business"
 REST_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
 REST_HISTORY_CANDLES_URL = "https://www.okx.com/api/v5/market/history-candles"
 
-Candle = tuple[int, float, float, float, float, float]
+Candle = tuple[int, float, float, float, float, float, float]  # ts,o,h,l,c,vol_contracts,vol_usdt
 Callback = Callable[[str, Candle], Awaitable[None] | None]
 
 
@@ -238,7 +238,7 @@ class WSFeed:
 
     @staticmethod
     def _parse_candle(row: list[str]) -> Candle:
-        return (int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5]))
+        return (int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5]), float(row[7]))
 
     async def _close_ws(self) -> None:
         if self.ws and not self.ws.closed:
