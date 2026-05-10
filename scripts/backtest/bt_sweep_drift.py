@@ -64,29 +64,39 @@ CONFIGS = [
 ]
 
 
-def compute_metrics(trades: list, days_back: int = 63) -> dict:
+def compute_metrics(
+    trades: list,
+    days_back: int = 63,
+    fee_rt_pct: float = 0.10,
+    position_usd: float = 100.0,
+) -> dict:
     if not trades:
         return {}
     trades = [t for t in trades if t.get("executed", True) and "pnl" in t]
     if not trades:
         return {}
 
-    tp_t   = [t for t in trades if t["outcome"] == "TP"]
-    sl_t   = [t for t in trades if t["outcome"] == "STOP"]
-    te_t   = [t for t in trades if t["outcome"] == "TIME_EXIT"]
+    tp_t    = [t for t in trades if t["outcome"] == "TP"]
+    sl_t    = [t for t in trades if t["outcome"] == "STOP"]
+    te_t    = [t for t in trades if t["outcome"] == "TIME_EXIT"]
     n_total = len(trades)
 
-    wr = len(tp_t) / (len(tp_t) + len(sl_t)) * 100 if (tp_t or sl_t) else 0.0
+    denom      = len(tp_t) + len(sl_t)
+    wr         = round(len(tp_t) / denom * 100, 1) if denom else 0.0
+    honest_wr  = round(len(tp_t) / n_total * 100, 1) if n_total else 0.0
 
-    gross_w = sum(t["pnl"] for t in tp_t)
-    gross_l = abs(sum(t["pnl"] for t in sl_t))
-    pf      = round(gross_w / gross_l, 2) if gross_l > 0 else 99.0
+    # PF by exit_r — R-normalized, independent of position size/instrument
+    gw_r = sum(t["exit_r"] for t in tp_t if t.get("exit_r") is not None)
+    gl_r = abs(sum(t["exit_r"] for t in sl_t if t.get("exit_r") is not None))
+    pf   = round(gw_r / gl_r, 2) if gl_r > 0 else 99.0
 
+    # Sim/DD by pnl (USD) with round-trip fee deduction
+    fee_per_trade = position_usd * fee_rt_pct / 100
     balance = 1000.0
     peak    = balance
     max_dd  = 0.0
     for t in trades:
-        balance += t["pnl"]
+        balance += t["pnl"] - fee_per_trade
         if balance > peak:
             peak = balance
         dd = (peak - balance) / peak * 100
@@ -95,7 +105,7 @@ def compute_metrics(trades: list, days_back: int = 63) -> dict:
 
     final = 1000.0
     for t in trades:
-        final += t["pnl"]
+        final += t["pnl"] - fee_per_trade
     sim_gain = round((final - 1000.0) / 1000.0 * 100, 1)
 
     def avg(lst, key):
@@ -109,9 +119,9 @@ def compute_metrics(trades: list, days_back: int = 63) -> dict:
     drift_te = [t for t in drift_t if t["outcome"] == "TIME_EXIT"]
     drift_denom = len(drift_tp) + len(drift_sl)
     drift_wr = round(len(drift_tp) / drift_denom * 100, 1) if drift_denom else 0.0
-    drift_gw = sum(t["pnl"] for t in drift_tp)
-    drift_gl = abs(sum(t["pnl"] for t in drift_sl))
-    drift_pf = round(drift_gw / drift_gl, 2) if drift_gl > 0 else 99.0
+    dgw_r    = sum(t["exit_r"] for t in drift_tp if t.get("exit_r") is not None)
+    dgl_r    = abs(sum(t["exit_r"] for t in drift_sl if t.get("exit_r") is not None))
+    drift_pf = round(dgw_r / dgl_r, 2) if dgl_r > 0 else 99.0
     drift_avg_r = avg(drift_t, "exit_r")
 
     # Per-regime
@@ -121,34 +131,35 @@ def compute_metrics(trades: list, days_back: int = 63) -> dict:
         rtp  = [t for t in rt if t["outcome"] == "TP"]
         rsl  = [t for t in rt if t["outcome"] == "STOP"]
         rte  = [t for t in rt if t["outcome"] == "TIME_EXIT"]
-        denom = len(rtp) + len(rsl)
-        rgw  = sum(t["pnl"] for t in rtp)
-        rgl  = abs(sum(t["pnl"] for t in rsl))
-        rpf  = round(rgw / rgl, 2) if rgl > 0 else 99.0
+        rdenom = len(rtp) + len(rsl)
+        rgw_r  = sum(t["exit_r"] for t in rtp if t.get("exit_r") is not None)
+        rgl_r  = abs(sum(t["exit_r"] for t in rsl if t.get("exit_r") is not None))
+        rpf    = round(rgw_r / rgl_r, 2) if rgl_r > 0 else 99.0
         by_regime[reg] = {
             "n":   len(rt),
-            "wr":  round(len(rtp) / denom * 100, 1) if denom else 0.0,
+            "wr":  round(len(rtp) / rdenom * 100, 1) if rdenom else 0.0,
             "pf":  rpf,
             "te":  len(rte),
         }
 
     return {
-        "n":            n_total,
-        "n_per_day":    round(n_total / days_back, 1),
-        "n_tp":         len(tp_t),
-        "n_sl":         len(sl_t),
-        "n_te":         len(te_t),
-        "wr":           round(wr, 1),
-        "pf":           pf,
-        "sim":          sim_gain,
-        "dd":           round(max_dd, 1),
-        "te_pct":       round(len(te_t) / n_total * 100) if n_total else 0,
-        "drift_n":      len(drift_t),
-        "drift_wr":     drift_wr,
-        "drift_pf":     drift_pf,
-        "drift_avg_r":  drift_avg_r,
-        "drift_te":     len(drift_te),
-        "by_regime":    by_regime,
+        "n":             n_total,
+        "n_per_day":     round(n_total / days_back, 1),
+        "n_tp":          len(tp_t),
+        "n_sl":          len(sl_t),
+        "n_te":          len(te_t),
+        "wr":            wr,
+        "honest_wr":     honest_wr,
+        "pf":            pf,
+        "sim":           sim_gain,
+        "dd":            round(max_dd, 1),
+        "te_pct":        round(len(te_t) / n_total * 100) if n_total else 0,
+        "drift_n":       len(drift_t),
+        "drift_wr":      drift_wr,
+        "drift_pf":      drift_pf,
+        "drift_avg_r":   drift_avg_r,
+        "drift_te":      len(drift_te),
+        "by_regime":     by_regime,
         "avg_exit_r_tp": avg(tp_t, "exit_r"),
         "avg_exit_r_sl": avg(sl_t, "exit_r"),
     }
@@ -186,15 +197,15 @@ def build_table(all_metrics: dict) -> str:
     # ── Overall summary ──────────────────────────────────────────────────────
     lines.append("## Overall")
     lines.append("")
-    lines.append("| Config | n/day | WR% | PF | sim% | DD% | TE% | TP | SL | TE |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| Config | n/day | WR% | honest_WR% | PF(R) | sim% | DD% | TE% | TP | SL | TE |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for cfg in CONFIGS:
         m = all_metrics.get(cfg["tag"])
         if not m:
-            lines.append(f"| {cfg['tag']} | — | — | — | — | — | — | — | — | — |")
+            lines.append(f"| {cfg['tag']} | — | — | — | — | — | — | — | — | — | — |")
             continue
         lines.append(
-            f"| {cfg['tag']} | {m['n_per_day']} | {m['wr']} | {m['pf']}"
+            f"| {cfg['tag']} | {m['n_per_day']} | {m['wr']} | {m['honest_wr']} | {m['pf']}"
             f" | {m['sim']} | {m['dd']} | {m['te_pct']}"
             f" | {m['n_tp']} | {m['n_sl']} | {m['n_te']} |"
         )
