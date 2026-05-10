@@ -56,6 +56,12 @@ pump_engine:
   state_ttl_min: 10
   reconnect_delays: [2, 4, 8, 16, 32, 60]
 
+  # Circuit breaker (B.5.1)
+  cb_max_consecutive_sl: 3    # SL подряд → cooldown
+  cb_cooldown_min: 30         # минут cooldown после серии потерь
+  cb_hourly_sl_limit: 3       # SL за час → session blacklist
+  cb_daily_loss_pct: 5.0      # дневной убыток % → halt all
+
 screener_live:
   vol_spike_min: 2.0
   price_move_min_pct: 1.0
@@ -68,5 +74,5 @@ main_screener:
   universe_refresh_hours: 8
   cooldown_minutes: 60
   warmup_bars: 20
-  prefilter_vol_ratio_min: 0.5
+  prefilter_vol_ratio_min: 1.0
   prefilter_adx_min: 10
