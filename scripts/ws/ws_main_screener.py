@@ -260,7 +260,7 @@ class MainScreener:
         candles_1h = list(reversed(self.feed.get_candles(sym, "candle1H", 100)))
         candles_4h = list(reversed(self.feed.get_candles(sym, "candle4H", 80)))
         candles_5m = list(reversed(self.feed.get_candles(sym, "candle5m", 180)))
-        if len(candles_15m) < 50 or len(candles_1h) < 30 or len(candles_4h) < 20 or len(candles_5m) < 30:
+        if len(candles_15m) < 50 or len(candles_1h) < 50 or len(candles_4h) < 50 or len(candles_5m) < 30:
             return None
         return compute_signal(candles_15m=candles_15m, candles_1h=candles_1h, candles_4h=candles_4h, candles_5m=candles_5m, symbol=_swap_to_base(sym), config=self.strategy_cfg, captured_at_iso=_ts_utc(candles_15m[0][0], tf_minutes))
 
