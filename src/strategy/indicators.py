@@ -20,6 +20,8 @@ def parse_candles(raw_candles: list) -> tuple:
 
 def calc_ema(closes: np.ndarray, period: int) -> np.ndarray:
     ema = np.zeros(len(closes))
+    if len(closes) < period:
+        return ema
     k = 2.0 / (period + 1)
     ema[period - 1] = np.mean(closes[:period])
     for i in range(period, len(closes)):
