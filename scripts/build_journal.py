@@ -35,10 +35,12 @@ except ImportError:
 from src.exchange.okx_client import OKXClient
 
 _ROOT            = Path(__file__).resolve().parent.parent
-SIGNAL_LOG       = _ROOT / "logs" / "signals" / "signal_log.jsonl"
-SIGNAL_LABELS    = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
-PUMP_SIGNALS_LOG = _ROOT / "logs" / "pump" / "pump_signals.jsonl"
-PUMP_LABELS_LOG  = _ROOT / "logs" / "pump" / "pump_labels.jsonl"
+SIGNAL_LOG          = _ROOT / "logs" / "signals" / "signal_log.jsonl"
+SIGNAL_LABELS       = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
+PUMP_SIGNALS_LOG    = _ROOT / "logs" / "pump" / "pump_signals.jsonl"
+PUMP_LABELS_LOG     = _ROOT / "logs" / "pump" / "pump_labels.jsonl"
+MAIN_SIGNALS_LOG    = _ROOT / "logs" / "signals" / "main_signals.jsonl"
+MAIN_SIGNALS_LABELS = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 JOURNAL_PATH     = Path(__file__).parent / "journal.xlsx"
 CONFIG_PATH      = Path(__file__).parent.parent / "config.yaml"
 
@@ -246,12 +248,14 @@ def build() -> None:
 
     real_trades    = _load_real_trades()
     pump_trades    = _load_pump_trades()
+    main_ws_trades = _load_main_ws_trades()
 
     wb = openpyxl.Workbook()
     _build_sheet1(wb, rows)
     _build_sheet2(wb, rows)
     _build_sheet3(wb, real_trades, signals)
     _build_sheet4(wb, pump_trades)
+    _build_sheet5(wb, main_ws_trades)
     wb.save(JOURNAL_PATH)
     print(f"Журнал: {JOURNAL_PATH}  ({len(rows)} сигналов, {sum(1 for r in rows if r['outcome'])} закрыто)")
 
@@ -534,6 +538,139 @@ def _build_sheet4(wb, pump_trades: list) -> None:
     _set_col_widths(ws, [16, 12, 6, 8, 12, 12, 9, 11, 10, 10, 10])
     ws.freeze_panes = "A2"
     print(f"Памп: {len(pump_trades)} сделок")
+
+
+# ---------------------------------------------------------------------------
+# Sheet 5 — Main WS (ws_main_screener signals)
+# ---------------------------------------------------------------------------
+
+def _load_main_ws_trades() -> list:
+    signals = {
+        (s.get("id") or s.get("signal_id", "")): s
+        for s in _load_jsonl(MAIN_SIGNALS_LOG)
+    }
+    labels = {
+        r["signal_id"]: r
+        for r in _load_jsonl(MAIN_SIGNALS_LABELS)
+    }
+    out = []
+    for sig_id, sig in signals.items():
+        lab = labels.get(sig_id, {})
+        ts = sig.get("ts", "")
+        out.append({
+            "dt":        ts[5:16].replace("T", " ") if ts else "",
+            "symbol":    sig.get("symbol", ""),
+            "regime":    sig.get("regime", ""),
+            "style":     sig.get("trade_style", ""),
+            "side":      "LONG" if sig.get("side") == "buy" else "SHORT",
+            "entry":     sig.get("entry"),
+            "sl":        sig.get("sl"),
+            "tp1":       sig.get("tp1"),
+            "tp2":       sig.get("tp2"),
+            "hold_min":  sig.get("hold_min"),
+            "outcome":   lab.get("outcome", ""),
+            "exit_price": lab.get("exit_price"),
+            "hold_actual": lab.get("hold_min"),
+            "tp2_hit":   lab.get("tp2_hit", False),
+            "vol_ratio": sig.get("vol_ratio"),
+            "adx_1h":    sig.get("adx_1h"),
+            "slope_15m": sig.get("slope_15m"),
+            "fvg":       sig.get("fvg_confirmed", False),
+        })
+    out.sort(key=lambda x: x["dt"], reverse=True)
+    return out
+
+
+def _build_sheet5(wb, rows: list) -> None:
+    ws = wb.create_sheet("Main WS")
+
+    headers = [
+        "Дата", "Пара", "Режим", "Стиль", "Сторона",
+        "Вход", "SL", "TP1", "TP2", "Hold(мин)",
+        "Исход", "Выход", "Hold факт.", "TP2?",
+        "Vol ratio", "ADX_1H", "Slope_15m", "FVG",
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = FILL_HEADER
+        cell.font = FONT_HEADER
+        cell.alignment = Alignment(horizontal="center")
+
+    outcome_fill = {
+        "TP1": FILL_TP, "TP2": FILL_TP,
+        "SL":  FILL_STOP,
+        "TIME": FILL_TIME,
+    }
+
+    for r, row in enumerate(rows, 2):
+        vals = [
+            row["dt"], row["symbol"], row["regime"], row["style"], row["side"],
+            row["entry"], row["sl"], row["tp1"], row["tp2"], row["hold_min"],
+            row["outcome"], row["exit_price"], row["hold_actual"],
+            "да" if row["tp2_hit"] else "",
+            round(row["vol_ratio"], 2) if row["vol_ratio"] else "",
+            round(row["adx_1h"], 1) if row["adx_1h"] else "",
+            round(row["slope_15m"], 1) if row["slope_15m"] is not None else "",
+            "да" if row["fvg"] else "",
+        ]
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=col, value=val)
+            if col == 11 and row["outcome"] in outcome_fill:
+                cell.fill = outcome_fill[row["outcome"]]
+
+    # Summary по режимам
+    labeled = [r for r in rows if r["outcome"]]
+    n_total  = len(rows)
+    n_labeled = len(labeled)
+    n_tp  = sum(1 for r in labeled if r["outcome"] in ("TP1", "TP2"))
+    n_sl  = sum(1 for r in labeled if r["outcome"] == "SL")
+    n_time = sum(1 for r in labeled if r["outcome"] == "TIME")
+    wr_str = f"{n_tp}/{n_tp+n_sl} = {n_tp/(n_tp+n_sl)*100:.0f}%" if (n_tp + n_sl) else "—"
+
+    sum_row = len(rows) + 3
+    summary = [
+        ("Всего сигналов", n_total),
+        ("Размечено",      n_labeled),
+        ("TP1+TP2",        n_tp),
+        ("SL",             n_sl),
+        ("TIME",           n_time),
+        ("WR (TP vs SL)",  wr_str),
+    ]
+    for i, (label, val) in enumerate(summary):
+        ws.cell(row=sum_row + i, column=1, value=label).fill = FILL_SUMMARY
+        ws.cell(row=sum_row + i, column=1).font = FONT_BOLD
+        ws.cell(row=sum_row + i, column=2, value=val).fill = FILL_SUMMARY
+
+    # WR по режимам
+    from collections import defaultdict
+    by_regime: dict = defaultdict(lambda: {"tp": 0, "sl": 0, "time": 0})
+    for r in labeled:
+        reg = r["regime"] or "?"
+        if r["outcome"] in ("TP1", "TP2"):
+            by_regime[reg]["tp"] += 1
+        elif r["outcome"] == "SL":
+            by_regime[reg]["sl"] += 1
+        else:
+            by_regime[reg]["time"] += 1
+
+    ws.cell(row=sum_row, column=4, value="Режим").fill = FILL_SUMMARY
+    ws.cell(row=sum_row, column=4).font = FONT_BOLD
+    ws.cell(row=sum_row, column=5, value="TP").fill = FILL_SUMMARY
+    ws.cell(row=sum_row, column=6, value="SL").fill = FILL_SUMMARY
+    ws.cell(row=sum_row, column=7, value="TIME").fill = FILL_SUMMARY
+    ws.cell(row=sum_row, column=8, value="WR%").fill = FILL_SUMMARY
+    for j, (reg, counts) in enumerate(sorted(by_regime.items()), 1):
+        tp, sl = counts["tp"], counts["sl"]
+        wr = f"{tp/(tp+sl)*100:.0f}%" if (tp + sl) else "—"
+        ws.cell(row=sum_row + j, column=4, value=reg)
+        ws.cell(row=sum_row + j, column=5, value=tp)
+        ws.cell(row=sum_row + j, column=6, value=sl)
+        ws.cell(row=sum_row + j, column=7, value=counts["time"])
+        ws.cell(row=sum_row + j, column=8, value=wr)
+
+    _set_col_widths(ws, [14, 14, 10, 7, 7, 10, 10, 10, 10, 9, 7, 10, 10, 5, 9, 8, 10, 5])
+    ws.freeze_panes = "A2"
+    print(f"Main WS: {n_total} сигналов, {n_labeled} размечено, WR={wr_str}")
 
 
 if __name__ == "__main__":
