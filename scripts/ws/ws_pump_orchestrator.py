@@ -244,28 +244,31 @@ class PumpOrchestrator:
             now = time.time()
             added, removed = [], []
 
-            # Add new pairs from screener
+            # 1. Update last_signal_at for existing pool pairs still in screener
+            for sym in self.pool:
+                if sym in screener_meta:
+                    self.pool[sym].last_signal_at = now
+
+            # 2. Remove pairs that left screener (frees slots before adding new ones)
+            for sym in list(self.pool.keys()):
+                state = self.pool[sym]
+                if sym not in screener_meta and state.position is None and state.section != "banned":
+                    await self._remove_pair(sym)
+                    removed.append(sym)
+
+            # 3. Fill empty slots with new screener pairs (no eviction of existing pairs)
             for sym, meta in screener_meta.items():
                 if sym in self.pool:
-                    # Update last_signal_at so pair isn't evicted
-                    self.pool[sym].last_signal_at = now
                     continue
 
-                # Check if banned
-                state = self.pool.get(sym)
-                if state and state.section == "banned" and now < state.banned_until:
+                # Skip banned pairs
+                if self.pool.get(sym) and self.pool[sym].section == "banned" and now < self.pool[sym].banned_until:
                     continue
 
-                # Pool full → evict oldest-without-signal if needed
                 main_count = sum(1 for p in self.pool.values() if p.section == "main")
                 if main_count >= int(self.config["max_main_slots"]):
-                    evicted = self._evict_candidate()
-                    if evicted is None:
-                        continue  # all slots taken by active positions
-                    await self._remove_pair(evicted)
-                    removed.append(evicted)
+                    break  # pool full — wait for next screener cycle
 
-                # Determine initial direction from screener meta
                 direction = "buy" if meta.get("direction", "up") == "up" else "sell"
                 first_price = self._get_last_price(sym) or 0.0
 
@@ -279,13 +282,6 @@ class PumpOrchestrator:
                 )
                 await self._ensure_subscribed([sym])
                 added.append(sym)
-
-            # Remove pairs no longer in screener (only if no open position)
-            for sym in list(self.pool.keys()):
-                state = self.pool[sym]
-                if sym not in screener_meta and state.position is None and state.section != "banned":
-                    await self._remove_pair(sym)
-                    removed.append(sym)
 
             if added or removed:
                 self._log(
