@@ -62,6 +62,37 @@ pump_engine:
   cb_hourly_sl_limit: 3       # SL за час → session blacklist
   cb_daily_loss_pct: 5.0      # дневной убыток % → halt all
 
+pump_orchestrator:
+  # Pool
+  max_main_slots: 4            # макс пар в MAIN пуле одновременно
+  universe_poll_sec: 1         # частота проверки active_universe.json (mtime watcher)
+
+  # Entry
+  vol_mult: 1.5                # мин vol_ratio для входа (vs 10-bar baseline)
+  price_pct: 1.2               # мин price_move % на сигнальной свече
+  min_usd_vol: 30000           # мин dollar_vol на свече
+  pump_phase_max_pct: 5.0      # не входить если цена уже >5% от baseline
+  alert_cooldown_sec: 120      # cooldown между сигналами на одной паре
+
+  # Position sizing
+  position_usd: 100.0
+  fee_rt_pct: 0.10
+  sl_atr_mult: 1.5
+  tp_atr_mult: 2.5
+  paper_max_hold_min: 9999
+
+  # Counter-trend
+  main_sl_to_counter: 2        # SL подряд в main → переход в counter
+  counter_sl_to_ban: 2         # SL подряд в counter → 24h бан
+
+  # Circuit breaker
+  cb_cooldown_sl: 3            # суммарных SL подряд → cooldown
+  cb_cooldown_min: 30          # минут cooldown
+  cb_daily_loss_pct: 5.0       # дневной убыток % → halt all
+
+  # Technical
+  heartbeat_interval: 30
+
 screener_live:
   vol_spike_min: 2.0
   price_move_min_pct: 1.0
