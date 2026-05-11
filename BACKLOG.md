@@ -90,6 +90,42 @@
 
 ---
 
+## P1 — После закрытия B.5 + S2.3
+
+### ⏳ Оркестратор основного сканнера
+- По аналогии с pump orchestrator: сигнал → auto-open → live SL/TP мониторинг каждую секунду → auto-close
+- Сейчас: сигнал уходит в Telegram → человек входит вручную → выход вручную. Никакого автоматического мониторинга нет
+- Что нужно: отдельный `ws_signal_executor.py` — читает сигналы из main_signals.jsonl, открывает позиции, мониторит через _on_candle_update, закрывает по SL/TP
+- AUTO_TRADE=false → режим paper (уже есть в auto_execute.py), позже true
+- **Когда:** после того как ws_main_screener shadow → prod (закрытие S2.3) + WR подтверждён на 100+ сигналах
+
+### ⏳ Data Recording System (архитектура готова — GPT 11.05.2026)
+
+**Ключевой инсайт:** `compute_signal()` уже вычисляет всё (ADX/slope/BB/OBI/engine_vars по всем TF) — `ws_main_screener._maybe_emit_signal()` просто выбрасывает 80% при записи.
+
+**Три компонента по приоритету:**
+
+1. **Signal Snapshot** (быстро, ~20 мин) — добавить `json.dumps(result)` в `_maybe_emit_signal()` → `logs/signals/signal_snapshot.jsonl`. Единый `signal_id` для signal → snapshot → label.
+
+2. **Per-candle Feature Log** (средне) — `src/data/feature_writer.py`, хук в WSFeed на закрытие 5m/15m/1H/4H, плоский CSV → `logs/features/{tf}/{symbol}/{date}.csv.gz` + `_index.jsonl`.
+
+3. **Tick Recorder на HDD** (тяжело) — переработать `scripts/analysis/tape_recorder.py`: путь из `.env` (`TAPE_DATA_DIR=D:\trading-data\ticks`), per-symbol файлы, 30 пар, исправить `start_tape.bat` (неверный путь к скрипту).
+
+4. **analysis_query.py** — `scripts/analysis/analysis_query.py`: берёт `signal_id` → находит snapshot → per-candle features ±30m → ticks ±5m → один DataFrame для анализа. Поддерживает фильтры: `--where "regime=='DRIFT' and outcome=='SL'"`.
+
+**Новые файлы:** `src/data/feature_writer.py`, `src/data/snapshot_writer.py`, `scripts/analysis/analysis_query.py`
+**Изменить:** `signal_engine.py` (расширить 4H индикаторы), `ws_main_screener.py`, `ws_scanner.py`, `tape_recorder.py`
+**Когда:** после закрытия B.5 + S2.3, первым делом — Signal Snapshot (минимум кода, максимум пользы)
+
+### ⏳ WS тестер — прогон WS-архитектуры на истории
+- Текущий backtest_simulate.py работает на REST свечах (batch). WS-движок (ws_main_screener) тестируется только в лайве
+- Идея: построить WS-тестер который воспроизводит WS-поток на исторических данных → прогоняет signal_engine → выдаёт те же метрики что и backtest_simulate.py
+- Ценность: можно быстро тестировать изменения в signal_engine без ожидания 24-48ч лайв данных
+- GPT уже в проекте — можно ему поставить задачу построить ws_backtester.py
+- **Когда:** после закрытия S2.3, параллельно с оркестратором основного сканнера
+
+---
+
 ## P1 — После 100+ labeled сигналов
 
 ### ⏳ ETH-specific recalibration
