@@ -141,11 +141,12 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 - [x] **B.5.3 — Базовые пороги** (10.05.2026):
   - prefilter_vol_ratio_min: 0.5 → 1.0
 
-- [ ] **B.5.4 — Фиксы кулдауна и порогов** (11.05.2026, НЕ ПРИМЕНЕНО):
-  - alert_cooldown_sec: 120 → 600
-  - vol_mult: 1.5 → 2.0
-  - price_pct: 1.2 → 1.5
-  - Минимальный dwell time пары в пуле (30-60 мин) — правка кода
+- [x] **B.5.4 → B.5.5 — Немедленный вход + live SL/TP** (11.05.2026, коммит aa95776):
+  - Вход на сигнале screener (~1 сек) вместо закрытия свечи (60 сек)
+  - `_on_candle_update` → `_close_position_if_hit` каждую секунду (был `pass`)
+  - alert_cooldown_sec: 120 → 90, vol_mult: 1.5 → 2.0, price_pct: 1.2 → 1.5
+  - min_pool_dwell_min: 30 добавлен
+  - Результат за 11.05: 27 сделок, WR=48%, net +3.28%
 
 ---
 
