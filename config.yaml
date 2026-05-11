@@ -72,7 +72,7 @@ pump_orchestrator:
   price_pct: 1.5               # мин price_move % на сигнальной свече
   min_usd_vol: 30000           # мин dollar_vol на свече
   pump_phase_max_pct: 5.0      # не входить если цена уже >5% от baseline
-  alert_cooldown_sec: 600      # cooldown между сигналами на одной паре
+  alert_cooldown_sec: 90       # cooldown между сигналами на одной паре (fast re-entry)
   min_pool_dwell_min: 30       # мин время удержания пары в pool после добавления
 
   # Position sizing
