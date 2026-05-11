@@ -68,11 +68,12 @@ pump_orchestrator:
   universe_poll_sec: 1         # частота проверки active_universe.json (mtime watcher)
 
   # Entry
-  vol_mult: 1.5                # мин vol_ratio для входа (vs 10-bar baseline)
-  price_pct: 1.2               # мин price_move % на сигнальной свече
+  vol_mult: 2.0                # мин vol_ratio для входа (vs 10-bar baseline)
+  price_pct: 1.5               # мин price_move % на сигнальной свече
   min_usd_vol: 30000           # мин dollar_vol на свече
   pump_phase_max_pct: 5.0      # не входить если цена уже >5% от baseline
-  alert_cooldown_sec: 120      # cooldown между сигналами на одной паре
+  alert_cooldown_sec: 600      # cooldown между сигналами на одной паре
+  min_pool_dwell_min: 30       # мин время удержания пары в pool после добавления
 
   # Position sizing
   position_usd: 100.0
@@ -89,6 +90,7 @@ pump_orchestrator:
   cb_cooldown_sl: 3            # суммарных SL подряд → cooldown
   cb_cooldown_min: 30          # минут cooldown
   cb_daily_loss_pct: 5.0       # дневной убыток % → halt all
+  session_ban_sl_no_tp: 3      # N SL без единого TP -> бан до конца UTC-дня
 
   # Technical
   heartbeat_interval: 30
