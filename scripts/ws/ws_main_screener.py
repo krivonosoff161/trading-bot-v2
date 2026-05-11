@@ -19,6 +19,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from src.data.snapshot_writer import write_snapshot
+from src.data.feature_writer import write_feature_row
 from src.data.ws_feed import Candle, WSFeed, _chunked
 from src.strategy.indicators import calc_adx, find_fvg, parse_candles
 from src.strategy.signal_engine import compute_signal
@@ -101,6 +103,8 @@ class MainScreener:
         self.feed = WSFeed(pairs=[], bars=["candle5m", "candle15m", "candle1H", "candle4H"], buffer_size=180)
         self.feed.on_candle_close("candle15m", self._on_15m_close)
         self.feed.on_candle_close("candle5m", self._on_5m_close)
+        self.feed.on_candle_close("candle1H", self._on_1h_close)
+        self.feed.on_candle_close("candle4H", self._on_4h_close)
         self.subscribed_pairs: list[str] = []
         self.active_setups: dict[str, dict[str, Any]] = {}
         self.last_regime_by_symbol: dict[str, dict[str, Any]] = {}
@@ -227,6 +231,7 @@ class MainScreener:
             await self.feed.ws.send_str(json.dumps({"op": op, "args": chunk}))
 
     async def _on_15m_close(self, sym: str, candle: Candle) -> None:
+        feature_result = self._write_feature_close(sym, candle, "15m", 15)
         candles_15m = self.feed.get_candles(sym, "candle15m", 30)
         candles_1h = self.feed.get_candles(sym, "candle1H", 30)
         if len(candles_15m) < max(20, int(self.main_cfg["warmup_bars"])) or len(candles_1h) < 10:
@@ -236,7 +241,7 @@ class MainScreener:
         adx_approx = self._cheap_adx_check(candles_1h)
         if vol_ratio < float(self.main_cfg["prefilter_vol_ratio_min"]) and adx_approx < float(self.main_cfg["prefilter_adx_min"]):
             return
-        result = self._compute(sym, tf_minutes=15)
+        result = feature_result or self._compute(sym, tf_minutes=15)
         if result is None:
             return
         self.last_regime_by_symbol[sym] = {"regime": result.regime, "updated_at": time.time(), "fade_hint": result.five_m_fade_hint}
@@ -245,15 +250,32 @@ class MainScreener:
         await self._maybe_emit_signal(sym, result, detected_on="15m", entry=result.entry_price, sl=result.sl_price, tp1=result.tp1_price, tp2=result.tp2_price, hold_min=result.max_hold_min, trade_style=result.trade_style or "FAST", regime=result.regime, side=result.side, vol_ratio=vol_ratio, adx_1h=result.context.get("adx_1h"), fvg_confirmed=self._fvg_confirmed(sym, result.side))
 
     async def _on_5m_close(self, sym: str, candle: Candle) -> None:
+        feature_result = self._write_feature_close(sym, candle, "5m", 5)
         state = self.last_regime_by_symbol.get(sym)
         if not state or state["regime"] not in ("RANGING", "CHOPPY"):
             return
-        result = self._compute(sym, tf_minutes=5)
+        result = feature_result or self._compute(sym, tf_minutes=5)
         if result is None or result.five_m_fade_hint not in ("LONG", "SHORT"):
             return
         side = "buy" if result.five_m_fade_hint == "LONG" else "sell"
         fade = result.five_m_fade_data or {}
         await self._maybe_emit_signal(sym, result, detected_on="5m", entry=fade.get("entry"), sl=fade.get("sl"), tp1=fade.get("tp"), tp2=None, hold_min=60, trade_style="BB_FADE", regime=result.regime, side=side, vol_ratio=None, adx_1h=result.context.get("adx_1h"), fvg_confirmed=False)
+
+    async def _on_1h_close(self, sym: str, candle: Candle) -> None:
+        self._write_feature_close(sym, candle, "1H", 60)
+
+    async def _on_4h_close(self, sym: str, candle: Candle) -> None:
+        self._write_feature_close(sym, candle, "4H", 240)
+
+    def _write_feature_close(self, sym: str, candle: Candle, tf: str, tf_minutes: int) -> Any | None:
+        result = self._compute(sym, tf_minutes=tf_minutes)
+        if result is None:
+            return None
+        try:
+            write_feature_row(result, symbol=sym, tf=tf, candle=candle)
+        except Exception as exc:
+            self._log(f"FEATURE write error | {sym} {tf} | {exc}")
+        return result
 
     def _compute(self, sym: str, tf_minutes: int) -> Any | None:
         candles_15m = list(reversed(self.feed.get_candles(sym, "candle15m", 120)))
@@ -315,6 +337,10 @@ class MainScreener:
         SIGNALS_LOG.parent.mkdir(parents=True, exist_ok=True)
         with SIGNALS_LOG.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        try:
+            write_snapshot(result, payload["id"], "ws_main_screener", detected_on, payload=payload)
+        except Exception as exc:
+            self._log(f"SNAPSHOT write error | {sym} | {exc}")
         self.active_setups[key] = {"ts": now, "signal_id": payload["id"], "expire_ts": now + int(hold_min + 30) * 60}
         self._roll_signal_day()
         self.signals_today += 1

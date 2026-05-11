@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv()
 
 from scripts.subscriptions import is_subscribed, list_users
+from src.data.snapshot_writer import write_snapshot
 from src.data.ws_feed import WSFeed
 from src.exchange.okx_client import OKXClient
 from src.strategy.chart_renderer import generate_chart_png
@@ -69,7 +70,15 @@ def _active_chat_ids() -> list[str]:
     return chats
 
 
-def _append_signal_log_entry(result: dict, *, captured_at: str, symbol: str, source: str) -> None:
+def _append_signal_log_entry(
+    result: dict,
+    *,
+    captured_at: str,
+    symbol: str,
+    source: str,
+    raw_result=None,
+    detected_on: str | None = None,
+) -> None:
     if (result or {}).get("entry_signal") != "ENTRY":
         return
     side = result.get("side")
@@ -105,6 +114,24 @@ def _append_signal_log_entry(result: dict, *, captured_at: str, symbol: str, sou
     }
     with SIGNAL_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    snapshot_payload = {
+        "ts": captured_at,
+        "ts_ms": ts_ms,
+        "symbol": symbol,
+        "entry_signal": result.get("entry_signal"),
+        "side": side,
+        "trade_style": style,
+        "regime": result.get("regime", ""),
+        "entry": entry["close"],
+        "sl": entry["sl"],
+        "tp1": entry["tp"],
+        "tp2": getattr(raw_result, "tp2_price", None) if raw_result is not None else None,
+        "hold_min": entry["max_hold_min"],
+    }
+    try:
+        write_snapshot(raw_result or result, entry["signal_id"], source, detected_on or "15m", payload=snapshot_payload)
+    except Exception as exc:
+        _scan_log(f"{symbol} snapshot write error: {exc}")
 
 
 class WSScanner:
@@ -238,7 +265,14 @@ class WSScanner:
         llm_text = await generate_client_text(base_symbol, captured_at, snapshot, str(png_path), client_summary=None)
         delivery_text = llm_text or result.engine_summary
         legacy = result.to_legacy_result(delivery_text)
-        _append_signal_log_entry(legacy, captured_at=captured_at, symbol=base_symbol, source="ws_scanner")
+        _append_signal_log_entry(
+            legacy,
+            captured_at=captured_at,
+            symbol=base_symbol,
+            source="ws_scanner",
+            raw_result=result,
+            detected_on=timeframe,
+        )
 
         active = _active_chat_ids()
         header = f"<b>{base_symbol}</b> — сигнал входа\n<i>Актуально до {legacy['expiry_time']}</i>\n\n"

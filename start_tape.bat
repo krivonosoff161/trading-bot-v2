@@ -5,5 +5,5 @@ set PYTHONUTF8=1
 echo Tape recorder запущен. Данные: scripts\tape\
 echo Закрой это окно чтобы остановить запись.
 echo.
-python -u scripts\tape_recorder.py
+python -u scripts\analysis\tape_recorder.py
 pause
