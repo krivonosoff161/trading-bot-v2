@@ -53,7 +53,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "price_pct": 1.2,
     "min_usd_vol": 30_000,
     "pump_phase_max_pct": 5.0,
-    "alert_cooldown_sec": 120,
+    "alert_cooldown_sec": 600,
+    "min_pool_dwell_min": 30,
     "position_usd": 100.0,
     "fee_rt_pct": 0.10,
     "sl_atr_mult": 1.5,
@@ -64,6 +65,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cb_cooldown_sl": 3,
     "cb_cooldown_min": 30,
     "cb_daily_loss_pct": 5.0,
+    "session_ban_sl_no_tp": 3,
     "heartbeat_interval": 30,
 }
 
@@ -102,6 +104,7 @@ class PairState:
     cooldown_until: float = 0.0
     banned_until: float = 0.0
     position: OpenPosition | None = None
+    last_entry_spike_ts: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +255,9 @@ class PumpOrchestrator:
             # 2. Remove pairs that left screener (frees slots before adding new ones)
             for sym in list(self.pool.keys()):
                 state = self.pool[sym]
-                if sym not in screener_meta and state.position is None and state.section != "banned":
+                min_dwell_sec = float(self.config["min_pool_dwell_min"]) * 60.0
+                dwell_ok = (now - state.added_at) >= min_dwell_sec
+                if sym not in screener_meta and state.position is None and state.section != "banned" and dwell_ok:
                     await self._remove_pair(sym)
                     removed.append(sym)
 
@@ -442,6 +447,17 @@ class PumpOrchestrator:
             state.sl_today += 1
             state.total_sl_streak += 1
 
+            # Fast-fail pair ban: N SL without any TP in this session -> ban until end of UTC day
+            if state.tp_today == 0 and state.sl_today >= int(self.config["session_ban_sl_no_tp"]):
+                now_utc = pd.Timestamp.utcnow()
+                eod_utc = now_utc.normalize() + pd.Timedelta(days=1)
+                state.banned_until = eod_utc.timestamp()
+                state.section = "banned"
+                self._log(
+                    f"SESSION BAN | {state.sym} | {state.sl_today} SL and 0 TP -> banned until {eod_utc.strftime('%Y-%m-%d %H:%M')} UTC"
+                )
+                return
+
             # Global cooldown after N consecutive SLs
             if state.total_sl_streak >= int(self.config["cb_cooldown_sl"]):
                 cooldown_sec = float(self.config["cb_cooldown_min"]) * 60
@@ -482,20 +498,22 @@ class PumpOrchestrator:
         if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
             return
 
-        # Need 11 bars history (10 baseline + 1 current)
-        history = self.feed.get_candles(sym, "candle1m", 11)
-        if len(history) < 11:
+        # Retest entry: detect spike on previous candle, enter on current pullback candle.
+        # Need 12 bars history (10 baseline + 1 spike + 1 retest)
+        history = self.feed.get_candles(sym, "candle1m", 12)
+        if len(history) < 12:
             return
 
+        spike = history[-2]
         current = history[-1]
-        previous = history[-11:-1]
+        previous = history[-12:-2]
 
         baseline_vol = sum(row[5] for row in previous) / 10.0
-        if baseline_vol <= 0 or current[1] <= 0:
+        if baseline_vol <= 0 or spike[1] <= 0 or current[4] <= 0:
             return
 
-        vol_spike = current[5] / baseline_vol
-        price_move = abs(current[4] - current[1]) / current[1] * 100.0
+        vol_spike = spike[5] / baseline_vol
+        price_move = abs(spike[4] - spike[1]) / spike[1] * 100.0
 
         if vol_spike < float(self.config["vol_mult"]) or price_move < float(self.config["price_pct"]):
             return
@@ -504,17 +522,32 @@ class PumpOrchestrator:
         if vol_spike >= 2.0 and price_move < 0.5:
             return
 
-        dollar_vol = current[6]
+        dollar_vol = spike[6]
         if dollar_vol < float(self.config["min_usd_vol"]):
+            return
+
+        spike_side = "buy" if spike[4] > spike[1] else "sell"
+        # Retest condition: next candle closes against spike direction (pullback).
+        # Buy spike -> retest close below spike close; Sell spike -> retest close above spike close.
+        if spike_side == "buy":
+            if current[4] >= spike[4]:
+                return
+        else:
+            if current[4] <= spike[4]:
+                return
+
+        spike_ts = int(spike[0])
+        # Avoid re-entry on the same pump leg.
+        if state.last_entry_spike_ts == spike_ts:
             return
 
         atr = sum(abs(row[2] - row[3]) for row in previous) / 10.0
         if atr <= 0:
             return
 
-        # Determine direction from signal candle
+        # Determine direction from spike candle (counter still inverts).
         if state.section == "main":
-            side = "buy" if current[4] > current[1] else "sell"
+            side = spike_side
             state.main_direction = side
         else:
             # Counter: opposite of main direction
@@ -522,12 +555,13 @@ class PumpOrchestrator:
 
         # Pump phase gate: don't enter if already far from baseline (main only)
         if state.section == "main" and state.baseline_price > 0:
-            phase_pct = abs(current[4] - state.baseline_price) / state.baseline_price * 100.0
+            phase_pct = abs(spike[4] - state.baseline_price) / state.baseline_price * 100.0
             if phase_pct > float(self.config["pump_phase_max_pct"]):
                 return
 
         self.last_signal_wall[sym] = now
         state.trade_count += 1
+        state.last_entry_spike_ts = spike_ts
         await self._open_position(state, current, side, vol_spike, price_move, dollar_vol, atr)
 
     # ------------------------------------------------------------------
