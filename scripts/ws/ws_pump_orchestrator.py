@@ -248,9 +248,11 @@ class PumpOrchestrator:
             added, removed = [], []
 
             # 1. Update last_signal_at for existing pool pairs still in screener
-            for sym in self.pool:
+            #    Also re-enter if cooldown expired (screener still active = pump continues)
+            for sym in list(self.pool.keys()):
                 if sym in screener_meta:
                     self.pool[sym].last_signal_at = now
+                    await self._enter_on_screener_signal(self.pool[sym], screener_meta[sym])
 
             # 2. Remove pairs that left screener (frees slots before adding new ones)
             for sym in list(self.pool.keys()):
@@ -287,6 +289,8 @@ class PumpOrchestrator:
                 )
                 await self._ensure_subscribed([sym])
                 added.append(sym)
+                # Enter immediately on screener signal (warmup already fetched history)
+                await self._enter_on_screener_signal(self.pool[sym], meta)
 
             if added or removed:
                 self._log(
@@ -316,11 +320,11 @@ class PumpOrchestrator:
     # ------------------------------------------------------------------
 
     async def _on_candle_update(self, sym: str, candle: Candle) -> None:
-        """1-second live update — only used to monitor open positions."""
+        """1-second live update — close positions when SL/TP hit mid-candle."""
         async with self.pool_lock:
             state = self.pool.get(sym)
             if state and state.position:
-                self._check_position_live(state, candle)
+                self._close_position_if_hit(state, candle)
 
     async def _on_candle_close(self, sym: str, candle: Candle) -> None:
         async with self.pool_lock:
@@ -487,7 +491,57 @@ class PumpOrchestrator:
             state.total_sl_streak = 0
 
     # ------------------------------------------------------------------
-    # Entry evaluation
+    # Immediate entry on screener signal
+    # ------------------------------------------------------------------
+
+    async def _enter_on_screener_signal(self, state: PairState, meta: dict) -> None:
+        """Enter immediately when screener fires — no waiting for candle close."""
+        sym = state.sym
+        now = time.time()
+
+        if self.cb_halted:
+            return
+        if state.position is not None:
+            return
+        if now < state.cooldown_until or now < state.banned_until:
+            return
+        if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
+            return
+
+        history = self.feed.get_candles(sym, "candle1m", 11)
+        if len(history) < 2:
+            return
+
+        n = min(10, len(history))
+        previous = history[-n:]
+        atr = sum(abs(row[2] - row[3]) for row in previous) / n
+        if atr <= 0:
+            return
+
+        entry_candle = history[-1]
+        entry_price = float(entry_candle[4])
+        vol_spike = float(meta.get("vol_spike", 2.0))
+        price_move = abs(entry_price - float(entry_candle[1])) / float(entry_candle[1]) * 100.0 if float(entry_candle[1]) > 0 else 0.0
+        dollar_vol = float(entry_candle[6])
+
+        screener_side = "buy" if meta.get("direction", "up") == "up" else "sell"
+        if state.section == "main":
+            side = screener_side
+            state.main_direction = side
+        else:
+            side = "sell" if state.main_direction == "buy" else "buy"
+
+        if state.section == "main" and state.baseline_price > 0:
+            phase_pct = abs(entry_price - state.baseline_price) / state.baseline_price * 100.0
+            if phase_pct > float(self.config["pump_phase_max_pct"]):
+                return
+
+        self.last_signal_wall[sym] = now
+        state.trade_count += 1
+        await self._open_position(state, entry_candle, side, vol_spike, price_move, dollar_vol, atr)
+
+    # ------------------------------------------------------------------
+    # Entry evaluation (backup: candle-close re-entry for pairs already in pool)
     # ------------------------------------------------------------------
 
     async def _evaluate_entry(self, state: PairState, candle: Candle) -> None:
@@ -498,70 +552,47 @@ class PumpOrchestrator:
         if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
             return
 
-        # Retest entry: detect spike on previous candle, enter on current pullback candle.
-        # Need 12 bars history (10 baseline + 1 spike + 1 retest)
-        history = self.feed.get_candles(sym, "candle1m", 12)
-        if len(history) < 12:
+        history = self.feed.get_candles(sym, "candle1m", 11)
+        if len(history) < 11:
             return
 
-        spike = history[-2]
         current = history[-1]
-        previous = history[-12:-2]
+        previous = history[-11:-1]
 
         baseline_vol = sum(row[5] for row in previous) / 10.0
-        if baseline_vol <= 0 or spike[1] <= 0 or current[4] <= 0:
+        if baseline_vol <= 0 or current[1] <= 0:
             return
 
-        vol_spike = spike[5] / baseline_vol
-        price_move = abs(spike[4] - spike[1]) / spike[1] * 100.0
+        vol_spike = current[5] / baseline_vol
+        price_move = abs(current[4] - current[1]) / current[1] * 100.0
 
         if vol_spike < float(self.config["vol_mult"]) or price_move < float(self.config["price_pct"]):
             return
 
-        # Stagnation filter: vol spike but price barely moved
         if vol_spike >= 2.0 and price_move < 0.5:
             return
 
-        dollar_vol = spike[6]
+        dollar_vol = current[6]
         if dollar_vol < float(self.config["min_usd_vol"]):
-            return
-
-        spike_side = "buy" if spike[4] > spike[1] else "sell"
-        # Retest condition: next candle closes against spike direction (pullback).
-        # Buy spike -> retest close below spike close; Sell spike -> retest close above spike close.
-        if spike_side == "buy":
-            if current[4] >= spike[4]:
-                return
-        else:
-            if current[4] <= spike[4]:
-                return
-
-        spike_ts = int(spike[0])
-        # Avoid re-entry on the same pump leg.
-        if state.last_entry_spike_ts == spike_ts:
             return
 
         atr = sum(abs(row[2] - row[3]) for row in previous) / 10.0
         if atr <= 0:
             return
 
-        # Determine direction from spike candle (counter still inverts).
         if state.section == "main":
-            side = spike_side
+            side = "buy" if current[4] > current[1] else "sell"
             state.main_direction = side
         else:
-            # Counter: opposite of main direction
             side = "sell" if state.main_direction == "buy" else "buy"
 
-        # Pump phase gate: don't enter if already far from baseline (main only)
         if state.section == "main" and state.baseline_price > 0:
-            phase_pct = abs(spike[4] - state.baseline_price) / state.baseline_price * 100.0
+            phase_pct = abs(current[4] - state.baseline_price) / state.baseline_price * 100.0
             if phase_pct > float(self.config["pump_phase_max_pct"]):
                 return
 
         self.last_signal_wall[sym] = now
         state.trade_count += 1
-        state.last_entry_spike_ts = spike_ts
         await self._open_position(state, current, side, vol_spike, price_move, dollar_vol, atr)
 
     # ------------------------------------------------------------------
