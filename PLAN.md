@@ -1,6 +1,6 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-10
+**Последнее обновление:** 2026-05-11
 
 ---
 
@@ -115,23 +115,37 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 
 ---
 
-### 🔧 Фаза B.5 — Минимальные фиксы (СЕЙЧАС, в `ws_pump_engine_v2.py`)
+### 🔧 Фаза B.5 — Минимальные фиксы (СЕЙЧАС, в `ws_pump_orchestrator.py`)
 **Цель:** поднять WR с 40% до >55% минимальными изменениями.
 **Критерий выхода:** 50+ новых paper сделок с WR >55%.
 
-- [x] **B.5.1 — Circuit breaker** (добавлен в `ws_pump_engine_v2.py` 10.05.2026):
-  - Per-pair: ≥3 SL подряд → cooldown 30 мин (сбрасывается при TP)
-  - Per-pair: ≥3 SL за последний час → blacklist пары до конца сессии
-  - Global: daily_pnl < -5% → halt_all, запись в лог + TG алерт
+**Архитектурное изменение (10.05.2026):** вместо правки `ws_pump_engine_v2.py` создан
+`ws_pump_orchestrator.py` с pool-логикой (4 слота, main/counter/banned per-pair state).
 
-- [x] **B.5.2 — Stagnation filter + USD vol** (выполнено 10.05.2026):
-  - Stagnation: vol_ratio >= 2 И price_change < 0.5% → BLOCK (фейковый объём MM)
-  - USD vol: Candle расширен до 7 полей (добавлен row[7] = volCcyQuote USDT)
-  - dollar_vol теперь `current[6]` — точный USDT объём вместо ct_val аппроксимации
-  - Исправлен _check_position unpacking в v2 и старом engine
+**Результаты оркестратора (10.05–11.05.2026):** 61 сделка, WR=32.8%, NET=-21.72% — неприемлемо.
 
-- [x] **B.5.3 — Поднять prefilter_vol_ratio_min** (config.yaml 10.05.2026):
-  - Было: 0.5 → Стало: 1.0 (только реальные всплески)
+**Диагноз (11.05.2026):**
+- alert_cooldown_sec=120 → LAYER дал 19/61 сигналов (слишком частые re-entry)
+- vol_mult=1.5, price_pct=1.2% → ловим шум (WAL: 3 сигнала за 5 мин)
+- Pool thrashing: пары вылетают через 5-10 мин, пул падает до main=3
+
+- [x] **B.5.1 — Circuit breaker + pool-архитектура** (10.05.2026):
+  - Per-pair: ≥3 SL подряд → cooldown 30 мин
+  - Global: daily_pnl < -5% → halt_all
+  - main → counter (2 SL) → banned 24ч
+
+- [x] **B.5.2 — Stagnation filter + USD vol** (10.05.2026):
+  - Stagnation: vol_ratio >= 2 И price_change < 0.5% → BLOCK
+  - dollar_vol = current[6] (USDT объём из row[7])
+
+- [x] **B.5.3 — Базовые пороги** (10.05.2026):
+  - prefilter_vol_ratio_min: 0.5 → 1.0
+
+- [ ] **B.5.4 — Фиксы кулдауна и порогов** (11.05.2026, НЕ ПРИМЕНЕНО):
+  - alert_cooldown_sec: 120 → 600
+  - vol_mult: 1.5 → 2.0
+  - price_pct: 1.2 → 1.5
+  - Минимальный dwell time пары в пуле (30-60 мин) — правка кода
 
 ---
 
