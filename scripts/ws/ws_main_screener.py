@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import logging.handlers
@@ -15,21 +16,28 @@ from typing import Any
 
 import aiohttp
 import yaml
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+load_dotenv()
 
+from scripts.subscriptions import is_subscribed, list_users
 from src.data.snapshot_writer import write_snapshot
 from src.data.feature_writer import write_feature_row
 from src.data.ws_feed import Candle, WSFeed, _chunked
+from src.strategy.chart_renderer import generate_chart_png
 from src.strategy.indicators import calc_adx, find_fvg, parse_candles
-from src.strategy.signal_engine import compute_signal
+from src.strategy.signal_engine import _format_telegram, build_analysis_snapshot, compute_signal
+from src.utils.llm_formatter import generate_client_text
+from src.utils.telegram import send_message_to, send_photo_to
 
 
 REST_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers"
 PINNED_PAIRS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "XRP-USDT-SWAP", "DOGE-USDT-SWAP", "ADA-USDT-SWAP"]
 SIGNALS_LOG = ROOT / "logs" / "signals" / "main_signals.jsonl"
 LOG_PATH = ROOT / "logs" / "ws_main_screener.log"
+SCREENER_LOG_DIR = ROOT / "logs" / "main_screener"
 UNIVERSE_CACHE = Path(__file__).resolve().parent / "cache" / "main_universe.json"
 DEFAULT_CONFIG = {
     "top_n_pairs": 24,
@@ -63,6 +71,15 @@ def _is_excluded_symbol(inst_id: str) -> tuple[bool, str]:
 
 def _swap_to_base(sym_swap: str) -> str:
     return sym_swap.removesuffix("-SWAP")
+
+
+def _active_chat_ids() -> list[str]:
+    chats: list[str] = []
+    for user in list_users():
+        cid = str(user["chat_id"])
+        if is_subscribed(cid):
+            chats.append(cid)
+    return chats
 
 
 def _load_yaml_section(section: str, defaults: dict[str, Any]) -> dict[str, Any]:
@@ -345,6 +362,97 @@ class MainScreener:
         self._roll_signal_day()
         self.signals_today += 1
         self._log(f"SIGNAL | {sym} {trade_style} {regime} {side} | on={detected_on} hold={hold_min}m")
+        try:
+            await self._deliver_signal(sym, result, payload, detected_on=detected_on)
+        except Exception as exc:
+            self._log(f"DELIVERY error | {sym} | {exc}")
+
+    def _delivery_snapshot(self, symbol: str, result: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = build_analysis_snapshot(symbol, result.captured_at, result, open_interest=None)
+        ctx = snapshot.setdefault("llm_context", {})
+        ctx.update(
+            {
+                "entry_signal": "ENTRY",
+                "trade_style_hint": payload["trade_style"],
+                "side": payload["side"],
+                "entry_price": payload["entry"],
+                "sl_price": payload["sl"],
+                "tp1_price": payload["tp1"],
+                "tp2_price": payload["tp2"],
+                "max_hold_minutes": payload["hold_min"],
+                "regime": payload["regime"],
+            }
+        )
+        snapshot["entry_signal"] = "ENTRY"
+        snapshot["trade_style"] = payload["trade_style"]
+        snapshot["side"] = payload["side"]
+        snapshot["regime"] = payload["regime"]
+        return snapshot
+
+    def _payload_summary(self, symbol: str, payload: dict[str, Any]) -> str:
+        side_label = "LONG" if payload["side"] == "buy" else "SHORT"
+        lines = [
+            f"{symbol} {side_label} {payload['trade_style']} {payload['regime']}",
+            f"Entry: {payload['entry']}",
+            f"SL: {payload['sl']}",
+            f"TP1: {payload['tp1']}",
+        ]
+        if payload.get("tp2") is not None:
+            lines.append(f"TP2: {payload['tp2']}")
+        lines.append(f"Max hold: {payload['hold_min']} min")
+        return "\n".join(lines)
+
+    async def _deliver_signal(self, sym: str, result: Any, payload: dict[str, Any], *, detected_on: str) -> None:
+        active = _active_chat_ids()
+        if not active:
+            return
+
+        base_symbol = _swap_to_base(sym)
+        run_dir = SCREENER_LOG_DIR / f"{datetime.utcnow().strftime('%Y-%m-%d_%H-%M-%S')}_{base_symbol}_{payload['trade_style']}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        png_path = run_dir / f"{base_symbol}_chart.png"
+        raw_15m = list(reversed(self.feed.get_candles(sym, "candle15m", 100)))
+
+        if raw_15m:
+            levels = {
+                "sl": payload["sl"],
+                "tp1": payload["tp1"],
+                "tp2": payload.get("tp2"),
+                "entry_price": payload["entry"],
+            }
+            generate_chart_png(
+                raw_15m,
+                result.indicators,
+                base_symbol,
+                result.captured_at,
+                str(png_path),
+                llm_levels=levels,
+                entry_signal="ENTRY",
+                direction=payload["side"],
+                trade_style=payload["trade_style"],
+            )
+
+        snapshot = self._delivery_snapshot(base_symbol, result, payload)
+        llm_text = await generate_client_text(base_symbol, result.captured_at, snapshot, str(png_path), client_summary=None)
+        delivery_text = llm_text or (
+            self._payload_summary(base_symbol, payload) if payload["trade_style"] == "BB_FADE" else result.engine_summary
+        )
+
+        arrow = "🟢" if payload["side"] == "buy" else "🔴"
+        header = f"{arrow} <b>{base_symbol}</b> — сигнал входа\n<i>Актуально до {result.expiry_time}</i>\n\n"
+        text = header + (html.escape(delivery_text) if llm_text else _format_telegram(delivery_text))
+
+        sent = 0
+        for chat_id in active:
+            try:
+                await send_message_to(chat_id, text)
+                if png_path.exists():
+                    await send_photo_to(chat_id, str(png_path))
+                sent += 1
+            except Exception as exc:
+                self._log(f"SEND error | {sym} chat={chat_id} | {exc}")
+            await asyncio.sleep(0.2)
+        self._log(f"DELIVERED | {sym} {payload['trade_style']} {detected_on} | users={sent}/{len(active)}")
 
     def _cleanup_active_setups(self) -> None:
         now = time.time()

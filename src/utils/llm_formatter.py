@@ -206,6 +206,7 @@ _STYLE_LABELS  = {"FAST":     "⚡ БЫСТРЫЙ — закрыть в тече
                   "SWING":    "📈 СВИНГ — держать до 4 часов, график 1H",
                   "SCALP":    "⚡ СКАЛЬП — закрыть в течение 2 часов, график 15m",
                   "PULLBACK": "🔄 ОТКАТ — закрыть в течение 8 часов, график 1H",
+                  "BB_FADE":  "↔️ ОТСКОК В ДИАПАЗОНЕ — закрыть в течение 60 минут, график 5m",
                   "NO_TRADE": "📊 НАБЛЮДАЕМ — ждём подтверждения на 5m"}
 
 
@@ -241,12 +242,19 @@ def _fp(symbol: str, price) -> str:
     """Format price with correct decimal places for the instrument."""
     if price is None:
         return "—"
+    value = float(price)
     base = symbol.split("-")[0].upper()
     if base == "BTC":
-        return f"{float(price):.1f}"
+        return f"{value:.1f}"
     if base in ("ETH", "SOL"):
-        return f"{float(price):.2f}"
-    return f"{float(price):.4f}"
+        return f"{value:.2f}"
+    if value < 0.01:
+        return f"{value:.8f}"
+    if value < 1:
+        return f"{value:.6f}"
+    if value < 10:
+        return f"{value:.5f}"
+    return f"{value:.4f}"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -360,7 +368,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     if funding is not None and abs(funding) > 0.0005 and (entry_signal != "NO_TRADE" or funding_blocked):
         pct = round(abs(funding) * 100, 3)
         direction_word = "лонги переплачивают шортам" if funding > 0 else "шорты переплачивают лонгам"
-        _limits = {"SWING": 0.3, "PULLBACK": 0.8, "SCALP": 0.5}
+        _limits = {"SWING": 0.3, "PULLBACK": 0.8, "SCALP": 0.5, "BB_FADE": 0.5}
         _limit  = _limits.get(trade_style, 0.1)
         if pct > _limit:
             level = "экстремально высокая — сделка заблокирована"
