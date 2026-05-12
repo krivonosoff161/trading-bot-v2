@@ -453,7 +453,7 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     vol_ratio = eng["vol_ratio_sig"]
     bb_expanding = eng["bb_expanding"]
     vwap_ok = eng["vwap_ok"]
-    oi_weak = eng["oi_weak"]
+    oi_weak = eng.get("oi_weak_veto", eng["oi_weak"])
     is_night = eng["is_night"]
     funding_warn = eng["funding_warn"]
     funding_block = eng["funding_block"]
@@ -508,9 +508,11 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
         if regime == "RANGING":
             zone = "дна" if side == "buy" else "вершины"
             expect = "отскок вверх" if side == "buy" else "откат вниз"
-            lines.append(f"  Рынок в диапазоне. Цена у {zone} дневного диапазона — ожидаем {expect} к VWAP.")
-        else:
-            lines.append("  Тренд 1H направлен " + direction_word + " и набирает силу — объём импульса подтверждает движение.")
+            lines.append(f"  Рынок в диапазоне. Цена у {zone} дневного диапазона — ожидаем {expect} к уровню равновесия.")
+        elif regime == "DRIFT":
+            lines.append(f"  Слабый дрейф {direction_word} — без резкого импульса, давление {'покупателей' if side == 'buy' else 'продавцов'} сохраняется.")
+        else:  # TRENDING
+            lines.append(f"  Сильный тренд {direction_word} — давление {'покупателей' if side == 'buy' else 'продавцов'} продолжается.")
         if vwap and close:
             vwap_word = "выше" if float(close) >= float(vwap) else "ниже"
             control = "покупатели" if side == "buy" else "продавцы"
@@ -528,9 +530,19 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             elif day_position >= 0.85:
                 lines.append(f"  Цена у вершины дня ({int(day_position * 100)}%) — потенциал вниз остаётся.")
         if rsi_1h <= 25:
-            lines.append(f"  RSI 1H перепродан ({rsi_1h:.0f}) — возможен отскок.")
+            if regime == "TRENDING" and side == "sell":
+                lines.append("  Импульс снижения сильный — подтверждает продолжение тренда вниз.")
+            elif regime == "TRENDING" and side == "buy":
+                lines.append("  Импульс временно ослаблен — возможна короткая пауза перед продолжением.")
+            else:
+                lines.append("  Импульс ослаблен — возможен отскок вверх.")
         elif rsi_1h >= 75:
-            lines.append(f"  RSI 1H перекуплен ({rsi_1h:.0f}) — давление на рост снизится.")
+            if regime == "TRENDING" and side == "buy":
+                lines.append("  Импульс роста сильный — подтверждает продолжение тренда вверх.")
+            elif regime == "TRENDING" and side == "sell":
+                lines.append("  Импульс временно перегрет — возможна короткая пауза перед продолжением.")
+            else:
+                lines.append("  Импульс перегрет — возможна коррекция вниз.")
         lines.append("")
 
         if funding_warn or funding_block:
@@ -587,87 +599,111 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     else:
         if regime == "RANGING":
             if side is None:
-                why = "Цена в середине дневного диапазона — ждём пока уйдёт в крайние зоны (< 35% или > 65%)."
+                why  = "Цена в середине дневного диапазона — ждём пока уйдёт в крайние зоны."
                 what = "Следить за приближением к дневным экстремумам — только оттуда берём отскок."
             elif adx_rising:
-                why = f"ADX на 1H растёт ({adx_1h:.1f}) — рынок выходит из диапазона, mean reversion опасен."
-                what = "Ждать пока ADX стабилизируется или начнёт падать."
+                why  = "Моментум на часовом графике ускоряется — рынок может выйти из диапазона, отскок ненадёжен."
+                what = "Ждать когда моментум успокоится."
             elif not five_m_trigger:
                 need5 = "выше" if side == "buy" else "ниже"
-                why = f"5m не подтвердил движение — FAST ждёт пробоя EMA20 на 5m {need5}."
-                what = f"Следить за 5m: как только trigger_close окажется {need5} EMA20 — условие выполнено."
+                why  = f"5-минутный график не подтвердил движение — ждём закрытия свечи {need5} ключевого уровня."
+                what = f"Следить за 5m: нужно закрытие свечи {need5} ключевого уровня."
             elif not vwap_ok:
                 need = "ниже" if side == "buy" else "выше"
-                why = f"Для отскока {'вверх' if side == 'buy' else 'вниз'} нужна цена {need} VWAP ({fp(vwap)})."
+                why  = f"Для {'лонга' if side == 'buy' else 'шорта'} нужна цена {need} дневного уровня равновесия ({fp(vwap)})."
                 what = f"Ждать пока цена окажется {need} {fp(vwap)}."
             elif vol_ratio < 1.3:
-                why = f"Объём слабый (×{vol_ratio:.2f}) — нет импульса для отскока."
+                why  = "Объём слабый — нет импульса для отскока."
                 what = "Ждать свечи с повышенным объёмом у экстремума диапазона."
             elif oi_weak:
-                why = "Открытый интерес падает — позиции закрываются, отскок ненадёжен."
-                what = "Ждать стабилизации OI перед входом."
+                why  = "Позиции закрываются, а не открываются — отскок без поддержки."
+                what = "Ждать когда позиции начнут накапливаться."
             else:
-                why = "Условия mean reversion не выполнены."
+                why  = "Условия для отскока не выполнены."
                 what = "Следить за следующей 15m свечой у экстремума диапазона."
-        else:
+        elif regime == "DRIFT":
             pp_sum = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
-            cfg_f = _mode_cfg(pp_sum, "trending", "fast")
-            cfg_sw = _mode_cfg(pp_sum, "trending", "swing")
-            t_vol = min(cfg_f["vol"], cfg_sw["vol"])
-            t_bb = cfg_f.get("bb_width_min", 0.5)
+            cfg_d  = _mode_cfg(pp_sum, "drift", "fast")
+            t_vol  = cfg_d.get("vol", 1.5)
             if bias_1h == "NEUTRAL":
-                why = "EMA на 1H без чёткого расхождения — рынок без направления, шансы 50/50."
-                what = "Ждать пока EMA20 и EMA50 разойдутся и ADX начнёт расти."
+                why  = "Нет чёткого направления — давление покупателей и продавцов сбалансировано."
+                what = "Ждать пока одна из сторон получит перевес."
             elif four_h_conflict:
-                why = "4H направление против 1H — SWING требует согласования таймфреймов."
-                what = "Ждать пока 4H и 1H совпадут по направлению."
+                why  = "Направление на 1H и 4H противоположны — входить опасно."
+                what = "Ждать пока оба таймфрейма совпадут по направлению."
             elif not adx_4h_ok:
-                why = f"На 4H нет выраженного тренда (ADX {adx_4h:.0f})."
-                what = "Ждать роста ADX 4H выше 20."
-            elif not adx_rising:
-                why = f"Тренд 1H есть (ADX {adx_1h:.1f}), но не ускоряется — движение в паузе."
-                what = "Ждать когда ADX начнёт расти."
+                why  = "На 4H нет выраженного тренда."
+                what = "Ждать когда тренд на 4H начнёт формироваться."
             elif vol_ratio < t_vol:
-                why = f"Объём импульса слабый (×{vol_ratio:.2f}, нужно ×{t_vol:.1f})."
-                what = "Ждать свечей с повышенным объёмом."
-            elif bb_width_pct < t_bb:
-                why = f"Bollinger Bands слишком узкие ({bb_width_pct:.2f}%, нужно >{t_bb:.1f}%)."
-                what = "Ждать расширения полос."
+                why  = "Объём недостаточный — дрейф без подтверждения."
+                what = "Ждать свечей с повышенным объёмом в направлении дрейфа."
             elif not five_m_trigger:
                 need5 = "выше" if side == "buy" else "ниже"
-                why = f"5m не подтвердил движение — FAST ждёт пробоя EMA20 на 5m {need5}."
-                what = f"Следить за 5m: как только trigger_close окажется {need5} EMA20 — условие выполнено."
+                why  = f"5-минутный график не подтвердил движение — ждём закрытия свечи {need5} ключевого уровня."
+                what = f"Следить за 5m: нужно закрытие {need5} ключевого уровня."
             elif oi_weak:
-                why = "Открытый интерес падает при движении цены — сигнал слабый."
-                what = "Ждать стабилизации или роста открытого интереса."
+                why  = "Позиции не накапливаются — слабый сигнал."
+                what = "Ждать когда позиции начнут расти в направлении дрейфа."
             else:
-                why = "Условия входа не выполнены в полном объёме."
+                why  = "Условия слабого тренда не выполнены в полном объёме."
+                what = "Следить за следующей 15m свечой."
+        else:  # TRENDING
+            pp_sum = _PAIR_PARAMS.get(symbol, _PAIR_PARAMS_DEFAULT)
+            cfg_f  = _mode_cfg(pp_sum, "trending", "fast")
+            cfg_sw = _mode_cfg(pp_sum, "trending", "swing")
+            t_vol  = min(cfg_f["vol"], cfg_sw["vol"])
+            t_bb   = cfg_f.get("bb_width_min", 0.5)
+            if bias_1h == "NEUTRAL":
+                why  = "Средние линии на 1H без чёткого расхождения — рынок без направления."
+                what = "Ждать когда средние линии разойдутся и тренд начнёт формироваться."
+            elif four_h_conflict:
+                why  = "4H направление против 1H — нужно согласование таймфреймов."
+                what = "Ждать пока 4H и 1H совпадут по направлению."
+            elif not adx_4h_ok:
+                why  = "На 4H нет выраженного тренда."
+                what = "Ждать когда тренд на 4H начнёт формироваться."
+            elif not adx_rising:
+                why  = "Тренд на 1H есть, но теряет силу — движение в паузе."
+                what = "Ждать возобновления импульса."
+            elif vol_ratio < t_vol:
+                why  = "Объём импульса слабый — нет подтверждения для входа."
+                what = "Ждать свечей с повышенным объёмом в направлении тренда."
+            elif bb_width_pct < t_bb:
+                why  = "Волатильность слишком низкая — рынок сжимается, ждём расширения."
+                what = "Ждать когда ценовой диапазон начнёт расширяться."
+            elif not five_m_trigger:
+                need5 = "выше" if side == "buy" else "ниже"
+                why  = f"5-минутный график не подтвердил движение — ждём закрытия свечи {need5} ключевого уровня."
+                what = f"Следить за 5m: нужно закрытие {need5} ключевого уровня."
+            elif oi_weak:
+                why  = "Позиции не накапливаются при движении цены — сигнал слабый."
+                what = "Ждать стабилизации или роста открытых позиций."
+            else:
+                why  = "Условия входа не выполнены в полном объёме."
                 what = "Следить за следующей 15m свечой."
 
-        if side == "buy":
-            dir_ctx = "Направление — LONG, но условия входа пока не созрели."
-        elif side == "sell":
-            dir_ctx = "Направление — SHORT, но условия входа пока не созрели."
-        else:
-            dir_ctx = ""
+        regime_ctx = {
+            "TRENDING": f"  Рынок в {'восходящем' if side == 'buy' else 'нисходящем' if side == 'sell' else 'активном'} тренде, но условия входа не созрели.",
+            "RANGING":  "  Рынок в диапазоне — цена движется между уровнями поддержки и сопротивления.",
+            "DRIFT":    f"  Слабый {'восходящий' if side == 'buy' else 'нисходящий' if side == 'sell' else ''} дрейф — направление есть, импульса пока недостаточно.",
+        }
 
         lines.append("📊 СЕЙЧАС НА РЫНКЕ")
-        if dir_ctx:
-            lines.append(f"  {dir_ctx}")
+        lines.append(regime_ctx.get(regime, "  Рынок без чёткого сигнала."))
         lines.append("")
         lines.append("🚫 НЕТ СДЕЛКИ")
         lines.append(f"  {why}")
         lines.append("")
-        lines.append("👃 ЗА ЧЕМ СЛЕДИМ")
+        lines.append("👁 ЗА ЧЕМ СЛЕДИМ")
         lines.append(f"  {what}")
         lines.append("")
         lines.append("❌ НЕ ДЕЛАТЬ")
         if side == "buy":
             lines.append("  Не входить в LONG без подтверждения условий выше.")
-            lines.append("  Не открывать SHORT против 1H направления.")
+            lines.append("  Не открывать SHORT против направления.")
         elif side == "sell":
             lines.append("  Не входить в SHORT без подтверждения условий выше.")
-            lines.append("  Не открывать LONG против 1H направления.")
+            lines.append("  Не открывать LONG против направления.")
         else:
             lines.append("  Не входить ни в LONG, ни в SHORT — направления нет.")
 
