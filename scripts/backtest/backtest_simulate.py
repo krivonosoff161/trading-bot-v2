@@ -870,7 +870,9 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
 
     # ── OI delta filter ───────────────────────────────────────────────────────
     # OI dropping >3% = positions being closed, not new money = weaker signal
+    # Exception: TRENDING regime — falling OI is normal (trapped positions covering)
     oi_weak = oi_delta < -0.03
+    oi_weak_veto = oi_weak and regime != "TRENDING"
 
     # ── SL / TP (matches prod analyze_chart.py formulas) ─────────────────────
     sl_p = tp_p = tp2_p = None
@@ -926,14 +928,14 @@ def compute_signal(raw_4h, raw_1h, raw_15m, funding, symbol="",
     # ── Drop reason for post-regime filters ──────────────────────────────────
     if not vwap_ok:        _drop = _drop or "vwap"
     if funding_block:      _drop = _drop or "funding"
-    if oi_weak:            _drop = _drop or "oi_weak"
+    if oi_weak_veto:       _drop = _drop or "oi_weak"
     if not rr_ok:          _drop = _drop or "rr_low"
     if not sl_p or not tp_p:
         _drop = _drop or "no_sl_tp"
 
     # ── Final signal ──────────────────────────────────────────────────────────
     blocked = (trade_style == "NO_TRADE" or not vwap_ok
-               or funding_block or oi_weak or not rr_ok
+               or funding_block or oi_weak_veto or not rr_ok
                or not sl_p or not tp_p)
 
     entry_signal = "NO_TRADE" if blocked else "ENTRY"
