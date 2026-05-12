@@ -428,7 +428,7 @@ def _resolve_drop_reason(entry_signal: str, engine_vars: dict) -> str:
         ("four_h_conflict", "four_h_conflict"),
         ("perp_div_short_veto", "perp_div_short_veto"),
         ("drift_adx1h_veto", "drift_adx1h_veto"),
-        ("oi_weak", "oi_weak"),
+        ("oi_weak_veto", "oi_weak"),
         ("funding_block", "funding_block"),
     ]
     for key, reason in checks:
@@ -1145,7 +1145,8 @@ def compute_signal(
             pass
 
     perp_div_short_veto = side == "sell" and perp_div_4bar is not None and perp_div_4bar > 0.0
-    if trade_style == "NO_TRADE" or not vwap_ok or oi_weak or funding_block or not rr_ok or not sl_p or not tp1_p or perp_div_short_veto or drift_adx1h_veto:
+    oi_weak_veto = oi_weak and regime != "TRENDING"
+    if trade_style == "NO_TRADE" or not vwap_ok or oi_weak_veto or funding_block or not rr_ok or not sl_p or not tp1_p or perp_div_short_veto or drift_adx1h_veto:
         entry_signal = "NO_TRADE"
     elif funding_warn:
         entry_signal = "WAIT"
@@ -1200,6 +1201,7 @@ def compute_signal(
         "vwap_ok": vwap_ok,
         "four_h_veto": four_h_veto,
         "oi_weak": oi_weak,
+        "oi_weak_veto": oi_weak_veto,
         "oi_delta": oi_delta,
         "is_night": is_night,
         "funding_warn": funding_warn,
