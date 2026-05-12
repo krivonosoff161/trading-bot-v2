@@ -53,7 +53,6 @@ USERS_ROOT  = ROOT / "logs" / "users"
 SIGNAL_LOG      = ROOT / "logs" / "signals" / "signal_log.jsonl"
 NOTRADE_LOG     = ROOT / "logs" / "signals" / "signal_log_notrade.jsonl"
 
-SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "XRP-USDT"]
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 TIMEOUT_SEC = 120
 STALE_THRESHOLD = 300   # seconds — warn if image message is older than this
@@ -192,6 +191,17 @@ async def _download(file_id: str, dest: Path) -> None:
         dest.write_bytes(await resp.read())
 
 
+def _load_universe_pairs() -> list[str]:
+    """Return current screener pairs as BTC-USDT format (without -SWAP suffix)."""
+    universe_path = ROOT / "scripts" / "ws" / "cache" / "main_universe.json"
+    try:
+        data = json.loads(universe_path.read_text(encoding="utf-8"))
+        pairs = data.get("pairs", [])
+        return [p.replace("-SWAP", "") for p in pairs if isinstance(p, str)]
+    except Exception:
+        return ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
+
+
 async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool = False) -> None:
     parts = []
     if welcome:
@@ -199,14 +209,14 @@ async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool 
     if extra_note:
         parts.append(extra_note)
     parts.append(TRANSPARENCY_NOTE)
-    parts.append("\nВыбери пару:")
-    buttons = [[{"text": sym, "callback_data": sym}] for sym in SYMBOLS]
-    buttons.append([{"text": "Другая пара", "callback_data": "__manual__"}])
-    buttons.append([{"text": "💡 Совет", "callback_data": "__edu__"}])
+    pairs = _load_universe_pairs()
+    # 3 per row
+    pair_rows = [[{"text": p, "callback_data": p} for p in pairs[i:i+3]] for i in range(0, len(pairs), 3)]
+    buttons = pair_rows + [[{"text": "Другая пара", "callback_data": "__manual__"}, {"text": "💡 Совет", "callback_data": "__edu__"}]]
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="\n".join(parts),
+        text="\n".join(parts) + "\n\nВыбери пару или введи свою:",
         reply_markup={"inline_keyboard": buttons},
     )
 
@@ -218,7 +228,7 @@ async def _send_main_menu(chat_id: str) -> None:
         chat_id=chat_id,
         text="Выберите тип анализа:",
         reply_markup={"inline_keyboard": [
-            [{"text": "📊 OKX Крипто-анализ",        "callback_data": "__start_analysis__"}],
+            [{"text": "📊 Анализ пары",              "callback_data": "__start_analysis__"}],
             [{"text": "⭐ Premium — анализ скрина",  "callback_data": "__premium__"}],
         ]},
     )
@@ -730,7 +740,7 @@ async def _handle_callback(cbq: dict) -> None:
         return
 
     if data == "__manual__":
-        await _send(chat_id, "Напиши тикер пары (например: AVAX-USDT):\n\n⚠️ Сервис заточен под крипто-фьючерсы. Анализ золота, нефти и валют — в разработке, результат может быть некорректным.\n\n📊 Пары вне основного списка (BTC/ETH/SOL/DOGE/XRP) анализируются по общим параметрам — результат ориентировочный, точной калибровки под эту пару нет.")
+        await _send(chat_id, "Напиши тикер пары в формате BTC-USDT, например AVAX-USDT.")
     else:
         await _start_analysis(chat_id, data)
 
