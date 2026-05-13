@@ -42,18 +42,15 @@ async def send_message_to(chat_id: str, text: str) -> None:
     if not _BOT_TOKEN:
         return
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
-    try:
-        async with aiohttp.ClientSession() as session:
-            resp = await session.post(
-                url,
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            )
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning("Telegram send_message_to error | chat_id={} status={} body={}", chat_id, resp.status, body)
-    except Exception as e:
-        logger.warning("Telegram send_message_to failed | {}", e)
+    async with aiohttp.ClientSession() as session:
+        resp = await session.post(
+            url,
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        )
+        if resp.status != 200:
+            body = await resp.text()
+            raise RuntimeError(f"Telegram API {resp.status}: {body[:200]}")
 
 
 async def send_photo_to(chat_id: str, file_path: str, caption: str = "") -> None:
