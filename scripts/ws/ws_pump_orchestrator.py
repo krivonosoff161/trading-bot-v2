@@ -38,7 +38,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bt_pump_filters import fetch_ctvals
+from scripts.subscriptions import is_subscribed, list_users
 from src.data.ws_feed import Candle, WSFeed, _chunked
+from src.utils.telegram import send_message_to
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
 LOG_DIR = ROOT / "logs" / "pump"
@@ -65,8 +67,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cb_cooldown_sl": 3,
     "cb_cooldown_min": 30,
     "cb_daily_loss_pct": 5.0,
+    "cb_daily_halt_cooldown_min": 120,
     "session_ban_sl_no_tp": 3,
     "heartbeat_interval": 30,
+    "confirmation_reversal_max_pct": 0.5,  # max reversal on confirm candle before skip
+    "min_tp_pct": 1.0,                     # minimum TP distance in % regardless of ATR
+    "pool_dead_vol_candles": 3,            # candles below baseline vol before eviction
 }
 
 
@@ -85,6 +91,8 @@ class OpenPosition:
     opened_at: pd.Timestamp
     position_usd: float
     atr: float
+    mfe_pct: float = 0.0   # max favorable excursion %
+    mae_pct: float = 0.0   # max adverse excursion % (negative = loss)
 
 
 @dataclass
@@ -95,6 +103,7 @@ class PairState:
     baseline_price: float  # price when pair entered pool
     added_at: float        # wall time
     last_signal_at: float  # last screener spike timestamp (for eviction)
+    last_close_ts: float = 0.0   # wall time of last closed trade (for re-entry detection)
     main_sl_streak: int = 0
     counter_sl_streak: int = 0
     total_sl_streak: int = 0   # for cb_cooldown_sl
@@ -105,6 +114,11 @@ class PairState:
     banned_until: float = 0.0
     position: OpenPosition | None = None
     last_entry_spike_ts: int = 0
+    # Pending entry (2nd-candle confirmation)
+    pending_side: str = ""
+    pending_vol: float = 0.0          # vol_spike of signal candle
+    pending_signal_close: float = 0.0 # close price of signal candle
+    pending_since: float = 0.0        # wall time when pending was set
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +193,8 @@ class PumpOrchestrator:
         # Global daily halt
         self.cb_halted: bool = False
         self.cb_daily_pnl: float = 0.0
+        self.cb_halted_at: float = 0.0
+        self._last_utc_date: str = datetime.utcnow().strftime("%Y-%m-%d")
 
         # Last signal wall time per pair (cooldown between entries)
         self.last_signal_wall: dict[str, float] = {}
@@ -254,12 +270,27 @@ class PumpOrchestrator:
                     self.pool[sym].last_signal_at = now
                     await self._enter_on_screener_signal(self.pool[sym], screener_meta[sym])
 
-            # 2. Remove pairs that left screener (frees slots before adding new ones)
+            # 2. Remove pairs that left screener OR have dead volume (frees slots before adding new ones)
+            dead_candles = int(self.config.get("pool_dead_vol_candles", 3))
             for sym in list(self.pool.keys()):
                 state = self.pool[sym]
+                if state.position is not None or state.section == "banned":
+                    continue
+
+                # Dead vol eviction: last N candles all below baseline — pump over
+                history = self.feed.get_candles(sym, "candle1m", dead_candles + 11)
+                if len(history) >= dead_candles + 4:
+                    baseline = sum(row[5] for row in history[-(dead_candles + 10):-dead_candles]) / 10.0
+                    recent = [row[5] for row in history[-dead_candles:]]
+                    if baseline > 0 and all(v < baseline * 1.5 for v in recent):
+                        self._log(f"EVICT dead vol | {sym} | {dead_candles} candles below 1.5x baseline")
+                        await self._remove_pair(sym)
+                        removed.append(sym)
+                        continue
+
                 min_dwell_sec = float(self.config["min_pool_dwell_min"]) * 60.0
                 dwell_ok = (now - state.added_at) >= min_dwell_sec
-                if sym not in screener_meta and state.position is None and state.section != "banned" and dwell_ok:
+                if sym not in screener_meta and dwell_ok:
                     await self._remove_pair(sym)
                     removed.append(sym)
 
@@ -324,7 +355,7 @@ class PumpOrchestrator:
         async with self.pool_lock:
             state = self.pool.get(sym)
             if state and state.position:
-                self._close_position_if_hit(state, candle)
+                await self._close_position_if_hit(state, candle)
 
     async def _on_candle_close(self, sym: str, candle: Candle) -> None:
         async with self.pool_lock:
@@ -334,7 +365,7 @@ class PumpOrchestrator:
 
             # 1. Check and close open position
             if state.position:
-                closed = self._close_position_if_hit(state, candle)
+                closed = await self._close_position_if_hit(state, candle)
                 if closed:
                     return  # cooldown reset, no new entry this candle
 
@@ -372,7 +403,7 @@ class PumpOrchestrator:
     # Position: close on candle close
     # ------------------------------------------------------------------
 
-    def _close_position_if_hit(self, state: PairState, candle: Candle) -> bool:
+    async def _close_position_if_hit(self, state: PairState, candle: Candle) -> bool:
         pos = state.position
         if not pos:
             return False
@@ -380,6 +411,16 @@ class PumpOrchestrator:
         ts_ms, _o, high, low, close, _v, _vu = candle
         exit_reason: str | None = None
         exit_price: float | None = None
+
+        # Update MFE/MAE on every tick
+        if pos.side == "buy":
+            gain = (high - pos.entry_price) / pos.entry_price * 100.0
+            loss = (low - pos.entry_price) / pos.entry_price * 100.0
+        else:
+            gain = (pos.entry_price - low) / pos.entry_price * 100.0
+            loss = (pos.entry_price - high) / pos.entry_price * 100.0
+        pos.mfe_pct = max(pos.mfe_pct, gain)
+        pos.mae_pct = min(pos.mae_pct, loss)
 
         if pos.side == "buy":
             if low <= pos.sl_price:
@@ -408,6 +449,12 @@ class PumpOrchestrator:
         net = gross - float(self.config["fee_rt_pct"])
         hold_min = (pd.Timestamp(ts_ms, unit="ms", tz="UTC") - pos.opened_at).total_seconds() / 60
 
+        # R-multiples for MFE/MAE
+        sl_dist_pct = abs(pos.entry_price - pos.sl_price) / pos.entry_price * 100.0
+        mfe_r = round(pos.mfe_pct / sl_dist_pct, 2) if sl_dist_pct > 0 else None
+        mae_r = round(pos.mae_pct / sl_dist_pct, 2) if sl_dist_pct > 0 else None
+        secs_since_last = round(time.time() - state.last_close_ts) if state.last_close_ts > 0 else None
+
         # Log label
         label = {
             "signal_id": pos.signal_id,
@@ -420,6 +467,11 @@ class PumpOrchestrator:
             "fee_pct": float(self.config["fee_rt_pct"]),
             "net_pnl_pct": round(net, 4),
             "hold_min": round(hold_min, 1),
+            "mfe_pct": round(pos.mfe_pct, 4),
+            "mae_pct": round(pos.mae_pct, 4),
+            "mfe_r": mfe_r,
+            "mae_r": mae_r,
+            "secs_since_last_trade": secs_since_last,
             "section": state.section,
             "trade_count": state.trade_count,
             "opened_at": pos.opened_at.isoformat(),
@@ -428,7 +480,15 @@ class PumpOrchestrator:
         with LABELS_LOG.open("a", encoding="utf-8") as f:
             f.write(json.dumps(label, ensure_ascii=False) + "\n")
 
-        self._log(f"CLOSE | {state.sym:<20} | {exit_reason} | pnl={net:+.2f}% | hold={hold_min:.0f}m | section={state.section}")
+        state.last_close_ts = time.time()
+        self._log(f"CLOSE | {state.sym:<20} | {exit_reason} | pnl={net:+.2f}% | mfe={pos.mfe_pct:+.2f}% mae={pos.mae_pct:+.2f}% | hold={hold_min:.0f}m | section={state.section}")
+        icon = "✅" if exit_reason == "TP" else ("⏱" if exit_reason == "TIME" else "❌")
+        base = state.sym.replace("-USDT-SWAP", "").replace("-USDT", "")
+        side_label = "LONG" if pos.side == "buy" else "SHORT"
+        await self._notify(
+            f"{icon} PUMP CLOSE {base} {side_label} → {exit_reason} {net:+.2f}% ({hold_min:.0f}m)\n"
+            f"День: {self.cb_daily_pnl + net:+.2f}%"
+        )
 
         # Reset cooldown on any close (prevents immediate re-entry on same candle)
         self.last_signal_wall[state.sym] = time.time()
@@ -438,6 +498,7 @@ class PumpOrchestrator:
         self.cb_daily_pnl += net
         if self.cb_daily_pnl <= -float(self.config["cb_daily_loss_pct"]):
             self.cb_halted = True
+            self.cb_halted_at = time.time()
             self._log(f"CB HALT | daily_pnl={self.cb_daily_pnl:.2f}% — all trading stopped")
             return True
 
@@ -495,7 +556,7 @@ class PumpOrchestrator:
     # ------------------------------------------------------------------
 
     async def _enter_on_screener_signal(self, state: PairState, meta: dict) -> None:
-        """Enter immediately when screener fires — no waiting for candle close."""
+        """Set pending entry on screener signal — confirmed on next candle close."""
         sym = state.sym
         now = time.time()
 
@@ -503,6 +564,8 @@ class PumpOrchestrator:
             return
         if state.position is not None:
             return
+        if state.pending_side:
+            return  # already pending, don't overwrite
         if now < state.cooldown_until or now < state.banned_until:
             return
         if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
@@ -512,17 +575,9 @@ class PumpOrchestrator:
         if len(history) < 2:
             return
 
-        n = min(10, len(history))
-        previous = history[-n:]
-        atr = sum(abs(row[2] - row[3]) for row in previous) / n
-        if atr <= 0:
-            return
-
-        entry_candle = history[-1]
-        entry_price = float(entry_candle[4])
+        signal_candle = history[-1]
+        signal_close = float(signal_candle[4])
         vol_spike = float(meta.get("vol_spike", 2.0))
-        price_move = abs(entry_price - float(entry_candle[1])) / float(entry_candle[1]) * 100.0 if float(entry_candle[1]) > 0 else 0.0
-        dollar_vol = float(entry_candle[6])
 
         screener_side = "buy" if meta.get("direction", "up") == "up" else "sell"
         if state.section == "main":
@@ -532,13 +587,15 @@ class PumpOrchestrator:
             side = "sell" if state.main_direction == "buy" else "buy"
 
         if state.section == "main" and state.baseline_price > 0:
-            phase_pct = abs(entry_price - state.baseline_price) / state.baseline_price * 100.0
+            phase_pct = abs(signal_close - state.baseline_price) / state.baseline_price * 100.0
             if phase_pct > float(self.config["pump_phase_max_pct"]):
                 return
 
-        self.last_signal_wall[sym] = now
-        state.trade_count += 1
-        await self._open_position(state, entry_candle, side, vol_spike, price_move, dollar_vol, atr)
+        state.pending_side = side
+        state.pending_vol = vol_spike
+        state.pending_signal_close = signal_close
+        state.pending_since = now
+        self._log(f"PENDING | {sym:<20} {side.upper()} | vol={vol_spike:.1f}x close={signal_close:.8g} — awaiting confirm")
 
     # ------------------------------------------------------------------
     # Entry evaluation (backup: candle-close re-entry for pairs already in pool)
@@ -548,46 +605,97 @@ class PumpOrchestrator:
         sym = state.sym
         now = time.time()
 
-        # Cooldown between entries
-        if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
-            return
-
         history = self.feed.get_candles(sym, "candle1m", 11)
-        if len(history) < 11:
+        if len(history) < 4:
             return
 
         current = history[-1]
-        previous = history[-11:-1]
-
-        baseline_vol = sum(row[5] for row in previous) / 10.0
-        if baseline_vol <= 0 or current[1] <= 0:
-            return
-
-        vol_spike = current[5] / baseline_vol
-        price_move = abs(current[4] - current[1]) / current[1] * 100.0
-
-        if vol_spike < float(self.config["vol_mult"]) or price_move < float(self.config["price_pct"]):
-            return
-
-        if vol_spike >= 2.0 and price_move < 0.5:
-            return
-
-        dollar_vol = current[6]
-        if dollar_vol < float(self.config["min_usd_vol"]):
-            return
-
-        atr = sum(abs(row[2] - row[3]) for row in previous) / 10.0
+        previous = history[-11:-1] if len(history) >= 11 else history[:-1]
+        baseline_vol = sum(row[5] for row in previous) / len(previous) if previous else 1.0
+        atr = sum(abs(row[2] - row[3]) for row in previous) / len(previous) if previous else 0.0
         if atr <= 0:
             return
 
+        # --- Path A: confirm pending signal from screener ---
+        if state.pending_side:
+            expire_sec = float(self.config.get("confirmation_reversal_max_pct", 0.5)) * 240
+            # expire pending after 2 candles (120s) regardless
+            if now - state.pending_since > 120:
+                self._log(f"PENDING expire | {sym} | no confirm candle in time")
+                state.pending_side = ""
+                return
+
+            side = state.pending_side
+            close = float(current[4])
+            open_ = float(current[1])
+            reversal_max = float(self.config.get("confirmation_reversal_max_pct", 0.5))
+
+            # Direction: confirmation candle must close in signal direction
+            if side == "buy":
+                direction_ok = close >= open_
+                reversal_pct = (state.pending_signal_close - close) / state.pending_signal_close * 100.0
+            else:
+                direction_ok = close <= open_
+                reversal_pct = (close - state.pending_signal_close) / state.pending_signal_close * 100.0
+
+            reversal_ok = reversal_pct < reversal_max
+            vol_ok = float(current[5]) >= baseline_vol * 0.8  # at least 80% of baseline
+
+            vol_spike = state.pending_vol
+            pending_close = state.pending_signal_close
+
+            # Clear pending before any return
+            state.pending_side = ""
+            state.pending_vol = 0.0
+            state.pending_signal_close = 0.0
+            state.pending_since = 0.0
+
+            if not direction_ok:
+                self._log(f"SKIP confirm | {sym} | candle reversed ({close:.8g} vs open {open_:.8g})")
+                return
+            if not reversal_ok:
+                self._log(f"SKIP confirm | {sym} | price reversed {reversal_pct:.2f}% from signal close")
+                return
+            if not vol_ok:
+                self._log(f"SKIP confirm | {sym} | vol dead ({current[5]:.0f} < {baseline_vol*0.8:.0f})")
+                return
+
+            dollar_vol = float(current[6])
+            self.last_signal_wall[sym] = now
+            state.trade_count += 1
+            self._log(f"CONFIRM | {sym:<20} {side.upper()} | signal_close={pending_close:.8g} confirm_close={close:.8g}")
+            await self._open_position(state, current, side, vol_spike, 0.0, dollar_vol, atr)
+            return
+
+        # --- Path B: standalone candle-close detection (backup) ---
+        if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
+            return
+        if len(history) < 11:
+            return
+
+        if baseline_vol <= 0 or current[1] <= 0:
+            return
+
+        vol_spike = float(current[5]) / baseline_vol
+        price_move = abs(float(current[4]) - float(current[1])) / float(current[1]) * 100.0
+
+        if vol_spike < float(self.config["vol_mult"]) or price_move < float(self.config["price_pct"]):
+            return
+        if vol_spike >= 2.0 and price_move < 0.5:
+            return
+
+        dollar_vol = float(current[6])
+        if dollar_vol < float(self.config["min_usd_vol"]):
+            return
+
         if state.section == "main":
-            side = "buy" if current[4] > current[1] else "sell"
+            side = "buy" if float(current[4]) > float(current[1]) else "sell"
             state.main_direction = side
         else:
             side = "sell" if state.main_direction == "buy" else "buy"
 
         if state.section == "main" and state.baseline_price > 0:
-            phase_pct = abs(current[4] - state.baseline_price) / state.baseline_price * 100.0
+            phase_pct = abs(float(current[4]) - state.baseline_price) / state.baseline_price * 100.0
             if phase_pct > float(self.config["pump_phase_max_pct"]):
                 return
 
@@ -614,12 +722,13 @@ class PumpOrchestrator:
         sl_mult = float(self.config["sl_atr_mult"])
         tp_mult = float(self.config["tp_atr_mult"])
 
+        min_tp_pct = float(self.config.get("min_tp_pct", 1.0)) / 100.0
         if side == "buy":
             sl_price = round(entry_price - atr * sl_mult, 8)
-            tp_price = round(entry_price + atr * tp_mult, 8)
+            tp_price = round(max(entry_price + atr * tp_mult, entry_price * (1 + min_tp_pct)), 8)
         else:
             sl_price = round(entry_price + atr * sl_mult, 8)
-            tp_price = round(entry_price - atr * tp_mult, 8)
+            tp_price = round(min(entry_price - atr * tp_mult, entry_price * (1 - min_tp_pct)), 8)
 
         signal_id = str(uuid.uuid4())[:12]
         sig = {
@@ -656,6 +765,13 @@ class PumpOrchestrator:
             f"OPEN  | {state.sym:<20} {side.upper():<4} | entry={entry_price:.8g} "
             f"sl={sl_price:.8g} tp={tp_price:.8g} | atr={atr:.8g} "
             f"| section={state.section} vol={vol_spike:.1f}x"
+        )
+        base = state.sym.replace("-USDT-SWAP", "").replace("-USDT", "")
+        side_label = "LONG" if side == "buy" else "SHORT"
+        await self._notify(
+            f"🔔 PUMP OPEN {base} {side_label}\n"
+            f"Entry: {entry_price:.8g} | SL: {sl_price:.8g} | TP: {tp_price:.8g}\n"
+            f"Vol: {vol_spike:.1f}x | День: {self.cb_daily_pnl:+.2f}%"
         )
 
     # ------------------------------------------------------------------
@@ -734,14 +850,37 @@ class PumpOrchestrator:
         interval = int(self.config["heartbeat_interval"])
         while not self.stop_event.is_set():
             await asyncio.sleep(interval)
+            self._check_cb_reset()
             main_n = sum(1 for p in self.pool.values() if p.section == "main")
             counter_n = sum(1 for p in self.pool.values() if p.section == "counter")
             banned_n = sum(1 for p in self.pool.values() if p.section == "banned")
             open_n = sum(1 for p in self.pool.values() if p.position)
+            halted_str = f" | HALTED" if self.cb_halted else ""
             self._log(
                 f"HEARTBEAT | main={main_n} counter={counter_n} banned={banned_n} "
-                f"| open={open_n} | daily_pnl={self.cb_daily_pnl:+.2f}%"
+                f"| open={open_n} | daily_pnl={self.cb_daily_pnl:+.2f}%{halted_str}"
             )
+
+    def _check_cb_reset(self) -> None:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        # New UTC day — always reset
+        if today != self._last_utc_date:
+            self._last_utc_date = today
+            if self.cb_halted or self.cb_daily_pnl != 0.0:
+                self.cb_halted = False
+                self.cb_daily_pnl = 0.0
+                self.cb_halted_at = 0.0
+                self._log("CB RESET | new UTC day — daily counters cleared")
+            return
+        # Cooldown expired — resume after N minutes
+        if self.cb_halted and self.cb_halted_at > 0:
+            elapsed_min = (time.time() - self.cb_halted_at) / 60.0
+            cooldown = float(self.config.get("cb_daily_halt_cooldown_min", 120))
+            if elapsed_min >= cooldown:
+                self.cb_halted = False
+                self.cb_daily_pnl = 0.0
+                self.cb_halted_at = 0.0
+                self._log(f"CB RESET | cooldown {cooldown:.0f}m expired — trading resumed")
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -752,6 +891,24 @@ class PumpOrchestrator:
                 loop.add_signal_handler(getattr(signal, sig_name), self.stop_event.set)
             except NotImplementedError:
                 pass
+
+    def _active_chat_ids(self) -> list[str]:
+        return [
+            str(u["chat_id"]) for u in list_users()
+            if is_subscribed(str(u["chat_id"]))
+        ]
+
+    async def _notify(self, text: str) -> None:
+        chats = self._active_chat_ids()
+        if not chats:
+            self._log("NOTIFY skip | no active subscribers")
+            return
+        for chat_id in chats:
+            try:
+                await send_message_to(chat_id, text)
+                self._log(f"NOTIFY ok | chat={chat_id}")
+            except Exception as exc:
+                self._log(f"NOTIFY error | chat={chat_id} | {exc}")
 
     def _log(self, message: str) -> None:
         self.logger.info(f"[{_now()}] {message}")
