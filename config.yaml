@@ -64,15 +64,15 @@ pump_engine:
 
 pump_orchestrator:
   # Pool
-  max_main_slots: 4            # макс пар в MAIN пуле одновременно
+  max_main_slots: 2            # макс пар в MAIN пуле одновременно
   universe_poll_sec: 1         # частота проверки active_universe.json (mtime watcher)
 
   # Entry
   vol_mult: 2.0                # мин vol_ratio для входа (vs 10-bar baseline)
   price_pct: 1.5               # мин price_move % на сигнальной свече
   min_usd_vol: 30000           # мин dollar_vol на свече
-  pump_phase_max_pct: 5.0      # не входить если цена уже >5% от baseline
-  alert_cooldown_sec: 90       # cooldown между сигналами на одной паре (fast re-entry)
+  pump_phase_max_pct: 3.0      # не входить если цена уже >3% от baseline
+  alert_cooldown_sec: 300      # cooldown между сигналами на одной паре (5 мин — skip retracement)
   min_pool_dwell_min: 30       # мин время удержания пары в pool после добавления
 
   # Position sizing
@@ -83,14 +83,20 @@ pump_orchestrator:
   paper_max_hold_min: 9999
 
   # Counter-trend
-  main_sl_to_counter: 2        # SL подряд в main → переход в counter
-  counter_sl_to_ban: 2         # SL подряд в counter → 24h бан
+  main_sl_to_counter: 99       # counter mode отключён
+  counter_sl_to_ban: 1         # SL в counter → 24h бан
 
   # Circuit breaker
   cb_cooldown_sl: 3            # суммарных SL подряд → cooldown
   cb_cooldown_min: 30          # минут cooldown
-  cb_daily_loss_pct: 5.0       # дневной убыток % → halt all
-  session_ban_sl_no_tp: 3      # N SL без единого TP -> бан до конца UTC-дня
+  cb_daily_loss_pct: 4.0       # дневной убыток % → halt all
+  cb_daily_halt_cooldown_min: 120  # минут до авто-сброса daily halt (0 = только при рестарте)
+  session_ban_sl_no_tp: 1      # 1 SL без TP -> бан до конца UTC-дня
+
+  # Entry quality filters
+  confirmation_reversal_max_pct: 0.5   # макс откат на свече подтверждения (%)
+  min_tp_pct: 1.0                      # минимальный TP в % (не зависит от ATR)
+  pool_dead_vol_candles: 3             # свечей без объёма → выброс из пула
 
   # Technical
   heartbeat_interval: 30
