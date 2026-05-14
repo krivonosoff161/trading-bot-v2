@@ -98,6 +98,9 @@ pump_orchestrator:
   min_tp_pct: 1.0                      # минимальный TP в % (не зависит от ATR)
   pool_dead_vol_candles: 3             # свечей без объёма → выброс из пула
 
+  # Telegram extra chats (group/channel IDs for pump notifications)
+  extra_notify_chats: [-1003352142986]
+
   # Technical
   heartbeat_interval: 30
 

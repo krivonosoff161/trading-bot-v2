@@ -893,10 +893,15 @@ class PumpOrchestrator:
                 pass
 
     def _active_chat_ids(self) -> list[str]:
-        return [
+        chats = [
             str(u["chat_id"]) for u in list_users()
             if is_subscribed(str(u["chat_id"]))
         ]
+        for extra in self.config.get("extra_notify_chats", []):
+            cid = str(extra)
+            if cid not in chats:
+                chats.append(cid)
+        return chats
 
     async def _notify(self, text: str) -> None:
         chats = self._active_chat_ids()
