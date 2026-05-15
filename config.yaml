@@ -91,7 +91,7 @@ pump_orchestrator:
   cb_cooldown_min: 30          # минут cooldown
   cb_daily_loss_pct: 4.0       # дневной убыток % → halt all
   cb_daily_halt_cooldown_min: 120  # минут до авто-сброса daily halt (0 = только при рестарте)
-  session_ban_sl_no_tp: 1      # 1 SL без TP -> бан до конца UTC-дня
+  session_ban_sl_no_tp: 3      # 3 SL без TP -> бан до конца UTC-дня
 
   # Entry quality filters
   confirmation_reversal_max_pct: 0.5   # макс откат на свече подтверждения (%)

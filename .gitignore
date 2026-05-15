@@ -47,6 +47,8 @@ api_keys.yaml
 *_files/
 
 # Backtest outputs (generated data, not source)
+scripts/backtest/cache/
+scripts/backtest/results/
 scripts/backtest/*.json
 scripts/backtest_result.txt
 scripts/backtest_*.txt
