@@ -16,7 +16,8 @@ strategy:
   hold_fast_minutes: 90
   hold_drift_minutes: 75
   hold_trending_fast_minutes: 120
-  trending_require_fvg: true
+  trending_require_fvg: false
+  min_vol_ratio_trending: 1.5
 
 pump_engine:
   # Detection

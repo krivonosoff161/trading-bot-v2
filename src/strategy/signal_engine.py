@@ -1030,6 +1030,9 @@ def compute_signal(
             if not any(gap["low"] <= _close <= gap["high"] for gap in _fvg_gaps):
                 trade_style, side = "NO_TRADE", None
 
+        if trade_style != "NO_TRADE" and vol_ratio_sig < config.get("min_vol_ratio_trending", 1.5):
+            trade_style, side = "NO_TRADE", None
+
     elif regime == "RANGING":
         cfg_r = _mode_cfg(pp, "ranging", "fast")
         bb_corridor = cfg_r.get("bb_width_min", 0.8) <= bb_width_pct <= cfg_r.get("bb_width_max", 2.5)
