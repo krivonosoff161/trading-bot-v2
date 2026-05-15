@@ -147,6 +147,23 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
   - min_pool_dwell_min: 30 добавлен
   - Результат за 11.05: 27 сделок, WR=48%, net +3.28%
 
+- [x] **B.5.6 — Tape-анализ + диагностика входов** (13.05.2026):
+  - `pump_day_analysis.py` — срез tape (E:\trading-data\ticks) вокруг каждой сделки
+  - Выявлено 5 паттернов потерь: поздний вход (3-4 свечи после пика), стоп-хант (один выброс без продолжения), поглощение (вход в период recovery после большого спайка), реэнтри без объёма, вход против потока
+  - Сегодня (13.05): 22 сделки, WR=32%, PnL=-5.23% → CB HALT в 04:48
+
+- [x] **B.5.7 — 2nd candle confirmation + надёжность** (13.05.2026, коммит 6f57535):
+  - Pending entry: скринер сигнал → PENDING → подтверждение на следующей свече
+  - SKIP если свеча разворот >0.5% или объём мёртвый (<80% baseline)
+  - MFE/MAE tracking per позиция + R-кратные в pump_labels.jsonl
+  - CB halt auto-reset: cb_daily_halt_cooldown_min=120 мин + сброс при смене UTC-дня
+  - Минимальный TP: max(2.5×ATR, min_tp_pct=1.0%) — убирает NEAR +0.69%, BRETT +0.53%
+  - Dead vol eviction: 3 свечи ниже 1.5× baseline → пара вылетает из пула
+  - run_pump_watchdog.py: авто-рестарт при падении процесса (max 10/час)
+  - start_all.bat: pump теперь через watchdog
+  - stop.bat: kill по заголовку окна (/T) — реально останавливает все процессы
+  - send_message_to: raises RuntimeError вместо silent log через loguru
+
 ---
 
 ### 🔜 Фаза C — Новый движок: `ws_smart_pump.py` (после B.5, при WR>55%)
