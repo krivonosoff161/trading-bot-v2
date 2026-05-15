@@ -64,6 +64,18 @@ def _fmt_price(symbol: str, price) -> str:
     return f"{float(price):.4f}"
 
 
+def _round_price(price: float, ref: float) -> float:
+    """Round to 4 significant figures based on price magnitude.
+    Fixes round(x, 4) precision loss for sub-0.001 coins (e.g. HMSTR at 0.000164).
+    """
+    import math
+    if price <= 0 or ref <= 0:
+        return price
+    magnitude = math.floor(math.log10(abs(ref)))
+    decimals = max(0, 4 - magnitude)
+    return round(price, decimals)
+
+
 def _to_msk(dt) -> "datetime":
     from datetime import timedelta
 
@@ -995,10 +1007,12 @@ def compute_signal(
 
         cfg_sw = _mode_cfg(pp, "trending", "swing")
         swing_base = adx_1h >= cfg_sw.get("adx", 18) and adx_1h_rising and vol_ratio_sig >= cfg_sw["vol"] and _bb_ok(cfg_sw) and not four_h_dir_conflict and adx_4h_ok and di_spread_4h >= 8 and di_spread_1h >= 8
+        # Veto: don't short into oversold (RSI<25 + price below BB) — reversal risk too high
+        swing_sell_oversold_veto = rsi_15m < 25 and float(h15.get("bb_pct_b") or 50) < 5
         if "SWING" in pp["allowed_modes"]:
             if swing_base and bias_1h == "UP" and five_m_long:
                 trade_style, side, entry_cfg = "SWING", "buy", cfg_sw
-            elif swing_base and bias_1h == "DOWN" and five_m_short:
+            elif swing_base and bias_1h == "DOWN" and five_m_short and not swing_sell_oversold_veto:
                 trade_style, side, entry_cfg = "SWING", "sell", cfg_sw
 
         cfg_f = _mode_cfg(pp, "trending", "fast")
@@ -1131,35 +1145,35 @@ def compute_signal(
         if side == "buy":
             atr_sl = close - atr_sl_dist
             struct = (swing_lows[-1] - 0.2 * atr_15m) if swing_lows else None
-            sl_p = round(min(struct, atr_sl) if struct and struct < close else atr_sl, 4)
+            sl_p = _round_price(min(struct, atr_sl) if struct and struct < close else atr_sl, close)
             sl_dist = close - sl_p
             tp1_k = 0.5 if regime == "DRIFT" else 0.8
-            tp1_p = round(close + sl_dist * tp1_k, 4)
-            tp2_p = round(close + sl_dist * 1.5, 4)
+            tp1_p = _round_price(close + sl_dist * tp1_k, close)
+            tp2_p = _round_price(close + sl_dist * 1.5, close)
         else:
             atr_sl = close + atr_sl_dist
             struct = (swing_highs[-1] + 0.2 * atr_15m) if swing_highs else None
-            sl_p = round(max(struct, atr_sl) if struct and struct > close else atr_sl, 4)
+            sl_p = _round_price(max(struct, atr_sl) if struct and struct > close else atr_sl, close)
             sl_dist = sl_p - close
             tp1_k = 0.5 if regime == "DRIFT" else 0.8
-            tp1_p = round(close - sl_dist * tp1_k, 4)
-            tp2_p = round(close - sl_dist * 1.5, 4)
+            tp1_p = _round_price(close - sl_dist * tp1_k, close)
+            tp2_p = _round_price(close - sl_dist * 1.5, close)
     elif trade_style == "SWING" and side and close:
         sl_k = entry_cfg.get("sl_k", 1.8) * 1.2
         if side == "buy":
             atr_sl = close - sl_k * atr_15m
             struct = (swing_lows[-1] - 0.3 * atr_15m) if swing_lows else None
-            sl_p = round(min(struct, atr_sl) if struct else atr_sl, 4)
+            sl_p = _round_price(min(struct, atr_sl) if struct else atr_sl, close)
             sl_dist = close - sl_p
-            tp1_p = round(close + min(sl_dist * 1.0, atr_1h * 0.5), 4)
-            tp2_p = round(close + min(sl_dist * 2.5, atr_1h * 1.2), 4)
+            tp1_p = _round_price(close + min(sl_dist * 1.0, atr_1h * 0.5), close)
+            tp2_p = _round_price(close + min(sl_dist * 2.5, atr_1h * 1.2), close)
         else:
             atr_sl = close + sl_k * atr_15m
             struct = (swing_highs[-1] + 0.3 * atr_15m) if swing_highs else None
-            sl_p = round(max(struct, atr_sl) if struct else atr_sl, 4)
+            sl_p = _round_price(max(struct, atr_sl) if struct else atr_sl, close)
             sl_dist = sl_p - close
-            tp1_p = round(close - min(sl_dist * 1.0, atr_1h * 0.5), 4)
-            tp2_p = round(close - min(sl_dist * 2.5, atr_1h * 1.2), 4)
+            tp1_p = _round_price(close - min(sl_dist * 1.0, atr_1h * 0.5), close)
+            tp2_p = _round_price(close - min(sl_dist * 2.5, atr_1h * 1.2), close)
 
     max_hold_minutes = (240 if is_night else hold_fast_m) if trade_style == "FAST" else 300
     rr_ok = True
