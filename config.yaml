@@ -119,3 +119,22 @@ main_screener:
   warmup_bars: 20
   prefilter_vol_ratio_min: 1.0
   prefilter_adx_min: 10
+
+bb_fade:
+  top_n_pairs:            24
+  universe_refresh_hours:  8
+  bb_period:              20
+  bb_std:                2.0
+  sl_mult:               0.5    # SL = band_edge + band_width * sl_mult
+  min_width_pct:         2.0    # skip if BB width < 2% of price
+  max_vol_ratio:         1.5    # skip if vol spike (breakout, not reversion)
+  rsi_period:             14
+  rsi_sell_max:           60    # skip SELL if RSI > 60 (momentum breakout)
+  rsi_buy_min:            40    # skip BUY  if RSI < 40 (downtrend impulse)
+  confirm_bars:            3    # max 5m bars to wait for wick rejection
+  cooldown_min:           30    # min between signals per pair
+  hold_min:               80    # max hold time in minutes
+  adx_period:              9
+  adx_trending_min:       22    # 1H ADX >= this = trending = skip
+  di_spread_min:          10    # 1H DI spread >= this = trending = skip
+  skip_asia_utc:        true    # skip 00:00-08:00 UTC (Asia underperforms)
