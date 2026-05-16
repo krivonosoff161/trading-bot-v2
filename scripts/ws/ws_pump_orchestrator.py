@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bt_pump_filters import fetch_ctvals
+from src.exchange.okx_meta import fetch_ctvals
 from scripts.subscriptions import is_subscribed, list_users
 from src.data.ws_feed import Candle, WSFeed, _chunked
 from src.utils.telegram import send_message_to
@@ -282,7 +282,8 @@ class PumpOrchestrator:
                 if len(history) >= dead_candles + 4:
                     baseline = sum(row[5] for row in history[-(dead_candles + 10):-dead_candles]) / 10.0
                     recent = [row[5] for row in history[-dead_candles:]]
-                    if baseline > 0 and all(v < baseline * 1.5 for v in recent):
+                    eviction_mult = float(self.config.get("eviction_vol_multiplier", 1.5))
+                    if baseline > 0 and all(v < baseline * eviction_mult for v in recent):
                         self._log(f"EVICT dead vol | {sym} | {dead_candles} candles below 1.5x baseline")
                         await self._remove_pair(sym)
                         removed.append(sym)
@@ -381,23 +382,6 @@ class PumpOrchestrator:
             # 4. No position — evaluate entry
             if state.position is None:
                 await self._evaluate_entry(state, candle)
-
-    # ------------------------------------------------------------------
-    # Position: live check (1-sec updates)
-    # ------------------------------------------------------------------
-
-    def _check_position_live(self, state: PairState, candle: Candle) -> None:
-        pos = state.position
-        if not pos:
-            return
-        _, _o, high, low, close, _v, _vu = candle
-        if pos.side == "buy":
-            if low <= pos.sl_price or high >= pos.tp_price:
-                # Will be caught properly on candle close; live update just for early awareness
-                pass
-        else:
-            if high >= pos.sl_price or low <= pos.tp_price:
-                pass
 
     # ------------------------------------------------------------------
     # Position: close on candle close
@@ -540,7 +524,7 @@ class PumpOrchestrator:
             elif state.section == "counter":
                 state.counter_sl_streak += 1
                 if state.counter_sl_streak >= int(self.config["counter_sl_to_ban"]):
-                    ban_sec = 24 * 3600
+                    ban_sec = float(self.config.get("ban_hours", 24)) * 3600
                     state.banned_until = now + ban_sec
                     state.section = "banned"
                     self._log(f"BAN | {state.sym} | {state.counter_sl_streak} SL in counter → 24h ban")
@@ -618,9 +602,7 @@ class PumpOrchestrator:
 
         # --- Path A: confirm pending signal from screener ---
         if state.pending_side:
-            expire_sec = float(self.config.get("confirmation_reversal_max_pct", 0.5)) * 240
-            # expire pending after 2 candles (120s) regardless
-            if now - state.pending_since > 120:
+            if now - state.pending_since > float(self.config.get("pending_ttl_sec", 120)):
                 self._log(f"PENDING expire | {sym} | no confirm candle in time")
                 state.pending_side = ""
                 return
@@ -639,7 +621,7 @@ class PumpOrchestrator:
                 reversal_pct = (close - state.pending_signal_close) / state.pending_signal_close * 100.0
 
             reversal_ok = reversal_pct < reversal_max
-            vol_ok = float(current[5]) >= baseline_vol * 0.8  # at least 80% of baseline
+            vol_ok = float(current[5]) >= baseline_vol * float(self.config.get("confirm_vol_min_ratio", 0.8))
 
             vol_spike = state.pending_vol
             pending_close = state.pending_signal_close
@@ -681,7 +663,7 @@ class PumpOrchestrator:
 
         if vol_spike < float(self.config["vol_mult"]) or price_move < float(self.config["price_pct"]):
             return
-        if vol_spike >= 2.0 and price_move < 0.5:
+        if vol_spike >= float(self.config.get("stagnation_vol_min", 2.0)) and price_move < float(self.config.get("stagnation_price_max_pct", 0.5)):
             return
 
         dollar_vol = float(current[6])

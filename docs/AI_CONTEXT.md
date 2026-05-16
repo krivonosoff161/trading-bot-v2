@@ -1,7 +1,7 @@
 # AI_CONTEXT.md — Контекст проекта для удалённых агентов
 
 > Этот файл обновляется вручную перед передачей задачи Qwen Coder.
-> Последнее обновление: 2026-05-10
+> Последнее обновление: 2026-05-16
 
 ---
 
@@ -45,11 +45,13 @@ Trading Bot V2 — OKX фьючерсный скальпинг бот + Telegram
 ## Текущая архитектура
 
 ### Запущенные процессы (start_all.bat):
-1. `scripts/telegram_bot.py` — Telegram бот (количество пользователей не фиксировать в Git-документах)
-2. `scripts/ws/ws_scanner.py` — WS сканер 5 пар (BTC/ETH/SOL/XRP/DOGE)
-3. `scripts/ws/ws_main_screener.py` — **shadow-mode**, 29 пар, пишет main_signals.jsonl
-4. `scripts/ws/ws_screener_live.py` — 232 пары, пишет active_universe.json
-5. `scripts/ws/ws_pump_engine_v2.py` — paper trading pump engine
+1. `scripts/telegram_bot.py` — Telegram бот
+2. `scripts/ws/ws_main_screener.py` — **shadow-mode**, 29 пар, пишет main_signals.jsonl
+3. `scripts/ws/ws_screener_live.py` — все SWAP пары, пишет active_universe.json
+4. `scripts/ws/run_pump_watchdog.py` → `ws_pump_orchestrator.py` — pump paper trading (Phase C)
+5. `scripts/ws/ws_smart_pump.py` — новый pump движок shadow-mode (Phase C.1-C.5)
+6. `scripts/ws/ws_bb_fade.py` — BB Fade mean reversion (Phase F.1)
+7. `scripts/analysis/tape_recorder.py` — запись тиков на E:\trading-data\ticks
 
 ### Сигнальные каналы:
 ```
@@ -88,8 +90,9 @@ MAIN WS— shadow-mode, 29 пар, ws_main_screener.py (без Telegram пока
 
 ## Что уже устарело / закрыто
 
-- `ws_pump_engine.py` (v1) — заменён на `ws_pump_engine_v2.py`
-- `_scanner_loop()` в telegram_bot.py — мёртвый код, сканер переехал в ws_scanner.py
+- `ws_pump_engine.py` (v1) и `ws_pump_engine_v2.py` — архивированы в `scripts/archive/` (16.05.2026). Заменены `ws_pump_orchestrator.py`.
+- `pump_engine:` секция в config.yaml — deprecated, помечена комментарием. Прод читает `pump_orchestrator:`.
+- `_scanner_loop()` в telegram_bot.py — мёртвый код, сканер переехал в ws_main_screener.py
 - Стратегия E — закрыта, см. `docs/strategy_e_postmortem.md`
 - ADX period 14 — заменён на 9 (config.yaml)
 

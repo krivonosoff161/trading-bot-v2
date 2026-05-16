@@ -29,7 +29,7 @@ import signal
 import sys
 import time
 import uuid
-from collections import defaultdict, deque
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -477,6 +477,12 @@ class BBFadeScreener:
     async def _heartbeat_loop(self) -> None:
         while not self.stop_event.is_set():
             await asyncio.sleep(3600)
+            # Evict armed setups that never got a 5m confirm (pair went silent or delisted)
+            armed_ttl = self.cfg["confirm_bars"] * 5 * 60 * 3  # 3× confirm window in seconds
+            stale = [sym for sym, s in self.armed.items() if time.time() - s["armed_ts"] > armed_ttl]
+            for sym in stale:
+                del self.armed[sym]
+                self._log(f"ARMED expire TTL | {sym}")
             self._log(
                 f"heartbeat | pairs={len(self.subscribed_pairs)} "
                 f"armed={len(self.armed)} "
