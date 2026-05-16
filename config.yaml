@@ -19,49 +19,9 @@ strategy:
   trending_require_fvg: false
   min_vol_ratio_trending: 1.5
 
-pump_engine:
-  # Detection
-  vol_mult: 1.5
-  price_pct: 1.2
-  lookback: 15
-  alert_cooldown_sec: 120
-
-  # Filters
-  min_usd_vol: 30000
-  active_hours: []  # no restriction — pumps happen 24/7
-  vol_sustain_bars: 3
-  vol_sustain_ratio: 0.8
-
-  # Universe
-  max_pairs: 14
-  min_market_vol_24h: 10000000
-  universe_refresh_hours: 1
-
-  # Paper trading
-  paper_tp_pct: 1.5
-  paper_sl_pct: 0.8
-  sl_atr_mult: 1.5
-  tp_atr_mult: 2.5
-  paper_max_hold_min: 9999  # effectively disabled — SL/TP are the only exits
-  paper_position_usd: 100.0
-  paper_balance_usd: 1000.0
-  max_open_positions: 3
-  fee_rt_pct: 0.10
-
-  # Telegram
-  telegram_enabled: false
-  # Tokens in .env: PUMP_TG_TOKEN, PUMP_TG_CHAT_ID
-
-  # Technical
-  heartbeat_interval: 30
-  state_ttl_min: 10
-  reconnect_delays: [2, 4, 8, 16, 32, 60]
-
-  # Circuit breaker (B.5.1)
-  cb_max_consecutive_sl: 3    # SL подряд → cooldown
-  cb_cooldown_min: 30         # минут cooldown после серии потерь
-  cb_hourly_sl_limit: 3       # SL за час → session blacklist
-  cb_daily_loss_pct: 5.0      # дневной убыток % → halt all
+# pump_engine: DEPRECATED — used by ws_pump_engine_v1/v2 (archived to scripts/archive/).
+# Production pump engine reads pump_orchestrator: section below.
+# Kept for reference only — changing these values has NO effect on running processes.
 
 pump_orchestrator:
   # Pool
@@ -101,6 +61,16 @@ pump_orchestrator:
 
   # Telegram extra chats (group/channel IDs for pump notifications)
   extra_notify_chats: [-1003352142986]
+
+  # Entry confirmation
+  pending_ttl_sec: 120              # max seconds to wait for confirm candle after screener signal
+  confirm_vol_min_ratio: 0.8        # confirm candle vol >= baseline * this
+  stagnation_vol_min: 2.0           # vol_spike threshold for stagnation check (Path B)
+  stagnation_price_max_pct: 0.5     # price_move below this = stagnation (high vol, no move)
+
+  # Pool management
+  eviction_vol_multiplier: 1.5      # dead vol: candles below baseline * this → evict pair
+  ban_hours: 24                     # hours a pair stays banned after counter SL streak
 
   # Technical
   heartbeat_interval: 30
