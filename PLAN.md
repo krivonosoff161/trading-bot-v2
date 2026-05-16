@@ -1,18 +1,25 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-11
+**Последнее обновление:** 2026-05-15
+
+> **Режим всех треков: PAPER TRADING / TEST ONLY**
+> AUTO_TRADE=false на всех процессах. Реальные деньги — только после прохождения
+> критериев каждой фазы на live paper данных. Нет исключений.
 
 ---
 
-## Текущий этап: S2.3 + Pump Engine Phase B.5
+## Текущий этап: S2.3 + Pump Engine Phase C.1 + BB Fade Phase F.1
 
-### Два параллельных трека:
+### Три параллельных трека:
 
 **Трек 1 — Concierge Analyzer** (основной, приносит клиентов)
 Фаза: S2.3 — Рост и качество
 
-**Трек 2 — Pump Engine** (улучшение качества)
-Фаза: B.5 — Минимальные фиксы для достижения WR>55%
+**Трек 2 — Pump Engine** (paper trading)
+Фаза: C.1 — Новый движок ws_smart_pump.py (B.5 закрыта)
+
+**Трек 3 — BB Fade** (отдельный канал, mean reversion)
+Фаза: F.1 — Live процесс + сбор данных
 
 ---
 
@@ -60,10 +67,11 @@ analyze_chart.py считает, llm_formatter.py объясняет.
 - [x] Логи очищены → свежий старт для новой системы ✅ 09.05
 
 **В работе / остаток S2.3:**
-- [ ] 100+ labeled сигналов → analyze_signal_log.py полный прогон
-- [ ] ws_main_screener shadow-режим → анализ что поймал за 24-48ч → решение о переключении
+- [ ] Запустить ws_main_screener с фиксами 15.05 (trending фильтры: vol≥1.5 + FVG off)
+- [ ] 100+ labeled сигналов → analyze_signal_log.py полный прогон (сейчас 56)
+- [ ] ws_main_screener → анализ сигналов за 24-48ч → подтверждение WR≥90% на live
 
-**Критерий перехода к S3:** 100+ labeled сигналов, понятен edge на реальных данных.
+**Критерий перехода к S3:** 100+ labeled, WR≥85% на последних 30 сигналах, понятен edge.
 
 ---
 
@@ -114,9 +122,23 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 
 ---
 
-### 🔧 Фаза B.5 — Минимальные фиксы (СЕЙЧАС, в `ws_pump_orchestrator.py`)
-**Цель:** поднять WR с 40% до >55% минимальными изменениями.
-**Критерий выхода:** 50+ новых paper сделок с WR >55%.
+### ✅ Фаза B.5 — Минимальные фиксы (ЗАКРЫТА 15.05.2026)
+**Цель была:** поднять WR с 40% до >55% минимальными изменениями.
+**Итог:** WR потолок ~38-42%, порог >55% недостижим параметрами.
+
+**Бэктест-валидация (GPT, 15.05.2026, `bt_pump_sim.py`):**
+- path_a_approx: n=301, WR=37.9% — совпадает с live 37.5% ✅ (логика верна)
+- base_path_b: n=71, WR=22.5% — standalone Path B нежизнеспособен
+- Sweep 0 конфигураций с WR>55% и n>30 → параметрами не вытащить
+- Потолок архитектуры: ~38-42%, PF<1 при любых настройках
+
+**Инсайты для Phase C:**
+- vol_ratio <2.0 WR=41.4% (держать фильтр)
+- dollar_vol $50k-200k оптимально (не мелкие, не гигантские)
+- ATR/price <0.2% WR=28% → фильтровать тихие монеты
+- vol_ratio >5× = поздний вход (MFE 0.97 vs baseline 1.36) → фильтровать
+
+**Вывод:** нужна новая архитектура с реальными данными (OI, taker ratio, CVD) → Phase C.
 
 **Архитектурное изменение (10.05.2026):** вместо правки `ws_pump_engine_v2.py` создан
 `ws_pump_orchestrator.py` с pool-логикой (4 слота, main/counter/banned per-pair state).
@@ -166,7 +188,9 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 
 ---
 
-### 🔜 Фаза C — Новый движок: `ws_smart_pump.py` (после B.5, при WR>55%)
+### 🔧 Фаза C — Новый движок: `ws_smart_pump.py` (СЕЙЧАС, paper trading)
+
+> **Всё в тестовом режиме.** AUTO_TRADE=false. Критерий перехода к D — 50+ paper сделок WR>60% PF>2.0.
 
 **Цель:** WR > 60%, PF > 2.0. Параллельный paper trading, старый движок не трогаем.
 **Файл:** `scripts/ws/ws_smart_pump.py`
@@ -328,20 +352,28 @@ PositionManager → paper SL/TP, логирование
 
 ---
 
-#### 12-шаговый порядок реализации
+#### Порядок реализации (все в paper/shadow режиме)
 
-1. Typed contracts (PairState, SignalCandidate, GateDecision)
-2. ExchangeGateway + OKXGateway скелет
-3. PairMetadata + CoinGeckoClient
-4. CandleFeed интеграция (существующий WSFeed + row[7])
-5. **Shadow mode** (prefilter only → jsonl) — запустить и собирать данные
-6. OIStream WS dynamic subscription
-7. FundingCache WS
-8. TradesAggregator (CVD + taker_ratio)
-9. MarketContext (parent network regime)
-10. SignalGate полный (все 3 слоя)
-11. PositionManager + CircuitBreaker
-12. NewsStream (последним — не критичный путь)
+- [x] **C.1** — Typed contracts (PairState, SignalCandidate, GateDecision)
+- [x] **C.2** — ExchangeGateway + OKXGateway скелет
+- [x] **C.3** — PairMetadata + CoinGeckoClient (кэш 24ч)
+- [x] **C.4** — CandleFeed интеграция (WSFeed + row[7] USDT vol)
+- [x] **C.5** — Shadow mode (SmartPumpShadow class, prefilter → jsonl) — **запустить, собирать кандидатов**
+- [ ] **C.6** — OIStream WS dynamic subscription (подписка только при price_change>2%)
+- [ ] **C.7** — FundingCache WS (один канал на все пары)
+- [ ] **C.8** — TradesAggregator (CVD + taker_buy_ratio, скользящее окно 60s)
+- [ ] **C.9** — MarketContext (BTC/ETH/SOL/BNB 1m slope, parent network regime)
+- [ ] **C.10** — SignalGate полный (все 3 слоя AND логика)
+- [ ] **C.11** — PositionManager + CircuitBreaker (paper SL/TP, daily_pnl halt)
+- [ ] **C.12** — NewsStream (CryptoPanic, boost только, не блокировщик — последним)
+
+**Приоритет прямо сейчас:** C.5 запустить в shadow mode → накопить 200+ кандидатов → анализ quality prefilter → затем C.6-C.8 (данные для реальных фильтров).
+
+**Инсайты из B.5 для SignalGate (C.10):**
+- dollar_vol $50k-200k → оптимальное окно
+- vol_ratio >5× → поздний вход, фильтровать
+- ATR/price <0.2% → тихие монеты, фильтровать
+- vol_ratio <2.0 → держать как baseline
 
 ---
 
@@ -371,6 +403,94 @@ PositionManager → paper SL/TP, логирование
 
 ---
 
+---
+
+## Трек 3 — BB Fade (WS, отдельный процесс)
+
+### Контекст и результаты бэктеста (15.05.2026)
+
+Mean reversion стратегия: 15m BB касание → 5m wick rejection вход → TP на midline.
+
+**Итерации бэктеста:**
+| Версия | Сигналов/60д | WR | avg_net | PF |
+|--|--|--|--|--|
+| v2: 5m only, pure touch | 22,089 | 61.0% | -0.088% | 0.75 |
+| v3: MTF 15m+5m | 6,540 | 64.7% | +0.006% | 1.01 |
+| v3 + RSI/vol/session фильтры | 1,236 | 71.8% | +0.194% | 1.58 |
+| **v3 + MIN_WIDTH=2.0% (прод)** | **344** | **70.6%** | **+0.478%** | **1.89** |
+
+**Зафиксированные параметры (прод):**
+- BB: period=20, std=2.0, на 15m
+- Вход: 5m wick rejection (HIGH>=upper15 AND close<upper15 = SHORT, обратное = LONG)
+- TP: 15m BB midline, SL: band_width × 0.5 за полосой
+- MIN_WIDTH: 2.0% (только широкие полосы — высокая волатильность)
+- RSI фильтр: SELL только RSI≤60, BUY только RSI≥40 (убирает импульсные пробои)
+- Vol filter: vol_ratio < 1.5 (высокий объём = импульс, не откат)
+- Сессия: EU 08-16 UTC + US 16-24 UTC (Азия -0.067% avg_net → пропускаем)
+- Trending guard: 1H ADX≥22 + DI_spread≥10 → пропускаем (BB walk в тренде убивает)
+- Cooldown: 2 бара между сетапами на паре
+- MAX_HOLD: 16 пятиминуток (80 мин)
+
+**Бэктест файлы:**
+- `scripts/backtest/bt_bb_fade.py` — основной бэктест (v3 MTF)
+- `scripts/backtest/bt_bb_tape_analysis.py` — анализ тейпа вокруг входов
+
+---
+
+### 🔧 Фаза F.1 — Live процесс + сбор данных (СЕЙЧАС)
+
+**Цель:** запустить ws_bb_fade.py, собирать сигналы, лейблить исходы.
+**Критерий перехода к F.2:** 50+ labeled сделок, подтверждение WR>65% на live данных.
+
+- [ ] **F.1.1** — `scripts/ws/ws_bb_fade.py`: отдельный WS процесс
+  - Подписка на 15m + 5m свечи для динамического universe (берёт список из конфига)
+  - Логика: 15m BB касание → watch → 5m wick rejection → сигнал
+  - Все параметры в config.yaml секция `bb_fade:`
+  - Лог: `logs/bb_fade/bb_fade_signals.jsonl`
+
+- [ ] **F.1.2** — Telegram уведомления
+  - Сигнал в отдельный канал (или тот же что main, с тегом [BB])
+  - Формат: пара / side / entry / TP / SL / bw_pct / RSI
+
+- [ ] **F.1.3** — `scripts/analysis/bb_fade_label_outcomes.py`
+  - Авто-лейблинг через OKX history (аналог label_outcomes.py для main)
+  - Пишет outcome (TP/SL/TIME) и net% в jsonl
+
+- [ ] **F.1.4** — Сбор тейп данных
+  - tape_recorder уже пишет тики на E:\trading-data\ticks
+  - BB Fade сигналы автоматически покрываются — данные копятся сами
+
+---
+
+### 🔜 Фаза F.2 — Tape filter (гипотезы, после 50+ live сделок)
+
+**Гипотеза 1 — Buy ratio фильтр (подтверждено на 35 сделках):**
+- pre_buy_ratio 0.5–0.7 за 5 мин до входа → WR=75%, avg=+0.570%
+- pre_buy_ratio <0.3 или >0.7 → WR=0%, avg=-1.4% (импульс продолжается)
+- Добавить: загружать тейп в момент сигнала, считать ratio → если вне [0.35, 0.70] → SKIP
+- Данных пока мало (35 из 344) → нужно накопить 100+ tape-покрытых сделок
+
+**Гипотеза 2 — US сессия приоритет:**
+- US 16-24: WR=75.2%, avg=+0.686% vs EU 08-16: WR=66.8%, avg=+0.304%
+- Возможно ограничить только US в F.2 если live данные подтвердят
+
+**Гипотеза 3 — Пары-лидеры:**
+- KAT, FLOKI, GALA, PEOPLE стабильно WR>77% с нормальным n
+- В F.2 возможен whitelist топ-10 пар вместо всего universe
+
+**Гипотеза 4 — CVD перед входом:**
+- CVD нейтральный или в сторону ожидаемого отскока → лучшие результаты
+- Требует tape stream в реальном времени (аналог C.5 из pump)
+
+---
+
+### 🔒 Фаза F.3 — Real Trading (после F.2, WR>70% live, PF>1.8)
+- AUTO_TRADE=true
+- Leverage 5× (avg_net 0.478% × 5 = ~2.4% на сделку)
+- Требует средства на OKX счёте
+
+---
+
 ## Этап S3 — Приложение / self-serve (будущее)
 
 ### Фаза S3.1 — Клиентский интерфейс
@@ -389,18 +509,24 @@ PositionManager → paper SL/TP, логирование
 
 **Общее:**
 - ML, LLM-оркестратор — нет данных
-- Walking BB pattern в прод — нужно 90+ дней данных
+- Реальные деньги — ни на одном треке, пока paper не доказал критерии
+- Telegram парсер каналов — не в текущей фазе, в BACKLOG
 
-**Pump Engine (до окончания Фазы C):**
-- ws_smart_pump.py — только после WR>55% в Фазе B.5
-- Trailing SL — после paper данных
-- Шорты по DUMP — нет backtest
+**Pump Engine (до прохождения Phase C):**
+- Параметрический тюнинг ws_pump_orchestrator — бэктест доказал потолок, не тратить время
+- Trailing SL — после paper данных Phase C
+- Шорты по DUMP — нет backtest данных
 - Dynamic pair switching — нет рабочей базы
-- Leverage — paper trading x1, живые деньги только в Фазе D
-- Ликвидации канал — неоднозначная интерпретация, не трогаем
-- Снижение vol thresholds — тестировали, ухудшает PF
-- Multi-exchange — только после Phase C доказала WR > 60%
-- NewsStream (CryptoPanic) — шаг 12, не критичный путь, добавляется последним
+- Leverage — paper x1, живые деньги только в Phase D
+- Ликвидации канал — неоднозначная интерпретация, defer
+- Multi-exchange — только после Phase C WR>60%
+- NewsStream (CryptoPanic) — шаг C.12, последним
+
+**BB Fade (до прохождения F.1):**
+- Tape buy_ratio фильтр в прод — ждём 100+ tape-покрытых live сделок
+- US-only режим — гипотеза, нужно live подтверждение
+- Whitelist пар — после 50+ labeled
+- Leverage — только в F.3, после WR>70% live
 
 ---
 

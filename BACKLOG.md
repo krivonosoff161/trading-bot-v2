@@ -4,7 +4,7 @@
 
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
-**Последнее ревью:** 2026-05-11
+**Последнее ревью:** 2026-05-16
 
 **Условные обозначения:**
 - ✅ Внедрено в прод
@@ -59,13 +59,23 @@
 
 ## P0 — Ближайшие практические задачи
 
-### ⏳ BB Fade в ws_main_screener.py с режимными правилами
-- BB Fade существует в бэктесте (088cd7b), но в WS системе не запущена
-- В REST-архиве 47 labeled сигналов: WR=60%, режимный разброс: RANGING=85%, TRENDING=81%, DRIFT=54%
-- Задача: реализовать BB Fade в ws_main_screener.py с фильтрами `not_thrust` + `slope_fading`
-- Режимные правила: RANGING и TRENDING — full weight; DRIFT — отключить или уменьшить TP1
-- Привлечь Qwen и GPT для ревью режимных правил перед внедрением
-- **Когда:** следующая сессия, приоритет #1
+### ✅ BB Fade как отдельный WS процесс (ws_bb_fade.py) — 15.05.2026
+- MTF BB Fade: 15m setup (BB touch) + 5m entry (wick rejection)
+- Бэктест v3: WR=70.6%, avg=+0.478%, PF=1.89, 344 сигнала, MIN_WIDTH=2.0%
+- Фильтры: RSI sell≤60/buy≥40, vol<1.5, bw≥2%, skip Asia UTC 00-06
+- Запущен в start_all.bat, stop.bat, сигналы в Telegram + logs/bb_fade/
+- Лейблер: scripts/analysis/bb_fade_label_outcomes.py
+
+### ⏳ BB Fade: интеграция режимных правил (Phase F.2+)
+- ws_bb_fade.py запущен как отдельный процесс ✅
+- Следующий шаг: весовые правила RANGING/TRENDING/DRIFT; DRIFT — уменьшить TP1
+- **Когда:** после накопления 50+ live сигналов из ws_bb_fade.py
+
+### ⏳ BB Fade: tape pre_buy_ratio фильтр (Гипотеза F.2)
+- Анализ bt_bb_tape_analysis.py: pre_buy_ratio 0.5-0.7 → WR=75%; <0.3 или >0.7 → WR=0%
+- Данные: 5-мин окно перед входом из E:\trading-data\ticks\
+- Нужно: tape_recorder копит данные → после 30+ дней данных проверить гипотезу на live сигналах
+- **Когда:** когда tape_recorder накопит 30+ дней данных (ожидание ~июнь 2026)
 
 ### ⏳ Переработка пользовательской системы (LLM промт + Telegram UI)
 - Текущая проблема: LLM не знает о режимах (TRENDING/DRIFT/RANGING), два параллельных источника сигналов, мёртвый `_scanner_loop()` в telegram_bot.py
@@ -162,11 +172,8 @@
 
 ## P1 — BB Fade переосмысление
 
-### ⏳ BB Fade как самостоятельный скальп (1m/5m/15m волны)
-- Текущая реализация требует RANGING режима от 15m — слишком ограниченно, за 2.5 дня 0 сигналов
-- Оригинальная концепция: цена касается BB на 1m/5m/15m → вход против движения, TP середина полосы
-- Независимый от основного движка модуль, без привязки к режиму
-- **Когда:** после Phase C pump engine доказала WR>60%
+### ✅ BB Fade как самостоятельный скальп — реализован 15.05.2026
+- ws_bb_fade.py: MTF 15m+5m, WR=70.6%, PF=1.89, запущен в прод (paper)
 
 ---
 
@@ -355,6 +362,10 @@
 - ✅ TRENDING FAST FVG фильтр + hold_trending_fast_minutes=120 (08.05)
 - ✅ WSFeed candle4H + per-bar буферы (09.05)
 - ✅ ws_main_screener.py — shadow-mode WS скринер, 29 пар (09.05)
+- ✅ ws_bb_fade.py — MTF BB Fade WS процесс, 15m+5m, WR=70.6%, PF=1.89 (15.05)
+- ✅ bb_fade_label_outcomes.py — лейблер BB Fade сигналов (15.05)
+- ✅ tape_recorder.py в start_all.bat — автозапуск tape recorder (15.05)
+- ✅ Pump notifications в Telegram community group (13.05)
 
 ---
 
