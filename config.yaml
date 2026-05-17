@@ -61,6 +61,7 @@ pump_orchestrator:
 
   # Telegram extra chats (group/channel IDs for pump notifications)
   extra_notify_chats: [-1003352142986]
+  notify_min_interval_sec: 2.0   # min seconds between notifications to same chat (0 = no throttle)
 
   # Entry confirmation
   pending_ttl_sec: 120              # max seconds to wait for confirm candle after screener signal

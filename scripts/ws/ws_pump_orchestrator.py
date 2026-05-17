@@ -202,8 +202,10 @@ class PumpOrchestrator:
         self._notify_queues: dict[str, asyncio.Queue] = {}
         self._notify_workers: dict[str, asyncio.Task] = {}
         # Min interval between sends to same chat. Group chats have stricter
-        # rate limit (~20 msg/min), personal — much higher. 2s is safe for both.
-        self._notify_min_interval_sec: float = 2.0
+        # rate limit (~20 msg/min). 2s is safe; set to 0 to disable throttle.
+        self._notify_min_interval_sec: float = float(
+            self.config.get("notify_min_interval_sec", 2.0)
+        )
 
     # ------------------------------------------------------------------
     # Run
