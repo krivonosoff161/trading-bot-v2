@@ -22,6 +22,8 @@ try:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment
     from openpyxl.utils import get_column_letter
+    from openpyxl.chart import LineChart, BarChart, PieChart, Reference
+    from openpyxl.chart.label import DataLabelList
 except ImportError:
     print("openpyxl не установлен: pip install openpyxl")
     sys.exit(1)
@@ -35,6 +37,7 @@ PUMP_SIGNALS_LOG    = _ROOT / "logs" / "pump" / "pump_signals.jsonl"
 PUMP_LABELS_LOG     = _ROOT / "logs" / "pump" / "pump_labels.jsonl"
 MAIN_SIGNALS_LOG    = _ROOT / "logs" / "signals" / "main_signals.jsonl"
 MAIN_SIGNALS_LABELS = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
+BB_FADE_SIGNALS_LOG = _ROOT / "logs" / "bb_fade" / "bb_fade_signals.jsonl"
 JOURNAL_PATH        = Path(__file__).parent / "journal.xlsx"
 
 # ── Palette ──────────────────────────────────────────────────────────────────
@@ -155,6 +158,39 @@ def _load_screener() -> list:
     return out
 
 
+def _calc_r_to_tp(entry, sl, tp, side: str):
+    """R-multiple of TP relative to SL distance. Returns None if invalid."""
+    if entry is None or sl is None or tp is None:
+        return None
+    try:
+        entry = float(entry); sl = float(sl); tp = float(tp)
+    except (TypeError, ValueError):
+        return None
+    sl_dist = abs(entry - sl)
+    if sl_dist == 0:
+        return None
+    if side == "LONG" or side == "buy":
+        return round((tp - entry) / sl_dist, 2) if tp > entry else None
+    return round((entry - tp) / sl_dist, 2) if tp < entry else None
+
+
+def _outcome_to_tp_unified(outcome: str) -> str:
+    """Unify TP1/TP2 → TP (client closes at TP1 anyway)."""
+    if outcome in ("TP1", "TP2"):
+        return "TP"
+    return outcome or ""
+
+
+def _exit_r_at_tp1(entry, sl, tp1, side: str, outcome: str):
+    """Realistic R for client: TP1 hit (or planned TP1) → +R_to_TP1, SL → -1, TIME → 0."""
+    out_norm = _outcome_to_tp_unified(outcome)
+    if out_norm == "TP":
+        return _calc_r_to_tp(entry, sl, tp1, side)
+    if out_norm == "SL":
+        return -1.0
+    return None  # TIME or empty
+
+
 def _load_main_ws() -> list:
     signals = {
         (s.get("id") or s.get("signal_id", "")): s
@@ -165,18 +201,25 @@ def _load_main_ws() -> list:
     for sig_id, sig in signals.items():
         lab = labels.get(sig_id, {})
         ts  = sig.get("ts", "")
+        side = "LONG" if sig.get("side") == "buy" else "SHORT"
+        outcome_raw = lab.get("outcome", "")
+        outcome = _outcome_to_tp_unified(outcome_raw)
+        tp2_reached = outcome_raw == "TP2"  # info only — client doesn't trade TP2
+        exit_r = _exit_r_at_tp1(sig.get("entry"), sig.get("sl"), sig.get("tp1"), side, outcome_raw)
         out.append({
             "dt":         ts[5:16].replace("T", " ") if ts else "",
-            "pair":       sig.get("symbol", ""),
+            "pair":       sig.get("symbol", "").replace("-USDT-SWAP", ""),
             "regime":     sig.get("regime", ""),
-            "side":       "LONG" if sig.get("side") == "buy" else "SHORT",
+            "style":      sig.get("trade_style", ""),
+            "side":       side,
             "entry":      sig.get("entry"),
             "sl":         sig.get("sl"),
-            "tp1":        sig.get("tp1"),
-            "tp2":        sig.get("tp2"),
+            "tp":         sig.get("tp1"),
             "hold_min":   sig.get("hold_min"),
-            "outcome":    lab.get("outcome", ""),
+            "outcome":    outcome,
+            "tp2_reached": tp2_reached,
             "exit_price": lab.get("exit_price"),
+            "exit_r":     exit_r,
         })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
@@ -209,6 +252,49 @@ def _load_pump() -> list:
         })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
+
+
+def _load_bb_fade() -> list:
+    """BB Fade signals — outcome пока приходит из самого signal jsonl (поле outcome)."""
+    out = []
+    for sig in _load_jsonl(BB_FADE_SIGNALS_LOG):
+        ts = sig.get("ts", "")
+        side = "LONG" if sig.get("side") == "buy" else "SHORT"
+        outcome_raw = sig.get("outcome") or ""
+        outcome = _outcome_to_tp_unified(outcome_raw)
+        exit_r = _exit_r_at_tp1(sig.get("entry"), sig.get("sl"), sig.get("tp"), side, outcome_raw)
+        out.append({
+            "dt":         ts[5:16].replace("T", " ") if ts else "",
+            "pair":       sig.get("symbol", "").replace("-USDT-SWAP", ""),
+            "regime":     "BB_FADE",
+            "style":      "FADE",
+            "side":       side,
+            "entry":      sig.get("entry"),
+            "sl":         sig.get("sl"),
+            "tp":         sig.get("tp"),
+            "hold_min":   sig.get("hold_min"),
+            "outcome":    outcome,
+            "tp2_reached": False,
+            "exit_price": None,
+            "exit_r":     exit_r,
+        })
+    out.sort(key=lambda x: x["dt"], reverse=True)
+    return out
+
+
+def _load_all_simulator_signals() -> list:
+    """Объединённый поток для Симулятора — все источники активных каналов с source-меткой."""
+    rows: list = []
+    for r in _load_main_ws():
+        r2 = dict(r)
+        r2["source"] = "Main WS"
+        rows.append(r2)
+    for r in _load_bb_fade():
+        r2 = dict(r)
+        r2["source"] = "BB Fade"
+        rows.append(r2)
+    rows.sort(key=lambda x: x["dt"], reverse=True)
+    return rows
 
 
 async def _fetch_positions_async() -> list:
@@ -336,15 +422,19 @@ def _build_screener(wb, rows: list) -> None:
 # M=Позиция$ N=Цена ликв O=Реал.исход P=P&L$ Q=P&L% R=Комис$ S=Финанс$ T=Чист P&L$
 
 def _build_simulator(wb, rows: list) -> None:
+    """Симулятор — Main WS + BB Fade с R-multiple клиента (TP1-only unification).
+
+    Колонки A=капитал B=плечо — input (можно менять для каждой строки).
+    P&L$ = position × (SL_dist_pct) × R. Где R — R-multiple до TP1 (клиент закрывает на TP1).
+    """
     ws = wb.create_sheet("Симулятор")
     _hdr(ws, 1, [
-        "Капитал$", "Плечо",
-        "Дата", "Пара", "Стиль", "Сторона",
-        "Вход", "SL", "TP", "Исход", "R", "MAE_R",
-        "Позиция$", "Цена ликв.", "Реал. исход",
-        "P&L$", "P&L%", "Комиссия$", "Финанс.$", "Чист. P&L$",
+        "Капитал$", "Плечо",          # A B — input
+        "Дата", "Источник", "Пара", "Режим", "Стиль", "Сторона",  # C-H — info
+        "Вход", "SL", "TP", "Исход", "R",                # I-M — signal data
+        "Позиция$", "Цена ликв.", "Реал. исход",          # N-P — derived
+        "P&L$", "P&L%", "Комиссия$", "Чист. P&L$",       # Q-T — money
     ])
-    # Highlight input column headers
     for c in (1, 2):
         ws.cell(row=1, column=c).fill = _fill("F4B942")
 
@@ -353,49 +443,75 @@ def _build_simulator(wb, rows: list) -> None:
         ws.cell(row=r, column=2, value=10).fill  = F_INPUT
 
         data = {
-            3: row["dt"],     4: row["pair"],    5: row["style"],
-            6: row["side"],   7: row["entry"],   8: row["sl"],
-            9: row["tp"],     10: row["outcome"] or "",
-            11: row["R"],     12: row["MAE_R"],
+            3:  row["dt"],
+            4:  row.get("source", ""),
+            5:  row["pair"],
+            6:  row.get("regime", ""),
+            7:  row.get("style", ""),
+            8:  row["side"],
+            9:  row["entry"],
+            10: row["sl"],
+            11: row["tp"],
+            12: row["outcome"] or "",
+            13: row.get("exit_r"),
         }
         for c, val in data.items():
             cell = ws.cell(row=r, column=c, value=val)
-            if c == 10 and row["outcome"] in OUTCOME_FILL:
+            if c == 12 and row["outcome"] in OUTCOME_FILL:
                 cell.fill = OUTCOME_FILL[row["outcome"]]
 
         if not (row["entry"] and row["sl"] and row["tp"]):
             continue
 
-        ws.cell(row=r, column=13, value=f"=A{r}*B{r}")
-        ws.cell(row=r, column=14, value=(
-            f'=IF(F{r}="LONG",'
-            f'G{r}*(1-1/B{r}+0.0055),'
-            f'G{r}*(1+1/B{r}-0.0055))'
-        ))
+        # N = Позиция$ = капитал × плечо
+        ws.cell(row=r, column=14, value=f"=A{r}*B{r}")
+        # O = Цена ликвидации (~maint margin 0.55%)
         ws.cell(row=r, column=15, value=(
-            f'=IF(J{r}="","",IF(AND(L{r}<>"",F{r}="LONG",'
-            f'G{r}-L{r}*ABS(G{r}-H{r})<=N{r}),"ЛИКВИДАЦИЯ",'
-            f'IF(AND(L{r}<>"",F{r}="SHORT",'
-            f'G{r}+L{r}*ABS(H{r}-G{r})>=N{r}),"ЛИКВИДАЦИЯ",'
-            f'J{r})))'
+            f'=IF(H{r}="LONG",I{r}*(1-1/B{r}+0.0055),I{r}*(1+1/B{r}-0.0055))'
         ))
+        # P = Реал. исход (учитывает ликвидацию если до неё дошло)
         ws.cell(row=r, column=16, value=(
-            f'=IF(OR(O{r}="",K{r}=""),"",IF(O{r}="ЛИКВИДАЦИЯ",-A{r},'
-            f'M{r}*ABS(G{r}-H{r})/G{r}*K{r}))'
+            f'=IF(L{r}="","",IF(AND(M{r}<>"",H{r}="LONG",'
+            f'I{r}-M{r}*ABS(I{r}-J{r})<=O{r}),"ЛИКВИДАЦИЯ",'
+            f'IF(AND(M{r}<>"",H{r}="SHORT",'
+            f'I{r}+M{r}*ABS(J{r}-I{r})>=O{r}),"ЛИКВИДАЦИЯ",L{r})))'
         ))
+        # Q = P&L$ = position × SL_dist_pct × R (или -капитал при ликвидации)
         ws.cell(row=r, column=17, value=(
-            f'=IF(OR(P{r}="",A{r}=0),"",P{r}/A{r}*100)'
+            f'=IF(OR(P{r}="",M{r}=""),"",IF(P{r}="ЛИКВИДАЦИЯ",-A{r},'
+            f'N{r}*ABS(I{r}-J{r})/I{r}*M{r}))'
         ))
+        # R = P&L%
         ws.cell(row=r, column=18, value=(
-            f'=IF(M{r}="","",-M{r}*0.001)'
+            f'=IF(OR(Q{r}="",A{r}=0),"",Q{r}/A{r}*100)'
         ))
-        ws.cell(row=r, column=19, value=round((row["funding"] or 0) * 100, 6))
+        # S = Комиссия$ = -0.1% от позиции (round-trip 0.05% × 2)
+        ws.cell(row=r, column=19, value=(
+            f'=IF(N{r}="","",-N{r}*0.001)'
+        ))
+        # T = Чистая P&L$ = P&L + комиссия
         ws.cell(row=r, column=20, value=(
-            f'=IF(P{r}="","",P{r}+R{r}+S{r})'
+            f'=IF(Q{r}="","",Q{r}+S{r})'
         ))
 
-    _set_widths(ws, [9, 6, 13, 15, 7, 8, 10, 10, 10, 10, 7, 7, 10, 12, 13, 9, 7, 10, 9, 12])
+    # Summary block в конце
+    sr = len(rows) + 3
+    summary = [
+        ("Всего сделок (с выходом)",  f'=COUNTA(L2:L{sr-2})-COUNTBLANK(L2:L{sr-2})'),
+        ("Net P&L$ (чистый)",          f'=ROUND(SUM(T2:T{sr-2}),2)'),
+        ("Прибыль$",                    f'=ROUND(SUMIF(T2:T{sr-2},">0",T2:T{sr-2}),2)'),
+        ("Убыток$",                     f'=ROUND(SUMIF(T2:T{sr-2},"<0",T2:T{sr-2}),2)'),
+        ("Profit Factor",               f'=IFERROR(SUMIF(T2:T{sr-2},">0",T2:T{sr-2})/ABS(SUMIF(T2:T{sr-2},"<0",T2:T{sr-2})),"—")'),
+        ("ROI на капитал (avg %)",      f'=IFERROR(ROUND(AVERAGE(R2:R{sr-2}),2),"—")'),
+    ]
+    for i, (lbl, val) in enumerate(summary):
+        ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+        ws.cell(row=sr + i, column=1).font = FONT_BOLD
+        ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
+
+    _set_widths(ws, [9, 6, 13, 10, 12, 10, 7, 8, 10, 10, 10, 8, 7, 11, 12, 13, 10, 8, 10, 12])
     ws.freeze_panes = "C2"
+    print(f"Симулятор: {len(rows)} строк (Main WS + BB Fade)")
 
 
 # ── Sheet 3: Main WS ─────────────────────────────────────────────────────────
@@ -403,17 +519,20 @@ def _build_simulator(wb, rows: list) -> None:
 # J=outcome K=exit_price
 
 def _build_main_ws(wb, rows: list) -> None:
+    """Main WS лист — унификация TP1/TP2 → TP (клиент торгует один TP)."""
     ws = wb.create_sheet("Main WS")
     _hdr(ws, 1, [
-        "Дата", "Пара", "Режим", "Сторона",
-        "Вход", "SL", "TP1", "TP2", "Hold(мин)",
-        "Исход", "Выход",
+        "Дата", "Пара", "Режим", "Стиль", "Сторона",
+        "Вход", "SL", "TP", "Hold(мин)",
+        "Исход", "R", "Дошёл до TP2?", "Выход",
     ])
     for r, row in enumerate(rows, 2):
         vals = [
-            row["dt"], row["pair"], row["regime"], row["side"],
-            row["entry"], row["sl"], row["tp1"], row["tp2"], row["hold_min"],
-            row["outcome"], row["exit_price"],
+            row["dt"], row["pair"], row["regime"], row.get("style", ""), row["side"],
+            row["entry"], row["sl"], row["tp"], row["hold_min"],
+            row["outcome"], row.get("exit_r"),
+            "✓" if row.get("tp2_reached") else "",
+            row["exit_price"],
         ]
         for c, val in enumerate(vals, 1):
             cell = ws.cell(row=r, column=c, value=val)
@@ -421,28 +540,78 @@ def _build_main_ws(wb, rows: list) -> None:
                 cell.fill = OUTCOME_FILL[row["outcome"]]
 
     labeled  = [r for r in rows if r["outcome"]]
-    n_tp     = sum(1 for r in labeled if r["outcome"] in ("TP1", "TP2"))
+    n_tp     = sum(1 for r in labeled if r["outcome"] == "TP")
     n_sl     = sum(1 for r in labeled if r["outcome"] == "SL")
     n_time   = sum(1 for r in labeled if r["outcome"] == "TIME")
+    n_tp2    = sum(1 for r in labeled if r.get("tp2_reached"))
     decisive = n_tp + n_sl
     wr_str   = f"{n_tp}/{decisive} = {n_tp/decisive*100:.0f}%" if decisive else "—"
+    r_values = [r["exit_r"] for r in labeled if r.get("exit_r") is not None]
+    sum_r    = round(sum(r_values), 2) if r_values else 0
+    avg_r    = round(sum_r / len(r_values), 2) if r_values else 0
 
     sr = len(rows) + 3
     for i, (lbl, val) in enumerate([
-        ("Всего сигналов", len(rows)),
-        ("Лейблировано",   len(labeled)),
-        ("WR (vs SL)",     wr_str),
-        ("TP1+TP2",        n_tp),
-        ("SL",             n_sl),
-        ("TIME",           n_time),
+        ("Всего сигналов",        len(rows)),
+        ("Лейблировано",          len(labeled)),
+        ("WR (decisive, vs SL)",  wr_str),
+        ("TP (TP1+ дошедшие до TP2)", n_tp),
+        ("SL",                    n_sl),
+        ("TIME (не определилось)",n_time),
+        ("Дошло до TP2 (инфо)",   f"{n_tp2}/{n_tp}" if n_tp else "0"),
+        ("Сумма R",               sum_r),
+        ("Avg R",                 avg_r),
     ]):
         ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
         ws.cell(row=sr + i, column=1).font = FONT_BOLD
         ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
 
-    _set_widths(ws, [13, 16, 10, 8, 10, 10, 10, 10, 9, 8, 10])
+    _set_widths(ws, [13, 14, 10, 8, 8, 10, 10, 10, 9, 8, 7, 12, 10])
     ws.freeze_panes = "A2"
-    print(f"Main WS: {len(rows)} сигналов, {len(labeled)} лейблировано, WR={wr_str}")
+    print(f"Main WS: {len(rows)} сигналов, {len(labeled)} лейблировано, WR={wr_str}, sumR={sum_r}")
+
+
+# ── Sheet 3b: BB Fade ─────────────────────────────────────────────────────────
+
+def _build_bb_fade(wb, rows: list) -> None:
+    """BB Fade лист — отдельный канал mean reversion. TP единственный (нет TP1/TP2)."""
+    ws = wb.create_sheet("BB Fade")
+    _hdr(ws, 1, [
+        "Дата", "Пара", "Сторона", "Вход", "SL", "TP",
+        "Hold(мин)", "Исход", "R",
+    ])
+    for r, row in enumerate(rows, 2):
+        vals = [
+            row["dt"], row["pair"], row["side"], row["entry"], row["sl"], row["tp"],
+            row["hold_min"], row["outcome"], row.get("exit_r"),
+        ]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=c, value=val)
+            if c == 8 and row["outcome"] in OUTCOME_FILL:
+                cell.fill = OUTCOME_FILL[row["outcome"]]
+
+    if not rows:
+        ws.cell(row=2, column=1, value="Нет данных пока (ждём первые сигналы)")
+
+    labeled  = [r for r in rows if r["outcome"]]
+    n_tp     = sum(1 for r in labeled if r["outcome"] == "TP")
+    n_sl     = sum(1 for r in labeled if r["outcome"] == "SL")
+    decisive = n_tp + n_sl
+    wr_str   = f"{n_tp}/{decisive} = {n_tp/decisive*100:.0f}%" if decisive else "—"
+
+    sr = max(len(rows), 1) + 3
+    for i, (lbl, val) in enumerate([
+        ("Всего сигналов",     len(rows)),
+        ("Лейблировано",       len(labeled)),
+        ("WR (decisive)",      wr_str),
+    ]):
+        ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+        ws.cell(row=sr + i, column=1).font = FONT_BOLD
+        ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
+
+    _set_widths(ws, [13, 14, 8, 10, 10, 10, 9, 8, 7])
+    ws.freeze_panes = "A2"
+    print(f"BB Fade: {len(rows)} сигналов, WR={wr_str}")
 
 
 # ── Sheet 4: Памп ────────────────────────────────────────────────────────────
@@ -567,24 +736,30 @@ def _build_dashboard(wb) -> None:
     ws.sheet_view.showGridLines = False
 
     # ── Блок A: Итоги по системам (A1:F7) ────────────────────────────────────
-    _dash_title(ws, 1, 1, "ИТОГИ ПО СИСТЕМАМ", span=6)
+    # WR DECISIVE: TP/(TP+SL), TIME вынесен в отдельную колонку справочно
+    _dash_title(ws, 1, 1, "ИТОГИ ПО СИСТЕМАМ (WR decisive = TP/TP+SL)", span=6)
     _dash_hdr(ws, 2, 1, ["Система", "TP", "SL", "TIME", "Всего", "WR%"])
 
     systems = [
         ("Скринер",
-         '=COUNTIF(Скринер!J2:J10000,"TP")',
+         '=COUNTIF(Скринер!J2:J10000,"TP")+COUNTIF(Скринер!J2:J10000,"TP1")+COUNTIF(Скринер!J2:J10000,"TP2")',
          '=COUNTIF(Скринер!J2:J10000,"SL")',
-         '=COUNTIF(Скринер!J2:J10000,"TIME_EXIT")',
+         '=COUNTIF(Скринер!J2:J10000,"TIME")+COUNTIF(Скринер!J2:J10000,"TIME_EXIT")',
          ),
         ("Main WS",
-         '=COUNTIF(\'Main WS\'!J2:J10000,"TP1")+COUNTIF(\'Main WS\'!J2:J10000,"TP2")',
+         '=COUNTIF(\'Main WS\'!J2:J10000,"TP")',  # унифицировано: TP1+TP2 → TP в loader
          '=COUNTIF(\'Main WS\'!J2:J10000,"SL")',
          '=COUNTIF(\'Main WS\'!J2:J10000,"TIME")',
+         ),
+        ("BB Fade",
+         '=COUNTIF(\'BB Fade\'!H2:H10000,"TP")',
+         '=COUNTIF(\'BB Fade\'!H2:H10000,"SL")',
+         '=COUNTIF(\'BB Fade\'!H2:H10000,"TIME")',
          ),
         ("Памп",
          '=COUNTIF(Памп!F2:F10000,"TP")',
          '=COUNTIF(Памп!F2:F10000,"SL")',
-         "0",
+         '=COUNTIF(Памп!F2:F10000,"TIME")',
          ),
         ("Ручные",
          '=COUNTIF(Ручные!G2:G10000,">0")',
@@ -600,60 +775,70 @@ def _build_dashboard(wb) -> None:
         _dw(ws, r, 3, sl_f,  fill=fill)
         _dw(ws, r, 4, t_f,   fill=fill)
         _dw(ws, r, 5, f"=B{r}+C{r}+D{r}", fill=fill)
-        _dw(ws, r, 6, f'=IF(E{r}=0,"",ROUND(B{r}/E{r}*100,1))', fill=fill)
+        # WR decisive: TP/(TP+SL)
+        _dw(ws, r, 6, f'=IF(B{r}+C{r}=0,"",ROUND(B{r}/(B{r}+C{r})*100,1))', fill=fill)
 
-    # ── Блок B: Скринер по стилю (A9:F13) ────────────────────────────────────
-    _dash_title(ws, 9, 1, "СКРИНЕР — ПО СТИЛЮ", span=6)
-    _dash_hdr(ws, 10, 1, ["Стиль", "TP", "SL", "TIME", "Всего", "WR%"])
+    # ── Блок B: Скринер по стилю (A10:F14) ────────────────────────────────────
+    _dash_title(ws, 10, 1, "СКРИНЕР — ПО СТИЛЮ", span=6)
+    _dash_hdr(ws, 11, 1, ["Стиль", "TP", "SL", "TIME", "Всего", "WR%"])
     for i, style in enumerate(["FAST", "SWING", "FADE"]):
-        r    = 11 + i
+        r    = 12 + i
         fill = F_STRIPE if i % 2 == 0 else None
         _dw(ws, r, 1, style, fill=fill, font=FONT_BOLD)
-        _dw(ws, r, 2, f'=COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TP")', fill=fill)
+        # TP catches "TP", "TP1", "TP2" — combined as wins
+        _dw(ws, r, 2, f'=COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TP")+'
+                      f'COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TP1")+'
+                      f'COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TP2")', fill=fill)
         _dw(ws, r, 3, f'=COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"SL")', fill=fill)
-        _dw(ws, r, 4, f'=COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TIME_EXIT")', fill=fill)
+        _dw(ws, r, 4, f'=COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TIME")+'
+                      f'COUNTIFS(Скринер!C2:C10000,A{r},Скринер!J2:J10000,"TIME_EXIT")', fill=fill)
         _dw(ws, r, 5, f"=B{r}+C{r}+D{r}", fill=fill)
-        _dw(ws, r, 6, f'=IF(E{r}=0,"",ROUND(B{r}/E{r}*100,1))', fill=fill)
+        _dw(ws, r, 6, f'=IF(B{r}+C{r}=0,"",ROUND(B{r}/(B{r}+C{r})*100,1))', fill=fill)
 
-    # ── Блок C: Скринер по режиму (A15:F19) ──────────────────────────────────
-    _dash_title(ws, 15, 1, "СКРИНЕР — ПО РЕЖИМУ", span=6)
-    _dash_hdr(ws, 16, 1, ["Режим", "TP", "SL", "TIME", "Всего", "WR%"])
-    for i, regime in enumerate(["DRIFT", "TRENDING", "RANGING"]):
-        r    = 17 + i
+    # ── Блок C: Main WS по режиму (A16:F20) ──────────────────────────────────
+    # Унификация: TP1+TP2 в loader уже схлопнуты в "TP", показываем "Дошло до TP2?" отдельно
+    _dash_title(ws, 16, 1, "MAIN WS — ПО РЕЖИМУ (WR decisive)", span=6)
+    _dash_hdr(ws, 17, 1, ["Режим", "TP", "SL", "TIME", "Всего", "WR%"])
+    for i, regime in enumerate(["DRIFT", "TRENDING", "RANGING", "CHOPPY"]):
+        r    = 18 + i
         fill = F_STRIPE if i % 2 == 0 else None
         _dw(ws, r, 1, regime, fill=fill, font=FONT_BOLD)
-        _dw(ws, r, 2, f'=COUNTIFS(Скринер!D2:D10000,A{r},Скринер!J2:J10000,"TP")', fill=fill)
-        _dw(ws, r, 3, f'=COUNTIFS(Скринер!D2:D10000,A{r},Скринер!J2:J10000,"SL")', fill=fill)
-        _dw(ws, r, 4, f'=COUNTIFS(Скринер!D2:D10000,A{r},Скринер!J2:J10000,"TIME_EXIT")', fill=fill)
+        _dw(ws, r, 2, f'=COUNTIFS(\'Main WS\'!C2:C10000,A{r},\'Main WS\'!J2:J10000,"TP")', fill=fill)
+        _dw(ws, r, 3, f'=COUNTIFS(\'Main WS\'!C2:C10000,A{r},\'Main WS\'!J2:J10000,"SL")', fill=fill)
+        _dw(ws, r, 4, f'=COUNTIFS(\'Main WS\'!C2:C10000,A{r},\'Main WS\'!J2:J10000,"TIME")', fill=fill)
         _dw(ws, r, 5, f"=B{r}+C{r}+D{r}", fill=fill)
-        _dw(ws, r, 6, f'=IF(E{r}=0,"",ROUND(B{r}/E{r}*100,1))', fill=fill)
+        _dw(ws, r, 6, f'=IF(B{r}+C{r}=0,"",ROUND(B{r}/(B{r}+C{r})*100,1))', fill=fill)
 
-    # ── Блок D: Main WS по режиму (H1:M6) ────────────────────────────────────
-    _dash_title(ws, 1, 8, "MAIN WS — ПО РЕЖИМУ", span=6)
-    _dash_hdr(ws, 2, 8, ["Режим", "TP1", "TP2", "SL", "TIME", "WR%"])
-    for i, regime in enumerate(["DRIFT", "TRENDING", "RANGING"]):
+    # ── Блок D: Main WS по стилю (H1:M6) ─────────────────────────────────────
+    _dash_title(ws, 1, 8, "MAIN WS — ПО СТИЛЮ (WR decisive)", span=6)
+    _dash_hdr(ws, 2, 8, ["Стиль", "TP", "SL", "TIME", "Всего", "WR%"])
+    for i, style in enumerate(["FAST", "SWING", "BB_FADE"]):
         r    = 3 + i
         fill = F_STRIPE if i % 2 == 0 else None
-        _dw(ws, r, 8,  regime, fill=fill, font=FONT_BOLD)
-        _dw(ws, r, 9,  f'=COUNTIFS(\'Main WS\'!C2:C10000,H{r},\'Main WS\'!J2:J10000,"TP1")', fill=fill)
-        _dw(ws, r, 10, f'=COUNTIFS(\'Main WS\'!C2:C10000,H{r},\'Main WS\'!J2:J10000,"TP2")', fill=fill)
-        _dw(ws, r, 11, f'=COUNTIFS(\'Main WS\'!C2:C10000,H{r},\'Main WS\'!J2:J10000,"SL")', fill=fill)
-        _dw(ws, r, 12, f'=COUNTIFS(\'Main WS\'!C2:C10000,H{r},\'Main WS\'!J2:J10000,"TIME")', fill=fill)
-        _dw(ws, r, 13,
-            f'=IF(I{r}+J{r}+K{r}+L{r}=0,"",'
-            f'ROUND((I{r}+J{r})/(I{r}+J{r}+K{r}+L{r})*100,1))',
-            fill=fill)
+        _dw(ws, r, 8,  style, fill=fill, font=FONT_BOLD)
+        _dw(ws, r, 9,  f'=COUNTIFS(\'Main WS\'!D2:D10000,H{r},\'Main WS\'!J2:J10000,"TP")', fill=fill)
+        _dw(ws, r, 10, f'=COUNTIFS(\'Main WS\'!D2:D10000,H{r},\'Main WS\'!J2:J10000,"SL")', fill=fill)
+        _dw(ws, r, 11, f'=COUNTIFS(\'Main WS\'!D2:D10000,H{r},\'Main WS\'!J2:J10000,"TIME")', fill=fill)
+        _dw(ws, r, 12, f"=I{r}+J{r}+K{r}", fill=fill)
+        _dw(ws, r, 13, f'=IF(I{r}+J{r}=0,"",ROUND(I{r}/(I{r}+J{r})*100,1))', fill=fill)
 
-    # ── Блок E: P&L сводка (H9:M14) ──────────────────────────────────────────
+    # ── Блок E: P&L сводка (H9:M15) ──────────────────────────────────────────
     _dash_title(ws, 9, 8, "P&L СВОДКА", span=6)
     _dash_hdr(ws, 10, 8, ["Источник", "Побед", "Потерь", "Net", "Прибыль", "Убыток"])
     pnl_data = [
-        ("Скринер (R)",
-         '=COUNTIF(Скринер!K2:K10000,">0")',
-         '=COUNTIF(Скринер!K2:K10000,"<0")',
-         '=ROUND(SUM(Скринер!K2:K10000),2)',
-         '=ROUND(SUMIF(Скринер!K2:K10000,">0",Скринер!K2:K10000),2)',
-         '=ROUND(SUMIF(Скринер!K2:K10000,"<0",Скринер!K2:K10000),2)',
+        ("Main WS (R)",  # колонка K = exit_r в листе Main WS
+         '=COUNTIF(\'Main WS\'!K2:K10000,">0")',
+         '=COUNTIF(\'Main WS\'!K2:K10000,"<0")',
+         '=ROUND(SUM(\'Main WS\'!K2:K10000),2)',
+         '=ROUND(SUMIF(\'Main WS\'!K2:K10000,">0",\'Main WS\'!K2:K10000),2)',
+         '=ROUND(SUMIF(\'Main WS\'!K2:K10000,"<0",\'Main WS\'!K2:K10000),2)',
+         ),
+        ("BB Fade (R)",  # колонка I = exit_r в листе BB Fade
+         '=COUNTIF(\'BB Fade\'!I2:I10000,">0")',
+         '=COUNTIF(\'BB Fade\'!I2:I10000,"<0")',
+         '=ROUND(SUM(\'BB Fade\'!I2:I10000),2)',
+         '=ROUND(SUMIF(\'BB Fade\'!I2:I10000,">0",\'BB Fade\'!I2:I10000),2)',
+         '=ROUND(SUMIF(\'BB Fade\'!I2:I10000,"<0",\'BB Fade\'!I2:I10000),2)',
          ),
         ("Памп (%)",
          '=COUNTIF(Памп!I2:I10000,">0")',
@@ -687,11 +872,11 @@ def _build_dashboard(wb) -> None:
         _dw(ws, r, 12, profit, fill=_fill("C6EFCE"))
         _dw(ws, r, 13, loss,   fill=_fill("FFC7CE"))
 
-    # ── Блок F: Памп по часам UTC (A21:F46) ──────────────────────────────────
-    _dash_title(ws, 21, 1, "ПАМП — ПО ЧАСАМ UTC", span=6)
-    _dash_hdr(ws, 22, 1, ["Час", "TP", "SL", "Всего", "WR%", "NET P&L% сумм"])
+    # ── Блок F: Памп по часам UTC (A24:F47) ──────────────────────────────────
+    _dash_title(ws, 24, 1, "ПАМП — ПО ЧАСАМ UTC (WR decisive)", span=6)
+    _dash_hdr(ws, 25, 1, ["Час", "TP", "SL", "Всего", "WR%", "NET P&L% сумм"])
     for hour in range(24):
-        r    = 23 + hour
+        r    = 26 + hour
         fill = F_STRIPE if hour % 2 == 0 else None
         _dw(ws, r, 1, hour, fill=fill)
         _dw(ws, r, 2, f'=COUNTIFS(Памп!H2:H10000,A{r},Памп!F2:F10000,"TP")', fill=fill)
@@ -700,35 +885,244 @@ def _build_dashboard(wb) -> None:
         _dw(ws, r, 5, f'=IF(D{r}=0,"",ROUND(B{r}/D{r}*100,1))', fill=fill)
         _dw(ws, r, 6, f"=ROUND(SUMIF(Памп!H2:H10000,A{r},Памп!I2:I10000),2)", fill=fill)
 
-    # ── Блок G: Памп по режиму (H16:M20) — placeholder ───────────────────────
-    # Pump has no regime data; reserved for future
-    _dash_title(ws, 16, 8, "ПАМП — ДОПОЛНИТЕЛЬНО", span=6)
-    ws.cell(row=17, column=8, value="Данные по режиму для памп-системы")
-    ws.cell(row=18, column=8, value="появятся когда скринер начнёт")
-    ws.cell(row=19, column=8, value="передавать режим в pump_signals")
-
     _set_widths(ws, [12, 9, 9, 9, 8, 15, 3, 16, 9, 9, 11, 12, 12])
+
+
+# ── Sheet 7: Графики ──────────────────────────────────────────────────────────
+
+def _agg_by_day(rows: list, value_key: str) -> tuple[list, list, list]:
+    """Группирует по дню (dt[:5] = DD.MM) → (days, daily_pnl, cumulative)."""
+    by_day: dict[str, float] = {}
+    for row in rows:
+        if not row.get("dt"): continue
+        val = row.get(value_key)
+        if val is None: continue
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            continue
+        day = row["dt"][:5]  # "DD.MM"
+        by_day[day] = by_day.get(day, 0) + val
+    days = sorted(by_day.keys(), key=lambda d: tuple(reversed(d.split("."))))
+    daily = [round(by_day[d], 2) for d in days]
+    cum = []
+    s = 0
+    for v in daily:
+        s += v
+        cum.append(round(s, 2))
+    return days, daily, cum
+
+
+def _outcome_counts(rows: list, outcome_field: str = "outcome",
+                    win_labels=("TP",), loss_labels=("SL",),
+                    time_labels=("TIME",)) -> tuple[int, int, int]:
+    win = sum(1 for r in rows if r.get(outcome_field) in win_labels)
+    loss = sum(1 for r in rows if r.get(outcome_field) in loss_labels)
+    time_ = sum(1 for r in rows if r.get(outcome_field) in time_labels)
+    return win, loss, time_
+
+
+def _build_charts(wb, main_ws_rows: list, bb_fade_rows: list, pump_rows: list) -> None:
+    """Лист 'Графики' — visualizations per system. Equity curve + outcome pie."""
+    ws = wb.create_sheet("Графики")
+    ws.sheet_view.showGridLines = False
+
+    # Data tables hidden in columns AA-AZ for chart sources
+    col = 27  # AA
+    row_start = 1
+
+    # === MAIN WS ===
+    ws.cell(row=1, column=1, value="📊 MAIN WS — основной канал").font = Font(bold=True, size=14, color="1F4E79")
+
+    # Data: equity curve по дням (Net R)
+    main_days, main_daily, main_cum = _agg_by_day(main_ws_rows, "exit_r")
+    if main_days:
+        ws.cell(row=row_start, column=col, value="День")
+        ws.cell(row=row_start, column=col+1, value="Net R за день")
+        ws.cell(row=row_start, column=col+2, value="Кумул. R")
+        for i, (d, daily, cum) in enumerate(zip(main_days, main_daily, main_cum)):
+            ws.cell(row=row_start+1+i, column=col, value=d)
+            ws.cell(row=row_start+1+i, column=col+1, value=daily)
+            ws.cell(row=row_start+1+i, column=col+2, value=cum)
+
+        # LineChart кумулятивный
+        chart = LineChart()
+        chart.title = "Equity curve (Net R накопительно)"
+        chart.style = 12
+        chart.y_axis.title = "R"
+        chart.x_axis.title = "Дата"
+        chart.height = 8
+        chart.width = 16
+        data = Reference(ws, min_col=col+2, min_row=row_start, max_row=row_start+len(main_days), max_col=col+2)
+        cats = Reference(ws, min_col=col, min_row=row_start+1, max_row=row_start+len(main_days))
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        ws.add_chart(chart, "A3")
+
+    # Outcome pie для Main WS
+    main_labeled = [r for r in main_ws_rows if r.get("outcome")]
+    n_tp, n_sl, n_time = _outcome_counts(main_labeled)
+    if n_tp + n_sl + n_time > 0:
+        pie_row = row_start + max(len(main_days), 5) + 3
+        ws.cell(row=pie_row, column=col, value="Исход")
+        ws.cell(row=pie_row, column=col+1, value="Количество")
+        ws.cell(row=pie_row+1, column=col, value="TP")
+        ws.cell(row=pie_row+1, column=col+1, value=n_tp)
+        ws.cell(row=pie_row+2, column=col, value="SL")
+        ws.cell(row=pie_row+2, column=col+1, value=n_sl)
+        ws.cell(row=pie_row+3, column=col, value="TIME")
+        ws.cell(row=pie_row+3, column=col+1, value=n_time)
+
+        pie = PieChart()
+        pie.title = f"Main WS: исходы (n={n_tp+n_sl+n_time})"
+        labels = Reference(ws, min_col=col,   min_row=pie_row+1, max_row=pie_row+3)
+        data   = Reference(ws, min_col=col+1, min_row=pie_row,   max_row=pie_row+3)
+        pie.add_data(data, titles_from_data=True)
+        pie.set_categories(labels)
+        pie.dataLabels = DataLabelList(showPercent=True)
+        pie.height = 8
+        pie.width = 10
+        ws.add_chart(pie, "K3")
+
+    # === BB FADE ===
+    ws.cell(row=20, column=1, value="📊 BB FADE — mean reversion").font = Font(bold=True, size=14, color="1F4E79")
+
+    if bb_fade_rows:
+        bb_days, bb_daily, bb_cum = _agg_by_day(bb_fade_rows, "exit_r")
+        if bb_days:
+            ws.cell(row=20, column=col, value="День")
+            ws.cell(row=20, column=col+1, value="Net R за день")
+            ws.cell(row=20, column=col+2, value="Кумул. R")
+            for i, (d, daily, cum) in enumerate(zip(bb_days, bb_daily, bb_cum)):
+                ws.cell(row=21+i, column=col,   value=d)
+                ws.cell(row=21+i, column=col+1, value=daily)
+                ws.cell(row=21+i, column=col+2, value=cum)
+            chart = LineChart()
+            chart.title = "BB Fade: equity curve (Net R)"
+            chart.style = 12
+            chart.height = 8
+            chart.width = 16
+            data = Reference(ws, min_col=col+2, min_row=20, max_row=20+len(bb_days), max_col=col+2)
+            cats = Reference(ws, min_col=col,   min_row=21, max_row=20+len(bb_days))
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            ws.add_chart(chart, "A22")
+    else:
+        ws.cell(row=22, column=1, value="(данных мало — 1 сигнал за 36ч live)").font = Font(italic=True, color="808080")
+
+    # === PUMP ===
+    ws.cell(row=40, column=1, value="📊 PUMP — alt scalp").font = Font(bold=True, size=14, color="1F4E79")
+
+    pump_days, pump_daily, pump_cum = _agg_by_day(pump_rows, "net_pnl")
+    if pump_days:
+        ws.cell(row=40, column=col, value="День")
+        ws.cell(row=40, column=col+1, value="Net % за день")
+        ws.cell(row=40, column=col+2, value="Кумул. %")
+        for i, (d, daily, cum) in enumerate(zip(pump_days, pump_daily, pump_cum)):
+            ws.cell(row=41+i, column=col,   value=d)
+            ws.cell(row=41+i, column=col+1, value=daily)
+            ws.cell(row=41+i, column=col+2, value=cum)
+
+        chart = LineChart()
+        chart.title = "Pump: equity curve (Net %, накопительно)"
+        chart.style = 12
+        chart.height = 8
+        chart.width = 16
+        data = Reference(ws, min_col=col+2, min_row=40, max_row=40+len(pump_days), max_col=col+2)
+        cats = Reference(ws, min_col=col,   min_row=41, max_row=40+len(pump_days))
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        ws.add_chart(chart, "A42")
+
+    # Outcome pie для Pump
+    pump_tp = sum(1 for r in pump_rows if r.get("outcome") == "TP")
+    pump_sl = sum(1 for r in pump_rows if r.get("outcome") == "SL")
+    if pump_tp + pump_sl > 0:
+        pie_row = 60
+        ws.cell(row=pie_row, column=col,   value="Исход")
+        ws.cell(row=pie_row, column=col+1, value="Количество")
+        ws.cell(row=pie_row+1, column=col, value="TP")
+        ws.cell(row=pie_row+1, column=col+1, value=pump_tp)
+        ws.cell(row=pie_row+2, column=col, value="SL")
+        ws.cell(row=pie_row+2, column=col+1, value=pump_sl)
+        pie = PieChart()
+        pie.title = f"Pump: исходы (n={pump_tp+pump_sl})"
+        labels = Reference(ws, min_col=col,   min_row=pie_row+1, max_row=pie_row+2)
+        data   = Reference(ws, min_col=col+1, min_row=pie_row,   max_row=pie_row+2)
+        pie.add_data(data, titles_from_data=True)
+        pie.set_categories(labels)
+        pie.dataLabels = DataLabelList(showPercent=True)
+        pie.height = 8
+        pie.width = 10
+        ws.add_chart(pie, "K42")
+
+    # WR by hour bar chart (Pump)
+    if pump_rows:
+        from collections import defaultdict
+        hour_stats = defaultdict(lambda: {"TP": 0, "SL": 0})
+        for r in pump_rows:
+            h = r.get("hour")
+            o = r.get("outcome")
+            if h is None or o not in ("TP", "SL"): continue
+            hour_stats[h][o] += 1
+
+        bar_row = 80
+        ws.cell(row=bar_row, column=col,   value="Час UTC")
+        ws.cell(row=bar_row, column=col+1, value="WR %")
+        for hour in range(24):
+            stat = hour_stats[hour]
+            total = stat["TP"] + stat["SL"]
+            wr = round(stat["TP"]/total*100, 1) if total else 0
+            ws.cell(row=bar_row+1+hour, column=col,   value=hour)
+            ws.cell(row=bar_row+1+hour, column=col+1, value=wr)
+        bar = BarChart()
+        bar.title = "Pump: WR % по часам UTC (decisive)"
+        bar.y_axis.title = "WR %"
+        bar.x_axis.title = "Час UTC"
+        bar.style = 11
+        bar.height = 8
+        bar.width = 16
+        data = Reference(ws, min_col=col+1, min_row=bar_row, max_row=bar_row+24)
+        cats = Reference(ws, min_col=col,   min_row=bar_row+1, max_row=bar_row+24)
+        bar.add_data(data, titles_from_data=True)
+        bar.set_categories(cats)
+        ws.add_chart(bar, "A62")
+
+    # Hide data columns
+    for c in range(col, col+5):
+        ws.column_dimensions[get_column_letter(c)].hidden = True
+
+    _set_widths(ws, [20] + [10]*9 + [4] + [20] + [10]*8)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def build() -> None:
-    screener = _load_screener()
-    main_ws  = _load_main_ws()
-    pump     = _load_pump()
-    real     = _load_real()
+    screener  = _load_screener()
+    main_ws   = _load_main_ws()
+    bb_fade   = _load_bb_fade()
+    simulator = _load_all_simulator_signals()
+    pump      = _load_pump()
+    real      = _load_real()
 
     wb = openpyxl.Workbook()
     _build_screener(wb, screener)
-    _build_simulator(wb, screener)
+    _build_simulator(wb, simulator)
     _build_main_ws(wb, main_ws)
+    _build_bb_fade(wb, bb_fade)
     _build_pump(wb, pump)
     _build_real(wb, real)
     _build_dashboard(wb)
+    _build_charts(wb, main_ws, bb_fade, pump)
 
     wb.save(JOURNAL_PATH)
     n_labeled = sum(1 for r in screener if r["outcome"])
-    print(f"Журнал готов: {JOURNAL_PATH} | Скринер {len(screener)} ({n_labeled} закрыто) | Памп {len(pump)} | Main WS {len(main_ws)}")
+    print(
+        f"Журнал готов: {JOURNAL_PATH}\n"
+        f"  Скринер {len(screener)} ({n_labeled} закрыто) | "
+        f"Main WS {len(main_ws)} | BB Fade {len(bb_fade)} | "
+        f"Памп {len(pump)} | Симулятор {len(simulator)} | Ручные {len(real)}"
+    )
 
 
 if __name__ == "__main__":
