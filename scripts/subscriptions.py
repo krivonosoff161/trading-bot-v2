@@ -87,5 +87,19 @@ def list_users() -> list[dict]:
             status = f"активен ({days_left}д)"
         else:
             status = "истёк"
-        result.append({"chat_id": cid, "plan": entry["plan"], "expires": entry["expires"], "status": status})
+        result.append({
+            "chat_id":       cid,
+            "plan":          entry["plan"],
+            "expires":       entry["expires"],
+            "status":        status,
+            "last_reminded": entry.get("last_reminded"),
+        })
     return result
+
+
+def mark_reminded(chat_id: str, when: str) -> None:
+    """Записать дату когда юзеру отправлено напоминание о скором истечении."""
+    data = _load()
+    if str(chat_id) in data:
+        data[str(chat_id)]["last_reminded"] = when
+        _save(data)

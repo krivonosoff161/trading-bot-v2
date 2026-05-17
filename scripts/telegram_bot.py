@@ -40,7 +40,7 @@ from scripts.analysis.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
 from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
-from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status  # noqa: E402
+from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status, mark_reminded  # noqa: E402
 from src.utils.llm_formatter import generate_premium_analysis  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
@@ -385,6 +385,60 @@ async def _check_and_send_reminders() -> None:
         await _send_feedback_result_buttons(e["chat_id"], e["id"], e["symbol"])
         update_entry(e["id"], chat_id=e["chat_id"], reminded=True)
         await asyncio.sleep(0.3)  # avoid Telegram flood
+
+
+async def _check_subscription_expiry() -> None:
+    """Один раз в час: всем у кого 1 день до окончания подписки → напоминание.
+
+    Не спамит — если в этот день уже напоминали (last_reminded == today), пропускает.
+    """
+    from datetime import date as _date
+    today = _date.today()
+    today_str = today.isoformat()
+
+    for user in list_users():
+        if user["expires"] is None:
+            continue  # superadmin
+        try:
+            expires = _date.fromisoformat(user["expires"])
+        except (TypeError, ValueError):
+            continue
+        days_left = (expires - today).days
+        if days_left != 1:
+            continue  # Шлём только когда 1 день остался
+        if user.get("last_reminded") == today_str:
+            continue  # Уже напомнили сегодня
+        chat_id = str(user["chat_id"])
+        text = (
+            "⏰ <b>Напоминание</b>\n\n"
+            f"Завтра ({user['expires']}) истекает доступ к боту.\n"
+            "Чтобы продлить подписку — напиши администратору."
+        )
+        try:
+            await _tg(
+                "sendMessage",
+                chat_id=chat_id,
+                text=text,
+                parse_mode="HTML",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "✉️ Продлить → @Krivonosoff", "url": ADMIN_LINK}],
+                ]},
+            )
+            mark_reminded(chat_id, today_str)
+            print(f"Subscription reminder sent to {chat_id} (1 day left)")
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"Subscription reminder failed | chat={chat_id} | {e}")
+
+
+async def _subscription_reminder_loop() -> None:
+    """Фоновый цикл: каждый час проверяет истекающие подписки."""
+    while True:
+        try:
+            await _check_subscription_expiry()
+        except Exception as e:
+            print(f"Subscription loop error: {e}")
+        await asyncio.sleep(3600)  # каждый час
 
 
 # ── Analysis runner ────────────────────────────────────────────────────────────
@@ -1205,6 +1259,9 @@ async def main() -> None:
 
     # On startup: send 24h reminders for any open trades
     await _check_and_send_reminders()
+
+    # Background: hourly subscription expiry check (notify users 1 day before)
+    asyncio.create_task(_subscription_reminder_loop(), name="bot.subscription_reminder")
 
     # scanner moved to scripts/ws/ws_scanner.py
     # label_outcomes runs separately via maintenance/update journal workflow
