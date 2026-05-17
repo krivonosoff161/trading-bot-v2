@@ -486,6 +486,151 @@ trading-journal-app/        ← ОТДЕЛЬНЫЙ РЕПО (своя dev цеп
 
 ---
 
+## 🔬 Phase G.0 — Historical Forensics & Pattern Mining (подготовка к G.1)
+
+> **Контекст:** обсуждено 17.05.2026 поздно вечером. Пользователь предложил пред-G.1 шаг — провести forensic-анализ архива для понимания **что работало**, **что нет** и **почему**, прежде чем строить Data Lake (G.1).
+> **Why:** прежде чем тренировать LLM-агентов на данных, нужно понимать паттерны. Без forensic фазы рискуем построить мета-слой вокруг ложной картины.
+
+### G.0.1 — Commit forensics: топ-периоды vs git история
+
+**Цель:** найти git коммиты которые соответствовали пиковым результатам каждого канала.
+
+**Что есть:**
+- Pump archive 03-09.05: пик +87% на 08.05 (со старым pump engine v1/v2 + старыми фильтрами)
+- Pump current 09-17.05: -41% (новый orchestrator с B.5.7 фильтрами)
+- Main: 38 дней, FAST WR=77% — устойчивый
+- BB Fade (старый FADE в scanner): 60% WR на 47 сделках за апрель-май
+
+**Метод:**
+- Для каждой даты пиковой производительности → найти соответствующий commit
+- Reconstruct config snapshot (config.yaml на ту дату)
+- Зафиксировать "winning parameters" в `docs/historical_winning_params.md`
+- Особо: pump 06-08.05 (старая логика) — какие vol_mult / price_pct / cooldown были
+
+**Объём:** 1-2 дня research
+
+### G.0.2 — TP pattern mining для Main
+
+**Цель:** найти паттерны прибыльных сетапов.
+
+**Подход:**
+```
+для каждого TP-сигнала в архиве + текущих:
+  собираем bucket_key: (style, regime, hour_utc, adx_4h_bucket, vol_ratio_bucket,
+                        side, btc_state, day_of_week)
+для каждого ключа:
+  posterior = TPs / (TPs + SLs)
+выводим: топ-30 ключей с n>=5 и posterior>=75%
+```
+
+**Результат:** "если такая комбинация — почти гарантированный TP". Это **готовые фильтры** для Main screener.
+
+**Объём:** 1 неделя research + 1-2 дня внедрение в код.
+
+### G.0.3 — SL pattern mining для Main
+
+**Цель:** найти паттерны убыточных сетапов.
+
+**Тот же подход, противоположная сторона:**
+```
+выводим: топ-30 ключей с n>=5 и WR<=40%
+```
+
+**Гипотеза автора:** часть SL — из-за **недоделанных** фильтров (мы слишком мягко проверяем условие), часть — **перемудрённых** (фильтр режет хорошие сигналы по wrong reasons).
+
+**Что искать:**
+- SL кластеры по часам — может Asia session
+- SL кластеры по парам — может специфичные альты
+- SL после консекутивных TP — overconfidence pattern
+- SL в первые 30 мин после открытия рынка / news / funding rate changes
+
+**Объём:** 1 неделя research + iteration на фильтрах.
+
+### G.0.4 — Training DB schema для будущей LLM (G.4)
+
+**Цель:** **уже сейчас** начать собирать данные в формат который потом feed'нется в LLM fine-tune.
+
+**Что должно быть в каждой записи:**
+
+```python
+@dataclass
+class TrainingRecord:
+    signal_id: str
+    ts_utc: datetime
+    symbol: str
+    channel: str          # main / bb_fade / pump
+    side: str
+    style: str            # FAST / SWING / FADE / null
+
+    # Полный indicator snapshot (15+ полей)
+    adx_1h: float
+    adx_4h: float
+    ema20_1h: float
+    ema50_1h: float
+    bb_width_1h: float
+    rsi_15m: float
+    atr_15m: float
+    slope_15m: float
+    fvg_present: bool
+    vol_ratio_15m: float
+
+    # Market context (cross-asset)
+    btc_state: dict        # {"regime": "TRENDING", "slope_1h": 25}
+    eth_state: dict
+    sol_state: dict
+
+    # Tape window (когда уже есть)
+    tape_5min_buy_ratio: float | None
+    tape_5min_volume_usd: float | None
+    tape_pre_cvd: float | None
+
+    # Decision context
+    entry: float
+    sl: float
+    tp1: float
+    tp2: float | None
+    expected_r: float
+
+    # Outcome (заполняется лейблером после факта)
+    outcome: str           # TP1 / TP2 / SL / TIME
+    actual_r: float
+    hold_min: int
+    mfe_r: float
+    mae_r: float
+```
+
+**Хранение:**
+- Формат: `data/training/{YYYY-MM-DD}.parquet`
+- Backfill из существующих jsonl + tape archives
+- Pandas DataFrame в одной команде: `python scripts/data/load_training.py --from 2026-04-09`
+
+**Backfill data sources:**
+- logs_archive/signals/signal_log_2026-05.jsonl + signal_labels_2026-05.jsonl
+- logs_archive/09.05.2026/* (signals, labels, pump)
+- logs/signals/main_signals.jsonl + main_signals_labels.jsonl
+- logs/bb_fade/bb_fade_signals.jsonl
+- logs/pump/pump_signals.jsonl + pump_labels.jsonl
+- E:\trading-data\ticks (tape для tape_5min_* fields)
+
+**Объём:** 1-2 недели — это инфраструктурная работа, основа для G.1-G.4.
+
+### Когда стартуем G.0
+
+**Не сейчас.** Текущая фаза — S2.3 (100+ labeled, осталось ~25 свежих).
+**После закрытия S2.3:**
+- G.0.1 — commit forensics
+- G.0.2 + G.0.3 — pattern mining параллельно
+- G.0.4 — Training DB schema (база для всего)
+
+**G.0 — это пред-фаза для G.1.** Без неё G.1 будет "стройка вокруг неизвестно чего".
+
+### Записи в memory для следующих сессий
+- Не предлагать кодить G.0 / G.1 / G.3 пока S2.3 не закрыта
+- Завтра — продолжение обсуждения этого с пользователем
+- При следующем разговоре про "патерны" — продолжаем отсюда
+
+---
+
 ## 🎯 Phase G — Multi-Agent LLM Architecture (большой горизонт)
 
 > **Контекст:** обсуждено 17.05.2026 — стратегическая цель проекта после закрытия текущих фаз.
