@@ -38,7 +38,6 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.exchange.okx_meta import fetch_ctvals
-from scripts.subscriptions import is_subscribed, list_users
 from src.data.ws_feed import Candle, WSFeed, _chunked
 from src.utils.telegram import send_message_to
 
@@ -890,15 +889,14 @@ class PumpOrchestrator:
                 pass
 
     def _active_chat_ids(self) -> list[str]:
-        chats = [
-            str(u["chat_id"]) for u in list_users()
-            if is_subscribed(str(u["chat_id"]))
-        ]
-        for extra in self.config.get("extra_notify_chats", []):
-            cid = str(extra)
-            if cid not in chats:
-                chats.append(cid)
-        return chats
+        """Pump engine notifies ONLY group chats (extra_notify_chats).
+
+        Personal chats are reserved for the analyzer bot — sending pump signals
+        to every subscriber's DM caused Telegram rate-limit silent drops
+        (5x sends per event × bursts on pump → throttle).
+        Group chat is the public marketing feed.
+        """
+        return [str(extra) for extra in self.config.get("extra_notify_chats", [])]
 
     async def _notify(self, text: str) -> None:
         """Enqueue a notification — non-blocking. Worker drains with rate limit."""
