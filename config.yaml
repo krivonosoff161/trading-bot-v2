@@ -108,3 +108,4 @@ bb_fade:
   adx_trending_min:       22    # 1H ADX >= this = trending = skip
   di_spread_min:          10    # 1H DI spread >= this = trending = skip
   skip_asia_utc:        true    # skip 00:00-08:00 UTC (Asia underperforms)
+  min_rr_ratio:         0.5     # SKIP if TP_dist < SL_dist × this (anti-TRUTH-incident)

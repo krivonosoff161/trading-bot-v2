@@ -37,15 +37,18 @@ async def send_message(text: str) -> None:
         logger.warning("Telegram send failed | {}", e)
 
 
-async def send_message_to(chat_id: str, text: str) -> None:
+async def send_message_to(chat_id: str, text: str) -> int | None:
     """Send a Telegram message to a specific chat_id (not broadcast).
 
-    Handles HTTP 429 (rate limit) with retry honoring retry_after.
-    Checks ``ok`` field in response body — Telegram can return HTTP 200 with
-    ``ok: false`` for some errors; raise on these too.
+    Returns ``message_id`` on success (or None if no token configured).
+    Raises ``RuntimeError`` on HTTP errors, 429 retries, or ``ok: false``.
+
+    Logs delivery via loguru so silent drops can be debugged: if Telegram
+    returns ``ok: true`` without sequential message_id, that indicates a
+    server-side silent drop (anti-spam shadow ban).
     """
     if not _BOT_TOKEN:
-        return
+        return None
     import asyncio
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -73,7 +76,10 @@ async def send_message_to(chat_id: str, text: str) -> None:
 
             if body_json and not body_json.get("ok", True):
                 raise RuntimeError(f"Telegram ok=false: {body_text[:200]}")
-            return
+
+            msg_id = body_json.get("result", {}).get("message_id")
+            logger.info("Telegram sent | chat_id={} msg_id={}", chat_id, msg_id)
+            return msg_id
 
 
 async def send_photo_to(chat_id: str, file_path: str, caption: str = "") -> None:

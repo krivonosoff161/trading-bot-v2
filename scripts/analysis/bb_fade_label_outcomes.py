@@ -103,7 +103,7 @@ async def label_all() -> None:
             s["outcome"] = outcome
             s["net_pct"] = round(net, 4)
             labeled_count += 1
-            print(f"  {sym} {side.upper()} → {outcome}  net={net:+.3f}%")
+            print(f"  {sym} {side.upper()} -> {outcome}  net={net:+.3f}%")
             await asyncio.sleep(0.2)
 
     if labeled_count:

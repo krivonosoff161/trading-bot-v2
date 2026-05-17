@@ -75,6 +75,7 @@ DEFAULT_CFG = {
     "adx_trending_min":       22,
     "di_spread_min":          10,
     "skip_asia_utc":        True,
+    "min_rr_ratio":          0.5,
 }
 
 
@@ -410,8 +411,11 @@ class BBFadeScreener:
 
         tp_dist = abs(entry - tp)
         sl_dist = abs(entry - sl)
-        if tp_dist < sl_dist * 0.3:
-            self._log(f"SKIP bad R:R | {sym} {side}")
+        # R:R >= 0.5 → break-even при WR>=67% (бэктест дал WR=70%).
+        # Раньше было 0.3 — пропускало случаи как TRUTH 16.05 (R:R=0.35, итог SL -5.87%).
+        min_rr = self.cfg.get("min_rr_ratio", 0.5)
+        if tp_dist < sl_dist * min_rr:
+            self._log(f"SKIP bad R:R | {sym} {side} | tp_dist={tp_dist:.6g} sl_dist={sl_dist:.6g} ratio={tp_dist/sl_dist:.2f}")
             return
 
         await self._emit_signal(sym, side, entry, tp, sl, setup)
