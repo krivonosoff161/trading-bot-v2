@@ -40,6 +40,13 @@ MAIN_SIGNALS_LABELS = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 BB_FADE_SIGNALS_LOG = _ROOT / "logs" / "bb_fade" / "bb_fade_signals.jsonl"
 JOURNAL_PATH        = Path(__file__).parent / "journal.xlsx"
 
+# Archive paths — same schema as current logs, just historical (pre-09.05.2026)
+ARCHIVE_DIRS        = [
+    _ROOT / "logs_archive" / "09.05.2026" / "signals",
+    _ROOT / "logs_archive" / "signals",
+    _ROOT / "logs_archive" / "09.05.2026" / "pump",
+]
+
 # ── Palette ──────────────────────────────────────────────────────────────────
 def _fill(hex6: str) -> PatternFill:
     return PatternFill("solid", fgColor=hex6)
@@ -131,9 +138,42 @@ def _dw(ws, row: int, col: int, value, fill=None, font=None) -> None:
 # ── Data loaders ─────────────────────────────────────────────────────────────
 
 def _load_screener() -> list:
-    labels = {l["signal_id"]: l for l in _load_jsonl(SIGNAL_LABELS)}
+    """Загружает signal_log + signal_labels из текущих и архивных папок.
+
+    Схема одинаковая — мерджим по signal_id, дедупликация автоматическая.
+    Архивные файлы (logs_archive/) дополняют живые данные историческими.
+    """
+    # Все source файлы (схема идентична)
+    signal_files = [SIGNAL_LOG]
+    label_files = [SIGNAL_LABELS]
+    for d in ARCHIVE_DIRS:
+        if not d.exists(): continue
+        for p in d.glob("signal_log*.jsonl"):
+            signal_files.append(p)
+        for p in d.glob("signal_labels*.jsonl"):
+            label_files.append(p)
+
+    # Мердж labels по signal_id
+    labels: dict = {}
+    for f in label_files:
+        for r in _load_jsonl(f):
+            sid = r.get("signal_id", "")
+            if sid and sid not in labels:
+                labels[sid] = r
+
+    # Мердж signals по signal_id (если дубликат — оставляем первый)
+    seen_ids: set = set()
+    raw_signals: list = []
+    for f in signal_files:
+        for r in _load_jsonl(f):
+            sid = r.get("signal_id", "")
+            if not sid or sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            raw_signals.append(r)
+
     out = []
-    for sig in _load_jsonl(SIGNAL_LOG):
+    for sig in raw_signals:
         lab   = labels.get(sig.get("signal_id", ""), {})
         style = sig.get("style") or ("FADE" if sig.get("source") == "bb_fade" else "FAST")
         out.append({
@@ -154,7 +194,10 @@ def _load_screener() -> list:
             "slope_1h": sig.get("slope_1h"),
             "slope_15m":sig.get("slope_15m"),
             "funding":  sig.get("funding") or 0.0,
+            "ts_ms":    sig.get("ts_ms", 0),  # для сортировки
         })
+    # Сортируем по времени, новейшие сверху
+    out.sort(key=lambda x: x.get("ts_ms", 0), reverse=True)
     return out
 
 
@@ -226,30 +269,55 @@ def _load_main_ws() -> list:
 
 
 def _load_pump() -> list:
-    entries = {
-        r["signal_id"]: r
-        for r in _load_jsonl(PUMP_SIGNALS_LOG)
-        if r.get("type") == "ENTRY"
-    }
+    """Загружает pump entries + labels из текущих и архивных папок."""
+    signal_files = [PUMP_SIGNALS_LOG]
+    label_files  = [PUMP_LABELS_LOG]
+    # Archive
+    for d in [_ROOT / "logs_archive" / "09.05.2026" / "pump"]:
+        if not d.exists(): continue
+        for p in d.glob("pump_signals*.jsonl"):
+            signal_files.append(p)
+        for p in d.glob("pump_labels*.jsonl"):
+            label_files.append(p)
+    for d in [_ROOT / "logs_archive" / "pump"]:
+        if not d.exists(): continue
+        for p in d.glob("pump_signals*.jsonl"):
+            signal_files.append(p)
+
+    # Мердж entries по signal_id
+    entries: dict = {}
+    for f in signal_files:
+        for r in _load_jsonl(f):
+            if r.get("type") != "ENTRY": continue
+            sid = r.get("signal_id", "")
+            if sid and sid not in entries:
+                entries[sid] = r
+
     out = []
-    for rec in _load_jsonl(PUMP_LABELS_LOG):
-        if rec.get("type") != "EXIT":
-            continue
-        entry  = entries.get(rec.get("signal_id", ""), {})
-        opened = rec.get("opened_at", "")
-        sl_raw = entry.get("paper_sl")
-        tp_raw = entry.get("paper_tp")
-        out.append({
-            "dt":      opened[:16].replace("T", " ") if opened else "",
-            "pair":    rec.get("sym", "").replace("-USDT-SWAP", "").replace("-SWAP", ""),
-            "entry":   rec.get("entry_price"),
-            "sl":      float(sl_raw) if sl_raw else None,
-            "tp":      float(tp_raw) if tp_raw else None,
-            "outcome": rec.get("exit_reason", ""),
-            "hold":    rec.get("hold_min"),
-            "hour":    entry.get("hour_utc"),
-            "net_pnl": rec.get("net_pnl_pct"),
-        })
+    seen_exit_ids: set = set()
+    for f in label_files:
+        for rec in _load_jsonl(f):
+            if rec.get("type") != "EXIT":
+                continue
+            sid = rec.get("signal_id", "")
+            if sid in seen_exit_ids:
+                continue
+            seen_exit_ids.add(sid)
+            entry  = entries.get(sid, {})
+            opened = rec.get("opened_at", "")
+            sl_raw = entry.get("paper_sl")
+            tp_raw = entry.get("paper_tp")
+            out.append({
+                "dt":      opened[:16].replace("T", " ") if opened else "",
+                "pair":    rec.get("sym", "").replace("-USDT-SWAP", "").replace("-SWAP", ""),
+                "entry":   rec.get("entry_price"),
+                "sl":      float(sl_raw) if sl_raw else None,
+                "tp":      float(tp_raw) if tp_raw else None,
+                "outcome": rec.get("exit_reason", ""),
+                "hold":    rec.get("hold_min"),
+                "hour":    entry.get("hour_utc"),
+                "net_pnl": rec.get("net_pnl_pct"),
+            })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
 
