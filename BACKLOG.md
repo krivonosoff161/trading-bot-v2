@@ -4,7 +4,7 @@
 
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
-**Последнее ревью:** 2026-05-16
+**Последнее ревью:** 2026-05-17
 
 **Условные обозначения:**
 - ✅ Внедрено в прод
@@ -92,6 +92,56 @@
 ### ⏳ analyze_signal_log.py — полный прогон
 - Скрипт написан, но нужно 100+ labeled сигналов
 - **Когда:** как только накопится достаточно данных
+
+---
+
+## P0 — Технический долг из аудита 16-17.05
+
+### ⏳ Перенос bt_pump_*.py в scripts/backtest/
+- 8 файлов research toolkit лежат в scripts/ws/ (нарушение CLAUDE.md)
+- Файлы используют relative imports через sys.path.insert на свою папку
+- Нужна отдельная аккуратная сессия: один импорт за раз + smoke test
+- Зависимость на production уже устранена (fetch_ctvals вынесен в src/exchange/okx_meta.py)
+- **Когда:** в отдельную сессию когда будет 1-2 часа без других задач
+
+### ⏳ CB state persistency в pump orchestrator
+- Сейчас `cb_daily_pnl` и `cb_halted` хранятся только в памяти
+- После рестарта (watchdog или вручную) защита от убытков ОБНУЛЯЕТСЯ
+- Риск: после краша в плохой день можно сразу опять зайти в убытки
+- Нужно: сохранять state в `logs/pump/cb_state.json` + читать при старте
+- **Когда:** до перехода в Phase D (real trading) — обязательно
+
+### ⏳ Screener-to-orchestrator silence alert
+- Если ws_screener_live упадёт и перестанет писать active_universe.json — оркестратор живёт без сигналов часами молча
+- Нужно: heartbeat-check на возраст файла; если >5 мин → log ERROR + Telegram alert
+- **Когда:** до Phase D
+
+### ⏳ _calc_rsi в ws_bb_fade — слишком короткое окно
+- Сейчас берёт `closes[-(period*3):]` для RSI(14) — это 42 свечи
+- Wilder smoothing стабилизируется за 5×period = 70 свечей
+- Результат: первые RSI значения смещены
+- Решение: использовать `src.strategy.indicators.calc_rsi` на полном буфере
+- **Когда:** после 50+ BB Fade live сделок (если WR не дотягивает до 65%)
+
+### ⏳ Документация: пути backtest_simulate.py
+- docs/BACKTEST_ENV_REFERENCE.md, docs/drift_test_map.md ссылаются на `scripts/backtest/backtest_simulate.py`
+- Реально файл в `scripts/archive/backtest_simulate.py` (был перенесён)
+- Нужно: либо обновить пути в docs, либо вернуть файл (зависит от того, нужен ли он сейчас)
+- **Когда:** при следующем запуске бэктеста — кто-то наткнётся
+
+### ✅ Tech audit + dead code archived (16.05.2026)
+- v1/v2 pump engines → scripts/archive/
+- pump_engine: секция config.yaml — DEPRECATED
+- 6 хардкодов в оркестраторе → config (pending_ttl_sec, confirm_vol_min_ratio, stagnation_*, eviction_*, ban_hours)
+- _check_position_live, expire_sec dead code — удалены
+- src/exchange/okx_meta.py — fetch_ctvals вынесен из bt_pump_filters
+- Commits: 0d0d38f, 1b31ab5
+
+### ✅ Telegram rate-limit fix (17.05.2026)
+- Проблема: 293 NOTIFY ok в группу за ночь → физически доставлено только 1 (Telegram silent drop при бурсте)
+- Фикс: per-chat asyncio.Queue + worker с 2с min interval; send_message_to проверяет ok field + retry на 429
+- Архитектурное: pump шлёт ТОЛЬКО в группу (extra_notify_chats), личные чаты убраны (личка зарезервирована за анализатором)
+- Commit: 06503f5, 1b31ab5
 
 ---
 
@@ -311,6 +361,95 @@
 ### ⏳ Graphify — оптимизация токенов с Claude Code
 - github.com/nateraw/graphify — карта функций/зависимостей
 - **Когда:** при ощутимом росте кодовой базы
+
+---
+
+## 🎯 Phase G — Multi-Agent LLM Architecture (большой горизонт)
+
+> **Контекст:** обсуждено 17.05.2026 — стратегическая цель проекта после закрытия текущих фаз.
+> **Концепция (пользователь):** перейти от rule-based скринера к системе LLM-агентов, обучаемых на собственных данных. Сейчас main screener — это "фотография рынка на 15m close", без памяти, без распознавания паттернов, без сравнения с историей. Phase G меняет это.
+
+### ⏳ G.1 — Data Lake: единая схема и хранение
+**Цель:** все события (signal/entry/outcome/tape) → единый parquet формат пригодный для обучения.
+
+**Что есть сейчас (фрагментированно):**
+- main_signals.jsonl (74) + main_signals_labels.jsonl (68)
+- pump_signals.jsonl (487) + pump_labels.jsonl (464) — с MFE/MAE/R-кратными
+- smart_pump_candidates.jsonl (138) — shadow mode
+- bb_fade_signals.jsonl (1)
+- signal_snapshot.jsonl (50) — full context
+- E:\trading-data\ticks — ~50M тиков
+
+**Что нужно построить:**
+- `src/data/training_writer.py` — единая `dataclass TrainingRecord`:
+  - `signal_id, ts, symbol, channel, side`
+  - `context: {indicators, regime, mtf_alignment, btc_state, eth_state}`
+  - `tape_window: {pre_5min, post_15min}` агрегат тейпа вокруг сигнала
+  - `outcome: {TP/SL/TIME, hold_min, net_pct, mfe_r, mae_r}`
+- Формат хранения: `data/training/{YYYY-MM-DD}.parquet`
+- Backfill из существующих jsonl + tape archives
+- Snapshot BTC/ETH/SOL **в момент любого сигнала** (market context для cross-asset)
+- `scripts/data/load_training.py` → возвращает pandas DataFrame
+
+**Объём:** ~1 неделя, без ML, чистая инфраструктура
+**Когда:** после закрытия S2.3 + Phase C critical mass (200+ pump trades)
+
+### ⏳ G.2 — Pattern Miner (бакетный анализ без ML)
+**Цель:** найти устойчивые бакеты с WR >65% и фильтровать остальные.
+
+```
+для каждого record:
+  bucket_key = f"{channel}|{regime}|{adx_bucket}|{vol_bucket}|{btc_state}|{hour_utc}"
+  bucket_stats[bucket_key].update(outcome)
+
+вывод: топ-50 бакетов с n>=20 и WR>=65%
+```
+
+**Применение:** перед каждым сигналом lookup в bucket_stats. Если `n>=10 AND WR>=55%` → ENTRY. Иначе → SHADOW (логируем, не торгуем).
+
+**Эффект:** меньше сделок, выше качество. Тестируется бэктестом.
+
+**Объём:** ~1 неделя
+**Когда:** после G.1, требует 500+ labeled
+
+### ⏳ G.3 — Multi-Agent LLM Pipeline
+**Цель:** реализация пользовательского видения — несколько LLM с разными ролями.
+
+| Агент | Вход | Выход | Стек |
+|-------|------|-------|------|
+| **Market Context** | BTC/ETH 4H + новости (CryptoPanic) | "медвежий/бычий/боковик + ключевые уровни" | Sonnet 4.6 |
+| **Setup Analyzer** | Свечи пары + индикаторы + market context от #1 | "сетап + confidence 0..1 + ключевая зона" | Sonnet 4.6 |
+| **Tape Reader** | Tape ±5 мин от точки входа | "buyers/sellers control + cluster zones" | Haiku 4.5 |
+| **Risk Manager** | Outputs #1-3 + текущая позиция | "размер позиции + SL/TP с обоснованием" | Sonnet 4.6 |
+
+**Финальное решение:** консенсус 3 из 4 агентов с confidence>=0.6 → ENTRY.
+
+**Стоимость:** ~$0.5-2 за решение на Sonnet (5x дешевле Opus, ~95% качества для классификации). При 10 решениях/день = $5-20/день.
+
+**Где живёт:** новый процесс `scripts/ws/ws_agent_orchestrator.py`. Параллельный канал, НЕ заменяет main/pump/bb_fade — добавляется поверх как третий слой фильтрации.
+
+**Объём:** 2-3 недели
+**Когда:** после G.1 + G.2 (нужна data для промптов)
+
+### ⏳ G.4 — Fine-tuning open-source модели на исходах
+**Цель:** локальная модель учится на наших данных, заменяет API на повторяющихся задачах.
+
+**Подход:**
+- Open-source база: Qwen 72B или Llama 70B
+- LoRA fine-tune на закрытых сделках: `(context) → (outcome)`
+- Дешёвый inference: TogetherAI ~$1/M токенов или своё железо
+- Метрика: prediction calibration (когда модель сказала confidence=0.8 → 80% сделок TP)
+
+**Зачем не Anthropic fine-tune:** Anthropic не предоставляет fine-tune для широкой публики. OpenAI/Together поддерживают LoRA на open models.
+
+**Объём:** 1-2 месяца (включая инфра под inference)
+**Когда:** после 1000+ labeled через G.3
+
+### Критерий для перехода в Phase G
+- S2.3 закрыта (100+ main labeled, WR>=80% на последних 30)
+- Phase C закрыта (200+ pump, WR>=60%, PF>=2.0)
+- F.1 закрыта (50+ BB Fade live, WR>=65%)
+- **Только тогда** имеет смысл строить мета-слой. Без работающих моделей на старте — построим эпициклы вокруг ложной картины.
 
 ---
 
