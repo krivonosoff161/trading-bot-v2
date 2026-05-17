@@ -959,19 +959,29 @@ def _build_dashboard(wb) -> None:
 # ── Sheet 7: Графики ──────────────────────────────────────────────────────────
 
 def _agg_by_day(rows: list, value_key: str) -> tuple[list, list, list]:
-    """Группирует по дню (dt[:5] = DD.MM) → (days, daily_pnl, cumulative)."""
+    """Группирует по дню → (days, daily_pnl, cumulative).
+
+    Поддерживает оба формата dt:
+      - "MM-DD HH:MM"          (Main WS, BB Fade) → берём [:5]
+      - "YYYY-MM-DD HH:MM"     (Pump)             → берём [5:10] для MM-DD
+    """
     by_day: dict[str, float] = {}
     for row in rows:
-        if not row.get("dt"): continue
+        dt = row.get("dt")
+        if not dt: continue
         val = row.get(value_key)
         if val is None: continue
         try:
             val = float(val)
         except (TypeError, ValueError):
             continue
-        day = row["dt"][:5]  # "DD.MM"
+        # Нормализуем к MM-DD
+        if len(dt) >= 10 and dt[4] == "-":
+            day = dt[5:10]  # "2026-05-17 07:51" → "05-17"
+        else:
+            day = dt[:5]    # "05-17 06:15" → "05-17"
         by_day[day] = by_day.get(day, 0) + val
-    days = sorted(by_day.keys(), key=lambda d: tuple(reversed(d.split("."))))
+    days = sorted(by_day.keys())
     daily = [round(by_day[d], 2) for d in days]
     cum = []
     s = 0
@@ -1156,9 +1166,10 @@ def _build_charts(wb, main_ws_rows: list, bb_fade_rows: list, pump_rows: list) -
         bar.set_categories(cats)
         ws.add_chart(bar, "A62")
 
-    # Hide data columns
+    # Не скрываем data columns — некоторые Excel клиенты не рендерят графики
+    # на скрытых столбцах. Просто узкие.
     for c in range(col, col+5):
-        ws.column_dimensions[get_column_letter(c)].hidden = True
+        ws.column_dimensions[get_column_letter(c)].width = 10
 
     _set_widths(ws, [20] + [10]*9 + [4] + [20] + [10]*8)
 
