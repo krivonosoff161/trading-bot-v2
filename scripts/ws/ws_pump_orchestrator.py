@@ -932,8 +932,8 @@ class PumpOrchestrator:
             if elapsed < self._notify_min_interval_sec:
                 await asyncio.sleep(self._notify_min_interval_sec - elapsed)
             try:
-                await send_message_to(chat_id, text)
-                self._log(f"NOTIFY ok | chat={chat_id} | queue={q.qsize()}")
+                msg_id = await send_message_to(chat_id, text)
+                self._log(f"NOTIFY ok | chat={chat_id} | msg_id={msg_id} | queue={q.qsize()}")
             except Exception as exc:
                 self._log(f"NOTIFY error | chat={chat_id} | {exc}")
             last_send = time.time()

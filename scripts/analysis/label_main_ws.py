@@ -48,7 +48,14 @@ async def _fetch_candles(session: aiohttp.ClientSession, sym: str, after_ms: int
 
 
 def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
-                   entry: float, sl: float, tp1: float, tp2: float):
+                   entry: float, sl: float, tp1: float, tp2: float,
+                   side: str = "buy"):
+    """Direction-aware outcome check.
+
+    BUY: SL below entry → hit when LOW <= SL; TP above entry → hit when HIGH >= TP.
+    SELL: SL above entry → hit when HIGH >= SL; TP below entry → hit when LOW <= TP.
+    """
+    is_buy = side == "buy"
     for row in rows:
         t_ms = int(row[0])
         if t_ms <= signal_ms:
@@ -58,13 +65,18 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
         high = float(row[2])
         low  = float(row[3])
 
-        sl_hit  = low <= sl
-        tp1_hit = high >= tp1
+        if is_buy:
+            sl_hit  = low <= sl
+            tp1_hit = high >= tp1
+            tp2_hit = bool(tp2 and high >= tp2)
+        else:
+            sl_hit  = high >= sl
+            tp1_hit = low <= tp1
+            tp2_hit = bool(tp2 and low <= tp2)
 
         if sl_hit and not tp1_hit:
             return "SL", sl, round((t_ms - signal_ms) / 60_000), False
         if tp1_hit:
-            tp2_hit = bool(tp2 and high >= tp2)
             outcome = "TP2" if tp2_hit else "TP1"
             exit_px = tp2 if tp2_hit else tp1
             return outcome, exit_px, round((t_ms - signal_ms) / 60_000), tp2_hit
@@ -118,6 +130,7 @@ async def run() -> None:
                         rows, ts_ms, hold_ms,
                         float(sig["entry"]), float(sig["sl"]),
                         float(sig["tp1"]), float(sig.get("tp2") or 0),
+                        side=sig.get("side", "buy"),
                     )
 
                     label = {
