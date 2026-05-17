@@ -38,19 +38,42 @@ async def send_message(text: str) -> None:
 
 
 async def send_message_to(chat_id: str, text: str) -> None:
-    """Send a Telegram message to a specific chat_id (not broadcast)."""
+    """Send a Telegram message to a specific chat_id (not broadcast).
+
+    Handles HTTP 429 (rate limit) with retry honoring retry_after.
+    Checks ``ok`` field in response body — Telegram can return HTTP 200 with
+    ``ok: false`` for some errors; raise on these too.
+    """
     if not _BOT_TOKEN:
         return
+    import asyncio
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+
     async with aiohttp.ClientSession() as session:
-        resp = await session.post(
-            url,
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=aiohttp.ClientTimeout(total=10),
-        )
-        if resp.status != 200:
-            body = await resp.text()
-            raise RuntimeError(f"Telegram API {resp.status}: {body[:200]}")
+        for attempt in range(2):
+            resp = await session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10))
+            status = resp.status
+            body_text = await resp.text()
+            try:
+                import json as _json
+                body_json = _json.loads(body_text)
+            except Exception:
+                body_json = {}
+
+            if status == 429:
+                retry_after = int(body_json.get("parameters", {}).get("retry_after", 2))
+                if attempt == 0:
+                    await asyncio.sleep(min(retry_after, 5))
+                    continue
+                raise RuntimeError(f"Telegram 429 (retry_after={retry_after}s): {body_text[:120]}")
+
+            if status != 200:
+                raise RuntimeError(f"Telegram HTTP {status}: {body_text[:200]}")
+
+            if body_json and not body_json.get("ok", True):
+                raise RuntimeError(f"Telegram ok=false: {body_text[:200]}")
+            return
 
 
 async def send_photo_to(chat_id: str, file_path: str, caption: str = "") -> None:

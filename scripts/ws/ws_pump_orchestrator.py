@@ -199,6 +199,13 @@ class PumpOrchestrator:
         # Last signal wall time per pair (cooldown between entries)
         self.last_signal_wall: dict[str, float] = {}
 
+        # Telegram delivery: queue + worker per chat (rate-limit safe)
+        self._notify_queues: dict[str, asyncio.Queue] = {}
+        self._notify_workers: dict[str, asyncio.Task] = {}
+        # Min interval between sends to same chat. Group chats have stricter
+        # rate limit (~20 msg/min), personal — much higher. 2s is safe for both.
+        self._notify_min_interval_sec: float = 2.0
+
     # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
@@ -236,9 +243,17 @@ class PumpOrchestrator:
             for t in (feed_task, universe_task, heartbeat_task, stop_task):
                 if not t.done():
                     t.cancel()
-            await asyncio.gather(feed_task, universe_task, heartbeat_task, stop_task, return_exceptions=True)
+            for w in self._notify_workers.values():
+                if not w.done():
+                    w.cancel()
+            await asyncio.gather(
+                feed_task, universe_task, heartbeat_task, stop_task,
+                *self._notify_workers.values(),
+                return_exceptions=True,
+            )
             await self.feed.stop()
-            self._log(f"stopped | pool={len(self.pool)} | open={sum(1 for p in self.pool.values() if p.position)}")
+            queued = sum(q.qsize() for q in self._notify_queues.values())
+            self._log(f"stopped | pool={len(self.pool)} | open={sum(1 for p in self.pool.values() if p.position)} | notify_queued={queued}")
 
     # ------------------------------------------------------------------
     # Universe watcher (push model: react to file mtime change)
@@ -886,16 +901,44 @@ class PumpOrchestrator:
         return chats
 
     async def _notify(self, text: str) -> None:
+        """Enqueue a notification — non-blocking. Worker drains with rate limit."""
         chats = self._active_chat_ids()
         if not chats:
             self._log("NOTIFY skip | no active subscribers")
             return
         for chat_id in chats:
+            self._ensure_notify_worker(chat_id)
+            try:
+                self._notify_queues[chat_id].put_nowait(text)
+            except asyncio.QueueFull:
+                self._log(f"NOTIFY drop | chat={chat_id} | queue full")
+
+    def _ensure_notify_worker(self, chat_id: str) -> None:
+        if chat_id in self._notify_queues:
+            return
+        self._notify_queues[chat_id] = asyncio.Queue(maxsize=500)
+        self._notify_workers[chat_id] = asyncio.create_task(
+            self._notify_worker(chat_id), name=f"orch.notify.{chat_id}"
+        )
+
+    async def _notify_worker(self, chat_id: str) -> None:
+        """Drain queue with min interval between sends — survives Telegram rate limit."""
+        q = self._notify_queues[chat_id]
+        last_send = 0.0
+        while not self.stop_event.is_set():
+            try:
+                text = await asyncio.wait_for(q.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                continue
+            elapsed = time.time() - last_send
+            if elapsed < self._notify_min_interval_sec:
+                await asyncio.sleep(self._notify_min_interval_sec - elapsed)
             try:
                 await send_message_to(chat_id, text)
-                self._log(f"NOTIFY ok | chat={chat_id}")
+                self._log(f"NOTIFY ok | chat={chat_id} | queue={q.qsize()}")
             except Exception as exc:
                 self._log(f"NOTIFY error | chat={chat_id} | {exc}")
+            last_send = time.time()
 
     def _log(self, message: str) -> None:
         self.logger.info(f"[{_now()}] {message}")
