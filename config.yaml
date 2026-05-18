@@ -68,6 +68,11 @@ pump_orchestrator:
   confirm_vol_min_ratio: 0.8        # confirm candle vol >= baseline * this
   stagnation_vol_min: 2.0           # vol_spike threshold for stagnation check (Path B)
   stagnation_price_max_pct: 0.5     # price_move below this = stagnation (high vol, no move)
+  enable_path_b: false              # GPT 18.05: Path B обходит confirmation, 3/3 SL — отключен по умолчанию
+
+  # Breakeven trail (GPT 18.05: +21.56 п.п. на 16-18.05 backtest)
+  breakeven_trail_enabled: true     # SL → entry когда MFE достигает trigger
+  breakeven_trigger_r: 1.0          # активация когда MFE >= 1R (R-кратное от SL distance)
 
   # Pool management
   eviction_vol_multiplier: 1.5      # dead vol: candles below baseline * this → evict pair
