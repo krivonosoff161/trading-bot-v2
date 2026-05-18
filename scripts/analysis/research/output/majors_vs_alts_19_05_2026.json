@@ -1,0 +1,142 @@
+{
+  "buckets": {
+    "TRENDING x SWING": {
+      "baseline_n": 24,
+      "after_n": 2,
+      "baseline_wr": 75.0,
+      "after_wr": 50.0,
+      "baseline_avg_r": 0.08916666666666669,
+      "after_avg_r": -0.315,
+      "cut_reasons": {
+        "min_vol_ratio_trending": 12,
+        "conditions_not_met": 8,
+        "reclassified_regime_RANGING": 1,
+        "other": 1
+      },
+      "verdict": "B",
+      "rationale": "cuts 91.7% or avg_R turns non-positive"
+    },
+    "DRIFT x FAST": {
+      "baseline_n": 53,
+      "after_n": 23,
+      "baseline_wr": 75.47169811320755,
+      "after_wr": 91.30434782608695,
+      "baseline_avg_r": 0.05547169811320754,
+      "after_avg_r": 0.27478260869565224,
+      "cut_reasons": {
+        "reclassified_regime_RANGING": 2,
+        "reclassified_regime_TRENDING": 5,
+        "conditions_not_met": 22,
+        "min_vol_ratio_trending": 1
+      },
+      "verdict": "precision-positive",
+      "rationale": "cuts 56.6% but improves surviving subset quality"
+    },
+    "TRENDING x FAST": {
+      "baseline_n": 8,
+      "after_n": 2,
+      "baseline_wr": 75.0,
+      "after_wr": 100.0,
+      "baseline_avg_r": 0.35625000000000007,
+      "after_avg_r": 0.825,
+      "cut_reasons": {
+        "reclassified_regime_RANGING": 1,
+        "min_vol_ratio_trending": 3,
+        "conditions_not_met": 2
+      },
+      "verdict": "precision-positive",
+      "rationale": "cuts 75.0% but improves surviving subset quality"
+    }
+  },
+  "trex_swing_conditions_not_met": {
+    "count": 8,
+    "sub_reason_counts": {
+      "slope_min_veto": 6,
+      "regime_reclassified": 0,
+      "5m_trigger_mismatch": 0,
+      "bias_check_fail": 0,
+      "4h_conflict": 0,
+      "other": 2
+    },
+    "min_vol_overlap_count": 0,
+    "rows": [
+      {
+        "signal_id": "1775775602000_BTC-USDT_buy_SWING",
+        "symbol": "BTC-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_now=-34.7<min=35.0",
+          "slope_not_rising(now=-34.7,prev=11.9)"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1775775602000_ETH-USDT_buy_SWING",
+        "symbol": "ETH-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_now=-45.9<min=35.0",
+          "slope_not_rising(now=-45.9,prev=-27.5)"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1776150901000_ETH-USDT_buy_SWING",
+        "symbol": "ETH-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_now=31.1<min=35.0"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1776157202000_BTC-USDT_buy_SWING",
+        "symbol": "BTC-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_now=30.7<min=35.0",
+          "slope_not_rising(now=30.7,prev=38.2)"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1776335401000_XRP-USDT_buy_SWING",
+        "symbol": "XRP-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_now=20.1<min=35.0",
+          "slope_not_rising(now=20.1,prev=29.5)"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1776862802000_ETH-USDT_buy_SWING",
+        "symbol": "ETH-USDT",
+        "sub_reason": "slope_min_veto",
+        "notes": [
+          "slope_not_rising(now=44.9,prev=46.0)"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1777352402000_DOGE-USDT_buy_SWING",
+        "symbol": "DOGE-USDT",
+        "sub_reason": "other",
+        "notes": [
+          "adx_1h_rising=False"
+        ],
+        "overlap_min_vol": false
+      },
+      {
+        "signal_id": "1777761302000_BTC-USDT_buy_SWING",
+        "symbol": "BTC-USDT",
+        "sub_reason": "other",
+        "notes": [
+          "adx_1h_rising=False",
+          "bb_width=0.69<min=0.70"
+        ],
+        "overlap_min_vol": false
+      }
+    ]
+  }
+}

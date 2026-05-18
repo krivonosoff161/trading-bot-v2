@@ -1,10 +1,29 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-17
+**Последнее обновление:** 2026-05-18
 
 > **Режим всех треков: PAPER TRADING / TEST ONLY**
 > AUTO_TRADE=false на всех процессах. Реальные деньги — только после прохождения
 > критериев каждой фазы на live paper данных. Нет исключений.
+
+---
+
+## 🔬 Research выводы 18.05.2026 (`docs/gpt_full_research_18_05_2026.md`)
+
+GPT прогнал полный анализ по 3 каналам. Главные выводы (полная картина в отчёте):
+
+### Main scanner
+- **FAST×DRIFT здоров** — n=71, WR=80.3%, +0.09R unified
+- **TRENDING×SWING регрессия** — universe drift (archive=мажоры, live=0 мажоров) + новый veto `min_vol_ratio_trending=1.5` (commit 2ea6a42) резал бы archive trades n=14 WR=78.6%
+- **Действие:** main scanner config НЕ трогаем до завершения majors-vs-alts эксперимента (Path A, делегировано GPT)
+
+### Pump (применяем сейчас)
+- 🟢 **Safe:** `session_ban_sl_no_tp: 3 → 2` (Sim7, +4.75 п.п.)
+- 🟡 **Soft aggressive:** hard-block APR/RIVER/LAB через `pair_risk_overrides` (нет tape coverage = слепая зона)
+- ❌ Sim9 full overrides отложен (overfit risk 3-day)
+
+### BB Fade
+- Live n=3, слишком мало для каких-либо изменений. Ждём 20+ decisive trades.
 
 ---
 

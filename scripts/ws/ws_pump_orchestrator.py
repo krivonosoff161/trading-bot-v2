@@ -587,12 +587,25 @@ class PumpOrchestrator:
     # Immediate entry on screener signal
     # ------------------------------------------------------------------
 
+    def _is_pair_blocked(self, sym: str) -> bool:
+        """GPT 18.05 research: hard-block pairs without tape coverage or chronic losses."""
+        overrides = self.config.get("pair_risk_overrides") or {}
+        rule = overrides.get(sym)
+        if not rule:
+            return False
+        return rule.get("mode") == "block"
+
     async def _enter_on_screener_signal(self, state: PairState, meta: dict) -> None:
         """Set pending entry on screener signal — confirmed on next candle close."""
         sym = state.sym
         now = time.time()
 
         if self.cb_halted:
+            return
+        if self._is_pair_blocked(sym):
+            if now - self.last_signal_wall.get(sym, 0.0) >= float(self.config["alert_cooldown_sec"]):
+                self._log(f"PAIR_BLOCKED | {sym} | screener signal skipped (pair_risk_overrides=block)")
+                self.last_signal_wall[sym] = now
             return
         if state.position is not None:
             return
@@ -636,6 +649,9 @@ class PumpOrchestrator:
     async def _evaluate_entry(self, state: PairState, candle: Candle) -> None:
         sym = state.sym
         now = time.time()
+
+        if self._is_pair_blocked(sym):
+            return
 
         history = self.feed.get_candles(sym, "candle1m", 11)
         if len(history) < 4:
