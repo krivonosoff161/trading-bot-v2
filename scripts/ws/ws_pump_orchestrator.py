@@ -37,6 +37,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# load_dotenv() ДО импорта src.utils.telegram — иначе _BOT_TOKEN пустой при
+# импорте модуля и send_message_to молча возвращает None (silent no-op).
+# Это была причина "msg_id=None" для всех NOTIFY: бот просто не звонил Telegram.
+from dotenv import load_dotenv
+load_dotenv()
+
 from src.exchange.okx_meta import fetch_ctvals
 from src.data.ws_feed import Candle, WSFeed, _chunked
 from src.utils.telegram import send_message_to
@@ -92,6 +98,8 @@ class OpenPosition:
     atr: float
     mfe_pct: float = 0.0   # max favorable excursion %
     mae_pct: float = 0.0   # max adverse excursion % (negative = loss)
+    be_armed: bool = False    # breakeven trail armed (SL перенесён на entry)
+    initial_sl_price: float = 0.0  # для логирования / отчёта
 
 
 @dataclass
@@ -422,6 +430,25 @@ class PumpOrchestrator:
         pos.mfe_pct = max(pos.mfe_pct, gain)
         pos.mae_pct = min(pos.mae_pct, loss)
 
+        # Breakeven trail: когда MFE достигает заданного R-кратного → SL переезжает на entry.
+        # GPT аудит 18.05: правило `mfe_r >= 1.0` даёт +21.56 п.п. на 16-18.05.
+        # Защита от MFE→SL: позиции с большим MFE превращаются в SL, breakeven спасает.
+        be_enabled = bool(self.config.get("breakeven_trail_enabled", True))
+        if be_enabled and not pos.be_armed:
+            be_trigger_r = float(self.config.get("breakeven_trigger_r", 1.0))
+            if not pos.initial_sl_price:
+                pos.initial_sl_price = pos.sl_price
+            sl_dist_pct = abs(pos.entry_price - pos.initial_sl_price) / pos.entry_price * 100.0
+            if sl_dist_pct > 0:
+                mfe_r = pos.mfe_pct / sl_dist_pct
+                if mfe_r >= be_trigger_r:
+                    pos.be_armed = True
+                    pos.sl_price = pos.entry_price  # SL → entry (breakeven)
+                    self._log(
+                        f"BE armed | {state.sym:<20} | mfe={pos.mfe_pct:+.2f}% "
+                        f"mfe_r={mfe_r:.2f} | SL: {pos.initial_sl_price:.8g} → {pos.entry_price:.8g}"
+                    )
+
         if pos.side == "buy":
             if low <= pos.sl_price:
                 exit_reason, exit_price = "SL", pos.sl_price
@@ -432,6 +459,10 @@ class PumpOrchestrator:
                 exit_reason, exit_price = "SL", pos.sl_price
             elif low <= pos.tp_price:
                 exit_reason, exit_price = "TP", pos.tp_price
+
+        # Reclass SL hit as "BE" (breakeven) если SL после armed
+        if exit_reason == "SL" and pos.be_armed and pos.sl_price == pos.entry_price:
+            exit_reason = "BE"
 
         if exit_reason is None:
             hold_min = (pd.Timestamp(ts_ms, unit="ms", tz="UTC") - pos.opened_at).total_seconds() / 60
@@ -482,7 +513,7 @@ class PumpOrchestrator:
 
         state.last_close_ts = time.time()
         self._log(f"CLOSE | {state.sym:<20} | {exit_reason} | pnl={net:+.2f}% | mfe={pos.mfe_pct:+.2f}% mae={pos.mae_pct:+.2f}% | hold={hold_min:.0f}m | section={state.section}")
-        icon = "✅" if exit_reason == "TP" else ("⏱" if exit_reason == "TIME" else "❌")
+        icon = "✅" if exit_reason == "TP" else ("🟡" if exit_reason == "BE" else ("⏱" if exit_reason == "TIME" else "❌"))
         base = state.sym.replace("-USDT-SWAP", "").replace("-USDT", "")
         side_label = "LONG" if pos.side == "buy" else "SHORT"
         await self._notify(
@@ -502,6 +533,7 @@ class PumpOrchestrator:
             self._log(f"CB HALT | daily_pnl={self.cb_daily_pnl:.2f}% — all trading stopped")
             return True
 
+        # BE считается "не SL" — позиция вышла в безубыток, серия SL не продолжается
         is_sl = (exit_reason == "SL")
         self._update_streaks(state, is_sl)
         return True
@@ -666,6 +698,11 @@ class PumpOrchestrator:
             return
 
         # --- Path B: standalone candle-close detection (backup) ---
+        # GPT аудит 18.05: Path B обходит 2nd-candle confirmation; 3/3 SL на 18.05.
+        # По умолчанию отключено. Включить через config.yaml для A/B-теста.
+        if not self.config.get("enable_path_b", False):
+            return
+
         if now - self.last_signal_wall.get(sym, 0.0) < float(self.config["alert_cooldown_sec"]):
             return
         if len(history) < 11:
@@ -758,6 +795,7 @@ class PumpOrchestrator:
             opened_at=ts,
             position_usd=float(self.config["position_usd"]),
             atr=atr,
+            initial_sl_price=sl_price,  # для breakeven trail tracking
         )
         self._log(
             f"OPEN  | {state.sym:<20} {side.upper():<4} | entry={entry_price:.8g} "
