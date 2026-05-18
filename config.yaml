@@ -52,7 +52,7 @@ pump_orchestrator:
   cb_cooldown_min: 30          # минут cooldown
   cb_daily_loss_pct: 4.0       # дневной убыток % → halt all
   cb_daily_halt_cooldown_min: 120  # минут до авто-сброса daily halt (0 = только при рестарте)
-  session_ban_sl_no_tp: 3      # 3 SL без TP -> бан до конца UTC-дня
+  session_ban_sl_no_tp: 2      # GPT 18.05 (Sim7 +4.75pp): 2 SL без TP -> бан до конца UTC-дня (было 3)
 
   # Entry quality filters
   confirmation_reversal_max_pct: 0.5   # макс откат на свече подтверждения (%)
@@ -73,6 +73,15 @@ pump_orchestrator:
   # Breakeven trail (GPT 18.05: +21.56 п.п. на 16-18.05 backtest)
   breakeven_trail_enabled: true     # SL → entry когда MFE достигает trigger
   breakeven_trigger_r: 1.0          # активация когда MFE >= 1R (R-кратное от SL distance)
+
+  # Pair risk overrides (GPT 18.05 research, Sim8 +16.27pp)
+  # Пары без tape coverage и стабильно убыточные → hard block на этапе signal
+  # mode: "block" → entry signal skipped (логируется как PAIR_BLOCKED)
+  # Расширение схемы (size_mult, max_trades_per_day) — после majors-vs-alts research
+  pair_risk_overrides:
+    APR-USDT-SWAP:   { mode: block }    # n=5, net=-6.90%, no tape on E:
+    RIVER-USDT-SWAP: { mode: block }    # n=3, net=-4.23%, no tape on E:
+    LAB-USDT-SWAP:   { mode: block }    # n=3, net=-3.47%, no tape on E:
 
   # Pool management
   eviction_vol_multiplier: 1.5      # dead vol: candles below baseline * this → evict pair
