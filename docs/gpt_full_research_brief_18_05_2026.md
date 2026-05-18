@@ -210,11 +210,45 @@ Bot v2 — OKX фьючерсный скальп-бот, 3 канала в paper
 3. **Симуляция фильтра:** "если signal не имеет нужный tape-pattern → SKIP". Сколько SL уйдёт, сколько TP пропадёт.
 4. **Funding rate research:** через OKX REST history-funding-rate API (если возможно), забирать funding на момент каждого pump signal. Корреляция funding ↔ outcome.
 
-### 3.4 Pair-level patterns (после 3.3)
+### 3.4 Pair risk overrides (поглощает Brief #2)
 
-После tape-фильтра — пересчитать pair_risk_overrides:
-- Какие пары остаются проблемными ДАЖЕ с tape фильтром
-- Какие пары становятся ОК после фильтра
+**Контекст:** в `docs/gpt_audit_report_18_05_2026.md` ты сам предложил:
+
+```yaml
+pair_risk_overrides:
+  BABY-USDT-SWAP: { size_mult: 0.0 }
+  RIVER-USDT-SWAP: { size_mult: 0.0 }
+  APR-USDT-SWAP: { size_mult: 0.5, require_breakeven: true }
+  BSB-USDT-SWAP: { size_mult: 0.5, require_breakeven: true }
+  BILL-USDT-SWAP: { max_trades_per_day: 2, ban_after_sl_streak: 2 }
+```
+
+**Главная гипотеза автора:** после внедрения breakeven trail (`mfe_r>=1.0`) **часть SL по этим парам станет BE-выходами**. Значит **pair_risk_overrides может быть избыточен или вреден** (зарежет потенциальные TP).
+
+**Симуляции (минимальный набор):**
+
+| Sim | Что меняется vs Sim0 (after-3-fixes baseline) |
+|-----|------------------------------------------------|
+| Sim0 | After-3-fixes baseline (breakeven, Path B off) |
+| Sim1 | + BABY: size_mult=0.0 |
+| Sim2 | + BABY + RIVER: size_mult=0.0 |
+| Sim3 | + APR: size_mult=0.5 |
+| Sim4 | + BSB: size_mult=0.5 |
+| Sim5 | + BILL: max_trades_per_day=2, ban_after_sl_streak=2 |
+| Sim6 | **ВСЕ overrides** |
+| Sim7 | Только `ban_after_sl_streak=2` динамически для всех пар |
+| Sim8 | + Tape-фильтр из 3.3 на всех парах |
+| Sim9 | **Tape-фильтр (3.3) + минимальные pair overrides** — комбинация |
+
+**Что ответить:**
+1. Какие пары после breakeven перестают быть проблемными?
+2. Какой override даёт max impact с min cuts (winners survival)?
+3. Где overfit на 3 дня — какие правила НЕ надо вводить?
+4. **Финальный вердикт:** нужны pair_risk_overrides если уже есть tape-фильтр?
+
+**Расширить выборку до 03.05** через архив (`logs_archive/09.05.2026/pump/pump_labels.jsonl`) для validity check.
+
+**Sample size warning:** 3 дня = 121 trade, маленькая выборка. **OOS test обязателен**: split train (16-17.05) → test (18.05) или train (03-13.05 архив) → test (14-18.05).
 
 ---
 
@@ -280,6 +314,44 @@ Bot v2 — OKX фьючерсный скальп-бот, 3 канала в paper
 ✅ "Не подтверждается" находки — тоже важны
 ✅ Альтернативные интерпретации
 ✅ Sample size warnings честно
+
+---
+
+## 🔍 Post-report audit by Claude (важно знать)
+
+После твоего отчёта Claude (другой AI в проекте) проводит **систематический аудит**:
+
+### Что Claude будет проверять
+
+1. **Воспроизводимость расчётов** — Claude **запустит ключевые симуляции сам** на тех же данных. Если численные результаты разойдутся >2 п.п. — запрос на пересчёт.
+2. **Sample size honesty** — если рекомендация основана на n<20 без чёткого disclaimer "preliminary, requires more data" — пометит как недостаточно обоснованную.
+3. **Logical consistency** — например если ты в Block 1 предложил отключить SWING TRENDING, а в Integrated Plan его оставил — Claude поймает.
+4. **YAML diff проверка** — каждый YAML diff Claude **применит локально на копии config**, проверит что валидно (`python -c "import yaml; yaml.safe_load(open('config.yaml'))"`).
+5. **Risk callouts adequacy** — если рекомендация имеет очевидный downside (например "blacklist BABY based on 5 trades") но он не упомянут — Claude добавит.
+6. **No hidden assumptions** — если симуляция полагается на "tick order MFE→SL" а должно быть наоборот — Claude проверит на конкретных примерах.
+
+### Что Claude НЕ будет делать
+
+- ❌ Переписывать твои выводы
+- ❌ Заменять твои recommendations своими
+- ❌ Оспаривать дизайнерские выборы (например порог breakeven 1R vs 0.5R) если у тебя есть обоснование
+
+### Что Claude **может попросить дополнить**
+
+- Sample sizes в табличной форме (n / decisive / WR / 95% CI если посчитал)
+- Конкретные сделки-примеры для top-3 рекомендаций (signal_id, timestamp, что было до/после)
+- Альтернативные интерпретации для нестабильных находок
+
+### Финальное решение по применению
+
+После твоего отчёта + аудита Claude — **человек-автор проекта** принимает решения. Twin-AI review (ты + Claude) — рекомендация, не указание.
+
+**Лайфхак для тебя:** пиши отчёт так, чтобы он **выдерживал аудит Claude**. То есть:
+- Каждая цифра — с источником (path к файлу + строка кода или формула)
+- Каждая рекомендация — с симуляцией numeric impact
+- Каждая рискованная находка — с честным "n=X, низкая confidence"
+
+Это сэкономит итерации back-and-forth между AI.
 
 ---
 
