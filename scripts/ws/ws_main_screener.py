@@ -264,6 +264,8 @@ class MainScreener:
         self.last_regime_by_symbol[sym] = {"regime": result.regime, "updated_at": time.time(), "fade_hint": result.five_m_fade_hint}
         if result.entry_signal != "ENTRY" or not result.side:
             return
+        if self._context_gate_reject(result, sym):
+            return
         await self._maybe_emit_signal(sym, result, detected_on="15m", entry=result.entry_price, sl=result.sl_price, tp1=result.tp1_price, tp2=result.tp2_price, hold_min=result.max_hold_min, trade_style=result.trade_style or "FAST", regime=result.regime, side=result.side, vol_ratio=vol_ratio, adx_1h=result.context.get("adx_1h"), fvg_confirmed=self._fvg_confirmed(sym, result.side))
 
     async def _on_5m_close(self, sym: str, candle: Candle) -> None:
@@ -501,6 +503,18 @@ class MainScreener:
                 loop.add_signal_handler(getattr(signal, sig_name), self.stop_event.set)
             except NotImplementedError:
                 pass
+
+    def _context_gate_reject(self, result: Any, sym: str) -> bool:
+        gate = self.main_cfg.get("context_gate", {})
+        if not gate.get("skip_asia_trending", False):
+            return False
+        if result.regime != "TRENDING":
+            return False
+        utc_hour = datetime.now(timezone.utc).hour
+        if utc_hour < int(gate.get("asia_utc_end", 6)):
+            self._log(f"GATE skip | asia_trending | {sym} | regime={result.regime} | {utc_hour:02d}:00 UTC")
+            return True
+        return False
 
     def _log(self, message: str) -> None:
         self.logger.info(f"[{_now()}] {message}")
