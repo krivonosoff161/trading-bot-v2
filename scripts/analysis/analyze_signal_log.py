@@ -1,4 +1,4 @@
-"""Analyze signal_log.jsonl + signal_labels.jsonl — 132 labeled signals."""
+"""Analyze main_signals.jsonl + main_signals_labels.jsonl — WS screener signals."""
 import json
 import sys
 from collections import defaultdict
@@ -6,9 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _ROOT   = Path(__file__).resolve().parents[2]
-LOG     = _ROOT / "logs" / "signals" / "signal_log.jsonl"
-LABELS  = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
+LOG     = _ROOT / "logs" / "signals" / "main_signals.jsonl"
+LABELS  = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 OUT_DIR = Path(__file__).parent / "backtest_runs"
+
+
+_OUTCOME_MAP = {"TP1": "TP", "TP2": "TP", "SL": "STOP", "TIME": "TIME_EXIT"}
 
 
 def load() -> list[dict]:
@@ -17,7 +20,10 @@ def load() -> list[dict]:
         for line in f:
             try:
                 s = json.loads(line)
-                signals[s["signal_id"]] = s
+                sid = s.get("id") or s.get("signal_id")
+                if sid:
+                    s["signal_id"] = sid
+                    signals[sid] = s
             except Exception:
                 pass
     with open(LABELS, encoding="utf-8") as f:
@@ -26,11 +32,35 @@ def load() -> list[dict]:
                 lb = json.loads(line)
                 sid = lb["signal_id"]
                 if sid in signals:
+                    lb["outcome"] = _OUTCOME_MAP.get(lb.get("outcome", ""), lb.get("outcome", ""))
                     signals[sid].update(lb)
             except Exception:
                 pass
     merged = [s for s in signals.values() if "outcome" in s]
-    merged.sort(key=lambda s: s.get("ts_ms", 0))
+    for s in merged:
+        # derive ts_ms from ts string if missing
+        if not s.get("ts_ms") and s.get("ts"):
+            try:
+                from datetime import timezone
+                s["ts_ms"] = int(datetime.fromisoformat(
+                    s["ts"].replace("Z", "+00:00")).timestamp() * 1000)
+            except Exception:
+                pass
+        # derive exit_r from exit_price + entry + sl
+        if not s.get("exit_r") and s.get("exit_price") and s.get("entry") and s.get("sl"):
+            try:
+                entry = float(s["entry"])
+                sl    = float(s["sl"])
+                ep    = float(s["exit_price"])
+                sl_dist = abs(entry - sl)
+                if sl_dist > 0:
+                    if s.get("side") == "sell":
+                        s["exit_r"] = (entry - ep) / sl_dist
+                    else:
+                        s["exit_r"] = (ep - entry) / sl_dist
+            except Exception:
+                pass
+    merged.sort(key=lambda s: s.get("ts_ms") or 0)
     return merged
 
 
