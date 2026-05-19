@@ -1,11 +1,7 @@
-"""Shadow-mode smart pump detector.
+"""Paper reversal pump engine.
 
-Phase C steps 1-5 only:
-  - typed contracts
-  - exchange gateway boundary
-  - pair metadata via CoinGecko cache
-  - candle1m integration through WSFeed
-  - prefilter candidate logging, no positions or paper trading
+Phase C replacement for the archived momentum pump orchestrator. This process
+does not place live orders; it records paper entries/exits only.
 """
 
 from __future__ import annotations
@@ -18,9 +14,10 @@ import os
 import signal
 import sys
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +26,11 @@ import yaml
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 
 from src.data.ws_feed import Candle, WSFeed, _chunked
+from src.utils.telegram import send_message_to
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
 COINGECKO_CACHE_PATH = Path(__file__).resolve().parent / "cache" / "coingecko_coins_list.json"
@@ -39,6 +38,8 @@ COINGECKO_COINS_LIST_URL = "https://api.coingecko.com/api/v3/coins/list"
 LOG_DIR = ROOT / "logs" / "pump"
 ENGINE_LOG = LOG_DIR / "ws_smart_pump.log"
 CANDIDATES_LOG = LOG_DIR / "smart_pump_candidates.jsonl"
+SIGNALS_LOG = LOG_DIR / "smart_pump_signals.jsonl"
+LABELS_LOG = LOG_DIR / "smart_pump_labels.jsonl"
 
 NETWORK_BY_PLATFORM = {
     "solana": "SOL",
@@ -59,12 +60,22 @@ NETWORK_OVERRIDES = {
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "universe_poll_sec": 1,
-    "price_pct": 1.5,
+    "explosion_pct": 0.8,
     "vol_mult": 2.0,
     "baseline_bars": 15,
-    "stagnation_price_pct": 0.5,
-    "data_freshness_sec": 90,
+    "eligible_pairs": ["BILL-USDT-SWAP", "JELLYJELLY-USDT-SWAP", "NOT-USDT-SWAP"],
+    "early_entry_enabled": True,
+    "early_trigger_pct": 0.5,
+    "early_trigger_sec": 20,
+    "sl_pct": 0.8,
+    "tp_pct": 1.5,
+    "max_hold_min": 15,
+    "be_trigger_pct": 0.5,
+    "lock_trigger_pct": 0.7,
+    "lock_profit_pct": 0.2,
+    "max_concurrent": 2,
+    "cooldown_sec": 120,
+    "universe_poll_sec": 1,
     "heartbeat_interval": 30,
     "warmup_bars": 20,
     "coingecko_cache_hours": 24,
@@ -76,35 +87,42 @@ DEFAULT_CONFIG: dict[str, Any] = {
 class PairState:
     sym: str
     parent_network: str = "OTHER"
-    candle_close: float = 0.0
-    vol_usd: float = 0.0
-    price_change_1m_pct: float = 0.0
-    oi_now: float | None = None
-    oi_5m_ago: float | None = None
-    funding_rate: float | None = None
-    taker_buy_ratio_60s: float | None = None
-    cvd_delta: float | None = None
-    news_score: float | None = None
-    ts_candle: float = 0.0
-    ts_oi: float = 0.0
-    ts_trades: float = 0.0
+    last_candle_ts_ms: int = 0
+    last_close: float = 0.0
+    last_vol_ratio: float = 0.0
+    last_price_change_pct: float = 0.0
 
 
 @dataclass
-class SignalCandidate:
+class ExplosionEvent:
     sym: str
     direction: str
-    trigger_reason: str
-    gate_passed: bool
-    gate_blocked_by: str
+    reversal_side: str
+    explosion_pct: float
+    vol_ratio: float
+    candle_open: float
+    candle_close: float
+    ts_ms: int
     ts: str
 
 
 @dataclass
-class GateDecision:
-    passed: bool
-    reason: str
-    score: float
+class PaperPosition:
+    signal_id: str
+    sym: str
+    side: str
+    entry_price: float
+    sl_price: float
+    tp_price: float
+    sl_initial: float
+    mfe_pct: float
+    mae_pct: float
+    opened_at: float
+    ts: str
+    early_entry: bool
+    explosion_pct: float
+    vol_ratio: float
+    sl_promoted: str
 
 
 @dataclass
@@ -152,13 +170,13 @@ class OKXGateway(ExchangeGateway):
         self.subscribed_candles.add(sym)
 
     async def subscribe_oi(self, sym: str) -> None:
-        self.logger.debug("OI stream is not enabled in Phase C steps 1-5 | %s", sym)
+        self.logger.debug("OI stream is not enabled for smart pump | %s", sym)
 
     async def subscribe_trades(self, sym: str) -> None:
-        self.logger.debug("Trades stream is not enabled in Phase C steps 1-5 | %s", sym)
+        self.logger.debug("Trades stream is not enabled for smart pump | %s", sym)
 
     async def get_funding(self, sym: str) -> float | None:
-        self.logger.debug("Funding cache is not enabled in Phase C steps 1-5 | %s", sym)
+        self.logger.debug("Funding cache is not enabled for smart pump | %s", sym)
         return None
 
     async def unsubscribe_candles(self, sym: str) -> None:
@@ -293,32 +311,36 @@ class CoinGeckoClient:
         return result
 
 
-class SmartPumpShadow:
+class SmartPumpEngine:
     def __init__(self) -> None:
-        load_dotenv(ROOT / ".env")
         self.config = _load_config()
         self.logger = _setup_logger()
         self.feed = WSFeed(pairs=[], bars=["candle1m"], buffer_size=self._buffer_size())
         self.gateway = OKXGateway(self.feed, self.logger, warmup_bars=int(self.config["warmup_bars"]))
         self.metadata = CoinGeckoClient(
             COINGECKO_CACHE_PATH,
-            cache_ttl_sec=float(self.config["coingecko_cache_hours"]) * 3600.0,
+            cache_ttl_sec=float(self.config.get("coingecko_cache_hours", 24)) * 3600.0,
             logger=self.logger,
         )
         self.stop_event = asyncio.Event()
         self.state_lock = asyncio.Lock()
         self.states: dict[str, PairState] = {}
+        self.positions: dict[str, PaperPosition] = {}
+        self.cooldowns: dict[str, float] = {}
+        self.early_fired: dict[str, int] = {}
         self.pair_metadata: dict[str, PairMetadata] = {}
         self.parent_networks: dict[str, str] = {}
         self._universe_mtime: float = 0.0
+        self.eligible_pairs = {str(sym) for sym in self.config.get("eligible_pairs", [])}
 
     async def run(self) -> None:
         self._install_signal_handlers()
         self.feed.on_candle_close("candle1m", self._on_candle_close)
+        self.feed.on_candle_forming("candle1m", self._on_candle_forming)
 
         initial_universe = self._read_universe()
         self._universe_mtime = _path_mtime(ACTIVE_UNIVERSE_PATH)
-        if bool(self.config["coingecko_enabled"]):
+        if bool(self.config.get("coingecko_enabled", True)):
             bases = {_base_asset(sym) for sym in initial_universe}
             self.parent_networks = await self.metadata.load(bases)
         await self._sync_universe(initial_universe)
@@ -326,9 +348,10 @@ class SmartPumpShadow:
             await self.feed.warmup()
 
         self._log(
-            "started | shadow_mode=true "
-            f"pairs={len(initial_universe)} price_pct={self.config['price_pct']} "
-            f"vol_mult={self.config['vol_mult']} baseline_bars={self.config['baseline_bars']}"
+            "started | reversal_paper=true "
+            f"eligible={','.join(sorted(self.eligible_pairs)) or '-'} "
+            f"subscribed={len(self.states)} explosion_pct={self.config['explosion_pct']} "
+            f"vol_mult={self.config['vol_mult']}"
         )
 
         feed_task = asyncio.create_task(self.feed.start(), name="ws_smart_pump.feed")
@@ -353,7 +376,7 @@ class SmartPumpShadow:
                     task.cancel()
             await asyncio.gather(feed_task, universe_task, heartbeat_task, stop_task, return_exceptions=True)
             await self.feed.stop()
-            self._log(f"stopped | pairs={len(self.states)}")
+            self._log(f"stopped | pairs={len(self.states)} open_positions={len(self.positions)}")
 
     async def _universe_watch_loop(self) -> None:
         poll_sec = float(self.config["universe_poll_sec"])
@@ -367,7 +390,7 @@ class SmartPumpShadow:
                 continue
             self._universe_mtime = mtime
             universe = self._read_universe()
-            if bool(self.config["coingecko_enabled"]):
+            if bool(self.config.get("coingecko_enabled", True)):
                 missing = {
                     _base_asset(sym)
                     for sym in universe
@@ -379,7 +402,7 @@ class SmartPumpShadow:
 
     async def _sync_universe(self, universe: dict[str, dict[str, Any]]) -> None:
         async with self.state_lock:
-            desired = set(universe)
+            desired = set(universe) & self.eligible_pairs
             current = set(self.states)
             added = sorted(desired - current)
             removed = sorted(current - desired)
@@ -391,8 +414,11 @@ class SmartPumpShadow:
                 await self.gateway.subscribe_candles(sym)
 
             for sym in removed:
+                if sym in self.positions:
+                    await self._close_position(self.positions[sym], "TIME", self.positions[sym].entry_price)
                 self.states.pop(sym, None)
                 self.pair_metadata.pop(sym, None)
+                self.early_fired.pop(sym, None)
                 await self.gateway.unsubscribe_candles(sym)
 
             for sym in desired & current:
@@ -401,9 +427,11 @@ class SmartPumpShadow:
                 self.states[sym].parent_network = pair_meta.parent_network
 
         if added or removed:
+            ignored = sorted(set(universe) - self.eligible_pairs)
             self._log(
-                f"UNIVERSE update | active={len(universe)} "
-                f"| added={','.join(added) or '-'} | removed={','.join(removed) or '-'}"
+                f"UNIVERSE update | active={len(universe)} eligible_active={len(desired)} "
+                f"| added={','.join(added) or '-'} | removed={','.join(removed) or '-'} "
+                f"| ignored_noneligible={len(ignored)}"
             )
 
     async def _on_candle_close(self, sym: str, candle: Candle) -> None:
@@ -412,78 +440,257 @@ class SmartPumpShadow:
             if state is None:
                 return
             self._update_pair_state(state, candle)
-            gate = self._gate_decision(state)
-            if not gate.passed:
-                if gate.reason.startswith("stale_candle"):
-                    self._write_candidate(state, gate, "freshness_check")
+            pos = self.positions.get(sym)
+            if pos:
+                await self._check_position(pos, candle)
+
+            if self.early_fired.get(sym) == candle[0]:
                 return
-            self._write_candidate(state, gate, "prefilter")
+            if sym not in self.states or sym in self.positions:
+                return
+            event = self._closed_explosion_event(sym, candle)
+            if not event:
+                return
+            self._write_candidate(event, early_entry=False)
+            if self._can_open(sym):
+                await self._open_position(event, early_entry=False)
+
+    async def _on_candle_forming(self, sym: str, candle: Candle) -> None:
+        if not bool(self.config["early_entry_enabled"]):
+            return
+        async with self.state_lock:
+            if sym not in self.states or sym in self.positions:
+                return
+            if self.early_fired.get(sym) == candle[0]:
+                return
+            if not self._can_open(sym):
+                return
+            event = self._forming_explosion_event(sym, candle)
+            if not event:
+                return
+            self.early_fired[sym] = candle[0]
+            self._write_candidate(event, early_entry=True)
+            await self._open_position(event, early_entry=True)
+
+    def _closed_explosion_event(self, sym: str, candle: Candle) -> ExplosionEvent | None:
+        ts_ms, open_px, _high, _low, close_px, _vol_contracts, _vol_usdt = candle
+        move_pct = _pct_change(open_px, close_px)
+        explosion_pct = abs(move_pct)
+        vol_ratio = self._vol_ratio(sym, forming_candle=None)
+        if vol_ratio is None:
+            self._log(f"CANDIDATE BLOCK | {sym:<20} | insufficient_baseline")
+            return None
+        if explosion_pct < float(self.config["explosion_pct"]) or vol_ratio < float(self.config["vol_mult"]):
+            return None
+        return self._event_from_move(sym, candle, explosion_pct, vol_ratio)
+
+    def _forming_explosion_event(self, sym: str, candle: Candle) -> ExplosionEvent | None:
+        ts_ms, open_px, _high, _low, close_px, _vol_contracts, _vol_usdt = candle
+        elapsed_sec = self._elapsed_from_candle_open(ts_ms)
+        if elapsed_sec < 0 or elapsed_sec > float(self.config["early_trigger_sec"]):
+            return None
+        move_pct = _pct_change(open_px, close_px)
+        explosion_pct = abs(move_pct)
+        if explosion_pct < float(self.config["early_trigger_pct"]):
+            return None
+        vol_ratio = self._vol_ratio(sym, forming_candle=candle)
+        if vol_ratio is None or vol_ratio < float(self.config["vol_mult"]):
+            return None
+        return self._event_from_move(sym, candle, explosion_pct, vol_ratio)
+
+    def _event_from_move(self, sym: str, candle: Candle, explosion_pct: float, vol_ratio: float) -> ExplosionEvent:
+        ts_ms, open_px, _high, _low, close_px, _vol_contracts, _vol_usdt = candle
+        direction = "up" if close_px >= open_px else "down"
+        reversal_side = "sell" if direction == "up" else "buy"
+        return ExplosionEvent(
+            sym=sym,
+            direction=direction,
+            reversal_side=reversal_side,
+            explosion_pct=float(explosion_pct),
+            vol_ratio=float(vol_ratio),
+            candle_open=float(open_px),
+            candle_close=float(close_px),
+            ts_ms=int(ts_ms),
+            ts=_ts_from_ms(int(ts_ms)),
+        )
+
+    async def _open_position(self, event: ExplosionEvent, early_entry: bool) -> None:
+        entry = event.candle_close
+        sl_pct = float(self.config["sl_pct"]) / 100.0
+        tp_pct = float(self.config["tp_pct"]) / 100.0
+        if event.reversal_side == "buy":
+            sl = entry * (1.0 - sl_pct)
+            tp = entry * (1.0 + tp_pct)
+        else:
+            sl = entry * (1.0 + sl_pct)
+            tp = entry * (1.0 - tp_pct)
+
+        pos = PaperPosition(
+            signal_id=str(uuid.uuid4()),
+            sym=event.sym,
+            side=event.reversal_side,
+            entry_price=float(entry),
+            sl_price=float(sl),
+            tp_price=float(tp),
+            sl_initial=float(sl),
+            mfe_pct=0.0,
+            mae_pct=0.0,
+            opened_at=time.time(),
+            ts=_ts_utc(),
+            early_entry=early_entry,
+            explosion_pct=event.explosion_pct,
+            vol_ratio=event.vol_ratio,
+            sl_promoted="",
+        )
+        self.positions[event.sym] = pos
+        self._write_signal(pos, event)
+        self._log(
+            f"ENTRY | {pos.sym:<20} | {pos.side.upper()} reversal | "
+            f"entry={pos.entry_price:.8g} sl={pos.sl_price:.8g} tp={pos.tp_price:.8g} "
+            f"| explosion={event.explosion_pct:+.2f}% vol={event.vol_ratio:.2f}x early={early_entry}"
+        )
+        await self._notify(_format_open_message(pos, event))
+
+    async def _check_position(self, pos: PaperPosition, candle: Candle) -> None:
+        _ts_ms, _open_px, high, low, close, _vol_contracts, _vol_usdt = candle
+        if pos.side == "buy":
+            favorable_price = high
+            adverse_price = low
+            favorable_pct = (favorable_price - pos.entry_price) / pos.entry_price * 100.0
+            adverse_pct = (pos.entry_price - adverse_price) / pos.entry_price * 100.0
+            tp_hit = high >= pos.tp_price
+            sl_hit = low <= pos.sl_price
+        else:
+            favorable_price = low
+            adverse_price = high
+            favorable_pct = (pos.entry_price - favorable_price) / pos.entry_price * 100.0
+            adverse_pct = (adverse_price - pos.entry_price) / pos.entry_price * 100.0
+            tp_hit = low <= pos.tp_price
+            sl_hit = high >= pos.sl_price
+
+        pos.mfe_pct = max(pos.mfe_pct, favorable_pct)
+        pos.mae_pct = max(pos.mae_pct, adverse_pct)
+        self._promote_stop(pos)
+
+        # Research MFE/MAE assumes favorable side first, then adverse side.
+        if tp_hit:
+            await self._close_position(pos, "TP", pos.tp_price)
+            return
+
+        if pos.side == "buy":
+            sl_hit = low <= pos.sl_price
+        else:
+            sl_hit = high >= pos.sl_price
+        if sl_hit:
+            await self._close_position(pos, "SL", pos.sl_price)
+            return
+
+        elapsed_min = (time.time() - pos.opened_at) / 60.0
+        if elapsed_min >= float(self.config["max_hold_min"]):
+            await self._close_position(pos, "TIME", close)
+
+    def _promote_stop(self, pos: PaperPosition) -> None:
+        if pos.mfe_pct >= float(self.config["be_trigger_pct"]) and pos.sl_promoted == "":
+            pos.sl_price = pos.entry_price
+            pos.sl_promoted = "be"
+            self._log(f"SL_PROMOTE | {pos.sym:<20} | be | sl={pos.sl_price:.8g}")
+
+        if pos.mfe_pct >= float(self.config["lock_trigger_pct"]) and pos.sl_promoted == "be":
+            lock_pct = float(self.config["lock_profit_pct"]) / 100.0
+            if pos.side == "buy":
+                pos.sl_price = pos.entry_price * (1.0 + lock_pct)
+            else:
+                pos.sl_price = pos.entry_price * (1.0 - lock_pct)
+            pos.sl_promoted = "lock"
+            self._log(f"SL_PROMOTE | {pos.sym:<20} | lock | sl={pos.sl_price:.8g}")
+
+    async def _close_position(self, pos: PaperPosition, outcome: str, exit_price: float) -> None:
+        self.positions.pop(pos.sym, None)
+        self.cooldowns[pos.sym] = time.time() + float(self.config["cooldown_sec"])
+        elapsed_m = (time.time() - pos.opened_at) / 60.0
+        r_value = _r_value(pos, exit_price)
+        payload = {
+            "signal_id": pos.signal_id,
+            "outcome": outcome,
+            "exit_price": float(exit_price),
+            "mfe_pct": pos.mfe_pct,
+            "mae_pct": pos.mae_pct,
+            "elapsed_m": elapsed_m,
+            "sl_promoted": pos.sl_promoted,
+            "early_entry": pos.early_entry,
+        }
+        _append_jsonl(LABELS_LOG, payload)
+        self._log(
+            f"CLOSE | {pos.sym:<20} | {outcome} | r={r_value:+.2f} "
+            f"| exit={exit_price:.8g} mfe={pos.mfe_pct:.2f}% mae={pos.mae_pct:.2f}% "
+            f"| held={elapsed_m:.1f}m sl_promoted={pos.sl_promoted or '-'}"
+        )
+        await self._notify(_format_close_message(pos, outcome, exit_price, r_value, elapsed_m))
+
+    def _can_open(self, sym: str) -> bool:
+        if sym not in self.eligible_pairs:
+            return False
+        if len(self.positions) >= int(self.config["max_concurrent"]):
+            return False
+        if sym in self.positions:
+            return False
+        if time.time() < self.cooldowns.get(sym, 0.0):
+            return False
+        return True
 
     def _update_pair_state(self, state: PairState, candle: Candle) -> None:
-        ts_ms, open_px, _high, _low, close_px, _vol_contracts, vol_usdt = candle
-        state.candle_close = float(close_px)
-        # WSFeed maps OKX candle row[7] (volCcyQuote, USDT volume) to candle[6].
-        state.vol_usd = float(vol_usdt)
-        state.price_change_1m_pct = (
-            abs(float(close_px) - float(open_px)) / float(open_px) * 100.0 if open_px > 0 else 0.0
-        )
-        state.ts_candle = int(ts_ms) / 1000.0
+        ts_ms, open_px, _high, _low, close_px, _vol_contracts, _vol_usdt = candle
+        state.last_candle_ts_ms = int(ts_ms)
+        state.last_close = float(close_px)
+        state.last_price_change_pct = abs(_pct_change(open_px, close_px))
+        state.last_vol_ratio = self._vol_ratio(state.sym, forming_candle=None) or 0.0
 
-    def _gate_decision(self, state: PairState) -> GateDecision:
-        now = time.time()
-        max_age = float(self.config["data_freshness_sec"])
-        if state.ts_candle <= 0:
-            return GateDecision(False, "missing_candle", 0.0)
-        age = now - state.ts_candle
-        if age > max_age:
-            return GateDecision(False, f"stale_candle:{age:.1f}s", 0.0)
-
-        vol_ratio = self._vol_ratio(state.sym)
-        if vol_ratio is None:
-            return GateDecision(False, "insufficient_baseline", 0.0)
-
-        price_pct = float(state.price_change_1m_pct)
-        if vol_ratio >= float(self.config["vol_mult"]) and price_pct < float(self.config["stagnation_price_pct"]):
-            return GateDecision(False, "stagnation", vol_ratio)
-        if price_pct < float(self.config["price_pct"]):
-            return GateDecision(False, "price_change_below_threshold", vol_ratio)
-        if vol_ratio < float(self.config["vol_mult"]):
-            return GateDecision(False, "vol_ratio_below_threshold", vol_ratio)
-        return GateDecision(True, f"prefilter:price={price_pct:.3f},vol_ratio={vol_ratio:.3f}", vol_ratio)
-
-    def _vol_ratio(self, sym: str) -> float | None:
+    def _vol_ratio(self, sym: str, forming_candle: Candle | None) -> float | None:
         bars = int(self.config["baseline_bars"])
         history = self.feed.get_candles(sym, "candle1m", bars + 1)
-        if len(history) < bars + 1:
-            return None
-        current = history[-1]
-        previous = history[-(bars + 1) : -1]
+        if forming_candle is None:
+            if len(history) < bars + 1:
+                return None
+            current = history[-1]
+            previous = history[-(bars + 1) : -1]
+        else:
+            if len(history) < bars:
+                return None
+            current = forming_candle
+            previous = history[-bars:]
         baseline = sum(row[6] for row in previous) / float(bars)
         if baseline <= 0:
             return None
         return float(current[6]) / baseline
 
-    def _write_candidate(self, state: PairState, gate: GateDecision, trigger: str) -> None:
-        direction = self._direction_from_last_candle(state.sym)
-        blocked_by = "" if gate.passed else gate.reason
-        candidate = SignalCandidate(
-            sym=state.sym,
-            direction=direction,
-            trigger_reason=trigger,
-            gate_passed=gate.passed,
-            gate_blocked_by=blocked_by,
-            ts=_ts_utc(),
-        )
+    def _write_candidate(self, event: ExplosionEvent, early_entry: bool) -> None:
         payload = {
-            **asdict(candidate),
-            "gate_score": gate.score,
-            "pair_state": asdict(state),
+            **asdict(event),
+            "early_entry": early_entry,
+            "reversal_direction": f"{event.direction}_explosion",
         }
-        CANDIDATES_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with CANDIDATES_LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        status = "PASS" if gate.passed else "BLOCK"
-        self._log(f"CANDIDATE {status} | {state.sym:<20} | {gate.reason}")
+        _append_jsonl(CANDIDATES_LOG, payload)
+        self._log(
+            f"CANDIDATE | {event.sym:<20} | {event.direction}_explosion "
+            f"| reversal={event.reversal_side.upper()} | move={event.explosion_pct:+.2f}% "
+            f"vol={event.vol_ratio:.2f}x early={early_entry}"
+        )
+
+    def _write_signal(self, pos: PaperPosition, event: ExplosionEvent) -> None:
+        payload = {
+            "signal_id": pos.signal_id,
+            "sym": pos.sym,
+            "side": pos.side,
+            "entry_price": pos.entry_price,
+            "sl_price": pos.sl_price,
+            "tp_price": pos.tp_price,
+            "explosion_pct": pos.explosion_pct,
+            "vol_ratio": pos.vol_ratio,
+            "early_entry": pos.early_entry,
+            "ts": pos.ts,
+            "reversal_direction": f"{event.direction}_explosion",
+        }
+        _append_jsonl(SIGNALS_LOG, payload)
 
     def _read_universe(self) -> dict[str, dict[str, Any]]:
         try:
@@ -503,7 +710,28 @@ class SmartPumpShadow:
         while not self.stop_event.is_set():
             await asyncio.sleep(interval)
             subscribed = len(self.gateway.subscribed_candles)
-            self._log(f"HEARTBEAT | pairs={len(self.states)} subscribed_candles={subscribed}")
+            self._log(
+                f"HEARTBEAT | pairs={len(self.states)} subscribed_candles={subscribed} "
+                f"open_positions={len(self.positions)} cooldowns={self._active_cooldowns()}"
+            )
+
+    async def _notify(self, text: str) -> None:
+        chats = _pump_chat_ids()
+        if not chats:
+            return
+        for chat_id in chats:
+            try:
+                await send_message_to(chat_id, text)
+            except Exception as exc:
+                self._log(f"NOTIFY error | chat={chat_id} | {exc}")
+
+    def _active_cooldowns(self) -> int:
+        now = time.time()
+        return sum(1 for expires_at in self.cooldowns.values() if expires_at > now)
+
+    def _elapsed_from_candle_open(self, ts_ms: int) -> float:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return (now_ms - int(ts_ms)) / 1000.0
 
     def _buffer_size(self) -> int:
         return max(int(self.config["baseline_bars"]) + 5, int(self.config["warmup_bars"]), 30)
@@ -515,17 +743,6 @@ class SmartPumpShadow:
             base_asset=base,
             parent_network=self.parent_networks.get(base, "OTHER"),
         )
-
-    def _direction_from_last_candle(self, sym: str) -> str:
-        history = self.feed.get_candles(sym, "candle1m", 1)
-        if not history:
-            return "unknown"
-        current = history[-1]
-        if current[4] > current[1]:
-            return "up"
-        if current[4] < current[1]:
-            return "down"
-        return "flat"
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -546,7 +763,6 @@ def _load_config() -> dict[str, Any]:
     try:
         with (ROOT / "config.yaml").open(encoding="utf-8") as f:
             project = yaml.safe_load(f) or {}
-        cfg.update(project.get("pump_orchestrator", {}) or {})
         cfg.update(project.get("smart_pump", {}) or {})
     except Exception:
         pass
@@ -574,6 +790,56 @@ def _setup_logger() -> logging.Logger:
     return logger
 
 
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _pct_change(start: float, end: float) -> float:
+    if start <= 0:
+        return 0.0
+    return (float(end) - float(start)) / float(start) * 100.0
+
+
+def _r_value(pos: PaperPosition, exit_price: float) -> float:
+    risk = abs(pos.entry_price - pos.sl_initial)
+    if risk <= 0:
+        return 0.0
+    if pos.side == "buy":
+        return (float(exit_price) - pos.entry_price) / risk
+    return (pos.entry_price - float(exit_price)) / risk
+
+
+def _format_open_message(pos: PaperPosition, event: ExplosionEvent) -> str:
+    side_label = "LONG" if pos.side == "buy" else "SHORT"
+    return (
+        f"🔄 REVERSAL PAPER | {pos.sym}\n"
+        f"{side_label} | entry {pos.entry_price:.8g} | SL {pos.sl_price:.8g} | TP {pos.tp_price:.8g}\n"
+        f"Explosion: {event.explosion_pct:+.2f}% | vol_ratio: {event.vol_ratio:.2f}x | "
+        f"early: {'yes' if pos.early_entry else 'no'}"
+    )
+
+
+def _format_close_message(
+    pos: PaperPosition,
+    outcome: str,
+    exit_price: float,
+    r_value: float,
+    elapsed_m: float,
+) -> str:
+    icon = "✅" if outcome == "TP" else ("⏱" if outcome == "TIME" else "❌")
+    return (
+        f"{icon} {outcome} | {pos.sym} | {r_value:+.2f}R\n"
+        f"exit {exit_price:.8g} | MFE {pos.mfe_pct:.2f}% | held {elapsed_m:.1f}m | "
+        f"SL promoted: {pos.sl_promoted or '-'}"
+    )
+
+
+def _pump_chat_ids() -> list[str]:
+    return [cid.strip() for cid in os.environ.get("PUMP_CHAT_ID", "").split(",") if cid.strip()]
+
+
 def _base_asset(sym: str) -> str:
     return sym.split("-", 1)[0].upper()
 
@@ -584,6 +850,10 @@ def _now() -> str:
 
 def _ts_utc() -> str:
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ts_from_ms(ts_ms: int) -> str:
+    return datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _path_mtime(path: Path) -> float:
@@ -599,4 +869,4 @@ def _env(name: str) -> str:
 
 
 if __name__ == "__main__":
-    asyncio.run(SmartPumpShadow().run())
+    asyncio.run(SmartPumpEngine().run())

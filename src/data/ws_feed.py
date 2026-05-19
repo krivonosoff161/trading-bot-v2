@@ -59,6 +59,7 @@ class WSFeed:
         }
         self.callbacks: dict[str, list[Callback]] = defaultdict(list)
         self.update_callbacks: dict[str, list[Callback]] = defaultdict(list)
+        self.forming_callbacks: dict[str, list[Callback]] = defaultdict(list)
         self.last_close_ts: dict[str, dict[str, int]] = defaultdict(dict)
         self.last_msg_ts: dict[str, pd.Timestamp] = {}
         self.session: aiohttp.ClientSession | None = None
@@ -134,6 +135,12 @@ class WSFeed:
             raise ValueError(f"Unsupported bar: {bar}")
         self.update_callbacks[bar].append(callback)
 
+    def on_candle_forming(self, bar: str, callback: Callback) -> None:
+        """Called on every live update of an incomplete candle (row[8]=='0')."""
+        if bar not in self.bars:
+            raise ValueError(f"Unsupported bar: {bar}")
+        self.forming_callbacks[bar].append(callback)
+
     def ensure_pair(self, sym: str) -> None:
         if sym in self.buffers:
             return
@@ -208,6 +215,8 @@ class WSFeed:
                 # Live updating candle — dispatch to update callbacks only
                 if self.update_callbacks.get(bar):
                     await self._dispatch_update(bar, sym, candle)
+                if self.forming_callbacks.get(bar):
+                    await self._dispatch_forming(bar, sym, candle)
             elif row[8] == "1":
                 # Closed candle — add to buffer and dispatch close callbacks
                 if self.last_close_ts[sym].get(bar) == candle[0]:
@@ -233,6 +242,15 @@ class WSFeed:
                     await result
             except Exception as exc:
                 print(f"[{_now()}] WSFeed update callback error {bar} {sym}: {exc}")
+
+    async def _dispatch_forming(self, bar: str, sym: str, candle: Candle) -> None:
+        for callback in self.forming_callbacks.get(bar, []):
+            try:
+                result = callback(sym, candle)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:
+                print(f"[{_now()}] WSFeed forming callback error {bar} {sym}: {exc}")
 
     async def _rest_candles(self, sym: str, bar: str, limit: int) -> list:
         assert self.session is not None

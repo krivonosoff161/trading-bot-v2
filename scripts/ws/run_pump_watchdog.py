@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent / "ws_pump_orchestrator.py"
+SCRIPT = Path(__file__).resolve().parent / "ws_smart_pump.py"
 RESTART_DELAY_SEC = 30
 MAX_RESTARTS_PER_HOUR = 10
 
