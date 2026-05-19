@@ -402,7 +402,7 @@ class SmartPumpEngine:
 
     async def _sync_universe(self, universe: dict[str, dict[str, Any]]) -> None:
         async with self.state_lock:
-            desired = set(universe) & self.eligible_pairs
+            desired = self.eligible_pairs  # always subscribe to eligible pairs directly
             current = set(self.states)
             added = sorted(desired - current)
             removed = sorted(current - desired)
@@ -427,11 +427,9 @@ class SmartPumpEngine:
                 self.states[sym].parent_network = pair_meta.parent_network
 
         if added or removed:
-            ignored = sorted(set(universe) - self.eligible_pairs)
             self._log(
-                f"UNIVERSE update | active={len(universe)} eligible_active={len(desired)} "
-                f"| added={','.join(added) or '-'} | removed={','.join(removed) or '-'} "
-                f"| ignored_noneligible={len(ignored)}"
+                f"UNIVERSE update | eligible={len(desired)} "
+                f"| added={','.join(added) or '-'} | removed={','.join(removed) or '-'}"
             )
 
     async def _on_candle_close(self, sym: str, candle: Candle) -> None:
