@@ -4,7 +4,7 @@
 
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
-**Последнее ревью:** 2026-05-18 (после research отчёта `docs/gpt_full_research_18_05_2026.md`)
+**Последнее ревью:** 2026-05-19 (после аудита 19.05, запуска ws_smart_pump reversal engine)
 
 **Условные обозначения:**
 - ✅ Внедрено в прод
@@ -18,19 +18,17 @@
 
 Источник: `docs/gpt_full_research_18_05_2026.md` (полный отчёт), аудит пройден.
 
-### ⏳ Pump: session_ban_sl_no_tp 3 → 2 (Sim7, safe)
+### ✅ Pump: session_ban_sl_no_tp 3 → 2 (применено 18.05)
 - Бан пары после **2** последовательных SL вместо 3
 - Effect на 2026-05-16..18 backtest: **+4.75 п.п.** net
-- Zero overfit risk, никакой pair-specific логики
-- **Изменение:** `config.yaml` → `pump_orchestrator.session_ban_sl_no_tp: 2`
+- Применено в `config.yaml` → `pump_orchestrator.session_ban_sl_no_tp: 2` (commit 84ec5e1)
 
-### ⏳ Pump: pair_risk_overrides handler + hard-block APR/RIVER/LAB
-- Новая секция в config + обработчик в `ws_pump_orchestrator.py`
-- **Логика:** если пара в block-list → orchestrator пропускает сигнал на этапе entry
-- **Block list (только):** APR / RIVER / LAB — у этих пар **нет tape coverage** на E:\trading-data\ticks\ (recorder ни разу не подписывался), net по ним -14.60% на 11 сделках. Структурный сигнал, не cherry-pick.
-- BSB / BABY / BILL **не блокируем** — у них есть tape coverage, дать шанс с session_ban_sl_no_tp=2
-- **Эффект Sim8 (APR/RIVER/LAB hard block):** +16.27 п.п. на 3-day window
-- **Caveat:** schema `pair_risk_overrides` это research proposal, нужно реализовать обработчик. ~30 мин работы.
+### ✅ Pump: pair_risk_overrides + hard-block APR/RIVER/LAB (применено 18.05)
+- Секция `pair_risk_overrides` в config + обработчик в движке
+- APR / RIVER / LAB → mode: block (нет tape coverage, net -14.60% на 11 сделках)
+- BSB / BABY / BILL — не блокируем (есть tape coverage)
+- **Эффект Sim8:** +16.27 п.п. на 3-day window (commit 564d58e)
+- **Примечание (19.05):** ws_pump_orchestrator.py АРХИВИРОВАН. Оба фикса перенесены как risk-containment в ws_smart_pump.py (новый движок).
 
 ### ❌ НЕ применяем сейчас (отложено)
 - **Sim9 full overrides** (BABY/BSB/BILL hard block + BSB half-size + BILL cap2) — overfit risk на 3 днях слишком высокий, +24.81 п.п. может стать -X на следующей неделе
@@ -71,35 +69,35 @@ Path A симуляция + декомпозиция conditions_not_met заве
 
 ---
 
-## 🧭 Приоритеты на 2026-05-18 (snapshot)
+## 🧭 Приоритеты на 2026-05-19 (snapshot)
 
 > Сверять с этим разделом в начале каждой сессии. Менять при закрытии фаз / появлении блокеров.
 
-### 🔴 P0 — СЕЙЧАС (1-3 дня, не блокирующие друг друга)
-- **Мониторинг pump-фиксов** — наблюдаем 2-3 дня как `session_ban_sl_no_tp=2` + `pair_risk_overrides` влияют на WR/net. Метрика: WR за 3 дня ≥ 35% И отсутствие новых пар в drag-листе.
-- **Накопление S2.3 labeled** — сейчас 75/100. Доберём пассивно при работающем боте. Когда дойдём до 100 — закрываем S2.3.
-- **GPT research-track main scanner** (опционально, без правок прода): прицельный majors-only replay `min_vol_ratio_trending`, потом `slope_min` decomposition. Параллельно живому боту.
+### 🔴 P0 — СЕЙЧАС (1-7 дней)
+- **Мониторинг ws_smart_pump.py** — новый reversal engine (BILL/JELLYJELLY/NOT) запущен 19.05. Ждём первые 20-50 бумажных сделок. Смотрим: raw WR, распределение по парам, hold time. Не трогаем логику пока нет данных.
+- **Накопление S2.3 labeled** — сейчас ~85/100. Копится пассивно. Когда 100 → закрываем S2.3, запускаем analyze_signal_log.py полный прогон.
+- **Мониторинг context_gate Asia** — `skip_asia_trending=true` (00-06 UTC) добавлен 19.05 в ws_main_screener. Проверить через 3-5 дней: WR TRENDING до/после 06:00 UTC в логах.
 
-### 🟡 P1 — СЛЕДУЮЩАЯ ФАЗА (после закрытия S2.3 или появления новых данных)
-- **Phase G.0 forensics** (`BACKLOG.md` строка 546) — Training DB + pattern mining + commit forensics. Стартовать только после S2.3.
-- **Phase C.1 ws_smart_pump** — новый движок с 7 слоями данных. Старт когда pump-фиксы дадут стабильный baseline.
-- **Phase F.2 BB Fade tape filter** — гипотеза `pre_buy_ratio`. Стартовать когда tape_recorder накопит 30+ дней (~июнь).
-- **Main scanner правки** (`min_vol_ratio_trending`, `slope_min`) — только когда соберём 20+ live TRENDING×SWING на майорах ИЛИ полный 1m исторический replay.
+### 🟡 P1 — СЛЕДУЮЩИЙ ШАГ (после первых результатов ws_smart_pump)
+- **[НОВОЕ 19.05] CVD + oscillation context для ws_smart_pump** — добавить running CVD (накопленное buy/sell давление между взрывами) и трекер фазы цикла (research: медиана цикла 25 мин, next opposite 11 мин) как pre-explosion context. Цель: знать состояние рынка ДО взрыва, а не реагировать холодно. **Старт только после 50+ paper сделок** — сначала валидируем базовый реверсальный edge.
+- **Phase F.2 BB Fade tape filter** — гипотеза `pre_buy_ratio` (WR=75% в нужной зоне, 0% вне). Стартовать когда tape_recorder накопит 30+ дней (~июнь 2026).
+- **Phase G.0 forensics** — Training DB + pattern mining + commit forensics. Стартовать только после закрытия S2.3.
+- **Main scanner правки** (TRENDING×SWING, `min_vol_ratio_trending`) — только когда соберём 20+ live TRENDING×SWING на майорах.
 
 ### 🟢 P2 — research candidates (записать, не делать)
-- **Main scanner на 5m триггерах** (NEW идея 18.05) — кандидат для исследования внутри Phase G.0. Сравнить 15m vs 5m триггеры на одной истории, оценить WR/n trade-off. Сейчас не делаем — нет данных, не закрыты текущие фазы.
-- **Tape анализ паттернов вокруг входа для main канала** — расширение F.2 hypothesis на main. Часть G.0.4 schema (tape_window поля). Не отдельная задача.
-- **Pinned majors в universe** — пометить мажоров как always-on в ws_main_screener для накопления данных. Низкий риск, но не критично сейчас.
+- **context_gate Phase 2 для main screener** — tape enrichment в момент сигнала (trade_delta, OBI, spread). После 100+ labeled сигналов, пока не трогаем.
+- **Main scanner на 5m триггерах** — сравнить 15m vs 5m триггеры на одной истории. Часть G.0 research.
+- **Pinned majors в universe** — BTC/ETH/SOL/XRP/DOGE always-on в ws_main_screener для накопления TRENDING×SWING данных по майорам.
 
 ### ⚪ P3 — большой горизонт
-- Phase G.1-G.4 multi-agent LLM (`BACKLOG.md` строка 691)
-- Phase S3.1 Desktop Journal App (`BACKLOG.md` строка 424)
-- Telegram Dev-Bridge (`BACKLOG.md` строка 817)
+- Phase G.1-G.4 multi-agent LLM
+- Phase S3.1 Desktop Journal App
+- Telegram Dev-Bridge
 
-### Что НЕ начинаем сейчас (явный отказ по красной линии CLAUDE.md)
-- Любые "ещё одну фичу" пока S2.3 / C.1 / F.1 не закрыты
-- Откат main scanner фильтров без новых данных (угадывание вслепую)
-- Параллельный старт двух новых треков (расфокусировка)
+### Что НЕ начинаем сейчас
+- Новые фичи в ws_smart_pump пока нет 50+ сделок
+- Откат main scanner фильтров без данных
+- Параллельный старт двух новых треков
 
 ---
 
@@ -172,11 +170,10 @@ Path A симуляция + декомпозиция conditions_not_met заве
 - **Зависит от:** ws_main_screener проработал 24-48ч в shadow-режиме → есть что оценивать
 - **Когда:** следующая сессия после анализа логов main_screener
 
-### ⏳ Pump Engine: добавить alt-coin пары
-- Текущие пары (BTC/ETH/SOL/XRP/DOGE) слишком большие — памп 2%+ редкость
-- 13 сделок за несколько дней, нужно больше активности
-- Кандидаты: AI-USDT, PENGU-USDT и другие активные альты
-- **Когда:** после 50+ сделок с текущими парами ИЛИ если активность < 1 сигнал/день
+### ✅ Pump Engine: alt-coin пары (решено через новую архитектуру 19.05)
+- ws_smart_pump.py работает на BILL/JELLYJELLY/NOT (WR reversal 54-63% по research)
+- Не зависит от active_universe.json — всегда подписан на eligible_pairs
+- Если нужно расширить universe → отдельный research на новых парах по той же методике (WS reversal universe scan)
 
 ### ⏳ analyze_signal_log.py — полный прогон
 - Скрипт написан, но нужно 100+ labeled сигналов
@@ -186,23 +183,20 @@ Path A симуляция + декомпозиция conditions_not_met заве
 
 ## P0 — Технический долг из аудита 16-17.05
 
-### ⏳ Перенос bt_pump_*.py в scripts/backtest/
-- 8 файлов research toolkit лежат в scripts/ws/ (нарушение CLAUDE.md)
-- Файлы используют relative imports через sys.path.insert на свою папку
-- Нужна отдельная аккуратная сессия: один импорт за раз + smoke test
-- Зависимость на production уже устранена (fetch_ctvals вынесен в src/exchange/okx_meta.py)
-- **Когда:** в отдельную сессию когда будет 1-2 часа без других задач
+### ✅ bt_pump_*.py архивированы (19.05.2026)
+- 11 файлов (bt_pump_core, sweep, filters, equity, walkforward, hours, tp_sl, report, bt_tape_analysis, pump_live_report) → `scripts/archive/`
+- ws_pump_orchestrator.py тоже архивирован — заменён ws_smart_pump.py
+- Зависимость на production устранена ранее (fetch_ctvals в src/exchange/okx_meta.py)
 
-### ⏳ CB state persistency в pump orchestrator
-- Сейчас `cb_daily_pnl` и `cb_halted` хранятся только в памяти
-- После рестарта (watchdog или вручную) защита от убытков ОБНУЛЯЕТСЯ
-- Риск: после краша в плохой день можно сразу опять зайти в убытки
-- Нужно: сохранять state в `logs/pump/cb_state.json` + читать при старте
+### ⏳ CB state persistency в ws_smart_pump
+- `session_ban_sl_no_tp` счётчик и `cb_halted` хранятся только в памяти
+- После рестарта (watchdog) защита обнуляется
+- Нужно: сохранять state в `logs/pump/smart_pump_state.json` + читать при старте
 - **Когда:** до перехода в Phase D (real trading) — обязательно
 
-### ⏳ Screener-to-orchestrator silence alert
-- Если ws_screener_live упадёт и перестанет писать active_universe.json — оркестратор живёт без сигналов часами молча
-- Нужно: heartbeat-check на возраст файла; если >5 мин → log ERROR + Telegram alert
+### ⏳ Screener-to-pump silence alert
+- Если ws_screener_live упадёт — ws_smart_pump живёт без обновлений active_universe.json (хотя eligible_pairs независимы, это всё равно признак проблемы)
+- Нужно: heartbeat-check на возраст файла; если >5 мин → log WARNING + Telegram alert
 - **Когда:** до Phase D
 
 ### ⏳ _calc_rsi в ws_bb_fade — слишком короткое окно
