@@ -108,6 +108,42 @@ main_screener:
     skip_asia_trending: true   # Asia 00-05 UTC + regime=TRENDING -> skip (WR=33%, research 19.05)
     asia_utc_end: 6            # hours 0-5 treated as Asia (00:00-05:59 UTC)
 
+smart_pump:
+  # Detection
+  explosion_pct: 0.8          # min |price_change_1m_pct| for explosive candle
+  vol_mult: 2.0               # min vol_ratio vs 15-bar baseline
+  baseline_bars: 15           # bars for volume baseline
+
+  # Eligible pairs (reversal WR >= 53%, research 19.05)
+  eligible_pairs:
+    - BILL-USDT-SWAP          # n=895, WR=54.5%
+    - JELLYJELLY-USDT-SWAP    # n=36,  WR=55.6%
+    - NOT-USDT-SWAP           # n=19,  WR=63.2%
+
+  # Intra-candle entry (Variant A: confirm=0)
+  early_entry_enabled: true
+  early_trigger_pct: 0.5      # price move from candle open, pct
+  early_trigger_sec: 20       # max seconds from candle open
+
+  # Risk management (paper)
+  sl_pct: 0.8                 # initial SL, pct from entry
+  tp_pct: 1.5                 # TP, pct from entry
+  max_hold_min: 15            # time exit
+
+  # Dynamic SL promotion
+  be_trigger_pct: 0.5         # after MFE >= 0.5% -> SL to BE
+  lock_trigger_pct: 0.7       # after MFE >= 0.7% -> SL to BE+0.2%
+  lock_profit_pct: 0.2        # locked profit at lock_trigger
+
+  # Limits
+  max_concurrent: 2           # max concurrent paper positions
+  cooldown_sec: 120           # per-pair cooldown after exit
+
+  # System
+  universe_poll_sec: 1
+  heartbeat_interval: 30
+  warmup_bars: 20
+
 bb_fade:
   top_n_pairs:            24
   universe_refresh_hours:  8
