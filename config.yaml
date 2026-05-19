@@ -104,6 +104,9 @@ main_screener:
   warmup_bars: 20
   prefilter_vol_ratio_min: 1.0
   prefilter_adx_min: 10
+  context_gate:
+    skip_asia_trending: true   # Asia 00-05 UTC + regime=TRENDING -> skip (WR=33%, research 19.05)
+    asia_utc_end: 6            # hours 0-5 treated as Asia (00:00-05:59 UTC)
 
 bb_fade:
   top_n_pairs:            24
