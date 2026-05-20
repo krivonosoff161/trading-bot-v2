@@ -4,7 +4,7 @@
 
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
-**Последнее ревью:** 2026-05-19 (после аудита 19.05, запуска ws_smart_pump reversal engine)
+**Последнее ревью:** 2026-05-20 (reversal pump ЗАКРЫТ fee-blocked → пивот в continuation research)
 
 **Условные обозначения:**
 - ✅ Внедрено в прод
@@ -74,12 +74,13 @@ Path A симуляция + декомпозиция conditions_not_met заве
 > Сверять с этим разделом в начале каждой сессии. Менять при закрытии фаз / появлении блокеров.
 
 ### 🔴 P0 — СЕЙЧАС (1-7 дней)
-- **Мониторинг ws_smart_pump.py** — новый reversal engine (BILL/JELLYJELLY/NOT) запущен 19.05. Ждём первые 20-50 бумажных сделок. Смотрим: raw WR, распределение по парам, hold time. Не трогаем логику пока нет данных.
+- **Pump Continuation research (round 2)** — reversal движок ЗАКРЫТ 20.05 (fee-blocked, постмортем `docs/strategy_pump_reversal_postmortem.md`), `ws_smart_pump.py` остановлен. Активный шаг: GPT прогоняет бриф `docs/gpt_continuation_research_v2_20_05_2026.md` (стоп за импульс + структурный выход + кластер-режим). Claude проверяет результат. **В прод ничего не добавляем пока нет положительного net после тейкера на всей выборке.**
 - **Накопление S2.3 labeled** — сейчас ~85/100. Копится пассивно. Когда 100 → закрываем S2.3, запускаем analyze_signal_log.py полный прогон.
 - **Мониторинг context_gate Asia** — `skip_asia_trending=true` (00-06 UTC) добавлен 19.05 в ws_main_screener. Проверить через 3-5 дней: WR TRENDING до/после 06:00 UTC в логах.
 
-### 🟡 P1 — СЛЕДУЮЩИЙ ШАГ (после первых результатов ws_smart_pump)
-- **[НОВОЕ 19.05] CVD + oscillation context для ws_smart_pump** — добавить running CVD (накопленное buy/sell давление между взрывами) и трекер фазы цикла (research: медиана цикла 25 мин, next opposite 11 мин) как pre-explosion context. Цель: знать состояние рынка ДО взрыва, а не реагировать холодно. **Старт только после 50+ paper сделок** — сначала валидируем базовый реверсальный edge.
+### 🟡 P1 — СЛЕДУЮЩИЙ ШАГ (после результатов continuation round 2)
+- **Continuation round 3 (если round 2 даст net+)** — кластер-режим (2+ взрыва/5м) как основной фильтр, структурный выход по слому ступеньки, ранний вход. Только если round 2 покажет положительный net после тейкера на полной выборке.
+- **CVD + oscillation как контекст** — running CVD и фаза цикла как pre-explosion context для continuation (не reversal — тот закрыт). Идея переиспользуется из закрытого reversal-плана. **Старт только после валидации базового continuation edge.**
 - **Phase F.2 BB Fade tape filter** — гипотеза `pre_buy_ratio` (WR=75% в нужной зоне, 0% вне). Стартовать когда tape_recorder накопит 30+ дней (~июнь 2026).
 - **Phase G.0 forensics** — Training DB + pattern mining + commit forensics. Стартовать только после закрытия S2.3.
 - **Main scanner правки** (TRENDING×SWING, `min_vol_ratio_trending`) — только когда соберём 20+ live TRENDING×SWING на майорах.
