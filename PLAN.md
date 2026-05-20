@@ -1,6 +1,6 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-18
+**Последнее обновление:** 2026-05-20
 
 > **Режим всех треков: PAPER TRADING / TEST ONLY**
 > AUTO_TRADE=false на всех процессах. Реальные деньги — только после прохождения
@@ -27,15 +27,15 @@ GPT прогнал полный анализ по 3 каналам. Главны
 
 ---
 
-## Текущий этап: S2.3 + Pump Engine Phase C.1 + BB Fade Phase F.1
+## Текущий этап: S2.3 + Pump Continuation Research + BB Fade Phase F.1
 
 ### Три параллельных трека:
 
 **Трек 1 — Concierge Analyzer** (основной, приносит клиентов)
 Фаза: S2.3 — Рост и качество
 
-**Трек 2 — Pump Engine** (paper trading)
-Фаза: C.1 — Новый движок ws_smart_pump.py (B.5 закрыта)
+**Трек 2 — Pump Engine** (research)
+Фаза: Reversal ЗАКРЫТ (fee-blocked) → Continuation research (round 2)
 
 **Трек 3 — BB Fade** (отдельный канал, mean reversion)
 Фаза: F.1 — Live процесс + сбор данных
@@ -99,6 +99,30 @@ analyze_chart.py считает, llm_formatter.py объясняет.
 ---
 
 ## Трек 2 — Pump Engine (WS)
+
+### 🔴 ТЕКУЩИЙ СТАТУС (20.05.2026)
+
+| Подход | Статус |
+|--------|--------|
+| Momentum (вход по взрыву, `ws_pump_orchestrator`) | ❌ ЗАКРЫТ — n=560, WR=34.6%, net=−74% |
+| Reversal (вход против взрыва, `ws_smart_pump`) | ❌ ЗАКРЫТ 20.05 — **fee-blocked**, постмортем `docs/strategy_pump_reversal_postmortem.md` |
+| **Continuation (вход ПО движению серии)** | 🔬 **АКТИВНЫЙ research** — round 2, бриф `docs/gpt_continuation_research_v2_20_05_2026.md` |
+
+**Reversal закрыт:** param sweep 0/320 положительных, гросс-edge < 0.20% тейкер. `ws_smart_pump.py`
+остановлен (убран из start_all.bat). Risk-containment секции в config.yaml (`session_ban_sl_no_tp`,
+`pair_risk_overrides`) — мёртвые, к процессам не подключены.
+
+**Continuation (новое направление):** реальный edge трейдера — вход ПО направлению импульса/серии,
+выход по слому структуры («лесенка»), не против взрыва. Round 1: MFE глубокий (до 13-15%), но
+signal-close вход + тугой трейл = 0 net-положительных (вытряхивает шумом до движения). Round 2
+тестирует: стоп за импульс + структурный выход + кластер-режим (2+ взрыва/5м → MFE 2.54% vs 1.85%).
+
+**Критерий выхода в прод:** положительный net после 0.20% тейкер + slippage на ВСЕЙ выборке.
+Пока этого нет — в config.yaml ничего не добавляем.
+
+> ⚠️ Разделы Phase A-C ниже — **исторический record**. Phase C «7-слойный движок» (OI/funding/CVD/news)
+> в таком виде НЕ был построен: вместо него сделан reversal-движок, который теперь закрыт. Оставлено
+> как лог решений.
 
 ### Архитектура и контекст
 
@@ -211,7 +235,12 @@ Funding — отдельный Business WS канал `funding-rate` (обнов
 
 ---
 
-### 🔧 Фаза C — Новый движок: `ws_smart_pump.py` (СЕЙЧАС, paper trading)
+### 📜 Фаза C — 7-слойный движок (НЕ ПОСТРОЕН, исторический план)
+
+> ⚠️ **Этот план не реализован.** Вместо 7-слойного движка (OI/funding/CVD/news) был сделан
+> reversal-движок `ws_smart_pump.py`, который ЗАКРЫТ 20.05 (fee-blocked, см. статус-блок выше +
+> `docs/strategy_pump_reversal_postmortem.md`). Текст ниже оставлен как лог архитектурных идей —
+> часть (CVD, кластер-режим, network context) переиспользуется в continuation research.
 
 > **Всё в тестовом режиме.** AUTO_TRADE=false. Критерий перехода к D — 50+ paper сделок WR>60% PF>2.0.
 
