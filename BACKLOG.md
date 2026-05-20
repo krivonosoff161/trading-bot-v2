@@ -69,21 +69,25 @@ Path A симуляция + декомпозиция conditions_not_met заве
 
 ---
 
-## 🧭 Приоритеты на 2026-05-19 (snapshot)
+## 🧭 Приоритеты на 2026-05-20 (ВСЁ НА ПАУЗЕ — ждём GPT round 3)
 
 > Сверять с этим разделом в начале каждой сессии. Менять при закрытии фаз / появлении блокеров.
 
-### 🔴 P0 — СЕЙЧАС (1-7 дней)
-- **Pump Continuation research (round 2)** — reversal движок ЗАКРЫТ 20.05 (fee-blocked, постмортем `docs/strategy_pump_reversal_postmortem.md`), `ws_smart_pump.py` остановлен. Активный шаг: GPT прогоняет бриф `docs/gpt_continuation_research_v2_20_05_2026.md` (стоп за импульс + структурный выход + кластер-режим). Claude проверяет результат. **В прод ничего не добавляем пока нет положительного net после тейкера на всей выборке.**
-- **Накопление S2.3 labeled** — сейчас ~85/100. Копится пассивно. Когда 100 → закрываем S2.3, запускаем analyze_signal_log.py полный прогон.
-- **Мониторинг context_gate Asia** — `skip_asia_trending=true` (00-06 UTC) добавлен 19.05 в ws_main_screener. Проверить через 3-5 дней: WR TRENDING до/после 06:00 UTC в логах.
+### ⏸️ ХОЛДИНГ — единственный активный пункт
+- **Ждём GPT continuation round 3** — бриф `docs/gpt_continuation_research_v3_20_05_2026.md` (long/short split + формальная модель + база). Claude проверит по GO/NO-GO:
+  - **ВАУ (продолжаем):** плюс на ОБЕ стороны (long+short), на >1 монете, держится на ранних И поздних днях.
+  - **НЕ ВАУ (закрываем):** опять только BSB / одна сторона / только хвосты → постмортем continuation + стоп.
+- **Майн — стабилен, переделок по факту нет.** Работает. BB/Live в режиме записи данных. Pump остановлен (reversal закрыт fee-blocked).
 
-### 🟡 P1 — СЛЕДУЮЩИЙ ШАГ (после результатов continuation round 2)
-- **Continuation round 3 (если round 2 даст net+)** — кластер-режим (2+ взрыва/5м) как основной фильтр, структурный выход по слому ступеньки, ранний вход. Только если round 2 покажет положительный net после тейкера на полной выборке.
-- **CVD + oscillation как контекст** — running CVD и фаза цикла как pre-explosion context для continuation (не reversal — тот закрыт). Идея переиспользуется из закрытого reversal-плана. **Старт только после валидации базового continuation edge.**
-- **Phase F.2 BB Fade tape filter** — гипотеза `pre_buy_ratio` (WR=75% в нужной зоне, 0% вне). Стартовать когда tape_recorder накопит 30+ дней (~июнь 2026).
-- **Phase G.0 forensics** — Training DB + pattern mining + commit forensics. Стартовать только после закрытия S2.3.
-- **Main scanner правки** (TRENDING×SWING, `min_vol_ratio_trending`) — только когда соберём 20+ live TRENDING×SWING на майорах.
+### 📦 ПАРКОВАНО (решаем ПОСЛЕ round 3 — что делать скажет пользователь)
+- **Continuation round 3 результат** — если ВАУ → forward-paper + вопрос про venue/комиссию; если НЕ ВАУ → постмортем continuation.
+- **Обучающая БД — первый кирпич заложен:** `flag_invalid_signals.py` (71 valid / 19 invalid метки main). Остаток: свести main+BB+pump в один формат + определить «удачную сделку» и набор признаков (нужен ввод пользователя — на что он смотрит).
+- **Шлифовка майна по режимам/стилям** — есть куда копать (DRIFT/TRENDING/RANGING × FAST/SWING), но не срочно, майн работает.
+- **Накопление S2.3 labeled** — ~85→100, копится пассивно.
+- **CVD + oscillation как контекст** — для continuation, только после валидации базового edge.
+- **Phase F.2 BB Fade tape filter** — `pre_buy_ratio`, когда tape накопит 30+ дней (~июнь).
+- **Phase G.0 forensics / Training DB** — после закрытия S2.3.
+- **Main scanner правки** (TRENDING×SWING) — когда 20+ live на майорах.
 
 ### 🟢 P2 — research candidates (записать, не делать)
 - **context_gate Phase 2 для main screener** — tape enrichment в момент сигнала (trade_delta, OBI, spread). После 100+ labeled сигналов, пока не трогаем.
