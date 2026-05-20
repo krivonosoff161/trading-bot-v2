@@ -112,3 +112,6 @@ docs/*.jpeg
 docs/*.docx
 docs/*.csv
 scripts/backtest_mark_index_cache.pkl
+
+# Large raw research dumps (regenerable from the .py; reports keep the readable version)
+scripts/analysis/research/output/continuation_patterns_*.json
