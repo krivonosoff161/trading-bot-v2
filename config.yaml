@@ -139,6 +139,9 @@ smart_pump:
   max_concurrent: 2           # max concurrent paper positions
   cooldown_sec: 120           # per-pair cooldown after exit
 
+  # Notifications
+  extra_notify_chats: [-1003352142986]   # pump group chat
+
   # System
   universe_poll_sec: 1
   heartbeat_interval: 30
