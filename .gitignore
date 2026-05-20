@@ -103,3 +103,12 @@ docs/статисика.csv
 
 # Claude session memory
 .claude/
+
+# Personal / non-source binaries (untracked 20.05 — kept locally, not shipped)
+обучение/
+docs/*.png
+docs/*.jpg
+docs/*.jpeg
+docs/*.docx
+docs/*.csv
+scripts/backtest_mark_index_cache.pkl
