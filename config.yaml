@@ -59,8 +59,8 @@ pump_orchestrator:
   min_tp_pct: 1.0                      # минимальный TP в % (не зависит от ATR)
   pool_dead_vol_candles: 3             # свечей без объёма → выброс из пула
 
-  # Telegram extra chats (group/channel IDs for pump notifications)
-  extra_notify_chats: [-1003352142986]
+  # Telegram extra chats — set actual IDs via PUMP_CHAT_ID in .env (not committed)
+  extra_notify_chats: []
   notify_min_interval_sec: 2.0   # min seconds between notifications to same chat (0 = no throttle)
 
   # Entry confirmation
@@ -139,8 +139,8 @@ smart_pump:
   max_concurrent: 2           # max concurrent paper positions
   cooldown_sec: 120           # per-pair cooldown after exit
 
-  # Notifications
-  extra_notify_chats: [-1003352142986]   # pump group chat
+  # Notifications — set actual IDs via PUMP_CHAT_ID in .env (not committed)
+  extra_notify_chats: []
 
   # System
   universe_poll_sec: 1
