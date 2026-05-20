@@ -714,7 +714,7 @@ class SmartPumpEngine:
             )
 
     async def _notify(self, text: str) -> None:
-        chats = _pump_chat_ids()
+        chats = _pump_chat_ids(self.config)
         if not chats:
             return
         for chat_id in chats:
@@ -834,8 +834,16 @@ def _format_close_message(
     )
 
 
-def _pump_chat_ids() -> list[str]:
-    return [cid.strip() for cid in os.environ.get("PUMP_CHAT_ID", "").split(",") if cid.strip()]
+def _pump_chat_ids(config: dict[str, Any] | None = None) -> list[str]:
+    ids: list[str] = []
+    if config:
+        for cid in config.get("extra_notify_chats", []):
+            ids.append(str(cid).strip())
+    for cid in os.environ.get("PUMP_CHAT_ID", "").split(","):
+        cid = cid.strip()
+        if cid and cid not in ids:
+            ids.append(cid)
+    return ids
 
 
 def _base_asset(sym: str) -> str:
