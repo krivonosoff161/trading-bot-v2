@@ -1,0 +1,416 @@
+{
+  "generated_at": "2026-05-21T17:27:21.901636Z",
+  "config": {
+    "analysis_days": 10,
+    "fetch_missing_from_okx": true,
+    "okx_sleep_sec": 0.08,
+    "okx_limit": 300,
+    "min_replay_15m": 70,
+    "min_replay_1h": 60,
+    "min_replay_4h": 55,
+    "min_replay_5m": 90,
+    "slice_15m": 120,
+    "slice_1h": 100,
+    "slice_4h": 80,
+    "slice_5m": 180,
+    "fast_horizon_15m": 4,
+    "swing_horizon_15m": 16,
+    "fast_min_move_pct": 0.8,
+    "swing_min_move_pct": 1.4,
+    "atr_mult": 1.15,
+    "max_adverse_ratio": 0.75,
+    "event_cooldown_15m": 6,
+    "case_limit_per_regime": 8
+  },
+  "period": {
+    "start": "2026-05-04T19:00:00Z",
+    "end": "2026-05-14T19:00:00Z"
+  },
+  "universe_count": 29,
+  "loaded_symbols": [
+    "ADA-USDT-SWAP",
+    "BILL-USDT-SWAP",
+    "BOME-USDT-SWAP",
+    "BONK-USDT-SWAP",
+    "BSB-USDT-SWAP",
+    "BTC-USDT-SWAP",
+    "CHZ-USDT-SWAP",
+    "DOGE-USDT-SWAP",
+    "EDEN-USDT-SWAP",
+    "ETH-USDT-SWAP",
+    "FLOKI-USDT-SWAP",
+    "GALA-USDT-SWAP",
+    "HMSTR-USDT-SWAP",
+    "LINEA-USDT-SWAP",
+    "MEME-USDT-SWAP",
+    "MEW-USDT-SWAP",
+    "NEIRO-USDT-SWAP",
+    "NOT-USDT-SWAP",
+    "PENGU-USDT-SWAP",
+    "PEPE-USDT-SWAP",
+    "PUMP-USDT-SWAP",
+    "RLS-USDT-SWAP",
+    "SAHARA-USDT-SWAP",
+    "SATS-USDT-SWAP",
+    "SHIB-USDT-SWAP",
+    "SOL-USDT-SWAP",
+    "SPACE-USDT-SWAP",
+    "TURBO-USDT-SWAP",
+    "XRP-USDT-SWAP"
+  ],
+  "skipped_symbols": [],
+  "decision_summary": [
+    {
+      "regime": "CHOPPY",
+      "n": 598,
+      "entry": 0,
+      "entry_rate": 0.0,
+      "wait": 0,
+      "no_trade": 598,
+      "fast_entries": 0,
+      "swing_entries": 0,
+      "avg_vol": 1.1091931649927376,
+      "avg_adx": 22.473879598662204
+    },
+    {
+      "regime": "DRIFT",
+      "n": 7280,
+      "entry": 105,
+      "entry_rate": 1.4423076923076923,
+      "wait": 0,
+      "no_trade": 7175,
+      "fast_entries": 105,
+      "swing_entries": 0,
+      "avg_vol": 1.2161082385281516,
+      "avg_adx": 22.40917719780222
+    },
+    {
+      "regime": "RANGING",
+      "n": 12066,
+      "entry": 1,
+      "entry_rate": 0.00828775070445881,
+      "wait": 0,
+      "no_trade": 12065,
+      "fast_entries": 1,
+      "swing_entries": 0,
+      "avg_vol": 1.127421952981168,
+      "avg_adx": 31.66473479197792
+    },
+    {
+      "regime": "TRENDING",
+      "n": 6964,
+      "entry": 15,
+      "entry_rate": 0.21539345203905802,
+      "wait": 0,
+      "no_trade": 6949,
+      "fast_entries": 0,
+      "swing_entries": 15,
+      "avg_vol": 1.1442862842008026,
+      "avg_adx": 38.55987363584136
+    }
+  ],
+  "event_summary": [
+    {
+      "regime": "CHOPPY",
+      "move_type": "FAST",
+      "n": 7,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 0,
+      "missed": 7,
+      "avg_move_pct": 3.669427805838674,
+      "p50_peak_bars": 3,
+      "top_reasons": [
+        [
+          "conditions_not_met:composite",
+          3
+        ],
+        [
+          "conditions_not_met:low_vol_under_1",
+          2
+        ],
+        [
+          "conditions_not_met:bias_1h_up",
+          1
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          1
+        ]
+      ]
+    },
+    {
+      "regime": "CHOPPY",
+      "move_type": "SWING",
+      "n": 48,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 0,
+      "missed": 48,
+      "avg_move_pct": 5.026318302233583,
+      "p50_peak_bars": 13.0,
+      "top_reasons": [
+        [
+          "conditions_not_met:low_vol_under_1",
+          22
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          9
+        ],
+        [
+          "conditions_not_met:composite",
+          8
+        ],
+        [
+          "conditions_not_met:bias_1h_up",
+          8
+        ],
+        [
+          "four_h_conflict",
+          1
+        ]
+      ]
+    },
+    {
+      "regime": "DRIFT",
+      "move_type": "FAST",
+      "n": 68,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 3,
+      "missed": 65,
+      "avg_move_pct": 1.874729291881038,
+      "p50_peak_bars": 4.0,
+      "top_reasons": [
+        [
+          "conditions_not_met:low_vol_under_1",
+          24
+        ],
+        [
+          "conditions_not_met:bias_1h_up",
+          14
+        ],
+        [
+          "conditions_not_met:slope_not_down",
+          10
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          9
+        ],
+        [
+          "conditions_not_met:composite",
+          4
+        ]
+      ]
+    },
+    {
+      "regime": "DRIFT",
+      "move_type": "SWING",
+      "n": 408,
+      "caught": 9,
+      "recall": 2.2058823529411766,
+      "wait": 0,
+      "wrong_side": 13,
+      "missed": 386,
+      "avg_move_pct": 3.037213182477903,
+      "p50_peak_bars": 13.0,
+      "top_reasons": [
+        [
+          "conditions_not_met:low_vol_under_1",
+          126
+        ],
+        [
+          "conditions_not_met:bias_1h_up",
+          70
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          49
+        ],
+        [
+          "conditions_not_met:slope_not_up",
+          43
+        ],
+        [
+          "conditions_not_met:slope_not_down",
+          31
+        ]
+      ]
+    },
+    {
+      "regime": "RANGING",
+      "move_type": "FAST",
+      "n": 109,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 0,
+      "missed": 109,
+      "avg_move_pct": 1.7735801689183215,
+      "p50_peak_bars": 4,
+      "top_reasons": [
+        [
+          "conditions_not_met:bias_1h_up",
+          29
+        ],
+        [
+          "conditions_not_met:low_vol_under_1",
+          28
+        ],
+        [
+          "four_h_conflict",
+          18
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          11
+        ],
+        [
+          "conditions_not_met:bb_width_outside_corridor",
+          10
+        ]
+      ]
+    },
+    {
+      "regime": "RANGING",
+      "move_type": "SWING",
+      "n": 698,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 0,
+      "missed": 698,
+      "avg_move_pct": 3.0225921704513334,
+      "p50_peak_bars": 13.0,
+      "top_reasons": [
+        [
+          "conditions_not_met:low_vol_under_1",
+          184
+        ],
+        [
+          "conditions_not_met:bias_1h_up",
+          132
+        ],
+        [
+          "four_h_conflict",
+          123
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          109
+        ],
+        [
+          "conditions_not_met:no_day_position",
+          87
+        ]
+      ]
+    },
+    {
+      "regime": "TRENDING",
+      "move_type": "FAST",
+      "n": 67,
+      "caught": 0,
+      "recall": 0.0,
+      "wait": 0,
+      "wrong_side": 1,
+      "missed": 66,
+      "avg_move_pct": 2.720840487417061,
+      "p50_peak_bars": 4,
+      "top_reasons": [
+        [
+          "conditions_not_met:bias_1h_up",
+          29
+        ],
+        [
+          "conditions_not_met:adx_not_rising",
+          20
+        ],
+        [
+          "conditions_not_met:low_vol_under_1",
+          11
+        ],
+        [
+          "conditions_not_met:low_trend_vol",
+          2
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          2
+        ]
+      ]
+    },
+    {
+      "regime": "TRENDING",
+      "move_type": "SWING",
+      "n": 446,
+      "caught": 3,
+      "recall": 0.672645739910314,
+      "wait": 0,
+      "wrong_side": 2,
+      "missed": 441,
+      "avg_move_pct": 3.858688903538138,
+      "p50_peak_bars": 13.0,
+      "top_reasons": [
+        [
+          "conditions_not_met:bias_1h_up",
+          142
+        ],
+        [
+          "conditions_not_met:adx_not_rising",
+          137
+        ],
+        [
+          "conditions_not_met:low_vol_under_1",
+          73
+        ],
+        [
+          "conditions_not_met:bias_1h_down",
+          38
+        ],
+        [
+          "conditions_not_met:low_trend_vol",
+          29
+        ]
+      ]
+    }
+  ],
+  "live_signal_benchmark": {
+    "rows": 38,
+    "by_cell": {
+      "DRIFT|FAST": {
+        "n": 22,
+        "tp": 10,
+        "sl": 1,
+        "time": 11,
+        "wr_decisive": 90.9090909090909,
+        "time_rate": 50.0
+      },
+      "RANGING|FAST": {
+        "n": 2,
+        "tp": 1,
+        "sl": 0,
+        "time": 1,
+        "wr_decisive": 100.0,
+        "time_rate": 50.0
+      },
+      "TRENDING|SWING": {
+        "n": 14,
+        "tp": 8,
+        "sl": 5,
+        "time": 1,
+        "wr_decisive": 61.53846153846154,
+        "time_rate": 7.142857142857142
+      }
+    },
+    "drift_fast_tp_features": {
+      "n": 10,
+      "avg_vol": 1.6804999999999999,
+      "avg_adx": 20.878000000000004
+    }
+  }
+}
