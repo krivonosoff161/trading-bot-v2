@@ -41,34 +41,47 @@ def bot_status():
     except Exception:
         return 0
 
-# ── 3. Last scanner log entry ────────────────────────────────────────────────
+# ── 3. Newest log entry ──────────────────────────────────────────────────────
 def last_log_line():
-    log = ROOT / "logs" / "scanner.log"
-    if not log.exists():
-        return "нет файла"
+    logs_dir = ROOT / "logs"
     try:
-        with open(log, "rb") as f:
+        log_files = list(logs_dir.rglob("*.log"))
+        if not log_files:
+            return "нет лог-файлов"
+        newest = max(log_files, key=lambda p: p.stat().st_mtime)
+        with open(newest, "rb") as f:
             f.seek(0, 2)
             size = f.tell()
             f.seek(max(0, size - 4096))
             tail = f.read().decode("utf-8", errors="ignore")
         lines = [l for l in tail.splitlines() if l.strip()]
-        return lines[-1][:120] if lines else "пусто"
+        last = lines[-1][:90] if lines else "пусто"
+        return f"{newest.name}: {last}"
     except Exception:
         return "ошибка чтения"
 
-# ── 4. Signal stats ──────────────────────────────────────────────────────────
+# ── 4. Signal stats (WS main screener) ───────────────────────────────────────
+def _ts_ms(ts_str):
+    try:
+        return int(datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
 def signal_stats(days=7):
-    sig_file = ROOT / "logs" / "signals" / "signal_log.jsonl"
-    lbl_file = ROOT / "logs" / "signals" / "signal_labels.jsonl"
+    sig_file = ROOT / "logs" / "signals" / "main_signals.jsonl"
+    lbl_file = ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 
     signals = {}
     try:
-        with open(sig_file) as f:
+        with open(sig_file, encoding="utf-8") as f:
             for line in f:
                 try:
                     s = json.loads(line)
-                    signals[s["signal_id"]] = s
+                    sid = s.get("id") or s.get("signal_id")
+                    if sid:
+                        s["_ts_ms"] = _ts_ms(s.get("ts", ""))
+                        signals[sid] = s
                 except Exception:
                     pass
     except FileNotFoundError:
@@ -76,7 +89,7 @@ def signal_stats(days=7):
 
     labels = {}
     try:
-        with open(lbl_file) as f:
+        with open(lbl_file, encoding="utf-8") as f:
             for line in f:
                 try:
                     l = json.loads(line)
@@ -86,52 +99,44 @@ def signal_stats(days=7):
     except FileNotFoundError:
         pass
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
-    cutoff_ms = int(cutoff.timestamp() * 1000)
+    cutoff_ms = int((datetime.now(tz=timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    recent = {sid: s for sid, s in signals.items() if s["_ts_ms"] >= cutoff_ms}
+    pending = [sid for sid in recent if sid not in labels]
 
-    recent_sigs = {sid: s for sid, s in signals.items() if s.get("ts_ms", 0) >= cutoff_ms}
-    pending = [sid for sid in recent_sigs if sid not in labels]
-
-    tp = sl = te = 0
+    tp = sl = te = invalid = 0
     by_pair = defaultdict(lambda: {"tp": 0, "sl": 0, "te": 0})
-    total_r = []
 
-    for sid, lbl in labels.items():
-        s = signals.get(sid)
-        if not s or s.get("ts_ms", 0) < cutoff_ms:
+    for sid, s in recent.items():
+        lbl = labels.get(sid)
+        if not lbl:
+            continue
+        if lbl.get("valid") is False:        # precision-bug / data-quality flag
+            invalid += 1
             continue
         out = lbl.get("outcome", "")
         sym = s.get("symbol", "?")
-        r = lbl.get("exit_r", 0) or 0
         if out.startswith("TP"):
             tp += 1
             by_pair[sym]["tp"] += 1
-            total_r.append(r)
-        elif out == "STOP":
+        elif out == "SL":
             sl += 1
             by_pair[sym]["sl"] += 1
-            total_r.append(r)
-        elif out == "TIME_EXIT":
+        elif out == "TIME":
             te += 1
             by_pair[sym]["te"] += 1
-            total_r.append(r)
 
-    total = tp + sl + te
-    wr = tp / total * 100 if total else 0
-    avg_r = sum(total_r) / len(total_r) if total_r else 0
+    decisive = tp + sl
+    wr = tp / decisive * 100 if decisive else 0
 
-    # Last signal
     last = None
     if signals:
-        last_sid = max(signals, key=lambda x: signals[x].get("ts_ms", 0))
+        last_sid = max(signals, key=lambda x: signals[x]["_ts_ms"])
         last = signals[last_sid]
 
     return {
-        "total": total, "tp": tp, "sl": sl, "te": te,
-        "wr": wr, "avg_r": avg_r,
-        "pending": len(pending),
-        "by_pair": dict(by_pair),
-        "last": last,
+        "total": tp + sl + te, "tp": tp, "sl": sl, "te": te,
+        "wr": wr, "pending": len(pending), "invalid": invalid,
+        "by_pair": dict(by_pair), "last": last,
     }
 
 # ── 5. Main ──────────────────────────────────────────────────────────────────
@@ -163,27 +168,28 @@ def main():
     total = st["total"]
     wr = st["wr"]
     tp, sl, te = st["tp"], st["sl"], st["te"]
-    avg_r = st["avg_r"]
     pending = st["pending"]
+    invalid = st["invalid"]
 
     print(f"\n{'-'*58}")
-    print(f" СИГНАЛЫ (7 дней): {total} закрытых  |  pending: {pending}")
-    if total > 0:
-        print(f" WR: {wr:.0f}%  |  TP={tp}  SL={sl}  TIME={te}  |  avg_R={avg_r:+.2f}R")
+    inv_mark = f"  |  invalid: {invalid}" if invalid else ""
+    print(f" СИГНАЛЫ MAIN (7 дней): {total} закрытых  |  pending: {pending}{inv_mark}")
+    if tp + sl > 0:
+        print(f" WR (decisive): {wr:.0f}%  |  TP={tp}  SL={sl}  TIME={te}")
         print()
         print(f" По парам:")
         for sym, s in sorted(st["by_pair"].items()):
             n = s["tp"] + s["sl"] + s["te"]
-            w = s["tp"] / n * 100 if n else 0
+            w = s["tp"] / (s["tp"] + s["sl"]) * 100 if (s["tp"] + s["sl"]) else 0
             bar = "▓" * s["tp"] + "░" * s["sl"] + "·" * s["te"]
-            print(f"   {sym:14} n={n:3}  WR={w:3.0f}%  {bar}")
+            print(f"   {sym.replace('-USDT-SWAP',''):10} n={n:3}  WR={w:3.0f}%  {bar}")
 
     # Last signal
     last = st["last"]
     if last:
-        ts = datetime.utcfromtimestamp(last["ts_ms"] / 1000).strftime("%m-%d %H:%M")
+        ts = datetime.utcfromtimestamp(last["_ts_ms"] / 1000).strftime("%m-%d %H:%M")
         print(f"\n ПОСЛЕДНИЙ СИГНАЛ: {ts} UTC | {last.get('symbol')} | "
-              f"{last.get('side')} | {last.get('regime')} | {last.get('source')}")
+              f"{last.get('side')} | {last.get('regime')} | {last.get('trade_style')}")
 
     print(f"{'='*58}\n")
 
