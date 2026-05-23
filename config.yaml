@@ -148,7 +148,7 @@ smart_pump:
   warmup_bars: 20
 
 impulse_pump:
-  enabled: false
+  enabled: true
   auto_trade: false
   paper: true
   pairs:
