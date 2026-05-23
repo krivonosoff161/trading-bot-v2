@@ -12,14 +12,15 @@ start "Main Screener" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_main_screen
 start "Live Screener" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_screener_live.py"
 timeout /t 5 /nobreak > nul
 REM Smart Pump (reversal) DISABLED 20.05.2026 — reversal edge fee-blocked (see docs/strategy_pump_reversal_postmortem.md).
-REM Continuation direction is in research (docs/gpt_continuation_research_v2_20_05_2026.md), not in production yet.
-REM start "Smart Pump" cmd /k "cd /d %~dp0 && python -u scripts\ws\run_pump_watchdog.py"
+REM Impulse Pump (rivok) — PAPER only. Runs only if config impulse_pump.enabled=true (else logs disabled and exits).
+start "Impulse Pump" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_impulse_pump.py"
 start "BB Fade" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_bb_fade.py"
 start "Tape Recorder" cmd /k "cd /d %~dp0 && python -u scripts\analysis\tape_recorder.py"
 
 echo [OK] Telegram Bot started
 echo [OK] Main Screener started (shadow mode)
 echo [OK] Live Screener started
+echo [OK] Impulse Pump started (paper; active only if enabled=true)
 echo [OK] BB Fade started
 echo [OK] Tape Recorder started
 echo.
