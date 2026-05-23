@@ -1,7 +1,9 @@
 """
-build_journal.py — trading journal Excel (6 sheets).
+build_journal.py — trading journal Excel.
 
-Sheets: Скринер | Симулятор | Main WS | Памп | Ручные | Дашборд
+Sheets: Скринер | Симулятор | Main WS | BB Fade | Памп | Импульс | Ручные | Дашборд | Графики
+
+Импульс — paper impulse pump (рывок). Метрика — net_pct (ride-the-move), не TP/SL.
 
 Run via update_journal.bat after labelers.
 """
@@ -38,6 +40,8 @@ PUMP_LABELS_LOG     = _ROOT / "logs" / "pump" / "pump_labels.jsonl"
 MAIN_SIGNALS_LOG    = _ROOT / "logs" / "signals" / "main_signals.jsonl"
 MAIN_SIGNALS_LABELS = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 BB_FADE_SIGNALS_LOG = _ROOT / "logs" / "bb_fade" / "bb_fade_signals.jsonl"
+IMPULSE_SIGNALS_LOG = _ROOT / "logs" / "impulse_pump" / "impulse_pump_signals.jsonl"
+IMPULSE_OUTCOMES_LOG = _ROOT / "logs" / "impulse_pump" / "impulse_pump_outcomes.jsonl"
 JOURNAL_PATH        = Path(__file__).parent / "journal.xlsx"
 
 # Archive paths — same schema as current logs, just historical (pre-09.05.2026)
@@ -318,6 +322,46 @@ def _load_pump() -> list:
                 "hour":    entry.get("hour_utc"),
                 "net_pnl": rec.get("net_pnl_pct"),
             })
+    out.sort(key=lambda x: x["dt"], reverse=True)
+    return out
+
+
+def _load_impulse() -> list:
+    """Импульс памп (paper) — join signals(вход) + outcomes(выход) по signal_id.
+
+    Метрика движка — net_pct (edge = ride-the-move, не TP/SL).
+    outcome: sl / time / ride_exit (механизм выхода, не win/loss).
+    win = net_pct > 0.
+    """
+    signals: dict = {}
+    for r in _load_jsonl(IMPULSE_SIGNALS_LOG):
+        sid = r.get("signal_id", "")
+        if sid and sid not in signals:
+            signals[sid] = r
+
+    out = []
+    seen: set = set()
+    for rec in _load_jsonl(IMPULSE_OUTCOMES_LOG):
+        sid = rec.get("signal_id", "")
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        sig = signals.get(sid, {})
+        ts  = sig.get("ts") or rec.get("ts") or ""
+        out.append({
+            "dt":          ts[5:16].replace("T", " ") if ts else "",
+            "pair":        rec.get("symbol", "").replace("-USDT-SWAP", "").replace("-SWAP", ""),
+            "side":        "LONG" if rec.get("side") == "long" else "SHORT",
+            "entry":       sig.get("entry_price"),
+            "exit":        rec.get("exit_price"),
+            "outcome":     (rec.get("outcome") or "").upper(),
+            "net_pct":     rec.get("net_pct"),
+            "mfe_pct":     rec.get("mfe_pct"),
+            "mae_pct":     rec.get("mae_pct"),
+            "capture_pct": rec.get("capture_pct"),
+            "hold_min":    rec.get("hold_min"),
+            "valid":       rec.get("valid", True),
+        })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
 
@@ -752,6 +796,77 @@ def _build_pump(wb, rows: list) -> None:
     print(f"Памп: {n} сделок")
 
 
+# ── Sheet 4b: Импульс ────────────────────────────────────────────────────────
+# A=date B=pair C=side D=entry E=exit F=outcome G=NET% H=MFE% I=MAE% J=Cap% K=hold L=valid
+# Метрика — net_pct (ride-the-move). outcome=sl/time/ride_exit — механизм выхода.
+
+_IMPULSE_FILL = {"SL": F_SL, "TIME": F_TIME, "RIDE_EXIT": F_TP}
+
+
+def _build_impulse(wb, rows: list) -> None:
+    """Импульс памп (paper) — рывок-вход + ride. WR по net_pct>0, не по TP/SL."""
+    ws = wb.create_sheet("Импульс")
+    _hdr(ws, 1, [
+        "Дата", "Пара", "Сторона", "Вход", "Выход",
+        "Выход(тип)", "NET %", "MFE %", "MAE %", "Capture %",
+        "Hold(мин)", "Valid",
+    ])
+
+    def _r(v, n=3):
+        return round(v, n) if isinstance(v, (int, float)) else v
+
+    for r, row in enumerate(rows, 2):
+        vals = [
+            row["dt"], row["pair"], row["side"], row["entry"], row["exit"],
+            row["outcome"], _r(row["net_pct"]), _r(row["mfe_pct"]), _r(row["mae_pct"]),
+            _r(row["capture_pct"], 1), _r(row["hold_min"], 1),
+            "" if row["valid"] else "✗",
+        ]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=c, value=val)
+            if c == 6 and row["outcome"] in _IMPULSE_FILL:
+                cell.fill = _IMPULSE_FILL[row["outcome"]]
+            if c == 7 and isinstance(row["net_pct"], (int, float)):
+                cell.fill = F_TP if row["net_pct"] >= 0 else F_SL
+
+    if not rows:
+        ws.cell(row=2, column=1, value="Нет данных пока (paper не запущен / ждём первые сделки)")
+
+    closed = [r for r in rows if isinstance(r["net_pct"], (int, float))]
+    n      = len(closed)
+    if n:
+        wins   = [r["net_pct"] for r in closed if r["net_pct"] > 0]
+        losses = [r["net_pct"] for r in closed if r["net_pct"] < 0]
+        wr     = len(wins) / n * 100
+        pf     = sum(wins) / abs(sum(losses)) if losses else 999.0
+        avg    = sum(r["net_pct"] for r in closed) / n
+        net    = sum(r["net_pct"] for r in closed)
+        caps   = [r["capture_pct"] for r in closed
+                  if isinstance(r["capture_pct"], (int, float))]
+        avg_cap = sum(caps) / len(caps) if caps else 0.0
+        holds   = [r["hold_min"] for r in closed
+                   if isinstance(r["hold_min"], (int, float))]
+        avg_hold = sum(holds) / len(holds) if holds else 0.0
+
+        sr = len(rows) + 3
+        for i, (lbl, val) in enumerate([
+            ("Всего сделок (закрыто)", n),
+            ("WR (net>0)",            f"{len(wins)}/{n} = {wr:.0f}%"),
+            ("Profit Factor",         f"{pf:.2f}"),
+            ("Avg NET %",             f"{avg:+.3f}%"),
+            ("Сумма NET %",           f"{net:+.2f}%"),
+            ("Avg Capture %",         f"{avg_cap:.0f}%"),
+            ("Avg Hold (мин)",        f"{avg_hold:.0f}"),
+        ]):
+            ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+            ws.cell(row=sr + i, column=1).font = FONT_BOLD
+            ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
+
+    _set_widths(ws, [13, 12, 8, 11, 11, 11, 9, 8, 8, 10, 9, 6])
+    ws.freeze_panes = "A2"
+    print(f"Импульс: {len(rows)} сделок ({len(closed)} закрыто)")
+
+
 # ── Sheet 5: Ручные ──────────────────────────────────────────────────────────
 # A=date B=pair C=side D=entry E=exit F=lever G=net_pnl$ H=pnl_pct% I=hold_min
 
@@ -828,6 +943,11 @@ def _build_dashboard(wb) -> None:
          '=COUNTIF(Памп!F2:F10000,"TP")',
          '=COUNTIF(Памп!F2:F10000,"SL")',
          '=COUNTIF(Памп!F2:F10000,"TIME")',
+         ),
+        ("Импульс",  # win=net>0 (G), loss=net<0; не TP/SL
+         '=COUNTIF(Импульс!G2:G10000,">0")',
+         '=COUNTIF(Импульс!G2:G10000,"<0")',
+         "0",
          ),
         ("Ручные",
          '=COUNTIF(Ручные!G2:G10000,">0")',
@@ -914,6 +1034,13 @@ def _build_dashboard(wb) -> None:
          '=ROUND(SUM(Памп!I2:I10000),2)',
          '=ROUND(SUMIF(Памп!I2:I10000,">0",Памп!I2:I10000),2)',
          '=ROUND(SUMIF(Памп!I2:I10000,"<0",Памп!I2:I10000),2)',
+         ),
+        ("Импульс (%)",  # колонка G = NET %
+         '=COUNTIF(Импульс!G2:G10000,">0")',
+         '=COUNTIF(Импульс!G2:G10000,"<0")',
+         '=ROUND(SUM(Импульс!G2:G10000),2)',
+         '=ROUND(SUMIF(Импульс!G2:G10000,">0",Импульс!G2:G10000),2)',
+         '=ROUND(SUMIF(Импульс!G2:G10000,"<0",Импульс!G2:G10000),2)',
          ),
         ("Ручные ($)",
          '=COUNTIF(Ручные!G2:G10000,">0")',
@@ -1182,6 +1309,7 @@ def build() -> None:
     bb_fade   = _load_bb_fade()
     simulator = _load_all_simulator_signals()
     pump      = _load_pump()
+    impulse   = _load_impulse()
     real      = _load_real()
 
     wb = openpyxl.Workbook()
@@ -1190,6 +1318,7 @@ def build() -> None:
     _build_main_ws(wb, main_ws)
     _build_bb_fade(wb, bb_fade)
     _build_pump(wb, pump)
+    _build_impulse(wb, impulse)
     _build_real(wb, real)
     _build_dashboard(wb)
     _build_charts(wb, main_ws, bb_fade, pump)
@@ -1200,7 +1329,8 @@ def build() -> None:
         f"Журнал готов: {JOURNAL_PATH}\n"
         f"  Скринер {len(screener)} ({n_labeled} закрыто) | "
         f"Main WS {len(main_ws)} | BB Fade {len(bb_fade)} | "
-        f"Памп {len(pump)} | Симулятор {len(simulator)} | Ручные {len(real)}"
+        f"Памп {len(pump)} | Импульс {len(impulse)} | "
+        f"Симулятор {len(simulator)} | Ручные {len(real)}"
     )
 
 
