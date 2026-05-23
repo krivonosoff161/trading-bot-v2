@@ -179,7 +179,7 @@ impulse_pump:
   extra_notify_chats: []
 
 main_impulse:
-  enabled: false
+  enabled: true
   auto_trade: false
   paper: true
   pairs:

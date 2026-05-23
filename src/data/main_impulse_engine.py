@@ -444,7 +444,7 @@ class MainImpulseEngine:
 
     def _fmt_open(self, pos: PaperPosition) -> str:
         return (
-            f"MAIN IMPULSE PAPER OPEN | {pos.symbol} | {pos.side.upper()}\n"
+            f"🔵 МАЙН (paper) OPEN | {pos.symbol} | {pos.side.upper()}\n"
             f"entry {pos.entry_price:.8g} | stop {pos.stop_price:.8g}\n"
             f"exit {pos.contract.exit_rule.type} | body "
             f"{pos.signal['metadata']['impulse_body_pct']:.2f}% | vol {pos.signal['metadata']['vol_ratio']:.2f}x"
@@ -452,7 +452,7 @@ class MainImpulseEngine:
 
     def _fmt_close(self, row: dict[str, Any]) -> str:
         return (
-            f"MAIN IMPULSE PAPER CLOSE | {row['symbol']} | {row['side'].upper()} | {row['outcome']}\n"
+            f"🔵 МАЙН (paper) CLOSE | {row['symbol']} | {row['side'].upper()} | {row['outcome']}\n"
             f"net {row['net_pct']:+.2f}% | mfe {row['mfe_pct']:.2f}% | "
             f"mae {row['mae_pct']:.2f}% | hold {row['hold_min']:.1f}m"
         )
