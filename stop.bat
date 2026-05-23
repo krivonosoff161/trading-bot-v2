@@ -25,7 +25,7 @@ goto :eof
 :kill_window
 taskkill /FI "WINDOWTITLE eq %~1" /T /F >nul 2>&1
 if errorlevel 1 (
-    echo [SKIP] %~1 — not found
+    echo [SKIP] %~1 - not found
 ) else (
     echo [OK]   %~1 — stopped
 )
