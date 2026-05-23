@@ -82,9 +82,9 @@ def setup_logger() -> logging.Logger:
 
 def notify_chat_ids(config: dict[str, Any]) -> list[str]:
     ids = [str(cid).strip() for cid in config.get("extra_notify_chats", [])]
-    # main engine -> bot group (TELEGRAM_CHAT_ID), NOT the pump chat.
-    # MAIN_IMPULSE_CHAT_ID is an optional override if a separate channel is ever wanted.
-    raw = os.getenv("MAIN_IMPULSE_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")
+    # Send to the SAME common group as the pump (PUMP_CHAT_ID); notifications are tagged
+    # "🔵 МАЙН" so they are distinguishable from pump messages. MAIN_IMPULSE_CHAT_ID overrides.
+    raw = os.getenv("MAIN_IMPULSE_CHAT_ID") or os.getenv("PUMP_CHAT_ID", "")
     ids += [cid.strip() for cid in raw.split(",")]
     return list(dict.fromkeys([cid for cid in ids if cid]))
 
