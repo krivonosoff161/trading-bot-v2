@@ -147,6 +147,37 @@ smart_pump:
   heartbeat_interval: 30
   warmup_bars: 20
 
+impulse_pump:
+  enabled: false
+  auto_trade: false
+  paper: true
+  pairs:
+    - BSB-USDT-SWAP
+    - EDEN-USDT-SWAP
+    - RLS-USDT-SWAP
+    - CHZ-USDT-SWAP
+    - SPACE-USDT-SWAP
+    - NOT-USDT-SWAP
+    - TURBO-USDT-SWAP
+    - BOME-USDT-SWAP
+  body_ratio_min: 2.0
+  vol_ratio_min: 2.0
+  trigger_pct: 1.0
+  trigger_window_sec: 10
+  entry_slippage_pct: 0.03
+  fee_pct: 0.20
+  stop_buffer_pct: 0.10
+  structure_k: 2
+  max_hold_min: 60
+  max_concurrent: 2
+  cooldown_sec: 300
+  position_usd: 100.0
+  warmup_bars: 40
+  heartbeat_interval: 30
+  notify_min_interval_sec: 2.0
+  vol_tier: volatile_alt
+  extra_notify_chats: []
+
 bb_fade:
   top_n_pairs:            24
   universe_refresh_hours:  8
