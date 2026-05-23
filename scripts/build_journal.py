@@ -42,6 +42,8 @@ MAIN_SIGNALS_LABELS = _ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 BB_FADE_SIGNALS_LOG = _ROOT / "logs" / "bb_fade" / "bb_fade_signals.jsonl"
 IMPULSE_SIGNALS_LOG = _ROOT / "logs" / "impulse_pump" / "impulse_pump_signals.jsonl"
 IMPULSE_OUTCOMES_LOG = _ROOT / "logs" / "impulse_pump" / "impulse_pump_outcomes.jsonl"
+MAIN_IMPULSE_SIGNALS_LOG = _ROOT / "logs" / "main_impulse" / "main_impulse_signals.jsonl"
+MAIN_IMPULSE_OUTCOMES_LOG = _ROOT / "logs" / "main_impulse" / "main_impulse_outcomes.jsonl"
 JOURNAL_PATH        = Path(__file__).parent / "journal.xlsx"
 
 # Archive paths — same schema as current logs, just historical (pre-09.05.2026)
@@ -361,6 +363,42 @@ def _load_impulse() -> list:
             "capture_pct": rec.get("capture_pct"),
             "hold_min":    rec.get("hold_min"),
             "valid":       rec.get("valid", True),
+            "exit_rule":   sig.get("exit_rule") or rec.get("exit_rule"),
+        })
+    out.sort(key=lambda x: x["dt"], reverse=True)
+    return out
+
+
+def _load_main_impulse() -> list:
+    signals: dict = {}
+    for r in _load_jsonl(MAIN_IMPULSE_SIGNALS_LOG):
+        sid = r.get("signal_id", "")
+        if sid and sid not in signals:
+            signals[sid] = r
+
+    out = []
+    seen: set = set()
+    for rec in _load_jsonl(MAIN_IMPULSE_OUTCOMES_LOG):
+        sid = rec.get("signal_id", "")
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        sig = signals.get(sid, {})
+        ts = sig.get("ts") or rec.get("ts") or ""
+        out.append({
+            "dt":          ts[5:16].replace("T", " ") if ts else "",
+            "pair":        rec.get("symbol", "").replace("-USDT-SWAP", "").replace("-SWAP", ""),
+            "side":        "LONG" if rec.get("side") == "long" else "SHORT",
+            "entry":       sig.get("entry"),
+            "exit":        rec.get("exit_price"),
+            "outcome":     (rec.get("outcome") or "").upper(),
+            "net_pct":     rec.get("net_pct"),
+            "mfe_pct":     rec.get("mfe_pct"),
+            "mae_pct":     rec.get("mae_pct"),
+            "capture_pct": rec.get("capture_pct"),
+            "hold_min":    rec.get("hold_min"),
+            "valid":       rec.get("valid", True),
+            "exit_rule":   sig.get("exit_rule") or rec.get("exit_rule"),
         })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
@@ -800,16 +838,16 @@ def _build_pump(wb, rows: list) -> None:
 # A=date B=pair C=side D=entry E=exit F=outcome G=NET% H=MFE% I=MAE% J=Cap% K=hold L=valid
 # Метрика — net_pct (ride-the-move). outcome=sl/time/ride_exit — механизм выхода.
 
-_IMPULSE_FILL = {"SL": F_SL, "TIME": F_TIME, "RIDE_EXIT": F_TP}
+_IMPULSE_FILL = {"SL": F_SL, "TIME": F_TIME, "RIDE_EXIT": F_TP, "SCALED_TP": F_TP}
 
 
-def _build_impulse(wb, rows: list) -> None:
+def _build_impulse(wb, rows: list, sheet_name: str = "Импульс") -> None:
     """Импульс памп (paper) — рывок-вход + ride. WR по net_pct>0, не по TP/SL."""
-    ws = wb.create_sheet("Импульс")
+    ws = wb.create_sheet(sheet_name)
     _hdr(ws, 1, [
         "Дата", "Пара", "Сторона", "Вход", "Выход",
         "Выход(тип)", "NET %", "MFE %", "MAE %", "Capture %",
-        "Hold(мин)", "Valid",
+        "Hold(мин)", "Exit rule", "Valid",
     ])
 
     def _r(v, n=3):
@@ -820,6 +858,7 @@ def _build_impulse(wb, rows: list) -> None:
             row["dt"], row["pair"], row["side"], row["entry"], row["exit"],
             row["outcome"], _r(row["net_pct"]), _r(row["mfe_pct"]), _r(row["mae_pct"]),
             _r(row["capture_pct"], 1), _r(row["hold_min"], 1),
+            (row.get("exit_rule") or {}).get("type") if isinstance(row.get("exit_rule"), dict) else "",
             "" if row["valid"] else "✗",
         ]
         for c, val in enumerate(vals, 1):
@@ -862,9 +901,9 @@ def _build_impulse(wb, rows: list) -> None:
             ws.cell(row=sr + i, column=1).font = FONT_BOLD
             ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
 
-    _set_widths(ws, [13, 12, 8, 11, 11, 11, 9, 8, 8, 10, 9, 6])
+    _set_widths(ws, [13, 12, 8, 11, 11, 11, 9, 8, 8, 10, 9, 11, 6])
     ws.freeze_panes = "A2"
-    print(f"Импульс: {len(rows)} сделок ({len(closed)} закрыто)")
+    print(f"{sheet_name}: {len(rows)} сделок ({len(closed)} закрыто)")
 
 
 # ── Sheet 5: Ручные ──────────────────────────────────────────────────────────
@@ -1310,6 +1349,7 @@ def build() -> None:
     simulator = _load_all_simulator_signals()
     pump      = _load_pump()
     impulse   = _load_impulse()
+    main_impulse = _load_main_impulse()
     real      = _load_real()
 
     wb = openpyxl.Workbook()
@@ -1319,6 +1359,7 @@ def build() -> None:
     _build_bb_fade(wb, bb_fade)
     _build_pump(wb, pump)
     _build_impulse(wb, impulse)
+    _build_impulse(wb, main_impulse, "Main Impulse")
     _build_real(wb, real)
     _build_dashboard(wb)
     _build_charts(wb, main_ws, bb_fade, pump)
@@ -1328,7 +1369,7 @@ def build() -> None:
     print(
         f"Журнал готов: {JOURNAL_PATH}\n"
         f"  Скринер {len(screener)} ({n_labeled} закрыто) | "
-        f"Main WS {len(main_ws)} | BB Fade {len(bb_fade)} | "
+        f"Main WS {len(main_ws)} | BB Fade {len(bb_fade)} | Main Impulse {len(main_impulse)} | "
         f"Памп {len(pump)} | Импульс {len(impulse)} | "
         f"Симулятор {len(simulator)} | Ручные {len(real)}"
     )

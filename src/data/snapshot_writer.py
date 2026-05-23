@@ -64,6 +64,7 @@ def write_snapshot(
         "sl": payload.get("sl") if "sl" in payload else _get(result, "sl_price"),
         "tp1": payload.get("tp1") if "tp1" in payload else _get(result, "tp1_price"),
         "tp2": payload.get("tp2") if "tp2" in payload else _get(result, "tp2_price"),
+        "exit_rule": payload.get("exit_rule") if "exit_rule" in payload else _get(result, "exit_rule"),
         "hold_min": payload.get("hold_min") if "hold_min" in payload else _get(result, "max_hold_min"),
         "drop_reason": _get(result, "drop_reason", ""),
         "context": _get(result, "context", {}) or {},

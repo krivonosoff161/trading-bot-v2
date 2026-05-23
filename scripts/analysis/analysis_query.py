@@ -96,6 +96,7 @@ def _norm_snapshot(row: dict[str, Any]) -> dict[str, Any]:
         "sl": row.get("sl"),
         "tp1": row.get("tp1"),
         "tp2": row.get("tp2"),
+        "exit_rule": row.get("exit_rule"),
         "hold_min": row.get("hold_min"),
         "snapshot_json": row,
     }
@@ -115,6 +116,7 @@ def _norm_main(row: dict[str, Any]) -> dict[str, Any]:
         "sl": row.get("sl"),
         "tp1": row.get("tp1"),
         "tp2": row.get("tp2"),
+        "exit_rule": row.get("exit_rule"),
         "hold_min": row.get("hold_min"),
         "snapshot_json": None,
     }
@@ -134,6 +136,7 @@ def _norm_signal_log(row: dict[str, Any]) -> dict[str, Any]:
         "sl": row.get("sl"),
         "tp1": row.get("tp"),
         "tp2": row.get("tp2"),
+        "exit_rule": row.get("exit_rule"),
         "hold_min": row.get("max_hold_min"),
         "snapshot_json": None,
     }
@@ -155,6 +158,7 @@ def _norm_pump(row: dict[str, Any]) -> dict[str, Any]:
         "sl": row.get("paper_sl"),
         "tp1": row.get("paper_tp"),
         "tp2": None,
+        "exit_rule": row.get("exit_rule"),
         "hold_min": None,
         "snapshot_json": None,
     }
@@ -400,6 +404,7 @@ def build_dataframe(signal_rows: pd.DataFrame, *, around: str = "entry", feature
             "sl": signal.get("sl"),
             "tp1": signal.get("tp1"),
             "tp2": signal.get("tp2"),
+            "exit_rule": signal.get("exit_rule"),
             "hold_min": signal.get("hold_min"),
             "snapshot_json": signal.get("snapshot_json"),
             "label_json": signal.get("label_json"),
