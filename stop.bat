@@ -13,6 +13,7 @@ call :kill_window "Main Screener"
 call :kill_window "Live Screener"
 call :kill_window "Pump Orchestrator"
 call :kill_window "Smart Pump"
+call :kill_window "Impulse Pump"
 call :kill_window "BB Fade"
 call :kill_window "Tape Recorder"
 
