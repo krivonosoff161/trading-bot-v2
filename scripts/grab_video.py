@@ -1,5 +1,6 @@
-"""Grab a video (Instagram reel, YouTube, ...) into the next numbered "темаN"
-folder under docs/инста трасткбрикция/ and transcribe + screenshot it there.
+"""Grab one or more videos (Instagram reels, YouTube, ...) into their own
+numbered "темаN" folders under docs/инста трасткбрикция/ and transcribe +
+screenshot each there.
 
 One folder per clip, self-contained, matching the existing layout:
     docs/инста трасткбрикция/темаN/
@@ -9,13 +10,17 @@ One folder per clip, self-contained, matching the existing layout:
         N_screens/
         meta.txt
 
+Pass several URLs at once — they run sequentially, a failed one (e.g. an
+image-only carousel) is skipped and its empty folder is removed.
+
 Usage:
-    python scripts/grab_video.py <url> [--screens N] [--model small]
+    python scripts/grab_video.py <url> [<url> ...] [--screens N] [--model small]
 """
 from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 from datetime import date
@@ -47,7 +52,7 @@ def download(url: str, folder: Path, base: str) -> Path:
     )
     videos = [p for p in folder.iterdir() if p.suffix.lower() in VIDEO_EXTS]
     if not videos:
-        raise RuntimeError("yt-dlp downloaded no video (image-only post? — screenshot it instead).")
+        raise RuntimeError("no video downloaded (image-only post? — screenshot it instead)")
     return videos[0]
 
 
@@ -58,22 +63,31 @@ def transcribe(video: Path, screens: int, model: str) -> None:
     )
 
 
+def grab_one(url: str, screens: int, model: str) -> bool:
+    folder, base = next_slot()
+    (folder / "meta.txt").write_text(
+        f"url: {url}\ndownloaded: {date.today().isoformat()}\n", encoding="utf-8"
+    )
+    try:
+        video = download(url, folder, base)
+        transcribe(video, screens, model)
+        print(f"OK   {folder.name} <- {url}")
+        return True
+    except Exception as exc:  # skip + clean up, keep the batch going
+        print(f"FAIL {url}: {exc}")
+        shutil.rmtree(folder, ignore_errors=True)
+        return False
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Grab a video into its own тема-folder and transcribe it.")
-    parser.add_argument("url", help="video URL (Instagram reel, YouTube, etc.)")
+    parser = argparse.ArgumentParser(description="Grab video(s) into тема-folders and transcribe.")
+    parser.add_argument("urls", nargs="+", help="one or more video URLs")
     parser.add_argument("--screens", type=int, default=12)
     parser.add_argument("--model", default="small")
     args = parser.parse_args()
 
-    folder, base = next_slot()
-    (folder / "meta.txt").write_text(
-        f"url: {args.url}\ndownloaded: {date.today().isoformat()}\n", encoding="utf-8"
-    )
-    print(f"Folder: {folder}")
-
-    video = download(args.url, folder, base)
-    transcribe(video, args.screens, args.model)
-    print(f"Done -> {folder}")
+    ok = sum(grab_one(url, args.screens, args.model) for url in args.urls)
+    print(f"Done: {ok}/{len(args.urls)} ok")
 
 
 if __name__ == "__main__":
