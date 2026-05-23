@@ -6,7 +6,7 @@ Run manually:
 Safety:
     - paper engine only, never sends orders;
     - requires impulse_pump.auto_trade=false and AUTO_TRADE!=true;
-    - intentionally not wired into start_all.bat.
+    - wired into start_all.bat; runs only when impulse_pump.enabled=true.
 """
 
 from __future__ import annotations
