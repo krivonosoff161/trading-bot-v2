@@ -1,6 +1,6 @@
 # PLAN - Trading Bot V2
 
-**Последнее обновление:** 2026-05-20
+**Последнее обновление:** 2026-05-23
 
 > **Режим всех треков: PAPER TRADING / TEST ONLY**
 > AUTO_TRADE=false на всех процессах. Реальные деньги — только после прохождения
@@ -115,13 +115,22 @@ analyze_chart.py считает, llm_formatter.py объясняет.
 
 ## Трек 2 — Pump Engine (WS)
 
-### 🔴 ТЕКУЩИЙ СТАТУС (20.05.2026)
+### 🟢 ТЕКУЩИЙ СТАТУС (23.05.2026) — ПАМП ЗАКРЫТ, paper-движок «рывок» готов
+
+**Реструктуризация завершена.** «Рывок» (ранний ТИКОВЫЙ вход на импульсе волатильных альтов + структурный
+ride) = рабочий edge (polish 22.05: +3.03% net, WR 84%, обе стороны). Собран **paper-движок**
+`scripts/ws/ws_impulse_pump.py` + `src/data/impulse_pump_*` (аудит Claude пройден `3351faf`, paper-only,
+конфиг заморожен в `config.yaml:impulse_pump`, enabled:false). Training-grade записи + вкладка «Импульс» в
+журнале (`31889a3`). Подвязан в start_all/stop (`af360f7`).
+**⛔ Испыт. срок:** edge на 2-3 днях тиков → forward-paper подтверждает на 2-3 неделях. **Денег НЕ трогаем.**
+**Запуск paper:** config enabled:true + `.env` AUTO_TRADE=false + PUMP_CHAT_ID + start_all.
 
 | Подход | Статус |
 |--------|--------|
 | Momentum (вход по взрыву, `ws_pump_orchestrator`) | ❌ ЗАКРЫТ — n=560, WR=34.6%, net=−74% |
 | Reversal (вход против взрыва, `ws_smart_pump`) | ❌ ЗАКРЫТ 20.05 — **fee-blocked**, постмортем `docs/strategy_pump_reversal_postmortem.md` |
-| **Continuation (вход ПО движению серии)** | 🔬 **АКТИВНЫЙ research** — round 2, бриф `docs/gpt_continuation_research_v2_20_05_2026.md` |
+| Continuation (вход ПО движению серии) | ✅ влит в «рывок» (research-фаза закрыта) |
+| **Рывок / Импульс (`ws_impulse_pump.py`, PAPER)** | 🟢 **готов, испыт. срок** — forward-paper копит дни |
 
 **Reversal закрыт:** param sweep 0/320 положительных, гросс-edge < 0.20% тейкер. `ws_smart_pump.py`
 остановлен (убран из start_all.bat). Risk-containment секции в config.yaml (`session_ban_sl_no_tp`,
