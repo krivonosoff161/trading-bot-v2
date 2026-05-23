@@ -11,8 +11,8 @@ timeout /t 3 /nobreak > nul
 start "Main Screener" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_main_screener.py"
 start "Live Screener" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_screener_live.py"
 timeout /t 5 /nobreak > nul
-REM Smart Pump (reversal) DISABLED 20.05.2026 — reversal edge fee-blocked (see docs/strategy_pump_reversal_postmortem.md).
-REM Impulse Pump (rivok) — PAPER only. Runs only if config impulse_pump.enabled=true (else logs disabled and exits).
+REM Smart Pump (reversal) DISABLED 20.05.2026 - reversal edge fee-blocked (see docs/strategy_pump_reversal_postmortem.md).
+REM Impulse Pump (rivok) - PAPER only. Runs only if config impulse_pump.enabled=true (else logs disabled and exits).
 start "Impulse Pump" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_impulse_pump.py"
 start "BB Fade" cmd /k "cd /d %~dp0 && python -u scripts\ws\ws_bb_fade.py"
 start "Tape Recorder" cmd /k "cd /d %~dp0 && python -u scripts\analysis\tape_recorder.py"
