@@ -262,6 +262,16 @@ def _fp(symbol: str, price) -> str:
     return f"{value:.4f}"
 
 
+def _get_exit_rule(snapshot: dict, ctx: dict) -> dict:
+    rule = snapshot.get("exit_rule")
+    if not rule:
+        rule = ctx.get("exit_rule")
+    if not rule:
+        contract = snapshot.get("signal_contract") or {}
+        rule = contract.get("exit_rule")
+    return rule if isinstance(rule, dict) else {}
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
@@ -304,6 +314,8 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     vwap         = ctx.get("vwap_day")
     day_high     = ctx.get("day_high")
     day_low      = ctx.get("day_low")
+    exit_rule    = _get_exit_rule(snapshot, ctx)
+    exit_rule_type = str(exit_rule.get("type") or "").lower()
 
     conflict = bias_4h != "NEUTRAL" and bias_1h != "NEUTRAL" and bias_4h != bias_1h
 
@@ -415,16 +427,32 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
             level = "умеренная — учитывай при удержании позиции"
         lines.append(f"\n⚠️ Ставка финансирования: {level} ({direction_word}, {pct}%)")
 
-    # Levels — only for ENTRY/WAIT, not NO_TRADE
+    # Levels - only for ENTRY/WAIT, not NO_TRADE.
     if entry_signal != "NO_TRADE" and sl:
         lines += [
             "",
             f"Расчётные уровни:",
             f"  Вход:    {_fp(symbol, close)}",
             f"  Стоп:    {_fp(symbol, sl)}",
-            f"  Цель:    {_fp(symbol, tp1)}  (основная, закрывать при касании)",
-            f"  Стретч:  {_fp(symbol, tp2)}  (опционально, при сильном импульсе)",
         ]
+        if exit_rule_type == "ride":
+            structure_k = exit_rule.get("params", {}).get("structure_k", 2)
+            be_at_r = (ctx.get("follow") or {}).get("be_at_R") or snapshot.get("follow", {}).get("be_at_R")
+            lines += [
+                "  Выход:   ride - едем по движению, без фиксированной цели",
+                f"  Слом:    выход по структуре ({structure_k} закрытых свечи)",
+            ]
+            if be_at_r is not None:
+                lines.append(f"  Защита: после {be_at_r}R стоп переводится к безубытку")
+        elif exit_rule_type == "scaled":
+            target_pct = exit_rule.get("params", {}).get("target_pct")
+            target_text = f"{target_pct:.2f}%" if isinstance(target_pct, (int, float)) else "по правилу импульса"
+            lines.append(f"  Выход:   scaled TP - фиксируем по цели {target_text}")
+        else:
+            lines += [
+                f"  Цель:    {_fp(symbol, tp1)}  (основная, закрывать при касании)",
+                f"  Стретч:  {_fp(symbol, tp2)}  (опционально, при сильном импульсе)",
+            ]
 
     max_hold = ctx.get("max_hold_minutes")
     if max_hold and entry_signal != "NO_TRADE":

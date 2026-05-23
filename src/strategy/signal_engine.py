@@ -487,6 +487,8 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     five_m_trigger = eng.get("five_m_trigger", True)
     adx_4h = eng.get("adx_4h", 0.0)
     regime = eng.get("regime", "RANGING")
+    exit_rule = eng.get("exit_rule") if isinstance(eng.get("exit_rule"), dict) else {}
+    exit_rule_type = str(exit_rule.get("type") or "").lower()
 
     try:
         dt = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
@@ -571,14 +573,19 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
             lines.append(f"  Сигнал формируется — ставим лимитку {long_short} при подтверждении.")
         lines.append("")
 
-        if sl_p and tp1_p and tp2_p:
+        if sl_p and (exit_rule_type == "ride" or (tp1_p and tp2_p)):
             arrow = "📈" if side == "buy" else "📉"
             sl_pct = abs(close - sl_p) / close * 100
             lines.append("📋 ИСПОЛНЕНИЕ (авто + ручное)")
             lines.append(f"  {arrow} Вход:   {fp(close)}")
             lines.append(f"  🛑 Стоп:   {fp(sl_p)}  (−{sl_pct:.2f}% от входа)")
-            lines.append(f"  🎯 Цель:   {fp(tp1_p)}   — основная фиксация")
-            lines.append(f"  🔝 Стретч: {fp(tp2_p)}   — если импульс сохранится")
+            if exit_rule_type == "ride":
+                structure_k = exit_rule.get("params", {}).get("structure_k", 2)
+                lines.append("  Выход:   ride - едем по движению, без фиксированной цели")
+                lines.append(f"  Слом:    выход по структуре ({structure_k} закрытых свечи)")
+            else:
+                lines.append(f"  🎯 Цель:   {fp(tp1_p)}   — основная фиксация")
+                lines.append(f"  🔝 Стретч: {fp(tp2_p)}   — если импульс сохранится")
             lines.append("")
             ex_notional = round(1000 * 0.01 / (sl_pct / 100))
             ex_margin = round(ex_notional / 10)
@@ -816,6 +823,7 @@ def build_analysis_snapshot(symbol: str, captured_at_iso: str, result: SignalRes
         "sl_price": result.sl_price,
         "tp1_price": result.tp1_price,
         "tp2_price": result.tp2_price,
+        "exit_rule": getattr(result, "exit_rule", None),
         "max_hold_minutes": result.max_hold_min,
         "daily_range_pct": round(float(ctx.get("daily_range_pct", 0)), 2),
         "is_night_session": ctx.get("is_night"),
@@ -835,6 +843,7 @@ def build_analysis_snapshot(symbol: str, captured_at_iso: str, result: SignalRes
         "symbol": symbol,
         "captured_at": captured_at_iso,
         "expiry_time": result.expiry_time,
+        "exit_rule": getattr(result, "exit_rule", None),
         "llm_context": llm_context,
         "microstructure": result.microstructure,
         "4h": result.indicators.get("4h", {}),
@@ -961,9 +970,9 @@ def compute_signal(
         dc_highs = [float(c[2]) for c in day_candles]
         dc_lows = [float(c[3]) for c in day_candles]
         vol_sum = sum(dc_vols)
-        vwap = round(sum(c * v for c, v in zip(dc_closes, dc_vols)) / vol_sum, 4) if vol_sum > 0 else None
-        day_high = round(max(dc_highs), 4)
-        day_low = round(min(dc_lows), 4)
+        vwap = _round_price(sum(c * v for c, v in zip(dc_closes, dc_vols)) / vol_sum, close) if vol_sum > 0 else None
+        day_high = _round_price(max(dc_highs), close)
+        day_low = _round_price(min(dc_lows), close)
     else:
         vwap = day_high = day_low = None
 
