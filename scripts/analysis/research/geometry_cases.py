@@ -14,7 +14,9 @@ import sys
 import io
 import datetime as dt
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+if not getattr(sys, "_utf8_wrapped", False):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    sys._utf8_wrapped = True
 
 import matplotlib
 matplotlib.use("Agg")
