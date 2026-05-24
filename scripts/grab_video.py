@@ -81,13 +81,21 @@ def grab_one(url: str, screens: int, model: str) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grab video(s) into тема-folders and transcribe.")
-    parser.add_argument("urls", nargs="+", help="one or more video URLs")
+    parser.add_argument("urls", nargs="*", help="video URLs (or use --from-file)")
+    parser.add_argument("--from-file", type=Path, help="text file with one URL per line")
     parser.add_argument("--screens", type=int, default=12)
     parser.add_argument("--model", default="small")
     args = parser.parse_args()
 
-    ok = sum(grab_one(url, args.screens, args.model) for url in args.urls)
-    print(f"Done: {ok}/{len(args.urls)} ok")
+    urls = list(args.urls)
+    if args.from_file:
+        urls += [ln.strip() for ln in args.from_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    urls = list(dict.fromkeys(urls))  # dedupe, keep order
+    if not urls:
+        parser.error("no URLs (pass URLs or --from-file)")
+
+    ok = sum(grab_one(url, args.screens, args.model) for url in urls)
+    print(f"Done: {ok}/{len(urls)} ok")
 
 
 if __name__ == "__main__":
