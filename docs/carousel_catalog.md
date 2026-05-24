@@ -7,23 +7,18 @@
 **Флаги:** 🟢 TRADE (полезно сейчас) · 🔵 CODE (кодинг / ИИ-тулзы) · 🟡 LATER (полезно позже/к фазе) · ⚪ INTEREST (другое, но интересное) · ❌ SKIP (мусор/аниме/промо)
 
 **Метод:** проход 1 (черновой) — разбор по обложке. Потом детальный проход 2 + финальное распределение.
-**Разобрано: 41 / 69.** ⭐ = особо релевантно нам.
+**Разобрано: 69 / 69** — проход 1 завершён полностью. ⭐ = особо релевантно нам.
+Видео-карусели #3, #20 разобраны по первому кадру (извлечён через PyAV в `_covers_small/`, помечены 🎬).
 
-> ## ▶ ПРОДОЛЖИТЬ В НОВОМ ЧАТЕ (проход 1, осталось ~28)
-> В прошлой сессии чтение картинок упёрлось в кумулятивный лимит API (~40 изображений в контексте →
-> любой image-запрос режется по ≤2000px). В **свежем** чате чтение снова работает.
-> - Дочитать обложки строк со статусом ⏳ (это **#41–69 кроме #51**).
-> - Читать **уменьшенные** копии: `docs/инста трасткбрикция/_covers_small/<shortcode>.jpg` (уже ≤1400px).
-> - **Читать малыми батчами (~8–10 за раз)**, чтобы снова не упереться в лимит за сессию.
-> - **#3 (DKXjNxuCA6L) и #20 (DUiUvnbglVz)** — видео-карусели, обложки в `_covers_small` нет; глянуть
->   первый кадр из `_carousels/<sc>/` или пометить как video-карусель.
-> - Проставить флаги в таблицу, обновить счётчик. Затем — **проход 2 (детально)** + распределение.
+> ## ▶ ДАЛЬШЕ — проход 2 (детально)
+> - Раскрыть содержимое ⭐-каруселей постранично (страницы в `_carousels/<shortcode>/`).
+> - Актуальные идеи → промоут в `BACKLOG.md` (в существующий раздел), в реестре — только статус + указатель.
 
 | # | shortcode | флаг | что это |
 |---|---|---|---|
 | 1 | DJ4Ae0tokIp | 🔵 CODE | No-code/AI-стек «запуск компании за 0₽» (Durable, Gumroad, Make) |
 | 2 | DJ6_Wn-MCEe | ❌ SKIP | Топ аниме |
-| 3 | DKXjNxuCA6L | ⏳ | видео-обложка — отдельно (video-карусель) |
+| 3 | DKXjNxuCA6L | ⚪ INTEREST | 🎬 видео-карусель — фитнес/осанка (упражнения для psoas/поясницы) |
 | 4 | DLJDmyxI6GR | ⚪ INTEREST | Медчекап / здоровье |
 | 5 | DLx2DqYsSwK | ❌ SKIP | Аниме (Киберпанк s2) |
 | 6 | DMhUqUjgFqi | ⚪ INTEREST | ООО / защита активов через траст/фонд |
@@ -40,7 +35,7 @@
 | 17 | DTD8-sGDTv1 | ⚪ INTEREST | Налоговая схема «дружественный лизинг» |
 | 18 | DU2t6PbDcfU | 🔵 CODE | Промпт «персональный крипто-аналитик» |
 | 19 | DUDHtLRiBvv | ❌ SKIP | Игра (Arab/ARC Raiders) |
-| 20 | DUiUvnbglVz | ⏳ | видео-обложка — отдельно (video-карусель) |
+| 20 | DUiUvnbglVz | ⚪ INTEREST | 🎬 видео-карусель — «6 автоматизаций на продажу в 2026 (70-150 тыс)» (бизнес; ср. #15 n8n) |
 | 21 | DUlO4aEDJbU | ⚪ INTEREST | 6 безопасных мессенджеров |
 | 22 | DV8qasfDWXx | 🔵 CODE ⭐ | Шаблон CLAUDE.md от Boris Cherny |
 | 23 | DWG4gWnmihX | 🟢 TRADE | Паттерны продолжения (TA) |
@@ -61,37 +56,44 @@
 | 38 | DX9bMibGnk- | ⚪ INTEREST | Цветовая схема графика TradingView |
 | 39 | DX9xEhhjjWA | 🟢 TRADE | ICT/SMC: BOS / IDM / OB / Liquidity grab |
 | 40 | DXEtwqpFYn8 | 🔵 CODE ⭐ | graphify: память Claude + экономия токенов 71.5× |
-| 41 | DXGNidNGM8X | ⏳ | _covers_small/DXGNidNGM8X.jpg (20 имг) |
-| 42 | DXJ1JyjGsh0 | ⏳ | _covers_small/DXJ1JyjGsh0.jpg |
-| 43 | DXKUmmzgh3u | ⏳ | _covers_small/DXKUmmzgh3u.jpg |
-| 44 | DXMCCUwjPyi | ⏳ | _covers_small/DXMCCUwjPyi.jpg (1 имг) |
-| 45 | DXTyl08lvhZ | ⏳ | _covers_small/DXTyl08lvhZ.jpg |
-| 46 | DXW3YSKmkTm | ⏳ | _covers_small/DXW3YSKmkTm.jpg |
-| 47 | DXXPB_BiIxb | ⏳ | _covers_small/DXXPB_BiIxb.jpg |
-| 48 | DXZ1RK4As1A | ⏳ | _covers_small/DXZ1RK4As1A.jpg |
-| 49 | DXdYrFYE9jR | ⏳ | _covers_small/DXdYrFYE9jR.jpg (20 имг) |
-| 50 | DXgbeB_Dc8H | ⏳ | _covers_small/DXgbeB_Dc8H.jpg |
+| 41 | DXGNidNGM8X | 🔵 CODE | Self-Healing RAG на LangGraph (grade-нода, anti-hallucination, гайд 60 мин) |
+| 42 | DXJ1JyjGsh0 | 🟢 TRADE | Imbalance / FVG — как торговать (SMC; ср. #39,48,50) |
+| 43 | DXKUmmzgh3u | 🟢 TRADE | Дивергенция (цена vs индикатор) — шпаргалка для новичков |
+| 44 | DXMCCUwjPyi | 🔵 CODE ⭐ | «Освоить Claude за неделю» (10 шагов: CLAUDE.md, 4 папки, промпты, Skill) |
+| 45 | DXTyl08lvhZ | ⚪ INTEREST | ИП на УСН: дедлайн 27-28 апреля (РФ налоги) |
+| 46 | DXW3YSKmkTm | 🟢 TRADE | Топ-5 сервисов для трейдера (smart__capital — тулзы) |
+| 47 | DXXPB_BiIxb | 🔵 CODE ⭐ | «71.5X метод Карпати» — token optimization Claude Code (ср. #26,40) |
+| 48 | DXZ1RK4As1A | 🟢 TRADE | Ордер-блоки (SMC) — следы крупных игроков, шпаргалка |
+| 49 | DXdYrFYE9jR | 🔵 CODE ⭐ | Parallel Multi-Agent Stock&Crypto Analyst (LangGraph fan-out→fan-in: Price/Sentiment/OnChain/Macro/Risk → Synthesis → BUY/HOLD/SELL) — ср. Phase G |
+| 50 | DXgbeB_Dc8H | 🟢 TRADE | «Кто такие Smart Money» (толпа vs умные деньги) — SMC интро |
 | 51 | DXjlj-GDXBJ | 🔵 CODE | «Stop using MCP, start using CLIs» (инфографика, опознано в тема25) |
-| 52 | DXkC38AiEV9 | ⏳ | _covers_small/DXkC38AiEV9.jpg |
-| 53 | DXkMmvzjPdE | ⏳ | _covers_small/DXkMmvzjPdE.jpg (1 имг) |
-| 54 | DXo_RhpiJ54 | ⏳ | _covers_small/DXo_RhpiJ54.jpg |
-| 55 | DXqa7GdDA-V | ⏳ | _covers_small/DXqa7GdDA-V.jpg (1 имг) |
-| 56 | DXwU6JoAtmT | ⏳ | _covers_small/DXwU6JoAtmT.jpg |
-| 57 | DXxAsiXDQ9L | ⏳ | _covers_small/DXxAsiXDQ9L.jpg |
-| 58 | DYAKGIgFWvs | ⏳ | _covers_small/DYAKGIgFWvs.jpg |
-| 59 | DYCUgFIlRDb | ⏳ | _covers_small/DYCUgFIlRDb.jpg |
-| 60 | DYCnJx3DCMZ | ⏳ | _covers_small/DYCnJx3DCMZ.jpg |
-| 61 | DYIFYQ5DLyH | ⏳ | _covers_small/DYIFYQ5DLyH.jpg |
-| 62 | DYNZRSgmcvQ | ⏳ | _covers_small/DYNZRSgmcvQ.jpg |
-| 63 | DYP4OZqDOhw | ⏳ | _covers_small/DYP4OZqDOhw.jpg |
-| 64 | DYSjKxRM88R | ⏳ | _covers_small/DYSjKxRM88R.jpg (1 имг) |
-| 65 | DYTla2vjIO3 | ⏳ | _covers_small/DYTla2vjIO3.jpg |
-| 66 | DYVFh60kRD8 | ⏳ | _covers_small/DYVFh60kRD8.jpg |
-| 67 | DYX1_-RmfP1 | ⏳ | _covers_small/DYX1_-RmfP1.jpg |
-| 68 | DYdMvIQjQfM | ⏳ | _covers_small/DYdMvIQjQfM.jpg |
-| 69 | DYkMCh0GnJ8 | ⏳ | _covers_small/DYkMCh0GnJ8.jpg (smart__capital, 5 имг) |
+| 52 | DXkC38AiEV9 | ⚪ INTEREST | Разбор питч-дека ElevenLabs (12 слайдов стартапа, $2M raise) |
+| 53 | DXkMmvzjPdE | 🔵 CODE | Все коннекторы Claude (20: Drive/Gmail/Notion/Slack/n8n/Zapier...) |
+| 54 | DXo_RhpiJ54 | 🔵 CODE ⭐ | 10 GitHub-репов для Claude Code (open source, osmagulov) |
+| 55 | DXqa7GdDA-V | 🔵 CODE | «Настрой Claude с нуля» (6 шагов + бонус Skill, abramov) |
+| 56 | DXwU6JoAtmT | 🟢 TRADE | «Поимка разворота = структура, не удача» (хаос → геометрия графика) |
+| 57 | DXxAsiXDQ9L | 🔵 CODE ⭐ | Agent Development Kit: 5 слоёв (CLAUDE.md+Skills+Hooks+Subagents+Plugins) — ср. #29 |
+| 58 | DYAKGIgFWvs | 🟢 TRADE | Ошибка входа: отметь уровень → вход → SL (тайминг входа и стопа) |
+| 59 | DYCUgFIlRDb | 🟢 TRADE | Топ-5 доджи-свечей (свечные паттерны, А. Звёздин) |
+| 60 | DYCnJx3DCMZ | 🔵 CODE | Claude Cowork: промпт-формула ODAF (Outcome·Data·Action·Format) |
+| 61 | DYIFYQ5DLyH | 🟡 LATER ⭐ | 4 проекта ML+Finance (нейросеть на OHLC, vol surface, yield-curve forecast) |
+| 62 | DYNZRSgmcvQ | 🟡 LATER ⭐ | 7 квант-стратегий для домашнего бэктеста (MacroGlide) |
+| 63 | DYP4OZqDOhw | ❌ SKIP | Аниме («ГГ имба») |
+| 64 | DYSjKxRM88R | 🔵 CODE | 20 способов использовать Claude (Chat/Code/Skills/Connectors/Research..., abramov) |
+| 65 | DYTla2vjIO3 | ❌ SKIP | Аниме («верь мне, брат») |
+| 66 | DYVFh60kRD8 | 🔵 CODE | Обзор ИИ-моделей: не только текст (картинки/видео/код/ресёрч) |
+| 67 | DYX1_-RmfP1 | ❌ SKIP | Аниме (топ исекай по MAL) |
+| 68 | DYdMvIQjQfM | 🔵 CODE ⭐ | 12 GitHub-репов для Claude Code (artanov.tech; ср. #54) |
+| 69 | DYkMCh0GnJ8 | 🟢 TRADE | Пробой уровня: снижение волатильности + боковик → вероятный пробой (smart__capital) |
 
-## Промежуточный итог прохода 1 (41/69)
-- 🟢 TRADE: 10 · 🔵 CODE: 14 · ⚪ INTEREST: 12 · ❌ SKIP: 4 · ⏳ осталось: 29 (вкл. 2 видео-обложки)
-- Кластеры на будущее: ORB/сессионные уровни (#34,36,25 + видео тема10/22), SMC/паттерны (#23,39),
-  макро/объём (#27,32 — ср. BACKLOG VIX+COT, Volume Profile), Claude-воркфлоу ⭐ (#22,26,29,40).
+## Итог прохода 1 (69/69 — завершён)
+- 🟢 TRADE: 18 · 🔵 CODE: 26 · 🟡 LATER: 2 · ⚪ INTEREST: 16 · ❌ SKIP: 7
+- **Кластеры:**
+  - SMC / умные деньги ⭐ (#39,42,48,50,56 — imbalance/FVG, ордер-блоки, структура разворота)
+  - ORB / сессионные уровни (#34,36,25 + видео тема10/22), пробой+волатильность (#69), вход/SL (#58)
+  - Паттерны TA (#23,43 дивергенция, #59 доджи), макро/объём (#27,32 — ср. BACKLOG VIX+COT, Volume Profile)
+  - Claude-воркфлоу ⭐ (#22,26,29,40,44,47,54,55,57,60,64,68 — CLAUDE.md/skills/hooks/subagents,
+    token-optimization, GitHub-репы, промпт-формулы) — самый плотный кластер, прямо в нашу работу
+  - Multi-agent LLM ⭐ (#49 parallel analyst, #41 self-healing RAG) — ср. `project_phase_g_vision`
+  - Квант/ML ⭐ (#61 ML+Finance, #62 7 квант-стратегий) → 🟡 LATER, к фазе квант-ресёрча
+- **На проход 2 (детально):** раскрыть ⭐-карусели постранично, актуальное промоутить в `BACKLOG.md`.
