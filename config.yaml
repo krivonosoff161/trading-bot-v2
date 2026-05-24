@@ -148,7 +148,7 @@ smart_pump:
   warmup_bars: 20
 
 impulse_pump:
-  enabled: true
+  enabled: false   # ЗАКРЫТО 24.05.2026 — форвард-paper NO-GO (см. docs/strategy_impulse_postmortem.md)
   auto_trade: false
   paper: true
   pairs:
@@ -179,7 +179,7 @@ impulse_pump:
   extra_notify_chats: []
 
 main_impulse:
-  enabled: true
+  enabled: false   # ЗАКРЫТО 24.05.2026 — форвард-paper NO-GO (см. docs/strategy_impulse_postmortem.md)
   auto_trade: false
   paper: true
   pairs:

@@ -36,7 +36,9 @@ B2 хардкод символов, B5 12+ вето (recall), B6 геометр�
 инфополя (69/69, проход 1 + проход 2 по CODE; промоут в `BACKLOG.md` блок «🎠 Карусели 24.05»), настроили
 `.claude/` (слэш-команды + хуки + money-guardrail), зафиксировали правила в CLAUDE.md (раздел «Воркфлоу с Claude»).
 **Торговый код НЕ трогали.** Окно закрыто. Дальше — наблюдение форвард-paper импульс-движка (~неделя /
-~100 сигналов), затем GO/NO-GO по эджу (см. СТАТУС 23.05 выше).
+~100 сигналов) — но GO/NO-GO УЖЕ вынесен: **импульс ЗАКРЫТ 24.05 (forward NO-GO).** Оба движка off, архив
+`docs/strategy_impulse_postmortem.md`. Живые каналы: **Main WS + BB Fade.** Следующий фронт — **geometry-research**
+(WR ок везде, деньги нет → корень стоп/тейк/сайзинг).
 
 ---
 
@@ -154,15 +156,17 @@ ride) = рабочий edge (polish 22.05: +3.03% net, WR 84%, обе сторо
 `scripts/ws/ws_impulse_pump.py` + `src/data/impulse_pump_*` (аудит Claude пройден `3351faf`, paper-only,
 конфиг заморожен в `config.yaml:impulse_pump`, enabled:false). Training-grade записи + вкладка «Импульс» в
 журнале (`31889a3`). Подвязан в start_all/stop (`af360f7`).
-**⛔ Испыт. срок:** edge на 2-3 днях тиков → forward-paper подтверждает на 2-3 неделях. **Денег НЕ трогаем.**
-**Запуск paper:** config enabled:true + `.env` AUTO_TRADE=false + PUMP_CHAT_ID + start_all.
+**❌ ЗАКРЫТ 24.05.2026 — forward-paper NO-GO.** За ~28-40ч: памп −19.67% (WR 14%), майн −7.77% (WR 0%).
+Research +3%/84% не пережил форвард (replay↔live gap подтверждён на 2 днях), BSB-оверфит (звезда research =
+убийца live), capture~0 (MFE есть, выход отдаёт). Движки off (`config.*.enabled=false`, убраны из start_all),
+логи сохранены для geometry-research. Постмортем `docs/strategy_impulse_postmortem.md`. **Денег не трогали (paper).**
 
 | Подход | Статус |
 |--------|--------|
 | Momentum (вход по взрыву, `ws_pump_orchestrator`) | ❌ ЗАКРЫТ — n=560, WR=34.6%, net=−74% |
 | Reversal (вход против взрыва, `ws_smart_pump`) | ❌ ЗАКРЫТ 20.05 — **fee-blocked**, постмортем `docs/strategy_pump_reversal_postmortem.md` |
 | Continuation (вход ПО движению серии) | ✅ влит в «рывок» (research-фаза закрыта) |
-| **Рывок / Импульс (`ws_impulse_pump.py`, PAPER)** | 🟢 **готов, испыт. срок** — forward-paper копит дни |
+| **Рывок / Импульс (`ws_impulse_pump` + `ws_main_impulse`, PAPER)** | ❌ **ЗАКРЫТ 24.05 — forward NO-GO** (памп −19.67%/WR 14%, майн −7.77%/WR 0%; replay↔live gap, BSB overfit, capture~0). Постмортем `docs/strategy_impulse_postmortem.md` |
 
 **Reversal закрыт:** param sweep 0/320 положительных, гросс-edge < 0.20% тейкер. `ws_smart_pump.py`
 остановлен (убран из start_all.bat). Risk-containment секции в config.yaml (`session_ban_sl_no_tp`,
