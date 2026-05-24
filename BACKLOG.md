@@ -86,6 +86,24 @@ Path A симуляция + декомпозиция conditions_not_met заве
 - **🔬 dev/AI для стройки** (к фазам): Paperclip + FireCrawl + DeepSeek-дешёвый-слой + Obsidian-память →
   Phase G; Supabase-стек → Phase S3.1. Это **референс к паркованным фазам**, не текущая работа.
 
+### 🎠 Карусели 24.05 — промоут из инфополя
+Проход 2 (детальный) по `docs/carousel_catalog.md`. Сюда — только actionable; awareness-гайды «как юзать Claude» не плодим.
+
+- **🟡 trade (точность ВХОДА, не «ещё направление»):** SMC-кластер — imbalance/FVG (#42), ордер-блоки (#48),
+  smart-money интро (#50), структура разворота (#56) + пробой-на-сжатии-волатильности (#69) + вход/SL после
+  уровня (#58). Рассматривать как research **точки входа для импульс-движка** (поздний вход = раздутый стоп =
+  убитая геометрия). Ложится в **context_gate Phase 2** (микроструктура в момент сигнала, см. P2). Оговорки:
+  дискреционно — механизировать объективно; та же геометрия (фикс RR / тесный стоп), что валила майн.
+- **🟡 trade:** ORB сессионный (15m ORB + VWAP, #34/#36) — рядом с «4H-якорь + реклейм». Один честный бэктест, не в лайв.
+- **📦 квант (далёкий горизонт):** #61 ML+Finance проекты (нейросеть на OHLC, vol surface, yield-curve forecast),
+  #62 «7 квант-стратегий для домашнего бэктеста» → зона квант-ресёрча, рядом с Марченко–Пастур + стат-арб (выше).
+  Референс, не работа сейчас.
+- **🔬 LLM-тема (Phase G):** #49 parallel multi-agent crypto-analyst (LangGraph fan-out→fan-in:
+  Price/Sentiment/OnChain/Macro/Risk → Synthesis → BUY/HOLD/SELL) = **почти буквально Phase G.3**, лучший
+  референс-материал; #41 self-healing RAG (grade-нода, anti-hallucination). Cross-ref Phase G, deep-read когда дойдём.
+- **⚙️ dev-воркфлоу (это работа ТЕКУЩЕГО окна, не бэклог):** `.claude/` setup (settings allowlist + SessionStart hook
+  + PreToolUse money-safety guardrail на AUTO_TRADE/.env) из каруселей #22/#29/#57. Обсуждается отдельно.
+
 ### ✅ СДЕЛАНО 23.05 (вечер) — МАЙН research проведён ЦЕЛИКОМ + аудит ядра
 Прошли весь research-цикл локально (скрипты `main_rebuild_*_23_05_2026.py`, документы `core_audit_*`,
 `architecture_vision_human_*`). Главные выводы (перевернули прежнюю премису бэклога):
