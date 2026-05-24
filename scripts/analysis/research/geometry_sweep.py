@@ -58,15 +58,22 @@ def build_paths(ch):
     out = []
     for t in sorted((x for x in load_trades() if x["ch"] == ch and is_clean(x)), key=lambda x: x["t0"]):
         H = hold_min(t)
-        ticks = load_ticks(t["sym"], t["t0"] - 25 * 60000, t["t0"] + (H + 5) * 60000)
+        ticks = load_ticks(t["sym"], t["t0"] - 25 * 60000, t["t0"] + (2 * H + 10) * 60000)
         bars = resample(ticks)
         if len(bars) < 6:
             continue
         ei = next((i for i, b in enumerate(bars) if b[0] >= t["t0"]), 0)
-        end_i = next((i for i, b in enumerate(bars) if b[0] >= t["t0"] + H * 60000), len(bars))
-        if end_i <= ei + 1:
+        search_end = next((i for i, b in enumerate(bars) if b[0] >= t["t0"] + H * 60000), len(bars))
+        e = t["entry"]; s = sgn(t["side"])
+        # FILL-verify: enter at the bar where price actually reaches the entry level
+        fi = next((i for i in range(ei, search_end)
+                   if (s > 0 and bars[i][3] <= e) or (s < 0 and bars[i][2] >= e)), None)
+        if fi is None:
             continue
-        out.append(((bars, ei, end_i, sgn(t["side"]), t["entry"]), atr_pre(bars, ei)))
+        end_i = next((i for i, b in enumerate(bars) if b[0] >= bars[fi][0] + H * 60000), len(bars))
+        if end_i <= fi + 1:
+            continue
+        out.append(((bars, fi, end_i, s, e), atr_pre(bars, fi)))
     return out
 
 

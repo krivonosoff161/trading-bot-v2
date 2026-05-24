@@ -143,18 +143,26 @@ def main():
         v1 = []; v2 = []; v3 = []
         for t in clean:
             H = hold_min(t)
-            ticks = load_ticks(t["sym"], t["t0"] - 25 * 60000, t["t0"] + (H + 5) * 60000)
+            ticks = load_ticks(t["sym"], t["t0"] - 25 * 60000, t["t0"] + (2 * H + 10) * 60000)
             bars = resample(ticks)
             if len(bars) < 6:
                 continue
             ei = next((i for i, b in enumerate(bars) if b[0] >= t["t0"]), 0)
-            end_i = next((i for i, b in enumerate(bars) if b[0] >= t["t0"] + H * 60000), len(bars))
-            if end_i <= ei + 1:
+            # FILL-verify: enter only at the bar where price actually reaches the entry level,
+            # within the signal's fill-search window (t0 .. t0+H); hold is anchored FROM the fill.
+            search_end = next((i for i, b in enumerate(bars) if b[0] >= t["t0"] + H * 60000), len(bars))
+            e = t["entry"]; s = sgn(t["side"])
+            fi = next((i for i in range(ei, search_end)
+                       if (s > 0 and bars[i][3] <= e) or (s < 0 and bars[i][2] >= e)), None)
+            if fi is None:
+                continue   # never filled within window -> phantom, skip
+            end_i = next((i for i, b in enumerate(bars) if b[0] >= bars[fi][0] + H * 60000), len(bars))
+            if end_i <= fi + 1:
                 continue
-            atr = atr_pre(bars, ei)
-            v1.append(walk_current(bars, ei, t, end_i))
-            v2.append(walk_oracle(bars, ei, t, end_i))
-            v3.append(walk_atr_trail(bars, ei, t, end_i, atr))
+            atr = atr_pre(bars, fi)
+            v1.append(walk_current(bars, fi, t, end_i))
+            v2.append(walk_oracle(bars, fi, t, end_i))
+            v3.append(walk_atr_trail(bars, fi, t, end_i, atr))
         print(f"\n===== {ch}  (всего {len(trades)}, чистых {len(clean)}, с тейпом {len(v1)}) =====")
         print(agg("V1 как сейчас", v1))
         print(agg("V2 потолок", v2))
