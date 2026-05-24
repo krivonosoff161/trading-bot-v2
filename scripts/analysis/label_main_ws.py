@@ -50,12 +50,18 @@ async def _fetch_candles(session: aiohttp.ClientSession, sym: str, after_ms: int
 def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
                    entry: float, sl: float, tp1: float, tp2: float,
                    side: str = "buy"):
-    """Direction-aware outcome check.
+    """Direction-aware outcome check WITH fill-gate.
 
-    BUY: SL below entry → hit when LOW <= SL; TP above entry → hit when HIGH >= TP.
-    SELL: SL above entry → hit when HIGH >= SL; TP below entry → hit when LOW <= TP.
+    `entry` is the (often pullback) entry LEVEL. The position opens only once
+    price actually reaches it — until then SL/TP are NOT scored. If the level is
+    never reached within the hold window → NO_FILL (it was never a trade).
+    This kills phantom wins: pullback longs that never pulled back but ran to TP.
+
+    BUY: filled when LOW <= entry; SL hit when LOW <= SL; TP when HIGH >= TP.
+    SELL: filled when HIGH >= entry; SL when HIGH >= SL; TP when LOW <= TP.
     """
     is_buy = side == "buy"
+    filled = False
     for row in rows:
         t_ms = int(row[0])
         if t_ms <= signal_ms:
@@ -64,6 +70,13 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
             break
         high = float(row[2])
         low  = float(row[3])
+
+        # fill-gate: no position (no SL/TP) until price reaches the entry level
+        if not filled:
+            if (is_buy and low <= entry) or (not is_buy and high >= entry):
+                filled = True
+            else:
+                continue
 
         if is_buy:
             sl_hit  = low <= sl
@@ -81,6 +94,8 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
             exit_px = tp2 if tp2_hit else tp1
             return outcome, exit_px, round((t_ms - signal_ms) / 60_000), tp2_hit
 
+    if not filled:
+        return "NO_FILL", None, 0, False
     return "TIME", None, hold_ms // 60_000, False
 
 
