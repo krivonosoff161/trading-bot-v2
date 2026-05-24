@@ -91,7 +91,8 @@ def load_trades() -> list[dict]:
                 continue
             T.append({"ch": ch, "sym": o["symbol"], "side": o["side"], "entry": entry,
                       "t0": iso_ms(o["ts"]), "t1": iso_ms(o["recorded_at"]),
-                      "net": o.get("net_pct"), "regime": None, "style": None})
+                      "net": o.get("net_pct"), "regime": None, "style": None,
+                      "sl": s.get("stop_price"), "tp": None})
     # main_ws (signals + labels)
     sg = {s["id"]: s for s in _jsonl(ROOT / "logs/signals/main_signals.jsonl")}
     for lb in _jsonl(ROOT / "logs/signals/main_signals_labels.jsonl"):
@@ -106,7 +107,8 @@ def load_trades() -> list[dict]:
         T.append({"ch": "main_ws", "sym": s["symbol"], "side": s["side"], "entry": entry,
                   "t0": t0, "t1": t0 + int(hold) * 60000, "net": None,
                   "outcome": lb.get("outcome"), "exit_price": lb.get("exit_price"),
-                  "regime": s.get("regime"), "style": s.get("trade_style")})
+                  "regime": s.get("regime"), "style": s.get("trade_style"),
+                  "sl": s.get("sl"), "tp": s.get("tp1")})
     # bb_fade
     for s in _jsonl(ROOT / "logs/bb_fade/bb_fade_signals.jsonl"):
         entry = s.get("entry")
@@ -115,7 +117,7 @@ def load_trades() -> list[dict]:
         t0 = iso_ms(s["ts"]); hold = s.get("hold_min") or 80
         T.append({"ch": "bb_fade", "sym": s["symbol"], "side": s["side"], "entry": entry,
                   "t0": t0, "t1": t0 + int(hold) * 60000, "net": s.get("net_pct"),
-                  "regime": None, "style": "FADE"})
+                  "regime": None, "style": "FADE", "sl": s.get("sl"), "tp": s.get("tp")})
     return T
 
 
