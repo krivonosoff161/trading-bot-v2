@@ -66,7 +66,7 @@ def main() -> None:
     print(f"Тредов сматчено: {len(targets)} | уникальных ссылок: {len(urls)}")
     if args.out:
         args.out.write_text("\n".join(urls) + "\n", encoding="utf-8")
-        print(f"Записано → {args.out}")
+        print(f"Saved: {args.out} ({len(urls)} urls)")
     else:
         print("\n".join(urls))
 
