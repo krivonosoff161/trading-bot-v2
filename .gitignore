@@ -115,3 +115,7 @@ scripts/backtest_mark_index_cache.pkl
 
 # Large raw research dumps (regenerable from the .py; reports keep the readable version)
 scripts/analysis/research/output/continuation_*.json
+
+# Research data caches (regenerable via okx_history.py / scripts — not source)
+scripts/analysis/research/_okxhist/
+scripts/analysis/research/*.npy
