@@ -16,6 +16,8 @@ import numpy as np
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 F5 = os.path.join(ROOT, "logs", "features", "5m")
+if not os.path.isdir(F5) or not os.listdir(F5):          # после сброса 27.05 фичи переехали в архив
+    F5 = os.path.join(ROOT, "logs_archive", "pre-reset_2026-05-27", "features", "5m")
 TRAIN_END = "2026-05-18"
 MAJORS = {"BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "LTC", "DOT", "TRX", "SUI", "APT"}
 W = 12          # свинг-окно (1ч на 5m) для прежнего хая/лоя
