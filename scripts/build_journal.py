@@ -46,12 +46,32 @@ MAIN_IMPULSE_SIGNALS_LOG = _ROOT / "logs" / "main_impulse" / "main_impulse_signa
 MAIN_IMPULSE_OUTCOMES_LOG = _ROOT / "logs" / "main_impulse" / "main_impulse_outcomes.jsonl"
 JOURNAL_PATH        = Path(__file__).parent / "journal.xlsx"
 
-# Archive paths — same schema as current logs, just historical (pre-09.05.2026)
+# Reset boundary (27.05.2026): все pre-reset торговые данные перенесены сюда = СТАРАЯ стратегия (архив).
+# Новый запуск пишет свежее в logs/. Журнал мерджит оба источника (дедуп по signal_id).
+RESET_DATE          = "27.05.2026"
+RESET_ARCHIVE       = _ROOT / "logs_archive" / "pre-reset_2026-05-27"
+
+# Archive paths — same schema as current logs, just historical
 ARCHIVE_DIRS        = [
     _ROOT / "logs_archive" / "09.05.2026" / "signals",
     _ROOT / "logs_archive" / "signals",
     _ROOT / "logs_archive" / "09.05.2026" / "pump",
+    RESET_ARCHIVE / "signals",
 ]
+
+# Data roots для single-file лоадеров: живые logs/ (новое) + reset-архив (история).
+_DATA_ROOTS = [_ROOT / "logs", RESET_ARCHIVE]
+
+
+def _jsonl_multi(rel: str) -> list:
+    """Читает относительный jsonl из всех data-roots (live logs/ + reset-архив), конкатенация.
+
+    Дедуп — на стороне лоадеров (по signal_id). _load_jsonl резолвится в рантайме.
+    """
+    out: list = []
+    for root in _DATA_ROOTS:
+        out += _load_jsonl(root / rel)
+    return out
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 def _fill(hex6: str) -> PatternFill:
@@ -243,9 +263,9 @@ def _exit_r_at_tp1(entry, sl, tp1, side: str, outcome: str):
 def _load_main_ws() -> list:
     signals = {
         (s.get("id") or s.get("signal_id", "")): s
-        for s in _load_jsonl(MAIN_SIGNALS_LOG)
+        for s in _jsonl_multi("signals/main_signals.jsonl")
     }
-    labels = {r["signal_id"]: r for r in _load_jsonl(MAIN_SIGNALS_LABELS)}
+    labels = {r["signal_id"]: r for r in _jsonl_multi("signals/main_signals_labels.jsonl") if r.get("signal_id")}
     out = []
     for sig_id, sig in signals.items():
         lab = labels.get(sig_id, {})
@@ -279,7 +299,7 @@ def _load_pump() -> list:
     signal_files = [PUMP_SIGNALS_LOG]
     label_files  = [PUMP_LABELS_LOG]
     # Archive
-    for d in [_ROOT / "logs_archive" / "09.05.2026" / "pump"]:
+    for d in [_ROOT / "logs_archive" / "09.05.2026" / "pump", RESET_ARCHIVE / "pump"]:
         if not d.exists(): continue
         for p in d.glob("pump_signals*.jsonl"):
             signal_files.append(p)
@@ -336,14 +356,14 @@ def _load_impulse() -> list:
     win = net_pct > 0.
     """
     signals: dict = {}
-    for r in _load_jsonl(IMPULSE_SIGNALS_LOG):
+    for r in _jsonl_multi("impulse_pump/impulse_pump_signals.jsonl"):
         sid = r.get("signal_id", "")
         if sid and sid not in signals:
             signals[sid] = r
 
     out = []
     seen: set = set()
-    for rec in _load_jsonl(IMPULSE_OUTCOMES_LOG):
+    for rec in _jsonl_multi("impulse_pump/impulse_pump_outcomes.jsonl"):
         sid = rec.get("signal_id", "")
         if not sid or sid in seen:
             continue
@@ -371,14 +391,14 @@ def _load_impulse() -> list:
 
 def _load_main_impulse() -> list:
     signals: dict = {}
-    for r in _load_jsonl(MAIN_IMPULSE_SIGNALS_LOG):
+    for r in _jsonl_multi("main_impulse/main_impulse_signals.jsonl"):
         sid = r.get("signal_id", "")
         if sid and sid not in signals:
             signals[sid] = r
 
     out = []
     seen: set = set()
-    for rec in _load_jsonl(MAIN_IMPULSE_OUTCOMES_LOG):
+    for rec in _jsonl_multi("main_impulse/main_impulse_outcomes.jsonl"):
         sid = rec.get("signal_id", "")
         if not sid or sid in seen:
             continue
@@ -407,7 +427,7 @@ def _load_main_impulse() -> list:
 def _load_bb_fade() -> list:
     """BB Fade signals — outcome пока приходит из самого signal jsonl (поле outcome)."""
     out = []
-    for sig in _load_jsonl(BB_FADE_SIGNALS_LOG):
+    for sig in _jsonl_multi("bb_fade/bb_fade_signals.jsonl"):
         ts = sig.get("ts", "")
         side = "LONG" if sig.get("side") == "buy" else "SHORT"
         outcome_raw = sig.get("outcome") or ""
@@ -1118,6 +1138,14 @@ def _build_dashboard(wb) -> None:
         _dw(ws, r, 4, f"=B{r}+C{r}", fill=fill)
         _dw(ws, r, 5, f'=IF(D{r}=0,"",ROUND(B{r}/D{r}*100,1))', fill=fill)
         _dw(ws, r, 6, f"=ROUND(SUMIF(Памп!H2:H10000,A{r},Памп!I2:I10000),2)", fill=fill)
+
+    # ── ЧЕРТА: сброс под новую стратегию ──────────────────────────────────────
+    _dash_title(ws, 51, 1,
+                f"🔴 СБРОС {RESET_DATE} — все данные = СТАРАЯ стратегия (архив pre-reset_2026-05-27)", span=6)
+    note = ws.cell(row=52, column=1,
+                   value="Новый запуск пишет свежее в logs/. Новые сделки (новая стратегия) появятся сверху листов по мере накопления.")
+    note.font = Font(italic=True, color="7F4F00")
+    ws.merge_cells(start_row=52, start_column=1, end_row=52, end_column=6)
 
     _set_widths(ws, [12, 9, 9, 9, 8, 15, 3, 16, 9, 9, 11, 12, 12])
 
