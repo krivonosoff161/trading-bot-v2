@@ -98,7 +98,7 @@ screener_live:
   warmup_bars: 15
 
 main_screener:
-  top_n_pairs: 24
+  top_n_pairs: 60                # 28.05: 24→60 — покрыть весь альт-юниверс, не только top по объёму
   universe_refresh_hours: 8
   cooldown_minutes: 60
   warmup_bars: 20

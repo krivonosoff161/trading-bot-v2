@@ -1015,7 +1015,9 @@ def compute_signal(
             return True
 
         cfg_sw = _mode_cfg(pp, "trending", "swing")
-        swing_base = adx_1h >= cfg_sw.get("adx", 18) and adx_1h_rising and vol_ratio_sig >= cfg_sw["vol"] and _bb_ok(cfg_sw) and not four_h_dir_conflict and adx_4h_ok and di_spread_4h >= 8 and di_spread_1h >= 8
+        # 28.05: убран _bb_ok (V5 дал +6 сигналов на 1581 — фильтр мёртвый)
+        # 28.05: убран di_spread_4h>=8 (V1 идентичен V0 — redundant с adx_4h_ok + di_spread_1h)
+        swing_base = adx_1h >= cfg_sw.get("adx", 18) and adx_1h_rising and vol_ratio_sig >= cfg_sw["vol"] and not four_h_dir_conflict and adx_4h_ok and di_spread_1h >= 8
         # Veto: don't short into oversold (RSI<25 + price below BB) — reversal risk too high
         swing_sell_oversold_veto = rsi_15m < 25 and float(h15.get("bb_pct_b") or 50) < 5
         if "SWING" in pp["allowed_modes"]:
@@ -1025,7 +1027,8 @@ def compute_signal(
                 trade_style, side, entry_cfg = "SWING", "sell", cfg_sw
 
         cfg_f = _mode_cfg(pp, "trending", "fast")
-        fast_base = adx_1h >= cfg_f.get("adx", 18) and adx_1h_rising and vol_ratio_sig >= cfg_f["vol"] and _bb_ok(cfg_f)
+        # 28.05: убран _bb_ok (мёртвый фильтр)
+        fast_base = adx_1h >= cfg_f.get("adx", 18) and adx_1h_rising and vol_ratio_sig >= cfg_f["vol"]
         if "FAST" in pp["allowed_modes"] and trade_style == "NO_TRADE":
             if fast_base and five_m_long and bias_1h == "UP":
                 trade_style, side, entry_cfg = "FAST", "buy", cfg_f
