@@ -243,6 +243,46 @@ def _calc_r_to_tp(entry, sl, tp, side: str):
     return round((entry - tp) / sl_dist, 2) if tp < entry else None
 
 
+# ── Main WS execution-cost model (29.05.2026) ────────────────────────────────
+# Client fills (confirmed by trader): ENTRY market/taker, EXIT TP/SL limit/maker;
+# manual exits negligible. OKX SWAP ~0.05% taker / ~0.02% maker per side; market-
+# entry adverse slippage ~0.03% (config.yaml). Round-trip price-cost ~0.10%.
+# In R-units: cost_R = COST_PCT_RT / SL-distance%  (per signal).
+FEE_TAKER_PCT = 0.05    # entry, market
+FEE_MAKER_PCT = 0.02    # exit, limit TP/SL
+ENTRY_SLIP_PCT = 0.03   # market-entry adverse slippage
+COST_PCT_RT = FEE_TAKER_PCT + FEE_MAKER_PCT + ENTRY_SLIP_PCT  # 0.10% round-trip
+
+
+def _cost_r(entry, sl) -> float:
+    """Round-trip execution cost expressed in R (fraction of SL distance)."""
+    try:
+        entry = float(entry); sl = float(sl)
+    except (TypeError, ValueError):
+        return 0.0
+    if entry == 0:
+        return 0.0
+    sl_dist_pct = abs(entry - sl) / abs(entry) * 100.0
+    if sl_dist_pct <= 0:
+        return 0.0
+    return COST_PCT_RT / sl_dist_pct
+
+
+def _r_from_exit(entry, sl, exit_price, side: str):
+    """Signed R of an arbitrary exit price (used for TIME exits)."""
+    if entry is None or sl is None or exit_price is None:
+        return None
+    try:
+        entry = float(entry); sl = float(sl); exit_price = float(exit_price)
+    except (TypeError, ValueError):
+        return None
+    sl_dist = abs(entry - sl)
+    if sl_dist == 0:
+        return None
+    s = 1 if side in ("LONG", "buy") else -1
+    return round(s * (exit_price - entry) / sl_dist, 2)
+
+
 def _outcome_to_tp_unified(outcome: str) -> str:
     """Unify TP1/TP2 → TP (client closes at TP1 anyway)."""
     if outcome in ("TP1", "TP2"):
@@ -250,14 +290,21 @@ def _outcome_to_tp_unified(outcome: str) -> str:
     return outcome or ""
 
 
-def _exit_r_at_tp1(entry, sl, tp1, side: str, outcome: str):
-    """Realistic R for client: TP1 hit (or planned TP1) → +R_to_TP1, SL → -1, TIME → 0."""
+def _exit_r_gross(entry, sl, tp1, side: str, outcome: str, exit_price=None):
+    """GROSS R (no cost): TP → +R_to_TP1 (single-TP), SL → -1, TIME → signed R at exit."""
     out_norm = _outcome_to_tp_unified(outcome)
     if out_norm == "TP":
         return _calc_r_to_tp(entry, sl, tp1, side)
     if out_norm == "SL":
         return -1.0
-    return None  # TIME or empty
+    if out_norm == "TIME":
+        return _r_from_exit(entry, sl, exit_price, side)
+    return None  # INVALID / empty
+
+
+def _exit_r_at_tp1(entry, sl, tp1, side: str, outcome: str):
+    """Back-compat for other channels: GROSS R, TIME->None (no cost, no exit price)."""
+    return _exit_r_gross(entry, sl, tp1, side, outcome)
 
 
 def _load_main_ws() -> list:
@@ -274,7 +321,9 @@ def _load_main_ws() -> list:
         outcome_raw = lab.get("outcome", "")
         outcome = _outcome_to_tp_unified(outcome_raw)
         tp2_reached = outcome_raw == "TP2"  # info only — client doesn't trade TP2
-        exit_r = _exit_r_at_tp1(sig.get("entry"), sig.get("sl"), sig.get("tp1"), side, outcome_raw)
+        gross = _exit_r_gross(sig.get("entry"), sig.get("sl"), sig.get("tp1"), side, outcome_raw, lab.get("exit_price"))
+        cost = _cost_r(sig.get("entry"), sig.get("sl"))
+        exit_r = round(gross - cost, 3) if gross is not None else None  # NET R
         out.append({
             "dt":         ts[5:16].replace("T", " ") if ts else "",
             "pair":       sig.get("symbol", "").replace("-USDT-SWAP", ""),
@@ -289,6 +338,7 @@ def _load_main_ws() -> list:
             "tp2_reached": tp2_reached,
             "exit_price": lab.get("exit_price"),
             "exit_r":     exit_r,
+            "exit_r_gross": gross,
         })
     out.sort(key=lambda x: x["dt"], reverse=True)
     return out
@@ -709,28 +759,38 @@ def _build_main_ws(wb, rows: list) -> None:
             if c == 10 and row["outcome"] in OUTCOME_FILL:
                 cell.fill = OUTCOME_FILL[row["outcome"]]
 
-    labeled  = [r for r in rows if r["outcome"]]
+    labeled   = [r for r in rows if r["outcome"] and r["outcome"] != "INVALID"]
+    n_invalid = sum(1 for r in rows if r["outcome"] == "INVALID")
     n_tp     = sum(1 for r in labeled if r["outcome"] == "TP")
     n_sl     = sum(1 for r in labeled if r["outcome"] == "SL")
     n_time   = sum(1 for r in labeled if r["outcome"] == "TIME")
     n_tp2    = sum(1 for r in labeled if r.get("tp2_reached"))
     decisive = n_tp + n_sl
+    per_sig  = n_tp + n_sl + n_time  # TIME now a real outcome -> per-signal denominator
     wr_str   = f"{n_tp}/{decisive} = {n_tp/decisive*100:.0f}%" if decisive else "—"
-    r_values = [r["exit_r"] for r in labeled if r.get("exit_r") is not None]
-    sum_r    = round(sum(r_values), 2) if r_values else 0
-    avg_r    = round(sum_r / len(r_values), 2) if r_values else 0
+    wr_psig  = f"{n_tp}/{per_sig} = {n_tp/per_sig*100:.0f}%" if per_sig else "—"
+    net_vals   = [r["exit_r"] for r in labeled if r.get("exit_r") is not None]
+    gross_vals = [r["exit_r_gross"] for r in labeled if r.get("exit_r_gross") is not None]
+    sum_r_net    = round(sum(net_vals), 2) if net_vals else 0
+    avg_r_net    = round(sum_r_net / len(net_vals), 3) if net_vals else 0
+    sum_r_gross  = round(sum(gross_vals), 2) if gross_vals else 0
+    avg_r_gross  = round(sum_r_gross / len(gross_vals), 3) if gross_vals else 0
 
     sr = len(rows) + 3
     for i, (lbl, val) in enumerate([
         ("Всего сигналов",        len(rows)),
         ("Лейблировано",          len(labeled)),
+        ("INVALID (дегенерат.)",  n_invalid),
         ("WR (decisive, vs SL)",  wr_str),
+        ("WR (per-signal, вкл.TIME)", wr_psig),
         ("TP (TP1+ дошедшие до TP2)", n_tp),
         ("SL",                    n_sl),
-        ("TIME (не определилось)",n_time),
+        ("TIME (вкл. в R)",       n_time),
         ("Дошло до TP2 (инфо)",   f"{n_tp2}/{n_tp}" if n_tp else "0"),
-        ("Сумма R",               sum_r),
-        ("Avg R",                 avg_r),
+        ("Сумма R (GROSS)",       sum_r_gross),
+        ("Сумма R (NET, с костами)", sum_r_net),
+        ("Avg R (GROSS)",         avg_r_gross),
+        ("Avg R (NET)",           avg_r_net),
     ]):
         ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
         ws.cell(row=sr + i, column=1).font = FONT_BOLD
@@ -738,7 +798,8 @@ def _build_main_ws(wb, rows: list) -> None:
 
     _set_widths(ws, [13, 14, 10, 8, 8, 10, 10, 10, 9, 8, 7, 12, 10])
     ws.freeze_panes = "A2"
-    print(f"Main WS: {len(rows)} сигналов, {len(labeled)} лейблировано, WR={wr_str}, sumR={sum_r}")
+    print(f"Main WS: {len(rows)} сигналов, {len(labeled)} лейбл. (INVALID {n_invalid}), "
+          f"WR decisive={wr_str}, WR per-signal={wr_psig}, sumR NET={sum_r_net} (GROSS {sum_r_gross})")
 
 
 # ── Sheet 3b: BB Fade ─────────────────────────────────────────────────────────
