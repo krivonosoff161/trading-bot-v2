@@ -63,14 +63,19 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
     SELL: SL hit when HIGH >= SL; TP when LOW <= TP.
     """
     is_buy = side == "buy"
+    last_close = entry  # fallback if no in-window bar
     for row in rows:
-        t_ms = int(row[0])
-        if t_ms <= signal_ms:
+        t_ms = int(row[0])  # OKX 15m candle OPEN time
+        # Skip only bars that CLOSED at/before the market fill. The FIRST live bar
+        # [fill, fill+15m] MUST be scored — that is where early SL/TP hits happen
+        # (the old `t_ms <= signal_ms` dropped it and hid early stops).
+        if t_ms + 15 * 60_000 <= signal_ms:
             continue
         if t_ms - signal_ms > hold_ms:
             break
         high = float(row[2])
         low  = float(row[3])
+        last_close = float(row[4])  # close of last in-window bar -> TIME exit price
 
         if is_buy:
             sl_hit  = low <= sl
@@ -81,14 +86,16 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
             tp1_hit = low <= tp1
             tp2_hit = bool(tp2 and low <= tp2)
 
-        if sl_hit and not tp1_hit:
+        if sl_hit and not tp1_hit:  # conservative same-bar tie: SL first
             return "SL", sl, round((t_ms - signal_ms) / 60_000), False
         if tp1_hit:
             outcome = "TP2" if tp2_hit else "TP1"
             exit_px = tp2 if tp2_hit else tp1
             return outcome, exit_px, round((t_ms - signal_ms) / 60_000), tp2_hit
 
-    return "TIME", None, hold_ms // 60_000, False
+    # TIME: real market exit at the close of the last in-window bar (was None ->
+    # survivorship: TIME silently dropped from WR and sumR). Now a real signed outcome.
+    return "TIME", last_close, hold_ms // 60_000, False
 
 
 async def run() -> None:
@@ -127,8 +134,26 @@ async def run() -> None:
                 try:
                     ts_ms   = sig["_ts_ms"]
                     hold_ms = sig["_hold_ms"]
-                    after_ms = ts_ms + hold_ms + 2 * 3_600_000
-                    limit    = sig.get("hold_min", 75) // 15 + 4
+                    # Cover the FULL hold window starting at/before the fill bar.
+                    # (was +2h offset with limit hold//15+4 -> under-covered the first
+                    # ~hour for SWING, so early bars were never fetched.) 30min buffer
+                    # past hold-end for candle availability; +6 bars margin to reach ts.
+                    after_ms = ts_ms + hold_ms + 30 * 60_000
+                    limit    = sig.get("hold_min", 75) // 15 + 6
+
+                    # Degenerate-geometry guard: sub-cent round(x,4) collisions where
+                    # SL==TP1 (or SL within 0.15% of entry) make R meaningless. Exclude
+                    # from metrics (outcome=INVALID) instead of scoring noise.
+                    e_v = float(sig["entry"]); sl_v = float(sig["sl"]); tp1_v = float(sig["tp1"])
+                    if e_v <= 0 or sl_v == tp1_v or abs(e_v - sl_v) / e_v < 0.0015:
+                        f.write(json.dumps({
+                            "signal_id": sig["_id"], "ts": sig["ts"], "symbol": sig["symbol"],
+                            "regime": sig.get("regime", ""), "outcome": "INVALID",
+                            "exit_price": None, "hold_min": 0, "tp2_hit": False,
+                            "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        }) + "\n")
+                        labeled += 1
+                        continue
 
                     rows = await _fetch_candles(session, sig["symbol"], after_ms, limit)
                     await asyncio.sleep(0.15)
