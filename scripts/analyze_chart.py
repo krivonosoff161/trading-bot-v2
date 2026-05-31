@@ -43,6 +43,16 @@ def load_strategy_params() -> dict:
     return cfg.get("strategy", {})
 
 
+def load_scout_bundle() -> dict | None:
+    """Latest scout market context (logs/scout/bundle_latest.json) or None if unavailable."""
+    bundle_path = Path(__file__).parent.parent / "logs" / "scout" / "bundle_latest.json"
+    try:
+        with open(bundle_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
 def _safe_print(text: str = "") -> None:
     try:
         print(text)
@@ -156,12 +166,17 @@ async def run(
         trade_style=result.trade_style,
     )
 
-    llm_text = None
-    if result.entry_signal in ("ENTRY", "WAIT"):
-        from src.utils.llm_formatter import generate_client_text
+    # Analyzer is a descriptive second-opinion product, not a trade gate:
+    # generate the client read for EVERY verdict (NO_TRADE has its own РЕЖИМ 3 template).
+    # Scout market backdrop is woven in for live captures only (stale for historical charts).
+    from src.utils.llm_formatter import generate_client_text
 
-        llm_image = str(png_path) if png_path.exists() else image_path
-        llm_text = await generate_client_text(symbol, captured_at_iso, snapshot, llm_image, client_summary=None)
+    llm_image = str(png_path) if png_path.exists() else image_path
+    market_context = load_scout_bundle() if is_live else None
+    llm_text = await generate_client_text(
+        symbol, captured_at_iso, snapshot, llm_image,
+        client_summary=None, market_context=market_context,
+    )
 
     delivery_text = llm_text if llm_text else result.engine_summary
     summary_path = run_dir / f"{symbol}_client_summary.txt"

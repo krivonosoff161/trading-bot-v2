@@ -59,6 +59,12 @@ _SYSTEM_PROMPT = """\
 - НЕ обещай проценты успеха / win-rate / «N% сделок закрываются». НЕ гарантируй результат.
 - Пиши как ВТОРОЕ МНЕНИЕ и структуру; решение — за клиентом.
 
+РЫНОЧНЫЙ ФОН (если в данных есть блок "РЫНОЧНЫЙ ФОН"):
+- Это ОБЩИЙ контекст рынка (настроение страх/жадность, доминация BTC, новости, аутлайеры) из скаут-сводки. НЕ сигнал по инструменту и НЕ направление.
+- Вплети максимум ОДНОЙ фразой в "СЕЙЧАС НА РЫНКЕ" как фон риска (например: "общий рынок в страхе, деньги в BTC — для альтов это давление").
+- ЕСЛИ монета помечена аутлайером роста/падения — ОБЯЗАТЕЛЬНО предупреди о повышенной волатильности и риске резкого отката.
+- НЕ превращай фон в направление и НЕ обещай движение из-за новостей.
+
 КАК ПИСАТЬ В ЗАВИСИМОСТИ ОТ РЕЖИМА РЫНКА (поле "Режим рынка:" в данных):
 - ТРЕНДОВЫЙ: движение сильное и направленное. "Импульс низкий" или "перепродан" — это НЕ сигнал разворота, это подтверждение тренда. Писать: "сильный тренд [вниз/вверх]", "давление [продавцов/покупателей] сохраняется" — как СЦЕНАРИЙ по направлению тренда (вход поздний, по подтверждению), с чёткой инвалидацией. НЕ обещать продолжение.
 - ДИАПАЗОН: цена ходит между уровнями. RSI у экстремумов = ожидаемый разворот. Писать: "рынок в диапазоне", "цена у уровня [поддержки/сопротивления]", "ждём отскок".
@@ -471,6 +477,70 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_market_backdrop(symbol: str, bundle: dict | None) -> str:
+    """Scout bundle → honest plain-language market backdrop.
+
+    General market context only (sentiment, dominance, outliers, headlines).
+    NOT a per-symbol signal — caller must keep it as risk context, not direction.
+    Returns "" when no bundle.
+    """
+    if not bundle:
+        return ""
+    base = symbol.split("-")[0].upper()
+    lines: list[str] = []
+
+    fg = bundle.get("fear_greed") or {}
+    mk = bundle.get("market") or {}
+    fg_val = fg.get("value")
+    mcap_chg = mk.get("mcap_change_24h_pct")
+    btc_dom = mk.get("btc_dominance_pct")
+
+    tone = []
+    if fg_val is not None:
+        mood = {"Extreme Fear": "крайний страх", "Fear": "страх", "Neutral": "нейтрально",
+                "Greed": "жадность", "Extreme Greed": "крайняя жадность"}.get(fg.get("classification"),
+                                                                               fg.get("classification") or "")
+        tone.append(f"настроение рынка — {mood} ({fg_val}/100)")
+    if mcap_chg is not None:
+        dir_word = "растёт" if mcap_chg > 0.3 else ("падает" if mcap_chg < -0.3 else "стоит на месте")
+        tone.append(f"капитализация рынка за сутки {dir_word} ({mcap_chg:+.1f}%)")
+    if tone:
+        lines.append("Общий фон: " + ", ".join(tone) + ".")
+    if isinstance(btc_dom, (int, float)) and btc_dom >= 55:
+        lines.append(f"Доминация BTC высокая ({btc_dom:.0f}%) — деньги в биткоине, альты обычно под давлением.")
+
+    movers = bundle.get("movers") or {}
+
+    def _change(rows):
+        for r in rows or []:
+            if (r.get("symbol") or "").upper() == base:
+                return r.get("change_24h_pct")
+        return None
+
+    up = _change(movers.get("gainers"))
+    down = _change(movers.get("losers"))
+    if up is not None:
+        lines.append(f"⚠️ {base} сегодня в топе РОСТА рынка ({up:+.0f}% за сутки) — повышенная волатильность, риск резкого отката.")
+    elif down is not None:
+        lines.append(f"⚠️ {base} сегодня в топе ПАДЕНИЯ рынка ({down:+.0f}% за сутки) — повышенная волатильность.")
+
+    trending = [(t.get("symbol") or "").upper() for t in (movers.get("trending") or [])]
+    if base in trending:
+        lines.append(f"{base} в списке трендовых по вниманию — много розничного интереса.")
+
+    heads = [n.get("title") for n in (bundle.get("news") or [])[:2] if n.get("title")]
+    if heads:
+        lines.append("Заголовки (общий фон): " + " | ".join(heads))
+
+    if not lines:
+        return ""
+    ts = bundle.get("ts_utc", "")
+    head = f"─── РЫНОЧНЫЙ ФОН (скаут-контекст{', ' + ts if ts else ''}) ───"
+    foot = ("Это ОБЩИЙ фон рынка, НЕ сигнал по инструменту и НЕ направление. "
+            "Максимум одна фраза контекста риска в «СЕЙЧАС НА РЫНКЕ». Решение — по структуре графика.")
+    return "\n\n" + head + "\n" + "\n".join(lines) + "\n" + foot
+
+
 def _encode_image(image_path: str | None) -> str | None:
     """Base64-encode image for Yandex AI Studio vision API."""
     if not image_path:
@@ -495,6 +565,7 @@ async def generate_client_text(
     snapshot: dict,
     image_path: str | None = None,
     client_summary: str | None = None,
+    market_context: dict | None = None,
     session: aiohttp.ClientSession | None = None,
 ) -> str | None:
     """
@@ -514,6 +585,8 @@ async def generate_client_text(
             "Используй объяснения выше как основу для секций СЕЙЧАС НА РЫНКЕ, "
             "НЕ ДЕЛАТЬ и условий входа. Конкретные цены бери из ПЛАН/АКТИВНЫЙ СИГНАЛ выше."
         )
+
+    analysis_text += _build_market_backdrop(symbol, market_context)
 
     # Build user message content
     content: list[dict] = [{"type": "text", "text": analysis_text}]
