@@ -2,7 +2,14 @@
 chcp 65001 > nul
 cd /d "%~dp0"
 
-echo Starting Trading Bot V2...
+REM ==================================================================
+REM  LEGACY / FROZEN trading stack (screeners + Tape). Main direction
+REM  pivoted 31.05.2026 to the analyzer-first PRODUCT — use start.bat
+REM  for that. Do NOT run this unless reviving research on the frozen
+REM  Main engine. Tape Recorder is not consumed live (research data).
+REM ==================================================================
+
+echo Starting Trading Bot V2 [LEGACY trading stack - see start.bat for product]...
 echo.
 
 start "Telegram Bot" cmd /k "cd /d %~dp0 && python -u scripts\telegram_bot.py"
