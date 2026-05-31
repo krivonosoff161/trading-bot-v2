@@ -116,7 +116,7 @@ trading-bot-v2/
 ├── start.bat           ← запуск бота (Windows)
 ├── stop.bat            ← остановка бота (Windows)
 ├── clear_cache.bat     ← чистка __pycache__ (Windows)
-├── collect_logs.bat    ← архив логов (Windows)
+├── bat/                ← редкие/утилитарные батники (scanner/tape/telegram/analyze/collect_logs/run_scout_daily)
 ├── src/
 │   ├── exchange/       ← OKX клиент (REST)
 │   ├── strategy/       ← индикаторы и сигналы
@@ -166,7 +166,7 @@ trading-bot-v2/
 ## Стандарты файловой структуры
 
 ### Что живёт в корне
-Только: `main.py`, `*.bat`, `*.yaml`, `*.txt`, `*.md`, `.env`, `.gitignore`
+Только: `main.py`, контрольные/дейли `*.bat` (`start`/`stop`/`start_all`/`update_journal`/`clear_cache`), `*.yaml`, `*.txt`, `*.md`, `.env`, `.gitignore`. Редкие/утилитарные батники → `bat/`.
 Всё остальное — в соответствующих папках.
 
 ### Правила размещения
