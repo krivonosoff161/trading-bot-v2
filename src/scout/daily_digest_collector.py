@@ -56,6 +56,13 @@ NEWS_PER_FEED = 6          # сколько свежих заголовков б
 MOVERS_TOP_N = 8           # top gainers / losers
 MARKETS_PER_PAGE = 250     # глубина выборки coins/markets для расчёта моверов
 OKX_TOP_N = 10             # топ SWAP по обороту
+GOOGLE_NEWS_TOP_N = 10     # keyless keyword news from Google News RSS
+DEXSCREENER_TOP_N = 10     # top DEX pairs by 24h volume from checked queries
+GOOGLE_NEWS_RSS_URL = (
+    "https://news.google.com/rss/search"
+    "?q=bitcoin%20OR%20crypto%20OR%20solana&hl=en-US&gl=US&ceid=US:en"
+)
+DEXSCREENER_QUERIES = ["SOL", "ETH", "BASE", "BTC"]
 
 
 def _now_iso():
@@ -196,6 +203,66 @@ def fetch_news(report):
 
 
 # --------------------------------------------------------------------------- #
+# Google News RSS — keyword crypto news without API key
+# --------------------------------------------------------------------------- #
+def fetch_google_news(report):
+    try:
+        r = _get(GOOGLE_NEWS_RSS_URL)
+        items = _parse_rss(r.content, "GoogleNews", GOOGLE_NEWS_TOP_N)
+        if not items:
+            raise ValueError("no items parsed")
+        report["sources_ok"].append("google_news_rss")
+        return items
+    except Exception as e:
+        report["sources_failed"].append({"src": "google_news_rss", "reason": f"{type(e).__name__}: {e}"})
+        return []
+
+
+# --------------------------------------------------------------------------- #
+# DexScreener public API — DEX liquidity / pair context
+# --------------------------------------------------------------------------- #
+def _dex_pair_slim(row, observed_at):
+    base = row.get("baseToken") or {}
+    quote = row.get("quoteToken") or {}
+    return {
+        "observed_at_utc": observed_at,
+        "chain": row.get("chainId"),
+        "dex": row.get("dexId"),
+        "pair": row.get("pairAddress"),
+        "base_symbol": base.get("symbol"),
+        "quote_symbol": quote.get("symbol"),
+        "price_usd": row.get("priceUsd"),
+        "liquidity_usd": (row.get("liquidity") or {}).get("usd"),
+        "volume_24h_usd": (row.get("volume") or {}).get("h24"),
+        "price_change_24h_pct": (row.get("priceChange") or {}).get("h24"),
+        "pair_created_at_ms": row.get("pairCreatedAt"),
+        "url": row.get("url"),
+    }
+
+
+def fetch_dexscreener(report):
+    out = []
+    seen = set()
+    observed_at = _now_iso()
+    try:
+        for query in DEXSCREENER_QUERIES:
+            d = _get("https://api.dexscreener.com/latest/dex/search", params={"q": query}).json()
+            time.sleep(THROTTLE_S)
+            for row in d.get("pairs") or []:
+                key = (row.get("chainId"), row.get("pairAddress"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(_dex_pair_slim(row, observed_at))
+        out.sort(key=lambda r: float(r.get("volume_24h_usd") or 0.0), reverse=True)
+        report["sources_ok"].append("dexscreener_public")
+        return out[:DEXSCREENER_TOP_N]
+    except Exception as e:
+        report["sources_failed"].append({"src": "dexscreener_public", "reason": f"{type(e).__name__}: {e}"})
+        return []
+
+
+# --------------------------------------------------------------------------- #
 # Fear & Greed
 # --------------------------------------------------------------------------- #
 def fetch_fear_greed(report):
@@ -265,6 +332,8 @@ def build_bundle():
     movers = fetch_movers(report)
     movers["trending"] = trending
     news = fetch_news(report)
+    google_news = fetch_google_news(report)
+    dexscreener = fetch_dexscreener(report)
     fear_greed = fetch_fear_greed(report)
     okx = fetch_okx(report)
 
@@ -282,6 +351,8 @@ def build_bundle():
         "market": market,
         "movers": movers,
         "news": news,
+        "google_news": google_news,
+        "dexscreener": dexscreener,
         "fear_greed": fear_greed,
         "okx": okx,
         "notes": notes,
@@ -370,6 +441,21 @@ def render_md(b):
             L.append(f"      {n.get('time')}  {n.get('url')}")
         L.append("")
 
+    if b.get("google_news"):
+        L.append(f"## Google News crypto search ({len(b['google_news'])})")
+        for n in b["google_news"]:
+            L.append(f"  - {n['title']}")
+            L.append(f"      {n.get('time')}  {n.get('url')}")
+        L.append("")
+
+    if b.get("dexscreener"):
+        L.append(f"## DexScreener top pairs by 24h volume ({len(b['dexscreener'])})")
+        for r in b["dexscreener"]:
+            L.append(f"  - {r.get('chain')}/{r.get('dex')} {r.get('base_symbol')}-{r.get('quote_symbol')}  "
+                     f"liq={_fmt_usd(r.get('liquidity_usd'))}  vol24h={_fmt_usd(r.get('volume_24h_usd'))}  "
+                     f"chg24h={r.get('price_change_24h_pct')}")
+        L.append("")
+
     if b.get("notes"):
         L.append("## Notes")
         for n in b["notes"]:
@@ -414,6 +500,8 @@ def main():
     if mv.get("trending"):
         print(f"trending:      {', '.join(t.get('symbol') for t in mv['trending'][:7])}")
     print(f"news:          {len(bundle.get('news', []))} headlines")
+    print(f"google news:   {len(bundle.get('google_news', []))} headlines")
+    print(f"dexscreener:   {len(bundle.get('dexscreener', []))} pairs")
     print(f"bundle JSON:   {BUNDLE_JSON}")
     print(f"bundle MD:     {BUNDLE_MD}")
 
