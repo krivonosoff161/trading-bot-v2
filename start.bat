@@ -1,18 +1,30 @@
 @echo off
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
-title Trading Bot V2 - Start
+title Telegram Bot
 cd /d "%~dp0"
 
-echo ================================
-echo   TRADING BOT V2 - START
-echo ================================
+REM ==================================================================
+REM  PRODUCT LAUNCHER (pivot 31.05.2026) — Concierge Analyzer only.
+REM  Starts the Telegram analyzer bot (scripts\telegram_bot.py).
+REM  Scout context (forward_series) runs SEPARATELY via Windows Task
+REM  "ScoutDaily" -> bat\run_scout_daily.bat (once a day).
+REM  Legacy / FROZEN trading stack (screeners, Tape, order-placing
+REM  main.py) is NOT launched here. See start_all.bat (do not run
+REM  unless reviving research). Direction = analyzer-first product.
+REM ==================================================================
+
+echo ==========================================
+echo   TRADING BOT V2 - PRODUCT
+echo   Concierge Analyzer (Telegram bot)
+echo ==========================================
 echo.
 
 REM Clear proxy env vars (prevents REST API blocking)
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set ALL_PROXY=
+set PYTHONUTF8=1
 
 REM Check Python
 python --version >nul 2>&1
@@ -30,13 +42,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check config
+REM Check config + secrets
 if not exist "config.yaml" (
     echo [ERROR] config.yaml not found!
     pause
     exit /b 1
 )
-
 if not exist ".env" (
     echo [ERROR] .env not found! Create it from .env.example
     pause
@@ -51,13 +62,14 @@ echo [OK] Dependencies OK
 echo [OK] config.yaml found
 echo [OK] .env found
 echo.
-echo Starting bot...
-echo Press Ctrl+C to stop.
+echo Starting Concierge Analyzer bot...
+echo Clients message the Telegram bot -^> chart analysis.
+echo Press Ctrl+C (or close window) to stop.
 echo.
 
-python main.py
+python -u scripts\telegram_bot.py
 
 echo.
-echo [INFO] Bot stopped. Logs saved in logs\
+echo [INFO] Bot stopped. Logs in logs\telegram_bot.log
 echo.
 pause
