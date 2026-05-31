@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
 title Trading Bot V2 - Collect Logs
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo ================================
 echo   TRADING BOT V2 - COLLECT LOGS
