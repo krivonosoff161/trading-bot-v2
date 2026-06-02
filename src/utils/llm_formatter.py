@@ -557,6 +557,56 @@ def _encode_image(image_path: str | None) -> str | None:
         return None
 
 
+# ── Shared transport (additive — used by info-edge scanner) ─────────────────────
+
+async def _call_yandex(
+    system_prompt: str,
+    user_text: str,
+    max_tokens: int = 900,
+    timeout: int = _TIMEOUT,
+) -> str | None:
+    """Shared Yandex AI Studio (Qwen3) transport: system + user text → reply text.
+
+    Additive helper for the info-edge scanner (generate_scout_card lives in
+    src/scout/scout_analyst.py). Deliberately does NOT touch generate_client_text
+    — the product chart-analyst path is left byte-for-byte unchanged.
+    Returns None on any error or missing keys.
+    """
+    if not _API_KEY or not _FOLDER_ID:
+        print("LLM _call_yandex: YANDEX_API_KEY/FOLDER_ID not set — skipping")
+        return None
+    payload = {
+        "model": _MODEL_URI,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ],
+    }
+    headers = {
+        "Authorization": f"Api-Key {_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _API_URL, json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"LLM _call_yandex: HTTP {resp.status} — {body[:300]}")
+                    return None
+                data = await resp.json()
+        body = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {})
+        print(f"LLM _call_yandex: OK — {tokens.get('total_tokens', '?')} tokens")
+        return body or None
+    except Exception as exc:
+        print(f"LLM _call_yandex: error — {exc}")
+        return None
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 async def generate_client_text(
