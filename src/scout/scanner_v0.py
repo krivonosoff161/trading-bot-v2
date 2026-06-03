@@ -48,6 +48,7 @@ from src.scout.page_extract import extract                       # noqa: E402
 from src.scout.scout_analyst import generate_scout_card          # noqa: E402
 from src.scout.router import route_asset, route_temporal, score_materiality, dedup_config   # noqa: E402
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
+from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
@@ -260,44 +261,61 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
                        recent: list | None = None, dedup_min: int = 88) -> dict | None:
     headline = item["title"]
-    url = item["url"]
+    url = item.get("url")
+    pre_routed = bool(item.get("asset"))      # листинг = актив/слой известны из инструмента
+    lead_class = item.get("lead_class", "LAGGING")
+    source_class = item.get("source_class", "rss")
+    source = item.get("source", "cointelegraph")
 
-    # 1) РОУТЕР актив/слой (на заголовке, 0 токенов, ДО extract)
-    routed = route_asset(headline)
-    if not routed:
-        return {"skipped": "no_tracked_asset", "headline": headline}
-    asset, inst, layer = routed["asset"], routed["okx_inst"], routed["layer"]
-    conf, baseline_sym = routed["confidence"], routed.get("baseline")
+    # 1) РОУТЕР актив/слой (+ материальность для RSS; листинг pre-routed, материален by design)
+    if pre_routed:
+        asset, inst = item["asset"], item.get("okx_inst")
+        layer, conf = int(item.get("layer", 2)), 1.0
+        baseline_sym = item.get("baseline")
+        mat = {"family": item.get("event_type", "unclassified"), "score": 0.6}
+        phase = item.get("phase", "REALIZED")
+    else:
+        routed = route_asset(headline)
+        if not routed:
+            return {"skipped": "no_tracked_asset", "headline": headline}
+        asset, inst, layer = routed["asset"], routed["okx_inst"], routed["layer"]
+        conf, baseline_sym = routed["confidence"], routed.get("baseline")
+        # V0: режем ТОЛЬКО заведомый шум (noise_genre); no_material_term пропускаем в LLM
+        # (рой: не резать сюрприз вслепую пока журнал мал; V1 ужесточит).
+        mat = score_materiality(headline, layer)
+        if mat.get("drop_reason") == "noise_genre":
+            return {"skipped": "noise_genre", "headline": headline, "asset": asset}
+        phase = route_temporal(headline)["phase"]
 
-    # 2) МАТЕРИАЛЬНОСТЬ — gate ДО extract+LLM. В V0 режем ТОЛЬКО заведомый шум (noise_genre);
-    #    no_material_term пропускаем в LLM, но логируем score (рой: не резать сюрприз вслепую
-    #    пока журнал мал; V1 ужесточит порог по накопленным данным).
-    mat = score_materiality(headline, layer)
-    if mat.get("drop_reason") == "noise_genre":
-        return {"skipped": "noise_genre", "headline": headline, "asset": asset}
-
-    # 2.5) EVENT-ДЕДУП — то же событие из N лент → 1 карточка (не дублируем LLM/карточку/WR)
+    # 2) EVENT-ДЕДУП — то же событие из N лент/проходов → 1 карточка
     if recent is not None and is_duplicate(headline, asset, recent, dedup_min):
         return {"skipped": "dup_event", "headline": headline, "asset": asset}
-
-    # 3) темпорал будет/произошло + canonical + event_key
-    temporal = route_temporal(headline)
-    canon = canonical_url(url)
+    canon = canonical_url(url or f"https://www.okx.com/trade-swap/{(inst or asset or '').lower()}")
     ekey = make_event_key(asset, headline)
 
-    # 4) тело страницы — ТОЛЬКО для выживших (перестановка: не качаем отброшенное)
-    ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
-    low_conf = False
-    if not ext or ext.get("error") or len(ext.get("text") or "") < 200:
-        low_conf = True
-        body_text = ""
-        source_ts = (ext or {}).get("date") or item.get("time") or J.now_iso()[:10]
+    # 3) тело — только для новостей со статьёй (у листинга статьи нет → анализ по заголовку)
+    if url and not pre_routed:
+        ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
+        if not ext or ext.get("error") or len(ext.get("text") or "") < 200:
+            low_conf, body_text = True, ""
+            source_ts = (ext or {}).get("date") or item.get("time") or J.now_iso()[:10]
+        else:
+            low_conf, body_text = False, ext["text"]
+            source_ts = ext.get("date") or item.get("time") or J.now_iso()[:10]
     else:
-        body_text = ext["text"]
-        source_ts = ext.get("date") or item.get("time") or J.now_iso()[:10]
+        low_conf, body_text = True, ""
+        source_ts = item.get("time") or J.now_iso()[:10]
 
-    price = okx_last(inst) if not dry else None
-    news = {"headline": headline, "text": body_text, "date": source_ts, "url": url}
+    # baseline-цена ПО СЛОЮ (excess vs index): BTC из btc_ref, иначе снять (None = manual, off-OKX)
+    if baseline_sym == "BTC-USDT-SWAP":
+        baseline_price = btc_ref
+    elif baseline_sym and not dry:
+        baseline_price = okx_last(baseline_sym)
+    else:
+        baseline_price = None
+
+    price = okx_last(inst) if (not dry and inst) else None
+    news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
     # 3) мозг (GO/NO-GO) — в dry-run заглушка, без токенов
     if dry:
@@ -316,17 +334,24 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         if not fields:
             return {"skipped": "llm_failed", "headline": headline}
 
+    # ПРЕДОХРАНИТЕЛЬ (рой/Codex, В КОДЕ не в промпте): GO+сторона только если источник LEADING.
+    # На запаздывающем (RSS) опережающего эджа нет by design → понижаем до WATCH (анти-мираж Main).
+    if fields.get("verdict") == "GO" and fields.get("side") not in (None, "none") and lead_class != "LEADING":
+        fields["verdict"] = "WATCH"
+        fields["summary"] = "[понижено до WATCH: запаздывающий источник — опережающего эджа нет] " + (fields.get("summary") or "")
+
     # 4) строка журнала
     row = J.build_row(
         source_url=canon, source_ts=source_ts, layer=layer,
-        asset=fields.get("asset") or asset, trigger_type=TRIGGER, headline=headline,
+        asset=fields.get("asset") or asset,
+        trigger_type=("okx_listing" if pre_routed else TRIGGER), headline=headline,
         verdict=fields["verdict"], horizon_hours=fields["horizon_hours"],
-        price_at_decision=price, okx_inst=inst, btc_at_decision=btc_ref,
+        price_at_decision=price, okx_inst=inst, btc_at_decision=baseline_price,
         baseline_symbol=baseline_sym,
-        lead_class="LAGGING", source_class="rss", router_version=ROUTER_VERSION,
+        lead_class=lead_class, source=source, source_class=source_class, router_version=ROUTER_VERSION,
         asset_confidence=conf,
         event_type=mat.get("family") or "unclassified",
-        event_phase=temporal["phase"],
+        event_phase=phase,
         materiality_score=mat.get("score"),
         event_key=ekey,
         levels=fields.get("levels"),
@@ -370,24 +395,27 @@ async def run(limit: int, dry: bool) -> None:
     dcfg = dedup_config()
     dedup_min = int(dcfg.get("fuzzy_min", 88))
     recent = J.recent_events(int(dcfg.get("window_hours", 48)))   # окно event-дедупа
-    print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | layer={LAYER} | "
+    print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | RSS+листинги | "
           f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
 
     try:
-        items = fetch_rss()
+        rss_items = fetch_rss()
+        for it in rss_items:                      # тег источника (RSS = запаздывающий)
+            it.update({"source": "cointelegraph", "lead_class": "LAGGING", "source_class": "rss"})
     except Exception as e:
         print(f"RSS ОШИБКА: {e}")
-        return
-
-    fresh = [it for it in items if canonical_url(it["url"]) not in seen]
-    print(f"RSS: {len(items)} заголовков, {len(fresh)} новых (не в seen)\n")
+        rss_items = []
+    listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
+    items = listings + rss_items                  # опережающие листинги первыми
+    fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
+    print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
     for it in fresh:
         if made >= limit:
             break
-        canon = canonical_url(it["url"])
+        canon = canonical_url(it.get("url") or "")
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
                                  recent=recent, dedup_min=dedup_min)
         skipped = res.get("skipped") if res else None
@@ -411,8 +439,8 @@ async def run(limit: int, dry: bool) -> None:
         r = res["row"]
         recent.append((res.get("asset"), r["headline"]))   # within-run дубли тоже ловим
         sent = f"sent msg_id={res['sent']}" if res.get("sent") else ("dry-доставка" if not dry else "не отправлено")
-        print(f"\n[{made}] {r['verdict']} {r['side']} · {r['asset']} @ {res.get('price')} · "
-              f"conf={r.get('asset_confidence')} · card_id={res['card_id'] or 'DUP'} · {sent}")
+        print(f"\n[{made}] {r['verdict']} {r['side']} · {r['asset']} L{r['layer']} {r['lead_class']}"
+              f" · {r['source']} · @ {res.get('price')} · {r['event_phase']} · card_id={res['card_id'] or 'DUP'} · {sent}")
         print("    " + "\n    ".join(res["card"].splitlines()))
 
     cost = round(total_tokens / 1000 * RATE_RUB_PER_1K, 2)
