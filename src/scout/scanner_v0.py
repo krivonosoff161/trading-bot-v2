@@ -46,7 +46,8 @@ import os  # noqa: E402
 from src.scout.page_extract import extract                       # noqa: E402
 from src.scout.scout_analyst import generate_scout_card          # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
-from src.utils.telegram import send_message_to                   # noqa: E402
+from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
+from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
 # ── Конфиг V0 ────────────────────────────────────────────────────────────────
 RSS_URL = "https://cointelegraph.com/rss"          # лок V0: прямой publisher-link
@@ -127,6 +128,67 @@ def okx_last(inst_id: str | None) -> float | None:
     return None
 
 
+CHARTS_DIR = _ROOT / "logs" / "scout" / "charts"
+
+
+def fetch_candles(inst_id: str, bar: str = "15m", limit: int = 120) -> list | None:
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/candles",
+                         params={"instId": inst_id, "bar": bar, "limit": str(limit)},
+                         headers=UA, timeout=TIMEOUT)
+        d = r.json()
+        if str(d.get("code")) == "0" and d.get("data"):
+            return d["data"]            # newest-first OKX rows [ts,o,h,l,c,vol,...]
+    except Exception:
+        return None
+    return None
+
+
+def _bar_for_horizon(h) -> str:
+    """Таймфрейм графика под горизонт анализа (инфо-эдж = дни, НЕ 15m-скальп)."""
+    try:
+        h = float(h)
+    except (TypeError, ValueError):
+        return "4H"
+    if h <= 24:
+        return "1H"
+    if h <= 96:
+        return "4H"
+    return "1D"
+
+
+def make_chart(inst_id: str, captured_at: str, row: dict) -> str | None:
+    """График актива: NO_GO/WATCH = чистый, GO = с прорисовкой уровней. Путь или None.
+    Таймфрейм — под горизонт анализа (1H/4H/1D), не 15m."""
+    bar = _bar_for_horizon(row.get("horizon_hours"))
+    candles = fetch_candles(inst_id, bar=bar)
+    if not candles or len(candles) < 30:
+        return None
+    try:
+        last_close = float(candles[0][4])
+    except Exception:
+        return None
+    indicators = {"15m": {"close": last_close, "swing_highs": [], "swing_lows": []}}
+    lv = row.get("levels") or {}
+    if row.get("verdict") == "GO" and lv.get("entry"):
+        levels = {"entry_price": lv.get("entry"), "sl": lv.get("invalidation"), "tp1": lv.get("target")}
+        direction = "buy" if row.get("side") == "long" else "sell"
+        entry_signal = "ENTRY"
+    else:
+        levels, direction, entry_signal = None, None, "NO_TRADE"
+    CHARTS_DIR.mkdir(parents=True, exist_ok=True)
+    out = CHARTS_DIR / f"{row['card_id']}.png"
+    try:
+        render_chart(symbol=inst_id, raw_15m=candles, indicators=indicators,
+                     captured_at=captured_at, output_path=str(out),
+                     levels=levels, entry_signal=entry_signal, direction=direction,
+                     tf_label=bar)
+    except Exception as e:
+        print(f"  chart: {e}")
+        return None
+    return str(out) if out.exists() else None
+
+
 def market_ctx_line() -> str | None:
     if not BUNDLE_PATH.exists():
         return None
@@ -147,31 +209,51 @@ def market_ctx_line() -> str | None:
 
 
 # ── карточка для Telegram ────────────────────────────────────────────────────
+def _meaningful(v) -> bool:
+    return bool(v) and str(v).strip().lower() not in ("none", "no", "unknown", "n/a", "-", "нет")
+
+
+def _esc(v) -> str:
+    return html.escape(str(v if v is not None else ""))
+
+
+def _cap(v, n: int) -> str:
+    s = str(v or "").strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
 def format_card(row: dict) -> str:
+    """HTML-подпись под график: кликабельный источник, флаги значимые, GO — с уровнями.
+    Поля подрезаны, чтобы уложиться в лимит подписи Telegram (1024)."""
     emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(row["verdict"], "⚪")
     side = {"long": "LONG", "short": "SHORT", "none": ""}.get(row.get("side", "none"), "")
-    lines = [
-        f"🛰️ СКАНЕР · {row.get('asset') or '—'} · слой {row['layer']}",
-        f"триггер: {row['trigger_type']}",
-        "─────",
-        f"📰 {row['headline']}",
-        row.get("summary", ""),
-        "─────",
-        f"катализатор: {row.get('catalyst', '')}",
-        f"в цене?: {row.get('in_price', '')}",
-        f"red-flag: {row.get('red_flag', '')}",
-        f"механика: {row.get('mechanics', '')}",
-        f"сюрприз: {row.get('surprise', '')}",
-        "─────",
-        f"{emoji} ВЕРДИКТ: {row['verdict']} {side}".strip(),
-        f"асимметрия: {row.get('asymmetry', '')}",
-        f"инвалидация: {row.get('invalidation', '')}",
-        f"прогноз ({row['horizon_hours']}ч): {row.get('forecast', '')}",
+    clean_url = (row.get("source_url") or "").split("?")[0]
+    lv = row.get("levels") or {}
+    is_go = row.get("verdict") == "GO"
+
+    L = [
+        f"🛰️ <b>СКАНЕР · {_esc(row.get('asset') or '—')}</b>",
+        "",
+        f"📰 <b>{_esc(_cap(row.get('headline'), 150))}</b>",
+        "",
+        _esc(_cap(row.get("summary"), 280)),
+        "",
+        f"{emoji} <b>{_esc((row['verdict'] + ' ' + side).strip())}</b>",
     ]
+    if is_go and lv.get("entry"):
+        L.append(f"📍 вход ~{_esc(lv.get('entry'))} · стоп {_esc(lv.get('invalidation'))} · цель {_esc(lv.get('target'))}")
+    if not is_go and _meaningful(row.get("in_price")):
+        L.append(f"в цене?: {_esc(_cap(row['in_price'], 110))}")
+    if _meaningful(row.get("red_flag")):
+        L.append(f"⛔ red-flag: {_esc(_cap(row['red_flag'], 130))}")
+    if _meaningful(row.get("invalidation")):
+        L.append(f"инвалидация: {_esc(_cap(row['invalidation'], 150))}")
+    L.append(f"прогноз ({_esc(row['horizon_hours'])}ч): {_esc(_cap(row.get('forecast'), 170))}")
     if row.get("low_confidence"):
-        lines.append("⚠️ тело новости не извлечено — низкая уверенность")
-    lines += ["─────", "⚠️ paper · фильтр, не рекомендация", row["source_url"]]
-    return "\n".join(x for x in lines if x)
+        L.append("⚠️ тело не извлечено — низкая уверенность")
+    L += ["", "⚠️ <i>paper · фильтр, не рекомендация</i>",
+          f'<a href="{_esc(clean_url)}">📎 источник</a>']
+    return "\n".join(x for x in L if x is not None)
 
 
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
@@ -191,8 +273,9 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         body_text = ext["text"]
         source_ts = ext.get("date") or item.get("time") or J.now_iso()[:10]
 
-    # 2) актив + цена
-    asset, inst = match_asset(headline + " " + body_text)
+    # 2) актив + цена (матч ТОЛЬКО по заголовку — новость про актив называет его в title;
+    #    матч по телу ловил мусор, напр. SOL в статье про Zcash)
+    asset, inst = match_asset(headline)
     if asset is None:
         return {"skipped": "no_tracked_asset", "headline": headline}
     price = okx_last(inst) if not dry else None
@@ -211,6 +294,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         fields = await generate_scout_card(
             news, layer=LAYER, trigger=TRIGGER,
             asset_hint=asset, market_ctx_line=mline, low_confidence=low_conf,
+            price=price,
         )
         if not fields:
             return {"skipped": "llm_failed", "headline": headline}
@@ -221,6 +305,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         asset=fields.get("asset") or asset, trigger_type=TRIGGER, headline=headline,
         verdict=fields["verdict"], horizon_hours=fields["horizon_hours"],
         price_at_decision=price, okx_inst=inst, btc_at_decision=btc_ref,
+        levels=fields.get("levels"),
         catalyst=fields.get("catalyst", ""), in_price=fields.get("in_price", ""),
         red_flag=fields.get("red_flag", ""), mechanics=fields.get("mechanics", ""),
         surprise=fields.get("surprise", ""), side=fields.get("side", "none"),
@@ -232,12 +317,18 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     cid = ("DRY-" + J.card_id_for(url)) if dry else J.write_row(row)
     card = format_card(row)
 
-    # 5) доставка (только если задан SCANNER_CHAT_ID и не dry)
+    # 5) график: NO_GO/WATCH = чистый, GO = с прорисовкой уровней
+    chart_path = make_chart(inst, J.now_iso(), row) if (cid and not dry and inst) else None
+
+    # 6) доставка (фото с подписью; текст-фоллбек если графика нет)
     sent = None
     if cid and SCANNER_CHAT_ID and not dry:
         try:
-            # send_message_to шлёт parse_mode=HTML → экранируем спецсимволы (&,<,>)
-            sent = await send_message_to(SCANNER_CHAT_ID, html.escape(card))
+            if chart_path:
+                await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=card, parse_mode="HTML")
+                sent = "photo"
+            else:
+                sent = await send_message_to(SCANNER_CHAT_ID, card)  # card уже HTML
         except Exception as e:
             print(f"  telegram: {e}")
 
