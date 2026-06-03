@@ -25,6 +25,7 @@ JOURNAL = OUT_DIR / "scanner_journal.jsonl"
 PENDING = OUT_DIR / "pending_events.jsonl"      # skeleton «будет» (анти-survivorship)
 DROPS = OUT_DIR / "drops.jsonl"                 # отброшенное фильтром (анти-survivorship)
 BUDGET = OUT_DIR / "llm_budget.jsonl"           # наблюдаемость стоимости LLM
+INGEST = OUT_DIR / "ingest_log.jsonl"           # КАЖДОЕ входящее событие до фильтров (полный аудит)
 
 SCHEMA_VERSION = 2   # v2: +event_type/phase/lead_class/source_class/baseline_symbol/router_version
 
@@ -193,6 +194,36 @@ def write_budget(stats: dict) -> None:
     rec = {"ts": now_iso(), **stats}
     with open(BUDGET, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _ingest_keys() -> set:
+    if not INGEST.exists():
+        return set()
+    keys = set()
+    with open(INGEST, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                keys.add(json.loads(line).get("canon"))
+            except Exception:
+                continue
+    return keys
+
+
+def write_ingest(records: list) -> int:
+    """Лог КАЖДОГО входящего события (до фильтров), дедуп по canon. Полный аудит:
+    что сканер ВИДЕЛ, даже если не дошло до карточки/дропа (превышен лимит, упало и т.п.).
+    records=[{canon, source, headline, url}]. Возвращает сколько новых записано."""
+    existing = _ingest_keys()
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(INGEST, "a", encoding="utf-8") as f:
+        for r in records:
+            c = r.get("canon")
+            if c and c not in existing:
+                f.write(json.dumps({"ts": now_iso(), **r}, ensure_ascii=False) + "\n")
+                existing.add(c)
+                n += 1
+    return n
 
 
 def recent_events(hours: int = 48) -> list:

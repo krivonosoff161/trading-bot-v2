@@ -409,6 +409,9 @@ async def run(limit: int, dry: bool) -> None:
     listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
     items = listings + rss_items                  # опережающие листинги первыми
     fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
+    if not dry and fresh:                         # полный аудит: лог КАЖДОГО входящего до фильтров
+        J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
+                         "headline": it.get("title"), "url": it.get("url")} for it in fresh])
     print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
