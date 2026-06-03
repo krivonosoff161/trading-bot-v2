@@ -156,7 +156,7 @@ async def generate_scout_card(
     side/asymmetry/invalidation/forecast/horizon_hours/summary (+ low_confidence).
     """
     user_text = _build_user_text(news, layer, trigger, asset_hint, market_ctx_line, price)
-    raw = await _call_yandex(_SYSTEM_PROMPT, user_text, max_tokens=750)
+    raw, tokens = await _call_yandex(_SYSTEM_PROMPT, user_text, max_tokens=750)
     if not raw:
         return None
     data = _strip_to_json(raw)
@@ -195,4 +195,5 @@ async def generate_scout_card(
     else:
         data["levels"] = {"entry": None, "invalidation": None, "target": None}
 
+    data["_tokens"] = tokens
     return data
