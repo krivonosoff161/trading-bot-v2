@@ -100,7 +100,7 @@ def resolve() -> None:
         return
     done = _scored_ids()
     now = dt.datetime.now(dt.timezone.utc)
-    btc_now = okx_last("BTC-USDT-SWAP")
+    baseline_cache: dict = {}      # per-layer якорь excess (кэш цен)
 
     matured = scored = manual = pending = 0
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -134,7 +134,11 @@ def resolve() -> None:
                 pending += 1
                 continue
             asset_ret = (p_now / p0 - 1.0) * 100.0
-            baseline = ((btc_now / btc0 - 1.0) * 100.0) if (btc_now and btc0) else None
+            bsym = r.get("baseline_symbol") or "BTC-USDT-SWAP"   # per-layer якорь (не хардкод BTC)
+            if bsym not in baseline_cache:
+                baseline_cache[bsym] = okx_last(bsym)
+            b_now = baseline_cache[bsym]
+            baseline = ((b_now / btc0 - 1.0) * 100.0) if (b_now and btc0) else None
             excess = (asset_ret - baseline) if baseline is not None else None
             correct = score(r.get("verdict", ""), r.get("side", "none"),
                             asset_ret, excess if excess is not None else asset_ret)
