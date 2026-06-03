@@ -130,6 +130,7 @@ def render_chart(
     entry_signal: str | None = None,
     direction: str | None = None,
     trade_style: str | None = None,
+    tf_label: str = "15m",
 ) -> None:
     try:
         import io
@@ -314,9 +315,9 @@ def render_chart(
 
     try:
         dt_utc = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
-        title = f"{symbol} · 15m · {_to_msk(dt_utc).strftime('%Y-%m-%d %H:%M')} МСК"
+        title = f"{symbol} · {tf_label} · {_to_msk(dt_utc).strftime('%Y-%m-%d %H:%M')} МСК"
     except Exception:
-        title = f"{symbol} · 15m · {captured_at[:16].replace('T', ' ')} UTC"
+        title = f"{symbol} · {tf_label} · {captured_at[:16].replace('T', ' ')} UTC"
     ax.set_title(title, color="#7788aa", fontsize=8, loc="left", pad=5)
 
     if entry_signal and entry_signal != "NO_TRADE" and direction:
