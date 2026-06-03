@@ -82,8 +82,9 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
             return msg_id
 
 
-async def send_photo_to(chat_id: str, file_path: str, caption: str = "") -> None:
-    """Send a photo file to a specific chat_id."""
+async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
+                        parse_mode: str | None = None) -> None:
+    """Send a photo file to a specific chat_id. parse_mode optional (e.g. 'HTML')."""
     if not _BOT_TOKEN:
         return
     url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendPhoto"
@@ -92,6 +93,8 @@ async def send_photo_to(chat_id: str, file_path: str, caption: str = "") -> None
             data = aiohttp.FormData()
             data.add_field("chat_id", chat_id)
             data.add_field("caption", caption)
+            if parse_mode:
+                data.add_field("parse_mode", parse_mode)
             with open(file_path, "rb") as f:
                 data.add_field("photo", f, filename=Path(file_path).name)
                 resp = await session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30))

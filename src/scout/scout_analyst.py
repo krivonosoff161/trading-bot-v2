@@ -61,9 +61,12 @@ _SYSTEM_PROMPT = """\
   "invalidation": "сценарий неверен, если …",
   "forecast": "короткий направленный сценарий",
   "horizon_hours": <целое число часов горизонта прогноза>,
-  "summary": "2-4 предложения простым языком: что это и почему вердикт такой"
+  "summary": "2-4 предложения простым языком: что это и почему вердикт такой",
+  "levels": {"entry": <число|null>, "invalidation": <число|null>, "target": <число|null>}
 }
-Только JSON. Если данных мало — ставь verdict NO_GO/WATCH и скажи почему в summary."""
+LEVELS — ТОЛЬКО для verdict=GO: дай числовые цены (entry ~ текущая цена, invalidation = где
+сценарий ломается, target = реалистичная цель), привязанные к ТЕКУЩЕЙ ЦЕНЕ из входа. Для
+NO_GO/WATCH ставь все три null. Только JSON. Если данных мало — verdict NO_GO/WATCH, скажи почему в summary."""
 
 
 def _strip_to_json(raw: str) -> dict | None:
@@ -101,13 +104,16 @@ _VALID_VERDICTS = {"GO", "NO_GO", "WATCH"}
 
 
 def _build_user_text(news: dict, layer: int, trigger: str,
-                     asset_hint: str | None, market_ctx_line: str | None) -> str:
+                     asset_hint: str | None, market_ctx_line: str | None,
+                     price: float | None = None) -> str:
     parts = [
         f"СЛОЙ: {layer}",
         f"ТРИГГЕР: {trigger}",
     ]
     if asset_hint:
         parts.append(f"АКТИВ (предварительно): {asset_hint}")
+    if price is not None:
+        parts.append(f"ТЕКУЩАЯ ЦЕНА: {price}")
     parts.append("")
     parts.append(f"ЗАГОЛОВОК: {news.get('headline') or news.get('title') or '—'}")
     if news.get("date"):
@@ -127,6 +133,13 @@ def _build_user_text(news: dict, layer: int, trigger: str,
     return "\n".join(parts)
 
 
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 async def generate_scout_card(
     news: dict,
     layer: int = 1,
@@ -134,6 +147,7 @@ async def generate_scout_card(
     asset_hint: str | None = None,
     market_ctx_line: str | None = None,
     low_confidence: bool = False,
+    price: float | None = None,
 ) -> dict | None:
     """Новость + контекст → структурный вердикт-фильтр (dict) либо None.
 
@@ -141,8 +155,8 @@ async def generate_scout_card(
     Возвращает поля: asset/catalyst/in_price/red_flag/mechanics/surprise/verdict/
     side/asymmetry/invalidation/forecast/horizon_hours/summary (+ low_confidence).
     """
-    user_text = _build_user_text(news, layer, trigger, asset_hint, market_ctx_line)
-    raw = await _call_yandex(_SYSTEM_PROMPT, user_text, max_tokens=700)
+    user_text = _build_user_text(news, layer, trigger, asset_hint, market_ctx_line, price)
+    raw = await _call_yandex(_SYSTEM_PROMPT, user_text, max_tokens=750)
     if not raw:
         return None
     data = _strip_to_json(raw)
@@ -171,5 +185,14 @@ async def generate_scout_card(
             data["verdict"] = "WATCH"
     else:
         data.setdefault("low_confidence", False)
+
+    # числовые уровни — только для GO (для прорисовки рекомендации на графике)
+    lv = data.get("levels") if isinstance(data.get("levels"), dict) else {}
+    if data["verdict"] == "GO":
+        data["levels"] = {"entry": _num(lv.get("entry")),
+                          "invalidation": _num(lv.get("invalidation")),
+                          "target": _num(lv.get("target"))}
+    else:
+        data["levels"] = {"entry": None, "invalidation": None, "target": None}
 
     return data

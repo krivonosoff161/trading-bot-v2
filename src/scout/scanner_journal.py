@@ -69,6 +69,7 @@ def build_row(
     price_at_decision: float | None,
     okx_inst: str | None = None,
     btc_at_decision: float | None = None,
+    levels: dict | None = None,
     catalyst: str = "",
     in_price: str = "",
     red_flag: str = "",
@@ -110,6 +111,7 @@ def build_row(
         "price_at_decision": price_at_decision,
         "okx_inst": okx_inst,                # инструмент для резолва цены актива
         "btc_at_decision": btc_at_decision,  # якорь baseline (anti-beta excess)
+        "levels": levels or {},              # entry/invalidation/target (только GO)
         "low_confidence": low_confidence,
         "dedup_key": f"{(asset or 'NA')}::{cid}",
         "outcome_source": outcome_source,    # okx | coingecko | manual
