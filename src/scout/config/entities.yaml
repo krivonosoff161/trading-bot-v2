@@ -14,7 +14,20 @@ assets:
   - {sym: SOL, layer: 1, okx_inst: SOL-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [solana], weak: [sol]}
   - {sym: XRP, layer: 1, okx_inst: XRP-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [xrp, ripple], weak: []}
   - {sym: BNB, layer: 1, okx_inst: BNB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bnb, "binance coin"], weak: []}
-  # --- Этап 4: провод слоёв 3-5 (структура; baseline резолвится off-OKX через Stooq) ---
-  # - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ,  strong: [nvidia, nvda], weak: []}
-  # - {sym: GOLD, layer: 3, okx_inst: XAU-USDT-SWAP, baseline: DXY,  strong: [gold, xau], weak: []}
-  # - {sym: OIL,  layer: 4, okx_inst: CL-USDT-SWAP,  baseline: brent, strong: [crude oil, wti], weak: []}
+  # --- Этап 4: провод слоёв 3-5 по ЗАГОЛОВКАМ (структура) ---
+  # - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [nvidia, nvda], weak: []}
+
+# Классификация ИНСТРУМЕНТА → слой (для новых листингов открытой вселенной, где актив заранее не известен).
+# Базовый символ инструмента в списке → его слой; иначе крипта (слой 2 альт; мажоры из assets = слой 1).
+layer_map:
+  3: [XAU, XAG, XPT, XPD]                     # металлы
+  4: [CL]                                     # ресурсы (нефть)
+  5: [NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, ARM, MRVL, MSFT, GOOGL, GOOG, META, AMZN, AAPL,
+      TSLA, NFLX, COIN, MSTR, HOOD, PLTR, QQQ, SPY, CRWD, NOW, ORCL, ASML, ADBE, HPE, ASTS,
+      AVUV, OPENAI, ANTHROPIC, SPACEX]        # акции + pre-IPO перпы
+
+# Якорь baseline по слою (excess vs index, не хардкод BTC). Off-OKX (металлы/нефть) → manual.
+baseline_by_layer:
+  1: BTC-USDT-SWAP
+  2: BTC-USDT-SWAP
+  5: QQQ-USDT-SWAP
