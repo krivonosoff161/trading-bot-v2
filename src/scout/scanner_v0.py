@@ -46,7 +46,8 @@ import os  # noqa: E402
 
 from src.scout.page_extract import extract                       # noqa: E402
 from src.scout.scout_analyst import generate_scout_card          # noqa: E402
-from src.scout.router import route_asset, route_temporal, score_materiality, dedup_config   # noqa: E402
+from src.scout.router import (route_asset, route_temporal, score_materiality,   # noqa: E402
+                              dedup_config, limits_config)
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
@@ -259,7 +260,8 @@ def format_card(row: dict) -> str:
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
 async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
-                       recent: list | None = None, dedup_min: int = 88) -> dict | None:
+                       recent: list | None = None, dedup_min: int = 88,
+                       carded: dict | None = None, max_per_asset: int = 1) -> dict | None:
     headline = item["title"]
     url = item.get("url")
     pre_routed = bool(item.get("asset"))      # листинг = актив/слой известны из инструмента
@@ -287,7 +289,14 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             return {"skipped": "noise_genre", "headline": headline, "asset": asset}
         phase = route_temporal(headline)["phase"]
 
-    # 2) EVENT-ДЕДУП — то же событие из N лент/проходов → 1 карточка
+    # CONTEXT (ценовой обзор/мнение/прогноз) — не событие → не будим LLM (экономия токенов)
+    if phase == "CONTEXT":
+        return {"skipped": "context_commentary", "headline": headline, "asset": asset}
+    # КАП — не флудить одним активом за проход (был кейс 4 BTC NO_GO подряд)
+    if carded is not None and carded.get(asset, 0) >= max_per_asset:
+        return {"skipped": "asset_capped", "headline": headline, "asset": asset}
+
+    # EVENT-ДЕДУП — то же событие из N лент/проходов → 1 карточка
     if recent is not None and is_duplicate(headline, asset, recent, dedup_min):
         return {"skipped": "dup_event", "headline": headline, "asset": asset}
     canon = canonical_url(url or f"https://www.okx.com/trade-swap/{(inst or asset or '').lower()}")
@@ -395,6 +404,8 @@ async def run(limit: int, dry: bool) -> None:
     dcfg = dedup_config()
     dedup_min = int(dcfg.get("fuzzy_min", 88))
     recent = J.recent_events(int(dcfg.get("window_hours", 48)))   # окно event-дедупа
+    max_per_asset = int(limits_config().get("max_cards_per_asset_per_run", 1))
+    carded: dict = {}                                            # кап карточек на актив за проход
     print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | RSS+листинги | "
           f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
@@ -420,7 +431,8 @@ async def run(limit: int, dry: bool) -> None:
             break
         canon = canonical_url(it.get("url") or "")
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
-                                 recent=recent, dedup_min=dedup_min)
+                                 recent=recent, dedup_min=dedup_min,
+                                 carded=carded, max_per_asset=max_per_asset)
         skipped = res.get("skipped") if res else None
         # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)
         if skipped != "llm_failed":
@@ -434,13 +446,15 @@ async def run(limit: int, dry: bool) -> None:
             else:                            # фильтр-дроп (роутер/материальность) → анти-survivorship
                 n_dropped += 1
                 if not dry:
-                    stage = {"no_tracked_asset": "router", "dup_event": "dedup"}.get(skipped, "materiality")
+                    stage = {"no_tracked_asset": "router", "dup_event": "dedup",
+                         "context_commentary": "gate", "asset_capped": "cap"}.get(skipped, "materiality")
                     J.write_drop(it["url"], it["title"], skipped, asset=res.get("asset"), drop_stage=stage)
             print(f"  · скип [{skipped}]: {res['headline'][:65]}")
             continue
         made += 1
         r = res["row"]
         recent.append((res.get("asset"), r["headline"]))   # within-run дубли тоже ловим
+        carded[res["asset"]] = carded.get(res["asset"], 0) + 1   # кап на актив
         sent = f"sent msg_id={res['sent']}" if res.get("sent") else ("dry-доставка" if not dry else "не отправлено")
         print(f"\n[{made}] {r['verdict']} {r['side']} · {r['asset']} L{r['layer']} {r['lead_class']}"
               f" · {r['source']} · @ {res.get('price')} · {r['event_phase']} · card_id={res['card_id'] or 'DUP'} · {sent}")

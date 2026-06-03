@@ -10,7 +10,10 @@ dedup:
   fuzzy_min: 88             # token_set_ratio порог near-duplicate заголовков одного актива
   window_hours: 48          # окно «одно событие» (дальше — считаем разными)
 
-# Negative-genre: заведомый шум (обзоры/мнения/гайды/реклама) → дроп noise_genre.
+limits:
+  max_cards_per_asset_per_run: 1   # не флудить одним активом (был кейс 4 BTC NO_GO подряд)
+
+# Negative-genre: заведомый шум (обзоры/мнения/прогнозы цены/гайды/реклама) → дроп noise_genre.
 noise_genres:
   - price analysis
   - price prediction
@@ -29,6 +32,29 @@ noise_genres:
   - "top 10"
   - here's why
   - heres why
+  # --- ценовая болтовня/прогнозы (не событие, а мнение) ---
+  - fair value
+  - price target
+  - could hit
+  - could reach
+  - may hit
+  - may reach
+  - could see
+  - eyes $
+  - sees $
+  - target after
+  - key support
+  - key resistance
+  - what's next
+  - whats next
+  - here's what
+  - heres what
+  - copying
+  - fractal
+  - pattern suggests
+  - outlook
+  - scenario
+  - is it time
 
 # Positive: материальные event-families по слою (термин в заголовке → family).
 layers:

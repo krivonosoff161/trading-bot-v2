@@ -44,6 +44,10 @@ def dedup_config() -> dict:
     return _taxonomy().get("dedup", {}) or {}
 
 
+def limits_config() -> dict:
+    return _taxonomy().get("limits", {}) or {}
+
+
 def classify_layer(symbol: str) -> int:
     """Базовый символ инструмента → слой (открытая вселенная листингов). Дефолт = 2 (крипта-альт)."""
     cfg = _entities()
