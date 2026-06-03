@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
 import re
 import sys
@@ -235,7 +236,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     sent = None
     if cid and SCANNER_CHAT_ID and not dry:
         try:
-            sent = await send_message_to(SCANNER_CHAT_ID, card)
+            # send_message_to шлёт parse_mode=HTML → экранируем спецсимволы (&,<,>)
+            sent = await send_message_to(SCANNER_CHAT_ID, html.escape(card))
         except Exception as e:
             print(f"  telegram: {e}")
 
