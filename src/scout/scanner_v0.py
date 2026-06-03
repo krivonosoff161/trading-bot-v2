@@ -28,6 +28,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -61,14 +62,31 @@ SEEN_PATH = _ROOT / "logs" / "scout" / "scanner_seen.json"
 BUNDLE_PATH = _ROOT / "logs" / "scout" / "bundle_latest.json"
 SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
 
-# актив → OKX instId (word-boundary матч в заголовке/тексте). V0 = мажоры.
+# актив → OKX instId + алиасы. strong=полное имя (надёжно), weak=короткий тикер
+# (считаем только с подтверждением: cashtag $sol / пара sol-usdt — иначе шум, «SOL в Zcash»).
 TRACKED = [
-    ("BTC", "BTC-USDT-SWAP", r"\b(bitcoin|btc)\b"),
-    ("ETH", "ETH-USDT-SWAP", r"\b(ethereum|ether|eth)\b"),
-    ("SOL", "SOL-USDT-SWAP", r"\b(solana|sol)\b"),
-    ("XRP", "XRP-USDT-SWAP", r"\b(xrp|ripple)\b"),
-    ("BNB", "BNB-USDT-SWAP", r"\b(bnb)\b"),
+    {"sym": "BTC", "inst": "BTC-USDT-SWAP", "strong": ["bitcoin"], "weak": ["btc"]},
+    {"sym": "ETH", "inst": "ETH-USDT-SWAP", "strong": ["ethereum", "ether"], "weak": ["eth"]},
+    {"sym": "SOL", "inst": "SOL-USDT-SWAP", "strong": ["solana"], "weak": ["sol"]},
+    {"sym": "XRP", "inst": "XRP-USDT-SWAP", "strong": ["xrp", "ripple"], "weak": []},
+    {"sym": "BNB", "inst": "BNB-USDT-SWAP", "strong": ["bnb", "binance coin"], "weak": []},
 ]
+ROUTER_VERSION = "v0.2"
+RATE_RUB_PER_1K = 0.5    # анкер стоимости Яндекса (приблизит., для llm_budget)
+
+
+def canonical_url(url: str) -> str:
+    """Нормализовать URL (drop query/utm/fragment, lowercase host, strip slash) — дедуп utm-вариантов."""
+    try:
+        p = urlsplit((url or "").strip())
+        return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), "", "")) or url
+    except Exception:
+        return url
+
+
+def baseline_for(asset: str | None, layer: int) -> str:
+    """Per-layer якорь excess. V0 = крипта → BTC. Слои 3-5 (Этап 6) → QQQ/Brent/DXY."""
+    return "BTC-USDT-SWAP"
 
 
 # ── seen-store (fire-on-new) ─────────────────────────────────────────────────
@@ -106,12 +124,33 @@ def fetch_rss(limit: int = 30) -> list[dict]:
     return out
 
 
-def match_asset(text: str) -> tuple[str | None, str | None]:
-    low = text.lower()
-    for sym, inst, pat in TRACKED:
-        if re.search(pat, low):
-            return sym, inst
-    return None, None
+def match_asset(headline: str) -> tuple[str | None, str | None, float]:
+    """Роутер актива (Этап 0): мульти-матч + субъект (позиция) + подтверждение тикера.
+    Возвращает (sym, inst, confidence) либо (None, None, 0.0)."""
+    low = headline.lower()
+    first_zone = set(re.findall(r"[a-z]+", low)[:6])     # «субъект» обычно в начале
+    best = None
+    for t in TRACKED:
+        score, pos = 0.0, 9999
+        for name in t["strong"]:
+            m = re.search(r"\b" + re.escape(name) + r"\b", low)
+            if m:
+                score = max(score, 0.7)
+                if name.split()[0] in first_zone:
+                    score += 0.15
+                pos = min(pos, m.start())
+        for tk in t["weak"]:
+            if re.search(r"\$" + tk + r"\b", low) or re.search(r"\b" + tk + r"[-/]usd", low):
+                score = max(score, 0.6)                   # cashtag/пара = надёжно
+            elif re.search(r"\b" + tk + r"\b", low) and score == 0.0:
+                score = max(score, 0.35)                  # голый тикер без имени = слабо
+        if score > 0:
+            cand = (score, -pos, t["sym"], t["inst"])
+            if best is None or cand > best:
+                best = cand
+    if best and best[0] >= 0.5:
+        return best[2], best[3], round(min(best[0], 1.0), 2)
+    return None, None, 0.0
 
 
 def okx_last(inst_id: str | None) -> float | None:
@@ -273,11 +312,11 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         body_text = ext["text"]
         source_ts = ext.get("date") or item.get("time") or J.now_iso()[:10]
 
-    # 2) актив + цена (матч ТОЛЬКО по заголовку — новость про актив называет его в title;
-    #    матч по телу ловил мусор, напр. SOL в статье про Zcash)
-    asset, inst = match_asset(headline)
+    # 2) актив + цена (матч по ЗАГОЛОВКУ: мульти-матч + субъект + подтверждение тикера)
+    asset, inst, conf = match_asset(headline)
     if asset is None:
         return {"skipped": "no_tracked_asset", "headline": headline}
+    canon = canonical_url(url)
     price = okx_last(inst) if not dry else None
 
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url}
@@ -301,10 +340,13 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 
     # 4) строка журнала
     row = J.build_row(
-        source_url=url, source_ts=source_ts, layer=LAYER,
+        source_url=canon, source_ts=source_ts, layer=LAYER,
         asset=fields.get("asset") or asset, trigger_type=TRIGGER, headline=headline,
         verdict=fields["verdict"], horizon_hours=fields["horizon_hours"],
         price_at_decision=price, okx_inst=inst, btc_at_decision=btc_ref,
+        baseline_symbol=baseline_for(asset, LAYER),
+        lead_class="LAGGING", source_class="rss", router_version=ROUTER_VERSION,
+        asset_confidence=conf,
         levels=fields.get("levels"),
         catalyst=fields.get("catalyst", ""), in_price=fields.get("in_price", ""),
         red_flag=fields.get("red_flag", ""), mechanics=fields.get("mechanics", ""),
@@ -314,7 +356,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         low_confidence=fields.get("low_confidence", low_conf),
         outcome_source=("okx" if price is not None else "manual"),
     )
-    cid = ("DRY-" + J.card_id_for(url)) if dry else J.write_row(row)
+    cid = ("DRY-" + J.card_id_for(canon)) if dry else J.write_row(row)
     card = format_card(row)
 
     # 5) график: NO_GO/WATCH = чистый, GO = с прорисовкой уровней
@@ -333,7 +375,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             print(f"  telegram: {e}")
 
     return {"card_id": cid, "row": row, "card": card, "sent": sent,
-            "asset": asset, "price": price}
+            "asset": asset, "price": price, "canon": canon,
+            "tokens": int(fields.get("_tokens") or 0)}
 
 
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────
@@ -352,31 +395,46 @@ async def run(limit: int, dry: bool) -> None:
         print(f"RSS ОШИБКА: {e}")
         return
 
-    fresh = [it for it in items if it["url"] not in seen]
+    fresh = [it for it in items if canonical_url(it["url"]) not in seen]
     print(f"RSS: {len(items)} заголовков, {len(fresh)} новых (не в seen)\n")
 
-    made = 0
+    made = n_no_asset = n_llm_fail = total_tokens = 0
     for it in fresh:
         if made >= limit:
             break
+        canon = canonical_url(it["url"])
         res = await process_item(it, mline, dry, btc_ref=btc_ref)
-        seen.add(it["url"])          # помечаем виденным независимо от исхода
+        skipped = res.get("skipped") if res else None
+        # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)
+        if skipped != "llm_failed":
+            seen.add(canon)
         if not res:
             continue
-        if res.get("skipped"):
-            print(f"  · скип [{res['skipped']}]: {res['headline'][:65]}")
+        total_tokens += res.get("tokens", 0)
+        if skipped:
+            if skipped == "no_tracked_asset":
+                n_no_asset += 1
+                if not dry:
+                    J.write_drop(it["url"], it["title"], skipped, drop_stage="router")
+            elif skipped == "llm_failed":
+                n_llm_fail += 1
+            print(f"  · скип [{skipped}]: {res['headline'][:65]}")
             continue
         made += 1
         r = res["row"]
         sent = f"sent msg_id={res['sent']}" if res.get("sent") else ("dry-доставка" if not dry else "не отправлено")
         print(f"\n[{made}] {r['verdict']} {r['side']} · {r['asset']} @ {res.get('price')} · "
-              f"card_id={res['card_id'] or 'DUP'} · {sent}")
+              f"conf={r.get('asset_confidence')} · card_id={res['card_id'] or 'DUP'} · {sent}")
         print("    " + "\n    ".join(res["card"].splitlines()))
 
+    cost = round(total_tokens / 1000 * RATE_RUB_PER_1K, 2)
     if not dry:                       # dry ничего не персистит (не съедает seen-слоты)
         save_seen(seen)
+        J.write_budget({"n_ingested": len(items), "n_fresh": len(fresh), "n_cards": made,
+                        "n_no_asset": n_no_asset, "n_llm_fail": n_llm_fail,
+                        "total_tokens": total_tokens, "cost_rub": cost})
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"
-          f"{' (dry — не сохранён)' if dry else ''} · журнал={J.JOURNAL} ===")
+          f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost}₽) · журнал={J.JOURNAL} ===")
 
 
 def main():
