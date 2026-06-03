@@ -11,7 +11,14 @@ sources:
     layers: [1, 2]
     enabled: true
 
-  # --- Этап 4: провод опережающих/official-first источников ---
+  okx_listings:                # новые листинги OKX (REALIZED), keyless, тот же okx public
+    source_class: ws
+    lead_class: LEADING
+    trust: official
+    layers: [1, 2, 5]          # крипта/альты + акции (ASML/ADBE/…); слой по инструменту
+    enabled: true
+
+  # --- следующие official-first (Этап 4+) ---
   # okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, layers: [1,2], enabled: false}
   # sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, layers: [5],   enabled: false}
   # eia:               {source_class: api, lead_class: COINCIDENT, trust: official, layers: [4],   enabled: false}
