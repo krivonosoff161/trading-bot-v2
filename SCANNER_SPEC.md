@@ -201,3 +201,32 @@ L5 акции:     чипы:    NVDA AMD AVGO TSM INTC MU QCOM ARM MRVL
 
 ### 🛠️ Порядок сборки (всё Claude, кроме п.10)
 1. лок источника в спеке ✓(этот блок) · 2. requirements + прогон page_extract на 5-10 живых URL · 3. `_call_yandex` + `generate_scout_card` (блокер №1) · 4. схема `scanner_journal.jsonl` + writer (блокер №2) · 5. `scanner_seen.json` · 6. **`scanner_v0.py` = первая живая карточка** · 7. skeleton `pending_events.jsonl` · 8. `resolve_outcomes.py` (baseline/excess) · 9. (V0.5) docstring-guard + тест изоляции импортов · 10. **ТРЕЙДЕР для V1:** добавить `TG_API_ID/HASH/PHONE` в `.env` заранее (my.telegram.org, money-guard).
+
+---
+
+## ✅ AS-BUILT (03.06.2026) — что реально построено (после дип-ресёрча ядра)
+
+> Дип-ресёрч ядра «вывода» (рой 17 агентов × Codex, сошлись ~95%) → `docs/scanner_core_SYNTHESIS_2026-06-03.md`. Собрано поэтапно, 15 коммитов, 20+ тестов, изоляция от денег цела.
+
+**Пайплайн (реализован):**
+```
+ИСТОЧНИКИ: RSS Cointelegraph(LAGGING) + OKX-листинги(LEADING)   [sources/okx_listings.py]
+  → INGEST-ЛОГ (всё входящее, ingest_log.jsonl — полный аудит)
+  → РОУТЕР актив/слой (router.py: мульти-матч+субъект+подтверждение тикера; листинг pre-routed по инструменту)
+  → МАТЕРИАЛЬНОСТЬ (event_taxonomy.yaml: режет noise_genre + ценовую болтовню + CONTEXT-фазу ДО LLM)
+  → КАП 1 карточка/актив/проход
+  → EVENT-ДЕДУП (dedup.py: canonical_url + RapidFuzz token_set≥88, окно 48ч)
+  → ТЕМПОРАЛ будет/произошло/контекст (router.route_temporal)
+  → СЖАТИЕ входа (scout_analyst._compress, extractive)
+  → ПРЕДОХРАНИТЕЛЬ (GO+side только если LEADING, в коде — анти-мираж)
+  → МОЗГ Qwen (scout_analyst.generate_scout_card) → карточка+график(TF под горизонт) → канал @analIIti + журнал v2
+```
+**Конфиги (не хардкод):** `src/scout/config/{entities,event_taxonomy,source_registry}.yaml` (активы/слои/baseline_by_layer/layer_map · материальность+noise+dedup+limits · источники/lead_class/trust).
+**Логи (полный аудит):** `logs/scout/{ingest_log,scanner_journal,drops,llm_budget,scanner_outcomes}.jsonl` + `scanner_seen.json`.
+**Слои:** ASML→5/QQQ, EWT→2/BTC, металлы/нефть→manual baseline; крипта-мажоры(BTC/ETH/SOL/XRP/BNB)→1/BTC.
+
+**ОСТАЛОСЬ:**
+- **Этап 3:** window-state + surprise-delta (z=факт−консенсус/σ + pre_drift). Нужны: free-key FRED/EIA (макро-консенсус) + источники; на крипте консенсуса мало → ценнее с акциями/макро. `pending_events.jsonl` пока skeleton.
+- **PUSH-источник** (event-driven, как хотел трейдер): Tree-of-Alpha WS (keyless) / Telegram-листенер (Telethon, api_id трейдера). Сейчас RSS=опрос 30мин; анти-спам (дедуп по содержанию) уже есть.
+- Расширение трекаемых активов/слоёв; SEC EDGAR (акции, keyless); per-layer baseline off-OKX (Stooq) для металлов/нефти.
+- Калибровка порогов материальности/дедупа по накопленным `drops.jsonl`.
