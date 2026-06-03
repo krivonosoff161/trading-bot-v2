@@ -88,6 +88,7 @@ def build_row(
     event_phase: str = "unknown",        # FUTURE/REALIZED/CONTEXT/AMBIGUOUS (темпорал-роутер)
     materiality_score: float | None = None,
     lead_class: str = "LAGGING",         # LEADING/COINCIDENT/LAGGING (карта источника)
+    source: str = "cointelegraph",       # имя фида (per-source метрики/latency)
     source_class: str = "rss",
     baseline_symbol: str | None = None,  # per-layer якорь excess (не хардкод BTC)
     router_version: str = "v0",
@@ -129,6 +130,7 @@ def build_row(
         "event_phase": event_phase,
         "materiality_score": materiality_score,
         "lead_class": lead_class,
+        "source": source,
         "source_class": source_class,
         "router_version": router_version,
         "asset_confidence": asset_confidence,
