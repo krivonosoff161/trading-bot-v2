@@ -1,0 +1,20 @@
+# entities.yaml — активы для роутера сканера (актив/слой/инструмент/baseline/алиасы).
+# Роутер (src/scout/router.py) читает ОТСЮДА — не хардкод в коде.
+# strong = полное имя (надёжный матч); weak = короткий тикер (только с подтверждением:
+# cashtag $sol / пара sol-usdt — иначе шум типа «SOL в статье про Zcash»).
+
+router:
+  threshold: 0.5          # ниже — актив не считаем (None)
+  subject_zone_words: 6   # «субъект» новости обычно в первых N словах заголовка
+
+# Слой 1 — крипта-история (активно в V0). Слои 2-5 расширяем по мере провода источников.
+assets:
+  - {sym: BTC, layer: 1, okx_inst: BTC-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bitcoin], weak: [btc]}
+  - {sym: ETH, layer: 1, okx_inst: ETH-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ethereum, ether], weak: [eth]}
+  - {sym: SOL, layer: 1, okx_inst: SOL-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [solana], weak: [sol]}
+  - {sym: XRP, layer: 1, okx_inst: XRP-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [xrp, ripple], weak: []}
+  - {sym: BNB, layer: 1, okx_inst: BNB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bnb, "binance coin"], weak: []}
+  # --- Этап 4: провод слоёв 3-5 (структура; baseline резолвится off-OKX через Stooq) ---
+  # - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ,  strong: [nvidia, nvda], weak: []}
+  # - {sym: GOLD, layer: 3, okx_inst: XAU-USDT-SWAP, baseline: DXY,  strong: [gold, xau], weak: []}
+  # - {sym: OIL,  layer: 4, okx_inst: CL-USDT-SWAP,  baseline: brent, strong: [crude oil, wti], weak: []}
