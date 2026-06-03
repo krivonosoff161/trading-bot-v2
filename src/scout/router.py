@@ -44,6 +44,24 @@ def dedup_config() -> dict:
     return _taxonomy().get("dedup", {}) or {}
 
 
+def classify_layer(symbol: str) -> int:
+    """Базовый символ инструмента → слой (открытая вселенная листингов). Дефолт = 2 (крипта-альт)."""
+    cfg = _entities()
+    sym = (symbol or "").upper()
+    for a in cfg.get("assets", []):
+        if a["sym"].upper() == sym:
+            return a["layer"]
+    for layer, syms in (cfg.get("layer_map", {}) or {}).items():
+        if sym in [str(s).upper() for s in syms]:
+            return int(layer)
+    return 2
+
+
+def baseline_for_layer(layer: int) -> str | None:
+    """Якорь baseline по слою (excess vs index). Нет в карте → None (manual, off-OKX)."""
+    return (_entities().get("baseline_by_layer", {}) or {}).get(layer)
+
+
 def source_meta(source: str) -> dict:
     return (_sources().get("sources", {}) or {}).get(source, {})
 
