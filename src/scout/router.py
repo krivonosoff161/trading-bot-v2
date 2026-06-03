@@ -40,6 +40,10 @@ def materiality_threshold() -> float:
     return _taxonomy().get("materiality", {}).get("threshold_llm", 0.5)
 
 
+def dedup_config() -> dict:
+    return _taxonomy().get("dedup", {}) or {}
+
+
 def source_meta(source: str) -> dict:
     return (_sources().get("sources", {}) or {}).get(source, {})
 

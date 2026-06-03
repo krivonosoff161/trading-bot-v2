@@ -93,6 +93,7 @@ def build_row(
     router_version: str = "v0",
     asset_confidence: float | None = None,
     source_count: int = 1,
+    event_key: str | None = None,
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -132,8 +133,9 @@ def build_row(
         "router_version": router_version,
         "asset_confidence": asset_confidence,
         "source_count": source_count,
+        "event_key": event_key,                     # актив+хэш-темы (event-дедуп, Этап 2)
         "low_confidence": low_confidence,
-        "dedup_key": f"{(asset or 'NA')}::{cid}",   # Этап 2 → event_key вместо cid
+        "dedup_key": event_key or f"{(asset or 'NA')}::{cid}",
         "outcome_source": outcome_source,    # okx | coingecko | manual
         "outcome": None,                     # {ret_pct, baseline_pct, excess_pct, scored, ...}
         "outcome_ts": None,
@@ -189,6 +191,27 @@ def write_budget(stats: dict) -> None:
     rec = {"ts": now_iso(), **stats}
     with open(BUDGET, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def recent_events(hours: int = 48) -> list:
+    """(asset, headline) из журнала за последние N часов — окно event-дедупа."""
+    if not JOURNAL.exists():
+        return []
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    out = []
+    with open(JOURNAL, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                ts = dt.datetime.strptime(r["ts_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+                if ts >= cutoff:
+                    out.append((r.get("asset"), r.get("headline")))
+            except Exception:
+                continue
+    return out
 
 
 if __name__ == "__main__":

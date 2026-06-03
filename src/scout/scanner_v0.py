@@ -46,7 +46,8 @@ import os  # noqa: E402
 
 from src.scout.page_extract import extract                       # noqa: E402
 from src.scout.scout_analyst import generate_scout_card          # noqa: E402
-from src.scout.router import route_asset, route_temporal, score_materiality   # noqa: E402
+from src.scout.router import route_asset, route_temporal, score_materiality, dedup_config   # noqa: E402
+from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
@@ -256,7 +257,8 @@ def format_card(row: dict) -> str:
 
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
 async def process_item(item: dict, mline: str | None, dry: bool,
-                       btc_ref: float | None = None) -> dict | None:
+                       btc_ref: float | None = None,
+                       recent: list | None = None, dedup_min: int = 88) -> dict | None:
     headline = item["title"]
     url = item["url"]
 
@@ -274,9 +276,14 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     if mat.get("drop_reason") == "noise_genre":
         return {"skipped": "noise_genre", "headline": headline, "asset": asset}
 
-    # 3) темпорал будет/произошло + canonical
+    # 2.5) EVENT-ДЕДУП — то же событие из N лент → 1 карточка (не дублируем LLM/карточку/WR)
+    if recent is not None and is_duplicate(headline, asset, recent, dedup_min):
+        return {"skipped": "dup_event", "headline": headline, "asset": asset}
+
+    # 3) темпорал будет/произошло + canonical + event_key
     temporal = route_temporal(headline)
     canon = canonical_url(url)
+    ekey = make_event_key(asset, headline)
 
     # 4) тело страницы — ТОЛЬКО для выживших (перестановка: не качаем отброшенное)
     ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
@@ -321,6 +328,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         event_type=mat.get("family") or "unclassified",
         event_phase=temporal["phase"],
         materiality_score=mat.get("score"),
+        event_key=ekey,
         levels=fields.get("levels"),
         catalyst=fields.get("catalyst", ""), in_price=fields.get("in_price", ""),
         red_flag=fields.get("red_flag", ""), mechanics=fields.get("mechanics", ""),
@@ -359,6 +367,9 @@ async def run(limit: int, dry: bool) -> None:
     seen = load_seen()
     mline = market_ctx_line()
     btc_ref = okx_last("BTC-USDT-SWAP") if not dry else None   # якорь baseline на проход
+    dcfg = dedup_config()
+    dedup_min = int(dcfg.get("fuzzy_min", 88))
+    recent = J.recent_events(int(dcfg.get("window_hours", 48)))   # окно event-дедупа
     print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | layer={LAYER} | "
           f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
@@ -377,7 +388,8 @@ async def run(limit: int, dry: bool) -> None:
         if made >= limit:
             break
         canon = canonical_url(it["url"])
-        res = await process_item(it, mline, dry, btc_ref=btc_ref)
+        res = await process_item(it, mline, dry, btc_ref=btc_ref,
+                                 recent=recent, dedup_min=dedup_min)
         skipped = res.get("skipped") if res else None
         # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)
         if skipped != "llm_failed":
@@ -391,12 +403,13 @@ async def run(limit: int, dry: bool) -> None:
             else:                            # фильтр-дроп (роутер/материальность) → анти-survivorship
                 n_dropped += 1
                 if not dry:
-                    stage = "router" if skipped == "no_tracked_asset" else "materiality"
+                    stage = {"no_tracked_asset": "router", "dup_event": "dedup"}.get(skipped, "materiality")
                     J.write_drop(it["url"], it["title"], skipped, asset=res.get("asset"), drop_stage=stage)
             print(f"  · скип [{skipped}]: {res['headline'][:65]}")
             continue
         made += 1
         r = res["row"]
+        recent.append((res.get("asset"), r["headline"]))   # within-run дубли тоже ловим
         sent = f"sent msg_id={res['sent']}" if res.get("sent") else ("dry-доставка" if not dry else "не отправлено")
         print(f"\n[{made}] {r['verdict']} {r['side']} · {r['asset']} @ {res.get('price')} · "
               f"conf={r.get('asset_confidence')} · card_id={res['card_id'] or 'DUP'} · {sent}")
