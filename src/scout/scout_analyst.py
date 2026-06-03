@@ -103,6 +103,24 @@ _REQUIRED = ("verdict", "horizon_hours")
 _VALID_VERDICTS = {"GO", "NO_GO", "WATCH"}
 
 
+def _compress(text: str, max_chars: int = 1400) -> str:
+    """Extractive-сжатие тела перед LLM: первые 2 предложения + все с числами/датами.
+    Дёшево (без sumy/nltk), числа/таймстемпы выживают. Режет вход-токены 2-4x."""
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    sents = re.split(r"(?<=[.!?])\s+", text)
+    keep, total, seen = [], 0, set()
+    for i, s in enumerate(sents):
+        if (i < 2 or re.search(r"\d", s)) and s not in seen:
+            keep.append(s)
+            seen.add(s)
+            total += len(s)
+            if total > max_chars:
+                break
+    return " ".join(keep)[:max_chars]
+
+
 def _build_user_text(news: dict, layer: int, trigger: str,
                      asset_hint: str | None, market_ctx_line: str | None,
                      price: float | None = None) -> str:
@@ -121,8 +139,8 @@ def _build_user_text(news: dict, layer: int, trigger: str,
     body = (news.get("text") or "").strip()
     if body:
         parts.append("")
-        parts.append("ТЕКСТ НОВОСТИ:")
-        parts.append(body[:4000])
+        parts.append("ТЕКСТ НОВОСТИ (сжато):")
+        parts.append(_compress(body))
     else:
         parts.append("")
         parts.append("(тело новости не извлечено — оценивай по заголовку, "

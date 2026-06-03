@@ -85,7 +85,8 @@ def build_row(
     low_confidence: bool = False,
     outcome_source: str = "okx",
     event_type: str = "unclassified",
-    event_phase: str = "unknown",        # будет/произошло/контекст (Этап 2)
+    event_phase: str = "unknown",        # FUTURE/REALIZED/CONTEXT/AMBIGUOUS (темпорал-роутер)
+    materiality_score: float | None = None,
     lead_class: str = "LAGGING",         # LEADING/COINCIDENT/LAGGING (карта источника)
     source_class: str = "rss",
     baseline_symbol: str | None = None,  # per-layer якорь excess (не хардкод BTC)
@@ -125,6 +126,7 @@ def build_row(
         "levels": levels or {},              # entry/invalidation/target (только GO)
         "event_type": event_type,
         "event_phase": event_phase,
+        "materiality_score": materiality_score,
         "lead_class": lead_class,
         "source_class": source_class,
         "router_version": router_version,
