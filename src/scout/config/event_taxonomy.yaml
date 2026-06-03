@@ -6,6 +6,10 @@ materiality:
   threshold_llm: 0.5        # >= → кандидат в LLM; < → дроп
   base_score: 0.6           # вес попадания в материальную family
 
+dedup:
+  fuzzy_min: 88             # token_set_ratio порог near-duplicate заголовков одного актива
+  window_hours: 48          # окно «одно событие» (дальше — считаем разными)
+
 # Negative-genre: заведомый шум (обзоры/мнения/гайды/реклама) → дроп noise_genre.
 noise_genres:
   - price analysis
