@@ -1,0 +1,18 @@
+# source_registry.yaml — реестр источников: класс / lead_class / доверие / слои.
+# lead_class — КАРТА (поле данных), правило в коде: GO+side только если ≥1 LEADING.
+# trust: official > primary > wire > aggregator > tg_alpha > tg_noise.
+
+sources:
+  cointelegraph:
+    url: https://cointelegraph.com/rss
+    source_class: rss
+    lead_class: LAGGING        # издательский RSS = запаздывающий by design
+    trust: wire
+    layers: [1, 2]
+    enabled: true
+
+  # --- Этап 4: провод опережающих/official-first источников ---
+  # okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, layers: [1,2], enabled: false}
+  # sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, layers: [5],   enabled: false}
+  # eia:               {source_class: api, lead_class: COINCIDENT, trust: official, layers: [4],   enabled: false}
+  # telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, layers: [1,2], enabled: false}

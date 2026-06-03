@@ -1,0 +1,46 @@
+# event_taxonomy.yaml — материальность (триггер vs шум) по слою. Главный бюджетный gate ДО LLM.
+# score_materiality(headline, layer): negative-genre → дроп сразу; иначе positive per-layer термин
+# даёт family+score; нет термина → дроп (no_material_term). Пороги — здесь, не в коде.
+
+materiality:
+  threshold_llm: 0.5        # >= → кандидат в LLM; < → дроп
+  base_score: 0.6           # вес попадания в материальную family
+
+# Negative-genre: заведомый шум (обзоры/мнения/гайды/реклама) → дроп noise_genre.
+noise_genres:
+  - price analysis
+  - price prediction
+  - prediction
+  - reasons to
+  - how to
+  - what to know
+  - things to
+  - weekly recap
+  - recap
+  - sponsored
+  - opinion
+  - explained
+  - guide
+  - "top 5"
+  - "top 10"
+  - here's why
+  - heres why
+
+# Positive: материальные event-families по слою (термин в заголовке → family).
+layers:
+  1:   # крипта-история (BTC/ETH мажоры)
+    etf_flow:   [etf, "spot etf", inflow, outflow, "net flow"]
+    regulation: [sec, cftc, lawsuit, "court", ban, sanction, ruling, regulation]
+    exploit:    [hack, exploit, breach, drained, "stolen"]
+    macro:      [fed, fomc, "rate cut", "rate hike", cpi, inflation, jobs]
+    listing:    [listing, lists, delist, delisting]
+    flows:      [whale, "exchange outflow", "exchange inflow", reserves]
+  2:   # альты/мемы (структура; провод on-chain — Этап 4)
+    listing:    [listing, lists, delist]
+    unlock:     [unlock, vesting, "token release"]
+    exploit:    [rug, hack, exploit, honeypot, scam]
+    launch:     [launch, mainnet, airdrop]
+  # --- Этап 4: слои 3-5 ---
+  # 3:  {tariff: [tariff, duty], supply: [mine, smelter, inventory], macro: [fed, dollar, china demand]}
+  # 4:  {opec: [opec, quota, output cut], inventory: [eia, "crude inventory"], geo: [strait, sanction, strike]}
+  # 5:  {earnings: [earnings, eps, guidance, beats, misses], filing: [8-k, s-1, sec filing], product: [launches, unveils]}
