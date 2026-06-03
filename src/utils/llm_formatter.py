@@ -564,17 +564,17 @@ async def _call_yandex(
     user_text: str,
     max_tokens: int = 900,
     timeout: int = _TIMEOUT,
-) -> str | None:
-    """Shared Yandex AI Studio (Qwen3) transport: system + user text → reply text.
+) -> tuple[str | None, int]:
+    """Shared Yandex AI Studio (Qwen3) transport: system + user text → (reply, total_tokens).
 
     Additive helper for the info-edge scanner (generate_scout_card lives in
     src/scout/scout_analyst.py). Deliberately does NOT touch generate_client_text
     — the product chart-analyst path is left byte-for-byte unchanged.
-    Returns None on any error or missing keys.
+    Returns (None, 0) on any error or missing keys; total_tokens for budget logging.
     """
     if not _API_KEY or not _FOLDER_ID:
         print("LLM _call_yandex: YANDEX_API_KEY/FOLDER_ID not set — skipping")
-        return None
+        return None, 0
     payload = {
         "model": _MODEL_URI,
         "max_tokens": max_tokens,
@@ -596,15 +596,16 @@ async def _call_yandex(
                 if resp.status != 200:
                     body = await resp.text()
                     print(f"LLM _call_yandex: HTTP {resp.status} — {body[:300]}")
-                    return None
+                    return None, 0
                 data = await resp.json()
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
-        print(f"LLM _call_yandex: OK — {tokens.get('total_tokens', '?')} tokens")
-        return body or None
+        total = int(tokens.get("total_tokens") or 0)
+        print(f"LLM _call_yandex: OK — {total} tokens")
+        return (body or None), total
     except Exception as exc:
         print(f"LLM _call_yandex: error — {exc}")
-        return None
+        return None, 0
 
 
 # ── Main entry point ───────────────────────────────────────────────────────────
