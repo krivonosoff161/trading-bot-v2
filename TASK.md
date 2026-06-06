@@ -1,79 +1,257 @@
-# TASK для Codex — глубокий research ЯДРА инфо-эдж сканера (03.06.2026)
+# TASK / HANDOFF для Claude и Codex — агентный scanner v1 (06.06.2026)
 
-## ЦЕЛЬ (что на выходе)
-Глубокий архитектурный разбор + GitHub-research по ОДНОЙ теме — **ядро = слой «ВЫВОДА» из новостного потока.** Нужны 4 вещи:
-1. **Ревью текущей реализации V0** — как сделано, где слабо.
-2. **Как настроить ядро точнее** — спроектировать «вывод» (роутер + материальность + дедуп + окно-состояние + сюрприз-дельта). Конкретные структуры/правила, где LLM, где дешёвый фильтр.
-3. **GitHub-research** — готовые инструменты поиска/ингеста/обработки новостей по ВСЕМ нашим слоям. Не упустили ли мы что-то.
-4. **Твой ответ** — рекомендованная архитектура ядра + что мы упустили. Глубокий расчёт, не поверхностно.
+Это файл-связка между агентами в VS Code. Читать перед любыми правками.
 
----
+## Статус коротко
 
-## ИДЕЯ ЦЕЛИКОМ (вся картина, чтобы был контекст)
+Фундамент агентной системы уже собран и запушен. Сейчас задача не перепридумывать архитектуру, а аккуратно запустить, проверить Alibaba-петлю и дальше достроить `source -> layer -> expected/realized -> agent -> orchestrator -> chief -> outcome`.
 
-**Система = машина-ФИЛЬТР (GO/NO-GO), НЕ машина-альфа.** Главный урок (проверен роем на 5 активах + TradFi): **«известный катализатор ≠ эдж»** — толпа видит ту же новость, она уже в цене. Эдж живёт только в: (1) **сюрпризе против консенсуса**, (2) механике инструмента, (3) **red-flag VETO** (NO-GO на ловушке). Дефолт вердикта = NO-GO, и это фича. PAPER-first: копим датированные вердикты → через горизонт меряем **excess vs BTC baseline** (анти-бета), деньги только после форвард-доказательства net+.
+## Что уже сделано
 
-**5 слоёв** (у каждого СВОЙ пак источников): 1) крипта-история (BTC/ETH) · 2) альты/мемы · 3) металлы (золото/серебро/медь) · 4) ресурсы (нефть/газ) · 5) акции+pre-IPO перпы (NVDA/MSFT/GOOGL/OPENAI/ANTHROPIC — всё на OKX как USDT-перпы).
+### 1. LLM backend
 
-**Триггеры:** опережающие (новость-на-выходе / on-chain / календарь) = entry; запаздывающие (цена/объём/ликвидации) = только контекст.
+- `src/utils/llm_client.py` есть.
+- Провайдеры: `yandex` fallback и `alibaba`.
+- Роли: `cheap`, `mid`, `chief`, `audit`.
+- Alibaba OpenAI-compatible endpoint работает.
+- Реальный тест Alibaba прошёл 06.06.2026:
+  - role: `cheap`;
+  - model: `qwen3-30b-a3b-instruct-2507`;
+  - response: `{"ok": true, "provider": "alibaba"}`;
+  - usage: 53 total tokens;
+  - estimated cost: ~0.0019 RUB.
 
-### ⭐ ЯДРО (то, что разбираем) — «ВЫВОД из потока новостей»
-Трейдер сформулировал корень: **проблема НЕ в ингесте (накидать лент легко), а в ВЫВОДЕ — достать из флуда правильный сигнал.** Наивный подход (regex «BTC/ETH в заголовке») ломается на масштабе (5 слоёв × N источников × флуд). «Вывод» = многоступенчатая экстракция:
+`.env` НЕ коммитить. Ключ находится только локально у трейдера.
 
+Ожидаемый локальный `.env` блок:
+
+```env
+LLM_PROVIDER=alibaba
+ALIBABA_API_KEY=sk-ws-...
+ALIBABA_BASE_URL=https://ws-bylnyb68jyymhk01.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+
+LLM_CHEAP_MODEL=qwen3-30b-a3b-instruct-2507
+LLM_MID_MODEL=qwen3-next-80b-a3b-instruct
+LLM_CHIEF_MODEL=qwen3.7-plus
+LLM_AUDIT_MODEL=qwen3.7-plus
 ```
-поток (per-layer source-паки)
- → РОУТЕР (2 оси):  (а) актив/слой   (б) ТИП события: «будет» (ещё не произошло) / «произошло» (уже)
- → МАТЕРИАЛЬНОСТЬ:  реальный триггер или шум? (дешёвый фильтр, дропает ~90%)
- → ДЕДУП события:   одно событие из N лент → 1 (не N карточек)
- → ОКНО-СОСТОЯНИЕ по активу/событию (НЕ выстрел-на-статью):
-        «будет»     → open/update pending-событие → анализ «положение ДО» (стоим заранее)
-        «произошло» → match с pending → СЮРПРИЗ-ДЕЛЬТА (факт vs ожидание) → пере-анализ «ПОСЛЕ»
-        каждая новость (любого типа) = триггер ПЕРЕ-анализа того же актива/окна
- → [только выжившие кандидаты] → LLM-мозг (Qwen) → вердикт GO/NO-GO → карточка (новая ИЛИ апдейт)
+
+Важно: `ALIBABA_BASE_URL` без `/chat/completions`; код сам добавляет endpoint.
+
+### 2. Агентная машинерия
+
+Собрана схема:
+
+```text
+deterministic router/dedup/materiality/temporal
+-> layer_agent cheap
+-> orchestrator rules
+-> chief only for candidates
+-> journal / Telegram
+-> outcome resolver
 ```
-Дешёвый пре-фильтр гонит флуд, **LLM только на отобранное** (важно — бюджет Яндекса ограничен, мозг не на каждую новость). «Окно на анализе» = жизнь события от ожидания до факта; эдж (сюрприз) живёт в зазоре внутри окна. Анти-survivorship: timestamp ожидания фиксируем с самого начала.
 
----
+Коммиты:
 
-## КОНТЕКСТ (что прочитать в репо)
-- **`SCANNER_SPEC.md`** — полная спека (5 слоёв, триггеры, фильтр-слои, будет/произошло, сюрприз-дельта, pending-таблица, блок «ПРЕ-СТАРТ АУДИТ» с локами V0). ГЛАВНЫЙ источник.
-- **`src/scout/scanner_v0.py`** — петля V0: RSS(Cointelegraph) → seen-дедуп → page_extract → мозг → журнал → Telegram-канал + график.
-- **`src/scout/scout_analyst.py`** — GO/NO-GO мозг (промпт, JSON-вывод, уровни на GO).
-- **`src/scout/scanner_journal.py`** — событийный `scanner_journal.jsonl` (card_id, поля, baseline-якорь).
-- **`src/scout/resolve_outcomes.py`** — форвард-счёт excess vs BTC.
-- **`src/scout/page_extract.py`** — Trafilatura (страница→текст).
-- **`src/scout/daily_digest_collector.py`** — СУЩЕСТВУЮЩИЙ keyless-сборщик (несколько RSS: Cointelegraph/Decrypt/CoinDesk[мёртв 403]/BitcoinMagazine/CryptoSlate + Google News + CoinGecko + OKX + Fear&Greed). Реюз механики.
-- `ROADMAP.md`, `MEMORY` фокус.
+- `b60bdb7` — `llm_client.py`, roles, provider routing.
+- `4e5c75a` — 5 layer agents через один класс + 5 промптов, chief, orchestrator.
+- `ef91c5f` — проводка orchestrator в `scanner_v0`, chief-карточки в канал, дешёвый NO_GO в журнал.
+- `2841c8e` — price-path resolver LONG/SHORT, `outcome_long/short`, `mfe/mae`, `price_after_1h/4h/24h/48h`, `missed_move`.
+- `13ff9bc` — расширение вселенной до 40+ активов + multi-RSS.
 
----
+### 3. Источники и вселенная
 
-## ЧТО ИМЕННО НУЖНО (твои 4 блока ответа)
+Активные сейчас:
 
-### 1. Ревью V0 — слабые места реализации
-Прочитай код. Конкретно: роутинг = один regex по заголовку (ловил «SOL» в статье про Zcash); один источник (Cointelegraph); fire-and-forget (карточка на статью, нет окна-состояния); дедуп только по url (не по событию); материальности нет (любой матч → LLM); будет/произошло не реализовано (только в спеке). Что ещё слабо, что сломается на масштабе.
+```text
+cointelegraph
+decrypt
+google_news_crypto
+okx_listings
+```
 
-### 2. Ядро «вывода» — спроектировать точно
-- **Роутер актив/слой:** как из заголовка+текста надёжно определить актив и слой? Entity-карта/словарь на слой? NER? Тикеры + алиасы + дизамбигуация (Zcash≠Solana). Дёшево/CPU.
-- **Роутер тип «будет/произошло»:** как классифицировать время события (will/expected/to-halt vs halted/announced/has)? Дешёвый темпоральный классификатор + где нужен LLM.
-- **Материальность:** какие события материальны на слой (листинг/взлом/ETF/анлок/отчёт/SEC/OPEC) — словарь событий? Как дропать шум ДО LLM.
-- **Дедуп события:** ключ = актив + хэш/похожесть заголовка + окно времени? Кластеризация near-duplicate заголовков из разных лент.
-- **Окно-состояние:** структура хранения pending-событий + активных окон по активу; как новость апдейтит окно; сюрприз-дельта (факт vs хранимое ожидание); анти-survivorship timestamp.
-- **Где LLM, где дешёвый фильтр** (бюджет Яндекса) — раздели чётко.
+Расширена вселенная:
 
-### 3. GitHub-research — инструменты поиска/обработки новостей по ВСЕМ слоям
-Проверь готовое (keyless/CPU/дёшево предпочтительно; лицензия важна). Не упустили ли:
-- **Крипта/альты:** news-aggregators, Tree of Alpha (free WS), Telegram-ингест (Telethon), on-chain (GoPlus/RugCheck), CryptoPanic/др.
-- **Металлы/ресурсы:** commodity/macro news, OPEC/EIA/Kitco/Reuters-feeds, экономкалендари (FOMC/CPI/OPEC = «будет»).
-- **Акции/pre-IPO:** earnings-календари, **SEC EDGAR** (S-1/8-K), news-API под тикеры.
-- **Кросс-слой (ядро «вывода»):** NER/entity-linking (новость→тикер), event-detection/materiality, news dedup/clustering, temporal/tense-классификация (будет/произошло), экономкалендарь-агрегаторы. Вот тут особенно проверь — может, есть готовое ядро, которое мы лепим руками.
+```text
+L1: BTC/ETH/SOL/XRP/BNB/DOGE/ADA...
+L2: AVAX/LINK/DOT/TON/TRX/ZEC/PEPE/SHIB/PUMP...
+L5: NVDA/TSLA/MSTR/COIN/OPENAI/ANTHROPIC/SPACEX...
+```
 
-### 4. Твой ответ — расчёт ядра
-Рекомендованная архитектура «вывода» целиком (структуры данных, поток, где LLM): что строить сами, что взять с GitHub. Что мы УПУСТИЛИ. Риски. Порядок сборки.
+Сейчас модель работы такая:
 
----
+```text
+общие RSS + OKX listings
+-> router определяет asset/layer
+-> нужный слой-агент анализирует
+```
 
-## ГОТОВО КОГДА
-Дописал в **`SESSION.md`** блок **«↪ Codex сделал: research ядра вывода»** с: (1) ревью V0 + слабые места, (2) спроектированное ядро «вывода» (роутер/материальность/дедуп/окно/сюрприз — структуры и правила), (3) GitHub-таблица инструментов по слоям (keyless? CPU? лицензия? что закрывает), (4) что упустили + расчёт ядра + порядок. Можно отдельный док в `research/docs/` (приватный репо) + указатель.
+Это уже работает как слойная агентная система, но это ещё НЕ полноценные 5 независимых специализированных потоков.
 
-## ГРАНИЦА (строго)
-READ-ONLY research + дизайн. **НЕ трогать** `.env` / `AUTO_TRADE` / `config.yaml` / прод-движок / `start_all` / live. Код — только как ЧЕРНОВИК/предложение в ответе, НЕ в прод. Предпочтение keyless/CPU/дёшево (слабый ПК GTX1050, бюджет Яндекса ограничен). Research-находки → указатель, секреты не дублировать.
+### 4. Исходы
+
+Старые 7 зрелых карточек пересчитаны:
+
+```text
+NO_GO n=7
+long avg:  -4.47%
+short avg: +4.47%
+missed_move: 7/7
+```
+
+Вывод подтверждён данными: старый V0 был однобокий. Он спасал от long, но не видел short. Новый chief уже умеет `side=short`, а resolver теперь это измеряет.
+
+## Что НЕ сделано
+
+Пока нет полноценного механизма:
+
+```text
+expected event -> pending_events.jsonl
+realized event -> match pending
+surprise = realized - expected
+chief decision on surprise
+```
+
+`pending_events.jsonl` пока skeleton. Без него нет настоящего surprise-edge.
+
+Пока НЕ подключены:
+
+- SEC EDGAR для L5 official filings.
+- FRED/FOMC/CPI calendar.
+- EIA/OPEC для L4.
+- token unlocks / earnings calendar.
+- Telegram alpha через Telethon.
+- weekly audit-agent.
+
+## Что делать сейчас
+
+### Запуск
+
+Если `.env` уже сохранён с Alibaba:
+
+1. Закрыть старое окно `scanner.bat`.
+2. Запустить `scanner.bat` заново.
+3. После первого нового события проверить:
+
+```text
+logs/scout/scanner_journal.jsonl
+```
+
+В новых строках должны появиться:
+
+```text
+chief_called
+agent_direction
+agent_confidence
+llm_provider = alibaba
+llm_model
+side = long|short|none
+```
+
+Также смотреть:
+
+```text
+logs/scout/llm_budget.jsonl
+logs/scout/drops.jsonl
+logs/scout/ingest_log.jsonl
+```
+
+### Коммит
+
+`.env` не коммитить никогда.
+
+Код последних фич уже запушен. Локально сейчас допустимо коммитить только handoff/docs, если нужно зафиксировать связь между агентами:
+
+```text
+TASK.md
+docs/video_research_catalog.md
+```
+
+Перед любым код-коммитом обязательно:
+
+```bash
+python -m pytest tests/test_scanner_isolation.py tests/test_scanner_router.py tests/test_scanner_dedup.py
+python src/scout/resolve_outcomes.py --report
+```
+
+## Следующий инженерный шаг
+
+Не добавлять хаотично ещё 20 RSS. Следующий правильный шаг:
+
+```text
+source_registry.yaml
+-> normalized_event contract
+-> expected/realized phase policy
+-> pending_events writer
+-> first calendar/official source
+-> matcher expected vs realized
+```
+
+Практичный порядок:
+
+1. Дать текущему scanner поработать на Alibaba 1-2 часа.
+2. Проверить, что новые события реально идут по разным слоям и `llm_provider=alibaba`.
+3. Потом подключать первый специализированный источник.
+
+Рекомендуемый первый источник:
+
+```text
+SEC EDGAR -> L5 -> realized official filings
+```
+
+Почему SEC EDGAR:
+
+- keyless;
+- official;
+- хорошо ложится в L5;
+- ловит filings раньше новостного цикла;
+- меньше шума, чем Google News.
+
+После SEC:
+
+```text
+earnings_calendar / token_unlocks / OPEC-EIA / FOMC-CPI
+```
+
+И только потом `pending_events` станет полезным.
+
+## Границы
+
+Строго нельзя:
+
+- коммитить `.env`;
+- печатать API key;
+- включать auto-trade;
+- трогать `AUTO_TRADE`, боевые ордера, `config.yaml` торгового исполнения;
+- запускать бесконтрольный поток без лимитов;
+- тащить код FinceptTerminal внутрь проекта.
+
+Можно:
+
+- править scanner/agents/source configs;
+- запускать paper scanner;
+- писать JSONL-журналы в `logs/scout`;
+- добавлять keyless источники;
+- расширять `pending_events` и resolver;
+- коммитить документацию/handoff.
+
+## Важное понимание
+
+Система сейчас уже не “одна LLM читает новости”. Она стала:
+
+```text
+источники -> роутер -> слой -> cheap agent -> orchestrator -> chief -> journal -> outcome
+```
+
+Но целевая система трейдера глубже:
+
+```text
+5 специализированных потоков
+-> expected/realized
+-> surprise
+-> agent/chief
+-> Telegram + dataset
+-> audit/calibration
+```
+
+Следующий агент должен двигать именно это, а не снова переписывать фундамент.
