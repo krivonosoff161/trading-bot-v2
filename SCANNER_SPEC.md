@@ -341,8 +341,8 @@ Smoke без LLM/Telegram:
 python -u src\scout\scanner_v0.py --buffer --limit 0
 ```
 
-Важно: `scanner.bat` пока не переключен на `--buffer`. Боевой запуск остается на
-прямом контуре RSS+листинги, buffer - новый контур для управляемого ingest/replay/debug.
+Важно: `scanner.bat` переключен на `--buffer` по умолчанию. Старый прямой контур
+RSS+листинги оставлен как fallback через `set USE_BUFFER=0` внутри bat.
 
 ### Что закрыто
 
@@ -360,7 +360,7 @@ python -u src\scout\scanner_v0.py --buffer --limit 0
   или аналоги для металлов/макро.
 - `pending_events` и surprise-delta концептуально описаны, но полноценный календарный
   ingest еще не построен. Без него "было/будет" не даст честный surprise.
-- Buffer пока не является default runtime. Следующий шаг - несколько стабильных прогонов,
-  затем переключение `scanner.bat` или отдельный `scanner_buffer.bat`.
+- Buffer стал default runtime для `scanner.bat`. Следующий шаг - несколько стабильных
+  живых прогонов и source-quality dashboard.
 - Нужен source-quality dashboard: сколько пришло, сколько извлеклось, сколько ушло в
   `DROPPED`, сколько дошло до chief, сколько реально дало движение.

@@ -37,15 +37,15 @@ RSS/listings -> router/materiality/dedup/temporal
   -> resolve_outcomes.py
 ```
 
-**Buffer pipeline (новый, не default в scanner.bat):**
+**Buffer pipeline (default в scanner.bat):**
 
 ```text
 source item -> raw_items -> machine_docs -> normalized_events -> READY_FOR_AGENT
 ```
 
-Стабильный запуск `scanner.bat` пока идет напрямую через `scanner_v0.py --limit N`.
+Стабильный запуск `scanner.bat` идет через `scanner_v0.py --buffer --limit N`.
 Режим `scanner_v0.py --buffer --limit 0` используется для ingest/extract/normalize smoke
-без LLM/Telegram, а `--buffer --limit N` - для последующего перевода анализа на buffer.
+без LLM/Telegram. Старый прямой путь оставлен в bat как fallback через `USE_BUFFER=0`.
 
 ### 📦 ARCHIVE — отработанный research (архив-на-месте)
 - `scripts/analysis/research/` — ~95 закрытых скриптов (Main-investigation + strategy-hunt). Артефакты, держим; активные скауты переезжают в 🟢.
@@ -55,7 +55,7 @@ source item -> raw_items -> machine_docs -> normalized_events -> READY_FOR_AGENT
 2. Агентная машинерия собрана: `agents/layer_agent.py`, `agents/orchestrator.py`, `agents/chief.py`.
 3. Единый LLM-клиент собран: `src/utils/llm_client.py`, Alibaba включается через `.env`.
 4. Журнал scanner и outcome-resolver работают.
-5. SQLite intake buffer добавлен, но еще не включен в bat по умолчанию.
+5. SQLite intake buffer добавлен и включен в bat по умолчанию.
 6. Следующий архитектурный шаг - расширить источники L3/L4 и построить calendar/pending ingest
    для механизма "было/будет" и surprise-delta.
 

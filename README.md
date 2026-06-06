@@ -61,8 +61,8 @@ Alibaba Cloud Model Studio / Qwen как основной cheap-tier для аг
 - Outcome-resolver считает обе стороны: `outcome_long`, `outcome_short`, `mfe/mae`, цена через 1/4/24/48 часов.
 - Новый durable intake buffer на SQLite: `data/scout/news_buffer.sqlite` для раздельного ingest/extract/normalize/analyze.
 
-Текущий стабильный `scanner.bat` пока запускает прямой контур RSS+листинги. Buffer-контур
-добавлен как проверяемый режим, но еще не включен в bat по умолчанию.
+Текущий `scanner.bat` запускает buffer-контур по умолчанию. Старый прямой контур
+RSS+листинги оставлен как fallback через `set USE_BUFFER=0` внутри bat.
 
 ### Каналы (стратегии)
 
@@ -202,6 +202,12 @@ cp .env.example .env        # заполнить ключи
 
 ```bash
 scanner.bat
+```
+
+По умолчанию это:
+
+```bash
+python -u src\scout\scanner_v0.py --buffer --limit 5
 ```
 
 Разовый прямой прогон:
