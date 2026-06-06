@@ -55,8 +55,12 @@ from src.scout import scanner_journal as J                       # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
-# ── Конфиг V0 ────────────────────────────────────────────────────────────────
-RSS_URL = "https://cointelegraph.com/rss"          # лок V0: прямой publisher-link
+# ── Конфиг ───────────────────────────────────────────────────────────────────
+RSS_FEEDS = [   # (имя, url) — широкий охват, не одна лента
+    ("cointelegraph", "https://cointelegraph.com/rss"),
+    ("decrypt", "https://decrypt.co/feed"),
+    ("googlenews", "https://news.google.com/rss/search?q=crypto+OR+bitcoin+OR+altcoin+OR+ethereum&hl=en-US&gl=US&ceid=US:en"),
+]
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 scanner-v0; keyless)"}
 TIMEOUT = 20
 DEFAULT_LIMIT = 3
@@ -97,22 +101,28 @@ def save_seen(seen: set[str]) -> None:
 
 
 # ── источники / контекст ─────────────────────────────────────────────────────
-def fetch_rss(limit: int = 30) -> list[dict]:
-    r = requests.get(RSS_URL, headers=UA, timeout=TIMEOUT)
-    # детект блокировки: HTML вместо XML (gap аудита — чтоб отказ был ВИДЕН)
-    head = r.content[:200].lstrip().lower()
-    if head.startswith(b"<!doctype") or head.startswith(b"<html"):
-        raise RuntimeError(f"feed returned HTML, not RSS ({RSS_URL}) — источник заблокирован")
-    root = ET.fromstring(r.content)
-    ch = root.find("channel")
-    items = (ch.findall("item") if ch is not None else root.findall(".//item"))[:limit]
+def fetch_rss(limit: int = 25) -> list[dict]:
+    """Тянет несколько RSS-лент (широкий охват). Каждый item тегается source/lead_class."""
     out = []
-    for it in items:
-        title = " ".join((it.findtext("title") or "").split()).strip()
-        url = (it.findtext("link") or "").strip()
-        pub = (it.findtext("pubDate") or "").strip() or None
-        if title and url:
-            out.append({"title": title, "url": url, "time": pub})
+    for name, url in RSS_FEEDS:
+        try:
+            r = requests.get(url, headers=UA, timeout=TIMEOUT)
+            head = r.content[:200].lstrip().lower()
+            if head.startswith(b"<!doctype") or head.startswith(b"<html"):
+                print(f"  RSS {name}: HTML вместо XML — пропуск (заблокирован)")
+                continue
+            root = ET.fromstring(r.content)
+            ch = root.find("channel")
+            items = (ch.findall("item") if ch is not None else root.findall(".//item"))[:limit]
+            for it in items:
+                title = " ".join((it.findtext("title") or "").split()).strip()
+                u = (it.findtext("link") or "").strip()
+                pub = (it.findtext("pubDate") or "").strip() or None
+                if title and u:
+                    out.append({"title": title, "url": u, "time": pub, "source": name,
+                                "lead_class": "LAGGING", "source_class": "rss"})
+        except Exception as e:
+            print(f"  RSS {name}: {e}")
     return out
 
 
@@ -425,9 +435,7 @@ async def run(limit: int, dry: bool) -> None:
     print(f"рыночный фон: {mline or '—'}")
 
     try:
-        rss_items = fetch_rss()
-        for it in rss_items:                      # тег источника (RSS = запаздывающий)
-            it.update({"source": "cointelegraph", "lead_class": "LAGGING", "source_class": "rss"})
+        rss_items = fetch_rss()                   # уже тегированы source/lead_class в fetch_rss
     except Exception as e:
         print(f"RSS ОШИБКА: {e}")
         rss_items = []

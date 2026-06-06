@@ -23,7 +23,7 @@ def test_route_asset_strong_name():
 def test_route_asset_rejects_bare_short_ticker():
     # «sol» в «sol energy» — голый тикер без имени/cashtag → НЕ роутить (анти-SOL-в-Zcash)
     assert route_asset("New solar panel tech uses sol energy") is None
-    assert route_asset("Zcash fixes Orchard bug after emergency upgrade") is None
+    assert route_asset("Orchard fixes emergency bug after protocol upgrade") is None
 
 
 def test_route_asset_cashtag_confirms():
