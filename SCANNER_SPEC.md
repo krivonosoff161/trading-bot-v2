@@ -230,3 +230,137 @@ L5 акции:     чипы:    NVDA AMD AVGO TSM INTC MU QCOM ARM MRVL
 - **PUSH-источник** (event-driven, как хотел трейдер): Tree-of-Alpha WS (keyless) / Telegram-листенер (Telethon, api_id трейдера). Сейчас RSS=опрос 30мин; анти-спам (дедуп по содержанию) уже есть.
 - Расширение трекаемых активов/слоёв; SEC EDGAR (акции, keyless); per-layer baseline off-OKX (Stooq) для металлов/нефти.
 - Калибровка порогов материальности/дедупа по накопленным `drops.jsonl`.
+
+---
+
+## AS-BUILT (06.06.2026) - агентный scanner + Alibaba + intake buffer
+
+Этот блок supersede-ит ранние V0-формулировки выше. Scanner уже не один LLM-разбор на
+RSS, а агентная система с дешевыми layer-агентами, кодовым оркестратором и сильным chief.
+
+### Текущий рабочий pipeline
+
+```text
+источники
+  -> router.py: актив + слой + baseline
+  -> event_taxonomy.yaml: materiality/noise/phase
+  -> dedup.py: URL + event-signature
+  -> layer_agent.py: cheap model, факты по слою
+  -> orchestrator.py: кодовые правила, экономия chief-вызовов
+  -> chief.py: сильная модель, GO/NO_GO/WATCH + LONG/SHORT/none
+  -> Telegram: только chief-карточки
+  -> logs/scout/scanner_journal.jsonl
+  -> resolve_outcomes.py: outcome_long/outcome_short + mfe/mae + price_after_Nh
+```
+
+### Что реально подключено
+
+- L1/L2/L5 получают поток: RSS Cointelegraph, Decrypt, Google News + OKX listings.
+- L3/L4 описаны в конфигурации, но источники металлов/ресурсов еще не подключены.
+- `src/scout/config/entities.yaml` расширен до 40+ активов: majors, alts/memes, акции,
+  pre-IPO/perp-темы вроде SpaceX, Nvidia, Anthropic.
+- `source_registry.yaml` является картой намерений `источник -> слой -> lead_class -> phase`.
+  Важно: часть прямых RSS сейчас еще задана в `scanner_v0.py`; registry не единственный
+  исполняемый источник правды для feed list.
+
+### Агентная модель
+
+- `src/utils/llm_client.py` - единый LLM-клиент.
+- Провайдеры: `LLM_PROVIDER=yandex|alibaba`.
+- Alibaba включается через `ALIBABA_API_KEY` и `ALIBABA_BASE_URL` OpenAI-compatible endpoint.
+- Роли:
+  - `cheap` - layer-агенты, массовая первичная выжимка;
+  - `mid` - резервный/промежуточный тир;
+  - `chief` - финальное решение по кандидатам;
+  - `audit` - будущие проверки/аудит.
+- На Yandex cheap временно равен сильной модели, поэтому Alibaba нужен для дешевого масштаба.
+
+Рекомендуемый Alibaba env без реальных ключей:
+
+```env
+LLM_PROVIDER=alibaba
+ALIBABA_API_KEY=sk-ws-...
+ALIBABA_BASE_URL=https://<workspace>.<region>.maas.aliyuncs.com/compatible-mode/v1
+LLM_CHEAP_MODEL=qwen3-30b-a3b-instruct-2507
+LLM_MID_MODEL=qwen3-next-80b-a3b-instruct
+LLM_CHIEF_MODEL=qwen3.7-plus
+LLM_AUDIT_MODEL=qwen3.7-plus
+```
+
+Cost-log пишет `provider/model/role/tokens/cost_usd/cost_rub`. Курсы/цены можно
+переопределять через `LLM_USD_RUB` и `LLM_PRICE_<MODEL>_IN_USD_PER_1M` /
+`LLM_PRICE_<MODEL>_OUT_USD_PER_1M`.
+
+### Telegram output
+
+Текущий формат: график отправляется отдельно с коротким caption, затем текстовая
+chief-карточка. Это сделано, чтобы Telegram не дублировал длинный анализ в подписи
+к картинке.
+
+В канал должны идти только chief-карточки. Дешевые NO_GO, шум, пропуски и промежуточные
+агентные выводы остаются в журналах как датасет.
+
+### SQLite intake buffer
+
+Добавлен новый durable buffer:
+
+```text
+source item -> raw_items -> machine_docs -> normalized_events -> scanner consumer
+```
+
+Файл БД: `data/scout/news_buffer.sqlite` (gitignored).
+
+Таблицы:
+
+- `raw_items` - входящие новости/листинги с source metadata;
+- `machine_docs` - машинно-читаемый документ после extraction;
+- `normalized_events` - актив, слой, phase, materiality, event_key;
+- `source_health` - базовая статистика источников.
+
+Статусы:
+
+```text
+NEW -> EXTRACTED -> READY_FOR_AGENT -> ANALYZED
+DROPPED / FAILED_RETRY / FAILED_FINAL
+```
+
+Команды:
+
+```bash
+python -m src.scout.news_buffer init
+python -m src.scout.news_buffer stats
+python -m src.scout.news_buffer ready --limit 5
+python -m src.scout.news_buffer show <doc_id>
+python -m src.scout.news_buffer resolve --limit 50
+python -m src.scout.news_buffer normalize --limit 100
+```
+
+Smoke без LLM/Telegram:
+
+```bash
+python -u src\scout\scanner_v0.py --buffer --limit 0
+```
+
+Важно: `scanner.bat` пока не переключен на `--buffer`. Боевой запуск остается на
+прямом контуре RSS+листинги, buffer - новый контур для управляемого ingest/replay/debug.
+
+### Что закрыто
+
+- Система умеет видеть обе стороны: LONG и SHORT.
+- Старые карточки пересчитаны по обеим сторонам: прежний long-bias был подтвержден,
+  теперь это измеряется в журнале.
+- Chief умеет ставить `side=short`.
+- Дедуп по событию добавлен поверх URL-дедупа, чтобы одна тема не давала пачку одинаковых
+  сообщений.
+- Alibaba test-call и scanner-pass подтверждали реальные вызовы через `llm_provider=alibaba`.
+
+### Открытые дыры
+
+- L3/L4 голодают без источников: нужны OilPrice/OPEC/EIA для ресурсов и Kitco/GDELT/FRED
+  или аналоги для металлов/макро.
+- `pending_events` и surprise-delta концептуально описаны, но полноценный календарный
+  ingest еще не построен. Без него "было/будет" не даст честный surprise.
+- Buffer пока не является default runtime. Следующий шаг - несколько стабильных прогонов,
+  затем переключение `scanner.bat` или отдельный `scanner_buffer.bat`.
+- Нужен source-quality dashboard: сколько пришло, сколько извлеклось, сколько ушло в
+  `DROPPED`, сколько дошло до chief, сколько реально дало движение.
