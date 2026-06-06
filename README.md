@@ -4,6 +4,11 @@
 Скальпинг и реверсальные паттерны на основе рыночных данных в реальном времени (WebSocket),
 с упаковкой сигналов и аналитики в Telegram.
 
+На 06.06.2026 проект фактически состоит из двух контуров:
+
+- **замороженный торговый контур** - старые WebSocket-стратегии OKX, paper/demo, без автоторговли в текущей работе;
+- **активный info-edge scanner** - агентная система для новостей, событий и форвард-журнала. Именно она сейчас развивается.
+
 > **Дисклеймер.** Это образовательный и исследовательский проект. Все стратегии
 > работают в режиме **paper / demo** — на бумаге, без реальных денег. Прибыльность
 > на реальном счёте не доказана. Это **не финансовый совет** и не сигнальный сервис
@@ -14,8 +19,9 @@
 ## Позиционирование
 
 **Целевой рынок — РФ.** Интерфейс на русском, доставка через Telegram (под местную
-аудиторию), LLM-слой ориентирован на доступные в РФ провайдеры (YandexGPT / GigaChat)
-либо self-host. Параметры стратегий калибруются под доступную ликвидность и условия рынка.
+аудиторию), LLM-слой ориентирован на доступные провайдеры: Yandex как fallback и
+Alibaba Cloud Model Studio / Qwen как основной cheap-tier для агентного сканера.
+Параметры стратегий калибруются под доступную ликвидность и условия рынка.
 
 Проект развивается не как «набор скриптов для программистов», а в сторону полноценного
 продукта с удобной оболочкой (GUI), с которым сможет работать любой пользователь — без
@@ -25,9 +31,38 @@
 
 ## Как это работает сейчас
 
-Система — это набор независимых процессов, каждый из которых слушает рынок через
-WebSocket, считает индикаторы и принимает решение в рамках своего канала. Доставка
-сигналов и разборов — через Telegram.
+Старая торговая часть - это набор независимых процессов, каждый из которых слушает рынок
+через WebSocket, считает индикаторы и принимает решение в рамках своего канала. Доставка
+сигналов и разборов - через Telegram.
+
+Новая активная часть - `src/scout/`: scanner собирает новости и листинги, раскладывает
+их по 5 слоям, дешевые layer-агенты извлекают факты, кодовый оркестратор решает,
+звать ли chief, а сильная модель выносит итог `GO / NO_GO / WATCH` и сторону
+`LONG / SHORT / none`. Все решения пишутся в журнал для дальнейшей проверки исходов.
+
+### Info-edge scanner
+
+Текущий pipeline:
+
+```text
+источники -> роутер актив/слой -> materiality/dedup/temporal
+  -> layer-agent cheap -> orchestrator rules -> chief strong
+  -> Telegram chief-card + logs/scout/scanner_journal.jsonl
+  -> resolve_outcomes.py считает LONG и SHORT исходы
+```
+
+Реализовано:
+
+- 5 агентных слоев в конфиге: L1 крипта-мажоры, L2 альты/мемы, L3 металлы, L4 ресурсы, L5 акции/pre-IPO.
+- Реальный поток сейчас есть по L1/L2/L5. L3/L4 описаны, но требуют подключения источников.
+- LLM-провайдеры: `yandex` fallback, `alibaba` основной дешевый контур через OpenAI-compatible endpoint.
+- Alibaba-роли: `cheap`, `mid`, `chief`, `audit` настраиваются через `.env`.
+- Журнал: `logs/scout/scanner_journal.jsonl`, бюджет: `logs/scout/llm_budget.jsonl`, исходы: `logs/scout/scanner_outcomes.jsonl`.
+- Outcome-resolver считает обе стороны: `outcome_long`, `outcome_short`, `mfe/mae`, цена через 1/4/24/48 часов.
+- Новый durable intake buffer на SQLite: `data/scout/news_buffer.sqlite` для раздельного ingest/extract/normalize/analyze.
+
+Текущий стабильный `scanner.bat` пока запускает прямой контур RSS+листинги. Buffer-контур
+добавлен как проверяемый режим, но еще не включен в bat по умолчанию.
 
 ### Каналы (стратегии)
 
@@ -82,7 +117,12 @@ Telegram: сигналы — в группу, персональные разб�
 `matplotlib`, `Pillow`, `loguru`, `PyYAML`, `python-dotenv`.
 
 **Данные:** [OKX API](https://www.okx.com/docs-v5/) (REST + WebSocket),
-[CoinGecko](https://www.coingecko.com/) (привязка пары к родительской экосистеме).
+[CoinGecko](https://www.coingecko.com/) (привязка пары к родительской экосистеме),
+RSS Cointelegraph / Decrypt / Google News, OKX listings.
+
+**LLM:** `src/utils/llm_client.py` - единый клиент для Yandex и Alibaba. Для Alibaba
+используется OpenAI-compatible endpoint Model Studio; ключи и модели задаются только
+через `.env`, реальные значения не коммитятся.
 
 **Эталоны и research-источники** (на которые опирался при проектировании стратегий):
 
@@ -158,6 +198,35 @@ cp .env.example .env        # заполнить ключи
 Запуск всех процессов (Windows): `start_all.bat`.
 Отдельные процессы — через свои watchdog-скрипты в [scripts/ws/](scripts/ws/).
 
+Запуск агентного scanner:
+
+```bash
+scanner.bat
+```
+
+Разовый прямой прогон:
+
+```bash
+python -u src\scout\scanner_v0.py --limit 5
+```
+
+Проверка нового SQLite-buffer без LLM/Telegram:
+
+```bash
+python -m src.scout.news_buffer init
+python -u src\scout\scanner_v0.py --buffer --limit 0
+python -m src.scout.news_buffer stats
+```
+
+Полезные команды buffer:
+
+```bash
+python -m src.scout.news_buffer ready --limit 5
+python -m src.scout.news_buffer show <doc_id>
+python -m src.scout.news_buffer resolve --limit 50
+python -m src.scout.news_buffer normalize --limit 100
+```
+
 ---
 
 ## Структура репозитория
@@ -171,6 +240,7 @@ trading-bot-v2/
 │   ├── exchange/        # OKX клиент (REST), метаданные инструментов
 │   ├── strategy/        # индикаторы, сигналы, рендер графиков
 │   ├── data/            # WS-фид, запись снапшотов и фич
+│   ├── scout/           # info-edge scanner: источники, агенты, оркестратор, buffer, outcome
 │   └── utils/           # логирование, Telegram, форматирование
 ├── scripts/
 │   ├── ws/              # WebSocket-движки (скринеры, BB fade, pump)
@@ -180,8 +250,11 @@ trading-bot-v2/
 └── *.bat                # операторские скрипты запуска (Windows)
 ```
 
-Документы проекта: [CLAUDE.md](CLAUDE.md) (правила для ИИ-агентов),
+Документы проекта: [SCANNER_SPEC.md](SCANNER_SPEC.md) (актуальная спека scanner),
+[ARCHITECTURE.md](ARCHITECTURE.md), [CLAUDE.md](CLAUDE.md) (правила для ИИ-агентов),
 [PLAN.md](PLAN.md), [SERVICE_PIVOT.md](SERVICE_PIVOT.md), [JOURNAL.md](JOURNAL.md).
+
+`TASK.md` - рабочий handoff между Codex и Claude, не главный проектный документ.
 
 ---
 
