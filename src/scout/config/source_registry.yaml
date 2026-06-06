@@ -1,25 +1,46 @@
-# source_registry.yaml — реестр источников: класс / lead_class / доверие / слои.
-# lead_class — КАРТА (поле данных), правило в коде: GO+side только если ≥1 LEADING.
+# source_registry.yaml — КАРТА источников (единая правда «что куда»).
+# Поля: source_class · lead_class(LEADING/COINCIDENT/LAGGING) · trust · layers(какие кормит) ·
+#       phase_prior(realized/expected/mixed — приор было/будет) · keyless · enabled.
+# lead_class — поле данных; правило в коде: GO+side только если ≥1 LEADING.
 # trust: official > primary > wire > aggregator > tg_alpha > tg_noise.
+# phase_prior: expected=календарь(будет) · realized=факт/филинг(произошло) · mixed=новостная лента.
+# Источник может кормить НЕСКОЛЬКО слоёв; слой кормят НЕСКОЛЬКО источников. Включаем по одному (enabled).
 
 sources:
+  # ── АКТИВНЫЕ ──────────────────────────────────────────────────────────────
   cointelegraph:
     url: https://cointelegraph.com/rss
     source_class: rss
-    lead_class: LAGGING        # издательский RSS = запаздывающий by design
+    lead_class: LAGGING
     trust: wire
+    phase_prior: mixed
+    keyless: true
     layers: [1, 2]
     enabled: true
 
-  okx_listings:                # новые листинги OKX (REALIZED), keyless, тот же okx public
+  okx_listings:                # новые листинги OKX (произошло), keyless
     source_class: ws
     lead_class: LEADING
     trust: official
-    layers: [1, 2, 5]          # крипта/альты + акции (ASML/ADBE/…); слой по инструменту
+    phase_prior: realized
+    keyless: true
+    layers: [1, 2, 5]          # слой по инструменту (классификатор)
     enabled: true
 
-  # --- следующие official-first (Этап 4+) ---
-  # okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, layers: [1,2], enabled: false}
-  # sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, layers: [5],   enabled: false}
-  # eia:               {source_class: api, lead_class: COINCIDENT, trust: official, layers: [4],   enabled: false}
-  # telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, layers: [1,2], enabled: false}
+  # ── ПРОИЗОШЛО (realized) — добавляем по одному, keyless сначала ───────────
+  decrypt:           {url: "https://decrypt.co/feed",            source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}
+  google_news_crypto:{url: "https://news.google.com/rss/search?q=crypto", source_class: rss, lead_class: LAGGING, trust: aggregator, phase_prior: mixed, keyless: true, layers: [1, 2], enabled: false}
+  sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, phase_prior: realized, keyless: true,  layers: [5],    enabled: false}   # 8-K/S-1/424B — официально, до новостного цикла
+  okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}   # upcoming листинги = будет; live = произошло
+  dexscreener:       {source_class: api, lead_class: COINCIDENT, trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: false}
+  goplus_rugcheck:   {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: false}   # red-flag VETO
+  oilprice:          {url: "https://oilprice.com/rss/main",      source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    keyless: true,  layers: [4],    enabled: false}
+  gdelt:             {source_class: api, lead_class: LAGGING,    trust: aggregator, phase_prior: realized, keyless: true, layers: [3, 4], enabled: false}   # металлы/геополитика, медленный recall
+  telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, phase_prior: mixed,  keyless: false, layers: [1, 2], enabled: false}   # Telethon, нужен api_id трейдера
+
+  # ── БУДЕТ (expected — КАЛЕНДАРИ) → наполняют pending_events (surprise-эдж) ─
+  fred_calendar:     {source_class: api, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: false, layers: [1, 3], enabled: false}   # FOMC/CPI/ставки — free-key FRED
+  eia:               {source_class: api, lead_class: COINCIDENT, trust: official, phase_prior: expected, keyless: false, layers: [4],    enabled: false}   # запасы нефти/газа (среда) — free-key
+  opec:              {source_class: web, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: true,  layers: [4],    enabled: false}   # заседания/решения
+  earnings_calendar: {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: true,  layers: [5],    enabled: false}   # даты отчётов (nfin/NASDAQ)
+  token_unlocks:     {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: true,  layers: [2],    enabled: false}   # анлоки
