@@ -66,6 +66,33 @@ def test_materiality_no_term_dropped():
     assert m["drop_reason"] == "no_material_term"
 
 
+# ── тёмные слои: металлы(3)/нефть(4)/акции(5) + layer-scoping ────────────────
+def test_route_metals_gold():
+    r = route_asset("Gold surges to record high as Fed signals rate cut")
+    assert r and r["asset"] == "XAU" and r["layer"] == 3
+
+
+def test_route_oil_opec():
+    r = route_asset("OPEC+ agrees surprise output cut to lift prices")
+    assert r and r["asset"] == "CL" and r["layer"] == 4
+
+
+def test_route_layer_scope_excludes_offlayer():
+    # без скоупа золото-субъект выигрывает; крипто-лента (allowed={1,2}) → не матчит XAU, берёт BTC
+    assert route_asset("Gold hits record as Bitcoin wobbles")["asset"] == "XAU"
+    assert route_asset("Gold hits record as Bitcoin wobbles", allowed_layers={1, 2})["asset"] == "BTC"
+
+
+def test_materiality_oil_opec_family():
+    m = score_materiality("OPEC announces surprise output cut at meeting", 4)
+    assert m["family"] == "opec" and m["score"] >= 0.5
+
+
+def test_materiality_equities_earnings_family():
+    m = score_materiality("Nvidia beats earnings, raises guidance", 5)
+    assert m["family"] == "earnings" and m["score"] >= 0.5
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in list(globals().items()):

@@ -47,17 +47,18 @@ import os  # noqa: E402
 from src.scout.page_extract import extract                       # noqa: E402
 # (chief = src/scout/agents/chief.py через orchestrator; старый generate_scout_card больше не зовём)
 from src.scout.router import (route_asset, route_temporal, score_materiality,   # noqa: E402
-                              dedup_config, limits_config)
+                              dedup_config, limits_config, enabled_sources, source_meta)
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
 from src.scout import news_buffer as NB                                        # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
+from src.scout.sources.sec_edgar import fetch_recent_filings                    # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
 # ── Конфиг ───────────────────────────────────────────────────────────────────
-RSS_FEEDS = [   # (имя, url) — широкий охват, не одна лента
+RSS_FEEDS = [   # FALLBACK (имя, url) если реестр пуст; основной список — source_registry.yaml
     ("cointelegraph", "https://cointelegraph.com/rss"),
     ("decrypt", "https://decrypt.co/feed"),
     ("googlenews", "https://news.google.com/rss/search?q=crypto+OR+bitcoin+OR+altcoin+OR+ethereum&hl=en-US&gl=US&ceid=US:en"),
@@ -102,10 +103,18 @@ def save_seen(seen: set[str]) -> None:
 
 
 # ── источники / контекст ─────────────────────────────────────────────────────
+def rss_sources() -> list[tuple[str, str, str]]:
+    """Активные RSS-источники (name, url, lead_class) из реестра; fallback — встроенные."""
+    out = [(name, meta["url"], meta.get("lead_class", "LAGGING"))
+           for name, meta in enabled_sources().items()
+           if meta.get("source_class") == "rss" and meta.get("url")]
+    return out or [(n, u, "LAGGING") for n, u in RSS_FEEDS]
+
+
 def fetch_rss(limit: int = 25) -> list[dict]:
-    """Тянет несколько RSS-лент (широкий охват). Каждый item тегается source/lead_class."""
+    """Тянет активные RSS-ленты ИЗ РЕЕСТРА (широкий охват). Каждый item тегается source/lead_class."""
     out = []
-    for name, url in RSS_FEEDS:
+    for name, url, lead in rss_sources():
         try:
             r = requests.get(url, headers=UA, timeout=TIMEOUT)
             head = r.content[:200].lstrip().lower()
@@ -121,7 +130,7 @@ def fetch_rss(limit: int = 25) -> list[dict]:
                 pub = (it.findtext("pubDate") or "").strip() or None
                 if title and u:
                     out.append({"title": title, "url": u, "time": pub, "source": name,
-                                "lead_class": "LAGGING", "source_class": "rss"})
+                                "lead_class": lead, "source_class": "rss"})
         except Exception as e:
             print(f"  RSS {name}: {e}")
     return out
@@ -332,7 +341,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         mat = {"family": item.get("event_type", "unclassified"), "score": 0.6}
         phase = item.get("phase", "REALIZED")
     else:
-        routed = route_asset(headline)
+        allowed = set(source_meta(source).get("layers") or []) or None
+        routed = route_asset(headline, allowed_layers=allowed)   # слои источника ограничивают кандидатов
         if not routed:
             return {"skipped": "no_tracked_asset", "headline": headline}
         asset, inst, layer = routed["asset"], routed["okx_inst"], routed["layer"]
@@ -495,7 +505,9 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         print(f"RSS ОШИБКА: {e}")
         rss_items = []
     listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
-    items = listings + rss_items                  # опережающие листинги первыми
+    sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
+    leading = listings + sec_items                # опережающие (LEADING): листинги OKX + SEC-филинги
+    items = leading + rss_items                   # LEADING первыми
     if use_buffer and not dry:
         ing = NB.ingest_items(items)
         buffer_batch = max(limit * 4, 10)
@@ -503,7 +515,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         normalized_stats = NB.normalize_pending(limit=buffer_batch)
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
-            f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(лист+SEC)={len(leading)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
             f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
@@ -513,7 +525,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         if not dry and fresh:                     # полный аудит: лог КАЖДОГО входящего до фильтров
             J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
                              "headline": it.get("title"), "url": it.get("url")} for it in fresh])
-        print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
+        print(f"источники: LEADING(лист+SEC)={len(leading)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
     total_cost = 0.0

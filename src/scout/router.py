@@ -80,9 +80,11 @@ def enabled_sources() -> dict:
 
 
 # ── РОУТЕР актив/слой ────────────────────────────────────────────────────────
-def route_asset(headline: str) -> dict | None:
+def route_asset(headline: str, allowed_layers: set | None = None) -> dict | None:
     """Заголовок → {asset, okx_inst, layer, baseline, confidence} либо None.
-    Мульти-матч + субъект (позиция) + подтверждение короткого тикера."""
+    Мульти-матч + субъект (позиция) + подтверждение короткого тикера.
+    allowed_layers (из source.layers) ограничивает кандидатов слоями источника:
+    крипто-лента не матчит «digital gold»→XAU, нефть-лента не матчит bitcoin."""
     cfg = _entities()
     rt = cfg.get("router", {})
     threshold = rt.get("threshold", 0.5)
@@ -92,6 +94,8 @@ def route_asset(headline: str) -> dict | None:
 
     best_key, best_asset = None, None
     for a in cfg.get("assets", []):
+        if allowed_layers and a.get("layer") not in allowed_layers:
+            continue
         score, pos = 0.0, 9999
         for name in a.get("strong", []):
             m = re.search(r"\b" + re.escape(name) + r"\b", low)
