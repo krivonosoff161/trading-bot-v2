@@ -68,6 +68,7 @@ data/scout/*.sqlite
 data/scout/*.sqlite-*
 
 # Video analysis artifacts
+docs/video_research_catalog.md
 docs/*.mp4
 docs/video*_frames/
 docs/video*_transcript_*.txt
