@@ -19,6 +19,16 @@ from rapidfuzz import fuzz
 _STOP = {"the", "a", "an", "to", "of", "on", "in", "for", "and", "s", "as",
          "is", "at", "by", "with", "after", "amid", "over", "its", "new"}
 
+_SIGNATURE_TERMS = {
+    "security_incident": {
+        "bug", "bugs", "vulnerability", "vulnerabilities", "exploit", "exploits",
+        "hack", "hacks", "hacked", "breach", "breaches", "counterfeit",
+        "counterfeiting", "stolen", "drained",
+    },
+    "listing_event": {"listing", "lists", "listed", "delist", "delisting"},
+    "unlock_event": {"unlock", "unlocks", "vesting"},
+}
+
 
 def normalize_title(title: str) -> str:
     """Заголовок → канон: lower, только слова/числа, без source-префиксов и стоп-слов."""
@@ -27,8 +37,20 @@ def normalize_title(title: str) -> str:
     return " ".join(w for w in words if w not in _STOP)
 
 
+def event_signature(title: str) -> str | None:
+    """Грубая сигнатура сюжета: ловит разные заголовки про одно событие одного актива."""
+    words = set(normalize_title(title).split())
+    for sig, terms in _SIGNATURE_TERMS.items():
+        if words & terms:
+            return sig
+    return None
+
+
 def event_key(asset: str | None, title: str) -> str:
     """Стабильный ключ события (актив + хэш нормализованного заголовка) — для кластера."""
+    sig = event_signature(title)
+    if sig:
+        return f"{asset or 'NA'}::{sig}"
     return f"{asset or 'NA'}::{hashlib.sha1(normalize_title(title).encode('utf-8')).hexdigest()[:8]}"
 
 
@@ -37,7 +59,12 @@ def is_duplicate(title: str, asset: str | None, recent: list, threshold: int = 8
     nt = normalize_title(title)
     if not nt:
         return None
+    sig = event_signature(title)
     for a, t in recent:
-        if a == asset and fuzz.token_set_ratio(nt, normalize_title(t)) >= threshold:
+        if a != asset:
+            continue
+        if sig and sig == event_signature(t):
+            return t
+        if fuzz.token_set_ratio(nt, normalize_title(t)) >= threshold:
             return t
     return None
