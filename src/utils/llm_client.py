@@ -1,0 +1,115 @@
+# -*- coding: utf-8 -*-
+"""
+llm_client.py — единый LLM-бэкенд агентного сканера.
+
+Провайдер-роутинг (yandex сейчас / alibaba по ключу) + роли-тиры (cheap/mid/chief/audit)
++ cost-log + retry с backoff. Модели на роль — из env (config-driven), без хардкода в логике.
+Alibaba = OpenAI-совместимый; Yandex = нативный AI Studio. Yandex работает дефолтом;
+Alibaba активируется когда задан ALIBABA_API_KEY + LLM_PROVIDER=alibaba.
+
+call(role, system, user) → (text, usage{provider,model,role,in,out,total,cost_rub}).
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+
+import aiohttp
+
+# ── провайдер ────────────────────────────────────────────────────────────────
+PROVIDER = os.getenv("LLM_PROVIDER", "yandex").strip().lower()
+
+_YANDEX_KEY = os.getenv("YANDEX_API_KEY", "").strip("'\"")
+_YANDEX_URL = "https://ai.api.cloud.yandex.net/v1/chat/completions"
+_YANDEX_CHIEF = "gpt://b1git4svubpojuiga5pn/qwen3-235b-a22b-fp8/latest"
+
+_ALIBABA_KEY = os.getenv("ALIBABA_API_KEY", "").strip("'\"")
+_ALIBABA_URL = (os.getenv("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+                .rstrip("/") + "/chat/completions")
+
+# роль → модель (env-driven). Yandex: маленькую под cheap (Gemma), 235b под chief.
+_ROLE_MODELS = {
+    "yandex": {
+        # Gemma URI даёт 403 на chat/completions (он под vision) → cheap дефолтом = chief-модель
+        # (работает); реальный дешёвый тир = Alibaba qwen3-30b или рабочий малый Yandex-URI через env.
+        "cheap": os.getenv("YANDEX_CHEAP_MODEL", "").strip("'\"") or _YANDEX_CHIEF,
+        "mid":   os.getenv("YANDEX_MID_MODEL", "").strip("'\"") or _YANDEX_CHIEF,
+        "chief": os.getenv("YANDEX_CHIEF_MODEL", "").strip("'\"") or _YANDEX_CHIEF,
+        "audit": os.getenv("YANDEX_AUDIT_MODEL", "").strip("'\"") or _YANDEX_CHIEF,
+    },
+    "alibaba": {
+        "cheap": os.getenv("LLM_CHEAP_MODEL", "qwen3-30b-a3b-instruct-2507"),
+        "mid":   os.getenv("LLM_MID_MODEL", "qwen3-next-80b-a3b-instruct"),
+        "chief": os.getenv("LLM_CHIEF_MODEL", "qwen3-235b-a22b-instruct-2507"),
+        "audit": os.getenv("LLM_AUDIT_MODEL", "qwen3-235b-a22b-thinking-2507"),
+    },
+}
+
+# ₽/1k токенов на провайдера (приблизит.; alibaba ~14x дешевле Yandex на нашем профиле).
+_RATE_RUB_PER_1K = {"yandex": 0.5, "alibaba": 0.035}
+
+_TIMEOUT = int(os.getenv("LLM_DEFAULT_TIMEOUT", "60"))
+_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+
+def model_for(role: str, provider: str | None = None) -> str:
+    p = (provider or PROVIDER)
+    return _ROLE_MODELS.get(p, _ROLE_MODELS["yandex"]).get(role) or _YANDEX_CHIEF
+
+
+def _usage(provider: str, model: str, role: str, data: dict) -> dict:
+    u = data.get("usage", {}) or {}
+    inp = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
+    out = int(u.get("completion_tokens") or u.get("output_tokens") or 0)
+    total = int(u.get("total_tokens") or (inp + out))
+    cost = round(total / 1000 * _RATE_RUB_PER_1K.get(provider, 0.5), 4)
+    return {"provider": provider, "model": model, "role": role,
+            "input_tokens": inp, "output_tokens": out, "total_tokens": total, "cost_rub": cost}
+
+
+async def call(role: str, system: str, user: str, *,
+               json_mode: bool = False, max_tokens: int = 900,
+               timeout: int | None = None) -> tuple[str | None, dict]:
+    """Вызвать модель роли на активном провайдере. (text|None, usage). Retry с backoff."""
+    provider = PROVIDER
+    model = model_for(role, provider)
+    timeout = timeout or _TIMEOUT
+
+    if provider == "alibaba":
+        if not _ALIBABA_KEY:
+            print("llm_client: ALIBABA_API_KEY не задан"); return None, _usage(provider, model, role, {})
+        url = _ALIBABA_URL
+        headers = {"Authorization": f"Bearer {_ALIBABA_KEY}", "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": max_tokens,
+                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}     # требует слово JSON в промпте
+    else:  # yandex
+        if not _YANDEX_KEY:
+            print("llm_client: YANDEX_API_KEY не задан"); return None, _usage(provider, model, role, {})
+        url = _YANDEX_URL
+        headers = {"Authorization": f"Api-Key {_YANDEX_KEY}", "Content-Type": "application/json"}
+        payload = {"model": model, "max_tokens": max_tokens,
+                   "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+
+    last_err = None
+    for attempt in range(_RETRIES + 1):
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(url, json=payload, headers=headers,
+                                  timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                    if r.status == 429 or r.status >= 500:
+                        last_err = f"HTTP {r.status}"
+                        await asyncio.sleep(min(2 ** attempt, 8)); continue
+                    if r.status != 200:
+                        body = await r.text()
+                        print(f"llm_client[{provider}/{role}]: HTTP {r.status} — {body[:200]}")
+                        return None, _usage(provider, model, role, {})
+                    data = await r.json()
+            text = (data["choices"][0]["message"]["content"] or "").strip()
+            return (text or None), _usage(provider, model, role, data)
+        except Exception as e:
+            last_err = str(e)
+            await asyncio.sleep(min(2 ** attempt, 8))
+    print(f"llm_client[{provider}/{role}]: провал после ретраев — {last_err}")
+    return None, _usage(provider, model, role, {})
