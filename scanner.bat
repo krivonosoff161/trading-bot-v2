@@ -21,6 +21,15 @@ REM seconds between scans (1800 = 30 min)
 set INTERVAL=1800
 REM max cards per scan (token-cost cap)
 set LIMIT=5
+REM 1 = durable SQLite buffer pipeline, 0 = legacy direct RSS+listings pipeline
+set USE_BUFFER=1
+
+set SCANNER_ARGS=--limit %LIMIT%
+set MODE_LABEL=direct RSS+listings
+if "%USE_BUFFER%"=="1" (
+    set SCANNER_ARGS=--buffer --limit %LIMIT%
+    set MODE_LABEL=SQLite buffer
+)
 
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -42,6 +51,7 @@ if not exist ".env" (
 
 echo ==========================================
 echo   INFO-EDGE SCANNER V0  (forward logger)
+echo   mode: %MODE_LABEL%
 echo   loop every %INTERVAL%s, up to %LIMIT% cards/scan
 echo   journal: logs\scout\scanner_journal.jsonl
 echo ==========================================
@@ -51,7 +61,7 @@ echo.
 
 :loop
 echo --- scan %date% %time% ---
-python -u src\scout\scanner_v0.py --limit %LIMIT%
+python -u src\scout\scanner_v0.py %SCANNER_ARGS%
 echo --- next scan in %INTERVAL%s ---
 timeout /t %INTERVAL% /nobreak >nul
 goto loop
