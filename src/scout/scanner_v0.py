@@ -73,7 +73,7 @@ SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
 
 # Активы/слои/материальность/источники — в config/*.yaml (читает router.py), не хардкод.
 ROUTER_VERSION = "v1"          # config-driven router (entities.yaml)
-RATE_RUB_PER_1K = 0.5          # анкер стоимости Яндекса (приблизит., для llm_budget)
+RATE_RUB_PER_1K = 0.5          # fallback, если usage не вернул cost_rub
 
 
 def canonical_url(url: str) -> str:
@@ -234,38 +234,76 @@ def _cap(v, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
-def format_card(row: dict) -> str:
-    """HTML-подпись под график: кликабельный источник, флаги значимые, GO — с уровнями.
-    Поля подрезаны, чтобы уложиться в лимит подписи Telegram (1024)."""
+def _money(v) -> str:
+    try:
+        return f"{float(v):g}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _side_ru(v: str | None) -> str:
+    return {"long": "лонг", "short": "шорт", "none": "нет сделки"}.get(str(v or "none").lower(), "нет сделки")
+
+
+def _in_price_ru(v: str | None) -> str:
+    return {"yes": "да", "partial": "частично", "no": "нет", "unknown": "неясно"}.get(
+        str(v or "unknown").lower(), str(v or "неясно")
+    )
+
+
+def _phase_ru(v: str | None) -> str:
+    return {
+        "expected": "будет",
+        "realized": "произошло",
+        "context": "контекст",
+        "ambiguous": "неясно",
+    }.get(str(v or "").lower(), str(v or "неясно"))
+
+
+def format_caption(row: dict) -> str:
+    """Короткая подпись к графику. Полный разбор отправляется отдельным сообщением."""
     emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(row["verdict"], "⚪")
     side = {"long": "LONG", "short": "SHORT", "none": ""}.get(row.get("side", "none"), "")
+    title = f"{emoji} <b>{_esc(row.get('asset') or '—')} · {_esc((row['verdict'] + ' ' + side).strip())}</b>"
+    return "\n".join([
+        title,
+        _esc(_cap(row.get("summary"), 240)),
+    ])
+
+
+def format_card(row: dict) -> str:
+    """Полная Telegram-карточка. Это не подпись к фото, поэтому можно дать связный вывод."""
+    emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(row["verdict"], "⚪")
     clean_url = (row.get("source_url") or "").split("?")[0]
     lv = row.get("levels") or {}
     is_go = row.get("verdict") == "GO"
+    side = str(row.get("side") or "none").lower()
 
     L = [
-        f"🛰️ <b>СКАНЕР · {_esc(row.get('asset') or '—')}</b>",
+        f"🛰️ <b>СКАНЕР · {_esc(row.get('asset') or '—')} · L{_esc(row.get('layer') or '—')}</b>",
+        f"{emoji} <b>Вердикт:</b> {_esc(row['verdict'])} · <b>сторона:</b> {_esc(_side_ru(side))}",
+        f"<b>Фаза:</b> {_esc(_phase_ru(row.get('event_phase')))} · <b>класс:</b> {_esc(row.get('lead_class') or '—')} · <b>в цене:</b> {_esc(_in_price_ru(row.get('in_price')))}",
+        f"<b>Цена:</b> {_esc(_money(row.get('price_at_decision')))} · <b>горизонт:</b> {_esc(row.get('horizon_hours'))}ч",
         "",
-        f"📰 <b>{_esc(_cap(row.get('headline'), 150))}</b>",
-        "",
-        _esc(_cap(row.get("summary"), 280)),
-        "",
-        f"{emoji} <b>{_esc((row['verdict'] + ' ' + side).strip())}</b>",
+        f"<b>Суть:</b> {_esc(_cap(row.get('summary'), 760))}",
     ]
-    if is_go and lv.get("entry"):
-        L.append(f"📍 вход ~{_esc(lv.get('entry'))} · стоп {_esc(lv.get('invalidation'))} · цель {_esc(lv.get('target'))}")
-    if not is_go and _meaningful(row.get("in_price")):
-        L.append(f"в цене?: {_esc(_cap(row['in_price'], 110))}")
-    if _meaningful(row.get("red_flag")):
-        L.append(f"⛔ red-flag: {_esc(_cap(row['red_flag'], 130))}")
+
+    if _meaningful(row.get("asymmetry")):
+        L.append(f"<b>Почему:</b> {_esc(_cap(row.get('asymmetry'), 520))}")
+    if _meaningful(row.get("forecast")):
+        L.append(f"<b>Сценарий:</b> {_esc(_cap(row.get('forecast'), 520))}")
     if _meaningful(row.get("invalidation")):
-        L.append(f"инвалидация: {_esc(_cap(row['invalidation'], 150))}")
-    L.append(f"прогноз ({_esc(row['horizon_hours'])}ч): {_esc(_cap(row.get('forecast'), 170))}")
+        L.append(f"<b>Отмена сценария:</b> {_esc(_cap(row.get('invalidation'), 520))}")
+    if is_go and lv.get("entry"):
+        L.append(f"<b>Уровни:</b> вход ~{_esc(lv.get('entry'))} · стоп {_esc(lv.get('invalidation'))} · цель {_esc(lv.get('target'))}")
     if row.get("low_confidence"):
         L.append("⚠️ тело не извлечено — низкая уверенность")
+    if _meaningful(row.get("headline")):
+        L.append(f"<b>Оригинал:</b> {_esc(_cap(row.get('headline'), 220))}")
+
     L += ["", "⚠️ <i>paper · фильтр, не рекомендация</i>",
           f'<a href="{_esc(clean_url)}">📎 источник</a>']
-    return "\n".join(x for x in L if x is not None)
+    return _cap("\n".join(x for x in L if x is not None), 3900)
 
 
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
@@ -358,7 +396,9 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     if verdict == "GO" and side != "none" and lead_class != "LEADING":
         verdict = "WATCH"
 
-    tokens = sum(int(u.get("total_tokens") or 0) for u in (orch.get("usage") or []))
+    usage_rows = orch.get("usage") or []
+    tokens = sum(int(u.get("total_tokens") or 0) for u in usage_rows)
+    cost_rub = round(sum(float(u.get("cost_rub") or 0.0) for u in usage_rows), 4)
     last_usage = (ch.get("_usage") or (orch.get("usage") or [{}])[-1] or {})
     fields = {
         "horizon_hours": ch.get("horizon_hours", 48), "levels": ch.get("levels"),
@@ -407,8 +447,9 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         chart_path = make_chart(inst, J.now_iso(), row) if inst else None
         try:
             if chart_path:
-                await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=card, parse_mode="HTML")
-                sent = "photo"
+                await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=format_caption(row), parse_mode="HTML")
+                await send_message_to(SCANNER_CHAT_ID, card)
+                sent = "photo+message"
             else:
                 sent = await send_message_to(SCANNER_CHAT_ID, card)
         except Exception as e:
@@ -416,6 +457,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 
     return {"card_id": cid, "row": row, "card": card, "sent": sent,
             "asset": asset, "price": price, "canon": canon, "tokens": tokens,
+            "cost_rub": cost_rub,
             "chief_called": orch.get("chief_called"), "channel": bool(orch.get("send_channel"))}
 
 
@@ -448,6 +490,7 @@ async def run(limit: int, dry: bool) -> None:
     print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
+    total_cost = 0.0
     for it in fresh:
         if made >= limit:
             break
@@ -462,6 +505,7 @@ async def run(limit: int, dry: bool) -> None:
         if not res:
             continue
         total_tokens += res.get("tokens", 0)
+        total_cost += float(res.get("cost_rub") or 0.0)
         if skipped:
             if skipped == "llm_failed":
                 n_llm_fail += 1
@@ -482,7 +526,7 @@ async def run(limit: int, dry: bool) -> None:
               f" · {r['source']} · @ {res.get('price')} · {r['event_phase']} · card_id={res['card_id'] or 'DUP'} · {sent}")
         print("    " + "\n    ".join(res["card"].splitlines()))
 
-    cost = round(total_tokens / 1000 * RATE_RUB_PER_1K, 2)
+    cost = round(total_cost if total_cost else total_tokens / 1000 * RATE_RUB_PER_1K, 2)
     if not dry:                       # dry ничего не персистит (не съедает seen-слоты)
         save_seen(seen)
         J.write_budget({"n_ingested": len(items), "n_fresh": len(fresh), "n_cards": made,
