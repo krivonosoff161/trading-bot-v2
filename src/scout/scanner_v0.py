@@ -45,11 +45,12 @@ except Exception:
 import os  # noqa: E402
 
 from src.scout.page_extract import extract                       # noqa: E402
-from src.scout.scout_analyst import generate_scout_card          # noqa: E402
+# (chief = src/scout/agents/chief.py через orchestrator; старый generate_scout_card больше не зовём)
 from src.scout.router import (route_asset, route_temporal, score_materiality,   # noqa: E402
                               dedup_config, limits_config)
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
+from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
@@ -326,73 +327,86 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     price = okx_last(inst) if (not dry and inst) else None
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
-    # 3) мозг (GO/NO-GO) — в dry-run заглушка, без токенов
+    # 3) ОРКЕСТРАТОР: дешёвый слой-агент → правила → chief (только кандидаты). dry = заглушка без LLM.
     if dry:
-        fields = {
-            "asset": asset, "catalyst": "(dry)", "in_price": "(dry)", "red_flag": "none",
-            "mechanics": "none", "surprise": "unknown", "verdict": "NO_GO", "side": "none",
-            "asymmetry": "нет", "invalidation": "(dry)", "forecast": "(dry)",
-            "horizon_hours": 48, "summary": "DRY-RUN: плумбинг без LLM", "low_confidence": low_conf,
-        }
+        orch = {"decision": "journal", "verdict": "NO_GO", "side": "none", "chief_called": False,
+                "agent": {"direction": "none", "confidence": None, "phase": phase, "asset": asset,
+                          "event_type": mat.get("family") or "unknown", "materiality": mat.get("score"),
+                          "red_flags": [], "mechanics": [], "key_facts": []},
+                "chief": None, "usage": [], "send_channel": True}
     else:
-        fields = await generate_scout_card(
-            news, layer=layer, trigger=TRIGGER,
-            asset_hint=asset, market_ctx_line=mline, low_confidence=low_conf,
-            price=price,
-        )
-        if not fields:
-            return {"skipped": "llm_failed", "headline": headline}
+        orch = await orchestrator.process(news, asset, layer, lead_class, price, mline)
 
-    # ПРЕДОХРАНИТЕЛЬ (рой/Codex, В КОДЕ не в промпте): GO+сторона только если источник LEADING.
-    # На запаздывающем (RSS) опережающего эджа нет by design → понижаем до WATCH (анти-мираж Main).
-    if fields.get("verdict") == "GO" and fields.get("side") not in (None, "none") and lead_class != "LEADING":
-        fields["verdict"] = "WATCH"
-        fields["summary"] = "[понижено до WATCH: запаздывающий источник — опережающего эджа нет] " + (fields.get("summary") or "")
+    if orch.get("decision") == "trash":
+        return {"skipped": "trash_lowmat", "headline": headline, "asset": asset}
+
+    agent = orch.get("agent") or {}
+    ch = orch.get("chief") or {}
+    verdict, side = orch.get("verdict", "NO_GO"), orch.get("side", "none")
+
+    # ПРЕДОХРАНИТЕЛЬ (в КОДЕ): GO+сторона только если LEADING (анти-мираж запаздывающего эджа)
+    if verdict == "GO" and side != "none" and lead_class != "LEADING":
+        verdict = "WATCH"
+
+    tokens = sum(int(u.get("total_tokens") or 0) for u in (orch.get("usage") or []))
+    last_usage = (ch.get("_usage") or (orch.get("usage") or [{}])[-1] or {})
+    fields = {
+        "horizon_hours": ch.get("horizon_hours", 48), "levels": ch.get("levels"),
+        "catalyst": "; ".join(map(str, agent.get("key_facts") or []))[:200],
+        "in_price": ch.get("in_price", ""),
+        "red_flag": ", ".join(map(str, agent.get("red_flags") or [])) or "none",
+        "mechanics": ", ".join(map(str, agent.get("mechanics") or [])) or "none",
+        "surprise": ch.get("surprise") or agent.get("phase", ""),
+        "asymmetry": ch.get("asymmetry", ""), "invalidation": ch.get("invalidation", ""),
+        "forecast": ch.get("forecast", ""),
+        "summary": ch.get("summary") or "низкая материальность — в журнал (датасет), chief не звали",
+    }
 
     # 4) строка журнала
     row = J.build_row(
         source_url=canon, source_ts=source_ts, layer=layer,
-        asset=fields.get("asset") or asset,
+        asset=agent.get("asset") or asset,
         trigger_type=("okx_listing" if pre_routed else TRIGGER), headline=headline,
-        verdict=fields["verdict"], horizon_hours=fields["horizon_hours"],
+        verdict=verdict, horizon_hours=fields["horizon_hours"],
         price_at_decision=price, okx_inst=inst, btc_at_decision=baseline_price,
         baseline_symbol=baseline_sym,
         lead_class=lead_class, source=source, source_class=source_class, router_version=ROUTER_VERSION,
         asset_confidence=conf,
-        event_type=mat.get("family") or "unclassified",
-        event_phase=phase,
-        materiality_score=mat.get("score"),
+        event_type=agent.get("event_type") or mat.get("family") or "unclassified",
+        event_phase=agent.get("phase") or phase,
+        materiality_score=(agent.get("materiality") if agent.get("materiality") is not None else mat.get("score")),
         event_key=ekey,
-        levels=fields.get("levels"),
-        catalyst=fields.get("catalyst", ""), in_price=fields.get("in_price", ""),
-        red_flag=fields.get("red_flag", ""), mechanics=fields.get("mechanics", ""),
-        surprise=fields.get("surprise", ""), side=fields.get("side", "none"),
-        asymmetry=fields.get("asymmetry", ""), invalidation=fields.get("invalidation", ""),
-        forecast=fields.get("forecast", ""), summary=fields.get("summary", ""),
-        low_confidence=fields.get("low_confidence", low_conf),
+        chief_called=orch.get("chief_called", False),
+        agent_direction=agent.get("direction", "none"), agent_confidence=agent.get("confidence"),
+        llm_provider=last_usage.get("provider"), llm_model=last_usage.get("model"),
+        levels=fields["levels"],
+        catalyst=fields["catalyst"], in_price=fields["in_price"],
+        red_flag=fields["red_flag"], mechanics=fields["mechanics"],
+        surprise=fields["surprise"], side=side,
+        asymmetry=fields["asymmetry"], invalidation=fields["invalidation"],
+        forecast=fields["forecast"], summary=fields["summary"],
+        low_confidence=low_conf,
         outcome_source=("okx" if price is not None else "manual"),
     )
     cid = ("DRY-" + J.card_id_for(canon)) if dry else J.write_row(row)
     card = format_card(row)
 
-    # 5) график: NO_GO/WATCH = чистый, GO = с прорисовкой уровней
-    chart_path = make_chart(inst, J.now_iso(), row) if (cid and not dry and inst) else None
-
-    # 6) доставка (фото с подписью; текст-фоллбек если графика нет)
+    # 5+6) график + доставка — ТОЛЬКО chief-карточки (send_channel); дешёвый NO_GO = только журнал/датасет
     sent = None
-    if cid and SCANNER_CHAT_ID and not dry:
+    if cid and orch.get("send_channel") and SCANNER_CHAT_ID and not dry:
+        chart_path = make_chart(inst, J.now_iso(), row) if inst else None
         try:
             if chart_path:
                 await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=card, parse_mode="HTML")
                 sent = "photo"
             else:
-                sent = await send_message_to(SCANNER_CHAT_ID, card)  # card уже HTML
+                sent = await send_message_to(SCANNER_CHAT_ID, card)
         except Exception as e:
             print(f"  telegram: {e}")
 
     return {"card_id": cid, "row": row, "card": card, "sent": sent,
-            "asset": asset, "price": price, "canon": canon,
-            "tokens": int(fields.get("_tokens") or 0)}
+            "asset": asset, "price": price, "canon": canon, "tokens": tokens,
+            "chief_called": orch.get("chief_called"), "channel": bool(orch.get("send_channel"))}
 
 
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────

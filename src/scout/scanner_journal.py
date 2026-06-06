@@ -96,6 +96,11 @@ def build_row(
     asset_confidence: float | None = None,
     source_count: int = 1,
     event_key: str | None = None,
+    chief_called: bool = False,
+    agent_direction: str = "none",       # намёк дешёвого слой-агента (long/short/none/mixed)
+    agent_confidence: float | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -137,6 +142,11 @@ def build_row(
         "asset_confidence": asset_confidence,
         "source_count": source_count,
         "event_key": event_key,                     # актив+хэш-темы (event-дедуп, Этап 2)
+        "chief_called": chief_called,               # звали ли мощную модель (экономия токенов)
+        "agent_direction": agent_direction,         # намёк слой-агента
+        "agent_confidence": agent_confidence,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
         "low_confidence": low_confidence,
         "dedup_key": event_key or f"{(asset or 'NA')}::{cid}",
         "outcome_source": outcome_source,    # okx | coingecko | manual
