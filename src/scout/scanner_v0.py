@@ -49,6 +49,7 @@ from src.scout.page_extract import extract                       # noqa: E402
 from src.scout.router import (route_asset, route_temporal, score_materiality,   # noqa: E402
                               dedup_config, limits_config)
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
+from src.scout import news_buffer as NB                                        # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
@@ -308,13 +309,23 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                        carded: dict | None = None, max_per_asset: int = 1) -> dict | None:
     headline = item["title"]
     url = item.get("url")
-    pre_routed = bool(item.get("asset"))      # листинг = актив/слой известны из инструмента
+    normalized = bool(item.get("buffer_doc_id"))
+    pre_routed = bool(item.get("asset")) and not normalized  # листинг = актив/слой известны из инструмента
     lead_class = item.get("lead_class", "LAGGING")
     source_class = item.get("source_class", "rss")
     source = item.get("source", "cointelegraph")
 
     # 1) РОУТЕР актив/слой (+ материальность для RSS; листинг pre-routed, материален by design)
-    if pre_routed:
+    if normalized:
+        if not item.get("asset"):
+            return {"skipped": "no_tracked_asset", "headline": headline}
+        asset, inst = item["asset"], item.get("okx_inst")
+        layer, conf = int(item.get("layer") or 2), float(item.get("asset_confidence") or 1.0)
+        baseline_sym = item.get("baseline")
+        mat = {"family": item.get("event_type") or "unclassified",
+               "score": item.get("materiality_score") or 0.0}
+        phase = str(item.get("phase") or "AMBIGUOUS").upper()
+    elif pre_routed:
         asset, inst = item["asset"], item.get("okx_inst")
         layer, conf = int(item.get("layer", 2)), 1.0
         baseline_sym = item.get("baseline")
@@ -344,10 +355,17 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     if recent is not None and is_duplicate(headline, asset, recent, dedup_min):
         return {"skipped": "dup_event", "headline": headline, "asset": asset}
     canon = canonical_url(url or f"https://www.okx.com/trade-swap/{(inst or asset or '').lower()}")
-    ekey = make_event_key(asset, headline)
+    ekey = item.get("event_key") or make_event_key(asset, headline)
 
     # 3) тело — только для новостей со статьёй (у листинга статьи нет → анализ по заголовку)
-    if url and not pre_routed:
+    if normalized:
+        body_text = (item.get("text") or "").strip()
+        source_ts = item.get("time") or J.now_iso()[:10]
+        try:
+            low_conf = float(item.get("extraction_quality") or 0.0) < 0.5
+        except (TypeError, ValueError):
+            low_conf = True
+    elif url and not pre_routed:
         ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
         if not ext or ext.get("error") or len(ext.get("text") or "") < 200:
             low_conf, body_text = True, ""
@@ -411,7 +429,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     row = J.build_row(
         source_url=canon, source_ts=source_ts, layer=layer,
         asset=agent.get("asset") or asset,
-        trigger_type=("okx_listing" if pre_routed else TRIGGER), headline=headline,
+        trigger_type=item.get("trigger_type") or ("okx_listing" if pre_routed else TRIGGER), headline=headline,
         verdict=verdict, horizon_hours=fields["horizon_hours"],
         price_at_decision=price, okx_inst=inst, btc_at_decision=baseline_price,
         baseline_symbol=baseline_sym,
@@ -457,7 +475,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 
 
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────
-async def run(limit: int, dry: bool) -> None:
+async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     J.ensure_pending_store()
     seen = load_seen()
     mline = market_ctx_line()
@@ -467,7 +485,7 @@ async def run(limit: int, dry: bool) -> None:
     recent = J.recent_events(int(dcfg.get("window_hours", 48)))   # окно event-дедупа
     max_per_asset = int(limits_config().get("max_cards_per_asset_per_run", 1))
     carded: dict = {}                                            # кап карточек на актив за проход
-    print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | RSS+листинги | "
+    print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | {'BUFFER' if use_buffer else 'RSS+листинги'} | "
           f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
 
@@ -478,11 +496,24 @@ async def run(limit: int, dry: bool) -> None:
         rss_items = []
     listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
     items = listings + rss_items                  # опережающие листинги первыми
-    fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
-    if not dry and fresh:                         # полный аудит: лог КАЖДОГО входящего до фильтров
-        J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
-                         "headline": it.get("title"), "url": it.get("url")} for it in fresh])
-    print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
+    if use_buffer and not dry:
+        ing = NB.ingest_items(items)
+        buffer_batch = max(limit * 4, 10)
+        resolved = NB.resolve_pending(limit=buffer_batch)
+        normalized_stats = NB.normalize_pending(limit=buffer_batch)
+        fresh = NB.ready_items(limit=max(limit * 10, limit))
+        print(
+            f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | "
+            f"buffer insert={ing['inserted']} update={ing['updated']} "
+            f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
+            f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
+        )
+    else:
+        fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
+        if not dry and fresh:                     # полный аудит: лог КАЖДОГО входящего до фильтров
+            J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
+                             "headline": it.get("title"), "url": it.get("url")} for it in fresh])
+        print(f"источники: листинги(LEADING)={len(listings)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
     total_cost = 0.0
@@ -493,9 +524,10 @@ async def run(limit: int, dry: bool) -> None:
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
                                  recent=recent, dedup_min=dedup_min,
                                  carded=carded, max_per_asset=max_per_asset)
+        doc_id = it.get("buffer_doc_id")
         skipped = res.get("skipped") if res else None
         # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)
-        if skipped != "llm_failed":
+        if not use_buffer and skipped != "llm_failed":
             seen.add(canon)
         if not res:
             continue
@@ -504,15 +536,21 @@ async def run(limit: int, dry: bool) -> None:
         if skipped:
             if skipped == "llm_failed":
                 n_llm_fail += 1
+                if use_buffer and doc_id and not dry:
+                    NB.mark_status(doc_id, NB.STATUS_READY)
             else:                            # фильтр-дроп (роутер/материальность) → анти-survivorship
                 n_dropped += 1
                 if not dry:
                     stage = {"no_tracked_asset": "router", "dup_event": "dedup",
                          "context_commentary": "gate", "asset_capped": "cap"}.get(skipped, "materiality")
                     J.write_drop(it["url"], it["title"], skipped, asset=res.get("asset"), drop_stage=stage)
+                    if use_buffer and doc_id:
+                        NB.mark_status(doc_id, NB.STATUS_DROPPED, skipped)
             print(f"  · скип [{skipped}]: {res['headline'][:65]}")
             continue
         made += 1
+        if use_buffer and doc_id and not dry:
+            NB.mark_status(doc_id, NB.STATUS_ANALYZED)
         r = res["row"]
         recent.append((res.get("asset"), r["headline"]))   # within-run дубли тоже ловим
         carded[res["asset"]] = carded.get(res["asset"], 0) + 1   # кап на актив
@@ -528,15 +566,16 @@ async def run(limit: int, dry: bool) -> None:
                         "n_dropped": n_dropped, "n_llm_fail": n_llm_fail,
                         "total_tokens": total_tokens, "cost_rub": cost})
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"
-          f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost}₽) · журнал={J.JOURNAL} ===")
+          f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost} RUB) · журнал={J.JOURNAL} ===")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="плумбинг без LLM/Telegram")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="макс карточек за проход")
+    ap.add_argument("--buffer", action="store_true", help="читать события из SQLite news_buffer после ingest/resolve/normalize")
     args = ap.parse_args()
-    asyncio.run(run(limit=args.limit, dry=args.dry_run))
+    asyncio.run(run(limit=args.limit, dry=args.dry_run, use_buffer=args.buffer))
 
 
 if __name__ == "__main__":

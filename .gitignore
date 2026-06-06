@@ -64,6 +64,8 @@ scripts/backtest/backtest_runs/*
 scripts/signal_log.jsonl
 scripts/signal_labels.jsonl
 scripts/signal_log_notrade.jsonl
+data/scout/*.sqlite
+data/scout/*.sqlite-*
 
 # Video analysis artifacts
 docs/*.mp4

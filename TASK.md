@@ -8,6 +8,44 @@
 
 ## Что уже сделано
 
+### 0. News intake buffer
+
+Добавлен первый слой новой системы парсинга:
+
+```text
+sources -> raw_items -> machine_docs -> normalized_events -> scanner consumer
+```
+
+Файлы:
+
+- `src/scout/news_buffer.py` — SQLite buffer + CLI.
+- `data/scout/news_buffer.sqlite` — runtime DB, ignored by git.
+- `tests/test_news_buffer.py` — unit test без LLM/Telegram.
+
+Команды:
+
+```bash
+python -m src.scout.news_buffer init
+python -m src.scout.news_buffer stats
+python -m src.scout.news_buffer ready --limit 5
+python -m src.scout.news_buffer show <doc_id>
+python src/scout/scanner_v0.py --buffer --limit 0   # smoke: ingest/resolve/normalize, без LLM
+python src/scout/scanner_v0.py --buffer --limit 5   # новый режим: consumer из buffer
+```
+
+Что делает:
+
+- хранит все входящие новости в SQLite;
+- вытаскивает clean text через `trafilatura`;
+- если нужно, пробует optional `newspaper4k/newspaper`;
+- строит machine-readable document;
+- нормализует asset/layer/phase/event_key;
+- отдаёт в scanner только `READY_FOR_AGENT`;
+- помечает события как `ANALYZED` или `DROPPED`;
+- имеет SSRF guard: запрещены localhost/private/link-local/reserved IP и non-http(s).
+
+Текущий `scanner.bat` пока НЕ переключён на `--buffer`; старый прямой режим сохранён как fallback.
+
 ### 1. LLM backend
 
 - `src/utils/llm_client.py` есть.
