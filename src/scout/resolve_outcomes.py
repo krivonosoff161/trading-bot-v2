@@ -60,6 +60,30 @@ def okx_last(inst_id: str | None) -> float | None:
     return None
 
 
+def fetch_path(inst_id: str, t0_ms: int, t_end_ms: int, bar: str = "1H") -> list:
+    """Свечи в окне [t0, t_end] для price-path (mfe/mae/точки). [(ts,high,low,close),…] или []."""
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/candles",
+                         params={"instId": inst_id, "bar": bar, "limit": "300"}, headers=UA, timeout=TIMEOUT)
+        d = r.json()
+        if str(d.get("code")) != "0":
+            return []
+        out = [(int(c[0]), float(c[2]), float(c[3]), float(c[4]))
+               for c in (d.get("data") or []) if t0_ms <= int(c[0]) <= t_end_ms]
+        out.sort()
+        return out
+    except Exception:
+        return []
+
+
+def _price_at(path: list, target_ms: int) -> float | None:
+    """Цена (close) ближайшей свечи к target_ms (в пределах окна)."""
+    if not path:
+        return None
+    best = min(path, key=lambda c: abs(c[0] - target_ms))
+    return best[3]
+
+
 def _read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -79,18 +103,19 @@ def _scored_ids() -> set[str]:
     return {r.get("card_id") for r in _read_jsonl(OUTCOMES)}
 
 
-def score(verdict: str, side: str, asset_ret: float, excess: float) -> bool | None:
-    """Правильна ли карточка по форварду. None = не определяемо автоматически."""
+def score(verdict: str, side: str, ret: float, mfe_long: float | None, mae_long: float | None) -> bool | None:
+    """Правильна ли карточка (обе стороны + амплитуда хода). None = не скорим бинарно."""
     if verdict == "GO":
         if side == "long":
-            return excess > GO_MIN_EXCESS and asset_ret > 0
+            return ret > 0
         if side == "short":
-            return excess < -GO_MIN_EXCESS and asset_ret < 0
+            return ret < 0
         return None
     if verdict == "NO_GO":
-        # фильтр «не лезь» правильный, если большого хода (в любую сторону) не было
-        return abs(asset_ret) < NO_GO_FLAT_PCT
-    return None  # WATCH = информационный, не скорим бинарно
+        # «не лезь» правильно, если НЕ упустили крупный ход НИ В ОДНУ сторону (по mfe/mae)
+        big = max(abs(mfe_long or 0.0), abs(mae_long or 0.0))
+        return big < NO_GO_FLAT_PCT
+    return None  # WATCH = информационный
 
 
 def resolve() -> None:
@@ -129,36 +154,59 @@ def resolve() -> None:
                 manual += 1
                 continue
 
-            p_now = okx_last(inst)
-            if p_now is None:
-                pending += 1
-                continue
-            asset_ret = (p_now / p0 - 1.0) * 100.0
-            bsym = r.get("baseline_symbol") or "BTC-USDT-SWAP"   # per-layer якорь (не хардкод BTC)
+            t0 = _parse(r["ts_utc"])
+            t0_ms = int(t0.timestamp() * 1000)
+            t_end_ms = int(min(now, t0 + dt.timedelta(hours=float(r["horizon_hours"]))).timestamp() * 1000)
+
+            path = fetch_path(inst, t0_ms, t_end_ms)
+            if path:
+                price_final = path[-1][3]
+                mfe_long = (max(c[1] for c in path) / p0 - 1.0) * 100.0   # макс ВВЕРХ (в пользу лонга)
+                mae_long = (min(c[2] for c in path) / p0 - 1.0) * 100.0   # макс ВНИЗ (в пользу шорта)
+                price_after = {f"{h}h": (round((v / p0 - 1.0) * 100.0, 3) if v else None)
+                               for h in (1, 4, 24, 48)
+                               for v in [_price_at(path, t0_ms + h * 3600000)]}
+            else:
+                p_now = okx_last(inst)
+                if p_now is None:
+                    pending += 1
+                    continue
+                price_final, mfe_long, mae_long, price_after = p_now, None, None, {}
+
+            ret = (price_final / p0 - 1.0) * 100.0
+            outcome_long, outcome_short = round(ret, 3), round(-ret, 3)   # P&L каждой стороны
+
+            bsym = r.get("baseline_symbol") or "BTC-USDT-SWAP"
             if bsym not in baseline_cache:
                 baseline_cache[bsym] = okx_last(bsym)
             b_now = baseline_cache[bsym]
             baseline = ((b_now / btc0 - 1.0) * 100.0) if (b_now and btc0) else None
-            excess = (asset_ret - baseline) if baseline is not None else None
-            correct = score(r.get("verdict", ""), r.get("side", "none"),
-                            asset_ret, excess if excess is not None else asset_ret)
+            excess = (ret - baseline) if baseline is not None else None
+
+            correct = score(r.get("verdict", ""), r.get("side", "none"), ret, mfe_long, mae_long)
+            big = max(abs(mfe_long or 0.0), abs(mae_long or 0.0))
+            missed = (r.get("verdict") == "NO_GO" and big >= NO_GO_FLAT_PCT)   # фильтр упустил крупный ход
 
             rec = {
                 "card_id": cid, "resolved_ts": now_iso(), "scored": True,
                 "verdict": r.get("verdict"), "side": r.get("side"), "asset": r.get("asset"),
-                "price_at_decision": p0, "price_now": p_now,
-                "asset_ret_pct": round(asset_ret, 3),
+                "price_at_decision": p0, "price_final": round(price_final, 6),
+                "ret_pct": round(ret, 3), "outcome_long_pct": outcome_long, "outcome_short_pct": outcome_short,
+                "mfe_long_pct": round(mfe_long, 3) if mfe_long is not None else None,
+                "mae_long_pct": round(mae_long, 3) if mae_long is not None else None,
+                "price_after": price_after,
                 "baseline_ret_pct": round(baseline, 3) if baseline is not None else None,
                 "excess_pct": round(excess, 3) if excess is not None else None,
-                "verdict_correct": correct,
+                "verdict_correct": correct, "missed_move": missed,
                 "horizon_hours": r.get("horizon_hours"),
             }
             out.write(json.dumps(rec, ensure_ascii=False) + "\n")
             scored += 1
             mark = {True: "✓", False: "✗", None: "?"}[correct]
-            ex = f"{excess:+.2f}%" if excess is not None else "n/a"
+            sw = (f"mfe+{mfe_long:.1f}/mae{mae_long:.1f}" if mfe_long is not None else "путь?")
             print(f"  [{mark}] {r.get('verdict')} {r.get('side')} {r.get('asset')}: "
-                  f"ret={asset_ret:+.2f}% baseline={baseline if baseline is None else round(baseline,2)}% excess={ex}")
+                  f"ret={ret:+.2f}% long={outcome_long:+.1f}/short={outcome_short:+.1f} {sw}"
+                  f"{' ⚠MISSED' if missed else ''}")
 
     print(f"\nзрело={matured} · посчитано={scored} · manual-очередь={manual} · ещё рано={pending}")
     print(f"outcomes: {OUTCOMES}")
@@ -178,14 +226,19 @@ def report() -> None:
     if not by_verdict:
         print("посчитанных исходов пока нет (карточки не дозрели или журнал пуст)")
         return
-    print("\nвердикт   n   correct%   mean_excess%")
+    def _avg(xs):
+        return f"{sum(xs)/len(xs):+.2f}" if xs else "—"
+
+    print("\nвердикт   n   correct%  long%   short%  excess%  missed")
     for v, lst in sorted(by_verdict.items()):
         n = len(lst)
         cor = [o for o in lst if o.get("verdict_correct") is True]
-        exs = [o["excess_pct"] for o in lst if o.get("excess_pct") is not None]
         wr = f"{100*len(cor)/n:.0f}%" if n else "—"
-        me = f"{sum(exs)/len(exs):+.2f}" if exs else "—"
-        print(f"  {v:<8} {n:<3} {wr:<9} {me}")
+        lo = _avg([o["outcome_long_pct"] for o in lst if o.get("outcome_long_pct") is not None])
+        sh = _avg([o["outcome_short_pct"] for o in lst if o.get("outcome_short_pct") is not None])
+        ex = _avg([o["excess_pct"] for o in lst if o.get("excess_pct") is not None])
+        miss = sum(1 for o in lst if o.get("missed_move"))
+        print(f"  {v:<8} {n:<3} {wr:<8} {lo:<7} {sh:<7} {ex:<8} {miss}")
 
 
 def main():
