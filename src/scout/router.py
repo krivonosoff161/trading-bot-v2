@@ -70,6 +70,15 @@ def source_meta(source: str) -> dict:
     return (_sources().get("sources", {}) or {}).get(source, {})
 
 
+def enabled_sources() -> dict:
+    """Активные источники из source_registry.yaml, в порядке конфига."""
+    return {
+        name: meta
+        for name, meta in ((_sources().get("sources", {}) or {}).items())
+        if meta.get("enabled") is True
+    }
+
+
 # ── РОУТЕР актив/слой ────────────────────────────────────────────────────────
 def route_asset(headline: str) -> dict | None:
     """Заголовок → {asset, okx_inst, layer, baseline, confidence} либо None.

@@ -7,13 +7,57 @@ router:
   threshold: 0.5          # ниже — актив не считаем (None)
   subject_zone_words: 6   # «субъект» новости обычно в первых N словах заголовка
 
-# Слой 1 — крипта-история (активно в V0). Слои 2-5 расширяем по мере провода источников.
+# Вселенная: мажоры(слой1) + ликвидные альты(слой2). strong=полное имя(надёжно),
+# weak=короткий тикер(только с подтверждением $/пара). Все torгуемы на OKX (baseline BTC).
 assets:
+  # --- слой 1: мажоры ---
   - {sym: BTC, layer: 1, okx_inst: BTC-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bitcoin], weak: [btc]}
   - {sym: ETH, layer: 1, okx_inst: ETH-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ethereum, ether], weak: [eth]}
   - {sym: SOL, layer: 1, okx_inst: SOL-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [solana], weak: [sol]}
   - {sym: XRP, layer: 1, okx_inst: XRP-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [xrp, ripple], weak: []}
   - {sym: BNB, layer: 1, okx_inst: BNB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bnb, "binance coin"], weak: []}
+  - {sym: DOGE, layer: 1, okx_inst: DOGE-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [dogecoin], weak: [doge]}
+  - {sym: ADA, layer: 1, okx_inst: ADA-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [cardano], weak: [ada]}
+  # --- слой 2: ликвидные альты ---
+  - {sym: AVAX, layer: 2, okx_inst: AVAX-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [avalanche], weak: [avax]}
+  - {sym: LINK, layer: 2, okx_inst: LINK-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [chainlink], weak: [link]}
+  - {sym: DOT, layer: 2, okx_inst: DOT-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [polkadot], weak: [dot]}
+  - {sym: TON, layer: 2, okx_inst: TON-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [toncoin], weak: [ton]}
+  - {sym: TRX, layer: 2, okx_inst: TRX-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [tron], weak: [trx]}
+  - {sym: LTC, layer: 2, okx_inst: LTC-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [litecoin], weak: [ltc]}
+  - {sym: BCH, layer: 2, okx_inst: BCH-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: ["bitcoin cash"], weak: [bch]}
+  - {sym: NEAR, layer: 2, okx_inst: NEAR-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [], weak: [near]}
+  - {sym: APT, layer: 2, okx_inst: APT-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [aptos], weak: [apt]}
+  - {sym: ARB, layer: 2, okx_inst: ARB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [arbitrum], weak: [arb]}
+  - {sym: OP, layer: 2, okx_inst: OP-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [optimism], weak: []}
+  - {sym: SUI, layer: 2, okx_inst: SUI-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [], weak: [sui]}
+  - {sym: SEI, layer: 2, okx_inst: SEI-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [], weak: [sei]}
+  - {sym: INJ, layer: 2, okx_inst: INJ-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [injective], weak: [inj]}
+  - {sym: TIA, layer: 2, okx_inst: TIA-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [celestia], weak: [tia]}
+  - {sym: ZEC, layer: 2, okx_inst: ZEC-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [zcash], weak: [zec]}
+  - {sym: XLM, layer: 2, okx_inst: XLM-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [stellar], weak: [xlm]}
+  - {sym: ATOM, layer: 2, okx_inst: ATOM-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [cosmos], weak: [atom]}
+  - {sym: FIL, layer: 2, okx_inst: FIL-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [filecoin], weak: [fil]}
+  - {sym: HBAR, layer: 2, okx_inst: HBAR-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [hedera], weak: [hbar]}
+  - {sym: RENDER, layer: 2, okx_inst: RENDER-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [render], weak: [rndr]}
+  - {sym: AAVE, layer: 2, okx_inst: AAVE-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [aave], weak: []}
+  - {sym: UNI, layer: 2, okx_inst: UNI-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [uniswap], weak: [uni]}
+  - {sym: ENA, layer: 2, okx_inst: ENA-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ethena], weak: [ena]}
+  - {sym: ONDO, layer: 2, okx_inst: ONDO-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ondo], weak: []}
+  # --- мемы (слой 2, памп-режим) ---
+  - {sym: PEPE, layer: 2, okx_inst: PEPE-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [pepe], weak: []}
+  - {sym: SHIB, layer: 2, okx_inst: SHIB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: ["shiba inu", shiba], weak: [shib]}
+  - {sym: WIF, layer: 2, okx_inst: WIF-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: ["dogwifhat"], weak: [wif]}
+  - {sym: BONK, layer: 2, okx_inst: BONK-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [bonk], weak: []}
+  - {sym: PUMP, layer: 2, okx_inst: PUMP-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: ["pump.fun", pumpfun], weak: [pump]}
+  # --- слой 5: акции + pre-IPO перпы (на OKX), baseline QQQ ---
+  - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [nvidia, nvda], weak: []}
+  - {sym: TSLA, layer: 5, okx_inst: TSLA-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [tesla, tsla], weak: []}
+  - {sym: MSTR, layer: 5, okx_inst: MSTR-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [microstrategy, "strategy inc", mstr], weak: []}
+  - {sym: COIN, layer: 5, okx_inst: COIN-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [coinbase], weak: []}
+  - {sym: OPENAI, layer: 5, okx_inst: OPENAI-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [openai], weak: []}
+  - {sym: ANTHROPIC, layer: 5, okx_inst: ANTHROPIC-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [anthropic], weak: []}
+  - {sym: SPACEX, layer: 5, okx_inst: SPACEX-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [spacex], weak: []}
   # --- Этап 4: провод слоёв 3-5 по ЗАГОЛОВКАМ (структура) ---
   # - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [nvidia, nvda], weak: []}
 

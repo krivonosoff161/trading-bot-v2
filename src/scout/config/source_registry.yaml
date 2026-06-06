@@ -28,8 +28,26 @@ sources:
     enabled: true
 
   # ── ПРОИЗОШЛО (realized) — добавляем по одному, keyless сначала ───────────
-  decrypt:           {url: "https://decrypt.co/feed",            source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}
-  google_news_crypto:{url: "https://news.google.com/rss/search?q=crypto", source_class: rss, lead_class: LAGGING, trust: aggregator, phase_prior: mixed, keyless: true, layers: [1, 2], enabled: false}
+  decrypt:
+    url: https://decrypt.co/feed
+    source_class: rss
+    lead_class: LAGGING
+    trust: wire
+    phase_prior: mixed
+    keyless: true
+    layers: [1, 2]
+    enabled: false
+
+  google_news_crypto:
+    url: "https://news.google.com/rss/search?q=crypto"
+    source_class: rss
+    lead_class: LAGGING
+    trust: aggregator
+    phase_prior: mixed
+    keyless: true
+    layers: [1, 2]
+    enabled: false
+
   sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, phase_prior: realized, keyless: true,  layers: [5],    enabled: false}   # 8-K/S-1/424B — официально, до новостного цикла
   okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}   # upcoming листинги = будет; live = произошло
   dexscreener:       {source_class: api, lead_class: COINCIDENT, trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: false}
