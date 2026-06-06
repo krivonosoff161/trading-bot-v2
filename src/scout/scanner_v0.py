@@ -261,14 +261,9 @@ def _phase_ru(v: str | None) -> str:
 
 
 def format_caption(row: dict) -> str:
-    """Короткая подпись к графику. Полный разбор отправляется отдельным сообщением."""
-    emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(row["verdict"], "⚪")
-    side = {"long": "LONG", "short": "SHORT", "none": ""}.get(row.get("side", "none"), "")
-    title = f"{emoji} <b>{_esc(row.get('asset') or '—')} · {_esc((row['verdict'] + ' ' + side).strip())}</b>"
-    return "\n".join([
-        title,
-        _esc(_cap(row.get("summary"), 240)),
-    ])
+    """Минимальная подпись к графику; смысловой разбор идет отдельным сообщением."""
+    tf = _bar_for_horizon(row.get("horizon_hours"))
+    return f"📈 <b>График · {_esc(row.get('asset') or '—')} · {tf}</b>"
 
 
 def format_card(row: dict) -> str:
