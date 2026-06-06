@@ -58,8 +58,15 @@ assets:
   - {sym: OPENAI, layer: 5, okx_inst: OPENAI-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [openai], weak: []}
   - {sym: ANTHROPIC, layer: 5, okx_inst: ANTHROPIC-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [anthropic], weak: []}
   - {sym: SPACEX, layer: 5, okx_inst: SPACEX-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [spacex], weak: []}
-  # --- Этап 4: провод слоёв 3-5 по ЗАГОЛОВКАМ (структура) ---
-  # - {sym: NVDA, layer: 5, okx_inst: NVDA-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [nvidia, nvda], weak: []}
+  # --- слой 3: металлы/макро (off-OKX → okx_inst/baseline null; цена/график по возможности) ---
+  - {sym: XAU, layer: 3, okx_inst: null, baseline: null, strong: [gold, "gold price", "spot gold"], weak: [xau]}
+  - {sym: XAG, layer: 3, okx_inst: null, baseline: null, strong: [silver, "silver price"], weak: [xag]}
+  - {sym: XPT, layer: 3, okx_inst: null, baseline: null, strong: [platinum], weak: [xpt]}
+  - {sym: XPD, layer: 3, okx_inst: null, baseline: null, strong: [palladium], weak: [xpd]}
+  - {sym: HG, layer: 3, okx_inst: null, baseline: null, strong: [copper, "copper price"], weak: []}
+  # --- слой 4: нефть/газ/энергия (off-OKX → null) ---
+  - {sym: CL, layer: 4, okx_inst: null, baseline: null, strong: ["crude oil", "oil price", "oil prices", brent, wti, opec], weak: []}
+  - {sym: NG, layer: 4, okx_inst: null, baseline: null, strong: ["natural gas", "nat gas"], weak: []}
 
 # Классификация ИНСТРУМЕНТА → слой (для новых листингов открытой вселенной, где актив заранее не известен).
 # Базовый символ инструмента в списке → его слой; иначе крипта (слой 2 альт; мажоры из assets = слой 1).

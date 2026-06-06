@@ -70,7 +70,18 @@ layers:
     unlock:     [unlock, vesting, "token release"]
     exploit:    [rug, hack, exploit, honeypot, scam]
     launch:     [launch, mainnet, airdrop]
-  # --- Этап 4: слои 3-5 ---
-  # 3:  {tariff: [tariff, duty], supply: [mine, smelter, inventory], macro: [fed, dollar, china demand]}
-  # 4:  {opec: [opec, quota, output cut], inventory: [eia, "crude inventory"], geo: [strait, sanction, strike]}
-  # 5:  {earnings: [earnings, eps, guidance, beats, misses], filing: [8-k, s-1, sec filing], product: [launches, unveils]}
+  3:   # металлы/макро (золото/серебро/медь/платина)
+    macro:     [fed, fomc, "rate cut", "rate hike", cpi, inflation, dollar, "jobs report", powell, "central bank"]
+    supply:    [mine, smelter, inventory, output, production, strike]
+    demand:    ["china demand", reserves, "safe haven", etf]
+    trade:     [tariff, duty, sanction, ban, export, embargo]
+  4:   # нефть/газ/энергия
+    opec:      [opec, quota, "output cut", "production cut", "production hike", "spare capacity"]
+    inventory: [eia, "crude inventory", stockpile, draw, build]
+    geo:       [strait, hormuz, sanction, strike, war, attack, embargo, drone]
+    supply:    [pipeline, refinery, outage, disruption, "supply cut"]
+  5:   # акции/pre-IPO перпы
+    earnings:  [earnings, eps, guidance, beats, misses, revenue]
+    filing:    ["8-k", "s-1", "424b", "sec filing", "10-k", "10-q", prospectus, "form 4"]
+    ma:        [merger, acquisition, antitrust, buyout, takeover, stake]
+    product:   [launches, unveils, recall, approval, "data center", chip]

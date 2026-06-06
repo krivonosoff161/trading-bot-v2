@@ -36,23 +36,54 @@ sources:
     phase_prior: mixed
     keyless: true
     layers: [1, 2]
-    enabled: false
+    enabled: true
 
   google_news_crypto:
-    url: "https://news.google.com/rss/search?q=crypto"
+    url: "https://news.google.com/rss/search?q=crypto+OR+bitcoin+OR+altcoin+OR+ethereum&hl=en-US&gl=US&ceid=US:en"
     source_class: rss
     lead_class: LAGGING
     trust: aggregator
     phase_prior: mixed
     keyless: true
     layers: [1, 2]
-    enabled: false
+    enabled: true
 
-  sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, phase_prior: realized, keyless: true,  layers: [5],    enabled: false}   # 8-K/S-1/424B — официально, до новостного цикла
+  # ── L3 металлы / L4 энергия / L5 акции — keyless Google News (наполняют тёмные слои) ──
+  google_news_metals:
+    url: "https://news.google.com/rss/search?q=gold+price+OR+silver+price+OR+copper+price+OR+platinum&hl=en-US&gl=US&ceid=US:en"
+    source_class: rss
+    lead_class: LAGGING
+    trust: aggregator
+    phase_prior: mixed
+    keyless: true
+    layers: [3]
+    enabled: true
+
+  google_news_energy:
+    url: "https://news.google.com/rss/search?q=oil+price+OR+crude+oil+OR+OPEC+OR+natural+gas&hl=en-US&gl=US&ceid=US:en"
+    source_class: rss
+    lead_class: LAGGING
+    trust: aggregator
+    phase_prior: mixed
+    keyless: true
+    layers: [4]
+    enabled: true
+
+  google_news_equities:
+    url: "https://news.google.com/rss/search?q=Nvidia+OR+Tesla+OR+MicroStrategy+OR+Coinbase+stock+earnings&hl=en-US&gl=US&ceid=US:en"
+    source_class: rss
+    lead_class: LAGGING
+    trust: aggregator
+    phase_prior: mixed
+    keyless: true
+    layers: [5]
+    enabled: true
+
+  sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, phase_prior: realized, keyless: true,  layers: [5],    enabled: true}    # 8-K/S-1/424B — официально, до новостного цикла
   okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}   # upcoming листинги = будет; live = произошло
   dexscreener:       {source_class: api, lead_class: COINCIDENT, trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: false}
   goplus_rugcheck:   {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: false}   # red-flag VETO
-  oilprice:          {url: "https://oilprice.com/rss/main",      source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    keyless: true,  layers: [4],    enabled: false}
+  oilprice:          {url: "https://oilprice.com/rss/main",      source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    keyless: true,  layers: [4],    enabled: true}
   gdelt:             {source_class: api, lead_class: LAGGING,    trust: aggregator, phase_prior: realized, keyless: true, layers: [3, 4], enabled: false}   # металлы/геополитика, медленный recall
   telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, phase_prior: mixed,  keyless: false, layers: [1, 2], enabled: false}   # Telethon, нужен api_id трейдера
 

@@ -27,7 +27,7 @@ if str(_ROOT) not in sys.path:
 
 from src.scout import page_extract  # noqa: E402
 from src.scout.dedup import event_key as make_event_key  # noqa: E402
-from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality  # noqa: E402
+from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality, source_meta  # noqa: E402
 
 DB_PATH = _ROOT / "data" / "scout" / "news_buffer.sqlite"
 
@@ -399,7 +399,8 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                 mat = {"family": raw.get("event_type", "listing"), "score": 0.6, "drop_reason": None}
                 phase = raw.get("phase") or "REALIZED"
             else:
-                routed = route_asset(title)
+                allowed = set(source_meta(source).get("layers") or []) or None
+                routed = route_asset(title, allowed_layers=allowed)   # слои источника ограничивают кандидатов
                 if not routed:
                     drop_reason = "no_tracked_asset"
                     asset = okx_inst = baseline = None
