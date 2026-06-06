@@ -7,7 +7,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.scout.dedup import normalize_title, event_key, is_duplicate  # noqa: E402
+from src.scout.dedup import normalize_title, event_signature, event_key, is_duplicate  # noqa: E402
 
 
 def test_normalize_strips_prefix_and_stopwords():
@@ -19,6 +19,12 @@ def test_event_key_stable_for_near_dup():
     a = event_key("BTC", "Bitcoin ETF approved by SEC")
     b = event_key("BTC", "Bitcoin ETF approved by SEC")
     assert a == b and a.startswith("BTC::")
+
+
+def test_event_signature_security_incident_groups_reworded_titles():
+    assert event_signature("ZEC crashes 38% as Zcash discloses critical counterfeiting vulnerability") == "security_incident"
+    recent = [("ZEC", "Winklevoss-Backed Zcash Treasury Plunges Nearly 40% on ZEC Privacy Bug Concerns")]
+    assert is_duplicate("ZEC Crashes 38% as Zcash Discloses Critical Counterfeiting Vulnerability", "ZEC", recent, 88)
 
 
 def test_is_duplicate_same_event_diff_wording():
