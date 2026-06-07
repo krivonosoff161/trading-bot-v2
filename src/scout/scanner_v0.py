@@ -367,6 +367,51 @@ def format_card(row: dict) -> str:
     return _cap("\n".join(x for x in L if x is not None), 3900)
 
 
+def write_routing_snapshot(
+    *,
+    item: dict,
+    source: str,
+    source_cfg: dict,
+    allowed_layers: list[int],
+    asset: str | None,
+    layer: int | None,
+    asset_confidence: float | None,
+    source_phase_prior: str,
+    headline_phase: str,
+    final_phase: str | None,
+    materiality_score: float | None,
+    materiality_family: str | None,
+    verdict: str | None = None,
+    chief_called: bool | None = None,
+    skipped: str | None = None,
+    note: str | None = None,
+) -> None:
+    J.write_routing_audit(
+        {
+            "source": source,
+            "source_class": item.get("source_class"),
+            "lead_class": item.get("lead_class"),
+            "source_trust": source_cfg.get("trust"),
+            "source_phase_prior": source_phase_prior,
+            "allowed_layers_from_source": allowed_layers,
+            "headline": item.get("title"),
+            "url": item.get("url"),
+            "buffer_doc_id": item.get("buffer_doc_id"),
+            "asset": asset,
+            "layer": layer,
+            "asset_confidence": asset_confidence,
+            "headline_phase": headline_phase,
+            "final_phase": final_phase,
+            "materiality_score": materiality_score,
+            "materiality_family": materiality_family,
+            "verdict": verdict,
+            "chief_called": chief_called,
+            "skipped": skipped,
+            "note": note,
+        }
+    )
+
+
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
 async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
@@ -374,15 +419,29 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                        carded: dict | None = None, max_per_asset: int = 1) -> dict | None:
     headline = item["title"]
     url = item.get("url")
+    doc_id = item.get("buffer_doc_id")
     normalized = bool(item.get("buffer_doc_id"))
     pre_routed = bool(item.get("asset")) and not normalized  # листинг = актив/слой известны из инструмента
     lead_class = item.get("lead_class", "LAGGING")
     source_class = item.get("source_class", "rss")
     source = item.get("source", "cointelegraph")
+    source_cfg = source_meta(source)
+    allowed = list(source_cfg.get("layers") or [])
+    source_phase_prior = str(source_cfg.get("phase_prior") or "mixed")
+    headline_temporal = route_temporal(headline)
+    headline_phase = str(headline_temporal.get("phase") or "AMBIGUOUS")
 
     # 1) РОУТЕР актив/слой (+ материальность для RSS; листинг pre-routed, материален by design)
     if normalized:
         if not item.get("asset"):
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=None, layer=item.get("layer"), asset_confidence=None,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=None, materiality_score=item.get("materiality_score"),
+                materiality_family=item.get("event_type"), skipped="no_tracked_asset",
+                note="normalized_item_without_asset",
+            )
             return {"skipped": "no_tracked_asset", "headline": headline}
         asset, inst = item["asset"], item.get("okx_inst")
         layer, conf = int(item.get("layer") or 2), float(item.get("asset_confidence") or 1.0)
@@ -397,9 +456,16 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         mat = {"family": item.get("event_type", "unclassified"), "score": 0.6}
         phase = item.get("phase", "REALIZED")
     else:
-        allowed = set(source_meta(source).get("layers") or []) or None
-        routed = route_asset(headline, allowed_layers=allowed)   # слои источника ограничивают кандидатов
+        allowed_set = set(allowed) or None
+        routed = route_asset(headline, allowed_layers=allowed_set)   # слои источника ограничивают кандидатов
         if not routed:
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=None, layer=None, asset_confidence=None,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=None, materiality_score=None, materiality_family=None,
+                skipped="no_tracked_asset", note="route_asset_returned_none",
+            )
             return {"skipped": "no_tracked_asset", "headline": headline}
         asset, inst, layer = routed["asset"], routed["okx_inst"], routed["layer"]
         conf, baseline_sym = routed["confidence"], routed.get("baseline")
@@ -407,18 +473,47 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         # (рой: не резать сюрприз вслепую пока журнал мал; V1 ужесточит).
         mat = score_materiality(headline, layer)
         if mat.get("drop_reason") == "noise_genre":
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=asset, layer=layer, asset_confidence=conf,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=None, materiality_score=mat.get("score"),
+                materiality_family=mat.get("family"), skipped="noise_genre",
+                note=str(mat.get("matched") or ""),
+            )
             return {"skipped": "noise_genre", "headline": headline, "asset": asset}
         phase = route_temporal(headline)["phase"]
 
     # CONTEXT (ценовой обзор/мнение/прогноз) — не событие → не будим LLM (экономия токенов)
     if phase == "CONTEXT":
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=mat.get("family"), skipped="context_commentary",
+        )
         return {"skipped": "context_commentary", "headline": headline, "asset": asset}
     # КАП — не флудить одним активом за проход (был кейс 4 BTC NO_GO подряд)
     if carded is not None and carded.get(asset, 0) >= max_per_asset:
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=mat.get("family"), skipped="asset_capped",
+        )
         return {"skipped": "asset_capped", "headline": headline, "asset": asset}
 
     # EVENT-ДЕДУП — то же событие из N лент/проходов → 1 карточка
     if recent is not None and is_duplicate(headline, asset, recent, dedup_min):
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=mat.get("family"), skipped="dup_event",
+        )
         return {"skipped": "dup_event", "headline": headline, "asset": asset}
     canon = canonical_url(url or f"https://www.okx.com/trade-swap/{(inst or asset or '').lower()}")
     ekey = item.get("event_key") or make_event_key(asset, headline)
@@ -444,6 +539,13 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         source_ts = item.get("time") or J.now_iso()[:10]
 
     if is_stale_story(source_ts, source, lead_class, source_class):
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=mat.get("family"), skipped="stale_article",
+        )
         return {"skipped": "stale_article", "headline": headline, "asset": asset}
 
     # baseline-цена ПО СЛОЮ (excess vs index): BTC из btc_ref, иначе снять (None = manual, off-OKX)
@@ -468,6 +570,17 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         orch = await orchestrator.process(news, asset, layer, lead_class, price, mline)
 
     if orch.get("decision") == "trash":
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=str((orch.get("agent") or {}).get("phase") or phase),
+            materiality_score=((orch.get("agent") or {}).get("materiality")
+                               if (orch.get("agent") or {}).get("materiality") is not None
+                               else mat.get("score")),
+            materiality_family=(orch.get("agent") or {}).get("event_type") or mat.get("family"),
+            skipped="trash_lowmat",
+        )
         return {"skipped": "trash_lowmat", "headline": headline, "asset": asset}
 
     agent = orch.get("agent") or {}
@@ -511,6 +624,10 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         chief_called=orch.get("chief_called", False),
         agent_direction=agent.get("direction", "none"), agent_confidence=agent.get("confidence"),
         llm_provider=last_usage.get("provider"), llm_model=last_usage.get("model"),
+        source_trust=source_cfg.get("trust"),
+        source_phase_prior=source_phase_prior,
+        headline_phase=headline_phase,
+        allowed_layers_from_source=allowed,
         levels=fields["levels"],
         catalyst=fields["catalyst"], in_price=fields["in_price"],
         red_flag=fields["red_flag"], mechanics=fields["mechanics"],
@@ -554,6 +671,16 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             matched = PS.match_realized_event(row)
             if matched:
                 PS.mark_matched(str(matched.get("pending_id")), row["card_id"])
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=row.get("asset"), layer=row.get("layer"), asset_confidence=row.get("asset_confidence"),
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=str(row.get("event_phase") or phase),
+            materiality_score=row.get("materiality_score"),
+            materiality_family=row.get("event_type"),
+            verdict=row.get("verdict"), chief_called=row.get("chief_called"),
+            note=row.get("side"),
+        )
     card = format_card(row)
 
     # 5+6) график + доставка — ТОЛЬКО chief-карточки (send_channel); дешёвый NO_GO = только журнал/датасет
@@ -650,7 +777,10 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                     stage = {"no_tracked_asset": "router", "dup_event": "dedup",
                          "context_commentary": "gate", "stale_article": "gate",
                          "asset_capped": "cap"}.get(skipped, "materiality")
-                    J.write_drop(it["url"], it["title"], skipped, asset=res.get("asset"), drop_stage=stage)
+                    J.write_drop(
+                        it["url"], it["title"], skipped,
+                        asset=res.get("asset"), drop_stage=stage, source=it.get("source"),
+                    )
                     if use_buffer and doc_id:
                         NB.mark_status(doc_id, NB.STATUS_DROPPED, skipped)
             print(f"  · скип [{skipped}]: {res['headline'][:65]}")

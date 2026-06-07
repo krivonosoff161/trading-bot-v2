@@ -37,6 +37,10 @@ def test_scanner_records_write_structured_blocks(monkeypatch, tmp_path):
         lead_class="LAGGING",
         source="decrypt",
         source_class="rss",
+        source_trust="wire",
+        source_phase_prior="mixed",
+        headline_phase="REALIZED",
+        allowed_layers_from_source=[1, 2],
         event_key="ZEC::security_incident",
         chief_called=True,
         agent_direction="short",
@@ -99,6 +103,9 @@ def test_scanner_records_write_structured_blocks(monkeypatch, tmp_path):
     loaded_event = R.read_index(R.EVENTS)[row["card_id"]]
     loaded_reasoning = R.read_index(R.REASONING)[row["card_id"]]
     assert loaded_event["normalized"]["asset"] == "ZEC"
+    assert loaded_event["source"]["source_trust"] == "wire"
+    assert loaded_event["normalized"]["headline_phase"] == "REALIZED"
+    assert loaded_event["normalized"]["allowed_layers_from_source"] == [1, 2]
     assert loaded_reasoning["agent"]["direction"] == "short"
 
 
@@ -119,6 +126,10 @@ def test_scanner_records_build_training_and_memory(monkeypatch, tmp_path):
         lead_class="LEADING",
         source="sec_edgar",
         source_class="api",
+        source_trust="official",
+        source_phase_prior="realized",
+        headline_phase="REALIZED",
+        allowed_layers_from_source=[5],
         event_key="NVDA::partnership",
         chief_called=True,
         agent_direction="long",
@@ -164,6 +175,9 @@ def test_scanner_records_build_training_and_memory(monkeypatch, tmp_path):
 
     assert training is not None and training["valid"] is True
     assert "low_confidence_source" not in training["quality_flags"]
+    assert training["source"]["source_trust"] == "official"
+    assert training["event"]["headline_phase"] == "REALIZED"
+    assert training["event"]["allowed_layers_from_source"] == [5]
     assert memory is not None and memory["lesson"]["result_label"] == "correct_long"
 
     assert R.write_training_record(training)
