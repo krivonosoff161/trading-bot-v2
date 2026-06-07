@@ -32,6 +32,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.scout.scanner_journal import JOURNAL, OUT_DIR, now_iso  # noqa: E402
+from src.scout import scanner_records as R  # noqa: E402
 
 OUTCOMES = OUT_DIR / "scanner_outcomes.jsonl"
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 resolve-outcomes; keyless)"}
@@ -124,6 +125,8 @@ def resolve() -> None:
         print("журнал пуст — нечего считать")
         return
     done = _scored_ids()
+    event_index = R.read_index(R.EVENTS)
+    reasoning_index = R.read_index(R.REASONING)
     now = dt.datetime.now(dt.timezone.utc)
     baseline_cache: dict = {}      # per-layer якорь excess (кэш цен)
 
@@ -201,6 +204,17 @@ def resolve() -> None:
                 "horizon_hours": r.get("horizon_hours"),
             }
             out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            training = R.build_training_record(
+                r,
+                rec,
+                event_block=event_index.get(cid),
+                reasoning_block=reasoning_index.get(cid),
+            )
+            memory = R.build_memory_record(r, rec, reasoning_block=reasoning_index.get(cid))
+            if training:
+                R.write_training_record(training)
+            if memory:
+                R.write_memory_record(memory)
             scored += 1
             mark = {True: "✓", False: "✗", None: "?"}[correct]
             sw = (f"mfe+{mfe_long:.1f}/mae{mae_long:.1f}" if mfe_long is not None else "путь?")

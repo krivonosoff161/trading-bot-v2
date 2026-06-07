@@ -19,6 +19,8 @@ import json
 import os
 from pathlib import Path
 
+from src.scout import pending_store as PS
+
 _ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = _ROOT / "logs" / "scout"
 JOURNAL = OUT_DIR / "scanner_journal.jsonl"
@@ -181,11 +183,7 @@ def ensure_pending_store() -> None:
     Пустой файл-маркер: timestamp ожиданий начинаем фиксировать с самого начала
     (анти-survivorship). Наполнение/матчинг «произошло» — V1+.
     """
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if not PENDING.exists():
-        PENDING.write_text(
-            "", encoding="utf-8"
-        )
+    PS.ensure_store()
 
 
 def write_drop(source_url: str, headline: str, drop_reason: str,

@@ -49,6 +49,8 @@ def test_temporal_future():
 
 def test_temporal_context():
     assert route_temporal("Bitcoin price analysis: key levels")["phase"] == "CONTEXT"
+    assert route_temporal("Should You Buy, Sell, or Hold MSTR Stock Before Q1 Earnings?")["phase"] == "CONTEXT"
+    assert route_temporal("Why Nvidia stock looks cheap ahead of its high-stakes earnings report this month")["phase"] == "CONTEXT"
 
 
 def test_materiality_noise_dropped():
