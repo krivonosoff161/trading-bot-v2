@@ -108,8 +108,8 @@ layers:
       - {source: google_news_energy, status: live, priority: 4, notes: "broad aggregator; often ambiguous"}
       - {source: oilprice, status: live, priority: 3, notes: "domain feed; useful only with strict gating"}
     expected_sources:
-      - {source: eia, status: planned, priority: 1, notes: "weekly inventory release; core expected source"}
-      - {source: opec, status: planned, priority: 1, notes: "official meeting/decision cadence"}
+      - {source: eia, status: live, priority: 1, notes: "official WPSR next-release cadence for crude inventory"}
+      - {source: opec, status: live, priority: 1, notes: "official next OPEC/OPEC+ meeting cadence from press releases"}
     watch_sources:
       - {source: gdelt, status: planned, priority: 3, notes: "geopolitical escalation around supply"}
 

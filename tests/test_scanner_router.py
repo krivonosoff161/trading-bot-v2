@@ -105,11 +105,15 @@ def test_layer_plan_matrix_loaded():
     tactical_sources = {row["source"] for row in l1["tactical_sources"]}
     l1_expected = {row["source"] for row in l1["expected_sources"]}
     l3_expected = {row["source"] for row in l3["expected_sources"]}
+    l4 = layer_plan(4)
+    l4_expected = {row["source"] for row in l4["expected_sources"]}
     realized_sources = {row["source"] for row in l2["realized_sources"]}
     expected_sources = {row["source"] for row in l2["expected_sources"]}
     assert "btc_eth_tactical" in tactical_sources
     assert "fred_calendar" in l1_expected
     assert "fred_calendar" in l3_expected
+    assert "eia" in l4_expected
+    assert "opec" in l4_expected
     assert "okx_listings" in realized_sources
     assert "dexscreener" in realized_sources
     assert "goplus_rugcheck" in realized_sources

@@ -59,6 +59,8 @@ from src.scout.sources.goplus_rugcheck import fetch_token_risk_signals          
 from src.scout.sources.token_unlocks import fetch_upcoming_unlocks              # noqa: E402
 from src.scout.sources.btc_eth_tactical import fetch_btc_eth_tactical           # noqa: E402
 from src.scout.sources.fred_calendar import fetch_fred_calendar                 # noqa: E402
+from src.scout.sources.eia import fetch_eia_schedule                           # noqa: E402
+from src.scout.sources.opec import fetch_opec_schedule                         # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
@@ -738,10 +740,12 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
     tactical_items = [] if (dry or not source_meta("btc_eth_tactical").get("enabled")) else fetch_btc_eth_tactical(limit=4)
     fred_items = [] if (dry or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
+    eia_items = [] if (dry or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
+    opec_items = [] if (dry or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
     unlock_items = [] if (dry or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
     dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
     risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
-    leading = listings + sec_items + unlock_items + tactical_items + fred_items   # опережающие/прямые сигналы
+    leading = listings + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items   # опережающие/прямые сигналы
     native = dex_items                            # native event feed for L2 (COINCIDENT)
     items = leading + risk_items + native + rss_items          # risk/official first, then coincident/native, then RSS
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
@@ -754,7 +758,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         normalized_stats = NB.normalize_pending(limit=buffer_batch)
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
-            f"источники: LEADING(лист+SEC+unlock+tactical+fred)={len(leading)} + L2_RISK={len(risk_items)} + "
+            f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec)={len(leading)} + L2_RISK={len(risk_items)} + "
             f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
@@ -763,7 +767,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     else:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
         print(
-            f"источники: LEADING(лист+SEC+unlock+tactical+fred)={len(leading)} + L2_RISK={len(risk_items)} + "
+            f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec)={len(leading)} + L2_RISK={len(risk_items)} + "
             f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
             f"новых={len(fresh)}\n"
         )
