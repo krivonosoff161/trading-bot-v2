@@ -59,14 +59,14 @@ assets:
   - {sym: ANTHROPIC, layer: 5, okx_inst: ANTHROPIC-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [anthropic], weak: []}
   - {sym: SPACEX, layer: 5, okx_inst: SPACEX-USDT-SWAP, baseline: QQQ-USDT-SWAP, strong: [spacex], weak: []}
   # --- слой 3: металлы/макро (off-OKX → okx_inst/baseline null; цена/график по возможности) ---
-  - {sym: XAU, layer: 3, okx_inst: null, baseline: null, strong: [gold, "gold price", "spot gold"], weak: [xau]}
-  - {sym: XAG, layer: 3, okx_inst: null, baseline: null, strong: [silver, "silver price"], weak: [xag]}
-  - {sym: XPT, layer: 3, okx_inst: null, baseline: null, strong: [platinum], weak: [xpt]}
-  - {sym: XPD, layer: 3, okx_inst: null, baseline: null, strong: [palladium], weak: [xpd]}
+  - {sym: XAU, layer: 3, okx_inst: XAU-USDT-SWAP, baseline: XAU-USDT-SWAP, strong: [gold, "gold price", "spot gold"], weak: [xau]}
+  - {sym: XAG, layer: 3, okx_inst: XAG-USDT-SWAP, baseline: XAU-USDT-SWAP, strong: [silver, "silver price"], weak: [xag]}
+  - {sym: XPT, layer: 3, okx_inst: XPT-USDT-SWAP, baseline: XAU-USDT-SWAP, strong: [platinum], weak: [xpt]}
+  - {sym: XPD, layer: 3, okx_inst: XPD-USDT-SWAP, baseline: XAU-USDT-SWAP, strong: [palladium], weak: [xpd]}
   - {sym: HG, layer: 3, okx_inst: null, baseline: null, strong: [copper, "copper price"], weak: []}
   # --- слой 4: нефть/газ/энергия (off-OKX → null) ---
-  - {sym: CL, layer: 4, okx_inst: null, baseline: null, strong: ["crude oil", "oil price", "oil prices", brent, wti, opec], weak: []}
-  - {sym: NG, layer: 4, okx_inst: null, baseline: null, strong: ["natural gas", "nat gas"], weak: []}
+  - {sym: CL, layer: 4, okx_inst: CL-USDT-SWAP, baseline: CL-USDT-SWAP, strong: ["crude oil", "oil price", "oil prices", brent, wti, opec], weak: []}
+  - {sym: NG, layer: 4, okx_inst: NG-USDT-SWAP, baseline: CL-USDT-SWAP, strong: ["natural gas", "nat gas"], weak: []}
 
 # Классификация ИНСТРУМЕНТА → слой (для новых листингов открытой вселенной, где актив заранее не известен).
 # Базовый символ инструмента в списке → его слой; иначе крипта (слой 2 альт; мажоры из assets = слой 1).
@@ -81,4 +81,6 @@ layer_map:
 baseline_by_layer:
   1: BTC-USDT-SWAP
   2: BTC-USDT-SWAP
+  3: XAU-USDT-SWAP
+  4: CL-USDT-SWAP
   5: QQQ-USDT-SWAP
