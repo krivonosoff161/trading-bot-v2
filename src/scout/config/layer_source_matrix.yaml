@@ -1,0 +1,195 @@
+# layer_source_matrix.yaml - single source of truth for scout intake by layer.
+#
+# Purpose:
+# - document what each layer should read
+# - separate realized / expected / watch / context inputs
+# - keep activation order explicit
+# - avoid "all layers read generic RSS" drift
+#
+# status:
+#   live     - already used in the scanner runtime
+#   planned  - approved, but not yet wired into live intake
+#   research - only probes/research scripts exist
+
+version: 1
+updated_utc: "2026-06-07T00:00:00Z"
+
+layers:
+  1:
+    name: "BTC/ETH majors and crypto regime"
+    thesis: "Read market-moving crypto events, macro shocks, and tactical regime changes for BTC/ETH."
+    tradeable_families:
+      - etf_flow
+      - regulation
+      - exchange_incident
+      - protocol_security
+      - liquidation_regime
+      - macro_release
+      - treasury_move
+    context_only_families:
+      - price_analysis
+      - sentiment_commentary
+      - educational_content
+      - analyst_opinion
+    realized_sources:
+      - {source: cointelegraph, status: live, priority: 3, notes: "broad crypto wire; lagging but useful for event recall"}
+      - {source: decrypt, status: live, priority: 3, notes: "broad crypto wire; better detail on incidents"}
+      - {source: google_news_crypto, status: live, priority: 4, notes: "aggregator only; often post-factum"}
+    expected_sources:
+      - {source: fred_calendar, status: planned, priority: 1, notes: "CPI/FOMC/rates for crypto macro surprise layer"}
+    watch_sources:
+      - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only until trust filters are in place"}
+    tactical_sources:
+      - {source: btc_eth_tactical, status: planned, priority: 1, notes: "funding/OI/liquidations/level reclaim; not news-only"}
+      - {source: etf_flow_feed, status: planned, priority: 1, notes: "spot ETF net flows and abnormal deviations"}
+
+  2:
+    name: "Alts, memes, on-chain and listings"
+    thesis: "Read event-driven altcoin flows: listings, unlocks, token security, wallet moves, DEX momentum."
+    tradeable_families:
+      - listing
+      - delisting
+      - token_unlock
+      - rug_flag
+      - exploit
+      - whale_move
+      - liquidity_spike
+      - governance_vote
+    context_only_families:
+      - meme_commentary
+      - influencer_take
+      - narrative_thread
+      - educational_content
+    realized_sources:
+      - {source: okx_listings, status: live, priority: 2, notes: "already wired, but too narrow alone"}
+      - {source: dexscreener, status: planned, priority: 1, notes: "pairs/liquidity/volume discovery for alt flow"}
+      - {source: goplus_rugcheck, status: planned, priority: 1, notes: "token security / rug veto / exploit flags"}
+    expected_sources:
+      - {source: token_unlocks, status: planned, priority: 1, notes: "unlock schedule for pending/surprise"}
+    watch_sources:
+      - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only signal enrichment"}
+      - {source: onchain_whales_probe, status: research, priority: 2, notes: "wallet flow research exists, not live"}
+
+  3:
+    name: "Gold, silver, metals and macro-precious"
+    thesis: "Read macro releases, central-bank demand and physical/industrial metal shocks."
+    tradeable_families:
+      - macro_release
+      - central_bank_buying
+      - china_demand
+      - mine_disruption
+      - safe_haven_shock
+    context_only_families:
+      - outlook_column
+      - weekly_analysis
+      - retail_price_roundup
+    realized_sources:
+      - {source: google_news_metals, status: live, priority: 4, notes: "broad aggregator; noisy but gives coverage"}
+    expected_sources:
+      - {source: fred_calendar, status: planned, priority: 1, notes: "Fed/CPI/NFP timing for gold surprise"}
+    watch_sources:
+      - {source: gdelt, status: planned, priority: 3, notes: "geopolitics / supply / trade references"}
+
+  4:
+    name: "Oil, gas and energy"
+    thesis: "Read OPEC, EIA, sanctions and supply disruptions that move crude and energy proxies."
+    tradeable_families:
+      - opec
+      - inventory
+      - sanctions
+      - supply_disruption
+      - refinery_outage
+      - pipeline_outage
+    context_only_families:
+      - oil_outlook
+      - price_commentary
+      - retrospective_narrative
+    realized_sources:
+      - {source: google_news_energy, status: live, priority: 4, notes: "broad aggregator; often ambiguous"}
+      - {source: oilprice, status: live, priority: 3, notes: "domain feed; useful only with strict gating"}
+    expected_sources:
+      - {source: eia, status: planned, priority: 1, notes: "weekly inventory release; core expected source"}
+      - {source: opec, status: planned, priority: 1, notes: "official meeting/decision cadence"}
+    watch_sources:
+      - {source: gdelt, status: planned, priority: 3, notes: "geopolitical escalation around supply"}
+
+  5:
+    name: "Equities, AI proxies and pre-IPO/perp names"
+    thesis: "Read official filings, earnings and corporate actions for listed AI/equity proxies."
+    tradeable_families:
+      - earnings
+      - guidance
+      - filing_8k
+      - filing_s1
+      - capital_raise
+      - partnership
+      - product_launch
+      - mna
+    context_only_families:
+      - valuation_commentary
+      - buy_sell_hold
+      - preview_article
+      - opinion
+    realized_sources:
+      - {source: sec_edgar, status: live, priority: 1, notes: "best official realized source in this layer"}
+      - {source: google_news_equities, status: live, priority: 4, notes: "coverage only; mostly lagging and preview-heavy"}
+    expected_sources:
+      - {source: earnings_calendar, status: planned, priority: 1, notes: "earnings dates for pending/surprise"}
+    watch_sources:
+      - {source: company_ir_feeds, status: planned, priority: 2, notes: "official newsroom / investor relations feeds"}
+
+  6:
+    name: "Cross-layer watch and linkage layer"
+    thesis: "Do not decide trades; infer linked entities, next-watch candidates and cross-layer attention."
+    tradeable_families: []
+    context_only_families:
+      - cross_asset_link
+      - buried_reference
+      - followup_watch
+    realized_sources:
+      - {source: internal_event_blocks, status: planned, priority: 1, notes: "primary input should be full text from L1-L5 events"}
+    expected_sources: []
+    watch_sources:
+      - {source: global_macro_world_feed, status: planned, priority: 3, notes: "only after internal L6 seed works"}
+
+activation_order:
+  - layer: 2
+    reason: "Current biggest blind spot. L2 is effectively empty in live runtime."
+    sources:
+      - dexscreener
+      - goplus_rugcheck
+      - token_unlocks
+  - layer: 1
+    reason: "Need tactical BTC/ETH regime feed in addition to lagging headlines."
+    sources:
+      - btc_eth_tactical
+      - etf_flow_feed
+  - layer: 3
+    reason: "Expected-macro layer improves phase correctness and pending/surprise."
+    sources:
+      - fred_calendar
+  - layer: 4
+    reason: "Energy requires official expected/realized cadence, not narrative columns."
+    sources:
+      - eia
+      - opec
+  - layer: 5
+    reason: "Official filings already live; next gain is expected earnings layer."
+    sources:
+      - earnings_calendar
+  - layer: 6
+    reason: "Only after event storage and watch schema are stable."
+    sources:
+      - internal_event_blocks
+
+global_rules:
+  drop_default_context_genres:
+    - buy_sell_hold
+    - looks_cheap
+    - weekly_recap
+    - glossary
+    - educational_content
+    - price_today_roundup
+  no_trade_from_context_only: true
+  no_chief_without_event_or_watch_match: true
+  store_all_raw_ingest: true

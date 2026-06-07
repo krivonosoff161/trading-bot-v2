@@ -36,6 +36,11 @@ def _sources() -> dict:
     return yaml.safe_load((_CFG / "source_registry.yaml").read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=1)
+def _layer_matrix() -> dict:
+    return yaml.safe_load((_CFG / "layer_source_matrix.yaml").read_text(encoding="utf-8"))
+
+
 def materiality_threshold() -> float:
     return _taxonomy().get("materiality", {}).get("threshold_llm", 0.5)
 
@@ -61,6 +66,14 @@ def classify_layer(symbol: str) -> int:
     return 2
 
 
+def tracked_assets(layer: int | None = None) -> list[dict]:
+    """Return tracked assets, optionally filtered by layer."""
+    assets = list(_entities().get("assets", []) or [])
+    if layer is None:
+        return assets
+    return [a for a in assets if int(a.get("layer") or 0) == int(layer)]
+
+
 def baseline_for_layer(layer: int) -> str | None:
     """Якорь baseline по слою (excess vs index). Нет в карте → None (manual, off-OKX)."""
     return (_entities().get("baseline_by_layer", {}) or {}).get(layer)
@@ -77,6 +90,14 @@ def enabled_sources() -> dict:
         for name, meta in ((_sources().get("sources", {}) or {}).items())
         if meta.get("enabled") is True
     }
+
+
+def layer_plan(layer: int | None = None) -> dict:
+    """Return the approved layer/source intake matrix or one layer slice."""
+    matrix = _layer_matrix() or {}
+    if layer is None:
+        return matrix
+    return ((matrix.get("layers", {}) or {}).get(int(layer)) or {})
 
 
 # ── РОУТЕР актив/слой ────────────────────────────────────────────────────────
