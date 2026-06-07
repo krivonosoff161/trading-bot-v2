@@ -160,6 +160,8 @@ def ingest_items(items: list[dict], path: Path = DB_PATH) -> dict:
             if not title and not url:
                 continue
             canon = canonical_url(url)
+            if item.get("event_key") and item.get("source_class") != "rss":
+                canon = f"{canon}::{item['event_key']}"
             doc_id = item.get("doc_id") or doc_id_for(canon, title)
             source = item.get("source") or item.get("source_id") or "unknown"
             existing = conn.execute("SELECT status FROM raw_items WHERE doc_id=?", (doc_id,)).fetchone()

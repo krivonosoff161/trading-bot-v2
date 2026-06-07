@@ -27,7 +27,7 @@ The scanner must distinguish:
 As of 2026-06-07:
 
 - live cards are dominated by RSS/Google News
-- `L2` is effectively empty
+- `L2` has native event sources now, but still lacks watch/on-chain depth
 - on-chain, wallet, fund-flow and calendar sources are mostly planned, not live
 - the system is often correct about "no news edge" but still misses tactical moves
 
@@ -65,11 +65,11 @@ Live now:
 - Cointelegraph
 - Decrypt
 - Google News crypto
+- BTC/ETH tactical regime feed (OKX public funding/OI/liquidation monitor)
 
 Missing next:
 
 - FRED expected macro
-- tactical BTC/ETH feed
 - ETF flow feed
 
 ### L2
@@ -85,14 +85,15 @@ Read:
 
 Live now:
 
-- OKX listings only
+- OKX listings
+- DexScreener
+- GoPlus/RugCheck
+- Token unlock feed (requires `TOKENOMIST_API_KEY`)
 
 Missing next:
 
-- DexScreener
-- GoPlus/RugCheck
-- Token unlock feed
 - Telegram alpha as watch-only
+- wallet/on-chain flow
 
 This is the highest-priority gap.
 
@@ -172,7 +173,6 @@ L6 should not issue trade verdicts. It should emit `watch_hint` and `linked_enti
    - Token unlocks
 
 2. `L1 tactical sources`
-   - BTC/ETH tactical regime feed
    - ETF flow feed
 
 3. `Expected macro layer`
@@ -205,7 +205,7 @@ Implementation starts with:
 
 1. `layer_source_matrix.yaml` as single source of truth
 2. bringing `L2` live with event-native sources
-3. then expected/calendar sources
-4. then tactical BTC/ETH
+3. bringing `L1` tactical BTC/ETH live
+4. then expected/calendar sources
 
 Until those steps are live, the scanner should be interpreted as a conservative event filter, not a full market-intelligence engine.

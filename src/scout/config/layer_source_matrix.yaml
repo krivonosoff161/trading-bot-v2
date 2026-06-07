@@ -40,7 +40,7 @@ layers:
     watch_sources:
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only until trust filters are in place"}
     tactical_sources:
-      - {source: btc_eth_tactical, status: planned, priority: 1, notes: "funding/OI/liquidations/level reclaim; not news-only"}
+      - {source: btc_eth_tactical, status: live, priority: 1, notes: "OKX public funding/OI/liquidation regime monitor; narrow and event-driven"}
       - {source: etf_flow_feed, status: planned, priority: 1, notes: "spot ETF net flows and abnormal deviations"}
 
   2:
