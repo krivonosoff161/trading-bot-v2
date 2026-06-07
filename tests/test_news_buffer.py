@@ -38,6 +38,38 @@ def test_news_buffer_ingest_resolve_normalize_ready(tmp_path):
     assert stats["raw"][NB.STATUS_ANALYZED] == 1
 
 
+def test_news_buffer_propagates_cross_layer_flag(tmp_path):
+    # L5-имя от крипто-ленты (decrypt allows [1,2]) → восстановлено strong cross-layer, флаг должен дойти
+    db = tmp_path / "nb_xl.sqlite"
+    spacex = {
+        "title": "Kraken offers SpaceX IPO access through xStocks",
+        "url": "https://decrypt.co/example-spacex", "time": "2026-06-07",
+        "source": "decrypt", "source_class": "rss", "lead_class": "LAGGING",
+        "text": "Kraken now offers SpaceX pre-IPO access via xStocks. " * 20,
+    }
+    NB.ingest_items([spacex], path=db)
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1 and ready[0]["asset"] == "SPACEX" and ready[0]["layer"] == 5
+    assert ready[0]["cross_layer"] is True
+
+    # in-layer матч (ZEC L2 от крипто-ленты) → НЕ cross_layer
+    db2 = tmp_path / "nb_inlayer.sqlite"
+    zec = {
+        "title": "Zcash fixes Orchard bug after emergency network upgrade",
+        "url": "https://decrypt.co/example-zec2", "time": "2026-06-07",
+        "source": "decrypt", "source_class": "rss", "lead_class": "LAGGING",
+        "text": "Zcash patched an Orchard bug after an upgrade. " * 20,
+    }
+    NB.ingest_items([zec], path=db2)
+    NB.resolve_pending(limit=10, path=db2, dry=True)
+    NB.normalize_pending(limit=10, path=db2)
+    r2 = NB.ready_items(limit=10, path=db2)
+    assert len(r2) == 1 and r2[0]["asset"] == "ZEC"
+    assert not r2[0]["cross_layer"]
+
+
 def test_news_buffer_keeps_distinct_prerouted_api_events_by_event_key(tmp_path):
     db = tmp_path / "news_buffer.sqlite"
     first = {

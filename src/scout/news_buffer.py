@@ -392,6 +392,7 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
             lead_class = row["lead_class"] or raw.get("lead_class") or "LAGGING"
 
             drop_reason = None
+            cross_layer = False
             if raw.get("asset"):
                 asset = raw.get("asset")
                 okx_inst = raw.get("okx_inst")
@@ -416,6 +417,7 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                     layer = int(routed["layer"])
                     baseline = routed.get("baseline")
                     conf = routed.get("confidence")
+                    cross_layer = bool(routed.get("cross_layer"))   # сильный алиас вне слоя источника
                     mat = score_materiality(title, layer)
                     phase = route_temporal(title)["phase"]
                     if mat.get("drop_reason") == "noise_genre":
@@ -437,6 +439,7 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                 "entities": [asset] if asset else [],
                 "asset_hint": asset,
                 "layer_hint": layer,
+                "cross_layer": cross_layer,
                 "event_type_hint": mat.get("family") or raw.get("event_type") or "unclassified",
                 "phase_hint": phase,
                 "lead_class": lead_class,
@@ -524,6 +527,10 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
         ).fetchall()
     out = []
     for row in rows:
+        try:
+            mj = json.loads(row["machine_json"] or "{}")
+        except Exception:
+            mj = {}
         out.append(
             {
                 "buffer_doc_id": row["doc_id"],
@@ -538,6 +545,7 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
                 "layer": row["layer"],
                 "baseline": row["baseline_symbol"],
                 "asset_confidence": row["asset_confidence"],
+                "cross_layer": bool(mj.get("cross_layer")),
                 "event_type": row["event_type_hint"],
                 "phase": row["phase_hint"],
                 "materiality_score": row["materiality_score"],

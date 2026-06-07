@@ -456,6 +456,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         asset, inst = item["asset"], item.get("okx_inst")
         layer, conf = int(item.get("layer") or 2), float(item.get("asset_confidence") or 1.0)
         baseline_sym = item.get("baseline")
+        cross_layer = bool(item.get("cross_layer"))   # буфер-путь: флаг из normalize_pending (recall-fix аудит)
         mat = {"family": item.get("event_type") or "unclassified",
                "score": item.get("materiality_score") or 0.0}
         phase = str(item.get("phase") or "AMBIGUOUS").upper()
