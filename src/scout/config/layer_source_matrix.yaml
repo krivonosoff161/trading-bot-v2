@@ -134,7 +134,7 @@ layers:
       - {source: sec_edgar, status: live, priority: 1, notes: "best official realized source in this layer"}
       - {source: google_news_equities, status: live, priority: 4, notes: "coverage only; mostly lagging and preview-heavy"}
     expected_sources:
-      - {source: earnings_calendar, status: planned, priority: 1, notes: "earnings dates for pending/surprise"}
+      - {source: earnings_calendar, status: live, priority: 1, notes: "earnings dates from SEC-linked company announcements for pending/surprise"}
     watch_sources:
       - {source: company_ir_feeds, status: planned, priority: 2, notes: "official newsroom / investor relations feeds"}
 
