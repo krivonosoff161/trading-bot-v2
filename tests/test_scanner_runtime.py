@@ -99,3 +99,33 @@ def test_process_item_logs_routing_audit_for_context_gate(monkeypatch):
     assert res == {"skipped": "context_commentary", "headline": "Bitcoin price analysis ahead of earnings", "asset": "BTC"}
     assert audits and audits[0]["skipped"] == "context_commentary"
     assert audits[0]["headline_phase"] == "CONTEXT"
+
+
+def test_process_item_uses_structured_text_for_pre_routed_items():
+    res = asyncio.run(
+        S.process_item(
+            {
+                "title": "PEPE DEX volume spike: +18.4% / 24h with $910,000 volume on uniswap",
+                "text": "DexScreener observed PEPE against WETH on ethereum/uniswap. Liquidity $240,000.",
+                "url": "https://dexscreener.com/ethereum/pair-pepe-good",
+                "time": "2026-06-07T12:00:00Z",
+                "source": "dexscreener",
+                "source_class": "api",
+                "lead_class": "COINCIDENT",
+                "asset": "PEPE",
+                "okx_inst": "PEPE-USDT-SWAP",
+                "layer": 2,
+                "baseline": "BTC-USDT-SWAP",
+                "phase": "REALIZED",
+                "event_type": "dex_momentum",
+                "trigger_type": "dexscreener_signal",
+            },
+            mline=None,
+            dry=True,
+        )
+    )
+
+    assert res is not None
+    assert res["row"]["asset"] == "PEPE"
+    assert res["row"]["source"] == "dexscreener"
+    assert res["row"]["low_confidence"] is False

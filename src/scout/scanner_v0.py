@@ -54,6 +54,7 @@ from src.scout.dedup import is_duplicate, event_key as make_event_key          #
 from src.scout import news_buffer as NB                                        # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
 from src.scout.sources.sec_edgar import fetch_recent_filings                    # noqa: E402
+from src.scout.sources.dexscreener import fetch_alt_flow_signals                # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
@@ -518,7 +519,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     canon = canonical_url(url or f"https://www.okx.com/trade-swap/{(inst or asset or '').lower()}")
     ekey = item.get("event_key") or make_event_key(asset, headline)
 
-    # 3) тело — только для новостей со статьёй (у листинга статьи нет → анализ по заголовку)
+    # 3) тело — для normalised/pre-routed items берем structured text, для RSS/статей — extract.
     if normalized:
         body_text = (item.get("text") or "").strip()
         source_ts = item.get("time") or J.now_iso()[:10]
@@ -526,6 +527,10 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             low_conf = float(item.get("extraction_quality") or 0.0) < 0.5
         except (TypeError, ValueError):
             low_conf = True
+    elif pre_routed:
+        body_text = (item.get("text") or "").strip()
+        source_ts = item.get("time") or J.now_iso()[:10]
+        low_conf = not bool(body_text)
     elif url and not pre_routed:
         ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
         if not ext or ext.get("error") or len(ext.get("text") or "") < 200:
@@ -727,8 +732,10 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         rss_items = []
     listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
     sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
+    dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
     leading = listings + sec_items                # опережающие (LEADING): листинги OKX + SEC-филинги
-    items = leading + rss_items                   # LEADING первыми
+    native = dex_items                            # native event feed for L2 (COINCIDENT)
+    items = leading + native + rss_items          # event-native first, RSS after
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
         J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
                          "headline": it.get("title"), "url": it.get("url")} for it in items])
@@ -739,14 +746,17 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         normalized_stats = NB.normalize_pending(limit=buffer_batch)
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
-            f"источники: LEADING(лист+SEC)={len(leading)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(лист+SEC)={len(leading)} + L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
             f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
         )
     else:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
-        print(f"источники: LEADING(лист+SEC)={len(leading)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
+        print(
+            f"источники: LEADING(лист+SEC)={len(leading)} + L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
+            f"новых={len(fresh)}\n"
+        )
 
     made = n_dropped = n_llm_fail = total_tokens = 0
     total_cost = 0.0

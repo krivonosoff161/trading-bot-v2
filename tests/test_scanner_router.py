@@ -12,7 +12,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.scout.router import route_asset, route_temporal, score_materiality  # noqa: E402
+from src.scout.router import layer_plan, route_asset, route_temporal, score_materiality  # noqa: E402
 
 
 def test_route_asset_strong_name():
@@ -93,6 +93,14 @@ def test_materiality_oil_opec_family():
 def test_materiality_equities_earnings_family():
     m = score_materiality("Nvidia beats earnings, raises guidance", 5)
     assert m["family"] == "earnings" and m["score"] >= 0.5
+
+
+def test_layer_plan_matrix_loaded():
+    l2 = layer_plan(2)
+    assert l2["name"]
+    realized_sources = {row["source"] for row in l2["realized_sources"]}
+    assert "okx_listings" in realized_sources
+    assert "dexscreener" in realized_sources
 
 
 if __name__ == "__main__":
