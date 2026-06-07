@@ -154,8 +154,8 @@ scout (RSS/новости) · analyzer (LLM-разбор) · chart_renderer (г�
 ```
 L1 крипта:    BTC ETH SOL BNB XRP
 L2 альты/мем: ОТКРЫТЫЙ (триггер-фид, НЕ фикс-список — монета приходит листингом/соц/on-chain)
-L3 металлы:   XAU XAG(серебро) XPT(платина) XPD(палладий)   [медь — вне OKX, веб]
-L4 ресурсы:   CL(нефть WTI)                                  [Brent/газ — вне OKX, веб]
+L3 металлы:   XAU XAG(серебро) XPT(платина) XPD(палладий)   [OKX perps; медь — вне OKX, веб]
+L4 ресурсы:   CL(нефть WTI) NG(газ)                          [OKX perps; Brent — через новости/контекст]
 L5 акции:     чипы:    NVDA AMD AVGO TSM INTC MU QCOM ARM MRVL
               бигтех:  MSFT GOOGL META AMZN AAPL TSLA NFLX
               крипто-прокси: COIN MSTR HOOD PLTR    ETF: QQQ SPY    софт: CRWD NOW ORCL
@@ -223,12 +223,12 @@ L5 акции:     чипы:    NVDA AMD AVGO TSM INTC MU QCOM ARM MRVL
 ```
 **Конфиги (не хардкод):** `src/scout/config/{entities,event_taxonomy,source_registry}.yaml` (активы/слои/baseline_by_layer/layer_map · материальность+noise+dedup+limits · источники/lead_class/trust).
 **Логи (полный аудит):** `logs/scout/{ingest_log,scanner_journal,drops,llm_budget,scanner_outcomes}.jsonl` + `scanner_seen.json`.
-**Слои:** ASML→5/QQQ, EWT→2/BTC, металлы/нефть→manual baseline; крипта-мажоры(BTC/ETH/SOL/XRP/BNB)→1/BTC.
+**Слои:** ASML→5/QQQ, EWT→2/BTC, металлы→3/XAU, нефть/газ→4/CL; крипта-мажоры(BTC/ETH/SOL/XRP/BNB)→1/BTC.
 
 **ОСТАЛОСЬ:**
 - **Этап 3:** window-state + surprise-delta (z=факт−консенсус/σ + pre_drift). Нужны: free-key FRED/EIA (макро-консенсус) + источники; на крипте консенсуса мало → ценнее с акциями/макро. `pending_events.jsonl` пока skeleton.
 - **PUSH-источник** (event-driven, как хотел трейдер): Tree-of-Alpha WS (keyless) / Telegram-листенер (Telethon, api_id трейдера). Сейчас RSS=опрос 30мин; анти-спам (дедуп по содержанию) уже есть.
-- Расширение трекаемых активов/слоёв; SEC EDGAR (акции, keyless); per-layer baseline off-OKX (Stooq) для металлов/нефти.
+- Расширение трекаемых активов/слоёв; SEC EDGAR (акции, keyless); per-layer OKX baseline для металлов/нефти/газа.
 - Калибровка порогов материальности/дедупа по накопленным `drops.jsonl`.
 
 ---
@@ -255,8 +255,8 @@ RSS, а агентная система с дешевыми layer-агентам
 
 ### Что реально подключено
 
-- L1/L2/L5 получают поток: RSS Cointelegraph, Decrypt, Google News + OKX listings.
-- L3/L4 описаны в конфигурации, но источники металлов/ресурсов еще не подключены.
+- L1/L2/L5 получают поток: RSS Cointelegraph, Decrypt, Google News + OKX listings + SEC/DexScreener/GoPlus.
+- L3/L4 получают поток: Google News metals/energy + FRED/EIA/OPEC/OilPrice; price/outcome по OKX `XAU/XAG/XPT/XPD/CL/NG-USDT-SWAP`.
 - `src/scout/config/entities.yaml` расширен до 40+ активов: majors, alts/memes, акции,
   pre-IPO/perp-темы вроде SpaceX, Nvidia, Anthropic.
 - `source_registry.yaml` является картой намерений `источник -> слой -> lead_class -> phase`.
@@ -356,8 +356,7 @@ RSS+листинги оставлен как fallback через `set USE_BUFFER
 
 ### Открытые дыры
 
-- L3/L4 голодают без источников: нужны OilPrice/OPEC/EIA для ресурсов и Kitco/GDELT/FRED
-  или аналоги для металлов/макро.
+- L3/L4 больше не являются пустыми слоями: OilPrice/OPEC/EIA/FRED подключены, но им всё ещё нужны более быстрые breaking-источники для геополитики и сырья.
 - `pending_events` и surprise-delta концептуально описаны, но полноценный календарный
   ingest еще не построен. Без него "было/будет" не даст честный surprise.
 - Buffer стал default runtime для `scanner.bat`. Следующий шаг - несколько стабильных

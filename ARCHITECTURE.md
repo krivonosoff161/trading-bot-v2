@@ -56,8 +56,10 @@ source item -> raw_items -> machine_docs -> normalized_events -> READY_FOR_AGENT
 3. Единый LLM-клиент собран: `src/utils/llm_client.py`, Alibaba включается через `.env`.
 4. Журнал scanner и outcome-resolver работают.
 5. SQLite intake buffer добавлен и включен в bat по умолчанию.
-6. Следующий архитектурный шаг - расширить источники L3/L4 и построить calendar/pending ingest
-   для механизма "было/будет" и surprise-delta.
+6. L3/L4 получили источники и OKX baselines: FRED/EIA/OPEC/OilPrice + XAU/CL price-path.
+7. Следующий архитектурный шаг - измерить новый поток после cross-layer recall fix и спроектировать
+   MARKET_CONTEXT/WATCH_MARKET для макро-заголовков без единого актива. `main_event_engine`
+   не строить до подтверждения на данных.
 
 ## Граница
 - Движок `src/strategy/*`, `src/data/{main_impulse,impulse_pump}_*` — НЕ трогать.
