@@ -31,6 +31,12 @@ KIND_CALENDAR = "calendar"
 KIND_INFERRED = "inferred"
 KIND_WATCH = "watch"
 
+_EVENT_MATCH_TERMS = {
+    "cpi": ["cpi", "consumer price index", "inflation"],
+    "fomc": ["fomc", "federal open market committee", "fed decision", "rate decision"],
+    "jobs": ["employment situation", "jobs report", "nonfarm payroll", "nonfarm payrolls", "nfp"],
+}
+
 
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -183,10 +189,11 @@ def build_pending_from_journal(row: dict[str, Any]) -> dict[str, Any] | None:
     if phase != "expected":
         return None
     source_ts = row.get("source_ts")
+    event_type = str(row.get("event_type") or "unknown").lower()
     return build_pending_record(
         asset=row.get("asset"),
         layer=row.get("layer"),
-        event_type=row.get("event_type"),
+        event_type=event_type,
         expected_start_ts=source_ts,
         expected_end_ts=source_ts,
         kind=KIND_CALENDAR,
@@ -197,7 +204,11 @@ def build_pending_from_journal(row: dict[str, Any]) -> dict[str, Any] | None:
         confidence=row.get("agent_confidence"),
         created_from_card_id=row.get("card_id"),
         created_from_event_key=row.get("event_key"),
-        metadata={"headline": row.get("headline"), "lead_class": row.get("lead_class")},
+        metadata={
+            "headline": row.get("headline"),
+            "lead_class": row.get("lead_class"),
+            "match_terms": _EVENT_MATCH_TERMS.get(event_type, []),
+        },
     )
 
 
@@ -211,6 +222,7 @@ def match_realized_event(row: dict[str, Any], window_hours: int = 72) -> dict[st
         return None
     asset = row.get("asset")
     event_type = row.get("event_type")
+    headline_low = str(row.get("headline") or "").lower()
     source_ts = parse_ts(row.get("source_ts"))
     if not asset or not event_type or source_ts is None:
         return None
@@ -221,7 +233,12 @@ def match_realized_event(row: dict[str, Any], window_hours: int = 72) -> dict[st
         if item.get("asset") != asset:
             continue
         if item.get("event_type") != event_type:
-            continue
+            if str(event_type).lower() not in {"macro", "unclassified"}:
+                continue
+            meta = item.get("metadata") or {}
+            match_terms = [str(x).lower() for x in (meta.get("match_terms") or []) if str(x).strip()]
+            if not match_terms or not any(term in headline_low for term in match_terms):
+                continue
         expected_start = parse_ts(item.get("expected_start_ts"))
         if expected_start is None:
             continue

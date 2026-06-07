@@ -36,7 +36,7 @@ layers:
       - {source: decrypt, status: live, priority: 3, notes: "broad crypto wire; better detail on incidents"}
       - {source: google_news_crypto, status: live, priority: 4, notes: "aggregator only; often post-factum"}
     expected_sources:
-      - {source: fred_calendar, status: planned, priority: 1, notes: "CPI/FOMC/rates for crypto macro surprise layer"}
+      - {source: fred_calendar, status: live, priority: 1, notes: "CPI/FOMC/jobs expected calendar for crypto macro surprise layer"}
     watch_sources:
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only until trust filters are in place"}
     tactical_sources:
@@ -86,7 +86,7 @@ layers:
     realized_sources:
       - {source: google_news_metals, status: live, priority: 4, notes: "broad aggregator; noisy but gives coverage"}
     expected_sources:
-      - {source: fred_calendar, status: planned, priority: 1, notes: "Fed/CPI/NFP timing for gold surprise"}
+      - {source: fred_calendar, status: live, priority: 1, notes: "Fed/CPI/NFP expected calendar for gold surprise"}
     watch_sources:
       - {source: gdelt, status: planned, priority: 3, notes: "geopolitics / supply / trade references"}
 

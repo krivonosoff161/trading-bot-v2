@@ -80,6 +80,40 @@ def test_pending_store_matches_realized_event(monkeypatch, tmp_path):
     assert PS.open_items() == []
 
 
+def test_pending_store_matches_macro_pending_by_headline_terms(monkeypatch, tmp_path):
+    _patch_pending(monkeypatch, tmp_path)
+    pending = PS.build_pending_record(
+        asset="BTC",
+        layer=1,
+        event_type="cpi",
+        expected_start_ts="2026-06-10T12:00:00Z",
+        kind=PS.KIND_CALENDAR,
+        source_id="fred_calendar",
+        metadata={"match_terms": ["cpi", "consumer price index", "inflation"]},
+    )
+    PS.upsert_pending(pending)
+    row = J.build_row(
+        source_url="https://example.com/news",
+        source_ts="2026-06-10T13:00:00Z",
+        layer=1,
+        asset="BTC",
+        trigger_type="rss_headline",
+        headline="Bitcoin turns volatile as CPI inflation print lands hot",
+        verdict="WATCH",
+        horizon_hours=24,
+        price_at_decision=70000.0,
+        event_type="macro",
+        event_phase="realized",
+        source="cointelegraph",
+        source_class="rss",
+        lead_class="LEADING",
+        event_key="BTC::macro",
+    )
+    matched = PS.match_realized_event(row)
+    assert matched is not None
+    assert matched["pending_id"] == pending["pending_id"]
+
+
 def test_pending_store_expires_old_items(monkeypatch, tmp_path):
     _patch_pending(monkeypatch, tmp_path)
     pending = PS.build_pending_record(

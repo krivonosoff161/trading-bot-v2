@@ -28,7 +28,7 @@ As of 2026-06-07:
 
 - live cards are dominated by RSS/Google News
 - `L2` has native event sources now, but still lacks watch/on-chain depth
-- on-chain, wallet, fund-flow and calendar sources are mostly planned, not live
+- on-chain, wallet and fund-flow sources are mostly planned, not live
 - the system is often correct about "no news edge" but still misses tactical moves
 
 This means the current scanner is closer to a lagging news filter than to a multi-layer event engine.
@@ -66,10 +66,10 @@ Live now:
 - Decrypt
 - Google News crypto
 - BTC/ETH tactical regime feed (OKX public funding/OI/liquidation monitor)
+- FRED expected macro calendar (CPI / FOMC / Employment Situation)
 
 Missing next:
 
-- FRED expected macro
 - ETF flow feed
 
 ### L2
@@ -109,10 +109,11 @@ Read:
 Live now:
 
 - Google News metals
+- FRED expected macro calendar
 
 Missing next:
 
-- FRED expected macro
+- macro follow-through quality and surprise resolution
 
 ### L4
 
@@ -206,6 +207,7 @@ Implementation starts with:
 1. `layer_source_matrix.yaml` as single source of truth
 2. bringing `L2` live with event-native sources
 3. bringing `L1` tactical BTC/ETH live
-4. then expected/calendar sources
+4. bringing `FRED` expected macro live
+5. then energy/equities official calendars
 
 Until those steps are live, the scanner should be interpreted as a conservative event filter, not a full market-intelligence engine.
