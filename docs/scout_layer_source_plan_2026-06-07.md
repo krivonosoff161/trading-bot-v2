@@ -128,11 +128,12 @@ Live now:
 
 - Google News energy
 - OilPrice
+- EIA WPSR expected release cadence
+- OPEC official next-meeting cadence
 
 Missing next:
 
-- EIA
-- OPEC official schedule/releases
+- realized surprise handling on release day
 
 ### L5
 
@@ -208,6 +209,7 @@ Implementation starts with:
 2. bringing `L2` live with event-native sources
 3. bringing `L1` tactical BTC/ETH live
 4. bringing `FRED` expected macro live
-5. then energy/equities official calendars
+5. bringing `EIA/OPEC` expected energy cadence live
+6. then equities official calendars
 
 Until those steps are live, the scanner should be interpreted as a conservative event filter, not a full market-intelligence engine.
