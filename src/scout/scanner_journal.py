@@ -29,7 +29,9 @@ DROPS = OUT_DIR / "drops.jsonl"                 # отброшенное фил�
 BUDGET = OUT_DIR / "llm_budget.jsonl"           # наблюдаемость стоимости LLM
 INGEST = OUT_DIR / "ingest_log.jsonl"           # КАЖДОЕ входящее событие до фильтров (полный аудит)
 
-SCHEMA_VERSION = 2   # v2: +event_type/phase/lead_class/source_class/baseline_symbol/router_version
+ROUTING_AUDIT = OUT_DIR / "routing_audit.jsonl"
+
+SCHEMA_VERSION = 3   # v3: +source routing/phase provenance fields
 
 # Поля, без которых карточку НЕ пишем (анти-survivorship + измеримость исхода).
 # price_at_decision может быть None (актив вне OKX → outcome_source=manual), но
@@ -103,6 +105,10 @@ def build_row(
     agent_confidence: float | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    source_trust: str | None = None,
+    source_phase_prior: str | None = None,
+    headline_phase: str | None = None,
+    allowed_layers_from_source: list[int] | None = None,
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -140,6 +146,10 @@ def build_row(
         "lead_class": lead_class,
         "source": source,
         "source_class": source_class,
+        "source_trust": source_trust,
+        "source_phase_prior": source_phase_prior,
+        "headline_phase": headline_phase,
+        "allowed_layers_from_source": allowed_layers_from_source or [],
         "router_version": router_version,
         "asset_confidence": asset_confidence,
         "source_count": source_count,
@@ -187,10 +197,11 @@ def ensure_pending_store() -> None:
 
 
 def write_drop(source_url: str, headline: str, drop_reason: str,
-               asset: str | None = None, drop_stage: str = "router") -> None:
+               asset: str | None = None, drop_stage: str = "router",
+               source: str | None = None) -> None:
     """Залогировать отброшенное (анти-survivorship: фильтр видит только прошедшее → порог не настроить)."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    rec = {"ts": now_iso(), "source_url": source_url, "headline": headline,
+    rec = {"ts": now_iso(), "source": source, "source_url": source_url, "headline": headline,
            "asset": asset, "drop_stage": drop_stage, "drop_reason": drop_reason}
     with open(DROPS, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -201,6 +212,14 @@ def write_budget(stats: dict) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     rec = {"ts": now_iso(), **stats}
     with open(BUDGET, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def write_routing_audit(record: dict) -> None:
+    """Persist one routing attempt for source/layer/phase quality analysis."""
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rec = {"ts": now_iso(), **record}
+    with open(ROUTING_AUDIT, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
