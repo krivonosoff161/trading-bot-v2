@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ if str(_ROOT) not in sys.path:
 
 from src.scout.scanner_journal import JOURNAL, OUT_DIR, now_iso  # noqa: E402
 from src.scout import scanner_records as R  # noqa: E402
+from src.scout.router import baseline_for_layer, tracked_assets  # noqa: E402
 
 OUTCOMES = OUT_DIR / "scanner_outcomes.jsonl"
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 resolve-outcomes; keyless)"}
@@ -40,11 +42,20 @@ TIMEOUT = 20
 
 # --- провизорные пороги скоринга (V1 → config.yaml, см. SCANNER_SPEC лок) ---
 NO_GO_FLAT_PCT = 3.0     # NO_GO «правильно», если |ret| < этого (большого хода не упустили)
+REPORT_THRESHOLDS = (2.0, 3.0, 5.0)
 GO_MIN_EXCESS = 0.0      # GO «правильно», если excess по стороне положителен
 
 
 def _parse(ts: str) -> dt.datetime:
     return dt.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+
+
+def _asset_ref(asset: str | None) -> dict:
+    sym = str(asset or "").upper()
+    for row in tracked_assets():
+        if str(row.get("sym") or "").upper() == sym:
+            return row
+    return {}
 
 
 def okx_last(inst_id: str | None) -> float | None:
@@ -104,6 +115,24 @@ def _scored_ids() -> set[str]:
     return {r.get("card_id") for r in _read_jsonl(OUTCOMES)}
 
 
+def _latest_by_card(rows: list[dict]) -> dict[str, dict]:
+    out = {}
+    for row in rows:
+        cid = row.get("card_id")
+        if cid:
+            out[cid] = row
+    return out
+
+
+def _backup_and_remove(path: Path) -> None:
+    if not path.exists():
+        return
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = path.with_suffix(path.suffix + f".bak-{stamp}")
+    shutil.copy2(path, backup)
+    path.unlink()
+
+
 def score(verdict: str, side: str, ret: float, mfe_long: float | None, mae_long: float | None) -> bool | None:
     """Правильна ли карточка (обе стороны + амплитуда хода). None = не скорим бинарно."""
     if verdict == "GO":
@@ -146,10 +175,24 @@ def resolve() -> None:
                 continue
             matured += 1
 
-            inst = r.get("okx_inst")
+            t0 = _parse(r["ts_utc"])
+            t0_ms = int(t0.timestamp() * 1000)
+            t_end_ms = int(min(now, t0 + dt.timedelta(hours=float(r["horizon_hours"]))).timestamp() * 1000)
+
+            aref = _asset_ref(r.get("asset"))
+            inst = r.get("okx_inst") or aref.get("okx_inst")
+            bsym = r.get("baseline_symbol") or aref.get("baseline") or baseline_for_layer(int(r.get("layer") or 0))
             p0 = r.get("price_at_decision")
             btc0 = r.get("btc_at_decision")
-            if r.get("outcome_source") == "manual" or not inst or p0 in (None, 0):
+
+            path = fetch_path(inst, max(0, t0_ms - 3600000), t_end_ms) if inst else []
+            if p0 in (None, 0) and path:
+                p0 = _price_at(path, t0_ms)
+            if btc0 in (None, 0) and bsym:
+                baseline_path = fetch_path(bsym, max(0, t0_ms - 3600000), t_end_ms)
+                btc0 = _price_at(baseline_path, t0_ms)
+
+            if not inst or p0 in (None, 0):
                 rec = {"card_id": cid, "resolved_ts": now_iso(), "scored": False,
                        "note": "manual — актив вне OKX / нет цены входа, исход дописывает трейдер",
                        "verdict": r.get("verdict"), "asset": r.get("asset")}
@@ -157,11 +200,7 @@ def resolve() -> None:
                 manual += 1
                 continue
 
-            t0 = _parse(r["ts_utc"])
-            t0_ms = int(t0.timestamp() * 1000)
-            t_end_ms = int(min(now, t0 + dt.timedelta(hours=float(r["horizon_hours"]))).timestamp() * 1000)
-
-            path = fetch_path(inst, t0_ms, t_end_ms)
+            path = [c for c in path if t0_ms <= c[0] <= t_end_ms] or fetch_path(inst, t0_ms, t_end_ms)
             if path:
                 price_final = path[-1][3]
                 mfe_long = (max(c[1] for c in path) / p0 - 1.0) * 100.0   # макс ВВЕРХ (в пользу лонга)
@@ -179,16 +218,20 @@ def resolve() -> None:
             ret = (price_final / p0 - 1.0) * 100.0
             outcome_long, outcome_short = round(ret, 3), round(-ret, 3)   # P&L каждой стороны
 
-            bsym = r.get("baseline_symbol") or "BTC-USDT-SWAP"
-            if bsym not in baseline_cache:
-                baseline_cache[bsym] = okx_last(bsym)
-            b_now = baseline_cache[bsym]
-            baseline = ((b_now / btc0 - 1.0) * 100.0) if (b_now and btc0) else None
+            bsym = bsym or "BTC-USDT-SWAP"
+            bkey = (bsym, t0_ms, t_end_ms)   # cache per (symbol, window), НЕ только символ — иначе чужое окно
+            if bkey not in baseline_cache:
+                baseline_cache[bkey] = fetch_path(bsym, t0_ms, t_end_ms)
+            baseline_path = baseline_cache[bkey]
+            b_final = baseline_path[-1][3] if baseline_path else okx_last(bsym)
+            baseline = ((b_final / btc0 - 1.0) * 100.0) if (b_final and btc0) else None
             excess = (ret - baseline) if baseline is not None else None
 
             correct = score(r.get("verdict", ""), r.get("side", "none"), ret, mfe_long, mae_long)
             big = max(abs(mfe_long or 0.0), abs(mae_long or 0.0))
-            missed = (r.get("verdict") == "NO_GO" and big >= NO_GO_FLAT_PCT)   # фильтр упустил крупный ход
+            volatility_missed = (r.get("verdict") == "NO_GO" and big >= NO_GO_FLAT_PCT)
+            directional_missed = (r.get("verdict") == "NO_GO" and abs(ret) >= NO_GO_FLAT_PCT)
+            missed = volatility_missed   # backward-compatible field
 
             rec = {
                 "card_id": cid, "resolved_ts": now_iso(), "scored": True,
@@ -201,6 +244,8 @@ def resolve() -> None:
                 "baseline_ret_pct": round(baseline, 3) if baseline is not None else None,
                 "excess_pct": round(excess, 3) if excess is not None else None,
                 "verdict_correct": correct, "missed_move": missed,
+                "volatility_missed_move": volatility_missed,
+                "directional_missed_move": directional_missed,
                 "horizon_hours": r.get("horizon_hours"),
             }
             out.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -216,11 +261,11 @@ def resolve() -> None:
             if memory:
                 R.write_memory_record(memory)
             scored += 1
-            mark = {True: "✓", False: "✗", None: "?"}[correct]
+            mark = {True: "OK", False: "BAD", None: "?"}[correct]
             sw = (f"mfe+{mfe_long:.1f}/mae{mae_long:.1f}" if mfe_long is not None else "путь?")
             print(f"  [{mark}] {r.get('verdict')} {r.get('side')} {r.get('asset')}: "
                   f"ret={ret:+.2f}% long={outcome_long:+.1f}/short={outcome_short:+.1f} {sw}"
-                  f"{' ⚠MISSED' if missed else ''}")
+                  f"{' MISSED' if missed else ''}")
 
     print(f"\nзрело={matured} · посчитано={scored} · manual-очередь={manual} · ещё рано={pending}")
     print(f"outcomes: {OUTCOMES}")
@@ -229,7 +274,7 @@ def resolve() -> None:
 def report() -> None:
     """Сводка: WR/excess по вердиктам (соединяет журнал и outcomes по card_id)."""
     jrows = {r["card_id"]: r for r in _read_jsonl(JOURNAL)}
-    orows = _read_jsonl(OUTCOMES)
+    orows = list(_latest_by_card(_read_jsonl(OUTCOMES)).values())
     print(f"карточек в журнале: {len(jrows)} · посчитано исходов: {len(orows)}")
     by_verdict: dict[str, list] = {}
     for o in orows:
@@ -254,14 +299,31 @@ def report() -> None:
         miss = sum(1 for o in lst if o.get("missed_move"))
         print(f"  {v:<8} {n:<3} {wr:<8} {lo:<7} {sh:<7} {ex:<8} {miss}")
 
+    print("\nNO_GO thresholds: directional=|final ret|, volatility=max(|MFE|,|MAE|)")
+    no_go = [o for o in orows if o.get("scored") and o.get("verdict") == "NO_GO"]
+    for th in REPORT_THRESHOLDS:
+        directional = sum(1 for o in no_go if abs(float(o.get("ret_pct") or 0.0)) >= th)
+        volatility = sum(
+            1 for o in no_go
+            if max(abs(float(o.get("mfe_long_pct") or 0.0)), abs(float(o.get("mae_long_pct") or 0.0))) >= th
+        )
+        n = len(no_go)
+        d_rate = f"{100 * directional / n:.0f}%" if n else "—"
+        v_rate = f"{100 * volatility / n:.0f}%" if n else "—"
+        print(f"  {th:.0f}%: directional {directional}/{n} ({d_rate}) · volatility {volatility}/{n} ({v_rate})")
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true", help="только сводка, без счёта")
+    ap.add_argument("--rebuild", action="store_true", help="backup and rebuild generated outcome/training/memory logs")
     args = ap.parse_args()
     if args.report:
         report()
     else:
+        if args.rebuild:
+            for path in (OUTCOMES, R.TRAINING, R.MEMORY):
+                _backup_and_remove(path)
         resolve()
         print()
         report()
