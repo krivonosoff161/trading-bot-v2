@@ -127,13 +127,17 @@ _FUTURE_RE = re.compile(
     r"next\s+(week|month)|due)\b")
 # headlinese: результативный present-simple/past = уже случилось (фикс «Bitcoin crashes»)
 _REALIZED_RE = re.compile(
-    r"\b(announced?|approved?|rejected?|reported?|released?|launch(ed|es)?|"
-    r"list(ed|s)?|filed?|files?|halt(ed|s)?|hack(ed|s)?|surge[sd]?|crash(ed|es)?|"
-    r"plunge[sd]?|jump(ed|s)?|fell|rose|rise[sd]?|beat[s]?|miss(ed|es)?|"
-    r"drop[s]?|dropped|unveil(ed|s)?|raises?|cuts?|soar[sd]?)\b")
+    r"\b(announced|announces|approved|approves|rejected|rejects|reported|reports|"
+    r"released|releases|launched|launches|listed|lists|filed|files|halted|halts|"
+    r"hacked|hacks|surged|surges|crashed|crashes|plunged|plunges|jumped|jumps|"
+    r"fell|rose|rises|beat|beats|missed|misses|dropped|drops|unveiled|unveils|"
+    r"raised|raises|cut|cuts|soared|soars)\b")
 _CONTEXT_RE = re.compile(
     r"\b(analysis|prediction|forecast|recap|opinion|explain(ed|er)?|guide|outlook|"
-    r"how\s+to|reasons?\s+to|what\s+to\s+know)\b")
+    r"how\s+to|reasons?\s+to|what\s+to\s+know|looks?\s+cheap|"
+    r"should\s+you\s+(buy|sell|hold)|buy,\s*sell,\s*or\s*hold|"
+    r"is\s+it\s+a\s+good\s+investment|better\s+buy|fairly\s+valued|"
+    r"ahead\s+of\s+earnings|resets?\s+\w+\s+forecast|the\s+real\s+reason)\b")
 
 
 def route_temporal(headline: str) -> dict:
@@ -142,14 +146,15 @@ def route_temporal(headline: str) -> dict:
     fut = bool(_FUTURE_RE.search(low))
     real = bool(_REALIZED_RE.search(low))
     ctx = bool(_CONTEXT_RE.search(low))
-    # future-маркер доминирует: тредабельное СОБЫТИЕ в будущем («announces it WILL unlock»
-    # = отчёт realized, но событие future → в pending). headlinese-результатив = realized.
-    if fut:
-        phase = "FUTURE"
-    elif real:
+    # RESULT > CONTEXT > FUTURE:
+    # - уже случившееся событие важнее opinion-слов вокруг него;
+    # - opinion/preview не должно пролезать как FUTURE только из-за "ahead of earnings".
+    if real:
         phase = "REALIZED"
     elif ctx:
         phase = "CONTEXT"
+    elif fut:
+        phase = "FUTURE"
     else:
         phase = "AMBIGUOUS"      # нет ясных маркеров → консервативно к LLM
     return {"phase": phase, "future": fut, "realized": real, "context": ctx}

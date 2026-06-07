@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
+import email.utils
 import html
 import json
 import re
@@ -54,6 +56,8 @@ from src.scout.sources.okx_listings import fetch_new_listings                   
 from src.scout.sources.sec_edgar import fetch_recent_filings                    # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
+from src.scout import scanner_records as R                       # noqa: E402
+from src.scout import pending_store as PS                        # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -100,6 +104,58 @@ def load_seen() -> set[str]:
 def save_seen(seen: set[str]) -> None:
     SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     SEEN_PATH.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+
+
+def parse_source_ts(raw: str | None) -> dt.datetime | None:
+    """Best-effort parser for source timestamps from RSS/pubDate/extractors."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z") and "T" in s:
+            return dt.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+        if len(s) == 10 and s.count("-") == 2:
+            return dt.datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=dt.timezone.utc)
+        parsed = email.utils.parsedate_to_datetime(s)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    except Exception:
+        return None
+
+
+def source_age_limit_hours(source: str, lead_class: str, source_class: str) -> int | None:
+    """Drop obviously stale lagging RSS before it burns LLM tokens.
+
+    Registry may set max_age_hours explicitly. Otherwise:
+    - LEADING / non-RSS: no age gate
+    - aggregator RSS: 72h
+    - other lagging RSS: 168h
+    """
+    meta = source_meta(source)
+    if meta.get("max_age_hours") is not None:
+        try:
+            return int(meta["max_age_hours"])
+        except (TypeError, ValueError):
+            return None
+    if str(lead_class).upper() == "LEADING" or source_class != "rss":
+        return None
+    if str(meta.get("trust") or "").lower() == "aggregator":
+        return 72
+    return 168
+
+
+def is_stale_story(source_ts: str | None, source: str, lead_class: str, source_class: str,
+                   now_utc: dt.datetime | None = None) -> bool:
+    limit_h = source_age_limit_hours(source, lead_class, source_class)
+    if not limit_h:
+        return False
+    ts = parse_source_ts(source_ts)
+    if ts is None:
+        return False
+    now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
+    age_h = (now_utc - ts.astimezone(dt.timezone.utc)).total_seconds() / 3600
+    return age_h > limit_h
 
 
 # ── источники / контекст ─────────────────────────────────────────────────────
@@ -387,6 +443,9 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         low_conf, body_text = True, ""
         source_ts = item.get("time") or J.now_iso()[:10]
 
+    if is_stale_story(source_ts, source, lead_class, source_class):
+        return {"skipped": "stale_article", "headline": headline, "asset": asset}
+
     # baseline-цена ПО СЛОЮ (excess vs index): BTC из btc_ref, иначе снять (None = manual, off-OKX)
     if baseline_sym == "BTC-USDT-SWAP":
         baseline_price = btc_ref
@@ -462,6 +521,39 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         outcome_source=("okx" if price is not None else "manual"),
     )
     cid = ("DRY-" + J.card_id_for(canon)) if dry else J.write_row(row)
+    if cid and not dry:
+        extraction_meta = {
+            "quality": item.get("extraction_quality"),
+            "status": item.get("extraction_status"),
+            "method": item.get("extraction_method"),
+        }
+        R.write_event_block(
+            R.build_event_block(
+                row=row,
+                source_item=item,
+                news=news,
+                market_ctx=mline,
+                buffer_doc_id=doc_id,
+                extraction_meta=extraction_meta,
+            )
+        )
+        R.write_reasoning_block(
+            R.build_reasoning_block(
+                row=row,
+                agent=agent,
+                orchestrator=orch,
+                chief=ch or None,
+                usage=usage_rows,
+                buffer_doc_id=doc_id,
+            )
+        )
+        pending = PS.build_pending_from_journal(row)
+        if pending:
+            PS.upsert_pending(pending)
+        else:
+            matched = PS.match_realized_event(row)
+            if matched:
+                PS.mark_matched(str(matched.get("pending_id")), row["card_id"])
     card = format_card(row)
 
     # 5+6) график + доставка — ТОЛЬКО chief-карточки (send_channel); дешёвый NO_GO = только журнал/датасет
@@ -487,6 +579,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────
 async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     J.ensure_pending_store()
+    if not dry:
+        PS.expire_old()
     seen = load_seen()
     mline = market_ctx_line()
     btc_ref = okx_last("BTC-USDT-SWAP") if not dry else None   # якорь baseline на проход
@@ -508,6 +602,9 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
     leading = listings + sec_items                # опережающие (LEADING): листинги OKX + SEC-филинги
     items = leading + rss_items                   # LEADING первыми
+    if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
+        J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
+                         "headline": it.get("title"), "url": it.get("url")} for it in items])
     if use_buffer and not dry:
         ing = NB.ingest_items(items)
         buffer_batch = max(limit * 4, 10)
@@ -522,9 +619,6 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         )
     else:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
-        if not dry and fresh:                     # полный аудит: лог КАЖДОГО входящего до фильтров
-            J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
-                             "headline": it.get("title"), "url": it.get("url")} for it in fresh])
         print(f"источники: LEADING(лист+SEC)={len(leading)} + RSS={len(rss_items)} | новых={len(fresh)}\n")
 
     made = n_dropped = n_llm_fail = total_tokens = 0
@@ -554,7 +648,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                 n_dropped += 1
                 if not dry:
                     stage = {"no_tracked_asset": "router", "dup_event": "dedup",
-                         "context_commentary": "gate", "asset_capped": "cap"}.get(skipped, "materiality")
+                         "context_commentary": "gate", "stale_article": "gate",
+                         "asset_capped": "cap"}.get(skipped, "materiality")
                     J.write_drop(it["url"], it["title"], skipped, asset=res.get("asset"), drop_stage=stage)
                     if use_buffer and doc_id:
                         NB.mark_status(doc_id, NB.STATUS_DROPPED, skipped)
