@@ -55,6 +55,7 @@ from src.scout import news_buffer as NB                                        #
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
 from src.scout.sources.sec_edgar import fetch_recent_filings                    # noqa: E402
 from src.scout.sources.dexscreener import fetch_alt_flow_signals                # noqa: E402
+from src.scout.sources.goplus_rugcheck import fetch_token_risk_signals          # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
@@ -733,9 +734,10 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
     sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
     dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
+    risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
     leading = listings + sec_items                # опережающие (LEADING): листинги OKX + SEC-филинги
     native = dex_items                            # native event feed for L2 (COINCIDENT)
-    items = leading + native + rss_items          # event-native first, RSS after
+    items = leading + risk_items + native + rss_items          # risk/official first, then coincident/native, then RSS
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
         J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
                          "headline": it.get("title"), "url": it.get("url")} for it in items])
@@ -746,7 +748,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         normalized_stats = NB.normalize_pending(limit=buffer_batch)
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
-            f"источники: LEADING(лист+SEC)={len(leading)} + L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(лист+SEC)={len(leading)} + L2_RISK={len(risk_items)} + "
+            f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
             f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
@@ -754,7 +757,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     else:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
         print(
-            f"источники: LEADING(лист+SEC)={len(leading)} + L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(лист+SEC)={len(leading)} + L2_RISK={len(risk_items)} + "
+            f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
             f"новых={len(fresh)}\n"
         )
 

@@ -62,8 +62,8 @@ layers:
       - educational_content
     realized_sources:
       - {source: okx_listings, status: live, priority: 2, notes: "already wired, but too narrow alone"}
-      - {source: dexscreener, status: planned, priority: 1, notes: "pairs/liquidity/volume discovery for alt flow"}
-      - {source: goplus_rugcheck, status: planned, priority: 1, notes: "token security / rug veto / exploit flags"}
+      - {source: dexscreener, status: live, priority: 1, notes: "pairs/liquidity/volume discovery for alt flow"}
+      - {source: goplus_rugcheck, status: live, priority: 1, notes: "token security / rug veto / exploit flags"}
     expected_sources:
       - {source: token_unlocks, status: planned, priority: 1, notes: "unlock schedule for pending/surprise"}
     watch_sources:

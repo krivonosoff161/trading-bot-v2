@@ -89,6 +89,7 @@ def _pair_age_hours(created_ms: int | None, observed_at: dt.datetime) -> float |
 
 
 def _signal_from_pair(asset: AssetRef, row: dict, observed_at: dt.datetime) -> dict | None:
+    base = row.get("baseToken") or {}
     liquidity = _safe_float((row.get("liquidity") or {}).get("usd"))
     volume_24h = _safe_float((row.get("volume") or {}).get("h24"))
     change_24h = _safe_float((row.get("priceChange") or {}).get("h24"))
@@ -153,6 +154,7 @@ def _signal_from_pair(asset: AssetRef, row: dict, observed_at: dt.datetime) -> d
         "source_class": "api",
         "lead_class": "COINCIDENT",
         "asset": asset.sym,
+        "contract_address": base.get("address"),
         "okx_inst": asset.okx_inst,
         "layer": 2,
         "baseline": asset.baseline,
