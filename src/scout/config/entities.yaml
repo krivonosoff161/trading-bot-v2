@@ -44,6 +44,8 @@ assets:
   - {sym: UNI, layer: 2, okx_inst: UNI-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [uniswap], weak: [uni]}
   - {sym: ENA, layer: 2, okx_inst: ENA-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ethena], weak: [ena]}
   - {sym: ONDO, layer: 2, okx_inst: ONDO-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [ondo], weak: []}
+  - {sym: HYPE, layer: 2, okx_inst: HYPE-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [hyperliquid], weak: [hype]}
+  - {sym: WLD, layer: 2, okx_inst: WLD-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [worldcoin], weak: [wld]}
   # --- мемы (слой 2, памп-режим) ---
   - {sym: PEPE, layer: 2, okx_inst: PEPE-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: [pepe], weak: []}
   - {sym: SHIB, layer: 2, okx_inst: SHIB-USDT-SWAP, baseline: BTC-USDT-SWAP, strong: ["shiba inu", shiba], weak: [shib]}
