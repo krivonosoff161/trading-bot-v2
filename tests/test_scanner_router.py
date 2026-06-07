@@ -96,10 +96,14 @@ def test_materiality_equities_earnings_family():
 
 
 def test_layer_plan_matrix_loaded():
+    l1 = layer_plan(1)
     l2 = layer_plan(2)
+    assert l1["name"]
     assert l2["name"]
+    tactical_sources = {row["source"] for row in l1["tactical_sources"]}
     realized_sources = {row["source"] for row in l2["realized_sources"]}
     expected_sources = {row["source"] for row in l2["expected_sources"]}
+    assert "btc_eth_tactical" in tactical_sources
     assert "okx_listings" in realized_sources
     assert "dexscreener" in realized_sources
     assert "goplus_rugcheck" in realized_sources

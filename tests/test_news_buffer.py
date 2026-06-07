@@ -36,3 +36,36 @@ def test_news_buffer_ingest_resolve_normalize_ready(tmp_path):
     NB.mark_status(ready[0]["buffer_doc_id"], NB.STATUS_ANALYZED, path=db)
     stats = NB.stats(path=db)
     assert stats["raw"][NB.STATUS_ANALYZED] == 1
+
+
+def test_news_buffer_keeps_distinct_prerouted_api_events_by_event_key(tmp_path):
+    db = tmp_path / "news_buffer.sqlite"
+    first = {
+        "title": "BTC tactical flush A",
+        "text": "OKX tactical monitor sees BTC flush.",
+        "url": "https://www.okx.com/trade-swap/btc-usdt-swap",
+        "time": "2026-06-07T12:00:00Z",
+        "source": "btc_eth_tactical",
+        "source_class": "api",
+        "lead_class": "LEADING",
+        "asset": "BTC",
+        "okx_inst": "BTC-USDT-SWAP",
+        "layer": 1,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "REALIZED",
+        "event_type": "liquidation_regime",
+        "trigger_type": "tactical_market_regime",
+        "event_key": "tactical:BTC:liquidation_regime:20260607T1200Z",
+    }
+    second = {
+        **first,
+        "title": "BTC tactical flush B",
+        "event_key": "tactical:BTC:liquidation_regime:20260607T1300Z",
+        "time": "2026-06-07T13:00:00Z",
+    }
+
+    res = NB.ingest_items([first, second], path=db)
+    assert res == {"inserted": 2, "updated": 0}
+
+    stats = NB.stats(path=db)
+    assert stats["raw"][NB.STATUS_NEW] == 2
