@@ -149,10 +149,10 @@ Live now:
 
 - SEC EDGAR
 - Google News equities
+- earnings calendar from SEC-linked company announcements
 
 Missing next:
 
-- earnings calendar
 - company IR/newsroom feeds
 
 ### L6

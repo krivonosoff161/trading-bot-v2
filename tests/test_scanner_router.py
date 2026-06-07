@@ -99,14 +99,17 @@ def test_layer_plan_matrix_loaded():
     l1 = layer_plan(1)
     l3 = layer_plan(3)
     l2 = layer_plan(2)
+    l5 = layer_plan(5)
     assert l1["name"]
     assert l3["name"]
     assert l2["name"]
+    assert l5["name"]
     tactical_sources = {row["source"] for row in l1["tactical_sources"]}
     l1_expected = {row["source"] for row in l1["expected_sources"]}
     l3_expected = {row["source"] for row in l3["expected_sources"]}
     l4 = layer_plan(4)
     l4_expected = {row["source"] for row in l4["expected_sources"]}
+    l5_expected = {row["source"] for row in l5["expected_sources"]}
     realized_sources = {row["source"] for row in l2["realized_sources"]}
     expected_sources = {row["source"] for row in l2["expected_sources"]}
     assert "btc_eth_tactical" in tactical_sources
@@ -118,6 +121,7 @@ def test_layer_plan_matrix_loaded():
     assert "dexscreener" in realized_sources
     assert "goplus_rugcheck" in realized_sources
     assert "token_unlocks" in expected_sources
+    assert "earnings_calendar" in l5_expected
 
 
 if __name__ == "__main__":
