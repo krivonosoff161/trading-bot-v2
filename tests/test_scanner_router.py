@@ -99,9 +99,11 @@ def test_layer_plan_matrix_loaded():
     l2 = layer_plan(2)
     assert l2["name"]
     realized_sources = {row["source"] for row in l2["realized_sources"]}
+    expected_sources = {row["source"] for row in l2["expected_sources"]}
     assert "okx_listings" in realized_sources
     assert "dexscreener" in realized_sources
     assert "goplus_rugcheck" in realized_sources
+    assert "token_unlocks" in expected_sources
 
 
 if __name__ == "__main__":

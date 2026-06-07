@@ -96,4 +96,4 @@ sources:
   eia:               {source_class: api, lead_class: COINCIDENT, trust: official, phase_prior: expected, keyless: false, layers: [4],    enabled: false}   # запасы нефти/газа (среда) — free-key
   opec:              {source_class: web, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: true,  layers: [4],    enabled: false}   # заседания/решения
   earnings_calendar: {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: true,  layers: [5],    enabled: false}   # даты отчётов (nfin/NASDAQ)
-  token_unlocks:     {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: true,  layers: [2],    enabled: false}   # анлоки
+  token_unlocks:     {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: false, layers: [2],    enabled: true}    # Tokenomist API key required

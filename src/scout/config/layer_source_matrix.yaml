@@ -65,7 +65,7 @@ layers:
       - {source: dexscreener, status: live, priority: 1, notes: "pairs/liquidity/volume discovery for alt flow"}
       - {source: goplus_rugcheck, status: live, priority: 1, notes: "token security / rug veto / exploit flags"}
     expected_sources:
-      - {source: token_unlocks, status: planned, priority: 1, notes: "unlock schedule for pending/surprise"}
+      - {source: token_unlocks, status: live, priority: 1, notes: "Tokenomist upcoming unlock schedule; requires TOKENOMIST_API_KEY"}
     watch_sources:
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only signal enrichment"}
       - {source: onchain_whales_probe, status: research, priority: 2, notes: "wallet flow research exists, not live"}
