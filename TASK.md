@@ -1,295 +1,138 @@
-# TASK / HANDOFF для Claude и Codex — агентный scanner v1 (06.06.2026)
+# TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Это файл-связка между агентами в VS Code. Читать перед любыми правками.
+Updated: 2026-06-08
 
-## Статус коротко
+This file is the local handoff channel between agents in VS Code.
+It is not the canonical architecture document.
 
-Фундамент агентной системы уже собран и запушен. Сейчас задача не перепридумывать архитектуру, а аккуратно запустить, проверить Alibaba-петлю и дальше достроить `source -> layer -> expected/realized -> agent -> orchestrator -> chief -> outcome`.
+## Current State
 
-## Что уже сделано
+Scanner is running after the recall fixes.
 
-### 0. News intake buffer
+Committed baseline before this handoff:
 
-Добавлен первый слой новой системы парсинга:
+- `d6116d7` - honest Stage 0 metrics in `resolve_outcomes.py`
+- `06e5294` - OKX perp instruments for L3 metals / L4 oil baselines
+- `3790d87` - strong cross-layer asset matches in router
+- `e43040c` - HYPE and WLD coverage
+- `1ccbb0b` - propagate `cross_layer` through buffer pipeline
+
+Do not build `main_event_engine` yet.
+
+## What Stage 0 Proved
+
+Stage 0 is complete enough for the current decision.
+
+Key result:
 
 ```text
-sources -> raw_items -> machine_docs -> normalized_events -> scanner consumer
+90 scanner cards
+19 mature outcomes
+17 NO_GO + 2 WATCH
+0 GO
 ```
 
-Файлы:
+Corrected metrics:
 
-- `src/scout/news_buffer.py` — SQLite buffer + CLI.
-- `data/scout/news_buffer.sqlite` — runtime DB, ignored by git.
-- `tests/test_news_buffer.py` — unit test без LLM/Telegram.
+```text
+NO_GO volatility missed at 3%:     16/17 (94%)
+NO_GO directional missed at 3%:     9/17 (53%)
+NO_GO idiosyncratic missed at 3%:   4/17 (24%)
+```
 
-Команды:
+Interpretation:
+
+- The original "94% missed" was inflated by beta/fat-tail volatility.
+- Real event-specific misses exist, but sample size is too small for a main engine.
+- The biggest actionable issue was recall, not LLM reasoning.
+
+Drop analysis:
+
+```text
+trash_lowmat: mostly clean
+asset_capped: clean duplicates
+dup/noise/stale/context: OK
+no_tracked_asset: real blind spot
+```
+
+Recall diagnosis:
+
+- 7-8 L5 events from crypto wires were blocked by source-layer constraints.
+- Strong cross-layer fallback now recovers `COIN`, `ANTHROPIC`, `SPACEX`.
+- `HYPE` and `WLD` were added to L2 coverage.
+- Macro/no-single-asset headlines remain intentionally unassigned.
+
+## Current Runtime Focus
+
+Let the scanner run and observe the post-fix flow.
+
+Check:
+
+- `cross_layer=true` events are present and not noisy.
+- HYPE/WLD route correctly only on strong names or `$`/pair confirmation.
+- L3/L4 now get OKX price/outcome through `XAU/XAG/XPT/XPD/CL/NG-USDT-SWAP`.
+- Alibaba/Yandex LLM role behavior remains stable.
+- Telegram cards are not duplicated or malformed.
+
+Useful commands:
 
 ```bash
-python -m src.scout.news_buffer init
+python src/scout/resolve_outcomes.py --report
 python -m src.scout.news_buffer stats
 python -m src.scout.news_buffer ready --limit 5
-python -m src.scout.news_buffer show <doc_id>
-python src/scout/scanner_v0.py --buffer --limit 0   # smoke: ingest/resolve/normalize, без LLM
-python src/scout/scanner_v0.py --buffer --limit 5   # новый режим: consumer из buffer
+python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py tests/test_scanner_records.py -q
 ```
 
-Что делает:
+## Next Design Step
 
-- хранит все входящие новости в SQLite;
-- вытаскивает clean text через `trafilatura`;
-- если нужно, пробует optional `newspaper4k/newspaper`;
-- строит machine-readable document;
-- нормализует asset/layer/phase/event_key;
-- отдаёт в scanner только `READY_FOR_AGENT`;
-- помечает события как `ANALYZED` или `DROPPED`;
-- имеет SSRF guard: запрещены localhost/private/link-local/reserved IP и non-http(s).
+Do not create a sixth agent/process yet.
 
-Текущий `scanner.bat` пока НЕ переключён на `--buffer`; старый прямой режим сохранён как fallback.
-
-### 1. LLM backend
-
-- `src/utils/llm_client.py` есть.
-- Провайдеры: `yandex` fallback и `alibaba`.
-- Роли: `cheap`, `mid`, `chief`, `audit`.
-- Alibaba OpenAI-compatible endpoint работает.
-- Реальный тест Alibaba прошёл 06.06.2026:
-  - role: `cheap`;
-  - model: `qwen3-30b-a3b-instruct-2507`;
-  - response: `{"ok": true, "provider": "alibaba"}`;
-  - usage: 53 total tokens;
-  - estimated cost: ~0.0019 RUB.
-
-`.env` НЕ коммитить. Ключ находится только локально у трейдера.
-
-Ожидаемый локальный `.env` блок:
-
-```env
-LLM_PROVIDER=alibaba
-ALIBABA_API_KEY=sk-ws-...
-ALIBABA_BASE_URL=https://ws-bylnyb68jyymhk01.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
-
-LLM_CHEAP_MODEL=qwen3-30b-a3b-instruct-2507
-LLM_MID_MODEL=qwen3-next-80b-a3b-instruct
-LLM_CHIEF_MODEL=qwen3.7-plus
-LLM_AUDIT_MODEL=qwen3.7-plus
-```
-
-Важно: `ALIBABA_BASE_URL` без `/chat/completions`; код сам добавляет endpoint.
-
-### 2. Агентная машинерия
-
-Собрана схема:
+The next design item is a passive macro/context class:
 
 ```text
-deterministic router/dedup/materiality/temporal
--> layer_agent cheap
--> orchestrator rules
--> chief only for candidates
--> journal / Telegram
--> outcome resolver
+MARKET_CONTEXT / WATCH_MARKET
 ```
 
-Коммиты:
+Purpose:
 
-- `b60bdb7` — `llm_client.py`, roles, provider routing.
-- `4e5c75a` — 5 layer agents через один класс + 5 промптов, chief, orchestrator.
-- `ef91c5f` — проводка orchestrator в `scanner_v0`, chief-карточки в канал, дешёвый NO_GO в журнал.
-- `2841c8e` — price-path resolver LONG/SHORT, `outcome_long/short`, `mfe/mae`, `price_after_1h/4h/24h/48h`, `missed_move`.
-- `13ff9bc` — расширение вселенной до 40+ активов + multi-RSS.
+- capture macro, regulation, stablecoin, geopolitics, tax, policy headlines with no single asset;
+- attach affected assets such as `BTC`, `ETH`, `CL`, `XAU`, `QQQ`;
+- write context to logs for later analysis;
+- do not emit trade recommendations by itself.
 
-### 3. Источники и вселенная
+Open design questions:
 
-Активные сейчас:
+- Store as separate `market_context.jsonl` or as journal rows with a context verdict?
+- Deterministic macro-term gate first, or cheap LLM classification?
+- How to map contexts to affected assets without polluting trade candidates?
+- How to measure context usefulness later?
 
-```text
-cointelegraph
-decrypt
-google_news_crypto
-okx_listings
-```
+## Hard Constraints
 
-Расширена вселенная:
+- Python only.
+- No Docker.
+- No new services.
+- Do not expand model-provider routing.
+- Use existing `src/utils/llm_client.py`.
+- No chart rendering in scanner.
+- Do not revive old `main_impulse_engine`.
+- Do not reuse old signal logic blindly.
+- Do not touch live order / auto-trade paths.
 
-```text
-L1: BTC/ETH/SOL/XRP/BNB/DOGE/ADA...
-L2: AVAX/LINK/DOT/TON/TRX/ZEC/PEPE/SHIB/PUMP...
-L5: NVDA/TSLA/MSTR/COIN/OPENAI/ANTHROPIC/SPACEX...
-```
+Safe reuse from frozen main:
 
-Сейчас модель работы такая:
+- `src/strategy/signal_contract.py`
+- `src/strategy/chart_renderer.py`
+- records/logging pattern
 
-```text
-общие RSS + OKX listings
--> router определяет asset/layer
--> нужный слой-агент анализирует
-```
+## Working Principle
 
-Это уже работает как слойная агентная система, но это ещё НЕ полноценные 5 независимых специализированных потоков.
+Data first.
+One experiment second.
+Architecture third.
 
-### 4. Исходы
+For the next session:
 
-Старые 7 зрелых карточек пересчитаны:
-
-```text
-NO_GO n=7
-long avg:  -4.47%
-short avg: +4.47%
-missed_move: 7/7
-```
-
-Вывод подтверждён данными: старый V0 был однобокий. Он спасал от long, но не видел short. Новый chief уже умеет `side=short`, а resolver теперь это измеряет.
-
-## Что НЕ сделано
-
-Пока нет полноценного механизма:
-
-```text
-expected event -> pending_events.jsonl
-realized event -> match pending
-surprise = realized - expected
-chief decision on surprise
-```
-
-`pending_events.jsonl` пока skeleton. Без него нет настоящего surprise-edge.
-
-Пока НЕ подключены:
-
-- SEC EDGAR для L5 official filings.
-- FRED/FOMC/CPI calendar.
-- EIA/OPEC для L4.
-- token unlocks / earnings calendar.
-- Telegram alpha через Telethon.
-- weekly audit-agent.
-
-## Что делать сейчас
-
-### Запуск
-
-Если `.env` уже сохранён с Alibaba:
-
-1. Закрыть старое окно `scanner.bat`.
-2. Запустить `scanner.bat` заново.
-3. После первого нового события проверить:
-
-```text
-logs/scout/scanner_journal.jsonl
-```
-
-В новых строках должны появиться:
-
-```text
-chief_called
-agent_direction
-agent_confidence
-llm_provider = alibaba
-llm_model
-side = long|short|none
-```
-
-Также смотреть:
-
-```text
-logs/scout/llm_budget.jsonl
-logs/scout/drops.jsonl
-logs/scout/ingest_log.jsonl
-```
-
-### Коммит
-
-`.env` не коммитить никогда.
-
-Код последних фич уже запушен. Локально сейчас допустимо коммитить только handoff/docs, если нужно зафиксировать связь между агентами:
-
-```text
-TASK.md
-docs/video_research_catalog.md
-```
-
-Перед любым код-коммитом обязательно:
-
-```bash
-python -m pytest tests/test_scanner_isolation.py tests/test_scanner_router.py tests/test_scanner_dedup.py
-python src/scout/resolve_outcomes.py --report
-```
-
-## Следующий инженерный шаг
-
-Не добавлять хаотично ещё 20 RSS. Следующий правильный шаг:
-
-```text
-source_registry.yaml
--> normalized_event contract
--> expected/realized phase policy
--> pending_events writer
--> first calendar/official source
--> matcher expected vs realized
-```
-
-Практичный порядок:
-
-1. Дать текущему scanner поработать на Alibaba 1-2 часа.
-2. Проверить, что новые события реально идут по разным слоям и `llm_provider=alibaba`.
-3. Потом подключать первый специализированный источник.
-
-Рекомендуемый первый источник:
-
-```text
-SEC EDGAR -> L5 -> realized official filings
-```
-
-Почему SEC EDGAR:
-
-- keyless;
-- official;
-- хорошо ложится в L5;
-- ловит filings раньше новостного цикла;
-- меньше шума, чем Google News.
-
-После SEC:
-
-```text
-earnings_calendar / token_unlocks / OPEC-EIA / FOMC-CPI
-```
-
-И только потом `pending_events` станет полезным.
-
-## Границы
-
-Строго нельзя:
-
-- коммитить `.env`;
-- печатать API key;
-- включать auto-trade;
-- трогать `AUTO_TRADE`, боевые ордера, `config.yaml` торгового исполнения;
-- запускать бесконтрольный поток без лимитов;
-- тащить код FinceptTerminal внутрь проекта.
-
-Можно:
-
-- править scanner/agents/source configs;
-- запускать paper scanner;
-- писать JSONL-журналы в `logs/scout`;
-- добавлять keyless источники;
-- расширять `pending_events` и resolver;
-- коммитить документацию/handoff.
-
-## Важное понимание
-
-Система сейчас уже не “одна LLM читает новости”. Она стала:
-
-```text
-источники -> роутер -> слой -> cheap agent -> orchestrator -> chief -> journal -> outcome
-```
-
-Но целевая система трейдера глубже:
-
-```text
-5 специализированных потоков
--> expected/realized
--> surprise
--> agent/chief
--> Telegram + dataset
--> audit/calibration
-```
-
-Следующий агент должен двигать именно это, а не снова переписывать фундамент.
+1. Review 2-4 hours of scanner output after recall fix.
+2. If flow is clean, design `MARKET_CONTEXT/WATCH_MARKET`.
+3. Only after more mature outcomes, revisit Stage 1 market-context experiment.

@@ -54,11 +54,12 @@ Alibaba Cloud Model Studio / Qwen как основной cheap-tier для аг
 Реализовано:
 
 - 5 агентных слоев в конфиге: L1 крипта-мажоры, L2 альты/мемы, L3 металлы, L4 ресурсы, L5 акции/pre-IPO.
-- Реальный поток сейчас есть по L1/L2/L5. L3/L4 описаны, но требуют подключения источников.
+- Реальный поток сейчас есть по всем 5 слоям: L1/L2/L5 через RSS/OKX/SEC, L3 через Google News metals + FRED/macro, L4 через Google News energy + EIA/OPEC/OilPrice.
 - LLM-провайдеры: `yandex` fallback, `alibaba` основной дешевый контур через OpenAI-compatible endpoint.
 - Alibaba-роли: `cheap`, `mid`, `chief`, `audit` настраиваются через `.env`.
 - Журнал: `logs/scout/scanner_journal.jsonl`, бюджет: `logs/scout/llm_budget.jsonl`, исходы: `logs/scout/scanner_outcomes.jsonl`.
-- Outcome-resolver считает обе стороны: `outcome_long`, `outcome_short`, `mfe/mae`, цена через 1/4/24/48 часов.
+- Outcome-resolver считает обе стороны: `outcome_long`, `outcome_short`, `mfe/mae`, цену через 1/4/24/48 часов и excess по baseline за то же окно.
+- Router поддерживает strong cross-layer fallback: если источник ограничен слоями, но заголовок содержит сильный алиас другого слоя (`Coinbase`, `SpaceX`, `Anthropic`), событие восстанавливается с флагом `cross_layer=true` для аудита.
 - Новый durable intake buffer на SQLite: `data/scout/news_buffer.sqlite` для раздельного ingest/extract/normalize/analyze.
 
 Текущий `scanner.bat` запускает buffer-контур по умолчанию. Старый прямой контур
@@ -118,7 +119,7 @@ Telegram: сигналы — в группу, персональные разб�
 
 **Данные:** [OKX API](https://www.okx.com/docs-v5/) (REST + WebSocket),
 [CoinGecko](https://www.coingecko.com/) (привязка пары к родительской экосистеме),
-RSS Cointelegraph / Decrypt / Google News, OKX listings.
+RSS Cointelegraph / Decrypt / Google News, OKX listings, SEC EDGAR, DexScreener, GoPlus, FRED, EIA/OPEC.
 
 **LLM:** `src/utils/llm_client.py` - единый клиент для Yandex и Alibaba. Для Alibaba
 используется OpenAI-compatible endpoint Model Studio; ключи и модели задаются только
