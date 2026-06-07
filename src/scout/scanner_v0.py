@@ -408,6 +408,7 @@ def write_routing_snapshot(
             "asset": asset,
             "layer": layer,
             "asset_confidence": asset_confidence,
+            "cross_layer": bool(item.get("cross_layer")),
             "headline_phase": headline_phase,
             "final_phase": final_phase,
             "materiality_score": materiality_score,
@@ -438,6 +439,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     source_phase_prior = str(source_cfg.get("phase_prior") or "mixed")
     headline_temporal = route_temporal(headline)
     headline_phase = str(headline_temporal.get("phase") or "AMBIGUOUS")
+    cross_layer = False   # сильный алиас восстановил актив вне слоя источника (recall-fix, аудит)
 
     # 1) РОУТЕР актив/слой (+ материальность для RSS; листинг pre-routed, материален by design)
     if normalized:
@@ -477,6 +479,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             return {"skipped": "no_tracked_asset", "headline": headline}
         asset, inst, layer = routed["asset"], routed["okx_inst"], routed["layer"]
         conf, baseline_sym = routed["confidence"], routed.get("baseline")
+        cross_layer = bool(routed.get("cross_layer"))   # strong-match минул гейт слоёв источника
+        item["cross_layer"] = cross_layer               # → routing audit (write_routing_snapshot)
         # V0: режем ТОЛЬКО заведомый шум (noise_genre); no_material_term пропускаем в LLM
         # (рой: не резать сюрприз вслепую пока журнал мал; V1 ужесточит).
         mat = score_materiality(headline, layer)
@@ -640,6 +644,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         source_phase_prior=source_phase_prior,
         headline_phase=headline_phase,
         allowed_layers_from_source=allowed,
+        cross_layer=cross_layer,
         levels=fields["levels"],
         catalyst=fields["catalyst"], in_price=fields["in_price"],
         red_flag=fields["red_flag"], mechanics=fields["mechanics"],
