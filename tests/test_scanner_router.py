@@ -124,6 +124,30 @@ def test_layer_plan_matrix_loaded():
     assert "earnings_calendar" in l5_expected
 
 
+# ── кросс-слой recall-fix: сильный именной алиас минует гейт слоёв источника ──
+def test_cross_layer_strong_recovers_l5_from_crypto_wire():
+    # крипто-лента (allowed={1,2}) пишет про L5-имена → 2-й проход восстанавливает + флаг cross_layer
+    r = route_asset("Coinbase launches pre-IPO markets, starting with SpaceX", allowed_layers={1, 2})
+    assert r and r["asset"] == "COIN" and r["layer"] == 5 and r.get("cross_layer") is True
+    a = route_asset("Anthropic's warning: AI is on the cusp of getting smarter on its own", allowed_layers={1, 2})
+    assert a and a["asset"] == "ANTHROPIC" and a.get("cross_layer") is True
+    s = route_asset("Kraken offers SpaceX IPO access through xStocks", allowed_layers={1, 2})
+    assert s and s["asset"] == "SPACEX" and s.get("cross_layer") is True
+
+
+def test_cross_layer_inlayer_match_not_flagged():
+    # актив в разрешённом слое → 1-й проход, БЕЗ cross_layer (флаг только для восстановленных)
+    z = route_asset("Zcash fixes Orchard bug after emergency network upgrade", allowed_layers={1, 2})
+    assert z and z["asset"] == "ZEC" and z["layer"] == 2 and not z.get("cross_layer")
+    b = route_asset("Bitcoin crashes 6% in a day", allowed_layers={1, 2})
+    assert b and b["asset"] == "BTC" and not b.get("cross_layer")
+
+
+def test_cross_layer_weak_ticker_stays_gated():
+    # голый слабый тикер (SOL) от крипто-ленты НЕ должен пролезать через 2-й проход (только strong)
+    assert route_asset("Forward Industries moves $32M in SOL amid paper loss", allowed_layers={1, 2}) is None
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in list(globals().items()):

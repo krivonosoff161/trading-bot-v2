@@ -101,18 +101,11 @@ def layer_plan(layer: int | None = None) -> dict:
 
 
 # ── РОУТЕР актив/слой ────────────────────────────────────────────────────────
-def route_asset(headline: str, allowed_layers: set | None = None) -> dict | None:
-    """Заголовок → {asset, okx_inst, layer, baseline, confidence} либо None.
-    Мульти-матч + субъект (позиция) + подтверждение короткого тикера.
-    allowed_layers (из source.layers) ограничивает кандидатов слоями источника:
-    крипто-лента не матчит «digital gold»→XAU, нефть-лента не матчит bitcoin."""
+def _best_match(low: str, first_zone: set, allowed_layers, strong_only: bool = False):
+    """Скоринг активов по заголовку → (best_key, best_asset) либо (None, None).
+    strong_only=True: считаем ТОЛЬКО сильные именные алиасы (слабые тикеры игнорим) —
+    для кросс-слой фоллбэка, чтобы голый «$X» не утаскивал чужой слой."""
     cfg = _entities()
-    rt = cfg.get("router", {})
-    threshold = rt.get("threshold", 0.5)
-    zone = rt.get("subject_zone_words", 6)
-    low = headline.lower()
-    first_zone = set(re.findall(r"[a-z]+", low)[:zone])
-
     best_key, best_asset = None, None
     for a in cfg.get("assets", []):
         if allowed_layers and a.get("layer") not in allowed_layers:
@@ -125,19 +118,49 @@ def route_asset(headline: str, allowed_layers: set | None = None) -> dict | None
                 if name.split()[0] in first_zone:
                     score += 0.15
                 pos = min(pos, m.start())
-        for tk in a.get("weak", []):
-            if re.search(r"\$" + re.escape(tk) + r"\b", low) or re.search(r"\b" + re.escape(tk) + r"[-/]usd", low):
-                score = max(score, 0.6)
-            elif re.search(r"\b" + re.escape(tk) + r"\b", low) and score == 0.0:
-                score = max(score, 0.35)
+        if not strong_only:
+            for tk in a.get("weak", []):
+                if re.search(r"\$" + re.escape(tk) + r"\b", low) or re.search(r"\b" + re.escape(tk) + r"[-/]usd", low):
+                    score = max(score, 0.6)
+                elif re.search(r"\b" + re.escape(tk) + r"\b", low) and score == 0.0:
+                    score = max(score, 0.35)
         if score > 0:
             key = (score, -pos)
             if best_key is None or key > best_key:
                 best_key, best_asset = key, a
+    return best_key, best_asset
+
+
+def _to_result(best_key, best_asset, cross_layer: bool = False) -> dict:
+    res = {"asset": best_asset["sym"], "okx_inst": best_asset["okx_inst"],
+           "layer": best_asset["layer"], "baseline": best_asset.get("baseline"),
+           "confidence": round(min(best_key[0], 1.0), 2)}
+    if cross_layer:
+        res["cross_layer"] = True
+    return res
+
+
+def route_asset(headline: str, allowed_layers: set | None = None) -> dict | None:
+    """Заголовок → {asset, okx_inst, layer, baseline, confidence[, cross_layer]} либо None.
+    Два прохода:
+    1) уважаем allowed_layers источника (крипто-лента не матчит «digital gold»→XAU);
+    2) если 1-й пуст — разрешаем ТОЛЬКО сильный именной алиас ВНЕ слоя источника
+       (крипто-провод пишет про COIN/SPACEX/ANTHROPIC=L5). Слабые тикеры не пускаем.
+       Восстановленное помечаем cross_layer (для аудита: сколько таких реально полезны)."""
+    cfg = _entities()
+    rt = cfg.get("router", {})
+    threshold = rt.get("threshold", 0.5)
+    zone = rt.get("subject_zone_words", 6)
+    low = headline.lower()
+    first_zone = set(re.findall(r"[a-z]+", low)[:zone])
+
+    best_key, best_asset = _best_match(low, first_zone, allowed_layers)
     if best_asset and best_key[0] >= threshold:
-        return {"asset": best_asset["sym"], "okx_inst": best_asset["okx_inst"],
-                "layer": best_asset["layer"], "baseline": best_asset.get("baseline"),
-                "confidence": round(min(best_key[0], 1.0), 2)}
+        return _to_result(best_key, best_asset)
+    if allowed_layers:
+        sk, sa = _best_match(low, first_zone, None, strong_only=True)
+        if sa and sk[0] >= 0.7:
+            return _to_result(sk, sa, cross_layer=True)
     return None
 
 

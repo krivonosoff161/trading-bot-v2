@@ -109,6 +109,7 @@ def build_row(
     source_phase_prior: str | None = None,
     headline_phase: str | None = None,
     allowed_layers_from_source: list[int] | None = None,
+    cross_layer: bool = False,           # актив восстановлен сильным алиасом вне слоя источника
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -150,6 +151,7 @@ def build_row(
         "source_phase_prior": source_phase_prior,
         "headline_phase": headline_phase,
         "allowed_layers_from_source": allowed_layers_from_source or [],
+        "cross_layer": cross_layer,
         "router_version": router_version,
         "asset_confidence": asset_confidence,
         "source_count": source_count,
