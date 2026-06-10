@@ -26,7 +26,6 @@ import datetime as dt
 import email.utils
 import html
 import json
-import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -295,6 +294,23 @@ def market_ctx_line() -> str | None:
 
 
 # ── карточка для Telegram ────────────────────────────────────────────────────
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().strip("'\"").lower() in ("1", "true", "yes", "on")
+
+
+def should_send_to_channel(verdict: str, send_channel: bool) -> bool:
+    """Гейт доставки: в канал идут только GO/WATCH chief-карточки.
+
+    NO_GO остаётся в журнале/датасете (канал не флудим); вернуть NO_GO в канал
+    можно ЯВНО через env SCANNER_SEND_NO_GO=true (дефолт — тихо)."""
+    if not send_channel:
+        return False
+    v = str(verdict or "").upper()
+    if v in ("GO", "WATCH"):
+        return True
+    return v == "NO_GO" and _env_flag("SCANNER_SEND_NO_GO")
+
+
 def _meaningful(v) -> bool:
     return bool(v) and str(v).strip().lower() not in ("none", "no", "unknown", "n/a", "-", "нет")
 
@@ -325,13 +341,15 @@ def _in_price_ru(v: str | None) -> str:
     )
 
 
-def _phase_ru(v: str | None) -> str:
-    return {
-        "expected": "будет",
-        "realized": "произошло",
-        "context": "контекст",
-        "ambiguous": "неясно",
-    }.get(str(v or "").lower(), str(v or "неясно"))
+LAYER_LABELS = {1: "крипта/мажоры", 2: "альты/мемы", 3: "металлы", 4: "энергия/нефть", 5: "акции/pre-IPO"}
+
+
+def layer_label(layer) -> str:
+    """Человеческая метка слоя для карточки (вместо системного L1..L5)."""
+    try:
+        return LAYER_LABELS.get(int(layer), f"L{layer}")
+    except (TypeError, ValueError):
+        return "—"
 
 
 def format_caption(row: dict) -> str:
@@ -341,32 +359,58 @@ def format_caption(row: dict) -> str:
 
 
 def format_card(row: dict) -> str:
-    """Полная Telegram-карточка. Это не подпись к фото, поэтому можно дать связный вывод."""
-    emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(row["verdict"], "⚪")
+    """Telegram-карточка трейдеру: слой-метка + вердикт-специфичная структура.
+
+    GO — уровни/сценарий/отмена; WATCH — почему наблюдаем/что подтвердит/что отменит;
+    NO_GO — компактная диагностика (в канал по дефолту не идёт — логи/override).
+    Пустые/none-поля не печатаем."""
+    verdict = str(row.get("verdict") or "").upper()
+    emoji = {"GO": "🟢", "NO_GO": "🔴", "WATCH": "🟡"}.get(verdict, "⚪")
     clean_url = (row.get("source_url") or "").split("?")[0]
     lv = row.get("levels") or {}
-    is_go = row.get("verdict") == "GO"
     side = str(row.get("side") or "none").lower()
 
-    L = [
-        f"🛰️ <b>СКАНЕР · {_esc(row.get('asset') or '—')} · L{_esc(row.get('layer') or '—')}</b>",
-        f"{emoji} <b>Вердикт:</b> {_esc(row['verdict'])} · <b>сторона:</b> {_esc(_side_ru(side))}",
-        f"<b>Фаза:</b> {_esc(_phase_ru(row.get('event_phase')))} · <b>класс:</b> {_esc(row.get('lead_class') or '—')} · <b>в цене:</b> {_esc(_in_price_ru(row.get('in_price')))}",
-        f"<b>Цена:</b> {_esc(_money(row.get('price_at_decision')))} · <b>горизонт:</b> {_esc(row.get('horizon_hours'))}ч",
-        "",
-        f"<b>Суть:</b> {_esc(_cap(row.get('summary'), 760))}",
-    ]
+    head = f"🛰️ <b>{_esc(row.get('asset') or '—')} · {_esc(layer_label(row.get('layer')))}</b>"
+    verdict_line = f"{emoji} <b>{_esc(verdict)}</b>"
+    if side in ("long", "short"):
+        verdict_line += f" · {_esc(_side_ru(side))}"
 
-    if _meaningful(row.get("asymmetry")):
-        L.append(f"<b>Почему:</b> {_esc(_cap(row.get('asymmetry'), 520))}")
-    if _meaningful(row.get("forecast")):
-        L.append(f"<b>Сценарий:</b> {_esc(_cap(row.get('forecast'), 520))}")
-    if _meaningful(row.get("invalidation")):
-        L.append(f"<b>Отмена сценария:</b> {_esc(_cap(row.get('invalidation'), 520))}")
-    if is_go and lv.get("entry"):
-        L.append(f"<b>Уровни:</b> вход ~{_esc(lv.get('entry'))} · стоп {_esc(lv.get('invalidation'))} · цель {_esc(lv.get('target'))}")
+    L = [head, verdict_line, "", f"{_esc(_cap(row.get('summary'), 760))}"]
+
+    if verdict == "WATCH":
+        if _meaningful(row.get("asymmetry")):
+            L.append(f"<b>Почему наблюдаем:</b> {_esc(_cap(row.get('asymmetry'), 520))}")
+        if _meaningful(row.get("forecast")):
+            L.append(f"<b>Что подтвердит:</b> {_esc(_cap(row.get('forecast'), 520))}")
+        if _meaningful(row.get("invalidation")):
+            L.append(f"<b>Что отменит:</b> {_esc(_cap(row.get('invalidation'), 520))}")
+    elif verdict == "GO":
+        if _meaningful(row.get("asymmetry")):
+            L.append(f"<b>Асимметрия:</b> {_esc(_cap(row.get('asymmetry'), 520))}")
+        if _meaningful(row.get("forecast")):
+            L.append(f"<b>Сценарий:</b> {_esc(_cap(row.get('forecast'), 520))}")
+        if _meaningful(row.get("invalidation")):
+            L.append(f"<b>Отмена:</b> {_esc(_cap(row.get('invalidation'), 520))}")
+        if lv.get("entry"):
+            L.append(f"<b>Уровни:</b> вход ~{_esc(lv.get('entry'))} · стоп {_esc(lv.get('invalidation'))} · цель {_esc(lv.get('target'))}")
+    else:  # NO_GO/прочее — компактная диагностика без сценарных полей
+        if _meaningful(row.get("asymmetry")):
+            L.append(f"<b>Почему мимо:</b> {_esc(_cap(row.get('asymmetry'), 320))}")
+
+    meta_bits = []
+    if verdict in ("GO", "WATCH"):
+        if row.get("price_at_decision") is not None:
+            meta_bits.append(f"цена {_esc(_money(row.get('price_at_decision')))}")
+        if row.get("horizon_hours"):
+            meta_bits.append(f"горизонт ~{_esc(row.get('horizon_hours'))}ч")
+        ip = str(row.get("in_price") or "").lower()
+        if ip in ("yes", "partial"):
+            meta_bits.append(f"в цене: {_in_price_ru(ip)}")
+    if meta_bits:
+        L.append("<i>" + " · ".join(meta_bits) + "</i>")
+
     if row.get("low_confidence"):
-        L.append("⚠️ тело не извлечено — низкая уверенность")
+        L.append("⚠️ тело не извлечено — оценка по заголовку")
     if _meaningful(row.get("headline")):
         L.append(f"<b>Оригинал:</b> {_esc(_cap(row.get('headline'), 220))}")
 
@@ -701,9 +745,10 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         )
     card = format_card(row)
 
-    # 5+6) график + доставка — ТОЛЬКО chief-карточки (send_channel); дешёвый NO_GO = только журнал/датасет
+    # 5+6) график + доставка — только GO/WATCH chief-карточки (should_send_to_channel);
+    # NO_GO (chief или дешёвый) = журнал/датасет, в канал не идёт (SCANNER_SEND_NO_GO=true вернёт)
     sent = None
-    if cid and orch.get("send_channel") and SCANNER_CHAT_ID and not dry:
+    if cid and should_send_to_channel(verdict, bool(orch.get("send_channel"))) and SCANNER_CHAT_ID and not dry:
         chart_path = make_chart(inst, J.now_iso(), row) if inst else None
         try:
             if chart_path:

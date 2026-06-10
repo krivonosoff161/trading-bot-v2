@@ -148,7 +148,27 @@ def score(verdict: str, side: str, ret: float, mfe_long: float | None, mae_long:
     return None  # WATCH = информационный
 
 
-def resolve() -> None:
+def _candidates(rows: list[dict], done: set[str], now: dt.datetime) -> tuple[list[dict], int]:
+    """Неразрешённые карточки журнала → (зрелые к счёту, сколько ещё не дозрело)."""
+    matured, pending = [], 0
+    for r in rows:
+        cid = r.get("card_id")
+        if not cid or cid in done:
+            continue
+        try:
+            mature_at = _parse(r["ts_utc"]) + dt.timedelta(hours=float(r["horizon_hours"]))
+        except Exception:
+            continue
+        if now < mature_at:
+            pending += 1
+        else:
+            matured.append(r)
+    return matured, pending
+
+
+def resolve(limit: int | None = None) -> None:
+    """Счёт зрелых карточек. limit — не больше N за прогон (сеть OKX = ~2-3 запроса
+    на карточку, на больших очередях прогон без лимита висит минуты)."""
     rows = _read_jsonl(JOURNAL)
     if not rows:
         print("журнал пуст — нечего считать")
@@ -159,22 +179,20 @@ def resolve() -> None:
     now = dt.datetime.now(dt.timezone.utc)
     baseline_cache: dict = {}      # per-layer якорь excess (кэш цен)
 
-    matured = scored = manual = pending = 0
+    todo, pending = _candidates(rows, done, now)
+    queued = max(0, len(todo) - limit) if (limit and limit > 0) else 0
+    if limit and limit > 0:
+        todo = todo[:limit]
+    matured = len(todo)
+    print(f"зрелых к счёту: {matured}"
+          + (f" (лимит {limit}, в очереди ещё {queued})" if queued else "")
+          + f" · ещё рано: {pending}")
+
+    scored = manual = 0
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUTCOMES, "a", encoding="utf-8") as out:
-        for r in rows:
+        for i, r in enumerate(todo, 1):
             cid = r.get("card_id")
-            if cid in done:
-                continue
-            try:
-                mature_at = _parse(r["ts_utc"]) + dt.timedelta(hours=float(r["horizon_hours"]))
-            except Exception:
-                continue
-            if now < mature_at:
-                pending += 1
-                continue
-            matured += 1
-
             t0 = _parse(r["ts_utc"])
             t0_ms = int(t0.timestamp() * 1000)
             t_end_ms = int(min(now, t0 + dt.timedelta(hours=float(r["horizon_hours"]))).timestamp() * 1000)
@@ -198,6 +216,7 @@ def resolve() -> None:
                        "verdict": r.get("verdict"), "asset": r.get("asset")}
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 manual += 1
+                print(f"  [{i}/{matured}] [manual] {r.get('verdict')} {r.get('asset')} — вне OKX, исход вручную")
                 continue
 
             path = [c for c in path if t0_ms <= c[0] <= t_end_ms] or fetch_path(inst, t0_ms, t_end_ms)
@@ -263,11 +282,12 @@ def resolve() -> None:
             scored += 1
             mark = {True: "OK", False: "BAD", None: "?"}[correct]
             sw = (f"mfe+{mfe_long:.1f}/mae{mae_long:.1f}" if mfe_long is not None else "путь?")
-            print(f"  [{mark}] {r.get('verdict')} {r.get('side')} {r.get('asset')}: "
+            print(f"  [{i}/{matured}] [{mark}] {r.get('verdict')} {r.get('side')} {r.get('asset')}: "
                   f"ret={ret:+.2f}% long={outcome_long:+.1f}/short={outcome_short:+.1f} {sw}"
                   f"{' MISSED' if missed else ''}")
 
-    print(f"\nзрело={matured} · посчитано={scored} · manual-очередь={manual} · ещё рано={pending}")
+    print(f"\nзрело={matured} · посчитано={scored} · manual-очередь={manual} · ещё рано={pending}"
+          + (f" · в очереди за лимитом={queued} (повтори прогон)" if queued else ""))
     print(f"outcomes: {OUTCOMES}")
 
 
@@ -316,6 +336,8 @@ def report() -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true", help="только сводка, без счёта")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="не больше N зрелых карточек за прогон (повторный прогон продолжит)")
     ap.add_argument("--rebuild", action="store_true", help="backup and rebuild generated outcome/training/memory logs")
     args = ap.parse_args()
     if args.report:
@@ -324,7 +346,7 @@ def main():
         if args.rebuild:
             for path in (OUTCOMES, R.TRAINING, R.MEMORY):
                 _backup_and_remove(path)
-        resolve()
+        resolve(limit=args.limit)
         print()
         report()
 
