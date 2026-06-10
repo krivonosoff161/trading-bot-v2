@@ -731,6 +731,7 @@ def main() -> None:
     p_show = sub.add_parser("show")
     p_show.add_argument("doc_id")
     p_dg = sub.add_parser("decode-google", help="бэкфил google-обёрток (дефолт dry-run)")
+    p_dg.add_argument("--dry-run", action="store_true", help="явный dry-run (это поведение по умолчанию)")
     p_dg.add_argument("--apply", action="store_true", help="применить (иначе dry-run)")
     p_dg.add_argument("--reset-low-quality", action="store_true",
                       help="сбросить заголовок-only google-доки на повторную экстракцию")
@@ -751,6 +752,8 @@ def main() -> None:
     elif args.cmd == "show":
         _print_json(show(args.doc_id) or {"error": "not_found", "doc_id": args.doc_id})
     elif args.cmd == "decode-google":
+        if args.apply and args.dry_run:
+            ap.error("decode-google: --dry-run and --apply are mutually exclusive")
         _print_json(decode_google_backfill(Path(args.db), apply=args.apply,
                                            reset_low_quality=args.reset_low_quality))
 
