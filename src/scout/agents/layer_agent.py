@@ -74,7 +74,7 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
         parts.append("ТЕКСТ: " + body[:2500])
     user = "\n".join(p for p in parts if p)
 
-    raw, usage = await llm_client.call("cheap", system, user, json_mode=True, max_tokens=600)
+    raw, usage = await llm_client.call("cheap", system, user, json_mode=True, max_tokens=700)
     data = _parse(raw) or {}
 
     direction = str(data.get("direction", "none")).lower().strip()
@@ -83,6 +83,14 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
     phase = str(data.get("phase", "ambiguous")).lower().strip()
     if phase not in ("expected", "realized", "context", "ambiguous"):
         phase = "ambiguous"
+    pre_verdict = str(data.get("pre_verdict") or "").upper().replace("-", "_").strip()
+    if pre_verdict not in ("DROP", "JOURNAL_NO_GO", "WATCH_CANDIDATE", "GO_CANDIDATE"):
+        pre_verdict = ""        # пусто → оркестратор применит консервативный fallback-маппинг
+    try:
+        horizon = int(float(data.get("suggested_horizon_hours")))
+        horizon = horizon if 1 <= horizon <= 720 else None
+    except (TypeError, ValueError):
+        horizon = None
 
     return {
         "asset": data.get("asset") or asset,
@@ -95,6 +103,12 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
         "numbers": data.get("numbers") or [],
         "red_flags": data.get("red_flags") or [],
         "mechanics": data.get("mechanics") or [],
+        "pre_verdict": pre_verdict,
+        "should_escalate": bool(data.get("should_escalate")),
+        "escalation_reason": str(data.get("escalation_reason") or "")[:300],
+        "no_go_reason": str(data.get("no_go_reason") or "")[:300],
+        "trigger_text": str(data.get("trigger_text") or "")[:300],
+        "suggested_horizon_hours": horizon,
         "reason_to_escalate": str(data.get("reason_to_escalate") or "")[:300],
         "_usage": usage,
         "_ok": bool(raw),

@@ -198,9 +198,11 @@ def _patch_pipeline(monkeypatch, verdict, side="none"):
     monkeypatch.setattr(S, "send_message_to", fake_send)
     monkeypatch.setattr(S, "send_photo_to", fake_send)
 
-    async def fake_process(news, asset, layer, lead_class, price, mline):
+    async def fake_process(news, asset, layer, lead_class, price, mline, **kw):
         return {"decision": "chief", "chief_called": True, "verdict": verdict, "side": side,
                 "send_channel": True, "usage": [{}],
+                "pre_verdict": "WATCH_CANDIDATE", "should_escalate": True,
+                "escalation_gate": "CHEAP_WATCH", "escalation_reason": "test",
                 "agent": {"direction": "none", "confidence": 0.5, "phase": "realized",
                           "asset": asset, "event_type": "etf_flow", "materiality": 0.7,
                           "red_flags": [], "mechanics": [], "key_facts": []},
