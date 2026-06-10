@@ -25,6 +25,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from src.scout import google_news_url as GN  # noqa: E402
 from src.scout import page_extract  # noqa: E402
 from src.scout.dedup import event_key as make_event_key  # noqa: E402
 from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality, source_meta  # noqa: E402
@@ -159,10 +160,19 @@ def ingest_items(items: list[dict], path: Path = DB_PATH) -> dict:
             url = str(item.get("url") or "").strip()
             if not title and not url:
                 continue
-            canon = canonical_url(url)
+            # Google-обёртка: локальный декод (старый формат) → реальный URL для canon/дедупа.
+            # Новый формат локально не раскрывается — резолвится сетью на extract-стадии.
+            stored_url, gn_meta = GN.unwrap_google_news_url(url)
+            canon = canonical_url(stored_url)
             if item.get("event_key") and item.get("source_class") != "rss":
                 canon = f"{canon}::{item['event_key']}"
             doc_id = item.get("doc_id") or doc_id_for(canon, title)
+            if gn_meta.get("decoded") and not item.get("doc_id"):
+                # стабильность doc_id: если эта статья уже лежит под wrapper-id — переиспользуем
+                legacy_id = doc_id_for(canonical_url(url), title)
+                if legacy_id != doc_id and conn.execute(
+                        "SELECT 1 FROM raw_items WHERE doc_id=?", (legacy_id,)).fetchone():
+                    doc_id = legacy_id
             source = item.get("source") or item.get("source_id") or "unknown"
             existing = conn.execute("SELECT status FROM raw_items WHERE doc_id=?", (doc_id,)).fetchone()
             if existing:
@@ -192,7 +202,7 @@ def ingest_items(items: list[dict], path: Path = DB_PATH) -> dict:
                         source,
                         item.get("source_class"),
                         item.get("lead_class"),
-                        url,
+                        stored_url,            # реальный URL (если локально декодирован); оригинал — в raw_json
                         canon,
                         title,
                         item.get("time") or item.get("published_at"),
@@ -270,6 +280,7 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
     """Turn raw_items into machine_docs. Does not call LLM."""
     init_db(path)
     resolved = failed = skipped = 0
+    gn_resolved = gn_failed = 0
     ts = now_iso()
     with connect(path) as conn:
         rows = conn.execute(
@@ -292,11 +303,20 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
             ext_title = title
             ext_date = row["published_at"]
             error = None
+            fetch_url = url
+            gn_original = None     # обёртка Google, если реальный URL раскрыт
 
             if not dry and url and len(text) < 500 and not raw.get("asset"):
-                ok, reason = _is_safe_fetch_url(url)
+                if GN.is_google_news_url(url):
+                    real = GN.decode_google_news_url(url) or GN.resolve_google_news_url(url)
+                    if real:
+                        fetch_url, gn_original = real, url
+                        gn_resolved += 1
+                    else:
+                        gn_failed += 1
+                ok, reason = _is_safe_fetch_url(fetch_url)
                 if ok:
-                    ext = page_extract.extract(url)
+                    ext = page_extract.extract(fetch_url)
                     if ext and ext.get("text"):
                         text = ext["text"].strip()
                         ext_title = ext.get("title") or ext_title
@@ -304,7 +324,7 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                         method = "trafilatura"
                         status = "ok" if len(text) >= 500 else "partial"
                     else:
-                        fb = _fallback_newspaper(url)
+                        fb = _fallback_newspaper(fetch_url)
                         if fb:
                             text = fb["text"].strip()
                             ext_title = fb.get("title") or ext_title
@@ -349,11 +369,24 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                     quality,
                     len(text),
                     _content_hash(text),
-                    _json({"error": error, "source_url": url}),
+                    _json({"error": error, "source_url": fetch_url, "google_news_url": gn_original}),
                     ts,
                     ts,
                 ),
             )
+            if gn_original:
+                # реальный URL — в raw_items (дедуп будущих заходов); canonical только без конфликта
+                new_canon = canonical_url(fetch_url)
+                conflict = conn.execute(
+                    "SELECT doc_id FROM raw_items WHERE canonical_url=? AND doc_id<>?",
+                    (new_canon, row["doc_id"]),
+                ).fetchone()
+                if conflict is None:
+                    conn.execute("UPDATE raw_items SET url=?, canonical_url=?, updated_at=? WHERE doc_id=?",
+                                 (fetch_url, new_canon, ts, row["doc_id"]))
+                else:
+                    conn.execute("UPDATE raw_items SET url=?, updated_at=? WHERE doc_id=?",
+                                 (fetch_url, ts, row["doc_id"]))
             conn.execute(
                 "UPDATE raw_items SET status=?, error=?, updated_at=? WHERE doc_id=?",
                 (STATUS_EXTRACTED, error, ts, row["doc_id"]),
@@ -363,7 +396,8 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
             else:
                 resolved += 1
         skipped = max(0, limit - len(rows))
-    return {"resolved": resolved, "failed_partial": failed, "skipped_capacity": skipped}
+    return {"resolved": resolved, "failed_partial": failed, "skipped_capacity": skipped,
+            "gn_resolved": gn_resolved, "gn_failed": gn_failed}
 
 
 def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
@@ -573,6 +607,76 @@ def mark_status(doc_id: str, status: str, drop_reason: str | None = None, path: 
         )
 
 
+def decode_google_backfill(path: Path = DB_PATH, apply: bool = False,
+                           reset_low_quality: bool = False) -> dict:
+    """Бэкфил google-обёрток: локальный декод URL + опц. сброс низкокачественных доков
+    на повторную экстракцию (реальный URL раскроет resolve_pending сетью). Без LLM/сети.
+
+    Дефолт = dry-run (только счёт). apply пишет; перед записью — бэкап .sqlite."""
+    init_db(path)
+    c = {"total_google": 0, "decoded": 0, "needs_network": 0, "unchanged": 0,
+         "conflicts": 0, "reset_for_reextract": 0, "skipped_analyzed": 0,
+         "skipped_not_google": 0, "applied": bool(apply)}
+    samples: list[str] = []
+    ts = now_iso()
+    if apply:
+        import shutil
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        shutil.copy2(path, path.with_suffix(f".sqlite.bak-{stamp}"))
+    with connect(path) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM raw_items").fetchone()[0]
+        rows = conn.execute(
+            """
+            SELECT r.doc_id, r.url, r.canonical_url, r.status,
+                   d.text_len, d.extraction_quality
+            FROM raw_items r LEFT JOIN machine_docs d ON d.doc_id = r.doc_id
+            WHERE r.url LIKE '%news.google.com%'
+            """
+        ).fetchall()
+        google_rows = [r for r in rows if GN.is_google_news_url(r["url"] or "")]
+        c["total_google"] = len(google_rows)
+        c["skipped_not_google"] = total - len(google_rows)
+        for row in google_rows:
+            real = GN.decode_google_news_url(row["url"])
+            if real:
+                new_canon = canonical_url(real)
+                conflict = conn.execute(
+                    "SELECT doc_id FROM raw_items WHERE canonical_url=? AND doc_id<>?",
+                    (new_canon, row["doc_id"]),
+                ).fetchone()
+                if conflict:
+                    c["conflicts"] += 1
+                else:
+                    c["decoded"] += 1
+                    if apply:
+                        conn.execute(
+                            "UPDATE raw_items SET url=?, canonical_url=?, updated_at=? WHERE doc_id=?",
+                            (real, new_canon, ts, row["doc_id"]),
+                        )
+            else:
+                c["needs_network"] += 1
+
+            low_quality = (row["text_len"] is None or int(row["text_len"] or 0) < 500
+                           or float(row["extraction_quality"] or 0.0) < 0.5)
+            if not low_quality:
+                c["unchanged"] += 1
+                continue
+            if row["status"] == STATUS_ANALYZED:
+                c["skipped_analyzed"] += 1            # уже в журнале — не пере-кардить
+                continue
+            if reset_low_quality:
+                c["reset_for_reextract"] += 1
+                if len(samples) < 5:
+                    samples.append(f"{row['doc_id']} {str(row['url'])[:70]}")
+                if apply:
+                    conn.execute(
+                        "UPDATE raw_items SET status=?, drop_reason=NULL, error=NULL, updated_at=? WHERE doc_id=?",
+                        (STATUS_NEW, ts, row["doc_id"]),
+                    )
+    c["sample_reset"] = samples
+    return c
+
+
 def stats(path: Path = DB_PATH) -> dict:
     init_db(path)
     with connect(path) as conn:
@@ -626,6 +730,11 @@ def main() -> None:
     p_ready.add_argument("--limit", type=int, default=20)
     p_show = sub.add_parser("show")
     p_show.add_argument("doc_id")
+    p_dg = sub.add_parser("decode-google", help="бэкфил google-обёрток (дефолт dry-run)")
+    p_dg.add_argument("--apply", action="store_true", help="применить (иначе dry-run)")
+    p_dg.add_argument("--reset-low-quality", action="store_true",
+                      help="сбросить заголовок-only google-доки на повторную экстракцию")
+    p_dg.add_argument("--db", default=str(DB_PATH))
     args = ap.parse_args()
 
     if args.cmd == "init":
@@ -641,6 +750,9 @@ def main() -> None:
         _print_json(ready_items(args.limit))
     elif args.cmd == "show":
         _print_json(show(args.doc_id) or {"error": "not_found", "doc_id": args.doc_id})
+    elif args.cmd == "decode-google":
+        _print_json(decode_google_backfill(Path(args.db), apply=args.apply,
+                                           reset_low_quality=args.reset_low_quality))
 
 
 if __name__ == "__main__":

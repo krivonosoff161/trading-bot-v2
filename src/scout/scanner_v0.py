@@ -46,6 +46,7 @@ except Exception:
 import os  # noqa: E402
 
 from src.scout.page_extract import extract                       # noqa: E402
+from src.scout import google_news_url as GN                      # noqa: E402
 # (chief = src/scout/agents/chief.py через orchestrator; старый generate_scout_card больше не зовём)
 from src.scout.router import (route_asset, route_temporal, score_materiality,   # noqa: E402
                               dedup_config, limits_config, enabled_sources, source_meta)
@@ -588,7 +589,10 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         source_ts = item.get("time") or J.now_iso()[:10]
         low_conf = not bool(body_text)
     elif url and not pre_routed:
-        ext = extract(url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
+        fetch_url = url
+        if not dry and GN.is_google_news_url(url):   # google-обёртка → реальный URL статьи
+            fetch_url = GN.decode_google_news_url(url) or GN.resolve_google_news_url(url) or url
+        ext = extract(fetch_url) if not dry else {"text": "(dry-run)", "date": item.get("time")}
         if not ext or ext.get("error") or len(ext.get("text") or "") < 200:
             low_conf, body_text = True, ""
             source_ts = (ext or {}).get("date") or item.get("time") or J.now_iso()[:10]
