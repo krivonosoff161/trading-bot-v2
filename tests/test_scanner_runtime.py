@@ -101,6 +101,143 @@ def test_process_item_logs_routing_audit_for_context_gate(monkeypatch):
     assert audits[0]["headline_phase"] == "CONTEXT"
 
 
+def test_should_send_to_channel_default_quiet(monkeypatch):
+    monkeypatch.delenv("SCANNER_SEND_NO_GO", raising=False)
+    assert S.should_send_to_channel("GO", True)
+    assert S.should_send_to_channel("WATCH", True)
+    assert not S.should_send_to_channel("NO_GO", True)
+    assert not S.should_send_to_channel("GO", False)      # не-chief карточка не идёт вовсе
+    assert not S.should_send_to_channel("DROP", True)
+
+
+def test_should_send_to_channel_env_override(monkeypatch):
+    monkeypatch.setenv("SCANNER_SEND_NO_GO", "true")
+    assert S.should_send_to_channel("NO_GO", True)
+    monkeypatch.setenv("SCANNER_SEND_NO_GO", "false")
+    assert not S.should_send_to_channel("NO_GO", True)
+
+
+def test_layer_label_known_and_fallback():
+    assert S.layer_label(1) == "крипта/мажоры"
+    assert S.layer_label("3") == "металлы"
+    assert S.layer_label(9) == "L9"
+    assert S.layer_label(None) == "—"
+
+
+def _card_row(verdict, **kw):
+    row = {
+        "verdict": verdict, "side": "none", "asset": "PEPE", "layer": 2,
+        "summary": "Конкретный разбор события.", "asymmetry": "", "forecast": "",
+        "invalidation": "", "in_price": "unknown", "levels": {},
+        "price_at_decision": None, "horizon_hours": 24, "low_confidence": False,
+        "headline": "PEPE unlock ahead", "source_url": "https://example.com/x?utm=1",
+        "event_phase": "expected", "lead_class": "LAGGING",
+    }
+    row.update(kw)
+    return row
+
+
+def test_format_card_watch_emphasizes_confirm_and_invalidate():
+    card = S.format_card(_card_row(
+        "WATCH", asymmetry="ранний анлок", forecast="рост объёма на DEX",
+        invalidation="отмена анлока", price_at_decision=0.0000012, in_price="partial",
+    ))
+    assert "альты/мемы" in card
+    assert "Почему наблюдаем:" in card
+    assert "Что подтвердит:" in card
+    assert "Что отменит:" in card
+    assert "в цене: частично" in card
+
+
+def test_format_card_skips_empty_none_fields():
+    card = S.format_card(_card_row("NO_GO"))
+    assert "none" not in card
+    assert "None" not in card
+    assert "Фаза:" not in card and "класс:" not in card     # системная строка убрана
+    assert "Сценарий" not in card                            # пустые поля не печатаем
+    assert "сторона" not in card                             # side=none не показываем
+
+
+def test_format_card_go_keeps_levels():
+    card = S.format_card(_card_row(
+        "GO", side="long", levels={"entry": 1.0, "invalidation": 0.9, "target": 1.2},
+        forecast="сценарий", invalidation="ниже 0.9", price_at_decision=1.0,
+    ))
+    assert "Уровни:" in card and "лонг" in card
+
+
+def _gate_item():
+    return {"title": "BTC ETF inflows hit record", "url": "https://example.com/etf",
+            "source": "cointelegraph", "lead_class": "LAGGING", "source_class": "rss",
+            "time": "2026-06-09T00:00:00Z"}
+
+
+def _patch_pipeline(monkeypatch, verdict, side="none"):
+    """process_item без сети/LLM: фиксированный chief-вердикт, перехват журнала и Telegram."""
+    sent, journaled = [], []
+    monkeypatch.setattr(S, "SCANNER_CHAT_ID", "12345")
+    monkeypatch.setattr(S, "route_asset", lambda h, allowed_layers=None: {
+        "asset": "BTC", "okx_inst": "BTC-USDT-SWAP", "layer": 1,
+        "baseline": "BTC-USDT-SWAP", "confidence": 0.9})
+    monkeypatch.setattr(S, "score_materiality", lambda h, layer: {"score": 0.7, "family": "etf_flow"})
+    monkeypatch.setattr(S, "route_temporal", lambda h: {"phase": "REALIZED"})
+    monkeypatch.setattr(S, "extract", lambda url: {"text": "x" * 400, "date": "2026-06-09"})
+    monkeypatch.setattr(S, "is_stale_story", lambda *a, **k: False)
+    monkeypatch.setattr(S, "okx_last", lambda inst: 100.0)
+    monkeypatch.setattr(S, "make_chart", lambda *a, **k: None)
+    monkeypatch.setattr(S.J, "write_row", lambda row: (journaled.append(row), row["card_id"])[1])
+    monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+    monkeypatch.setattr(S.R, "write_event_block", lambda b: True)
+    monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
+    monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
+    monkeypatch.setattr(S.PS, "match_realized_event", lambda row: None)
+
+    async def fake_send(chat_id, payload, **kw):
+        sent.append(payload)
+        return 777
+    monkeypatch.setattr(S, "send_message_to", fake_send)
+    monkeypatch.setattr(S, "send_photo_to", fake_send)
+
+    async def fake_process(news, asset, layer, lead_class, price, mline):
+        return {"decision": "chief", "chief_called": True, "verdict": verdict, "side": side,
+                "send_channel": True, "usage": [{}],
+                "agent": {"direction": "none", "confidence": 0.5, "phase": "realized",
+                          "asset": asset, "event_type": "etf_flow", "materiality": 0.7,
+                          "red_flags": [], "mechanics": [], "key_facts": []},
+                "chief": {"verdict": verdict, "side": side, "in_price": "partial",
+                          "surprise": "timing", "asymmetry": "а", "invalidation": "б",
+                          "forecast": "в", "horizon_hours": 24, "confidence": 0.6,
+                          "levels": {"entry": None, "invalidation": None, "target": None},
+                          "summary": "с", "journal_reason": "р", "_usage": {}}}
+    monkeypatch.setattr(S.orchestrator, "process", fake_process)
+    return sent, journaled
+
+
+def test_chief_no_go_journaled_but_not_sent(monkeypatch):
+    monkeypatch.delenv("SCANNER_SEND_NO_GO", raising=False)
+    sent, journaled = _patch_pipeline(monkeypatch, "NO_GO")
+    res = asyncio.run(S.process_item(_gate_item(), None, dry=False))
+    assert journaled and journaled[0]["verdict"] == "NO_GO"   # журнал/датасет — без изменений
+    assert sent == []                                          # Telegram молчит
+    assert res["sent"] is None
+
+
+def test_chief_watch_still_sent(monkeypatch):
+    monkeypatch.delenv("SCANNER_SEND_NO_GO", raising=False)
+    sent, journaled = _patch_pipeline(monkeypatch, "WATCH")
+    res = asyncio.run(S.process_item(_gate_item(), None, dry=False))
+    assert journaled and journaled[0]["verdict"] == "WATCH"
+    assert len(sent) == 1
+    assert res["sent"] is not None
+
+
+def test_chief_no_go_sent_only_with_env_override(monkeypatch):
+    monkeypatch.setenv("SCANNER_SEND_NO_GO", "1")
+    sent, journaled = _patch_pipeline(monkeypatch, "NO_GO")
+    asyncio.run(S.process_item(_gate_item(), None, dry=False))
+    assert len(sent) == 1
+
+
 def test_process_item_uses_structured_text_for_pre_routed_items():
     res = asyncio.run(
         S.process_item(
