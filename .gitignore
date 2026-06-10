@@ -66,6 +66,7 @@ scripts/signal_labels.jsonl
 scripts/signal_log_notrade.jsonl
 data/scout/*.sqlite
 data/scout/*.sqlite-*
+data/scout/*.sqlite.bak-*
 
 # Video analysis artifacts
 docs/video_research_catalog.md
