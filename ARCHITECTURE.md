@@ -1,4 +1,4 @@
-# ARCHITECTURE - целевое дерево проекта (обновлено 06.06.2026)
+# ARCHITECTURE - current project boundaries (updated 2026-06-10)
 
 > Принцип: новая система = новая ЛОГИКА на ПОЛКЕ готовых утилит Main. Движок Main заморожен и отдельно.
 > Research-пила — в архив. Grounded на полной карте проекта (src/ + logs/ + utils проверены).
@@ -57,9 +57,13 @@ source item -> raw_items -> machine_docs -> normalized_events -> READY_FOR_AGENT
 4. Журнал scanner и outcome-resolver работают.
 5. SQLite intake buffer добавлен и включен в bat по умолчанию.
 6. L3/L4 получили источники и OKX baselines: FRED/EIA/OPEC/OilPrice + XAU/CL price-path.
-7. Следующий архитектурный шаг - измерить новый поток после cross-layer recall fix и спроектировать
-   MARKET_CONTEXT/WATCH_MARKET для макро-заголовков без единого актива. `main_event_engine`
-   не строить до подтверждения на данных.
+7. Первый calibration/hygiene pass сделан: Telegram gate `GO/WATCH` по умолчанию,
+   bounded outcome resolver, layer-aware cards, and `calibration_report.py`.
+   Текущий архитектурный шаг - наблюдать свежий поток и калибровать thresholds
+   source/layer/phase по данным.
+8. Следующий design-шаг после калибровки - `MARKET_CONTEXT/WATCH_MARKET` для
+   макро-заголовков без единого актива. `main_event_engine` не строить до
+   подтверждения на данных.
 
 ## Граница
 - Движок `src/strategy/*`, `src/data/{main_impulse,impulse_pump}_*` — НЕ трогать.

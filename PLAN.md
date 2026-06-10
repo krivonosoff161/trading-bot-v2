@@ -1,5 +1,10 @@
 # PLAN - Trading Bot V2
 
+> **LEGACY / HISTORICAL.** This file is kept as an audit trail for older
+> bot-first, analyzer-first, and strategy-research phases. It is not the current
+> operational plan. For current work, read `CURRENT_STATE.md`, `ROADMAP.md`,
+> `ARCHITECTURE.md`, `SCANNER_SPEC.md`, and `TASK.md`.
+
 **Последнее обновление:** 2026-05-28
 
 > **Режим всех треков: PAPER TRADING / TEST ONLY**

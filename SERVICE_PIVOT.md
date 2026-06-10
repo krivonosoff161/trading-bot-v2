@@ -1,5 +1,10 @@
 # Service Pivot
 
+> **LEGACY / HISTORICAL.** This document records the earlier analyzer-first pivot.
+> It is preserved for context, but it is not the active project direction as of
+> 2026-06-10. Current work is the `src/scout/` info-edge scanner; see
+> `CURRENT_STATE.md` and `ROADMAP.md`.
+
 ## Зачем этот файл
 
 Это рабочая точка перезапуска проекта.
@@ -20,7 +25,8 @@
 - [src/exchange/okx_client.py](c:/Users/krivo/trading-bot-v2/src/exchange/okx_client.py) — OKX REST клиент, historical candles, instrument info
 - [src/strategy/indicators.py](c:/Users/krivo/trading-bot-v2/src/strategy/indicators.py) — EMA, ADX, DI, ATR, SMA и парсинг свечей
 - [scripts/analyze_chart.py](c:/Users/krivo/trading-bot-v2/scripts/analyze_chart.py) — прототип анализатора по `symbol + captured_at`
-- [analyze_latest.bat](c:/Users/krivo/trading-bot-v2/analyze_latest.bat) — операторский запуск анализатора по последнему скрину
+- `analyze_latest.bat` — historical operator command from the earlier analyzer
+  phase; not part of the current scanner workflow.
 - [src/utils/telegram.py](c:/Users/krivo/trading-bot-v2/src/utils/telegram.py) — отправка сообщений в Telegram
 - [обучение проба](c:/Users/krivo/trading-bot-v2/обучение проба) — реальные кейсы со скринами и разметкой
 

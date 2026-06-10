@@ -1,223 +1,118 @@
 # Trading Bot V2
 
-Исследовательский проект алгоритмической торговли криптофьючерсами на бирже OKX.
-Скальпинг и реверсальные паттерны на основе рыночных данных в реальном времени (WebSocket),
-с упаковкой сигналов и аналитики в Telegram.
+Research project for market-data and news-driven trading infrastructure around OKX
+crypto futures. The current active work is not live auto-trading. It is an
+`info-edge scanner`: a paper-only event pipeline that collects market/news events,
+routes them by asset and layer, records decisions, and later measures outcomes.
 
-На 06.06.2026 проект фактически состоит из двух контуров:
+> **Status:** research / paper / demo only. No profitability is claimed. This is
+> not financial advice, not a signal service, and not a promise of future returns.
+> Real-money execution is outside the current work.
 
-- **замороженный торговый контур** - старые WebSocket-стратегии OKX, paper/demo, без автоторговли в текущей работе;
-- **активный info-edge scanner** - агентная система для новостей, событий и форвард-журнала. Именно она сейчас развивается.
+## Current Direction
 
-> **Дисклеймер.** Это образовательный и исследовательский проект. Все стратегии
-> работают в режиме **paper / demo** — на бумаге, без реальных денег. Прибыльность
-> на реальном счёте не доказана. Это **не финансовый совет** и не сигнальный сервис
-> с гарантиями. Торговля криптовалютой сопряжена с риском полной потери средств.
+The project has two separate contours:
 
----
+| Contour | Status | Purpose |
+|---|---|---|
+| `src/scout/` info-edge scanner | active | News/event intake, layer routing, agent review, Telegram cards, forward outcome journal |
+| Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies and reusable utilities; not the current development focus |
 
-## Позиционирование
+The active scanner is being calibrated. It already writes a useful dataset, and
+the first hygiene pass is in place: `NO_GO` stays in logs by default, while only
+`GO` / `WATCH` chief cards are sent to Telegram unless `SCANNER_SEND_NO_GO=true`
+is explicitly enabled. The next work is measuring whether the new chief prompt
+and calibration reports reduce missed `NO_GO` without turning `WATCH` into spam.
 
-**Целевой рынок — РФ.** Интерфейс на русском, доставка через Telegram (под местную
-аудиторию), LLM-слой ориентирован на доступные провайдеры: Yandex как fallback и
-Alibaba Cloud Model Studio / Qwen как основной cheap-tier для агентного сканера.
-Параметры стратегий калибруются под доступную ликвидность и условия рынка.
-
-Проект развивается не как «набор скриптов для программистов», а в сторону полноценного
-продукта с удобной оболочкой (GUI), с которым сможет работать любой пользователь — без
-кода и терминала.
-
----
-
-## Как это работает сейчас
-
-Старая торговая часть - это набор независимых процессов, каждый из которых слушает рынок
-через WebSocket, считает индикаторы и принимает решение в рамках своего канала. Доставка
-сигналов и разборов - через Telegram.
-
-Новая активная часть - `src/scout/`: scanner собирает новости и листинги, раскладывает
-их по 5 слоям, дешевые layer-агенты извлекают факты, кодовый оркестратор решает,
-звать ли chief, а сильная модель выносит итог `GO / NO_GO / WATCH` и сторону
-`LONG / SHORT / none`. Все решения пишутся в журнал для дальнейшей проверки исходов.
+## What Exists Today
 
 ### Info-edge scanner
 
-Текущий pipeline:
+Current runtime:
 
 ```text
-источники -> роутер актив/слой -> materiality/dedup/temporal
-  -> layer-agent cheap -> orchestrator rules -> chief strong
-  -> Telegram chief-card + logs/scout/scanner_journal.jsonl
-  -> resolve_outcomes.py считает LONG и SHORT исходы
+sources
+  -> SQLite news buffer
+  -> asset/layer router
+  -> materiality, temporal phase, dedup
+  -> cheap layer agent
+  -> rule orchestrator
+  -> chief model for selected candidates
+  -> Telegram card + JSONL records
+  -> outcome resolver
 ```
 
-Реализовано:
+Implemented pieces:
 
-- 5 агентных слоев в конфиге: L1 крипта-мажоры, L2 альты/мемы, L3 металлы, L4 ресурсы, L5 акции/pre-IPO.
-- Реальный поток сейчас есть по всем 5 слоям: L1/L2/L5 через RSS/OKX/SEC, L3 через Google News metals + FRED/macro, L4 через Google News energy + EIA/OPEC/OilPrice.
-- LLM-провайдеры: `yandex` fallback, `alibaba` основной дешевый контур через OpenAI-compatible endpoint.
-- Alibaba-роли: `cheap`, `mid`, `chief`, `audit` настраиваются через `.env`.
-- Журнал: `logs/scout/scanner_journal.jsonl`, бюджет: `logs/scout/llm_budget.jsonl`, исходы: `logs/scout/scanner_outcomes.jsonl`.
-- Outcome-resolver считает обе стороны: `outcome_long`, `outcome_short`, `mfe/mae`, цену через 1/4/24/48 часов и excess по baseline за то же окно.
-- Router поддерживает strong cross-layer fallback: если источник ограничен слоями, но заголовок содержит сильный алиас другого слоя (`Coinbase`, `SpaceX`, `Anthropic`), событие восстанавливается с флагом `cross_layer=true` для аудита.
-- Новый durable intake buffer на SQLite: `data/scout/news_buffer.sqlite` для раздельного ingest/extract/normalize/analyze.
+- Five scanner layers:
+  - `L1`: crypto majors / BTC-ETH regime
+  - `L2`: alts, memes, listings, token-risk and DEX signals
+  - `L3`: metals
+  - `L4`: energy / oil / gas
+  - `L5`: equities, AI proxies and pre-IPO/proxy themes
+- Durable SQLite intake buffer: `data/scout/news_buffer.sqlite`.
+- Runtime logs under `logs/scout/`: journal, drops, ingest, routing audit, LLM
+  budget, reasoning/events, outcomes and training/memory records.
+- Source families include RSS, Google News, OKX listings, SEC EDGAR, DexScreener,
+  GoPlus/RugCheck, FRED, EIA, OPEC, OilPrice and earnings calendar sources.
+- LLM routing through `src/utils/llm_client.py` with Yandex fallback and Alibaba
+  / Qwen roles configured through `.env`.
+- Outcome resolver for both long and short sides with MFE/MAE and per-layer
+  baseline/excess measurement; use `--limit N` for large backlogs.
+- Source-quality reporting and routing audit records for calibration work.
+- `src/scout/calibration_report.py` for missed-`NO_GO` analysis by source, layer,
+  asset, phase, lead class, chief-called and low-confidence status.
 
-Текущий `scanner.bat` запускает buffer-контур по умолчанию. Старый прямой контур
-RSS+листинги оставлен как fallback через `set USE_BUFFER=0` внутри bat.
+### Frozen trading contour
 
-### Каналы (стратегии)
+The older WebSocket strategies and paper engines remain in the repository because
+they provide reusable infrastructure and historical research:
 
-| Канал | Что делает | Триггер | Статус |
-|-------|-----------|---------|--------|
-| **Main WS Screener** | Скан ~24 пар, режимные сигналы (DRIFT / TRENDING) в Telegram | 15m / 1H | live, копит размеченную статистику |
-| **FAST / SWING** | Трендовые входы по EMA/ADX с разным горизонтом удержания | 15m / 1H | research |
-| **BB Fade** | Возврат к средней после прокола полос Боллинджера + отказ фитиля на 5m | 15m setup + 5m | paper, копит данные |
-| **Pump / Momentum** | Скальп на взрывных движениях альтов. Reversal-подход закрыт (комиссия съедает edge), continuation (вход по движению серии) — в research | 1m | research |
+- OKX clients and WebSocket data utilities
+- indicators and chart rendering
+- Telegram delivery helpers
+- historical paper/research scripts
+- old main/pump/BB fade experiments
 
-### Индикаторы
+They should be treated as reference or archive unless a task explicitly says
+otherwise.
 
-EMA (быстрая/медленная), ADX и DI (сила и направление тренда), ATR (волатильность для
-SL/TP), SMA, RSI, полосы Боллинджера, slope (наклон тренда), относительный объём
-(volume ratio / spike). В работе — CVD (накопленная дельта покупок/продаж) и трекер
-фазы осцилляции.
+## Current Problems Being Worked
 
-### Фильтры и риск-контроль
+- **Over-conservative scanner:** too many `NO_GO` outcomes; filters and prompts need
+  measured calibration by source, layer, asset, phase and lead class. The first
+  chief-prompt fix is implemented, but it needs forward observation.
+- **Telegram noise:** first pass implemented: `GO` / `WATCH` only by default;
+  `NO_GO` remains in logs and can be re-enabled with `SCANNER_SEND_NO_GO=true`.
+- **Generic card text:** first pass implemented: cards are layer-aware and
+  verdict-specific; watch live output for repeated wording.
+- **Outcome resolver throughput:** first pass implemented: use
+  `python src/scout/resolve_outcomes.py --limit 50` for bounded runs.
+- **Market context:** macro/regulation/geopolitical events without one clean asset
+  need a `MARKET_CONTEXT / WATCH_MARKET` path, not forced trade verdicts.
 
-- **Режимный фильтр** — разделение рынка на DRIFT / TRENDING, разные правила под каждый
-- **Контекст-гейт** — отсечение слабых сценариев (например, азиатская сессия в TRENDING)
-- **Сессионный фильтр** — учёт времени суток (UTC), азиатская сессия торгуется иначе
-- **Фильтры качества входа** — подтверждение объёмом, минимальное соотношение TP/SL
-- **Пар-специфичный гейтинг** — торгуются только пары с доказанным на данных эджем;
-  стабильно убыточные пары блокируются на уровне сигнала
-- **Управление позицией** — перенос стопа в безубыток, фиксация части прибыли,
-  тайм-аут по времени удержания
-- **Circuit breaker** — стоп серии убытков, дневной лимит просадки, бан пары после
-  серии стопов
+## How To Run
 
-### Доставка
-
-Telegram: сигналы — в группу, персональные разборы — в личку. Очередь сообщений с
-троттлингом по каждому чату.
-
----
-
-## AI-помощник и обучающая база
-
-В проекте есть AI-ассистент для ответов на вопросы и разбора графиков.
-
-- **Разбор графиков** — пока прототип (демо-функция), не основная ценность проекта.
-- **Ответы на вопросы** — развиваются в обучающую базу знаний: ответы накапливаются и
-  дорабатываются для дообучения LLM, чтобы помогать пользователям разбираться в
-  конкретных аспектах рынка и торговли.
-
----
-
-## Стек и открытые источники
-
-**Язык и библиотеки:** Python 3, asyncio, `websockets`, `aiohttp`, `pandas`, `numpy`,
-`matplotlib`, `Pillow`, `loguru`, `PyYAML`, `python-dotenv`.
-
-**Данные:** [OKX API](https://www.okx.com/docs-v5/) (REST + WebSocket),
-[CoinGecko](https://www.coingecko.com/) (привязка пары к родительской экосистеме),
-RSS Cointelegraph / Decrypt / Google News, OKX listings, SEC EDGAR, DexScreener, GoPlus, FRED, EIA/OPEC.
-
-**LLM:** `src/utils/llm_client.py` - единый клиент для Yandex и Alibaba. Для Alibaba
-используется OpenAI-compatible endpoint Model Studio; ключи и модели задаются только
-через `.env`, реальные значения не коммитятся.
-
-**Эталоны и research-источники** (на которые опирался при проектировании стратегий):
-
-- **TradingView** — Pine-скрипты regime-split (BB Breakout + Reversion), Squeeze Breakout
-- **GitHub** — `kernc/backtesting.py`, `fmzquant/strategies`,
-  `aiwebarchitects/multi-coin-backtester`, `jicheolha/crypto-trading-bot`
-- **Quant-платформы** — QuantConnect (Lean strategy library), FMZ Quant
-- **Академика** — SSRN «Bollinger Bands under Varying Market Regimes (BTC/USDT)»,
-  Physica A (2020) «Profitability of Bollinger Bands»
-
-Полные таблицы консенсуса по источникам — в [docs/](docs/) (research-отчёты).
-
----
-
-## Методология
-
-Проект разрабатывается **в одиночку**, команды нет. Чтобы компенсировать это, весь
-research и архитектурные решения проходят через **коллегию ИИ** — несколько моделей
-независимо отвечают на один вопрос, ответы сводятся в таблицу консенсуса, спорные места
-уходят в проверку на данных.
-
-| Модель | Роль |
-|--------|------|
-| Claude Code | Архитектура, код, запуск, основные решения |
-| GPT / Codex | Анализ, черновики, code review |
-| Qwen | Second opinion, sweep-конфиги, поиск рисков |
-| Kimi | Анализ больших логов |
-| Grok / Perplexity | Внешний research, источники |
-
-Протокол: [docs/AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md).
-
-Принцип процесса — **дисциплина и честный самоаудит**: следующий шаг делается только если
-предыдущий доказал результат; неработающие направления закрываются с постмортемом
-([docs/](docs/)), а не реанимируются. Это сознательная защита от «монстр-кода» и
-переусложнения.
-
----
-
-## Дорожная карта
-
-| Статус | Направление |
-|--------|-------------|
-| ✅ Подтверждено (research/paper) | Main-скринер в режиме DRIFT — реальный edge (WR ~90%) |
-| 🔬 Research | Per-regime логика: TRENDING/RANGING требуют своего стиля входа (текущая логика их пропускает / читает направление неверно) |
-| 📊 Проверено (research) | Pump reversal закрыт (комиссия > edge) |
-| ✅ Готово | Система записи данных (тики / снапшоты / фичи) под будущее обучение |
-| 🔬 Research | Единый импульс-детектор (main + pump): ранний вход в движение, edge масштабируется волатильностью пары |
-| 📋 В работе | CVD + трекер фазы осцилляции (контекст до взрыва) |
-| 📋 В работе | Сетевой контекст (parent network): отличать аномалию от продолжения тренда экосистемы |
-| 🔮 Видение | Мультибиржевость (ccxt / Freqtrade) |
-| 🔮 Видение | Многоязычность интерфейса |
-| 🔮 Видение | LLM-слой: интерпретация сигналов и разбор графиков (своя / локальная модель) |
-| 🔮 Видение | Самообучаемость — авто-адаптация параметров на накопленных данных |
-| 🔮 Видение | Полноценная оболочка (GUI) для не-технических пользователей |
-| 🔮 Видение | Обучающая база знаний на основе ответов AI-помощника |
-
-Актуальный план фаз — в [PLAN.md](PLAN.md), отложенные идеи — в [BACKLOG.md](BACKLOG.md).
-
----
-
-## Как запустить
-
-> Нужен файл `.env` с ключами OKX и Telegram (см. [.env.example](.env.example)).
-> Ключи **никогда** не коммитятся.
+Create `.env` from the example and fill only the keys you actually need:
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env        # заполнить ключи
+cp .env.example .env
 ```
 
-Параметры стратегий — в [config.yaml](config.yaml) (без ключей).
-
-Запуск всех процессов (Windows): `start_all.bat`.
-Отдельные процессы — через свои watchdog-скрипты в [scripts/ws/](scripts/ws/).
-
-Запуск агентного scanner:
+Run the scanner loop on Windows:
 
 ```bash
 scanner.bat
 ```
 
-По умолчанию это:
+Equivalent scanner command:
 
 ```bash
 python -u src\scout\scanner_v0.py --buffer --limit 5
 ```
 
-Разовый прямой прогон:
-
-```bash
-python -u src\scout\scanner_v0.py --limit 5
-```
-
-Проверка нового SQLite-buffer без LLM/Telegram:
+Smoke test the SQLite buffer without LLM/Telegram:
 
 ```bash
 python -m src.scout.news_buffer init
@@ -225,49 +120,82 @@ python -u src\scout\scanner_v0.py --buffer --limit 0
 python -m src.scout.news_buffer stats
 ```
 
-Полезные команды buffer:
+Useful scanner commands:
 
 ```bash
 python -m src.scout.news_buffer ready --limit 5
 python -m src.scout.news_buffer show <doc_id>
 python -m src.scout.news_buffer resolve --limit 50
 python -m src.scout.news_buffer normalize --limit 100
+python src/scout/resolve_outcomes.py --report
+python src/scout/resolve_outcomes.py --limit 50
+python src/scout/source_quality_report.py
+python -X utf8 src/scout/calibration_report.py
 ```
 
----
+Focused scanner tests:
 
-## Структура репозитория
-
+```bash
+python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py tests/test_scanner_records.py tests/test_source_quality_report.py tests/test_calibration_report.py tests/test_resolve_outcomes.py -q
 ```
+
+## Repository Map
+
+```text
 trading-bot-v2/
-├── main.py              # точка входа торгового рантайма
-├── config.yaml          # параметры стратегий (без ключей)
-├── .env.example         # шаблон ключей (реальный .env в .gitignore)
+├── README.md
+├── CURRENT_STATE.md
+├── ARCHITECTURE.md
+├── ROADMAP.md
+├── SCANNER_SPEC.md
+├── TASK.md
+├── config.yaml
+├── scanner.bat
 ├── src/
-│   ├── exchange/        # OKX клиент (REST), метаданные инструментов
-│   ├── strategy/        # индикаторы, сигналы, рендер графиков
-│   ├── data/            # WS-фид, запись снапшотов и фич
-│   ├── scout/           # info-edge scanner: источники, агенты, оркестратор, buffer, outcome
-│   └── utils/           # логирование, Telegram, форматирование
-├── scripts/
-│   ├── ws/              # WebSocket-движки (скринеры, BB fade, pump)
-│   └── analysis/        # research-скрипты и их выгрузки
-├── docs/                # постмортемы стратегий + research-отчёты ИИ
-├── tests/               # тесты
-└── *.bat                # операторские скрипты запуска (Windows)
+│   ├── scout/       # active info-edge scanner
+│   ├── utils/       # Telegram, logging, LLM clients
+│   ├── exchange/    # OKX clients and instrument metadata
+│   ├── strategy/    # indicators, signal helpers, chart rendering
+│   └── data/        # historical/frozen paper engines and data utilities
+├── scripts/         # operator/research scripts
+├── tests/
+└── docs/            # research reports, protocols and archives
 ```
 
-Документы проекта: [SCANNER_SPEC.md](SCANNER_SPEC.md) (актуальная спека scanner),
-[ARCHITECTURE.md](ARCHITECTURE.md), [CLAUDE.md](CLAUDE.md) (правила для ИИ-агентов),
-[PLAN.md](PLAN.md), [SERVICE_PIVOT.md](SERVICE_PIVOT.md), [JOURNAL.md](JOURNAL.md).
+## Documentation
 
-`TASK.md` - рабочий handoff между Codex и Claude, не главный проектный документ.
+Read these first:
 
----
+- [CURRENT_STATE.md](CURRENT_STATE.md) - short operational status.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - current project boundaries.
+- [ROADMAP.md](ROADMAP.md) - current development sequence.
+- [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design and as-built notes.
+- [TASK.md](TASK.md) - local handoff between agents.
+- [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) - context for remote coding agents.
+- [docs/REMOTE_DATA_MANIFEST.md](docs/REMOTE_DATA_MANIFEST.md) - ignored local data map.
 
-## Лицензия и статус
+Legacy/historical documents are kept for audit trail, not as current direction:
 
-Проект **проприетарный** и находится в активной разработке. Открытой лицензии (MIT и т.п.)
-нет намеренно: проект развивается в сторону коммерческого продукта с собственной оболочкой
-для конечных пользователей, а не как open-source библиотека. Условия использования будут
-определены ближе к публичному релизу.
+- [PLAN.md](PLAN.md)
+- [SERVICE_PIVOT.md](SERVICE_PIVOT.md)
+- [PROJECT_VISION.md](PROJECT_VISION.md)
+
+## Methodology
+
+The project is developed by one operator with AI-assisted review. Research claims
+are treated as provisional until checked against logs, costs, fills and forward
+outcomes. Failed directions are kept as postmortems instead of being quietly
+rebranded as success.
+
+Practical rules:
+
+- data first;
+- one experiment second;
+- architecture third;
+- no live-money path without explicit approval;
+- no profitability claims without forward evidence.
+
+## License And Status
+
+This is a proprietary research project in active development. No open-source
+license is granted at this stage.

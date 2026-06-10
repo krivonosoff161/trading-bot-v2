@@ -1,4 +1,11 @@
-# SCANNER — спецификация (со слов трейдера, 02.06.2026)
+# SCANNER — specification and as-built notes
+
+> Current status note, 2026-06-10: the active scanner is built and collecting
+> paper data, but calibration is not finished. Treat older V0 design blocks below
+> as history where they conflict with the AS-BUILT sections. First hygiene pass
+> is implemented: Telegram sends `GO`/`WATCH` by default, `NO_GO` stays in logs,
+> outcome resolving has `--limit`, and `calibration_report.py` explains missed
+> `NO_GO` by source/layer/asset/phase.
 
 > Источник правды по НОВОЙ системе. Записано с диалога-проектирования. Принцип: **фильтр-машина (GO/NO-GO), не альфа-машина.** Paper-first, сбор данных, строгость учим из журнала.
 
@@ -64,6 +71,10 @@ scout (RSS/новости) · analyzer (LLM-разбор) · chart_renderer (г�
 
 ## ВЫБРАННЫЙ СТЕК (рой GitHub, 02.06) + порядок V0
 
+> Historical design section. It records why the scanner was started and which
+> components were considered. The AS-BUILT source of truth is the current
+> `src/scout/` runtime plus the status note at the top of this file.
+
 ### Пики по слоям (keyless/open, под слабый ПК GTX1050/8GB)
 | Слой | PICK | лиц. | нота |
 |---|---|---|---|
@@ -80,7 +91,10 @@ scout (RSS/новости) · analyzer (LLM-разбор) · chart_renderer (г�
 2. `src/scout/page_extract.py` — Trafilatura: `url` → чистый текст + date (fallback readability-lxml).
 3. Аналитик = **готовый** `llm_formatter` (Yandex Qwen3) → карточка.
 4. Доставка = **готовый** `telegram.send_message_to` (@lektorTP_bot).
-5. Лог = паттерн `forward_series.csv` в `logs/scout/` (идемпотентность уже решена).
+5. Historical V0 idea: log through a `forward_series.csv`-style pattern.
+   AS-BUILT now uses append-only JSONL records such as
+   `logs/scout/scanner_journal.jsonl`, `scanner_outcomes.jsonl`, and
+   `scanner_training.jsonl`.
 (social/on-chain/sumy ждут V1 — у BTC нет insider%.)
 
 ### Честные блокеры + обход
@@ -248,9 +262,10 @@ RSS, а агентная система с дешевыми layer-агентам
   -> layer_agent.py: cheap model, факты по слою
   -> orchestrator.py: кодовые правила, экономия chief-вызовов
   -> chief.py: сильная модель, GO/NO_GO/WATCH + LONG/SHORT/none
-  -> Telegram: только chief-карточки
+  -> Telegram: только GO/WATCH chief-карточки по умолчанию
   -> logs/scout/scanner_journal.jsonl
   -> resolve_outcomes.py: outcome_long/outcome_short + mfe/mae + price_after_Nh
+  -> calibration_report.py: missed-NO_GO by source/layer/asset/phase
 ```
 
 ### Что реально подключено
@@ -297,8 +312,10 @@ Cost-log пишет `provider/model/role/tokens/cost_usd/cost_rub`. Курсы/�
 chief-карточка. Это сделано, чтобы Telegram не дублировал длинный анализ в подписи
 к картинке.
 
-В канал должны идти только chief-карточки. Дешевые NO_GO, шум, пропуски и промежуточные
-агентные выводы остаются в журналах как датасет.
+В канал идут только полезные chief-карточки. Текущее поведение:
+`GO` и `WATCH` отправляются в Telegram по умолчанию; `NO_GO`, шум, пропуски и
+промежуточные агентные выводы остаются в журналах как датасет. Debug/noise mode:
+`SCANNER_SEND_NO_GO=true` явно возвращает `NO_GO` в канал.
 
 ### SQLite intake buffer
 
