@@ -295,7 +295,10 @@ def report() -> None:
     """Сводка: WR/excess по вердиктам (соединяет журнал и outcomes по card_id)."""
     jrows = {r["card_id"]: r for r in _read_jsonl(JOURNAL)}
     orows = list(_latest_by_card(_read_jsonl(OUTCOMES)).values())
-    print(f"карточек в журнале: {len(jrows)} · посчитано исходов: {len(orows)}")
+    scored_count = sum(1 for o in orows if o.get("scored"))
+    manual_count = len(orows) - scored_count
+    print(f"карточек в журнале: {len(jrows)} · outcomes: {len(orows)} "
+          f"(scored={scored_count}, manual/unscored={manual_count})")
     by_verdict: dict[str, list] = {}
     for o in orows:
         if not o.get("scored"):

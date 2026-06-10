@@ -1,161 +1,163 @@
-# AI_COLLABORATION_PROTOCOL.md — Протокол работы с Qwen Coder
+# AI Collaboration Protocol
 
-> Последнее обновление: 2026-05-24
+Updated: 2026-06-10
 
----
+Purpose: describe how this project uses remote coding agents without letting
+them overwrite local context, secrets, runtime data, or active scanner direction.
 
-## Цепочка работы
-
-```
-Пользователь формулирует задачу
-    ↓
-Claude Code готовит QWEN TASK (шаблон ниже)
-    ↓
-Пользователь вставляет задачу в Qwen Coder
-    ↓
-Qwen отвечает / делает branch / даёт отчёт
-    ↓
-Пользователь приносит ответ Claude Code
-    ↓
-Claude Code проверяет, интегрирует, коммитит
-```
-
----
-
-## Когда вызывать Qwen
-
-- Second opinion по гипотезе (фильтр, параметр, режим)
-- Review архитектуры или backtest-логики
-- Проверка PLAN/BACKLOG vs код — есть ли противоречия
-- Варианты параметров для sweep (без запуска)
-- Черновик research-only скрипта в отдельной ветке
-- Поиск рисков в отчёте или метриках
-- Анализ кода на предмет технического долга
-
-## Когда НЕ вызывать Qwen
-
-- Задача требует локальных данных: `.pkl`, `logs/`, `journal.xlsx`, `SESSION.md`
-- Быстрый локальный баг — дешевле сделать здесь
-- Нужны реальные секреты или API ключи
-- Запуск live/paper trading или бэктеста
-- Задача маленькая (< 15 минут локально)
-
----
-
-## Шаблон задачи для Qwen
+## Current Workflow
 
 ```
-QWEN TASK:
+User defines the task
+    ↓
+Local Codex prepares a precise remote-agent task
+    ↓
+User sends it to Claude/Qwen/another remote agent
+    ↓
+Remote agent returns a report, patch, branch, or commit summary
+    ↓
+User brings the result back here
+    ↓
+Local Codex reviews against repo state, tests, docs and local-only data
+```
+
+## When To Use A Remote Agent
+
+- scanner calibration tasks;
+- review of `GO / WATCH / NO_GO` boundaries;
+- Telegram card wording and dedup logic;
+- source/layer quality reporting;
+- outcome-resolver reliability;
+- docs/code consistency review;
+- small scanner tests or refactors with clear file limits.
+
+## When Not To Use A Remote Agent
+
+- task requires raw local logs, `.env`, `.pkl`, SQLite database, or `SESSION.md`;
+- task requires API keys or Telegram tokens;
+- task touches live order execution or `AUTO_TRADE`;
+- task asks for real-money trading decisions;
+- task relies on private local data that has not been summarized safely.
+
+## Remote-Agent Task Template
+
+```
+REMOTE AGENT TASK:
 
 Context files:
 - docs/AI_CONTEXT.md
 - docs/REMOTE_DATA_MANIFEST.md
-- docs/BACKTEST_ENV_REFERENCE.md
-- [+ конкретные файлы по задаче]
+- CURRENT_STATE.md
+- README.md
+- ROADMAP.md
+- SCANNER_SPEC.md
+- TASK.md
+- [specific files for this task]
 
 Mode: READ-ONLY | BRANCH-ONLY
-(READ-ONLY = только анализ, без изменений кода)
-(BRANCH-ONLY = изменения только в feature/ ветке, не в main)
+(READ-ONLY = analysis/report only)
+(BRANCH-ONLY = code/docs changes in a feature branch or unpushed local commit)
 
 Task:
-[описание задачи]
+[exact task]
 
 Expected output:
-[что именно должен вернуть: markdown отчёт / код / таблица / список рисков]
+[markdown report / patch summary / test results / exact changed files]
 
 Do not:
-- запускать скрипты требующие локальных данных
-- обращаться к .env, logs/, *.pkl
-- предлагать AUTO_TRADE=true
-- коммитить в main
+- request or print `.env`, API keys, Telegram tokens, or raw private logs
+- assume ignored files are absent
+- touch live order execution or `AUTO_TRADE`
+- claim profitability from paper/research metrics
+- commit directly to main unless explicitly instructed
 ```
 
----
-
-## Примеры готовых задач
-
-### Review sweep конфига
+## Example Current Tasks
 
 ```
-QWEN TASK:
+REMOTE AGENT TASK:
 
 Context files:
 - docs/AI_CONTEXT.md
-- docs/BACKTEST_ENV_REFERENCE.md
-- scripts/backtest/bt_entry_filters.py
+- CURRENT_STATE.md
+- README.md
+- ROADMAP.md
+- SCANNER_SPEC.md
+- src/scout/scanner_v0.py
+- src/scout/agents/chief.py
+- src/scout/resolve_outcomes.py
+
+Mode: BRANCH-ONLY
+
+Task:
+Review the post-v0.6 scanner calibration behavior:
+1. Check whether `GO` / `WATCH` Telegram gating is isolated in `should_send_to_channel`.
+2. Check that `NO_GO` still reaches logs/training data.
+3. Review whether card text remains layer-specific and trader-readable.
+4. Review whether `resolve_outcomes.py --limit N` is safe and resumable.
+5. Suggest the next evidence-based threshold changes, but do not hard-code new
+   thresholds without local data.
+
+Expected output:
+Markdown review with risks, exact file references, and any focused tests you
+recommend. Do not write code in this task.
+
+Do not:
+- touch live trading/order paths
+- request raw logs or secrets
+- change unrelated frozen WebSocket engines
+```
+
+```
+REMOTE AGENT TASK:
+
+Context files:
+- docs/AI_CONTEXT.md
+- docs/REMOTE_DATA_MANIFEST.md
+- src/scout/source_quality_report.py
+- src/scout/router.py
+- tests/test_source_quality_report.py
 
 Mode: READ-ONLY
 
 Task:
-Проверь логику bt_entry_filters.py:
-1. Корректно ли считается WR при включении TIME_EXIT?
-2. Правильно ли реализована структура TP1→BE→TP2?
-3. Есть ли риски в расчёте PF при малом n?
+Review source-quality reporting for the current scanner. Identify missing
+aggregations that would help explain excessive NO_GO decisions by source, layer,
+asset, phase, lead class, and chief-called status.
 
 Expected output:
-Markdown отчёт: найденные проблемы + конкретные строки кода.
-
-Do not:
-- запускать скрипт
-- предлагать изменения в main без review
+Markdown report with concrete proposed metrics and exact files that would need
+changes. Do not write code in this task.
 ```
 
-### Генерация sweep конфигов
+## Context Files To Include
 
-```
-QWEN TASK:
-
-Context files:
-- docs/AI_CONTEXT.md
-- docs/BACKTEST_ENV_REFERENCE.md
-- config.yaml
-
-Mode: READ-ONLY
-
-Task:
-Предложи 8-10 комбинаций BT_* параметров для следующего sweep.
-Текущий эталон: WR=88%, PF=3.92, sim=+161.3% (DRIFT, D2+B3+D3, hold=75m, tp1=0.5R).
-Цель: улучшить sim при сохранении WR>80% и PF>3.0.
-
-Expected output:
-Таблица: параметры | гипотеза | ожидаемый эффект.
-
-Do not:
-- запускать бэктест
-- использовать локальные данные
-```
-
----
-
-## Контекстные файлы Qwen (всегда включать)
-
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `docs/AI_CONTEXT.md` | Архитектура, роли, что видно/не видно |
-| `docs/REMOTE_DATA_MANIFEST.md` | Карта локальных данных |
-| `docs/BACKTEST_ENV_REFERENCE.md` | Параметры, формулы, кэши |
+| `docs/AI_CONTEXT.md` | Current architecture, boundaries and agent context. |
+| `docs/REMOTE_DATA_MANIFEST.md` | Local-only data map. |
+| `CURRENT_STATE.md` | Short operational status. |
+| `ROADMAP.md` | Current development sequence. |
+| `SCANNER_SPEC.md` | Scanner design and as-built notes. |
+| `TASK.md` | Local handoff. |
 
----
+## Packing Code For A Remote Agent
 
-## Упаковка кода для агента (repomix)
-
-Когда Qwen/Kimi/GPT нужен контекст кода (у них нет нашего репо), вместо ручного перечисления файлов можно
-упаковать нужное в один файл:
+When a remote agent cannot access the repo directly, package only the relevant
+files:
 
 ```
-npx repomix --include "src/**,scripts/ws/**"
+npx repomix --include "src/scout/**,tests/test_scanner_*.py,tests/test_source_quality_report.py,README.md,CURRENT_STATE.md,ROADMAP.md,SCANNER_SPEC.md,docs/AI_CONTEXT.md,docs/REMOTE_DATA_MANIFEST.md"
 ```
 
-→ `repomix-output.xml` (один файл со всем кодом + токен-каунт по файлам + встроенный сканер секретов Secretlint).
-Вставляешь агенту. `npx` — без установки. **Не гонять без `--include`** (раздувает на весь репо). Секреты не уходят:
-`.env` в .gitignore, repomix его не берёт + Secretlint предупредит. Источник: разбор каруселей 24.05 (репо `yamadashy/repomix`).
+Do not run repomix without `--include`; it will package too much historical
+code. Never include `.env`, raw logs, private data, or ignored local caches.
 
----
+## Integrating Remote-Agent Output
 
-## Правила интеграции ответа Qwen
-
-1. Принести ответ Claude Code для проверки
-2. Claude Code верифицирует логику и корректность
-3. Если код — запустить `py_compile` и review
-4. Коммит только после одобрения пользователя
-5. Обновить `AI_CONTEXT.md` если изменилась архитектура
+1. Bring the report or patch back to local Codex.
+2. Check changed files against current docs and local-only data assumptions.
+3. Run focused tests, at minimum scanner tests affected by the change.
+4. Keep code, docs and `TASK.md` consistent.
+5. Commit only after user approval.
+6. Update `docs/AI_CONTEXT.md` if architecture or active workflow changed.

@@ -1,57 +1,164 @@
-# ROADMAP — НАШЕ НАПРАВЛЕНИЕ
+# ROADMAP - Current Project Direction
 
-> Обновлено: 31.05.2026. Это стержневой документ направления (выше частностей PLAN.md).
-> Контекст: направленный Main ЗАКРЫТ (доказано до дна — все причинные классы дали null, бот заморожен как есть).
-> **31.05: инфо-эдж БЭКТЕСТ тоже исчерпан** (рой 33 агента + Codex + Claude = 0 выживших, конвергентно по 8 рыночно-широким семействам) → путь = **ФОРВАРД paper-логгер**, не бэктест-эдж. Продукт 🅰 (analyzer) ожил и связан со скаутами 🅱, Telegram-стек живой. Детали: `research/docs/info_edge_CONSOLIDATED_verdict_2026-05-31.md`.
->
-> **Три цели:** (1) учиться работать с ИИ · (2) репутация · (3) починить воркфлоу. Плюс новая торговая система (инфо-эдж).
-> **Принцип:** делаем ПО ОДНОМУ, чтоб не утонуть. Вет репо встроен в каждую фазу, не отдельно.
-> **Граница (держим всегда):** «учить / строить = всё в тему» vs «торговый эдж = миражи остаются миражами».
+Updated: 2026-06-10
 
----
+This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
+documents are preserved as history, but they no longer define the active work.
 
-## ДВА СЛОЯ НАПРАВЛЕНИЯ (решение трейдера 31.05 — «оба»)
-Не автоторговля. **Analyzer-first**, скауты кормят контекстом.
-- **🅰 ПРОДУКТ — Concierge AI Chart Analyzer** (спец: `SERVICE_PIVOT.md`): клиент шлёт скрин + symbol + время → разбор / уровни / invalidation → Telegram. Ближний к деньгам и репутации. На готовой полке Main: `scripts/analyze_chart.py` + `src/strategy/{indicators,chart_renderer}` + `src/utils/{llm_formatter,telegram}`.
-- **🅱 СЛОЙ КОНТЕКСТА — инфо-эдж скауты** (`src/scout/`): Scout #1 + оркестратор + `forward_series` → рыночный контекст/сводка, которая **кормит анализатор** и копит данные под OOS.
-- **Связь:** скауты дают «что в рынке сейчас» → анализатор вплетает это в клиентский разбор. Торговый эдж (инфо раньше) ищем отдельно, не обещаем.
+## Current Thesis
 
-## ИЕРАРХИЯ ДОКОВ (источник правды — чтоб ИИ/люди не путались)
-- `ROADMAP.md` — **направление** (этот файл, верхний).
-- `ARCHITECTURE.md` — целевое дерево проекта.
-- `SERVICE_PIVOT.md` — спец слоя 🅰 (Concierge Analyzer).
-- `PLAN.md` — активные фазы (детали под направление).
-- `PROJECT_VISION.md` — долгосрочное видение.
-- `REFACTOR_PLAN.md` — план пересборки дерева.
+The active project is an **info-edge scanner** for market events, not an
+auto-trading bot.
 
----
+The scanner should:
 
-## ФАЗА 1 — ВОРКФЛОУ (первая, «заточить топор перед рубкой»)
-**Боль:** копипаст контекста между Codex/GPT и Claude каждый раз заново.
-- **v1 (сегодня):** `make_handoff.py` — собирает `snapshot + SESSION.md + последние коммиты + todos` в ОДИН paste-блок для Codex/GPT; `SESSION.md` = общий источник правды (Claude держит актуальным).
-- **v2 (позже):** agentmemory / MCP-память для авто-синка между инструментами.
-- **Вет по ходу:** agentmemory, orca, LibreChat, hermes-agent.
+- collect broad raw information;
+- route events to the right asset and layer;
+- distinguish expected / realized / context events;
+- keep a full paper journal;
+- measure outcomes against baselines;
+- learn which sources, filters and event families are useful;
+- surface only high-value `GO` / `WATCH` cards to Telegram.
 
-## ФАЗА 2 — ПРОЕКТ (новая система / инфо-эдж)
+The current scanner is useful as a data and decision journal, but it is not yet a
+calibrated trading engine.
 
-**СТАТУС 31.05 — бэктест-охота завершена, направление = форвард-логгер.** Прогнали исчерпывающе (рой 33 агента / 26 гипотез + Codex параллельно + Claude): **keyless бэктест-эджа в рыночно-широких семействах НЕТ** (листинги/cross-sec/volume/доминация/стейблы/funding-OI/sentiment/lead-lag — все NULL). Корень структурный (режим+история+1биржа+косты), не реализация. **Конкретная реализация Фазы 2 = непрерывный AI-сканер как PAPER data/decision-логгер** (event→pre-filter→LLM-решение→paper-исполнение→форвард-табло vs baseline). Деньги — ТОЛЬКО после форвард-доказательства net+. 2 named-WATCH на мониторинг: `xsec_mom_topQ_look14`, `btc_alt_lag1_4H`. Decision-LLM = плаг-ин (Яндекс Qwen → локаль; ПК слаб → 3-7B). Сборка по GO трейдера (≈часы, с дизайн-споки).
+## Current State
 
-**СТАТУС 02.06 — сканер СПРОЕКТИРОВАН + V0 начат.** Полная спека → `SCANNER_SPEC.md` (5 слоёв, опережающие триггеры, фильтр-слои, журнал, контра-счётчик, paper-first). Стек выбран (рой GitHub: Tree-of-Alpha-WS/Telethon/Trafilatura/sumy/GoPlus-RugCheck, keyless). V0 начат: `src/scout/page_extract.py` ✓. Ключевой урок 5-активов: **система = ФИЛЬТР (NO-GO), не альфа** («известный катализатор ≠ эдж»). Детали — `SCANNER_SPEC.md` + память [[project_scanner_design_2026-06-01]].
+Done:
 
-Main заморожен. Строим информационный слой:
-- консолидировать Scout #1 + оркестратор, **включить накопитель** `forward_series` (бесплатно, копит OOS-данные);
-- выбрать/поднять первый осмысленный скаут (SGR / инфо-дайджест);
-- **учёба ИИ встроена:** каждый скаут разбираем по слоям (цель / мотивация / мораль / рассуждение).
-- **Вет по ходу:** FinceptTerminal (монитор «всё-в-одном»), API-mega-list (источники), SGR / hermes-agent (агент-каркас).
-- **Граница:** TradingAgents / Kronos / ai-hedge-fund / SMC — изучать как код/архитектуру ДА; разворачивать как money-машину НЕТ (мираж доказан).
+- `src/scout/` created as the active scanner home.
+- Five layers configured: L1 crypto majors, L2 alts/memes, L3 metals, L4 energy,
+  L5 equities/proxies.
+- SQLite intake buffer is the default scanner runtime.
+- Layer agents, orchestrator, chief model and LLM role routing exist.
+- Scanner journal, ingest log, drops log, routing audit, reasoning/events records,
+  outcomes and training/memory records exist.
+- L2/L3/L4/L5 source coverage was expanded.
+- Strong cross-layer asset fallback exists for cases such as Coinbase, SpaceX and
+  Anthropic mentioned from sources outside their normal layer.
+- Stage 0 recall fixes were applied and the scanner has accumulated live paper
+  data.
+- First v0.6 hygiene pass is implemented:
+  - Telegram sends `GO` / `WATCH` chief cards by default;
+  - `NO_GO` stays in logs/training data unless `SCANNER_SEND_NO_GO=true`;
+  - cards are layer-aware and verdict-specific;
+  - `resolve_outcomes.py --limit N` prevents long silent backlogs;
+  - `calibration_report.py` measures missed `NO_GO` by useful dimensions.
 
-## ФАЗА 3 — РЕПУТАЦИЯ (репо исследований)
-Оформить наш research как чистые публичные репо. Сила: «вот как я СТРОГО протестировал и ЧЕСТНО закрыл стратегию» (негативный результат + OOS-дисциплина) — репутационно сильнее фейковых +1000%.
-- 🔴 **СНАЧАЛА решить приватность:** 27.05 research сделан приватным; публикация НЕОБРАТИМА (индексируется). Публично = методология/тулинг/«как честно убили Main»; приватно = точные эдж-находки.
+Known current problems:
 
-## ПАРКОВКА (решения трейдера, не код)
-платные данные (CryptoQuant/Glassnode) · unattended-VPS для скаутов · Kalman стат-арб форвард-paper.
+- The scanner is over-conservative: too many cards end as `NO_GO`.
+- Some `NO_GO` cards are followed by real movement, so filters and prompts are not
+  calibrated yet.
+- New Telegram/card behavior needs live observation to ensure `WATCH` does not
+  become spam.
+- Calibration reports must be compared after fresh outcomes accumulate.
+- Macro/context headlines without one clean asset need a separate context path.
 
----
+## Near-Term Roadmap
 
-**Порядок: Фаза 1 → Фаза 2 → Фаза 3.** Запуск сегодня — с Фазы 1 (воркфлоу v1).
+### v0.6 - Calibration And Telegram Hygiene
+
+Goal: make the current scanner easier to judge and less noisy.
+
+Tasks:
+
+- done: gate Telegram output to `GO` / `WATCH` by default;
+- done: keep all `NO_GO` cards in logs and training data;
+- done: first layer-specific, verdict-specific card wording pass;
+- done: bounded outcome resolver with `--limit`;
+- done: add a calibration report:
+  - missed `NO_GO` by source;
+  - missed `NO_GO` by layer;
+  - missed `NO_GO` by asset;
+  - missed `NO_GO` by phase;
+  - missed `NO_GO` by lead class;
+  - missed `NO_GO` by chief-called / low-confidence;
+- next: run the new behavior for several sessions and compare fresh reports;
+- next: tune source/layer thresholds from evidence.
+
+Exit criteria:
+
+- Telegram is quiet by default.
+- Source/layer calibration report is reproducible locally.
+- The project can explain why `NO_GO` dominates without treating that dominance as
+  success.
+- `WATCH` stays selective rather than becoming a second noisy channel.
+
+### v0.7 - MARKET_CONTEXT / WATCH_MARKET
+
+Goal: stop forcing macro or cross-market context into single-asset trade verdicts.
+
+Tasks:
+
+- define `MARKET_CONTEXT` / `WATCH_MARKET` schema;
+- capture macro, regulation, geopolitics, stablecoin, tax and policy headlines;
+- attach affected assets without emitting trade recommendations;
+- write context records for later analysis;
+- decide how context interacts with scanner cards.
+
+Exit criteria:
+
+- no-single-asset headlines have a clean destination;
+- context can be measured later without polluting trade candidates.
+
+### v0.8 - Source Quality And Intake Discipline
+
+Goal: identify which sources deserve tokens and attention.
+
+Tasks:
+
+- refine source-quality dashboard/reporting;
+- compare RSS/aggregator/official/native feeds;
+- identify sources that are mostly late recaps;
+- identify sources that produce real watch candidates;
+- tune layer-specific materiality thresholds conservatively.
+
+Exit criteria:
+
+- clear source ranking by layer;
+- explicit keep / reduce / park decisions for each active source family.
+
+### v0.9 - Surprise And Pending Events
+
+Goal: turn "expected vs realized" into measurable state instead of prompt guessing.
+
+Tasks:
+
+- expand `pending_events.jsonl` use beyond skeleton records;
+- match realized events against expected/pending records;
+- add basic surprise classes: timing, magnitude, direction, mechanics, none;
+- keep surprise computation deterministic where possible.
+
+Exit criteria:
+
+- at least one layer has real expected->realized lifecycle measurement.
+
+### v1.0 - Stable Research Scanner
+
+Goal: a stable paper scanner that can run continuously and produce trustworthy
+diagnostics.
+
+Tasks:
+
+- stable commands and docs;
+- clean operational handoff;
+- reproducible local quality reports;
+- clear boundaries between active scanner, frozen engines and archives;
+- no stale top-level documentation.
+
+## Future Tracks
+
+These are intentionally not current work:
+
+- live auto-trading;
+- real-money execution;
+- a new `main_event_engine`;
+- full GUI/SaaS wrapper;
+- paid data integrations;
+- Telegram account listener / Telethon production feed;
+- broad multi-agent market-debate platform.
+
+They may become relevant only after the scanner proves source quality and forward
+measurement discipline.
