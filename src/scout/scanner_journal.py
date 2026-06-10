@@ -16,7 +16,6 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-import os
 from pathlib import Path
 
 from src.scout import pending_store as PS
@@ -101,6 +100,7 @@ def build_row(
     source_count: int = 1,
     event_key: str | None = None,
     chief_called: bool = False,
+    escalation_gate: str | None = None,  # за что позвали/не позвали chief (кодовый гейт)
     agent_direction: str = "none",       # намёк дешёвого слой-агента (long/short/none/mixed)
     agent_confidence: float | None = None,
     llm_provider: str | None = None,
@@ -157,6 +157,7 @@ def build_row(
         "source_count": source_count,
         "event_key": event_key,                     # актив+хэш-темы (event-дедуп, Этап 2)
         "chief_called": chief_called,               # звали ли мощную модель (экономия токенов)
+        "escalation_gate": escalation_gate,         # причина гейта (RED_FLAG/LEADING/FLOW_SIGNAL/...)
         "agent_direction": agent_direction,         # намёк слой-агента
         "agent_confidence": agent_confidence,
         "llm_provider": llm_provider,

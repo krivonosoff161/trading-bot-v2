@@ -2,12 +2,17 @@
 """
 orchestrator.py — оркестратор (обычный Python-код + правила, НЕ LLM).
 
-Поток на одно событие: дешёвый слой-агент извлекает факты → правила решают:
+Поток на одно событие: дешёвый слой-агент даёт факты + ПРЕДВАРИТЕЛЬНЫЙ вердикт →
+кодовый гейт decide_escalation решает:
   • trash   → мусор, дропаем (chief не зовём, токены не тратим);
   • journal → дешёвый NO_GO в журнал (датасет), chief НЕ зовём, в канал НЕ шлём;
-  • chief   → зовём мощную модель → финальный вердикт + сторона → в журнал И в канал.
+  • chief   → зовём мощную модель → финальный вердикт + сторона.
 
-Это экономит токены: chief только на реальных кандидатах. Возвращает единый dict для журнала.
+Гейт ЯВНЫЙ (escalation_gate) и пишется в reasoning/журнал — видно, за что платим chief.
+Голая materiality>=0.65 на lagging/агрегаторах больше НЕ эскалирует (аудит 10.06:
+128 chief-вызовов / 315k токенов по этой причине → 99% NO_GO).
+Защищено от пере-подавления (по NO_GO аудиту): flow-источники (dexscreener),
+red-flags, LEADING — эскалируются всегда/легко.
 """
 from __future__ import annotations
 
@@ -26,38 +31,105 @@ from src.scout.agents import layer_agent             # noqa: E402
 
 _CFG = Path(__file__).resolve().parents[1] / "config" / "layer_agents.yaml"
 
+PRE_VERDICTS = ("DROP", "JOURNAL_NO_GO", "WATCH_CANDIDATE", "GO_CANDIDATE")
+
 
 @lru_cache(maxsize=1)
 def _esc() -> dict:
     return (yaml.safe_load(_CFG.read_text(encoding="utf-8")) or {}).get("escalation", {}) or {}
 
 
-def _route(agent: dict, lead_class: str) -> str:
-    """trash | journal | chief — на основе фактов агента + класса источника."""
+def _fallback_pre_verdict(agent: dict, e: dict) -> str:
+    """Старый/несовместимый ответ агента (нет pre_verdict) → консервативный маппинг."""
+    pre = str(agent.get("pre_verdict") or "").upper()
+    if pre in PRE_VERDICTS:
+        return pre
+    m = agent.get("materiality") or 0.0
+    c = agent.get("confidence") or 0.0
+    if (agent.get("direction") in ("long", "short")
+            and c >= e.get("direction_conf_min", 0.55)
+            and m >= e.get("materiality_min", 0.65)):
+        return "WATCH_CANDIDATE"
+    return "JOURNAL_NO_GO"
+
+
+def decide_escalation(agent: dict, *, layer: int, lead_class: str,
+                      source: str | None = None, source_class: str | None = None,
+                      source_trust: str | None = None,
+                      low_confidence: bool = False) -> tuple[str, str, str]:
+    """Кодовый гейт: (decision trash|journal|chief, escalation_gate, escalation_reason)."""
     e = _esc()
-    m = agent.get("materiality", 0.0)
-    c = agent.get("confidence", 0.0)
-    d = agent.get("direction", "none")
-    if (m >= e.get("materiality_min", 0.65)
-            or (d in ("long", "short") and c >= e.get("direction_conf_min", 0.55))
-            or bool(agent.get("red_flags"))
-            or lead_class == "LEADING"):
-        return "chief"
-    if m < e.get("trash_materiality_max", 0.2) and agent.get("phase") in ("context", "ambiguous"):
-        return "trash"
-    return "journal"
+    pre = _fallback_pre_verdict(agent, e)
+    m = float(agent.get("materiality") or 0.0)
+    c = float(agent.get("confidence") or 0.0)
+    trigger = str(agent.get("trigger_text") or "").strip()
+    lead = str(lead_class or "").upper()
+
+    # 1) мусор: cheap сказал DROP, либо детерминированное правило шума
+    if pre == "DROP" or (m < e.get("trash_materiality_max", 0.2)
+                         and agent.get("phase") in ("context", "ambiguous")
+                         and not agent.get("red_flags") and lead != "LEADING"):
+        return "trash", "DROP_RULE", agent.get("no_go_reason") or "cheap: мусор/нерелевантно слою"
+
+    # 2) red-flag VETO — всегда финальный разбор
+    if agent.get("red_flags"):
+        return "chief", "RED_FLAG", f"red_flags: {', '.join(map(str, agent['red_flags']))[:120]}"
+
+    # 3) LEADING (official/api до новостного цикла) — эскалация лёгкая
+    if lead == "LEADING":
+        return "chief", "LEADING", "опережающий источник"
+
+    # 4) flow/телеметрия (DEX-объёмы и т.п.): «уже в цене» неприменимо; режем только явный DROP.
+    #    Шире, чем «cheap сказал WATCH»: аудит 10.06 — dexscreener 7/18 idio-промахов,
+    #    5 из них cheap-fallback резал; объём источника мал (~2 карточки/день), цена защиты копейки.
+    if str(source or "") in set(e.get("flow_sources") or ()):
+        return "chief", "FLOW_SIGNAL", f"flow-источник {source}: {pre.lower() or 'телеметрия'}"
+
+    # 5) GO-кандидат от cheap (требует trigger_text по контракту промпта)
+    if pre == "GO_CANDIDATE":
+        return "chief", "CHEAP_GO", agent.get("escalation_reason") or trigger or "cheap: GO-кандидат"
+
+    # 6) WATCH-кандидат: пороги (металлы-lagging строже — аудит 0/22 idio);
+    #    механика на прямом/официальном источнике эскалируется без порогов
+    if pre == "WATCH_CANDIDATE":
+        if agent.get("mechanics") and (str(source_trust or "") in ("official", "primary")
+                                       or str(source_class or "") in ("api", "ws", "web")):
+            return "chief", "MECHANICS", f"механика на прямом источнике: {', '.join(map(str, agent['mechanics']))[:120]}"
+        mat_min = (e.get("metals_lagging_materiality_min", 0.8)
+                   if (int(layer or 0) == 3 and lead == "LAGGING")
+                   else e.get("watch_materiality_min", 0.55))
+        title_only_aggregator = low_confidence and str(source_trust or "") == "aggregator" and not trigger
+        if m >= mat_min and c >= e.get("watch_confidence_min", 0.5) and not title_only_aggregator:
+            return "chief", "CHEAP_WATCH", agent.get("escalation_reason") or trigger or "cheap: watch-кандидат"
+        return ("journal", "MATERIALITY_ONLY_BLOCKED",
+                f"watch-кандидат ниже порогов слоя (mat={m:.2f}<{mat_min:g} или conf={c:.2f}, "
+                f"title_only_agg={title_only_aggregator})")
+
+    # 7) дефолт: cheap не эскалирует; высокая «голая» материальность больше не повод
+    if m >= e.get("materiality_min", 0.65):
+        return ("journal", "MATERIALITY_ONLY_BLOCKED",
+                "только материальность без конкретного триггера — недостаточно для lagging")
+    return "journal", "CHEAP_NO_GO", agent.get("no_go_reason") or "cheap: нет конкретного триггера"
 
 
 async def process(event: dict, asset: str | None, layer: int, lead_class: str,
-                  price: float | None, market_ctx: str | None = None) -> dict:
+                  price: float | None, market_ctx: str | None = None, *,
+                  source: str | None = None, source_class: str | None = None,
+                  source_trust: str | None = None, low_confidence: bool = False) -> dict:
     """Одно событие → решение оркестратора (для журнала/канала). Поля:
-    decision · chief_called · verdict · side · agent · chief · usage[] · send_channel."""
+    decision · chief_called · verdict · side · agent · chief · usage[] · send_channel
+    · pre_verdict · should_escalate · escalation_gate · escalation_reason."""
     agent = await layer_agent.analyze(event, layer, asset)
     usage = [agent.get("_usage", {})]
-    decision = _route(agent, lead_class)
+    decision, gate, reason = decide_escalation(
+        agent, layer=layer, lead_class=lead_class, source=source,
+        source_class=source_class, source_trust=source_trust, low_confidence=low_confidence)
 
     out = {"decision": decision, "chief_called": False, "agent": agent, "chief": None,
-           "usage": usage, "send_channel": False}
+           "usage": usage, "send_channel": False,
+           "pre_verdict": _fallback_pre_verdict(agent, _esc()),
+           "should_escalate": decision == "chief",
+           "escalation_gate": gate, "escalation_reason": reason}
 
     if decision == "trash":
         out["verdict"] = "DROP"
@@ -71,9 +143,11 @@ async def process(event: dict, asset: str | None, layer: int, lead_class: str,
             out["chief"] = ch
             out["verdict"] = ch["verdict"]
             out["side"] = ch["side"]
-            out["send_channel"] = True       # chief-карточка → в канал
+            out["send_channel"] = True       # chief-карточка → кандидат в канал (гейт GO/WATCH в scanner_v0)
             return out
         # chief упал → мягкая деградация в дешёвый NO_GO (в журнал)
+        out["escalation_gate"] = "CHIEF_ERROR_FALLBACK"
+        out["escalation_reason"] = f"chief недоступен (гейт был {gate})"
 
     # journal-path: дешёвый NO_GO (датасет), chief не зван / упал → только журнал, не в канал
     out["verdict"] = "NO_GO"

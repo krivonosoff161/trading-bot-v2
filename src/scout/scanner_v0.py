@@ -436,6 +436,7 @@ def write_routing_snapshot(
     materiality_family: str | None,
     verdict: str | None = None,
     chief_called: bool | None = None,
+    escalation_gate: str | None = None,
     skipped: str | None = None,
     note: str | None = None,
 ) -> None:
@@ -460,6 +461,7 @@ def write_routing_snapshot(
             "materiality_family": materiality_family,
             "verdict": verdict,
             "chief_called": chief_called,
+            "escalation_gate": escalation_gate,
             "skipped": skipped,
             "note": note,
         }
@@ -624,15 +626,20 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     price = okx_last(inst) if (not dry and inst) else None
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
-    # 3) ОРКЕСТРАТОР: дешёвый слой-агент → правила → chief (только кандидаты). dry = заглушка без LLM.
+    # 3) ОРКЕСТРАТОР: дешёвый слой-агент → кодовый гейт → chief (только кандидаты). dry = заглушка без LLM.
     if dry:
         orch = {"decision": "journal", "verdict": "NO_GO", "side": "none", "chief_called": False,
                 "agent": {"direction": "none", "confidence": None, "phase": phase, "asset": asset,
                           "event_type": mat.get("family") or "unknown", "materiality": mat.get("score"),
                           "red_flags": [], "mechanics": [], "key_facts": []},
-                "chief": None, "usage": [], "send_channel": True}
+                "chief": None, "usage": [], "send_channel": True,
+                "pre_verdict": "JOURNAL_NO_GO", "should_escalate": False,
+                "escalation_gate": "CHEAP_NO_GO", "escalation_reason": "dry-run"}
     else:
-        orch = await orchestrator.process(news, asset, layer, lead_class, price, mline)
+        orch = await orchestrator.process(news, asset, layer, lead_class, price, mline,
+                                          source=source, source_class=source_class,
+                                          source_trust=source_cfg.get("trust"),
+                                          low_confidence=low_conf)
 
     if orch.get("decision") == "trash":
         write_routing_snapshot(
@@ -669,7 +676,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         "surprise": ch.get("surprise") or agent.get("phase", ""),
         "asymmetry": ch.get("asymmetry", ""), "invalidation": ch.get("invalidation", ""),
         "forecast": ch.get("forecast", ""),
-        "summary": ch.get("summary") or "низкая материальность — в журнал (датасет), chief не звали",
+        "summary": (ch.get("summary") or agent.get("no_go_reason") or orch.get("escalation_reason")
+                    or "дешёвый фильтр: chief не звали — в журнал (датасет)"),
     }
 
     # 4) строка журнала
@@ -687,6 +695,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         materiality_score=(agent.get("materiality") if agent.get("materiality") is not None else mat.get("score")),
         event_key=ekey,
         chief_called=orch.get("chief_called", False),
+        escalation_gate=orch.get("escalation_gate"),
         agent_direction=agent.get("direction", "none"), agent_confidence=agent.get("confidence"),
         llm_provider=last_usage.get("provider"), llm_model=last_usage.get("model"),
         source_trust=source_cfg.get("trust"),
@@ -745,6 +754,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             materiality_score=row.get("materiality_score"),
             materiality_family=row.get("event_type"),
             verdict=row.get("verdict"), chief_called=row.get("chief_called"),
+            escalation_gate=orch.get("escalation_gate"),
             note=row.get("side"),
         )
     card = format_card(row)
