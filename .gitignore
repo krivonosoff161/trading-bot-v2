@@ -123,3 +123,4 @@ scripts/analysis/research/output/continuation_*.json
 # Research → ПРИВАТНЫЙ репозиторий (отдельный git внутри папки).
 # Публичный репо игнорирует ВЕСЬ research; в PLAN.md — только указатель.
 scripts/analysis/research/
+reports/
