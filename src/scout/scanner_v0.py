@@ -62,6 +62,7 @@ from src.scout.sources.fred_calendar import fetch_fred_calendar                 
 from src.scout.sources.eia import fetch_eia_schedule                           # noqa: E402
 from src.scout.sources.opec import fetch_opec_schedule                         # noqa: E402
 from src.scout.sources.earnings_calendar import fetch_earnings_calendar        # noqa: E402
+from src.scout.sources.etf_flow import l1_context_line                          # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
@@ -666,6 +667,14 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     price = okx_last(inst) if (not dry and inst) else None
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
+    # L1-обогащение: строка ETF-потоков в рыночный фон (контекст для cheap/chief,
+    # НЕ сигнал и НЕ гейт — пусто, если SCANNER_ETF_FLOW_PROVIDER не сконфигурирован)
+    ctx_line = mline
+    if int(layer or 0) == 1 and not dry:
+        etf_line = l1_context_line()
+        if etf_line:
+            ctx_line = f"{mline} | {etf_line}" if mline else etf_line
+
     # 3) ОРКЕСТРАТОР: дешёвый слой-агент → кодовый гейт → chief (только кандидаты). dry = заглушка без LLM.
     if dry:
         orch = {"decision": "journal", "verdict": "NO_GO", "side": "none", "chief_called": False,
@@ -676,7 +685,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                 "pre_verdict": "JOURNAL_NO_GO", "should_escalate": False,
                 "escalation_gate": "CHEAP_NO_GO", "escalation_reason": "dry-run"}
     else:
-        orch = await orchestrator.process(news, asset, layer, lead_class, price, mline,
+        orch = await orchestrator.process(news, asset, layer, lead_class, price, ctx_line,
                                           source=source, source_class=source_class,
                                           source_trust=source_cfg.get("trust"),
                                           low_confidence=low_conf)

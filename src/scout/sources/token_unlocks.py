@@ -104,8 +104,17 @@ def _build_item(token: dict, tracked: dict) -> dict | None:
         "token_id": token_id,
         "unlock_value_usd": total_value,
         "unlock_value_to_mcap_pct": value_to_mcap,
+        "released_supply_pct": released_pct,        # None = API не дал
         "allocation_breakdown": cliff.get("allocationBreakdown") or [],
+        "source_quality": "primary",                # Tokenomist API, точная дата/сумма
     }
+
+
+def unlocks_status() -> dict:
+    """Для отчётов: graceful-disabled без ключа (источник молчит by design)."""
+    configured = bool(os.getenv("TOKENOMIST_API_KEY", "").strip())
+    return {"configured": configured, "provider": "tokenomist",
+            "reason": None if configured else "not_configured: TOKENOMIST_API_KEY отсутствует"}
 
 
 def fetch_upcoming_unlocks(limit: int = 12) -> list[dict]:

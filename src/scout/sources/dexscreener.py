@@ -144,6 +144,9 @@ def _signal_from_pair(asset: AssetRef, row: dict, observed_at: dt.datetime) -> d
     )
     if age_hours is not None:
         text += f" Pair age about {age_hours:.1f}h."
+    else:
+        text += " Pair age unknown."
+    turnover = round(volume_24h / liquidity, 2) if liquidity else None
 
     return {
         "title": title,
@@ -168,6 +171,15 @@ def _signal_from_pair(asset: AssetRef, row: dict, observed_at: dt.datetime) -> d
         "liquidity_usd": liquidity,
         "volume_24h_usd": volume_24h,
         "price_change_24h_pct": change_24h,
+        # структурное качество пары для L2-контекста/отчётов; None = API поля не дал
+        # (без фейковой точности), новых сетевых запросов это не добавляет
+        "flow_metrics": {
+            "liquidity_usd": liquidity,
+            "volume_24h_usd": volume_24h,
+            "price_change_24h_pct": change_24h,
+            "pair_age_hours": round(age_hours, 1) if age_hours is not None else None,
+            "turnover_to_liquidity": turnover,
+        },
     }
 
 
