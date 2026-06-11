@@ -233,7 +233,8 @@ Current implementation:
 - evaluates strategy families against parameter grids;
 - writes private outputs to `trading-bot-research/strategy-lab`;
 - emits `metrics.json`, `candidates.csv`, `summary.md`, `graph_edges.csv`,
-  and `llm_review_pack.json`.
+  `llm_review_pack.json`, `llm_review_prompt.md`, and Obsidian notes under
+  `obsidian-vault/`.
 
 The first runner is deliberately code-first and LLM-later. LLM review should
 consume only the aggregate `llm_review_pack.json` after code metrics exist.
