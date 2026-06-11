@@ -7,6 +7,8 @@ Reads append-only scanner logs and produces per-source metrics:
   - drop reasons
   - cards / chief / low-confidence
   - phase disagreement (source prior vs headline vs final)
+  - body quality from news_buffer.sqlite (title_only/full_body/avg text_len)
+  - telegram cards (GO/WATCH) and idio misses per source
 
 This is intentionally offline and read-only.
 """
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -25,6 +28,9 @@ INGEST = LOG_DIR / "ingest_log.jsonl"
 DROPS = LOG_DIR / "drops.jsonl"
 JOURNAL = LOG_DIR / "scanner_journal.jsonl"
 ROUTING = LOG_DIR / "routing_audit.jsonl"
+OUTCOMES = LOG_DIR / "scanner_outcomes.jsonl"
+DB_PATH = _ROOT / "data" / "scout" / "news_buffer.sqlite"
+IDIO_THRESHOLD_PCT = 3.0
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -67,17 +73,53 @@ def _infer_source(row: dict[str, Any]) -> str:
     return "unknown"
 
 
+def body_quality(db_path: Path = DB_PATH) -> dict[str, dict[str, Any]]:
+    """machine_docs per source: full_body/title_only/sec_primary_doc rate + avg text_len."""
+    if not Path(db_path).exists():
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    con = sqlite3.connect(str(db_path))
+    try:
+        q = """
+            SELECT r.source_id, COUNT(*),
+                   SUM(CASE WHEN m.extraction_status='ok' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN m.extraction_method='title_only' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN m.extraction_method='sec_primary_doc' THEN 1 ELSE 0 END),
+                   CAST(AVG(m.text_len) AS INT)
+            FROM raw_items r JOIN machine_docs m ON m.doc_id = r.doc_id
+            GROUP BY r.source_id
+        """
+        for s, n, full, to, sec, alen in con.execute(q):
+            out[str(s)] = {
+                "docs": int(n),
+                "full_body": int(full or 0),
+                "full_body_rate": round((full or 0) / n, 3) if n else 0.0,
+                "title_only": int(to or 0),
+                "title_only_rate": round((to or 0) / n, 3) if n else 0.0,
+                "sec_primary_doc": int(sec or 0),
+                "avg_text_len": alen,
+            }
+    finally:
+        con.close()
+    return out
+
+
 def summarize(
     *,
     ingest_rows: list[dict[str, Any]] | None = None,
     drop_rows: list[dict[str, Any]] | None = None,
     journal_rows: list[dict[str, Any]] | None = None,
     routing_rows: list[dict[str, Any]] | None = None,
+    outcome_rows: list[dict[str, Any]] | None = None,
+    body_stats: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ingest_rows = ingest_rows if ingest_rows is not None else _load_jsonl(INGEST)
     drop_rows = drop_rows if drop_rows is not None else _load_jsonl(DROPS)
     journal_rows = journal_rows if journal_rows is not None else _load_jsonl(JOURNAL)
     routing_rows = routing_rows if routing_rows is not None else _load_jsonl(ROUTING)
+    outcome_rows = outcome_rows if outcome_rows is not None else _load_jsonl(OUTCOMES)
+    body_stats = body_stats if body_stats is not None else body_quality()
+    outcome_by_card = {str(o.get("card_id")): o for o in outcome_rows}
 
     stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -89,6 +131,9 @@ def summarize(
             "lead_classes": Counter(),
             "low_confidence": 0,
             "chief_called": 0,
+            "telegram_cards": 0,
+            "scored_outcomes": 0,
+            "idio_miss": 0,
             "routing_attempts": 0,
             "routing_skips": Counter(),
             "phase_prior_vs_headline": Counter(),
@@ -117,6 +162,15 @@ def summarize(
             entry["low_confidence"] += 1
         if row.get("chief_called"):
             entry["chief_called"] += 1
+        if str(row.get("verdict")) in ("GO", "WATCH"):
+            entry["telegram_cards"] += 1     # кандидаты канала (гейт GO/WATCH)
+        outcome = outcome_by_card.get(str(row.get("card_id")))
+        if outcome and outcome.get("scored"):
+            entry["scored_outcomes"] += 1
+            excess = outcome.get("excess_pct")
+            if (str(row.get("verdict")) == "NO_GO" and excess is not None
+                    and abs(float(excess)) >= IDIO_THRESHOLD_PCT):
+                entry["idio_miss"] += 1      # baseline-значимые промахи (beta_blind → excess=None)
 
     for row in routing_rows:
         source = _infer_source(row)
@@ -147,6 +201,12 @@ def summarize(
             "chief_rate": round(chief_called / cards, 4) if cards else 0.0,
             "low_confidence": int(entry["low_confidence"]),
             "low_confidence_rate": round(entry["low_confidence"] / cards, 4) if cards else 0.0,
+            "telegram_cards": int(entry["telegram_cards"]),
+            "idio_miss": int(entry["idio_miss"]),
+            "idio_miss_rate": (round(entry["idio_miss"] / entry["scored_outcomes"], 4)
+                               if entry["scored_outcomes"] else 0.0),
+            "scored_outcomes": int(entry["scored_outcomes"]),
+            "body": body_stats.get(source) or {},
             "verdicts": dict(entry["verdicts"]),
             "phases": dict(entry["phases"]),
             "lead_classes": dict(entry["lead_classes"]),
@@ -178,8 +238,16 @@ def render_text(report: dict[str, Any]) -> str:
     for source, row in report["sources"].items():
         lines.append(
             f"[{source}] ingest={row['ingested']} cards={row['cards']} "
-            f"chief={row['chief_called']} low_conf={row['low_confidence']}"
+            f"chief={row['chief_called']} low_conf={row['low_confidence']} "
+            f"tg={row.get('telegram_cards', 0)} idio_miss={row.get('idio_miss', 0)}"
         )
+        body = row.get("body") or {}
+        if body:
+            lines.append(
+                f"  body: docs={body['docs']} full={body['full_body_rate']:.0%} "
+                f"title_only={body['title_only_rate']:.0%} avg_len={body['avg_text_len']}"
+                + (f" sec_primary={body['sec_primary_doc']}" if body.get("sec_primary_doc") else "")
+            )
         if row["drops"]:
             lines.append(f"  drops: {json.dumps(row['drops'], ensure_ascii=False, sort_keys=True)}")
         if row["routing_skips"]:

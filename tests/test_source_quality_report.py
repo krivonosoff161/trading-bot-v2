@@ -59,6 +59,10 @@ def test_source_quality_summary_aggregates_phase_and_drop_metrics():
                 "verdict": "GO",
             },
         ],
+        outcome_rows=[],
+        body_stats={"sec_edgar": {"docs": 9, "full_body": 9, "full_body_rate": 1.0,
+                                  "title_only": 0, "title_only_rate": 0.0,
+                                  "sec_primary_doc": 9, "avg_text_len": 33000}},
     )
 
     decrypt = report["sources"]["decrypt"]
@@ -71,6 +75,27 @@ def test_source_quality_summary_aggregates_phase_and_drop_metrics():
     assert decrypt["low_confidence"] == 1
     assert sec["chief_called"] == 1
     assert sec["phase_prior_vs_headline"]["REALIZED->REALIZED"] == 1
+    assert sec["telegram_cards"] == 1                 # GO/WATCH = кандидат канала
+    assert decrypt["telegram_cards"] == 0
+    assert sec["body"]["sec_primary_doc"] == 9 and sec["body"]["title_only_rate"] == 0.0
+
+
+def test_source_quality_idio_miss_uses_meaningful_excess_only():
+    report = SQR.summarize(
+        ingest_rows=[], drop_rows=[], routing_rows=[], body_stats={},
+        journal_rows=[
+            {"card_id": "a", "source": "dexscreener", "verdict": "NO_GO"},
+            {"card_id": "b", "source": "cointelegraph", "verdict": "NO_GO"},
+        ],
+        outcome_rows=[
+            {"card_id": "a", "scored": True, "excess_pct": -8.1},        # реальный idio-промах
+            {"card_id": "b", "scored": True, "excess_pct": None,         # beta_blind → не idio
+             "beta_blind": True, "ret_pct": -6.0},
+        ],
+    )
+    assert report["sources"]["dexscreener"]["idio_miss"] == 1
+    assert report["sources"]["cointelegraph"]["idio_miss"] == 0
+    assert report["sources"]["cointelegraph"]["scored_outcomes"] == 1
 
 
 def test_source_quality_render_text_includes_source_rows():
