@@ -67,6 +67,7 @@ from src.scout.agents import orchestrator                                       
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
 from src.scout import pending_store as PS                        # noqa: E402
+from src.scout import watch_queue as WQ                          # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -820,6 +821,10 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             matched = PS.match_realized_event(row)
             if matched:
                 PS.mark_matched(str(matched.get("pending_id")), row["card_id"])
+        try:
+            WQ.upsert_watch(row)
+        except Exception as exc:
+            print(f"  watch_queue: {exc}")
         write_routing_snapshot(
             item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
             asset=row.get("asset"), layer=row.get("layer"), asset_confidence=row.get("asset_confidence"),
