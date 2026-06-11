@@ -363,7 +363,9 @@ def write_run_outputs(spec: ExperimentSpec, results: list[RunResult], out_root: 
         json.dumps(_llm_review_pack(spec, results), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    (run_dir / "llm_review_prompt.md").write_text(_llm_review_prompt(spec, results), encoding="utf-8")
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
+    _write_obsidian_notes(spec, results, out_root, run_dir.name)
     return run_dir
 
 
@@ -432,6 +434,174 @@ def _llm_review_pack(spec: ExperimentSpec, results: list[RunResult]) -> dict[str
     }
 
 
+def _llm_review_prompt(spec: ExperimentSpec, results: list[RunResult]) -> str:
+    pack = _llm_review_pack(spec, results)
+    promoted = [r for r in results if r.decision == "PROMOTE_FOR_PRESSURE_TEST"]
+    observed = [r for r in results if r.decision == "OBSERVE"]
+    rejected = [r for r in results if r.decision == "REJECT"]
+    return "\n".join(
+        [
+            "# Strategy Lab LLM Review Prompt",
+            "",
+            "You are reviewing a private trading research experiment.",
+            "",
+            "Rules:",
+            "- Do not treat any result as live-tradable.",
+            "- Do not invent missing fills, fees, symbols, or validation results.",
+            "- Look for overfit, small samples, single-trade dominance, weak OOS, and missing regime controls.",
+            "- Recommend the next code-based pressure tests before any human considers the candidate.",
+            "- Keep exact private parameters and symbol findings inside the private research repo.",
+            "",
+            "Experiment:",
+            f"- experiment_id: {spec.experiment_id}",
+            f"- symbols: {', '.join(spec.symbols)}",
+            f"- families: {', '.join(spec.families)}",
+            f"- fees_bps: {spec.fees_bps}",
+            f"- slippage_bps: {spec.slippage_bps}",
+            "",
+            "Counts:",
+            f"- promote_for_pressure_test: {len(promoted)}",
+            f"- observe: {len(observed)}",
+            f"- reject: {len(rejected)}",
+            "",
+            "Review tasks:",
+            "1. Identify which promoted candidates are most likely overfit.",
+            "2. List missing validation gates needed next.",
+            "3. Suggest which family/filter/regime links should be tested next.",
+            "4. Propose a small next experiment spec, without claiming profitability.",
+            "5. Produce a short operator summary for the Obsidian run note.",
+            "",
+            "Machine-readable pack follows:",
+            "",
+            "```json",
+            json.dumps(pack, ensure_ascii=False, indent=2),
+            "```",
+            "",
+        ]
+    )
+
+
+def _safe_note_name(value: str) -> str:
+    keep = []
+    for ch in value:
+        if ch.isalnum() or ch in {"_", "-", "."}:
+            keep.append(ch)
+        else:
+            keep.append("_")
+    return "".join(keep).strip("_") or "unknown"
+
+
+def _write_obsidian_notes(spec: ExperimentSpec, results: list[RunResult], out_root: Path, run_name: str) -> None:
+    vault = out_root / "obsidian-vault"
+    runs_dir = vault / "Runs"
+    candidates_dir = vault / "Candidates"
+    symbols_dir = vault / "Symbols"
+    families_dir = vault / "Families"
+    decisions_dir = vault / "Decisions"
+    reasons_dir = vault / "Reasons"
+    for path in (runs_dir, candidates_dir, symbols_dir, families_dir, decisions_dir, reasons_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    run_note = runs_dir / f"{_safe_note_name(run_name)}.md"
+    run_links = []
+    for r in sorted(results, key=lambda item: (item.decision, item.symbol, item.family, item.run_id)):
+        note_id = _candidate_note_id(r)
+        run_links.append(f"- [[Candidates/{note_id}|{r.run_id}]] - [[Symbols/{r.symbol}]] - [[Families/{r.family}]] - [[Decisions/{r.decision}]]")
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.decision] = counts.get(r.decision, 0) + 1
+    run_note.write_text(
+        "\n".join(
+            [
+                f"# {run_name}",
+                "",
+                "Private strategy-lab run. Exact result tables stay private.",
+                "",
+                "## Experiment",
+                "",
+                f"- experiment: {spec.experiment_id}",
+                f"- families: {', '.join(f'[[Families/{f}]]' for f in spec.families)}",
+                f"- symbols: {', '.join(f'[[Symbols/{s}]]' for s in spec.symbols)}",
+                "",
+                "## Counts",
+                "",
+                *[f"- [[Decisions/{k}]]: {v}" for k, v in sorted(counts.items())],
+                "",
+                "## Candidate Links",
+                "",
+                *run_links,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for r in results:
+        _write_candidate_note(candidates_dir / f"{_candidate_note_id(r)}.md", r, run_name)
+    for symbol in sorted({r.symbol for r in results}):
+        _append_index_note(symbols_dir / f"{_safe_note_name(symbol)}.md", f"# {symbol}", _links_for_symbol(results, symbol))
+    for family in sorted({r.family for r in results}):
+        _append_index_note(families_dir / f"{_safe_note_name(family)}.md", f"# {family}", _links_for_family(results, family))
+    for decision in sorted({r.decision for r in results}):
+        _append_index_note(decisions_dir / f"{_safe_note_name(decision)}.md", f"# {decision}", _links_for_decision(results, decision))
+    for reason in sorted({reason for r in results for reason in r.reasons}):
+        _append_index_note(reasons_dir / f"{_safe_note_name(reason)}.md", f"# {reason}", _links_for_reason(results, reason))
+
+
+def _candidate_note_id(result: RunResult) -> str:
+    return _safe_note_name(f"{result.run_id}_{result.symbol}_{result.family}")
+
+
+def _write_candidate_note(path: Path, result: RunResult, run_name: str) -> None:
+    m = result.metrics
+    lines = [
+        f"# Candidate {result.run_id}",
+        "",
+        f"- run: [[Runs/{_safe_note_name(run_name)}]]",
+        f"- symbol: [[Symbols/{result.symbol}]]",
+        f"- family: [[Families/{result.family}]]",
+        f"- decision: [[Decisions/{result.decision}]]",
+        f"- reasons: {', '.join(f'[[Reasons/{reason}]]' for reason in result.reasons)}",
+        "",
+        "## Metrics",
+        "",
+        f"- trades: {m['n_trades']}",
+        f"- win_rate: {m['win_rate']}",
+        f"- avg_net_pct: {m['avg_net_pct']}",
+        f"- test_avg_net_pct: {m['test_avg_net_pct']}",
+        f"- profit_factor: {m['profit_factor']}",
+        f"- max_drawdown_pct: {m['max_drawdown_pct']}",
+        f"- best_trade_share: {m['best_trade_share']}",
+        "",
+        "## Next Review",
+        "",
+        "- Needs code pressure-test before any live interpretation.",
+        "- Check OOS split, costs, parameter neighborhood, and regime dependency.",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _append_index_note(path: Path, title: str, links: list[str]) -> None:
+    path.write_text("\n".join([title, "", "## Linked Candidates", "", *sorted(set(links)), ""]), encoding="utf-8")
+
+
+def _links_for_symbol(results: list[RunResult], symbol: str) -> list[str]:
+    return [f"- [[Candidates/{_candidate_note_id(r)}|{r.run_id}]] - [[Families/{r.family}]] - [[Decisions/{r.decision}]]" for r in results if r.symbol == symbol]
+
+
+def _links_for_family(results: list[RunResult], family: str) -> list[str]:
+    return [f"- [[Candidates/{_candidate_note_id(r)}|{r.run_id}]] - [[Symbols/{r.symbol}]] - [[Decisions/{r.decision}]]" for r in results if r.family == family]
+
+
+def _links_for_decision(results: list[RunResult], decision: str) -> list[str]:
+    return [f"- [[Candidates/{_candidate_note_id(r)}|{r.run_id}]] - [[Symbols/{r.symbol}]] - [[Families/{r.family}]]" for r in results if r.decision == decision]
+
+
+def _links_for_reason(results: list[RunResult], reason: str) -> list[str]:
+    return [f"- [[Candidates/{_candidate_note_id(r)}|{r.run_id}]] - [[Symbols/{r.symbol}]] - [[Families/{r.family}]]" for r in results if reason in r.reasons]
+
+
 def _summary_md(spec: ExperimentSpec, results: list[RunResult]) -> str:
     counts: dict[str, int] = {}
     for r in results:
@@ -459,4 +629,3 @@ def _summary_md(spec: ExperimentSpec, results: list[RunResult]) -> str:
         )
     lines.append("")
     return "\n".join(lines)
-

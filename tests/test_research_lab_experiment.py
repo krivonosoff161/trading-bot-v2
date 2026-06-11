@@ -57,7 +57,12 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert (out_dir / "candidates.csv").exists()
     assert (out_dir / "graph_edges.csv").exists()
     assert (out_dir / "llm_review_pack.json").exists()
+    assert (out_dir / "llm_review_prompt.md").exists()
     assert "Strategy Lab Run" in (out_dir / "summary.md").read_text(encoding="utf-8")
+    vault = tmp_path / "private" / "obsidian-vault"
+    assert (vault / "Runs").exists()
+    assert list((vault / "Candidates").glob("*.md"))
+    assert "[[Symbols/ABC_USDT_SWAP]]" in next((vault / "Candidates").glob("*.md")).read_text(encoding="utf-8")
 
 
 def test_experiment_spec_loads_from_json(tmp_path):
@@ -79,4 +84,3 @@ def test_experiment_spec_loads_from_json(tmp_path):
 
     assert spec.experiment_id == "x"
     assert spec.parameter_grid["momentum_breakout"][0]["lookback"] == 3
-
