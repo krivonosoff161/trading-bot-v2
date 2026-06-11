@@ -212,3 +212,28 @@ Before leaving the scanner running on paid models:
 6. Move conclusions and candidate details into the private research repo, not
    into public docs.
 
+## Strategy-Lab Runner
+
+First working command:
+
+```bash
+python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
+```
+
+Continuous loop:
+
+```bash
+bat\strategy_lab_loop.bat
+```
+
+Current implementation:
+
+- reads a JSON experiment spec;
+- loads local OKX-history JSON candles;
+- evaluates strategy families against parameter grids;
+- writes private outputs to `trading-bot-research/strategy-lab`;
+- emits `metrics.json`, `candidates.csv`, `summary.md`, `graph_edges.csv`,
+  and `llm_review_pack.json`.
+
+The first runner is deliberately code-first and LLM-later. LLM review should
+consume only the aggregate `llm_review_pack.json` after code metrics exist.

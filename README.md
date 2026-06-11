@@ -150,6 +150,16 @@ set `LLM_STOP_ON_BUDGET=true` and tune `LLM_DAILY_RUB_CAP`,
 `status=budget_skipped`; chief skips are journaled as `CHIEF_BUDGET_SKIPPED`
 and are not sent to Telegram.
 
+Private strategy-lab smoke run:
+
+```bash
+python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
+```
+
+For continuous local research, run `bat\strategy_lab_loop.bat`. It writes
+results to the private `trading-bot-research` workspace by default; public code
+shows the method, not the private candidate tables.
+
 Focused scanner tests:
 
 ```bash

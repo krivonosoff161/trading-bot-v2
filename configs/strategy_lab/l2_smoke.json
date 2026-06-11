@@ -1,0 +1,29 @@
+{
+  "experiment_id": "l2_smoke_v0",
+  "data_glob": "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json",
+  "symbols": ["ZEC_USDT_SWAP", "NOT_USDT_SWAP", "PENGU_USDT_SWAP"],
+  "families": [
+    "momentum_breakout",
+    "mean_reversion_fade",
+    "volume_shock_continuation"
+  ],
+  "fees_bps": 7,
+  "slippage_bps": 3,
+  "min_trades": 10,
+  "split_ratio": 0.7,
+  "parameter_grid": {
+    "momentum_breakout": [
+      {"lookback": 10, "threshold_pct": 0.0, "hold_bars": 3, "stop_pct": 8, "take_pct": 16},
+      {"lookback": 20, "threshold_pct": 1.0, "hold_bars": 5, "stop_pct": 10, "take_pct": 20}
+    ],
+    "mean_reversion_fade": [
+      {"lookback": 3, "move_pct": 12, "hold_bars": 2, "stop_pct": 10, "take_pct": 8},
+      {"lookback": 5, "move_pct": 18, "hold_bars": 3, "stop_pct": 14, "take_pct": 10}
+    ],
+    "volume_shock_continuation": [
+      {"lookback": 10, "vol_mult": 2.0, "min_body_pct": 5, "hold_bars": 2, "stop_pct": 8, "take_pct": 14},
+      {"lookback": 20, "vol_mult": 3.0, "min_body_pct": 8, "hold_bars": 3, "stop_pct": 10, "take_pct": 18}
+    ]
+  }
+}
+
