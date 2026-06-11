@@ -114,6 +114,42 @@ def save_seen(seen: set[str]) -> None:
     SEEN_PATH.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
 
 
+# ── chief-error retry (P0 аудита 11.06: кандидат не умирает тихим NO_GO) ────
+CHIEF_RETRY_PATH = _ROOT / "logs" / "scout" / "chief_retry_state.json"
+CHIEF_RETRY_MAX = 2     # ретраев ПОСЛЕ первой попытки (итого до 3 заходов к chief)
+
+
+def _load_retry_state() -> dict:
+    if not CHIEF_RETRY_PATH.exists():
+        return {}
+    try:
+        return dict(json.loads(CHIEF_RETRY_PATH.read_text(encoding="utf-8")))
+    except Exception:
+        return {}
+
+
+def _save_retry_state(state: dict) -> None:
+    CHIEF_RETRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHIEF_RETRY_PATH.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True),
+                                encoding="utf-8")
+
+
+def chief_retry_decision(key: str, retry_max: int = CHIEF_RETRY_MAX) -> str:
+    """chief упал на кандидате → 'retry' (вернуть в очередь) или 'finalize' (кап исчерпан).
+
+    Счётчик персистентный (chief_retry_state.json): процесс сканера перезапускается
+    каждый проход. На finalize ключ чистится."""
+    state = _load_retry_state()
+    n = int(state.get(key) or 0) + 1
+    if n <= retry_max:
+        state[key] = n
+        _save_retry_state(state)
+        return "retry"
+    state.pop(key, None)
+    _save_retry_state(state)
+    return "finalize"
+
+
 def parse_source_ts(raw: str | None) -> dt.datetime | None:
     """Best-effort parser for source timestamps from RSS/pubDate/extractors."""
     if not raw:
@@ -439,6 +475,8 @@ def write_routing_snapshot(
     escalation_gate: str | None = None,
     skipped: str | None = None,
     note: str | None = None,
+    veto_flags: list | None = None,
+    no_edge_flags: list | None = None,
 ) -> None:
     J.write_routing_audit(
         {
@@ -464,6 +502,8 @@ def write_routing_snapshot(
             "escalation_gate": escalation_gate,
             "skipped": skipped,
             "note": note,
+            "veto_flags": veto_flags,
+            "no_edge_flags": no_edge_flags,
         }
     )
 
@@ -666,12 +706,37 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     usage_rows = orch.get("usage") or []
     tokens = sum(int(u.get("total_tokens") or 0) for u in usage_rows)
     cost_rub = round(sum(float(u.get("cost_rub") or 0.0) for u in usage_rows), 4)
+
+    # chief упал на эскалированном кандидате → НЕ финализируем обычным NO_GO: возвращаем
+    # событие в очередь (buffer→READY / RSS→не-seen, существующий llm_failed-путь);
+    # после CHIEF_RETRY_MAX ретраев финализируем с гейтом CHIEF_UNAVAILABLE (видно в аудитах).
+    if orch.get("chief_error") and not dry:
+        if chief_retry_decision(doc_id or canon) == "retry":
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=asset, layer=layer, asset_confidence=conf,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=str(agent.get("phase") or phase),
+                materiality_score=(agent.get("materiality")
+                                   if agent.get("materiality") is not None else mat.get("score")),
+                materiality_family=agent.get("event_type") or mat.get("family"),
+                escalation_gate="CHIEF_ERROR_PENDING", skipped="chief_error_retry",
+                veto_flags=agent.get("veto_flags"), no_edge_flags=agent.get("no_edge_flags"),
+            )
+            print(f"  · chief недоступен — ретрай следующим проходом: {headline[:60]}")
+            return {"skipped": "llm_failed", "headline": headline, "asset": asset,
+                    "tokens": tokens, "cost_rub": cost_rub}
+        orch["escalation_gate"] = "CHIEF_UNAVAILABLE"
+        orch["retry_status"] = "chief_unavailable"
+
     last_usage = (ch.get("_usage") or (orch.get("usage") or [{}])[-1] or {})
     fields = {
         "horizon_hours": ch.get("horizon_hours", 48), "levels": ch.get("levels"),
         "catalyst": "; ".join(map(str, agent.get("key_facts") or []))[:200],
         "in_price": ch.get("in_price", ""),
-        "red_flag": ", ".join(map(str, agent.get("red_flags") or [])) or "none",
+        # red_flag журнала = ТОЛЬКО veto (риск); слабости (no_edge) — в reasoning-логе
+        "red_flag": ", ".join(map(str, (agent.get("veto_flags") if "veto_flags" in agent
+                                        else agent.get("red_flags")) or [])) or "none",
         "mechanics": ", ".join(map(str, agent.get("mechanics") or [])) or "none",
         "surprise": ch.get("surprise") or agent.get("phase", ""),
         "asymmetry": ch.get("asymmetry", ""), "invalidation": ch.get("invalidation", ""),
@@ -756,6 +821,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             verdict=row.get("verdict"), chief_called=row.get("chief_called"),
             escalation_gate=orch.get("escalation_gate"),
             note=row.get("side"),
+            veto_flags=agent.get("veto_flags"), no_edge_flags=agent.get("no_edge_flags"),
         )
     card = format_card(row)
 

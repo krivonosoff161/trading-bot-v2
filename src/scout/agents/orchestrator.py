@@ -12,7 +12,11 @@ orchestrator.py — оркестратор (обычный Python-код + пр�
 Голая materiality>=0.65 на lagging/агрегаторах больше НЕ эскалирует (аудит 10.06:
 128 chief-вызовов / 315k токенов по этой причине → 99% NO_GO).
 Защищено от пере-подавления (по NO_GO аудиту): flow-источники (dexscreener),
-red-flags, LEADING — эскалируются всегда/легко.
+veto-флаги, LEADING — эскалируются всегда/легко.
+
+Аудит 11.06: эскалирует ТОЛЬКО veto_flags (словарь реальных рисков, layer_agent.split_flags);
+no_edge_flags («нет конкретики/общий анализ») — НЕ эскалация (было 52% вызовов chief, 100% NO_GO).
+Падение chief на кандидате → chief_error/retry_status (ретрай в scanner_v0), не финальный NO_GO.
 """
 from __future__ import annotations
 
@@ -64,16 +68,18 @@ def decide_escalation(agent: dict, *, layer: int, lead_class: str,
     c = float(agent.get("confidence") or 0.0)
     trigger = str(agent.get("trigger_text") or "").strip()
     lead = str(lead_class or "").upper()
+    # veto (риск) ≠ no_edge (слабость новости): только veto — повод будить chief
+    veto, _no_edge = layer_agent.split_flags(agent)
 
     # 1) мусор: cheap сказал DROP, либо детерминированное правило шума
     if pre == "DROP" or (m < e.get("trash_materiality_max", 0.2)
                          and agent.get("phase") in ("context", "ambiguous")
-                         and not agent.get("red_flags") and lead != "LEADING"):
+                         and not veto and lead != "LEADING"):
         return "trash", "DROP_RULE", agent.get("no_go_reason") or "cheap: мусор/нерелевантно слою"
 
-    # 2) red-flag VETO — всегда финальный разбор
-    if agent.get("red_flags"):
-        return "chief", "RED_FLAG", f"red_flags: {', '.join(map(str, agent['red_flags']))[:120]}"
+    # 2) veto-флаг (скам/взлом/манипуляция/санкции — словарь) — всегда финальный разбор
+    if veto:
+        return "chief", "VETO_FLAG", f"veto_flags: {', '.join(map(str, veto))[:120]}"
 
     # 3) LEADING (official/api до новостного цикла) — эскалация лёгкая
     if lead == "LEADING":
@@ -125,11 +131,14 @@ async def process(event: dict, asset: str | None, layer: int, lead_class: str,
         agent, layer=layer, lead_class=lead_class, source=source,
         source_class=source_class, source_trust=source_trust, low_confidence=low_confidence)
 
+    veto, no_edge = layer_agent.split_flags(agent)
     out = {"decision": decision, "chief_called": False, "agent": agent, "chief": None,
            "usage": usage, "send_channel": False,
            "pre_verdict": _fallback_pre_verdict(agent, _esc()),
            "should_escalate": decision == "chief",
-           "escalation_gate": gate, "escalation_reason": reason}
+           "escalation_gate": gate, "escalation_reason": reason,
+           "veto_flags": veto, "no_edge_flags": no_edge,
+           "chief_error": False, "retry_status": None}
 
     if decision == "trash":
         out["verdict"] = "DROP"
@@ -145,8 +154,12 @@ async def process(event: dict, asset: str | None, layer: int, lead_class: str,
             out["side"] = ch["side"]
             out["send_channel"] = True       # chief-карточка → кандидат в канал (гейт GO/WATCH в scanner_v0)
             return out
-        # chief упал → мягкая деградация в дешёвый NO_GO (в журнал)
-        out["escalation_gate"] = "CHIEF_ERROR_FALLBACK"
+        # chief упал → НЕ финализируем кандидата обычным NO_GO: помечаем для ретрая
+        # (scanner_v0 вернёт событие в очередь; после капа — CHIEF_UNAVAILABLE). Аудит 11.06:
+        # SPACEX WATCH-кандидат умер тихим NO_GO, когда chief был недоступен.
+        out["chief_error"] = True
+        out["retry_status"] = "chief_error_pending"
+        out["escalation_gate"] = "CHIEF_ERROR_PENDING"
         out["escalation_reason"] = f"chief недоступен (гейт был {gate})"
 
     # journal-path: дешёвый NO_GO (датасет), chief не зван / упал → только журнал, не в канал

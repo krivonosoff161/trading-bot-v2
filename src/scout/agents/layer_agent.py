@@ -58,6 +58,71 @@ def _num(v, default=0.0):
         return default
 
 
+# ── вето vs «нет эджа»: детерминированная классификация флагов ───────────────
+# Аудит 11.06: cheap писал «нет конкретики» в red_flags, гейт читал как скам-вето →
+# 52% эскалаций, 100% NO_GO. Вето = ТОЛЬКО словарь реальных рисков; остальное = no_edge.
+_VETO_VOCAB = (
+    # скам/раг/мошенничество
+    "scam", "скам", "rug", "раг", "honeypot", "ханипот", "fraud", "мошенн", "ponzi", "понци",
+    "пирамид", "malicious", "вредонос",
+    # взлом/эксплойт/кража/уязвимость
+    "hack", "взлом", "хакер", "exploit", "эксплойт", "уязвим", "vulnerab", "drain", "дрейн",
+    "кража", "украден", "stolen", "theft", "хищени",
+    # механика контракта
+    "mintable", "mint function", "минт", "freeze", "заморозк", "заморож", "frozen",
+    "blacklist", "чёрный список", "черный список",
+    # манипуляция/инсайдеры
+    "манипуляц", "manipulat", "инсайдер", "insider", "wash trad", "вош-трейд",
+    # санкции/конфискации/регуляторное преследование/ЧС
+    "санкци", "sanction", "конфискац", "seizure", "изъят", "арест", "enforcement",
+    "правоприменит", "уголовн", "criminal", "запрет", "ban ", "экстренн", "emergency",
+    # инциденты инфраструктуры/платёжеспособности
+    "депег", "depeg", "insolven", "несостоятельн", "банкрот", "bankrupt", "делистинг", "delist",
+    "halt", "остановка торгов", "остановка вывода", "withdrawal", "вывод средств заморожен",
+)
+# «отсутствие/слабость» — анти-паттерны: даже если модель положила это в veto_flags, демоутим
+_ABSENCE_PAT = (
+    "нет ", "нет.", "отсутств", "не указ", "не содерж", "не назван", "не объясн", "без конкрет",
+    "без подтвержд", "без деталей", "без новых", "только общ", "обобщ", "общие фразы",
+    "no specific", "no concrete", "lack of", "generic", "пересказ", "мнение", "не упомина",
+)
+
+
+def _is_veto(flag: str) -> bool:
+    s = str(flag).lower()
+    return any(w in s for w in _VETO_VOCAB)
+
+
+def _is_absence(flag: str) -> bool:
+    s = str(flag).lower()
+    return any(w in s for w in _ABSENCE_PAT)
+
+
+def classify_flags(veto_raw, no_edge_raw, legacy_red) -> tuple[list[str], list[str]]:
+    """(veto_flags, no_edge_flags): explicit-поля + консервативный разбор legacy red_flags.
+
+    Правила: legacy red_flag = вето ТОЛЬКО при матче словаря (иначе no_edge);
+    explicit veto_flag демоутится в no_edge, если это «отсутствие конкретики» без вето-слова."""
+    veto: list[str] = []
+    no_edge: list[str] = [str(f) for f in (no_edge_raw or [])]
+    for f in (veto_raw or []):
+        (no_edge if (_is_absence(f) and not _is_veto(f)) else veto).append(str(f))
+    for f in (legacy_red or []):
+        s = str(f)
+        if s in veto or s in no_edge:
+            continue
+        (veto if _is_veto(s) else no_edge).append(s)
+    return veto, no_edge
+
+
+def split_flags(agent: dict) -> tuple[list[str], list[str]]:
+    """Флаги агента → (veto, no_edge). Старые ответы (только red_flags) — через словарь;
+    explicit-списки тоже проходят демоут absence-текста (защита от дрейфа промпта)."""
+    if "veto_flags" in agent or "no_edge_flags" in agent:
+        return classify_flags(agent.get("veto_flags"), agent.get("no_edge_flags"), None)
+    return classify_flags([], [], agent.get("red_flags"))
+
+
 async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
     """Событие + слой → структурные факты (dict) + _usage. На ошибке — пустой материальный 0."""
     cfg = _cfg()
@@ -92,6 +157,9 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
     except (TypeError, ValueError):
         horizon = None
 
+    veto_flags, no_edge_flags = classify_flags(
+        data.get("veto_flags"), data.get("no_edge_flags"), data.get("red_flags"))
+
     return {
         "asset": data.get("asset") or asset,
         "event_type": str(data.get("event_type") or "unknown")[:40],
@@ -101,7 +169,9 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
         "confidence": _num(data.get("confidence")),
         "key_facts": data.get("key_facts") or [],
         "numbers": data.get("numbers") or [],
-        "red_flags": data.get("red_flags") or [],
+        "red_flags": data.get("red_flags") or [],   # сырой ответ модели (backward compat)
+        "veto_flags": veto_flags,                   # риск-вето → эскалация
+        "no_edge_flags": no_edge_flags,             # слабость новости → НЕ эскалация
         "mechanics": data.get("mechanics") or [],
         "pre_verdict": pre_verdict,
         "should_escalate": bool(data.get("should_escalate")),
