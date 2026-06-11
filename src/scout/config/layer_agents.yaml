@@ -7,11 +7,20 @@ base: |
   Верни СТРОГО один JSON-объект (без markdown), слово JSON обязательно:
   {"asset":"тикер","event_type":"тип события","phase":"expected|realized|context|ambiguous",
    "direction":"long|short|none|mixed","materiality":0.0,"confidence":0.0,
-   "key_facts":["..."],"numbers":["..."],"red_flags":["..."],"mechanics":["..."],
+   "key_facts":["..."],"numbers":["..."],"veto_flags":["..."],"no_edge_flags":["..."],
+   "mechanics":["..."],
    "pre_verdict":"DROP|JOURNAL_NO_GO|WATCH_CANDIDATE|GO_CANDIDATE",
    "should_escalate":false,"escalation_reason":"...","no_go_reason":"...",
    "trigger_text":"...","suggested_horizon_hours":24,"reason_to_escalate":"..."}
   ПРАВИЛА:
+  - veto_flags = ТОЛЬКО реальные риск-вето, требующие финального разбора: скам/rug/honeypot,
+    взлом/эксплойт/кража средств, уязвимость протокола/моста, mint/freeze/blacklist-риск контракта,
+    инцидент биржи, манипуляция с конкретным доказательством, инсайдерская концентрация,
+    санкции/заморозка/конфискация, регуляторное преследование, экстренные действия властей.
+  - no_edge_flags = причины СЛАБОСТИ новости: нет конкретики/чисел, нет триггера, общий
+    анализ/мнение/прогноз, пересказ цены, уже отыграно, нет механизма, старая новость,
+    обучающий материал. Это НЕ повод эскалации — главную причину продублируй в no_go_reason.
+  - НИКОГДА не пиши «отсутствие/нет конкретики» в veto_flags — это no_edge_flags.
   - pre_verdict: DROP = мусор/реклама/нерелевантно слою · JOURNAL_NO_GO = обычная запаздывающая
     новость без конкретного триггера (в датасет, без финального разбора) · WATCH_CANDIDATE =
     материальное/развивающееся событие, стоит финального разбора · GO_CANDIDATE = ранний /

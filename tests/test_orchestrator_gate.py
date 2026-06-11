@@ -95,11 +95,75 @@ def test_leading_trash_still_dropped():
     assert out["escalation_gate"] == "DROP_RULE"
 
 
-# 4. red flag → chief всегда
-def test_red_flag_escalates():
+# 4. veto-флаг (словарь рисков) → chief всегда; legacy red_flags классифицируются
+def test_veto_flag_escalates():
     out, n = _run(_agent(red_flags=["insider concentration 95%"], pre_verdict="JOURNAL_NO_GO"),
                   source="google_news_crypto", source_trust="aggregator", low_confidence=True)
-    assert n == 1 and out["escalation_gate"] == "RED_FLAG"
+    assert n == 1 and out["escalation_gate"] == "VETO_FLAG"
+
+
+# 4b. P0 аудита 11.06: «нет конкретики» в red_flags — НЕ эскалация (было 52% вызовов, 100% NO_GO)
+def test_absence_red_flag_does_not_escalate():
+    out, n = _run(_agent(red_flags=["Нет конкретного триггера для движения цены"],
+                         pre_verdict="JOURNAL_NO_GO", materiality=0.5),
+                  source="google_news_crypto", source_trust="aggregator", low_confidence=True)
+    assert n == 0 and out["chief_called"] is False
+    assert out["verdict"] == "NO_GO" and out["escalation_gate"] == "CHEAP_NO_GO"
+    assert out["no_edge_flags"] and not out["veto_flags"]
+
+
+def test_generic_analysis_flags_route_to_journal():
+    out, n = _run(_agent(red_flags=["Текст — обобщённый анализ рынка без триггеров",
+                                    "Мнение аналитиков без подтверждения механики"],
+                         pre_verdict="JOURNAL_NO_GO", materiality=0.7),
+                  source="google_news_metals", source_trust="aggregator", low_confidence=True)
+    assert n == 0 and out["escalation_gate"] == "MATERIALITY_ONLY_BLOCKED"
+
+
+# 4c. настоящие вето-слова по-прежнему эскалируются
+def test_true_veto_vocabulary_escalates():
+    for flag in ("rug pull risk", "protocol exploit confirmed", "взлом моста на $20M",
+                 "mintable contract", "honeypot signature", "санкции OFAC на адреса"):
+        out, n = _run(_agent(red_flags=[flag], pre_verdict="JOURNAL_NO_GO"),
+                      source="google_news_crypto", source_trust="aggregator")
+        assert n == 1 and out["escalation_gate"] == "VETO_FLAG", flag
+
+
+# 4d. explicit-контракт: veto_flags эскалирует, no_edge_flags — нет;
+#     absence-текст внутри veto_flags демоутится (защита от дрейфа промпта)
+def test_explicit_flag_lists():
+    out, n = _run(_agent(veto_flags=["скам-паттерн в контракте"], no_edge_flags=[],
+                         red_flags=[], pre_verdict="JOURNAL_NO_GO"))
+    assert n == 1 and out["escalation_gate"] == "VETO_FLAG"
+
+    out2, n2 = _run(_agent(veto_flags=[], no_edge_flags=["нет конкретики"], red_flags=[],
+                           pre_verdict="JOURNAL_NO_GO", materiality=0.4))
+    assert n2 == 0 and out2["escalation_gate"] == "CHEAP_NO_GO"
+
+    out3, n3 = _run(_agent(veto_flags=["Отсутствие конкретных данных о продажах"],
+                           no_edge_flags=[], red_flags=[],
+                           pre_verdict="JOURNAL_NO_GO", materiality=0.4))
+    assert n3 == 0 and out3["no_edge_flags"]                 # демоут absence из veto_flags
+
+
+# 4e. смешанный legacy-список: вето-слово достаточно для эскалации
+def test_legacy_mixed_flags_keep_veto():
+    out, n = _run(_agent(red_flags=["Нет конкретики по объёмам", "rug-риск: 95% у инсайдеров"],
+                         pre_verdict="JOURNAL_NO_GO"))
+    assert n == 1 and out["escalation_gate"] == "VETO_FLAG"
+    assert len(out["veto_flags"]) == 1 and len(out["no_edge_flags"]) == 1
+
+
+# 4f. no_edge-флаги не ломают другие гейты: flow и LEADING работают как раньше
+def test_no_edge_flags_do_not_block_flow_and_leading():
+    out, n = _run(_agent(red_flags=["Нет новых данных"], pre_verdict="JOURNAL_NO_GO"),
+                  layer=2, lead="COINCIDENT", source="dexscreener",
+                  source_class="api", source_trust="primary")
+    assert n == 1 and out["escalation_gate"] == "FLOW_SIGNAL"
+
+    out2, n2 = _run(_agent(red_flags=["Отсутствие деталей формы 8-K"], pre_verdict="JOURNAL_NO_GO"),
+                    lead="LEADING", source="sec_edgar", source_class="api", source_trust="official")
+    assert n2 == 1 and out2["escalation_gate"] == "LEADING"
 
 
 # 5. L3 металлы lagging-пересказ → без chief, пока нет сильного конкретного триггера
@@ -129,12 +193,22 @@ def test_cheap_no_go_journaled_without_chief():
     assert out["escalation_reason"]                      # причина не-эскалации записана
 
 
-# 8. chief упал → NO_GO, CHIEF_ERROR_FALLBACK, send_channel=False
-def test_chief_failure_fallback():
+# 8. chief упал на кандидате → НЕ обычный NO_GO: chief_error + retry_status, в канал нельзя
+def test_chief_failure_marks_retryable():
     out, n = _run(_agent(pre_verdict="GO_CANDIDATE"), chief_result="none")
     assert n == 1 and out["chief_called"] is True
-    assert out["verdict"] == "NO_GO" and out["send_channel"] is False
-    assert out["escalation_gate"] == "CHIEF_ERROR_FALLBACK"
+    assert out["chief_error"] is True
+    assert out["retry_status"] == "chief_error_pending"
+    assert out["escalation_gate"] == "CHIEF_ERROR_PENDING"
+    assert out["send_channel"] is False
+    assert out["verdict"] == "NO_GO"          # безопасный дефолт для старых потребителей
+
+
+# 8b. cheap-only JOURNAL_NO_GO не помечается chief_error (обычный NO_GO как был)
+def test_cheap_only_no_go_not_marked_chief_error():
+    out, n = _run(_agent(pre_verdict="JOURNAL_NO_GO", materiality=0.3))
+    assert n == 0 and out["chief_error"] is False and out["retry_status"] is None
+    assert out["verdict"] == "NO_GO" and out["escalation_gate"] == "CHEAP_NO_GO"
 
 
 # 9. телега: только GO/WATCH (гейт scanner_v0 не изменился)
