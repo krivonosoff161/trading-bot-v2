@@ -68,6 +68,7 @@ from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
 from src.scout import pending_store as PS                        # noqa: E402
 from src.scout import watch_queue as WQ                          # noqa: E402
+from src.utils import llm_budget_guard as LBG                    # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
@@ -862,6 +863,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
 
 # ── оркестрация (одиночный проход) ───────────────────────────────────────────
 async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
+    LBG.reset_session()
     J.ensure_pending_store()
     if not dry:
         PS.expire_old()

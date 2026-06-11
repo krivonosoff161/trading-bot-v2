@@ -137,10 +137,18 @@ python src/scout/resolve_outcomes.py --report
 python src/scout/resolve_outcomes.py --limit 50
 python src/scout/source_quality_report.py
 python src/scout/chief_usage_report.py
+python src/scout/llm_health_report.py --day 2026-06-11
 python scripts/analysis/source_onboarding_report.py
 python scripts/analysis/build_watch_queue.py --dry-run
 python -X utf8 src/scout/calibration_report.py
 ```
+
+LLM budget controls are opt-in. To hard-stop paid model calls after local caps,
+set `LLM_STOP_ON_BUDGET=true` and tune `LLM_DAILY_RUB_CAP`,
+`LLM_SCAN_RUB_CAP`, `LLM_MAX_TOKENS_PER_SCAN`, and
+`LLM_MAX_CHIEF_PER_SCAN` in `.env`. Budget skips are logged as model usage with
+`status=budget_skipped`; chief skips are journaled as `CHIEF_BUDGET_SKIPPED`
+and are not sent to Telegram.
 
 Focused scanner tests:
 
@@ -179,6 +187,7 @@ Read these first:
 - [ARCHITECTURE.md](ARCHITECTURE.md) - current project boundaries.
 - [ROADMAP.md](ROADMAP.md) - current development sequence.
 - [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design and as-built notes.
+- [docs/scanner_llm_operations_2026-06-12.md](docs/scanner_llm_operations_2026-06-12.md) - LLM budget, scanner/main/strategy-lab operating plan.
 - [docs/scanner_source_onboarding_2026-06-11.md](docs/scanner_source_onboarding_2026-06-11.md) - current one-source-per-layer experiment.
 - [docs/scanner_ta_confirmation_contract.md](docs/scanner_ta_confirmation_contract.md) - scanner-to-TA bridge contract.
 - [docs/main_research_verdict_index.md](docs/main_research_verdict_index.md) - why old Main/TA is confirmation-only.

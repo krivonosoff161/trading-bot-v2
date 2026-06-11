@@ -307,6 +307,43 @@ Cost-log пишет `provider/model/role/tokens/cost_usd/cost_rub`. Курсы/�
 переопределять через `LLM_USD_RUB` и `LLM_PRICE_<MODEL>_IN_USD_PER_1M` /
 `LLM_PRICE_<MODEL>_OUT_USD_PER_1M`.
 
+### LLM budget guard (AS-BUILT 12.06.2026)
+
+The scanner has a local cost guard in `src/utils/llm_budget_guard.py`. It is
+disabled by default for compatibility. When `LLM_STOP_ON_BUDGET=true`, the LLM
+client checks caps before making a network call:
+
+```env
+LLM_STOP_ON_BUDGET=true
+LLM_DAILY_RUB_CAP=100
+LLM_SCAN_RUB_CAP=10
+LLM_MAX_TOKENS_PER_SCAN=80000
+LLM_MAX_CHIEF_PER_SCAN=5
+```
+
+The guard reads the existing aggregate cost log `logs/scout/llm_budget.jsonl`
+for daily spend and keeps per-process counters for the current scanner pass.
+If a cap is reached, the client returns a structured usage record with
+`status=budget_skipped` and `error_type=<cap_name>` without calling the
+provider.
+
+Cheap-layer budget skips degrade to the existing low-confidence route and stay
+visible through usage telemetry. Chief budget skips are not retried and are not
+sent to Telegram; they are journaled with `escalation_gate=CHIEF_BUDGET_SKIPPED`
+so a missing paid call is not confused with a real `NO_GO` judgment.
+
+Offline health check:
+
+```bash
+python src/scout/llm_health_report.py --day 2026-06-11
+```
+
+Live provider probe is explicit because it spends tokens:
+
+```bash
+python src/scout/llm_health_report.py --probe-live
+```
+
 ### Telegram output
 
 Текущий формат: график отправляется отдельно с коротким caption, затем текстовая

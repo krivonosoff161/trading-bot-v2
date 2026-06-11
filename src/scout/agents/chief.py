@@ -107,6 +107,8 @@ async def decide(event: dict, agent: dict, price: float | None, market_ctx: str 
                                        json_mode=True, max_tokens=750)
     data = _parse(raw)
     if not isinstance(data, dict):
+        if usage.get("status") == "budget_skipped":
+            return {"_error": "budget_skipped", "_usage": usage}
         return None
 
     verdict = str(data.get("verdict", "")).upper().replace("-", "_").strip()
