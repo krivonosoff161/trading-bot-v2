@@ -415,7 +415,8 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                 resolved += 1
         skipped = max(0, limit - len(rows))
     return {"resolved": resolved, "failed_partial": failed, "skipped_capacity": skipped,
-            "gn_resolved": gn_resolved, "gn_failed": gn_failed}
+            "gn_resolved": gn_resolved, "gn_failed": gn_failed,
+            "gn_metrics": GN.metrics()}   # seen/resolved/failed/429/cooldown/backoff_seconds
 
 
 def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:

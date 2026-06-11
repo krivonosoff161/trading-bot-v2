@@ -9,12 +9,21 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.scout import google_news_url as GN  # noqa: E402
 from src.scout import news_buffer as NB  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_real_throttle(monkeypatch):
+    """Троттлинг резолвера (фича 11.06) не должен реально спать в юнит-тестах."""
+    GN.reset_metrics()
+    monkeypatch.setattr(GN, "_sleep", lambda s: None)
 
 
 def _varint(n: int) -> bytes:
