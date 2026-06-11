@@ -16,6 +16,8 @@ import os
 
 import aiohttp
 
+from src.utils import llm_budget_guard as budget_guard
+
 # ── провайдер ────────────────────────────────────────────────────────────────
 PROVIDER = os.getenv("LLM_PROVIDER", "yandex").strip().lower()
 
@@ -68,24 +70,45 @@ def model_for(role: str, provider: str | None = None) -> str:
     return _ROLE_MODELS.get(p, _ROLE_MODELS["yandex"]).get(role) or _YANDEX_CHIEF
 
 
-def _usage(provider: str, model: str, role: str, data: dict) -> dict:
+def _alibaba_rates(model: str) -> tuple[float, float]:
+    env_key = model.upper().replace("-", "_").replace(".", "_")
+    in_rate, out_rate = _ALIBABA_PRICE_USD_PER_1M.get(model, (0.0, 0.0))
+    in_rate = float(os.getenv(f"LLM_PRICE_{env_key}_IN_USD_PER_1M", in_rate))
+    out_rate = float(os.getenv(f"LLM_PRICE_{env_key}_OUT_USD_PER_1M", out_rate))
+    return in_rate, out_rate
+
+
+def _estimate_pre_call_cost(provider: str, model: str, system: str, user: str, max_tokens: int) -> tuple[int, float]:
+    input_estimate = budget_guard.estimate_tokens(system, user)
+    output_estimate = max(0, int(max_tokens or 0))
+    total_estimate = input_estimate + output_estimate
+    if provider == "alibaba":
+        in_rate, out_rate = _alibaba_rates(model)
+        cost_usd = input_estimate / 1_000_000 * in_rate + output_estimate / 1_000_000 * out_rate
+        return total_estimate, round(cost_usd * _USD_RUB, 4)
+    return total_estimate, round(total_estimate / 1000 * _RATE_RUB_PER_1K.get(provider, 0.5), 4)
+
+
+def _usage(provider: str, model: str, role: str, data: dict, *,
+           status: str = "ok", error_type: str | None = None) -> dict:
     u = data.get("usage", {}) or {}
     inp = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
     out = int(u.get("completion_tokens") or u.get("output_tokens") or 0)
     total = int(u.get("total_tokens") or (inp + out))
     cost_usd = 0.0
     if provider == "alibaba":
-        env_key = model.upper().replace("-", "_").replace(".", "_")
-        in_rate, out_rate = _ALIBABA_PRICE_USD_PER_1M.get(model, (0.0, 0.0))
-        in_rate = float(os.getenv(f"LLM_PRICE_{env_key}_IN_USD_PER_1M", in_rate))
-        out_rate = float(os.getenv(f"LLM_PRICE_{env_key}_OUT_USD_PER_1M", out_rate))
+        in_rate, out_rate = _alibaba_rates(model)
         cost_usd = inp / 1_000_000 * in_rate + out / 1_000_000 * out_rate
         cost = round(cost_usd * _USD_RUB, 4)
     else:
         cost = round(total / 1000 * _RATE_RUB_PER_1K.get(provider, 0.5), 4)
-    return {"provider": provider, "model": model, "role": role,
-            "input_tokens": inp, "output_tokens": out, "total_tokens": total,
-            "cost_usd": round(cost_usd, 6), "cost_rub": cost}
+    out_usage = {"provider": provider, "model": model, "role": role,
+                 "input_tokens": inp, "output_tokens": out, "total_tokens": total,
+                 "cost_usd": round(cost_usd, 6), "cost_rub": cost,
+                 "status": status}
+    if error_type:
+        out_usage["error_type"] = error_type
+    return out_usage
 
 
 async def call(role: str, system: str, user: str, *,
@@ -95,10 +118,16 @@ async def call(role: str, system: str, user: str, *,
     provider = PROVIDER
     model = model_for(role, provider)
     timeout = timeout or _TIMEOUT
+    est_tokens, est_cost_rub = _estimate_pre_call_cost(provider, model, system, user, max_tokens)
+    blocked, reason, ctx = budget_guard.should_block(role, est_tokens, est_cost_rub)
+    if blocked:
+        print(f"llm_client[{provider}/{role}]: budget skipped - {reason}")
+        return None, budget_guard.usage_for_block(provider, model, role, reason, ctx)
 
     if provider == "alibaba":
         if not _ALIBABA_KEY:
-            print("llm_client: ALIBABA_API_KEY не задан"); return None, _usage(provider, model, role, {})
+            print("llm_client: ALIBABA_API_KEY не задан")
+            return None, _usage(provider, model, role, {}, status="error", error_type="missing_api_key")
         url = _ALIBABA_URL
         headers = {"Authorization": f"Bearer {_ALIBABA_KEY}", "Content-Type": "application/json"}
         payload = {"model": model, "max_tokens": max_tokens,
@@ -107,7 +136,8 @@ async def call(role: str, system: str, user: str, *,
             payload["response_format"] = {"type": "json_object"}     # требует слово JSON в промпте
     else:  # yandex
         if not _YANDEX_KEY:
-            print("llm_client: YANDEX_API_KEY не задан"); return None, _usage(provider, model, role, {})
+            print("llm_client: YANDEX_API_KEY не задан")
+            return None, _usage(provider, model, role, {}, status="error", error_type="missing_api_key")
         url = _YANDEX_URL
         headers = {"Authorization": f"Api-Key {_YANDEX_KEY}", "Content-Type": "application/json"}
         payload = {"model": model, "max_tokens": max_tokens,
@@ -121,16 +151,19 @@ async def call(role: str, system: str, user: str, *,
                                   timeout=aiohttp.ClientTimeout(total=timeout)) as r:
                     if r.status == 429 or r.status >= 500:
                         last_err = f"HTTP {r.status}"
-                        await asyncio.sleep(min(2 ** attempt, 8)); continue
+                        await asyncio.sleep(min(2 ** attempt, 8))
+                        continue
                     if r.status != 200:
                         body = await r.text()
                         print(f"llm_client[{provider}/{role}]: HTTP {r.status} — {body[:200]}")
-                        return None, _usage(provider, model, role, {})
+                        return None, _usage(provider, model, role, {}, status="error", error_type=f"http_{r.status}")
                     data = await r.json()
             text = (data["choices"][0]["message"]["content"] or "").strip()
-            return (text or None), _usage(provider, model, role, data)
+            usage = _usage(provider, model, role, data)
+            budget_guard.record_usage(role, usage.get("total_tokens") or 0, usage.get("cost_rub") or 0.0)
+            return (text or None), usage
         except Exception as e:
             last_err = str(e)
             await asyncio.sleep(min(2 ** attempt, 8))
     print(f"llm_client[{provider}/{role}]: провал после ретраев — {last_err}")
-    return None, _usage(provider, model, role, {})
+    return None, _usage(provider, model, role, {}, status="error", error_type="retry_exhausted")

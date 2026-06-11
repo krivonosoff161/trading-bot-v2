@@ -147,6 +147,16 @@ async def process(event: dict, asset: str | None, layer: int, lead_class: str,
     if decision == "chief":
         ch = await chief_mod.decide(event, agent, price, market_ctx)
         out["chief_called"] = True
+        if ch and ch.get("_error") == "budget_skipped":
+            usage.append(ch.get("_usage", {}))
+            out["chief_error"] = False
+            out["retry_status"] = "chief_budget_skipped"
+            out["escalation_gate"] = "CHIEF_BUDGET_SKIPPED"
+            out["escalation_reason"] = "chief skipped by LLM budget guard"
+            out["verdict"] = "NO_GO"
+            out["side"] = "none"
+            out["send_channel"] = False
+            return out
         if ch:
             usage.append(ch.get("_usage", {}))
             out["chief"] = ch

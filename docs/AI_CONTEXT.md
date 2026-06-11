@@ -113,6 +113,7 @@ python -m src.scout.news_buffer ready --limit 5
 python src/scout/resolve_outcomes.py --report
 python src/scout/resolve_outcomes.py --limit 50
 python src/scout/source_quality_report.py
+python src/scout/llm_health_report.py --day 2026-06-11
 python -X utf8 src/scout/calibration_report.py
 python -m py_compile <file>
 ```
