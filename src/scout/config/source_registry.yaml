@@ -1,6 +1,11 @@
 # source_registry.yaml — КАРТА источников (единая правда «что куда»).
 # Поля: source_class · lead_class(LEADING/COINCIDENT/LAGGING) · trust · layers(какие кормит) ·
 #       phase_prior(realized/expected/mixed — приор было/будет) · keyless · enabled.
+# Онбординг-поля (эксперимент «один источник на слой», 11.06.2026):
+#   onboarding_status: candidate(на замере 24-48ч) / live / disabled / rejected / needs_key / needs_provider
+#   expected_body: direct_body / google_wrapper / api / manual_csv — что ждём от extract-стадии
+#   quality_notes / rate_limit_notes — на что смотреть в source_onboarding_report.
+# Роллбэк любого источника = enabled: false (следующий проход сканера его не читает).
 # lead_class — поле данных; правило в коде: GO+side только если ≥1 LEADING.
 # trust: official > primary > wire > aggregator > tg_alpha > tg_noise.
 # phase_prior: expected=календарь(будет) · realized=факт/филинг(произошло) · mixed=новостная лента.
@@ -92,9 +97,73 @@ sources:
   gdelt:             {source_class: api, lead_class: LAGGING,    trust: aggregator, phase_prior: realized, keyless: true, layers: [3, 4], enabled: false}   # металлы/геополитика, медленный recall
   telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, phase_prior: mixed,  keyless: false, layers: [1, 2], enabled: false}   # Telethon, нужен api_id трейдера
 
+  # ── ОНБОРДИНГ 11.06.2026 — эксперимент «ровно один источник на слой» ───────
+  # Замер 24-48ч → scripts/analysis/source_onboarding_report.py → keep/disable.
+  etf_flow:              # L1: дневные потоки спот-ETF (КОНТЕКСТ market_ctx, не карточки)
+    source_class: context          # не RSS-карточки: только строка фона для L1-кандидатов
+    lead_class: COINCIDENT
+    trust: manual
+    phase_prior: realized
+    keyless: true
+    layers: [1]
+    enabled: false                 # включить = enabled:true + вести data/scout/etf_flows.csv
+    provider: manual_csv
+    onboarding_status: needs_provider
+    expected_body: manual_csv
+    quality_notes: "слот под ежедневный CSV трейдера (date,ticker,asset,flow_usd_m,source); живой web-провайдер — после GO"
+    rate_limit_notes: "локальный файл, сети нет"
+
+  investing_commodities:           # L3: прямая commodities-лента (металлы; уход от google-обёрток)
+    url: "https://www.investing.com/rss/commodities.rss"
+    source_class: rss
+    lead_class: LAGGING
+    trust: wire
+    phase_prior: mixed
+    max_age_hours: 48
+    keyless: true
+    layers: [3]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: direct_body
+    quality_notes: "лента смешанная (металлы+нефть) — скоуп L3; сильные нефть-алиасы (OPEC/crude) восстановятся кросс-слойно в CL (cross_layer=true, видно в аудите), остальное в no_tracked; следить за full_body (Cloudflare может резать страницы статей)"
+    rate_limit_notes: "1 GET/проход (30 мин); RSS отвечал 200 под сканерным UA 11.06"
+
+  rigzone:                         # L4: прямая нефтегаз-лента (дополняет oilprice)
+    url: "https://www.rigzone.com/news/rss/rigzone_latest.aspx"
+    source_class: rss
+    lead_class: LAGGING
+    trust: wire
+    phase_prior: mixed
+    max_age_hours: 48
+    keyless: true
+    layers: [4]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: direct_body
+    quality_notes: "отраслевой wire (upstream/LNG/санкции); сравнить idio/full_body с oilprice за неделю"
+    rate_limit_notes: "1 GET/проход; RSS 200/20 items под сканерным UA 11.06"
+
+  globenewswire_public:            # L5: официальные пресс-релизы публичных компаний (IR-класс)
+    url: "https://www.globenewswire.com/RssFeed/orgclass/1/feedTitle/GlobeNewswire%20-%20News%20about%20Public%20Companies"
+    source_class: rss
+    lead_class: LAGGING
+    trust: primary
+    phase_prior: realized
+    max_age_hours: 48
+    keyless: true
+    layers: [5]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: direct_body
+    quality_notes: "первичка (company PR до пересказов); объём большой — роутер режет не-трекаемое ДО LLM (drops=дёшево); дополняет sec_edgar, не дублирует (PR≠филинг)"
+    rate_limit_notes: "1 GET/проход; RSS 200/20 items 11.06"
+
   # ── БУДЕТ (expected — КАЛЕНДАРИ) → наполняют pending_events (surprise-эдж) ─
   fred_calendar:     {source_class: api, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: false, layers: [1, 3], enabled: true}    # FOMC/CPI/jobs — free-key FRED
   eia:               {source_class: web, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: true,  layers: [4],    enabled: true}    # WPSR next release date from official EIA page
   opec:              {source_class: web, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: true,  layers: [4],    enabled: true}    # next OPEC/OPEC+ meeting from official press releases
   earnings_calendar: {source_class: api, lead_class: LEADING,    trust: official, phase_prior: expected, keyless: true,  layers: [5],    enabled: true}    # даты отчётов из SEC-linked company announcements
-  token_unlocks:     {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: false, layers: [2],    enabled: true}    # Tokenomist API key required
+  token_unlocks:     {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: expected, keyless: false, layers: [2],    enabled: true,
+                      onboarding_status: needs_key, expected_body: api,
+                      quality_notes: "кандидат L2 онбординга 11.06: без TOKENOMIST_API_KEY молчит честно (не фейкуем); dexscreener flow_metrics уже live как L2-улучшение",
+                      rate_limit_notes: "до 3 страниц API/проход при наличии ключа"}    # Tokenomist API key required
