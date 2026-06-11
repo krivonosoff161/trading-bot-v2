@@ -1,71 +1,168 @@
-# ARCHITECTURE - current project boundaries (updated 2026-06-10)
+# Architecture
 
-> Принцип: новая система = новая ЛОГИКА на ПОЛКЕ готовых утилит Main. Движок Main заморожен и отдельно.
-> Research-пила — в архив. Grounded на полной карте проекта (src/ + logs/ + utils проверены).
+Updated: 2026-06-11
 
-## Три ящика
+## Boundary
 
-### ❄️ FROZEN — торговый движок Main (off, НЕ трогать)
-- `src/strategy/signal.py`, `src/strategy/signal_engine.py` (65КБ монолит), `src/data/main_impulse_*.py`, `src/data/impulse_pump_*.py` — авто-трейд движки.
-- Статус: ЗАМОРОЖЕНО (направленный Main закрыт). Только чтение/референс.
+The project has two different contours:
 
-### 🟢 NEW - информационная система (активная разработка)
-**ЛОГИКА:** скауты (сбор инфополя), durable intake buffer, layer-агенты,
-кодовый оркестратор, chief-модель, outcome-resolver, разметка под ЛМ.
-**Дом:** `src/scout/` (отдельно от торгового движка и research-архива).
-**ПОЛКА (импорт из Main, НЕ дублировать):**
-| нужда | переиспользуем |
-|---|---|
-| доставка | `src/utils/telegram.py` (`send_message_to`, `send_photo_to`) |
-| логирование | `src/utils/logger.py` (loguru, `write_signal`) |
-| ЛМ-слой | `src/utils/llm_client.py` (Yandex/Alibaba, роли cheap/mid/chief/audit) + legacy `llm_formatter.py` |
-| конфиг | `src/config.py` |
-| данные OKX | `src/exchange/okx_client.py`, `src/data/ws_feed.py` |
-| индикаторы | `src/strategy/indicators.py` |
-**ХРАНЕНИЕ:**
-- `logs/scout/`: `scanner_journal.jsonl`, `ingest_log.jsonl`, `drops.jsonl`,
-  `llm_budget.jsonl`, `scanner_outcomes.jsonl`, `scanner_seen.json`;
-- `data/scout/news_buffer.sqlite`: SQLite intake buffer для raw/extracted/normalized news;
-- разметка под ЛМ: журнал решений + исходы LONG/SHORT как база будущего обучения.
+1. **Active contour:** `src/scout/` information-edge scanner.
+2. **Frozen/reference contour:** old WebSocket Main/TA and paper engines.
 
-**Текущий scanner pipeline:**
+The scanner is the current product/research direction. Main/TA is not the source
+of trade intent anymore. It may only confirm, invalidate, visualize, or risk-check
+scanner-led candidates.
+
+No current path may place orders from scanner output.
+
+## Current Active Flow
 
 ```text
-RSS/listings -> router/materiality/dedup/temporal
-  -> layer_agent cheap -> orchestrator rules -> chief strong
-  -> Telegram chief-card -> scanner_journal.jsonl
-  -> resolve_outcomes.py
+sources
+  -> data/scout/news_buffer.sqlite
+  -> machine_docs / normalized_events
+  -> asset/layer router
+  -> cheap layer agent
+  -> orchestrator code gate
+  -> chief model for selected candidates
+  -> logs/scout/scanner_journal.jsonl
+  -> logs/scout/watch_queue.jsonl
+  -> setup_confirmation engine
+  -> future paper confirmation journal
 ```
 
-**Buffer pipeline (default в scanner.bat):**
+The scanner can send `GO/WATCH` cards to Telegram, but those are paper research
+cards, not trade instructions.
+
+## Scanner Components
+
+| Component | File(s) | Role |
+|---|---|---|
+| Intake buffer | `src/scout/news_buffer.py` | Durable raw/extracted/normalized news state |
+| Source registry | `src/scout/config/source_registry.yaml` | Source layer, trust, onboarding status, rollback |
+| Router | `src/scout/router.py` | Asset/layer/baseline/source routing |
+| Cheap layer agent | `src/scout/agents/layer_agent.py` | Structured first-pass extraction |
+| Orchestrator | `src/scout/agents/orchestrator.py` | Deterministic escalation and safety gates |
+| Chief | `src/scout/agents/chief.py` | Final candidate judgment |
+| Journal | `src/scout/scanner_journal.py` | Append-only decision rows |
+| Structured records | `src/scout/scanner_records.py` | Event/reasoning/training/memory blocks |
+| Outcomes | `src/scout/resolve_outcomes.py` | Forward MFE/MAE, side-aware scoring, baseline/excess |
+| Reports | `src/scout/*_report.py`, `scripts/analysis/*report.py` | Calibration, source quality, onboarding, deep audit |
+| Watch queue | `src/scout/watch_queue.py` | `WATCH/GO` queue for later TA confirmation |
+
+## Source Onboarding
+
+The current source policy is deliberately conservative:
 
 ```text
-source item -> raw_items -> machine_docs -> normalized_events -> READY_FOR_AGENT
+one source per layer
+  -> run 24-48h
+  -> measure body quality, cards, chief cost, outcomes
+  -> keep / observe / disable
 ```
 
-Стабильный запуск `scanner.bat` идет через `scanner_v0.py --buffer --limit N`.
-Режим `scanner_v0.py --buffer --limit 0` используется для ingest/extract/normalize smoke
-без LLM/Telegram. Старый прямой путь оставлен в bat как fallback через `USE_BUFFER=0`.
+Current source onboarding state:
 
-### 📦 ARCHIVE — отработанный research (архив-на-месте)
-- `scripts/analysis/research/` — ~95 закрытых скриптов (Main-investigation + strategy-hunt). Артефакты, держим; активные скауты переезжают в 🟢.
+| Layer | Source | State |
+|---|---|---|
+| L1 | `etf_flow` | Disabled context slot; needs provider or manual CSV |
+| L2 | `token_unlocks` | Configured but needs `TOKENOMIST_API_KEY`; DexScreener quality is live context |
+| L3 | `investing_commodities` | Candidate direct source |
+| L4 | `rigzone` | Candidate direct source |
+| L5 | `globenewswire_public` | Candidate direct company/IR source |
 
-## Пересборка дерева (обдуманно, по батчам, тест после каждого)
-1. `src/scout/` создан и является активным домом scanner.
-2. Агентная машинерия собрана: `agents/layer_agent.py`, `agents/orchestrator.py`, `agents/chief.py`.
-3. Единый LLM-клиент собран: `src/utils/llm_client.py`, Alibaba включается через `.env`.
-4. Журнал scanner и outcome-resolver работают.
-5. SQLite intake buffer добавлен и включен в bat по умолчанию.
-6. L3/L4 получили источники и OKX baselines: FRED/EIA/OPEC/OilPrice + XAU/CL price-path.
-7. Первый calibration/hygiene pass сделан: Telegram gate `GO/WATCH` по умолчанию,
-   bounded outcome resolver, layer-aware cards, and `calibration_report.py`.
-   Текущий архитектурный шаг - наблюдать свежий поток и калибровать thresholds
-   source/layer/phase по данным.
-8. Следующий design-шаг после калибровки - `MARKET_CONTEXT/WATCH_MARKET` для
-   макро-заголовков без единого актива. `main_event_engine` не строить до
-   подтверждения на данных.
+Rollback is one line: set `enabled: false` for a source in
+`src/scout/config/source_registry.yaml`.
 
-## Граница
-- Движок `src/strategy/*`, `src/data/{main_impulse,impulse_pump}_*` — НЕ трогать.
-- `.env`/`AUTO_TRADE`/`config.yaml` прод-секции — НЕ трогать.
-- Перемещения — только после явного GO трейдера, по одному батчу, с тестом импортов.
+## Scanner To TA Confirmation
+
+The bridge exists, but it is still paper/read-only:
+
+```text
+scanner_journal WATCH/GO
+  -> watch_queue.jsonl
+  -> setup_confirmation.confirm_setup(watch, SignalResult)
+  -> status only
+```
+
+Allowed statuses:
+
+- `WATCH_CONTINUE`
+- `SETUP_FORMING`
+- `TRADE_PLAN_READY`
+- `INVALIDATED`
+- `EXPIRED`
+- `NEEDS_DATA`
+
+Important invariants:
+
+- `NO_GO` does not enter `watch_queue`.
+- `watch_queue` rows have `execution_allowed=false`.
+- `TRADE_PLAN_READY` is paper-only and also has `execution_allowed=false`.
+- A future runner may write confirmation results, but must not call order
+  execution.
+
+## Main/TA Role
+
+Old Main/TA research showed that the directed 15m Main is not a durable primary
+signal. It can still provide useful market structure.
+
+Allowed use:
+
+- confirm scanner side with current market structure;
+- invalidate scanner thesis when technical side conflicts;
+- produce paper levels for analysis;
+- provide chart/indicator context;
+- classify `SETUP_FORMING` vs `WATCH_CONTINUE`;
+- support later extended Telegram analysis.
+
+Forbidden use:
+
+- old `ENTRY` becoming a live order;
+- old Main/TA originating trades without scanner event context;
+- scanner calling old client text/entry formatters as a trade signal;
+- any automatic execution from `watch_queue` or `setup_confirmation`.
+
+## Frozen/Reference Code
+
+These files are reference unless a task explicitly says otherwise:
+
+- `src/strategy/signal.py`
+- `src/strategy/signal_engine.py`
+- `scripts/ws/ws_main_screener.py`
+- `src/data/main_impulse_*.py`
+- `src/data/impulse_pump_*.py`
+- old `scripts/analysis/research/` experiments
+
+Safe reuse from frozen code:
+
+- `src/strategy/indicators.py`
+- `src/strategy/chart_renderer.py`
+- `src/strategy/signal_contract.py`
+- `build_analysis_snapshot()` as read-only context
+- OKX market-data utilities
+
+## Operational Commands
+
+Scanner:
+
+```bash
+python -u src\scout\scanner_v0.py --buffer --limit 5
+python -m src.scout.news_buffer stats
+python src/scout/resolve_outcomes.py --limit 50
+```
+
+Reports:
+
+```bash
+python src/scout/source_quality_report.py
+python src/scout/chief_usage_report.py
+python scripts/analysis/source_onboarding_report.py
+python scripts/analysis/build_watch_queue.py --dry-run
+```
+
+Focused checks:
+
+```bash
+python -m pytest tests/test_source_onboarding.py tests/test_watch_queue.py tests/test_setup_confirmation.py tests/test_build_watch_queue.py -q
+```

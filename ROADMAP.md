@@ -1,13 +1,14 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-06-10
+Updated: 2026-06-11
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
 
-The active project is an **info-edge scanner** for market events, not an
+The active project is an **info-edge scanner** for market events, plus a
+paper-only confirmation bridge toward technical analysis. It is not an
 auto-trading bot.
 
 The scanner should:
@@ -19,6 +20,7 @@ The scanner should:
 - measure outcomes against baselines;
 - learn which sources, filters and event families are useful;
 - surface only high-value `GO` / `WATCH` cards to Telegram.
+- queue `WATCH/GO` events for later TA confirmation without allowing execution.
 
 The current scanner is useful as a data and decision journal, but it is not yet a
 calibrated trading engine.
@@ -45,16 +47,34 @@ Done:
   - cards are layer-aware and verdict-specific;
   - `resolve_outcomes.py --limit N` prevents long silent backlogs;
   - `calibration_report.py` measures missed `NO_GO` by useful dimensions.
+- Deep audit pass added scanner diagnostics and exposed the bad RED_FLAG
+  over-escalation path.
+- P0 scanner stabilization is implemented:
+  - true `veto_flags` are separated from `no_edge_flags`;
+  - chief errors retry visibly instead of silently becoming ordinary `NO_GO`;
+  - outcome scoring is side-aware and marks beta-blind cases.
+- P1 ingestion stabilization is implemented:
+  - SEC EDGAR primary filing extraction;
+  - Google News resolver throttling/backoff;
+  - source-quality body/outcome metrics.
+- Source onboarding is active:
+  - one candidate source per layer;
+  - `source_onboarding_report.py`;
+  - quick rollback through `enabled: false`.
+- Scanner-to-TA bridge v0 is implemented:
+  - `watch_queue.jsonl` for `WATCH/GO`;
+  - `setup_confirmation.confirm_setup()` status classifier;
+  - paper-only invariant `execution_allowed=false`.
 
 Known current problems:
 
-- The scanner is over-conservative: too many cards end as `NO_GO`.
-- Some `NO_GO` cards are followed by real movement, so filters and prompts are not
-  calibrated yet.
-- New Telegram/card behavior needs live observation to ensure `WATCH` does not
-  become spam.
-- Calibration reports must be compared after fresh outcomes accumulate.
-- Macro/context headlines without one clean asset need a separate context path.
+- Fresh data is needed to verify that the veto/no-edge split reduces chief-rate
+  without increasing missed idiosyncratic moves.
+- Candidate sources need 24-48h measurement before keep/disable decisions.
+- Per-asset `WATCH` synthesis is still missing; oil/energy can produce conflicting
+  `WATCH` cards in both directions.
+- `watch_queue` exists, but no runner consumes it and writes confirmation results.
+- Macro/context headlines without one clean asset still need a separate context path.
 
 ## Near-Term Roadmap
 
@@ -77,6 +97,9 @@ Tasks:
   - missed `NO_GO` by chief-called / low-confidence;
 - next: run the new behavior for several sessions and compare fresh reports;
 - next: tune source/layer thresholds from evidence.
+- done: separate true veto risk from no-edge/no-specificity reasons;
+- done: add chief-error retry and visible unavailable state;
+- done: side-aware outcome semantics and beta-blind marking.
 
 Exit criteria:
 
@@ -103,6 +126,27 @@ Exit criteria:
 - no-single-asset headlines have a clean destination;
 - context can be measured later without polluting trade candidates.
 
+### v0.7a - Scanner To TA Confirmation Contract
+
+Goal: connect scanner watches to technical confirmation without reviving old Main
+as a primary signal or creating any execution path.
+
+Tasks:
+
+- document the scanner-to-TA contract;
+- backfill current `WATCH/GO` journal rows into `watch_queue`;
+- add a paper-only runner that reads open watches and creates market/TA snapshots;
+- call `confirm_setup()` and write a confirmation journal;
+- keep `execution_allowed=false` through the entire path;
+- keep old `ENTRY` signals from becoming orders or standalone trade signals.
+
+Exit criteria:
+
+- `WATCH/GO` rows can be classified as `WATCH_CONTINUE`, `SETUP_FORMING`,
+  `TRADE_PLAN_READY`, `INVALIDATED`, `EXPIRED`, or `NEEDS_DATA`;
+- every result is paper-only and auditable;
+- no order path, Telegram execution path, or `AUTO_TRADE` path is touched.
+
 ### v0.8 - Source Quality And Intake Discipline
 
 Goal: identify which sources deserve tokens and attention.
@@ -110,6 +154,7 @@ Goal: identify which sources deserve tokens and attention.
 Tasks:
 
 - refine source-quality dashboard/reporting;
+- run `source_onboarding_report.py` after 24-48h of new candidate sources;
 - compare RSS/aggregator/official/native feeds;
 - identify sources that are mostly late recaps;
 - identify sources that produce real watch candidates;
@@ -119,6 +164,7 @@ Exit criteria:
 
 - clear source ranking by layer;
 - explicit keep / reduce / park decisions for each active source family.
+- source candidates can be disabled quickly through registry config.
 
 ### v0.9 - Surprise And Pending Events
 
@@ -154,11 +200,11 @@ These are intentionally not current work:
 
 - live auto-trading;
 - real-money execution;
-- a new `main_event_engine`;
+- a new execution-oriented `main_event_engine`;
 - full GUI/SaaS wrapper;
 - paid data integrations;
 - Telegram account listener / Telethon production feed;
 - broad multi-agent market-debate platform.
 
-They may become relevant only after the scanner proves source quality and forward
-measurement discipline.
+They may become relevant only after the scanner proves source quality, forward
+measurement discipline, and paper-only TA confirmation quality.

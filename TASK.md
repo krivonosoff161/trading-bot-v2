@@ -1,13 +1,19 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-06-08
+Updated: 2026-06-11
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
 
 ## Current State
 
-Scanner is running after the recall fixes.
+Scanner is running after recall, stabilization, source-onboarding, and
+watch-queue bridge fixes.
+
+This file is local handoff context, not the canonical architecture. For current
+truth read `CURRENT_STATE.md`, `ARCHITECTURE.md`,
+`docs/scanner_ta_confirmation_contract.md`, and
+`docs/main_research_verdict_index.md`.
 
 Committed baseline before this handoff:
 
@@ -17,7 +23,7 @@ Committed baseline before this handoff:
 - `e43040c` - HYPE and WLD coverage
 - `1ccbb0b` - propagate `cross_layer` through buffer pipeline
 
-Do not build `main_event_engine` yet.
+Do not build an execution-oriented `main_event_engine` yet.
 
 ## What Stage 0 Proved
 
@@ -87,7 +93,7 @@ python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py test
 
 Do not create a sixth agent/process yet.
 
-The next design item is a passive macro/context class:
+The next design item used to be a passive macro/context class:
 
 ```text
 MARKET_CONTEXT / WATCH_MARKET
@@ -107,6 +113,24 @@ Open design questions:
 - How to map contexts to affected assets without polluting trade candidates?
 - How to measure context usefulness later?
 
+## Current Bridge State
+
+Implemented:
+
+- `src/scout/watch_queue.py` queues only `WATCH/GO`; `NO_GO` is excluded.
+- `src/strategy/setup_confirmation.py` classifies scanner watches against a
+  `SignalResult`-like object.
+- `TRADE_PLAN_READY` is paper-only and keeps `execution_allowed=false`.
+- `scripts/analysis/build_watch_queue.py --dry-run` shows how many existing
+  journal rows are eligible.
+
+Still missing:
+
+- a paper-only runner that consumes open watches and writes confirmation results;
+- per-asset `WATCH` synthesis;
+- extended Telegram analysis by button/command;
+- fresh 24-48h source onboarding measurements.
+
 ## Hard Constraints
 
 - Python only.
@@ -114,7 +138,8 @@ Open design questions:
 - No new services.
 - Do not expand model-provider routing.
 - Use existing `src/utils/llm_client.py`.
-- No chart rendering in scanner.
+- Chart rendering is allowed only as visual context, not as a decision or
+  execution trigger.
 - Do not revive old `main_impulse_engine`.
 - Do not reuse old signal logic blindly.
 - Do not touch live order / auto-trade paths.
