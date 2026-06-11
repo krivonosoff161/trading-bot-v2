@@ -134,8 +134,11 @@ def _backup_and_remove(path: Path) -> None:
 
 
 def score(verdict: str, side: str, ret: float, mfe_long: float | None, mae_long: float | None) -> bool | None:
-    """Правильна ли карточка (обе стороны + амплитуда хода). None = не скорим бинарно."""
-    if verdict == "GO":
+    """Правильна ли карточка (обе стороны + амплитуда хода). None = не скорим бинарно.
+
+    Аудит 11.06: WATCH со стороной скорится side-aware (раньше все WATCH = None/0%,
+    BTC-squeeze +4.3% считался промахом). WATCH side=none = movement-watch, не направленный."""
+    if verdict == "GO" or (verdict == "WATCH" and side in ("long", "short")):
         if side == "long":
             return ret > 0
         if side == "short":
@@ -145,7 +148,7 @@ def score(verdict: str, side: str, ret: float, mfe_long: float | None, mae_long:
         # «не лезь» правильно, если НЕ упустили крупный ход НИ В ОДНУ сторону (по mfe/mae)
         big = max(abs(mfe_long or 0.0), abs(mae_long or 0.0))
         return big < NO_GO_FLAT_PCT
-    return None  # WATCH = информационный
+    return None  # WATCH side=none = информационный (movement-watch)
 
 
 def _candidates(rows: list[dict], done: set[str], now: dt.datetime) -> tuple[list[dict], int]:
@@ -238,23 +241,32 @@ def resolve(limit: int | None = None) -> None:
             outcome_long, outcome_short = round(ret, 3), round(-ret, 3)   # P&L каждой стороны
 
             bsym = bsym or "BTC-USDT-SWAP"
-            bkey = (bsym, t0_ms, t_end_ms)   # cache per (symbol, window), НЕ только символ — иначе чужое окно
-            if bkey not in baseline_cache:
-                baseline_cache[bkey] = fetch_path(bsym, t0_ms, t_end_ms)
-            baseline_path = baseline_cache[bkey]
-            b_final = baseline_path[-1][3] if baseline_path else okx_last(bsym)
-            baseline = ((b_final / btc0 - 1.0) * 100.0) if (b_final and btc0) else None
-            excess = (ret - baseline) if baseline is not None else None
+            # beta_blind: актив сам себе baseline (BTC/CL/XAU…) → excess≡0 by construction,
+            # idio для него НЕ существует — excess не пишем (None), а не пишем фиктивный 0
+            beta_blind = bool(inst and bsym and inst == bsym)
+            if beta_blind:
+                baseline, excess = ret, None
+            else:
+                bkey = (bsym, t0_ms, t_end_ms)   # cache per (symbol, window), НЕ только символ — иначе чужое окно
+                if bkey not in baseline_cache:
+                    baseline_cache[bkey] = fetch_path(bsym, t0_ms, t_end_ms)
+                baseline_path = baseline_cache[bkey]
+                b_final = baseline_path[-1][3] if baseline_path else okx_last(bsym)
+                baseline = ((b_final / btc0 - 1.0) * 100.0) if (b_final and btc0) else None
+                excess = (ret - baseline) if baseline is not None else None
 
-            correct = score(r.get("verdict", ""), r.get("side", "none"), ret, mfe_long, mae_long)
+            verdict_j, side_j = r.get("verdict", ""), r.get("side", "none")
+            correct = score(verdict_j, side_j, ret, mfe_long, mae_long)
             big = max(abs(mfe_long or 0.0), abs(mae_long or 0.0))
-            volatility_missed = (r.get("verdict") == "NO_GO" and big >= NO_GO_FLAT_PCT)
-            directional_missed = (r.get("verdict") == "NO_GO" and abs(ret) >= NO_GO_FLAT_PCT)
+            volatility_missed = (verdict_j == "NO_GO" and big >= NO_GO_FLAT_PCT)
+            directional_missed = (verdict_j == "NO_GO" and abs(ret) >= NO_GO_FLAT_PCT)
             missed = volatility_missed   # backward-compatible field
+            watch_kind = (("directional" if side_j in ("long", "short") else "movement")
+                          if verdict_j == "WATCH" else None)
 
             rec = {
                 "card_id": cid, "resolved_ts": now_iso(), "scored": True,
-                "verdict": r.get("verdict"), "side": r.get("side"), "asset": r.get("asset"),
+                "verdict": verdict_j, "side": side_j, "asset": r.get("asset"),
                 "price_at_decision": p0, "price_final": round(price_final, 6),
                 "ret_pct": round(ret, 3), "outcome_long_pct": outcome_long, "outcome_short_pct": outcome_short,
                 "mfe_long_pct": round(mfe_long, 3) if mfe_long is not None else None,
@@ -262,6 +274,9 @@ def resolve(limit: int | None = None) -> None:
                 "price_after": price_after,
                 "baseline_ret_pct": round(baseline, 3) if baseline is not None else None,
                 "excess_pct": round(excess, 3) if excess is not None else None,
+                "beta_blind": beta_blind,
+                "watch_kind": watch_kind,
+                "movement_observed": (big >= NO_GO_FLAT_PCT) if watch_kind == "movement" else None,
                 "verdict_correct": correct, "missed_move": missed,
                 "volatility_missed_move": volatility_missed,
                 "directional_missed_move": directional_missed,
@@ -321,6 +336,13 @@ def report() -> None:
         ex = _avg([o["excess_pct"] for o in lst if o.get("excess_pct") is not None])
         miss = sum(1 for o in lst if o.get("missed_move"))
         print(f"  {v:<8} {n:<3} {wr:<8} {lo:<7} {sh:<7} {ex:<8} {miss}")
+
+    scored_rows = [o for o in orows if o.get("scored")]
+    bb = sum(1 for o in scored_rows if o.get("beta_blind"))
+    w_dir = sum(1 for o in scored_rows if o.get("watch_kind") == "directional")
+    w_mov = sum(1 for o in scored_rows if o.get("watch_kind") == "movement")
+    print(f"\nbeta_blind (актив=своему baseline, idio не определён): {bb}/{len(scored_rows)}"
+          f" · WATCH directional={w_dir} / movement={w_mov}")
 
     print("\nNO_GO thresholds: directional=|final ret|, volatility=max(|MFE|,|MAE|)")
     no_go = [o for o in orows if o.get("scored") and o.get("verdict") == "NO_GO"]

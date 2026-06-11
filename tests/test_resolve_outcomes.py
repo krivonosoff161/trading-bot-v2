@@ -82,3 +82,68 @@ def test_resolve_no_limit_default_processes_all(tmp_path, monkeypatch):
     journal.write_text("\n".join(json.dumps(_row(f"c{i}")) for i in range(3)) + "\n", encoding="utf-8")
     RO.resolve()
     assert len(_written(outcomes)) == 3
+
+
+# ── семантика скоринга (аудит 11.06): beta_blind + side-aware WATCH ──────────
+def test_self_baseline_sets_beta_blind_and_null_excess(tmp_path, monkeypatch):
+    journal, outcomes = _patch_paths_and_net(tmp_path, monkeypatch)
+    journal.write_text(json.dumps(_row("btc1")) + "\n", encoding="utf-8")   # BTC vs BTC
+    RO.resolve()
+    rec = _written(outcomes)[0]
+    assert rec["beta_blind"] is True
+    assert rec["excess_pct"] is None             # idio≡0 by construction → не пишем фиктивный 0
+    assert rec["baseline_ret_pct"] == rec["ret_pct"]
+
+
+def test_distinct_baseline_keeps_excess(tmp_path, monkeypatch):
+    journal, outcomes = _patch_paths_and_net(tmp_path, monkeypatch)
+    row = {**_row("eth1"), "asset": "ETH", "okx_inst": "ETH-USDT-SWAP",
+           "baseline_symbol": "BTC-USDT-SWAP"}
+    journal.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    RO.resolve()
+    rec = _written(outcomes)[0]
+    assert rec["beta_blind"] is False
+    assert rec["excess_pct"] is not None
+
+
+def _watch_row(cid, side, **kw):
+    row = {**_row(cid), "verdict": "WATCH", "side": side,
+           "asset": "ETH", "okx_inst": "ETH-USDT-SWAP", "baseline_symbol": "BTC-USDT-SWAP"}
+    row.update(kw)
+    return row
+
+
+def test_watch_long_positive_move_is_correct(tmp_path, monkeypatch):
+    journal, outcomes = _patch_paths_and_net(tmp_path, monkeypatch)   # путь даёт ret +1%
+    journal.write_text(json.dumps(_watch_row("w1", "long")) + "\n", encoding="utf-8")
+    RO.resolve()
+    rec = _written(outcomes)[0]
+    assert rec["watch_kind"] == "directional"
+    assert rec["verdict_correct"] is True        # раньше WATCH всегда None → correct 0%
+
+
+def test_watch_short_negative_move_is_correct(tmp_path, monkeypatch):
+    journal, outcomes = _patch_paths_and_net(tmp_path, monkeypatch)
+
+    def falling(inst, t0_ms, t_end_ms, bar="1H"):
+        return [(t0_ms, 101.0, 98.0, 100.0), (t_end_ms, 100.0, 97.0, 98.0)]   # ret −2%
+    monkeypatch.setattr(RO, "fetch_path", falling)
+    journal.write_text(json.dumps(_watch_row("w2", "short")) + "\n", encoding="utf-8")
+    RO.resolve()
+    rec = _written(outcomes)[0]
+    assert rec["verdict_correct"] is True
+    assert rec["watch_kind"] == "directional"
+
+
+def test_watch_none_is_movement_watch_not_directional(tmp_path, monkeypatch):
+    journal, outcomes = _patch_paths_and_net(tmp_path, monkeypatch)
+
+    def big_move(inst, t0_ms, t_end_ms, bar="1H"):
+        return [(t0_ms, 106.0, 99.0, 100.0), (t_end_ms, 107.0, 100.0, 105.0)]  # ход +5%
+    monkeypatch.setattr(RO, "fetch_path", big_move)
+    journal.write_text(json.dumps(_watch_row("w3", "none")) + "\n", encoding="utf-8")
+    RO.resolve()
+    rec = _written(outcomes)[0]
+    assert rec["watch_kind"] == "movement"
+    assert rec["verdict_correct"] is None        # не направленный успех/провал
+    assert rec["movement_observed"] is True
