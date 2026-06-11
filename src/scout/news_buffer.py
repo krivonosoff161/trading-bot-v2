@@ -28,6 +28,7 @@ if str(_ROOT) not in sys.path:
 from src.scout import google_news_url as GN  # noqa: E402
 from src.scout import page_extract  # noqa: E402
 from src.scout.dedup import event_key as make_event_key  # noqa: E402
+from src.scout.sources import sec_edgar as SEC  # noqa: E402
 from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality, source_meta  # noqa: E402
 
 DB_PATH = _ROOT / "data" / "scout" / "news_buffer.sqlite"
@@ -305,8 +306,24 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
             error = None
             fetch_url = url
             gn_original = None     # обёртка Google, если реальный URL раскрыт
+            sec_meta = None        # структурные метаданные филинга SEC
 
-            if not dry and url and len(text) < 500 and not raw.get("asset"):
+            # SEC-филинги pre-routed (asset задан) → общая ветка их пропускала, доки
+            # оставались title_only по 21-43 символа (аудит 11.06). Отдельная экстракция:
+            # index-страница → primary document → текст + CIK/форма/accession/exhibits.
+            is_sec_filing = (row["source_id"] == "sec_edgar"
+                             or "sec.gov/archives/" in (url or "").lower())
+            if not dry and url and is_sec_filing and len(text) < 500:
+                filing = SEC.extract_filing(url)
+                if filing and filing.get("text"):
+                    text = filing["text"].strip()
+                    ext_title = filing.get("title") or ext_title
+                    method = "sec_primary_doc"
+                    status = "ok" if len(text) >= 500 else "partial"
+                    sec_meta = filing.get("metadata")
+                else:
+                    error = "sec_extract_failed"   # честный фолбэк = title_only
+            elif not dry and url and len(text) < 500 and not raw.get("asset"):
                 if GN.is_google_news_url(url):
                     real = GN.decode_google_news_url(url) or GN.resolve_google_news_url(url)
                     if real:
@@ -369,7 +386,8 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
                     quality,
                     len(text),
                     _content_hash(text),
-                    _json({"error": error, "source_url": fetch_url, "google_news_url": gn_original}),
+                    _json({"error": error, "source_url": fetch_url, "google_news_url": gn_original,
+                           **({"sec_filing": sec_meta} if sec_meta else {})}),
                     ts,
                     ts,
                 ),
@@ -677,6 +695,66 @@ def decode_google_backfill(path: Path = DB_PATH, apply: bool = False,
     return c
 
 
+def sec_reextract(limit: int = 20, path: Path = DB_PATH, apply: bool = False,
+                  fetch=None) -> dict:
+    """Пере-экстракция SEC-доков, застрявших title_only (аудит 11.06: 9/9 по 21-43 симв).
+
+    Дефолт = dry-run (только счёт + сэмплы); --apply пишет machine_docs. Хорошие доки
+    (sec_primary_doc с телом) не трогаем. Статусы raw_items НЕ меняются — уже
+    ANALYZED-карточки не пере-кардятся, выигрывает датасет и будущие решения."""
+    init_db(path)
+    c = {"checked": 0, "candidates": 0, "extracted": 0, "failed": 0,
+         "skipped_good": 0, "applied": bool(apply)}
+    samples: list[dict] = []
+    ts = now_iso()
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT r.doc_id, r.url, m.extraction_method, m.text_len, m.metadata_json
+            FROM raw_items r JOIN machine_docs m ON m.doc_id = r.doc_id
+            WHERE r.source_id='sec_edgar'
+            ORDER BY r.fetched_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        for row in rows:
+            c["checked"] += 1
+            if row["extraction_method"] == "sec_primary_doc" and int(row["text_len"] or 0) >= 300:
+                c["skipped_good"] += 1
+                continue
+            c["candidates"] += 1
+            filing = SEC.extract_filing(row["url"], fetch=fetch)
+            if not filing or not filing.get("text"):
+                c["failed"] += 1
+                continue
+            text = filing["text"].strip()
+            c["extracted"] += 1
+            if len(samples) < 10:
+                samples.append({"doc_id": row["doc_id"], "title": filing.get("title"),
+                                "before_len": int(row["text_len"] or 0), "after_len": len(text)})
+            if apply:
+                quality = 0.9 if len(text) >= 1200 else 0.6 if len(text) >= 300 else 0.25
+                try:
+                    meta = json.loads(row["metadata_json"] or "{}")
+                except Exception:
+                    meta = {}
+                meta["sec_filing"] = filing.get("metadata")
+                conn.execute(
+                    """
+                    UPDATE machine_docs
+                    SET title=?, text=?, extraction_method='sec_primary_doc',
+                        extraction_status=?, extraction_quality=?, text_len=?,
+                        content_hash=?, metadata_json=?, updated_at=?
+                    WHERE doc_id=?
+                    """,
+                    (filing.get("title"), text, "ok" if len(text) >= 500 else "partial",
+                     quality, len(text), _content_hash(text), _json(meta), ts, row["doc_id"]),
+                )
+    c["samples"] = samples
+    return c
+
+
 def stats(path: Path = DB_PATH) -> dict:
     init_db(path)
     with connect(path) as conn:
@@ -730,6 +808,10 @@ def main() -> None:
     p_ready.add_argument("--limit", type=int, default=20)
     p_show = sub.add_parser("show")
     p_show.add_argument("doc_id")
+    p_sec = sub.add_parser("sec-reextract", help="пере-экстракция SEC title_only доков (дефолт dry-run)")
+    p_sec.add_argument("--limit", type=int, default=20)
+    p_sec.add_argument("--apply", action="store_true", help="записать (иначе dry-run)")
+    p_sec.add_argument("--db", default=str(DB_PATH))
     p_dg = sub.add_parser("decode-google", help="бэкфил google-обёрток (дефолт dry-run)")
     p_dg.add_argument("--dry-run", action="store_true", help="явный dry-run (это поведение по умолчанию)")
     p_dg.add_argument("--apply", action="store_true", help="применить (иначе dry-run)")
@@ -751,6 +833,8 @@ def main() -> None:
         _print_json(ready_items(args.limit))
     elif args.cmd == "show":
         _print_json(show(args.doc_id) or {"error": "not_found", "doc_id": args.doc_id})
+    elif args.cmd == "sec-reextract":
+        _print_json(sec_reextract(args.limit, Path(args.db), apply=args.apply))
     elif args.cmd == "decode-google":
         if args.apply and args.dry_run:
             ap.error("decode-google: --dry-run and --apply are mutually exclusive")
