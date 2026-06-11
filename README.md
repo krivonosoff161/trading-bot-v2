@@ -21,8 +21,9 @@ The project has two separate contours:
 The active scanner is being calibrated. It already writes a useful dataset, and
 the first hygiene pass is in place: `NO_GO` stays in logs by default, while only
 `GO` / `WATCH` chief cards are sent to Telegram unless `SCANNER_SEND_NO_GO=true`
-is explicitly enabled. The next work is measuring whether the new chief prompt
-and calibration reports reduce missed `NO_GO` without turning `WATCH` into spam.
+is explicitly enabled. The current bridge writes `WATCH` / `GO` rows into a
+paper-only watch queue for later technical confirmation. Main/TA is confirmation
+and risk context only, not the source of trade intent.
 
 ## What Exists Today
 
@@ -62,6 +63,11 @@ Implemented pieces:
 - Source-quality reporting and routing audit records for calibration work.
 - `src/scout/calibration_report.py` for missed-`NO_GO` analysis by source, layer,
   asset, phase, lead class, chief-called and low-confidence status.
+- `logs/scout/watch_queue.jsonl` for `WATCH` / `GO` rows that need later
+  technical confirmation.
+- `src/strategy/setup_confirmation.py` for paper-only confirmation statuses:
+  `WATCH_CONTINUE`, `SETUP_FORMING`, `TRADE_PLAN_READY`, `INVALIDATED`,
+  `EXPIRED`, `NEEDS_DATA`.
 
 ### Frozen trading contour
 
@@ -130,6 +136,9 @@ python -m src.scout.news_buffer normalize --limit 100
 python src/scout/resolve_outcomes.py --report
 python src/scout/resolve_outcomes.py --limit 50
 python src/scout/source_quality_report.py
+python src/scout/chief_usage_report.py
+python scripts/analysis/source_onboarding_report.py
+python scripts/analysis/build_watch_queue.py --dry-run
 python -X utf8 src/scout/calibration_report.py
 ```
 
@@ -170,6 +179,9 @@ Read these first:
 - [ARCHITECTURE.md](ARCHITECTURE.md) - current project boundaries.
 - [ROADMAP.md](ROADMAP.md) - current development sequence.
 - [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design and as-built notes.
+- [docs/scanner_source_onboarding_2026-06-11.md](docs/scanner_source_onboarding_2026-06-11.md) - current one-source-per-layer experiment.
+- [docs/scanner_ta_confirmation_contract.md](docs/scanner_ta_confirmation_contract.md) - scanner-to-TA bridge contract.
+- [docs/main_research_verdict_index.md](docs/main_research_verdict_index.md) - why old Main/TA is confirmation-only.
 - [TASK.md](TASK.md) - local handoff between agents.
 - [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) - context for remote coding agents.
 - [docs/REMOTE_DATA_MANIFEST.md](docs/REMOTE_DATA_MANIFEST.md) - ignored local data map.

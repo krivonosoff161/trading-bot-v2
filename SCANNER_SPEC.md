@@ -1,11 +1,12 @@
 # SCANNER — specification and as-built notes
 
-> Current status note, 2026-06-10: the active scanner is built and collecting
-> paper data, but calibration is not finished. Treat older V0 design blocks below
-> as history where they conflict with the AS-BUILT sections. First hygiene pass
-> is implemented: Telegram sends `GO`/`WATCH` by default, `NO_GO` stays in logs,
-> outcome resolving has `--limit`, and `calibration_report.py` explains missed
-> `NO_GO` by source/layer/asset/phase.
+> Current status note, 2026-06-11: the active scanner is built, collecting paper
+> data, and now has source onboarding plus a paper-only TA confirmation bridge.
+> Treat older V0 design blocks below as history where they conflict with the
+> AS-BUILT sections. Telegram sends `GO`/`WATCH` by default, `NO_GO` stays in
+> logs, outcome resolving has `--limit`, source reports exist, `watch_queue`
+> stores `WATCH/GO`, and `setup_confirmation` classifies watches without any
+> execution permission.
 
 > Источник правды по НОВОЙ системе. Записано с диалога-проектирования. Принцип: **фильтр-машина (GO/NO-GO), не альфа-машина.** Paper-first, сбор данных, строгость учим из журнала.
 
