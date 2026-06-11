@@ -7,12 +7,14 @@
 # - avoid "all layers read generic RSS" drift
 #
 # status:
-#   live     - already used in the scanner runtime
-#   planned  - approved, but not yet wired into live intake
-#   research - only probes/research scripts exist
+#   live      - already used in the scanner runtime
+#   candidate - onboarding experiment (one source per layer, 24-48h measurement
+#               via scripts/analysis/source_onboarding_report.py, rollback = enabled:false)
+#   planned   - approved, but not yet wired into live intake
+#   research  - only probes/research scripts exist
 
-version: 1
-updated_utc: "2026-06-07T00:00:00Z"
+version: 2
+updated_utc: "2026-06-11T21:00:00Z"
 
 layers:
   1:
@@ -41,7 +43,7 @@ layers:
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only until trust filters are in place"}
     tactical_sources:
       - {source: btc_eth_tactical, status: live, priority: 1, notes: "OKX public funding/OI/liquidation regime monitor; narrow and event-driven"}
-      - {source: etf_flow_feed, status: planned, priority: 1, notes: "spot ETF net flows and abnormal deviations"}
+      - {source: etf_flow, status: candidate, priority: 1, notes: "context-only adapter wired (manual_csv slot, registry enabled:false until trader feeds CSV or live provider approved); replaces planned etf_flow_feed"}
 
   2:
     name: "Alts, memes, on-chain and listings"
@@ -85,6 +87,7 @@ layers:
       - retail_price_roundup
     realized_sources:
       - {source: google_news_metals, status: live, priority: 4, notes: "broad aggregator; noisy but gives coverage"}
+      - {source: investing_commodities, status: candidate, priority: 3, notes: "onboarding 2026-06-11: direct commodities wire with article bodies; kitco RSS dead (404), mining.com blocked (403)"}
     expected_sources:
       - {source: fred_calendar, status: live, priority: 1, notes: "Fed/CPI/NFP expected calendar for gold surprise"}
     watch_sources:
@@ -107,6 +110,7 @@ layers:
     realized_sources:
       - {source: google_news_energy, status: live, priority: 4, notes: "broad aggregator; often ambiguous"}
       - {source: oilprice, status: live, priority: 3, notes: "domain feed; useful only with strict gating"}
+      - {source: rigzone, status: candidate, priority: 3, notes: "onboarding 2026-06-11: direct upstream/LNG wire; compare idio/full_body vs oilprice over a week"}
     expected_sources:
       - {source: eia, status: live, priority: 1, notes: "official WPSR next-release cadence for crude inventory"}
       - {source: opec, status: live, priority: 1, notes: "official next OPEC/OPEC+ meeting cadence from press releases"}
@@ -131,8 +135,9 @@ layers:
       - preview_article
       - opinion
     realized_sources:
-      - {source: sec_edgar, status: live, priority: 1, notes: "best official realized source in this layer"}
+      - {source: sec_edgar, status: live, priority: 1, notes: "best official realized source in this layer; primary-doc extraction live since 2026-06-11"}
       - {source: google_news_equities, status: live, priority: 4, notes: "coverage only; mostly lagging and preview-heavy"}
+      - {source: globenewswire_public, status: candidate, priority: 2, notes: "onboarding 2026-06-11: official company PR (IR-class primary); high volume is router-filtered pre-LLM; complements sec_edgar (PR != filing)"}
     expected_sources:
       - {source: earnings_calendar, status: live, priority: 1, notes: "earnings dates from SEC-linked company announcements for pending/surprise"}
     watch_sources:

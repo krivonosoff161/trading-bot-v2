@@ -24,6 +24,8 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from src.scout.router import source_meta
+
 _ROOT = Path(__file__).resolve().parents[3]
 CSV_PATH = _ROOT / "data" / "scout" / "etf_flows.csv"
 
@@ -31,7 +33,16 @@ VALID_DIRECTIONS = ("inflow", "outflow", "unknown")
 
 
 def provider() -> str:
-    return os.getenv("SCANNER_ETF_FLOW_PROVIDER", "").strip().lower()
+    """Провайдер: env-переменная (приоритет) либо source_registry (enabled+provider).
+
+    Реестр = единая точка включения/роллбэка (онбординг 11.06): enabled:false → ''."""
+    env = os.getenv("SCANNER_ETF_FLOW_PROVIDER", "").strip().lower()
+    if env:
+        return env
+    meta = source_meta("etf_flow") or {}
+    if meta.get("enabled") and meta.get("provider"):
+        return str(meta["provider"]).strip().lower()
+    return ""
 
 
 def status() -> dict:
