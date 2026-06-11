@@ -8,8 +8,12 @@ audit_bucket (метрики = calibration_report.classify_miss, порог ед
 
   MISSED_IDIO_MOVE          |excess| >= th   — событие, не бета (реальный промах)
   MISSED_DIRECTIONAL_MOVE   |ret| >= th, excess ниже порога — в основном бета/рынок
+  BETA_BLIND_MOVE           |ret| >= th при активе=своему baseline (BTC/CL/XAU) —
+                            idio не определён by construction, НЕ записывать в idio-промахи
   VOLATILE_BUT_NO_DIRECTION max(|MFE|,|MAE|) >= th — фитили без финального хода
   CORRECT_NO_GO             тихо по всем осям
+  CHIEF_ERROR_UNRESOLVED    chief был недоступен (гейт CHIEF_ERROR_*/CHIEF_UNAVAILABLE) —
+                            это не качество суждения, отдельно от обычных NO_GO
   MANUAL_OR_UNSCORED / NOT_MATURE / MISSING_PRICE — нескоренные состояния
 
 Выход: reports/scanner_no_go_audit/{no_go_audit.json,no_go_audit.csv,summary.md,samples/}.
@@ -38,10 +42,15 @@ OUT_BASE = _ROOT / "reports" / "scanner_no_go_audit"
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 nogo-audit; keyless)"}
 
 FIELDS = ["card_id", "ts_utc", "source", "layer", "asset", "okx_inst", "headline", "source_url",
-          "low_confidence", "chief_called", "in_price", "surprise", "event_phase", "lead_class",
+          "low_confidence", "chief_called", "escalation_gate", "in_price", "surprise",
+          "event_phase", "lead_class",
           "materiality_score", "price_at_decision", "horizon_hours",
           "outcome_long_pct", "outcome_short_pct", "ret_pct", "mfe_long_pct", "mae_long_pct",
-          "excess_pct", "missed_move", "verdict_correct", "outcome_source", "chart_path", "audit_bucket"]
+          "excess_pct", "beta_blind", "missed_move", "verdict_correct", "outcome_source",
+          "chart_path", "audit_bucket"]
+
+CHIEF_ERROR_GATES = ("CHIEF_ERROR_FALLBACK", "CHIEF_ERROR_PENDING", "CHIEF_UNAVAILABLE")
+UNSCORED_BUCKETS = ("NOT_MATURE", "MANUAL_OR_UNSCORED", "MISSING_PRICE", "CHIEF_ERROR_UNRESOLVED")
 
 
 def _parse_ts(ts: str) -> dt.datetime | None:
@@ -51,16 +60,27 @@ def _parse_ts(ts: str) -> dt.datetime | None:
         return None
 
 
+def _is_beta_blind(jrow: dict, outcome: dict | None) -> bool:
+    """Актив сам себе baseline (новые outcomes несут флаг; старые — по журналу)."""
+    if outcome and outcome.get("beta_blind") is not None:
+        return bool(outcome.get("beta_blind"))
+    inst = jrow.get("okx_inst")
+    return bool(inst) and inst == jrow.get("baseline_symbol")
+
+
 def classify_bucket(jrow: dict, outcome: dict | None, now: dt.datetime, threshold: float = 3.0) -> str:
     """Разложить NO_GO карточку в audit_bucket (см. шапку модуля)."""
+    if str(jrow.get("escalation_gate") or "") in CHIEF_ERROR_GATES:
+        return "CHIEF_ERROR_UNRESOLVED"   # chief упал — не качество суждения фильтра
     if outcome and outcome.get("scored"):
         if outcome.get("ret_pct") is None and outcome.get("mfe_long_pct") is None:
             return "MISSING_PRICE"
         miss = classify_miss(outcome, threshold)
-        if miss["idio"]:
+        beta_blind = _is_beta_blind(jrow, outcome)
+        if miss["idio"] and not beta_blind:
             return "MISSED_IDIO_MOVE"
         if miss["dir"]:
-            return "MISSED_DIRECTIONAL_MOVE"
+            return "BETA_BLIND_MOVE" if beta_blind else "MISSED_DIRECTIONAL_MOVE"
         if miss["vol"]:
             return "VOLATILE_BUT_NO_DIRECTION"
         return "CORRECT_NO_GO"
@@ -91,7 +111,7 @@ def build_dataset(journal_rows: list[dict], outcome_rows: list[dict],
         o = latest.get(str(r.get("card_id"))) or {}
         rec = {k: r.get(k) for k in FIELDS if k in r}
         for k in ("outcome_long_pct", "outcome_short_pct", "ret_pct", "mfe_long_pct",
-                  "mae_long_pct", "excess_pct", "missed_move", "verdict_correct"):
+                  "mae_long_pct", "excess_pct", "beta_blind", "missed_move", "verdict_correct"):
             rec[k] = o.get(k)
         rec["chart_path"] = ""
         rec["audit_bucket"] = classify_bucket(r, o or None, now, threshold)
@@ -119,6 +139,7 @@ def select_chart_rows(rows: list[dict], per_set: int = 20, correct_n: int = 10) 
 
     take("MISSED_IDIO_MOVE", lambda r: -_abs(r["excess_pct"]), per_set)
     take("MISSED_DIRECTIONAL_MOVE", lambda r: -_abs(r["ret_pct"]), per_set)
+    take("BETA_BLIND_MOVE", lambda r: -_abs(r["ret_pct"]), correct_n)
     take("VOLATILE_BUT_NO_DIRECTION",
          lambda r: -max(_abs(r["mfe_long_pct"]), _abs(r["mae_long_pct"])), per_set)
     take("CORRECT_NO_GO", lambda r: r["card_id"], correct_n)   # стабильная «случайная» выборка
@@ -195,7 +216,7 @@ def write_outputs(rows: list[dict], out_dir: Path) -> None:
 def _rate_table(rows: list[dict], key: str, top: int = 12) -> list[str]:
     agg: dict[str, list[int]] = {}
     for r in rows:
-        if r["audit_bucket"] in ("NOT_MATURE", "MANUAL_OR_UNSCORED", "MISSING_PRICE"):
+        if r["audit_bucket"] in UNSCORED_BUCKETS:
             continue
         k = str(r.get(key))
         cell = agg.setdefault(k, [0, 0])
@@ -209,7 +230,7 @@ def build_summary(rows: list[dict], journal_rows: list[dict], threshold: float) 
     buckets: dict[str, int] = {}
     for r in rows:
         buckets[r["audit_bucket"]] = buckets.get(r["audit_bucket"], 0) + 1
-    scored = [r for r in rows if r["audit_bucket"] not in ("NOT_MATURE", "MANUAL_OR_UNSCORED", "MISSING_PRICE")]
+    scored = [r for r in rows if r["audit_bucket"] not in UNSCORED_BUCKETS]
     idio = [r for r in rows if r["audit_bucket"] == "MISSED_IDIO_MOVE"]
     verd: dict[str, int] = {}
     for r in journal_rows:
@@ -229,7 +250,10 @@ def build_summary(rows: list[dict], journal_rows: list[dict], threshold: float) 
          f"- Вероятно ПРАВИЛЬНЫЙ фильтр (CORRECT + VOLATILE-фитили): "
          f"{buckets.get('CORRECT_NO_GO', 0) + buckets.get('VOLATILE_BUT_NO_DIRECTION', 0)}/{len(scored)}",
          f"- РЕАЛЬНЫЕ идиосинкратические промахи: **{len(idio)}/{len(scored)}**",
-         f"- Бета/рынок (directional без excess): {buckets.get('MISSED_DIRECTIONAL_MOVE', 0)}/{len(scored)}", "",
+         f"- Бета/рынок (directional без excess): {buckets.get('MISSED_DIRECTIONAL_MOVE', 0)}/{len(scored)}",
+         f"- beta_blind ход (актив=своему baseline, idio не определён): "
+         f"{buckets.get('BETA_BLIND_MOVE', 0)}/{len(scored)}",
+         f"- chief был недоступен (вне оценки суждения): {buckets.get('CHIEF_ERROR_UNRESOLVED', 0)}", "",
          "## Идио-промахи по источникам (idio/n)", "| источник | idio/n |", "|---|---|",
          *_rate_table(rows, "source"), "",
          "## По слоям", "| слой | idio/n |", "|---|---|", *_rate_table(rows, "layer"), "",
