@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-m", "not live"]
+markers = [
+    "live: requires external exchange/API credentials and may touch live/demo services",
+]

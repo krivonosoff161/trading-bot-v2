@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-from scripts.ws.ws_pump_orchestrator import PumpOrchestrator
+from scripts.archive.ws_pump_orchestrator import PumpOrchestrator
 
 
 def _make_orchestrator(tmp_path, monkeypatch, payload: dict) -> PumpOrchestrator:
     path = tmp_path / "active_universe.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setattr("scripts.ws.ws_pump_orchestrator.ACTIVE_UNIVERSE_PATH", path)
+    monkeypatch.setattr("scripts.archive.ws_pump_orchestrator.ACTIVE_UNIVERSE_PATH", path)
     orch = PumpOrchestrator.__new__(PumpOrchestrator)
     orch.config = {}
     return orch
@@ -43,7 +43,7 @@ def test_fallback_active_list_defaults_to_up(tmp_path, monkeypatch) -> None:
 
 def test_missing_file_returns_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "scripts.ws.ws_pump_orchestrator.ACTIVE_UNIVERSE_PATH",
+        "scripts.archive.ws_pump_orchestrator.ACTIVE_UNIVERSE_PATH",
         tmp_path / "nonexistent.json",
     )
     orch = PumpOrchestrator.__new__(PumpOrchestrator)

@@ -15,6 +15,7 @@ import datetime as dt
 import email.utils
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -95,9 +96,13 @@ def _read_rows() -> list[dict[str, Any]]:
 
 def _write_rows(rows: list[dict[str, Any]]) -> None:
     ensure_store()
-    with PENDING.open("w", encoding="utf-8") as fh:
+    tmp = PENDING.with_name(f".{PENDING.name}.{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, PENDING)
 
 
 def read_index() -> dict[str, dict[str, Any]]:

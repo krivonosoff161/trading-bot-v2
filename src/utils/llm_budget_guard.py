@@ -3,7 +3,7 @@
 
 The guard is intentionally small and environment-driven:
 
-* caps are disabled when set to 0 or omitted;
+* caps set to 0 or omitted are disabled;
 * if ``LLM_STOP_ON_BUDGET`` is false, calls are allowed but the report can still
   show projected spend;
 * scanner-level caps are enforced within the current Python process;
@@ -57,7 +57,7 @@ def env_int(name: str, default: int = 0) -> int:
 
 
 def stop_on_budget() -> bool:
-    return os.getenv("LLM_STOP_ON_BUDGET", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("LLM_STOP_ON_BUDGET", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def today_utc() -> str:

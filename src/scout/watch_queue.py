@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -148,9 +149,13 @@ def _read_rows(path: Path = WATCH_QUEUE) -> list[dict[str, Any]]:
 
 def _write_rows(rows: list[dict[str, Any]], path: Path = WATCH_QUEUE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def upsert_watch(row: dict[str, Any], path: Path = WATCH_QUEUE) -> tuple[str, bool]:

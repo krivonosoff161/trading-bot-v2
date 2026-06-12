@@ -31,8 +31,8 @@ def test_fetch_fred_calendar_builds_expected_macro_items(monkeypatch):
         return _Resp(
             {
                 "release_dates": [
-                    {"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-06-10"},
-                    {"release_id": 11, "release_name": "Employment Situation", "date": "2026-06-12"},
+                    {"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-06-15"},
+                    {"release_id": 11, "release_name": "Employment Situation", "date": "2026-06-16"},
                     {"release_id": 12, "release_name": "Federal Open Market Committee", "date": "2026-06-17"},
                     {"release_id": 13, "release_name": "Retail Sales", "date": "2026-06-18"},
                 ]
