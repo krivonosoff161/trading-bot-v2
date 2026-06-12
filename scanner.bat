@@ -63,5 +63,5 @@ echo.
 echo --- scan %date% %time% ---
 python -u src\scout\scanner_v0.py %SCANNER_ARGS%
 echo --- next scan in %INTERVAL%s ---
-timeout /t %INTERVAL% /nobreak >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds %INTERVAL%"
 goto loop
