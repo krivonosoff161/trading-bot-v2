@@ -718,6 +718,22 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     tokens = sum(int(u.get("total_tokens") or 0) for u in usage_rows)
     cost_rub = round(sum(float(u.get("cost_rub") or 0.0) for u in usage_rows), 4)
 
+    if orch.get("llm_error") and not dry:
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=str(agent.get("phase") or phase),
+            materiality_score=(agent.get("materiality")
+                               if agent.get("materiality") is not None else mat.get("score")),
+            materiality_family=agent.get("event_type") or mat.get("family"),
+            escalation_gate=orch.get("escalation_gate"), skipped=orch.get("retry_status") or "llm_error",
+            veto_flags=agent.get("veto_flags"), no_edge_flags=agent.get("no_edge_flags"),
+        )
+        print(f"  · LLM budget/access interrupted - retry next pass: {headline[:60]}")
+        return {"skipped": "llm_failed", "headline": headline, "asset": asset,
+                "tokens": tokens, "cost_rub": cost_rub}
+
     # chief упал на эскалированном кандидате → НЕ финализируем обычным NO_GO: возвращаем
     # событие в очередь (buffer→READY / RSS→не-seen, существующий llm_failed-путь);
     # после CHIEF_RETRY_MAX ретраев финализируем с гейтом CHIEF_UNAVAILABLE (видно в аудитах).

@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 chcp 65001 >nul 2>&1
 cd /d "%~dp0\.."
-set PYTHONUTF8=1
+set "PYTHONUTF8=1"
 
 REM 24/7 private strategy-lab loop. Results are written to trading-bot-research.
 REM Default: one experiment every 6 hours.
@@ -15,4 +15,3 @@ python scripts\strategy_lab\run_experiment.py --spec %SPEC%
 echo --- next run in %INTERVAL%s ---
 timeout /t %INTERVAL% /nobreak >nul
 goto loop
-

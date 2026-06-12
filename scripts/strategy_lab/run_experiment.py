@@ -13,9 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
-
-
-DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
 def main() -> None:
@@ -27,6 +25,7 @@ def main() -> None:
         help="Private strategy-lab root",
     )
     ap.add_argument("--dry-run", action="store_true", help="Evaluate but do not write outputs")
+    ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
 
     spec = ExperimentSpec.from_json(Path(args.spec))
@@ -40,8 +39,14 @@ def main() -> None:
     )
     if args.dry_run:
         return
-    out_dir = write_run_outputs(spec, results, Path(args.out_root))
-    print(f"wrote {out_dir}")
+    out_root = resolve_private_root(args.out_root, allow_public_output=args.allow_public_output)
+    out_dir = write_run_outputs(
+        spec,
+        results,
+        out_root,
+        allow_public_output=args.allow_public_output,
+    )
+    print(f"wrote experiments/completed/{out_dir.name}")
 
 
 if __name__ == "__main__":

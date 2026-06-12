@@ -16,14 +16,22 @@ from typing import Any
 
 from src.research_lab.candidate_registry import build_entry, registry_path, upsert_entries
 from src.research_lab.experiment import ExperimentSpec, RunResult
+from src.research_lab.paths import resolve_private_root
 
 VALIDATION_ORDER = ["FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE", "REJECT"]
 
 
-def write_run_outputs(spec: ExperimentSpec, results: list[RunResult], out_root: Path) -> Path:
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
+def write_run_outputs(
+    spec: ExperimentSpec,
+    results: list[RunResult],
+    out_root: Path,
+    *,
+    allow_public_output: bool = False,
+) -> Path:
+    out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     run_dir = out_root / "experiments" / "completed" / f"{stamp}_{spec.experiment_id}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=False)
     payload = {
         "schema": "strategy_lab_results.v1",
         "experiment_id": spec.experiment_id,

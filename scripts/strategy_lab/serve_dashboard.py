@@ -15,4 +15,3 @@ from src.research_lab.dashboard_server import main  # noqa: E402
 
 if __name__ == "__main__":
     main()
-

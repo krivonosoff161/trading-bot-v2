@@ -27,8 +27,7 @@ from src.research_lab.state_db import (  # noqa: E402
     import_run_dir,
     init_db,
 )
-
-DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
 def main() -> None:
@@ -38,21 +37,27 @@ def main() -> None:
         default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
         help="Private strategy-lab root",
     )
+    ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
-    private_root = Path(args.private_root).expanduser()
+    private_root = resolve_private_root(args.private_root, allow_public_output=args.allow_public_output)
     db_path = default_db_path(private_root)
     conn = connect(db_path)
     init_db(conn)
     job = claim_next_job(conn)
     if not job:
-        print(f"db={db_path} queue=empty")
+        print(f"db=strategy-lab/state/{db_path.name} queue=empty")
         conn.close()
         return
     job_id = int(job["job_id"])
     try:
         spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
         results = evaluate_spec(spec)
-        run_dir = write_run_outputs(spec, results, private_root)
+        run_dir = write_run_outputs(
+            spec,
+            results,
+            private_root,
+            allow_public_output=args.allow_public_output,
+        )
         import_run_dir(conn, private_root, run_dir)
         conn.commit()
         label = str(run_dir.relative_to(private_root)).replace("\\", "/")

@@ -233,26 +233,34 @@ def ensure_experiment_queued(conn: sqlite3.Connection, spec_path: Path, *, prior
 
 
 def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT * FROM queue
-        WHERE status = 'queued'
-        ORDER BY priority ASC, created_at ASC, job_id ASC
-        LIMIT 1
-        """
-    ).fetchone()
-    if row is None:
-        return None
-    conn.execute(
-        """
-        UPDATE queue
-        SET status = 'running', started_at = ?, attempts = attempts + 1
-        WHERE job_id = ? AND status = 'queued'
-        """,
-        (utc_now(), int(row["job_id"])),
-    )
-    conn.commit()
-    return dict(conn.execute("SELECT * FROM queue WHERE job_id = ?", (int(row["job_id"]),)).fetchone())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT * FROM queue
+            WHERE status = 'queued'
+            ORDER BY priority ASC, created_at ASC, job_id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+        job_id = int(row["job_id"])
+        conn.execute(
+            """
+            UPDATE queue
+            SET status = 'running', started_at = ?, attempts = attempts + 1
+            WHERE job_id = ? AND status = 'queued'
+            """,
+            (utc_now(), job_id),
+        )
+        conn.commit()
+        claimed = conn.execute("SELECT * FROM queue WHERE job_id = ?", (job_id,)).fetchone()
+        return dict(claimed) if claimed is not None else None
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def complete_job(conn: sqlite3.Connection, job_id: int, run_dir_label: str) -> None:

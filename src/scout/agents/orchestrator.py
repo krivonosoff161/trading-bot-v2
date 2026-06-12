@@ -127,6 +127,28 @@ async def process(event: dict, asset: str | None, layer: int, lead_class: str,
     · pre_verdict · should_escalate · escalation_gate · escalation_reason."""
     agent = await layer_agent.analyze(event, layer, asset)
     usage = [agent.get("_usage", {})]
+    cheap_usage = usage[0] if isinstance(usage[0], dict) else {}
+    if cheap_usage.get("status") == "budget_skipped":
+        veto, no_edge = layer_agent.split_flags(agent)
+        return {
+            "decision": "journal",
+            "chief_called": False,
+            "agent": agent,
+            "chief": None,
+            "usage": usage,
+            "send_channel": False,
+            "pre_verdict": _fallback_pre_verdict(agent, _esc()),
+            "should_escalate": False,
+            "escalation_gate": "CHEAP_BUDGET_SKIPPED",
+            "escalation_reason": "cheap layer skipped by LLM budget guard",
+            "veto_flags": veto,
+            "no_edge_flags": no_edge,
+            "chief_error": False,
+            "llm_error": True,
+            "retry_status": "cheap_budget_skipped",
+            "verdict": "NO_GO",
+            "side": "none",
+        }
     decision, gate, reason = decide_escalation(
         agent, layer=layer, lead_class=lead_class, source=source,
         source_class=source_class, source_trust=source_trust, low_confidence=low_confidence)
