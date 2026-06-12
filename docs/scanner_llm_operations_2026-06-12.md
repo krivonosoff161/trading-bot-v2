@@ -215,6 +215,25 @@ Before leaving the scanner running on paid models:
 
 ## Strategy-Lab Runner
 
+Operator start:
+
+```bash
+bat\strategy_lab_start.bat
+```
+
+This syncs the state DB, starts the dashboard, starts the one-worker queue loop,
+and opens `http://127.0.0.1:8765`. It does not enqueue a new experiment by
+itself, so repeated starts do not duplicate jobs.
+
+Smoke demo:
+
+```bash
+bat\strategy_lab_demo_all.bat
+```
+
+This syncs the DB, queues `configs/strategy_lab/l2_smoke.json`, runs one queued
+job, starts the dashboard, and opens the browser.
+
 First working command:
 
 ```bash
