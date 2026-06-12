@@ -163,10 +163,9 @@ One-command local start:
 bat\strategy_lab_start.bat
 ```
 
-This builds the data inventory, syncs the private state DB, opens the local
-dashboard, and starts the one-worker queue loop. It also ensures one smoke
-experiment is queued if the same spec is not already queued or running, so the
-page starts changing without manual follow-up clicks.
+This builds the data inventory, syncs the private state DB, queues the starter
+research pack, opens the local dashboard, and starts the one-worker queue loop.
+The worker processes one job at a time so the desktop is not flooded.
 
 Strategy Lab MVP 2.0 chain: data inventory -> strategy registry (12
 deterministic strategies) -> queue -> worker -> simulation -> regime labeling
@@ -180,6 +179,12 @@ Data inventory for a spec:
 
 ```bash
 python scripts/strategy_lab/build_data_inventory.py --spec configs/strategy_lab/l2_smoke.json
+```
+
+Queue the starter research pack without starting the dashboard:
+
+```bash
+python scripts/strategy_lab/enqueue_pack.py --dir configs/strategy_lab/starter --priority 50
 ```
 
 One-command smoke demo:

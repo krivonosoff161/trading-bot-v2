@@ -1,0 +1,38 @@
+{
+  "experiment_id": "l5_ai_equity_proxy_v0",
+  "data_glob": "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json",
+  "symbols": [
+    "NVDA_USDT_SWAP",
+    "AMD_USDT_SWAP",
+    "COIN_USDT_SWAP",
+    "MSTR_USDT_SWAP",
+    "PLTR_USDT_SWAP",
+    "OPENAI_USDT_SWAP",
+    "ANTHROPIC_USDT_SWAP"
+  ],
+  "families": [
+    "momentum_breakout",
+    "range_breakout",
+    "volatility_squeeze_breakout",
+    "moving_average_reclaim"
+  ],
+  "fees_bps": 8,
+  "slippage_bps": 5,
+  "min_trades": 8,
+  "split_ratio": 0.7,
+  "max_runs": 100,
+  "parameter_grid": {
+    "momentum_breakout": [
+      {"lookback": 20, "threshold_pct": 0.0, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ],
+    "range_breakout": [
+      {"lookback": 30, "max_range_pct": 12.0, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ],
+    "volatility_squeeze_breakout": [
+      {"lookback": 20, "squeeze_ratio": 0.6, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ],
+    "moving_average_reclaim": [
+      {"ma": 20, "below_bars": 3, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ]
+  }
+}

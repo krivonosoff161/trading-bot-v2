@@ -1,0 +1,46 @@
+{
+  "experiment_id": "l2_alts_meme_volatility_v0",
+  "data_glob": "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json",
+  "symbols": [
+    "ZEC_USDT_SWAP",
+    "PENGU_USDT_SWAP",
+    "HYPE_USDT_SWAP",
+    "WLD_USDT_SWAP",
+    "ONDO_USDT_SWAP",
+    "ENA_USDT_SWAP",
+    "PUMP_USDT_SWAP",
+    "DOGE_USDT_SWAP"
+  ],
+  "families": [
+    "momentum_breakout",
+    "volume_shock_continuation",
+    "impulse_continuation",
+    "rsi_reversal",
+    "volume_exhaustion_fade"
+  ],
+  "fees_bps": 9,
+  "slippage_bps": 6,
+  "min_trades": 12,
+  "split_ratio": 0.7,
+  "max_runs": 120,
+  "filters": {"volatility": ["medium", "high"]},
+  "parameter_grid": {
+    "momentum_breakout": [
+      {"lookback": 10, "threshold_pct": 0.0, "hold_bars": 3, "stop_pct": 8, "take_pct": 16},
+      {"lookback": 20, "threshold_pct": 1.0, "hold_bars": 5, "stop_pct": 10, "take_pct": 22}
+    ],
+    "volume_shock_continuation": [
+      {"lookback": 10, "vol_mult": 2.0, "min_body_pct": 5, "hold_bars": 2, "stop_pct": 8, "take_pct": 14},
+      {"lookback": 20, "vol_mult": 3.0, "min_body_pct": 8, "hold_bars": 3, "stop_pct": 10, "take_pct": 18}
+    ],
+    "impulse_continuation": [
+      {"min_body_pct": 6.0, "min_close_pos": 0.7, "hold_bars": 3, "stop_pct": 10, "take_pct": 16}
+    ],
+    "rsi_reversal": [
+      {"period": 14, "oversold": 30, "overbought": 70, "hold_bars": 4, "stop_pct": 8, "take_pct": 12}
+    ],
+    "volume_exhaustion_fade": [
+      {"lookback": 20, "move_bars": 3, "min_move_pct": 10.0, "vol_mult": 3.0, "hold_bars": 3, "stop_pct": 12, "take_pct": 10}
+    ]
+  }
+}
