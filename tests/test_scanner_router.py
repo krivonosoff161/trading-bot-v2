@@ -12,7 +12,14 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.scout.router import layer_plan, route_asset, route_temporal, score_materiality  # noqa: E402
+from src.scout.router import (  # noqa: E402
+    baseline_for_layer,
+    classify_layer,
+    layer_plan,
+    route_asset,
+    route_temporal,
+    score_materiality,
+)
 
 
 def test_route_asset_strong_name():
@@ -122,6 +129,13 @@ def test_layer_plan_matrix_loaded():
     assert "goplus_rugcheck" in realized_sources
     assert "token_unlocks" in expected_sources
     assert "earnings_calendar" in l5_expected
+
+
+def test_okx_stock_listing_symbols_route_to_l5():
+    # OKX can list stock-style swaps. They must not fall through to the L2 alt/meme default.
+    for sym in ("TWLO", "CGNX", "ROK", "BX", "CRDO", "CIEN", "ISRG", "FLNC"):
+        assert classify_layer(sym) == 5
+    assert baseline_for_layer(5) == "QQQ-USDT-SWAP"
 
 
 # ── кросс-слой recall-fix: сильный именной алиас минует гейт слоёв источника ──
