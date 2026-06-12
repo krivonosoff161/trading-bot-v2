@@ -163,7 +163,9 @@ bat\strategy_lab_start.bat
 ```
 
 This syncs the private state DB, opens the local dashboard, and starts the
-one-worker queue loop. It does not enqueue new experiments by itself.
+one-worker queue loop. It also ensures one smoke experiment is queued if the
+same spec is not already queued or running, so the page starts changing without
+manual follow-up clicks.
 
 One-command smoke demo:
 

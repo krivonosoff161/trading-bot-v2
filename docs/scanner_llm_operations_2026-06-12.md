@@ -221,9 +221,9 @@ Operator start:
 bat\strategy_lab_start.bat
 ```
 
-This syncs the state DB, starts the dashboard, starts the one-worker queue loop,
-and opens `http://127.0.0.1:8765`. It does not enqueue a new experiment by
-itself, so repeated starts do not duplicate jobs.
+This syncs the state DB, ensures one smoke experiment is queued if the same spec
+is not already queued/running, starts the dashboard, starts the one-worker queue
+loop, and opens `http://127.0.0.1:8765`.
 
 Smoke demo:
 
