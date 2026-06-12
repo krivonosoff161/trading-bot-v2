@@ -169,6 +169,18 @@ bat\strategy_lab_dashboard.bat
 Open `http://127.0.0.1:8765`. The dashboard is read-only, localhost-only, and
 does not expose `.env` values or live-trading controls.
 
+State DB and queue:
+
+```bash
+bat\strategy_lab_sync_db.bat
+bat\strategy_lab_enqueue_smoke.bat
+bat\strategy_lab_worker_once.bat
+```
+
+For unattended local research, run `bat\strategy_lab_worker_loop.bat` after
+queueing allowed experiment specs. The worker processes one queued job at a
+time and writes full results to the private research workspace.
+
 Focused scanner tests:
 
 ```bash

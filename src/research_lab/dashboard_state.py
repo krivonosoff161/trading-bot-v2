@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.state_db import dashboard_snapshot, default_db_path
+
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 SCOUT_BUDGET_LOG = ROOT / "logs" / "scout" / "llm_budget.jsonl"
@@ -35,11 +37,13 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
     private_root = private_root.expanduser().resolve()
     completed_root = private_root / "experiments" / "completed"
     runs = load_completed_runs(completed_root, private_root)
+    state_db = dashboard_snapshot(default_db_path(private_root))
     return {
         "schema": "strategy_lab_dashboard.v0",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "private_root_label": "strategy-lab",
         "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "state_db": state_db,
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
