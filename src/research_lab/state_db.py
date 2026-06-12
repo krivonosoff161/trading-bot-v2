@@ -263,6 +263,27 @@ def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
         raise
 
 
+def reap_stale_jobs(conn: sqlite3.Connection, *, max_age_seconds: int = 3600) -> int:
+    """Requeue jobs left in running state after a worker crash."""
+    cutoff = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=max(1, int(max_age_seconds)))
+    ).isoformat()
+    cur = conn.execute(
+        """
+        UPDATE queue
+        SET status = 'queued',
+            started_at = NULL,
+            last_error = ?
+        WHERE status = 'running'
+          AND started_at IS NOT NULL
+          AND started_at < ?
+        """,
+        (f"requeued stale running job after {max_age_seconds}s", cutoff),
+    )
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
 def complete_job(conn: sqlite3.Connection, job_id: int, run_dir_label: str) -> None:
     conn.execute(
         """

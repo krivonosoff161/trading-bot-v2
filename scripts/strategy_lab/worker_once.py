@@ -26,6 +26,7 @@ from src.research_lab.state_db import (  # noqa: E402
     fail_job,
     import_run_dir,
     init_db,
+    reap_stale_jobs,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
@@ -43,6 +44,9 @@ def main() -> None:
     db_path = default_db_path(private_root)
     conn = connect(db_path)
     init_db(conn)
+    stale = reap_stale_jobs(conn)
+    if stale:
+        print(f"requeued stale jobs={stale} db=strategy-lab/state/{db_path.name}")
     job = claim_next_job(conn)
     if not job:
         print(f"db=strategy-lab/state/{db_path.name} queue=empty")

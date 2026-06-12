@@ -309,9 +309,9 @@ Cost-log пишет `provider/model/role/tokens/cost_usd/cost_rub`. Курсы/�
 
 ### LLM budget guard (AS-BUILT 12.06.2026)
 
-The scanner has a local cost guard in `src/utils/llm_budget_guard.py`. It is
-disabled by default for compatibility. When `LLM_STOP_ON_BUDGET=true`, the LLM
-client checks caps before making a network call:
+The scanner has a local cost guard in `src/utils/llm_budget_guard.py`. It checks
+any non-zero caps before making a network call. Set `LLM_STOP_ON_BUDGET=false`
+only for manual diagnostics:
 
 ```env
 LLM_STOP_ON_BUDGET=true

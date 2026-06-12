@@ -143,10 +143,11 @@ python scripts/analysis/build_watch_queue.py --dry-run
 python -X utf8 src/scout/calibration_report.py
 ```
 
-LLM budget controls are opt-in. To hard-stop paid model calls after local caps,
-set `LLM_STOP_ON_BUDGET=true` and tune `LLM_DAILY_RUB_CAP`,
+LLM budget controls enforce any non-zero local caps by default. Tune
+`LLM_DAILY_RUB_CAP`,
 `LLM_SCAN_RUB_CAP`, `LLM_MAX_TOKENS_PER_SCAN`, and
-`LLM_MAX_CHIEF_PER_SCAN` in `.env`. Budget skips are logged as model usage with
+`LLM_MAX_CHIEF_PER_SCAN` in `.env`; set `LLM_STOP_ON_BUDGET=false` only for
+manual diagnostics. Budget skips are logged as model usage with
 `status=budget_skipped`; chief skips are journaled as `CHIEF_BUDGET_SKIPPED`
 and are not sent to Telegram.
 

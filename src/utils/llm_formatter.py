@@ -10,11 +10,12 @@ Falls back to None on any error — caller uses build_client_summary() instead.
 from __future__ import annotations
 
 import base64
-import json
 import os
 from pathlib import Path
 
 import aiohttp
+
+from src.utils import llm_budget_guard as budget_guard
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,26 @@ _MODEL_URI       = "gpt://b1git4svubpojuiga5pn/qwen3-235b-a22b-fp8/latest"
 _SUPPORTS_VISION = False   # Qwen3-235B = False
 _MAX_TOKENS = 900
 _TIMEOUT    = 60  # seconds
+_FORMATTER_RUB_PER_1K_TOKENS = float(os.getenv("YANDEX_LLM_FORMATTER_RUB_PER_1K", "0.5"))
+
+
+def _estimated_cost_rub(tokens: int) -> float:
+    return round(max(0, int(tokens or 0)) * _FORMATTER_RUB_PER_1K_TOKENS / 1000, 4)
+
+
+def _budget_allowed(role: str, model: str, *parts: str, max_output_tokens: int) -> bool:
+    estimated = budget_guard.estimate_tokens(*parts, max_output_tokens=max_output_tokens)
+    blocked, reason, ctx = budget_guard.should_block(role, estimated, _estimated_cost_rub(estimated))
+    if blocked:
+        print(f"LLM {role}: budget skipped - {reason} ({model})")
+        budget_guard.usage_for_block("yandex", model, role, reason, ctx)
+        return False
+    return True
+
+
+def _record_budget(role: str, tokens: int) -> None:
+    if tokens:
+        budget_guard.record_usage(role, tokens, _estimated_cost_rub(tokens))
 
 _SYSTEM_PROMPT = """\
 Ты — аналитик крипторынка. Пишешь клиенту разбор на русском языке.
@@ -414,7 +435,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     if close:
         _price = float(close)
         swing_highs = sorted([h for h in (h15.get("swing_highs") or []) if float(h) > _price])[:3]
-        swing_lows  = sorted([l for l in (h15.get("swing_lows")  or []) if float(l) < _price], reverse=True)[:3]
+        swing_lows = sorted([low for low in (h15.get("swing_lows") or []) if float(low) < _price], reverse=True)[:3]
     else:
         swing_highs = (h15.get("swing_highs") or [])[::-1][:3]
         swing_lows  = (h15.get("swing_lows")  or [])[::-1][:3]
@@ -434,7 +455,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
         if pct > _limit:
             level = "экстремально высокая — сделка заблокирована"
         elif pct > _limit * 0.8:
-            level = f"повышенная, но в пределах для этого типа входа — не держать позицию дольше 4 часов"
+            level = "повышенная, но в пределах для этого типа входа — не держать позицию дольше 4 часов"
         else:
             level = "умеренная — учитывай при удержании позиции"
         lines.append(f"\n⚠️ Ставка финансирования: {level} ({direction_word}, {pct}%)")
@@ -443,7 +464,7 @@ def _build_analysis_text(symbol: str, captured_at: str, snapshot: dict) -> str:
     if entry_signal != "NO_TRADE" and sl:
         lines += [
             "",
-            f"Расчётные уровни:",
+            "Расчётные уровни:",
             f"  Вход:    {_fp(symbol, close)}",
             f"  Стоп:    {_fp(symbol, sl)}",
         ]
@@ -575,6 +596,8 @@ async def _call_yandex(
     if not _API_KEY or not _FOLDER_ID:
         print("LLM _call_yandex: YANDEX_API_KEY/FOLDER_ID not set — skipping")
         return None, 0
+    if not _budget_allowed("cheap", _MODEL_URI, system_prompt, user_text, max_output_tokens=max_tokens):
+        return None, 0
     payload = {
         "model": _MODEL_URI,
         "max_tokens": max_tokens,
@@ -601,6 +624,7 @@ async def _call_yandex(
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
         total = int(tokens.get("total_tokens") or 0)
+        _record_budget("cheap", total)
         print(f"LLM _call_yandex: OK — {total} tokens")
         return (body or None), total
     except Exception as exc:
@@ -660,6 +684,8 @@ async def generate_client_text(
         "Authorization": f"Api-Key {_API_KEY}",
         "Content-Type": "application/json",
     }
+    if not _budget_allowed("chief", _MODEL_URI, _SYSTEM_PROMPT, analysis_text, max_output_tokens=_MAX_TOKENS):
+        return None
 
     try:
         own_session = session is None
@@ -684,6 +710,7 @@ async def generate_client_text(
 
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
+        _record_budget("chief", int(tokens.get("total_tokens") or 0))
         print(f"LLM: OK — {tokens.get('total_tokens', '?')} tokens used")
         if not body:
             return None
@@ -718,6 +745,14 @@ async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | 
 
     from scripts.premium_prompts import PREMIUM_SYSTEM_PROMPTS, PREMIUM_USER_PROMPT
     system_prompt = PREMIUM_SYSTEM_PROMPTS.get(category, PREMIUM_SYSTEM_PROMPTS["CRYPTO"])
+    if not _budget_allowed(
+        "audit",
+        _GEMMA_MODEL_URI,
+        system_prompt,
+        PREMIUM_USER_PROMPT,
+        max_output_tokens=_GEMMA_MAX_TOKENS,
+    ):
+        return None
     b64 = base64.b64encode(image_bytes).decode()
 
     payload = {
@@ -749,6 +784,7 @@ async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | 
                 data = await resp.json()
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
+        _record_budget("audit", int(tokens.get("total_tokens") or 0))
         print(f"Gemma: OK — {tokens.get('total_tokens', '?')} tokens")
         return body or None
     except Exception as exc:
@@ -784,6 +820,8 @@ async def generate_edu_text(question: str) -> str | None:
     if not _API_KEY or not _FOLDER_ID:
         print("LLM edu: YANDEX_API_KEY or YANDEX_FOLDER_ID not set — skipping")
         return None
+    if not _budget_allowed("mid", _MODEL_URI, _EDU_SYSTEM_PROMPT, question, max_output_tokens=400):
+        return None
 
     payload = {
         "model": _MODEL_URI,
@@ -811,6 +849,7 @@ async def generate_edu_text(question: str) -> str | None:
                 data = await resp.json()
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
+        _record_budget("mid", int(tokens.get("total_tokens") or 0))
         print(f"LLM edu: OK — {tokens.get('total_tokens', '?')} tokens")
         return body or None
     except Exception as exc:

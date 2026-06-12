@@ -115,6 +115,8 @@ docs/*.jpg
 docs/*.jpeg
 docs/*.docx
 docs/*.csv
+docs/*.exe
+docs/*.winmd
 scripts/backtest_mark_index_cache.pkl
 
 # Large raw research dumps (regenerable from the .py; reports keep the readable version)

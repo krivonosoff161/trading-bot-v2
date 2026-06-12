@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import datetime as dt
 from pathlib import Path
 
 from src.research_lab.state_db import (
@@ -15,6 +16,7 @@ from src.research_lab.state_db import (
     fail_job,
     import_completed_runs,
     init_db,
+    reap_stale_jobs,
 )
 
 
@@ -107,6 +109,43 @@ def test_claim_next_job_leaves_running_job_unclaimed(tmp_path):
     assert second_claim is None
     assert row["status"] == "running"
     assert row["attempts"] == 1
+
+
+def test_reap_stale_jobs_requeues_old_running_job(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    job_id = enqueue_experiment(conn, tmp_path / "a.json", priority=10)
+    claimed = claim_next_job(conn)
+    assert claimed is not None
+    old_started = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat()
+    conn.execute("UPDATE queue SET started_at = ? WHERE job_id = ?", (old_started, job_id))
+    conn.commit()
+
+    reaped = reap_stale_jobs(conn, max_age_seconds=3600)
+
+    row = conn.execute("SELECT status, started_at, attempts, last_error FROM queue WHERE job_id = ?", (job_id,)).fetchone()
+    conn.close()
+    assert reaped == 1
+    assert row["status"] == "queued"
+    assert row["started_at"] is None
+    assert row["attempts"] == 1
+    assert "requeued stale running job" in row["last_error"]
+
+
+def test_reap_stale_jobs_keeps_recent_running_job(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    job_id = enqueue_experiment(conn, tmp_path / "a.json", priority=10)
+    claim_next_job(conn)
+
+    reaped = reap_stale_jobs(conn, max_age_seconds=3600)
+
+    row = conn.execute("SELECT status FROM queue WHERE job_id = ?", (job_id,)).fetchone()
+    conn.close()
+    assert reaped == 0
+    assert row["status"] == "running"
 
 
 def test_ensure_experiment_queued_does_not_duplicate_pending_job(tmp_path):

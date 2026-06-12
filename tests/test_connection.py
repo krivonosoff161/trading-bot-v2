@@ -1,12 +1,16 @@
 """Quick connection test — run once to verify API keys work."""
 
 import asyncio
-from src.utils.logger import setup_logger
-from src.config import Config
-from src.exchange.okx_client import OKXClient
+import pytest
+
+pytestmark = pytest.mark.live
 
 
 async def main():
+    from src.config import Config
+    from src.exchange.okx_client import OKXClient
+    from src.utils.logger import setup_logger
+
     setup_logger()
     config = Config.load()
     client = OKXClient(config.api_key, config.secret_key, config.passphrase, config.is_demo)
