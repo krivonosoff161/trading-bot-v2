@@ -23,8 +23,8 @@ from scripts.analysis import source_onboarding_report as OR  # noqa: E402
 ONBOARDING = {
     "etf_flow": (1, False, "needs_provider"),
     "token_unlocks": (2, True, "needs_key"),
-    "investing_commodities": (3, True, "candidate"),
-    "rigzone": (4, True, "candidate"),
+    "investing_commodities": (3, False, "disabled"),
+    "rigzone": (4, False, "disabled"),
     "globenewswire_public": (5, True, "candidate"),
 }
 
@@ -48,6 +48,14 @@ def test_new_rss_sources_have_max_age_guard():
         assert sources[name].get("max_age_hours") == 48     # анти-флуд бэкфилом
         assert sources[name].get("source_class") == "rss"
         assert sources[name].get("lead_class") == "LAGGING"  # GO-предохранитель применим
+
+
+def test_disabled_sources_excluded_from_active():
+    """Disabled onboarding sources не попадают в enabled_sources."""
+    sources = OR.load_registry()
+    for name in ("investing_commodities", "rigzone"):
+        assert sources[name].get("enabled") is False
+        assert sources[name].get("onboarding_status") == "disabled"
 
 
 # 2. выключенный источник ничего не делает

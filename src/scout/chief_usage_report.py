@@ -39,10 +39,18 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _row_ts(row: dict[str, Any]) -> str:
+    return str(row.get("ts_utc") or row.get("recorded_at") or row.get("decision_ts") or "")
+
+
 def summarize(*, reasoning_rows: list[dict] | None = None,
-              journal_rows: list[dict] | None = None) -> dict[str, Any]:
+              journal_rows: list[dict] | None = None,
+              since: str | None = None) -> dict[str, Any]:
     reasoning_rows = reasoning_rows if reasoning_rows is not None else _load_jsonl(REASONING)
     journal_rows = journal_rows if journal_rows is not None else _load_jsonl(JOURNAL)
+    if since:
+        reasoning_rows = [r for r in reasoning_rows if _row_ts(r) and _row_ts(r) >= since]
+        journal_rows = [r for r in journal_rows if _row_ts(r) and _row_ts(r) >= since]
     jix = {str(r.get("card_id")): r for r in journal_rows if r.get("card_id")}
 
     calls_by_gate: Counter = Counter()
@@ -85,6 +93,7 @@ def summarize(*, reasoning_rows: list[dict] | None = None,
 
     return {
         "cards": len(reasoning_rows),
+        "since": since,
         "cheap": {"calls": cheap_calls, "tokens": cheap_tokens},
         "chief": {"calls": chief_calls, "tokens": chief_tokens,
                   "call_rate": round(chief_calls / len(reasoning_rows), 3) if reasoning_rows else 0.0,
@@ -116,14 +125,18 @@ def render_text(rep: dict[str, Any]) -> str:
     lines += ["", f"без chief по гейтам: {json.dumps(rep['no_chief_by_gate'], ensure_ascii=False)}",
               f"chief по source: {json.dumps(rep['chief_by_source'], ensure_ascii=False)}",
               f"chief по layer: {json.dumps(rep['chief_by_layer'], ensure_ascii=False)}"]
+    if rep.get("since"):
+        lines += ["", f"[фильтр --since={rep['since']}]"]
     return "\n".join(lines)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--since", metavar="ISO", default=None,
+                    help="Filter rows with ts_utc >= this value (e.g. 2026-06-11T17:30:00Z)")
     args = ap.parse_args()
-    rep = summarize()
+    rep = summarize(since=args.since)
     print(json.dumps(rep, ensure_ascii=False, indent=2) if args.json else render_text(rep))
 
 

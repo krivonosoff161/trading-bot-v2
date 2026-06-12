@@ -280,6 +280,7 @@ def _fallback_newspaper(url: str) -> dict | None:
 def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) -> dict:
     """Turn raw_items into machine_docs. Does not call LLM."""
     init_db(path)
+    GN.reset_pass_counter()     # сброс cap перед каждым resolve-проходом
     resolved = failed = skipped = 0
     gn_resolved = gn_failed = 0
     ts = now_iso()
@@ -416,7 +417,8 @@ def resolve_pending(limit: int = 50, path: Path = DB_PATH, dry: bool = False) ->
         skipped = max(0, limit - len(rows))
     return {"resolved": resolved, "failed_partial": failed, "skipped_capacity": skipped,
             "gn_resolved": gn_resolved, "gn_failed": gn_failed,
-            "gn_metrics": GN.metrics()}   # seen/resolved/failed/429/cooldown/backoff_seconds
+            "gn_pass_cap": GN.metrics().get("google_skipped_pass_cap", 0),
+            "gn_metrics": GN.metrics()}   # seen/resolved/failed/429/cooldown/backoff_seconds/pass_cap
 
 
 def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:

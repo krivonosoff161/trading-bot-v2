@@ -122,10 +122,10 @@ sources:
     max_age_hours: 48
     keyless: true
     layers: [3]
-    enabled: true
-    onboarding_status: candidate
+    enabled: false                 # disabled: 100% title_only (22/22, avg 58 chars); investing.com JS-rendered, trafilatura не берёт
+    onboarding_status: disabled
     expected_body: direct_body
-    quality_notes: "лента смешанная (металлы+нефть) — скоуп L3; сильные нефть-алиасы (OPEC/crude) восстановятся кросс-слойно в CL (cross_layer=true, видно в аудите), остальное в no_tracked; следить за full_body (Cloudflare может резать страницы статей)"
+    quality_notes: "2026-06-12: 100% title_only (22 docs, 0 full body); investing.com uses JS rendering that trafilatura cannot handle. Re-enable only with headless browser or API adapter."
     rate_limit_notes: "1 GET/проход (30 мин); RSS отвечал 200 под сканерным UA 11.06"
 
   rigzone:                         # L4: прямая нефтегаз-лента (дополняет oilprice)
@@ -137,10 +137,10 @@ sources:
     max_age_hours: 48
     keyless: true
     layers: [4]
-    enabled: true
-    onboarding_status: candidate
+    enabled: false                 # disabled: 100% title_only (25/25, avg 45 chars); rigzone JS-rendered
+    onboarding_status: disabled
     expected_body: direct_body
-    quality_notes: "отраслевой wire (upstream/LNG/санкции); сравнить idio/full_body с oilprice за неделю"
+    quality_notes: "2026-06-12: 100% title_only (25 docs, 0 full body); rigzone.com requires JS rendering or dedicated parser. Re-enable only with headless browser or RSS adapter."
     rate_limit_notes: "1 GET/проход; RSS 200/20 items под сканерным UA 11.06"
 
   globenewswire_public:            # L5: официальные пресс-релизы публичных компаний (IR-класс)

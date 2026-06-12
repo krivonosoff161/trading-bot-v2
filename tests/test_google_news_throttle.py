@@ -148,3 +148,83 @@ def test_resolver_failure_keeps_original_url_as_fallback(monkeypatch, tmp_path):
     assert len(rows) == 1                              # без дублей
     assert rows[0][0] == WRAPPED                       # обёртка осталась фолбэком
     assert rows[0][1] == "title_only"
+
+
+# ── Pass cap tests ──────────────────────────────────────────────────────────
+
+def test_pass_cap_limits_network_resolves(monkeypatch):
+    """SCANNER_GN_MAX_PER_PASS ограничивает число сетевых вызовов за проход."""
+    _patch_clock(monkeypatch)
+    monkeypatch.setattr(GN, "MAX_RESOLVE_PER_PASS", 3)
+    GN.reset_pass_counter()
+    http = _Http()
+    for _ in range(5):
+        GN.resolve_google_news_url(WRAPPED, http=http)
+    # 3 успешных + 2 skipped by cap
+    m = GN.metrics()
+    assert m["google_resolved"] == 3
+    assert m["google_skipped_pass_cap"] == 2
+
+
+def test_local_decode_does_not_count_against_pass_cap(monkeypatch):
+    """Локальный decode_google_news_url не считается в сетевой cap."""
+    _patch_clock(monkeypatch)
+    monkeypatch.setattr(GN, "MAX_RESOLVE_PER_PASS", 2)
+    GN.reset_pass_counter()
+    # decode — локальная, не трогает счётчик
+    GN.decode_google_news_url("https://news.google.com/rss/articles/AU_yqLTEST?oc=5")
+    GN.decode_google_news_url("https://news.google.com/rss/articles/AU_yqLTEST2?oc=5")
+    assert GN._state["resolves_this_pass"] == 0  # счётчик не сдвинулся
+    # resolve — сетевой, считается
+    http = _Http()
+    GN.resolve_google_news_url(WRAPPED, http=http)
+    GN.resolve_google_news_url(WRAPPED, http=http)
+    GN.resolve_google_news_url(WRAPPED, http=http)  # 3-й — за cap
+    m = GN.metrics()
+    assert m["google_resolved"] == 2
+    assert m["google_skipped_pass_cap"] == 1
+
+
+def test_pass_counter_resets_between_passes(monkeypatch):
+    """reset_pass_counter() сбрасывает cap между вызовами resolve_pending."""
+    _patch_clock(monkeypatch)
+    monkeypatch.setattr(GN, "MAX_RESOLVE_PER_PASS", 1)
+    GN.reset_pass_counter()
+    http = _Http()
+    GN.resolve_google_news_url(WRAPPED, http=http)
+    assert GN.metrics()["google_resolved"] == 1
+    assert GN.metrics()["google_skipped_pass_cap"] == 0  # cap ещё не достигнут
+    # сброс — cap сброшен, опять можно resolve
+    GN.reset_pass_counter()
+    GN.resolve_google_news_url(WRAPPED, http=http)
+    assert GN.metrics()["google_resolved"] == 2
+
+
+def test_pass_cap_does_not_crash_scanner(monkeypatch, tmp_path):
+    """resolve_pending не падает при cap: wrapper docs обрабатываются без краша,
+    gn_pass_cap присутствует в результате."""
+    _patch_clock(monkeypatch)
+    db = tmp_path / "nb_gn_cap.sqlite"
+    urls = [
+        "https://news.google.com/rss/articles/AU_yqL111?oc=5",
+        "https://news.google.com/rss/articles/AU_yqL222?oc=5",
+        "https://news.google.com/rss/articles/AU_yqL333?oc=5",
+    ]
+    for i, u in enumerate(urls):
+        item = {"title": f"Article {i}", "url": u,
+                "time": "2026-06-11", "source": "google_news_crypto",
+                "source_class": "rss", "lead_class": "LAGGING"}
+        NB.ingest_items([item], path=db)
+
+    monkeypatch.setattr(NB.GN, "decode_google_news_url", lambda u: None)
+    monkeypatch.setattr(NB.GN, "resolve_google_news_url", lambda u: None)
+    monkeypatch.setattr(NB.page_extract, "extract", lambda u: {"text": "x" * 600, "title": "ok"})
+    monkeypatch.setattr(NB, "_fallback_newspaper", lambda u: None)
+
+    res = NB.resolve_pending(limit=10, path=db, dry=False)
+    assert "gn_pass_cap" in res
+    assert "gn_metrics" in res
+    import sqlite3
+    con = sqlite3.connect(db)
+    rows = con.execute("select extraction_method from machine_docs").fetchall()
+    assert len(rows) == 3  # все 3 дока обработаны, без краша
