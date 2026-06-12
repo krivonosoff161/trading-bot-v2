@@ -8,8 +8,8 @@ python scripts\strategy_lab\worker_once.py %*
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo [%date% %time%] strategy_lab worker failed with exit code %RC%
-    timeout /t %ERROR_SLEEP_SECONDS% /nobreak >nul
+    powershell -NoProfile -Command "Start-Sleep -Seconds %ERROR_SLEEP_SECONDS%"
 ) else (
-    timeout /t %SLEEP_SECONDS% /nobreak >nul
+    powershell -NoProfile -Command "Start-Sleep -Seconds %SLEEP_SECONDS%"
 )
 goto loop
