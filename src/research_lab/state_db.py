@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utc_now() -> str:
@@ -63,6 +63,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             reasons TEXT NOT NULL,
             metrics_json TEXT NOT NULL,
             params_json TEXT NOT NULL,
+            validation_status TEXT NOT NULL DEFAULT '',
+            validation_reasons TEXT NOT NULL DEFAULT '',
+            next_action TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (run_id, candidate_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
         );
@@ -87,11 +90,20 @@ def init_db(conn: sqlite3.Connection) -> None:
             ON queue(status, priority, created_at);
         """
     )
+    _migrate_candidate_columns(conn)
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
+
+
+def _migrate_candidate_columns(conn: sqlite3.Connection) -> None:
+    """Schema v1 -> v2: add validation columns to pre-existing candidates tables."""
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(candidates)")}
+    for column in ("validation_status", "validation_reasons", "next_action"):
+        if column not in existing:
+            conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
 
 def import_completed_runs(private_root: Path, db_path: Path | None = None) -> dict[str, int]:
@@ -163,9 +175,10 @@ def import_run_dir(conn: sqlite3.Connection, private_root: Path, run_dir: Path) 
             """
             INSERT INTO candidates(
                 run_id, candidate_id, symbol, family, decision, reasons,
-                metrics_json, params_json
+                metrics_json, params_json, validation_status, validation_reasons,
+                next_action
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -176,6 +189,9 @@ def import_run_dir(conn: sqlite3.Connection, private_root: Path, run_dir: Path) 
                 _reasons_text(row),
                 json.dumps(row.get("metrics") or _metrics_from_csv_row(row), sort_keys=True),
                 json.dumps(row.get("params") or {}, sort_keys=True),
+                str(row.get("validation_status") or ""),
+                _validation_reasons_text(row),
+                str(row.get("next_action") or ""),
             ),
         )
     return len(rows)
@@ -277,12 +293,22 @@ def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
             "family": str(r["family"]),
             "decision": str(r["decision"]),
             "reasons": str(r["reasons"]),
+            "validation_status": str(r["validation_status"]),
+            "next_action": str(r["next_action"]),
         }
         for r in conn.execute(
             """
-            SELECT run_id, candidate_id, symbol, family, decision, reasons
+            SELECT run_id, candidate_id, symbol, family, decision, reasons,
+                   validation_status, next_action
             FROM candidates
             ORDER BY
+              CASE validation_status
+                WHEN 'FORWARD_PAPER' THEN 4
+                WHEN 'REGIME_SPECIFIC' THEN 3
+                WHEN 'OBSERVE' THEN 2
+                WHEN 'REJECT' THEN 1
+                ELSE 0
+              END DESC,
               CASE decision
                 WHEN 'PROMOTE_FOR_PRESSURE_TEST' THEN 3
                 WHEN 'OBSERVE' THEN 2
@@ -300,6 +326,12 @@ def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
         str(r["status"]): int(r["n"])
         for r in conn.execute("SELECT status, COUNT(*) AS n FROM queue GROUP BY status")
     }
+    validation_counts = {
+        str(r["validation_status"] or "UNKNOWN"): int(r["n"])
+        for r in conn.execute(
+            "SELECT validation_status, COUNT(*) AS n FROM candidates GROUP BY validation_status"
+        )
+    }
     conn.close()
     return {
         "exists": True,
@@ -309,6 +341,7 @@ def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
         "queue": queue,
         "totals": totals,
         "queue_counts": queue_counts,
+        "validation_counts": validation_counts,
     }
 
 
@@ -378,6 +411,13 @@ def _decision_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 def _reasons_text(row: dict[str, Any]) -> str:
     reasons = row.get("reasons")
+    if isinstance(reasons, list):
+        return "|".join(str(r) for r in reasons)
+    return str(reasons or "")
+
+
+def _validation_reasons_text(row: dict[str, Any]) -> str:
+    reasons = row.get("validation_reasons")
     if isinstance(reasons, list):
         return "|".join(str(r) for r in reasons)
     return str(reasons or "")

@@ -5,7 +5,10 @@
   "families": [
     "momentum_breakout",
     "mean_reversion_fade",
-    "volume_shock_continuation"
+    "volume_shock_continuation",
+    "trend_pullback",
+    "rsi_reversal",
+    "donchian_breakout"
   ],
   "fees_bps": 7,
   "slippage_bps": 3,
@@ -23,6 +26,15 @@
     "volume_shock_continuation": [
       {"lookback": 10, "vol_mult": 2.0, "min_body_pct": 5, "hold_bars": 2, "stop_pct": 8, "take_pct": 14},
       {"lookback": 20, "vol_mult": 3.0, "min_body_pct": 8, "hold_bars": 3, "stop_pct": 10, "take_pct": 18}
+    ],
+    "trend_pullback": [
+      {"trend_ma": 30, "pullback_ma": 10, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ],
+    "rsi_reversal": [
+      {"period": 14, "oversold": 30, "overbought": 70, "hold_bars": 4, "stop_pct": 8, "take_pct": 12}
+    ],
+    "donchian_breakout": [
+      {"lookback": 20, "hold_bars": 5, "stop_pct": 10, "take_pct": 20}
     ]
   }
 }

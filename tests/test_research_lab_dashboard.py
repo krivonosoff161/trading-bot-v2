@@ -85,6 +85,8 @@ def test_dashboard_state_loads_completed_runs(tmp_path, monkeypatch):
     assert state["totals"]["run_count"] == 1
     assert state["totals"]["decision_counts"]["PROMOTE_FOR_PRESSURE_TEST"] == 1
     assert state["latest_run"]["top_candidates"][0]["symbol"] == "BTC_USDT_SWAP"
+    assert state["candidate_registry"]["exists"] is False
+    assert state["candidate_registry"]["registry_label"].startswith("strategy-lab/")
     assert str(tmp_path) not in json.dumps(state)
 
 
@@ -128,6 +130,30 @@ def test_render_html_escapes_candidate_fields():
 
     assert "<script>" not in page
     assert "&lt;script&gt;" in page
+
+
+def test_render_html_shows_validation_and_registry():
+    state = {
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "totals": {"run_count": 1, "candidate_count": 1, "decision_counts": {}},
+        "state_db": {"validation_counts": {"FORWARD_PAPER": 2, "REJECT": 5}},
+        "candidate_registry": {
+            "exists": True,
+            "entries": 7,
+            "by_validation_status": {"FORWARD_PAPER": 2, "REJECT": 5},
+            "registry_label": "strategy-lab/candidate-registry/candidates.jsonl",
+        },
+        "llm_cost": {},
+        "latest_run": {},
+        "runs": [],
+    }
+
+    page = render_html(state)
+
+    assert "Forward paper" in page
+    assert "Candidate Registry" in page
+    assert "candidates.jsonl" in page
 
 
 def test_aggregate_runs_counts_decisions():

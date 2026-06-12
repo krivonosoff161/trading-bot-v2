@@ -5,8 +5,7 @@ from src.research_lab.experiment import (
     ExperimentSpec,
     RunResult,
     evaluate_spec,
-    write_run_outputs,
 )
+from src.research_lab.outputs import write_run_outputs
 
 __all__ = ["ExperimentSpec", "RunResult", "evaluate_spec", "write_run_outputs"]
-
