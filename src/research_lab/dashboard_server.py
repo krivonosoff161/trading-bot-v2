@@ -70,6 +70,8 @@ def render_html(state: dict) -> str:
     totals = state.get("totals") or {}
     llm = state.get("llm_cost") or {}
     runs = state.get("runs") or []
+    state_db = state.get("state_db") or {}
+    queue_counts = state_db.get("queue_counts") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -106,7 +108,7 @@ def render_html(state: dict) -> str:
     {metric_card("Runs", totals.get("run_count", 0))}
     {metric_card("Candidates", totals.get("candidate_count", 0))}
     {metric_card("Promoted", (totals.get("decision_counts") or {}).get("PROMOTE_FOR_PRESSURE_TEST", 0), "ok")}
-    {metric_card("LLM RUB today", llm.get("today_rub", 0), "warn")}
+    {metric_card("Queued", queue_counts.get("queued", 0), "warn")}
   </div>
 
   <section class="card">
@@ -120,8 +122,20 @@ def render_html(state: dict) -> str:
   </section>
 
   <section class="section card">
+    <h2>Queue</h2>
+    {queue_table((state_db.get("queue") or [])[:20])}
+  </section>
+
+  <section class="section card">
     <h2>Latest Candidates</h2>
     {candidates_table((latest.get("top_candidates") or [])[:20])}
+  </section>
+
+  <section class="section card">
+    <h2>LLM Cost Guard</h2>
+    <p>today: {esc(llm.get("today_rub", 0))} RUB / {esc(llm.get("today_tokens", 0))} tokens</p>
+    <p>total: {esc(llm.get("total_rub", 0))} RUB / {esc(llm.get("total_tokens", 0))} tokens</p>
+    <p class="path">budget log: {esc(llm.get("log_label", ""))}</p>
   </section>
 
   <section class="section card">
@@ -130,6 +144,8 @@ def render_html(state: dict) -> str:
     <div class="path">{esc(state.get("private_root_label", ""))}</div>
     <p>Obsidian vault:</p>
     <div class="path">{esc(state.get("obsidian_vault_label", ""))}</div>
+    <p>State DB:</p>
+    <div class="path">{esc(state_db.get("db_label", "not initialized"))}</div>
   </section>
 </main>
 </body>
@@ -174,6 +190,24 @@ def runs_table(runs: list[dict]) -> str:
     return "\n".join(rows)
 
 
+def queue_table(rows_in: list[dict]) -> str:
+    if not rows_in:
+        return '<p class="muted">No queued jobs yet.</p>'
+    rows = ["<table><thead><tr><th>ID</th><th>Status</th><th>Priority</th><th>Spec</th><th>Attempts</th><th>Run</th><th>Error</th></tr></thead><tbody>"]
+    for row in rows_in:
+        rows.append(
+            "<tr>"
+            f"<td>{esc(row.get('job_id', ''))}</td>"
+            f"<td>{esc(row.get('status', ''))}</td>"
+            f"<td>{esc(row.get('priority', ''))}</td>"
+            f"<td class=\"path\">{esc(row.get('spec_label', ''))}</td>"
+            f"<td>{esc(row.get('attempts', ''))}</td>"
+            f"<td class=\"path\">{esc(row.get('run_dir_label', '') or '')}</td>"
+            f"<td>{esc(row.get('last_error', '') or '')}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table>")
+    return "\n".join(rows)
 def candidates_table(candidates: list[dict]) -> str:
     if not candidates:
         return '<p class="muted">No candidates in latest run.</p>'

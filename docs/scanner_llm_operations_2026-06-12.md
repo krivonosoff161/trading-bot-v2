@@ -244,12 +244,46 @@ private runs, scanner LLM cost logs, and Obsidian paths. It does not read or
 display `.env`, does not execute shell commands from the UI, and does not import
 the live trading path.
 
+SQLite state DB:
+
+```bash
+bat\strategy_lab_sync_db.bat
+```
+
+This imports completed private runs into
+`strategy-lab/state/strategy_lab.sqlite`. The DB is an index and queue state
+store; raw metrics, candidate tables, and Obsidian notes remain in the private
+workspace.
+
+Queue one smoke experiment:
+
+```bash
+bat\strategy_lab_enqueue_smoke.bat
+```
+
+Run one queued job:
+
+```bash
+bat\strategy_lab_worker_once.bat
+```
+
+Run the local worker loop:
+
+```bash
+bat\strategy_lab_worker_loop.bat
+```
+
+The worker handles one queued job per pass. This keeps 24/7 research bounded:
+the loop can sleep between jobs, the queue is visible in the dashboard, and each
+job writes files first before the DB is updated.
+
 Current implementation:
 
 - reads a JSON experiment spec;
 - loads local OKX-history JSON candles;
 - evaluates strategy families against parameter grids;
 - writes private outputs to `trading-bot-research/strategy-lab`;
+- indexes completed runs and queue jobs in `state/strategy_lab.sqlite`;
 - emits `metrics.json`, `candidates.csv`, `summary.md`, `graph_edges.csv`,
   `llm_review_pack.json`, `llm_review_prompt.md`, and Obsidian notes under
   `obsidian-vault/`.
