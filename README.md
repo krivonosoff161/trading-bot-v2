@@ -162,10 +162,24 @@ One-command local start:
 bat\strategy_lab_start.bat
 ```
 
-This syncs the private state DB, opens the local dashboard, and starts the
-one-worker queue loop. It also ensures one smoke experiment is queued if the
-same spec is not already queued or running, so the page starts changing without
-manual follow-up clicks.
+This builds the data inventory, syncs the private state DB, opens the local
+dashboard, and starts the one-worker queue loop. It also ensures one smoke
+experiment is queued if the same spec is not already queued or running, so the
+page starts changing without manual follow-up clicks.
+
+Strategy Lab MVP 2.0 chain: data inventory -> strategy registry (12
+deterministic strategies) -> queue -> worker -> simulation -> regime labeling
+-> validator-lite (REJECT / OBSERVE / REGIME_SPECIFIC / FORWARD_PAPER) ->
+private candidate registry -> state DB -> dashboard -> Obsidian notes -> LLM
+review pack (prepared only, never auto-executed). Validation statuses are
+research labels, not profitability claims. Full doc:
+[docs/strategy_lab_mvp2.md](docs/strategy_lab_mvp2.md).
+
+Data inventory for a spec:
+
+```bash
+python scripts/strategy_lab/build_data_inventory.py --spec configs/strategy_lab/l2_smoke.json
+```
 
 One-command smoke demo:
 
@@ -205,6 +219,12 @@ Focused scanner tests:
 
 ```bash
 python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py tests/test_scanner_records.py tests/test_source_quality_report.py tests/test_calibration_report.py tests/test_resolve_outcomes.py -q
+```
+
+Strategy-lab tests:
+
+```bash
+python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py -q
 ```
 
 ## Repository Map

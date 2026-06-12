@@ -221,9 +221,9 @@ Operator start:
 bat\strategy_lab_start.bat
 ```
 
-This syncs the state DB, ensures one smoke experiment is queued if the same spec
-is not already queued/running, starts the dashboard, starts the one-worker queue
-loop, and opens `http://127.0.0.1:8765`.
+This builds the data inventory, syncs the state DB, ensures one smoke
+experiment is queued if the same spec is not already queued/running, starts the
+dashboard, starts the one-worker queue loop, and opens `http://127.0.0.1:8765`.
 
 Smoke demo:
 
@@ -296,16 +296,42 @@ The worker handles one queued job per pass. This keeps 24/7 research bounded:
 the loop can sleep between jobs, the queue is visible in the dashboard, and each
 job writes files first before the DB is updated.
 
-Current implementation:
+Data inventory (run before queueing new specs):
 
-- reads a JSON experiment spec;
+```bash
+python scripts/strategy_lab/build_data_inventory.py --spec configs/strategy_lab/l2_smoke.json
+```
+
+This scans the spec's `data_glob`, classifies every file as
+usable / too_short / malformed and flags spec symbols with no usable data as
+missing. The report goes to the private `strategy-lab/inventory/` folder; the
+console prints only counts.
+
+Current implementation (MVP 2.0):
+
+- reads a JSON experiment spec (optionally with `filters` for regimes);
 - loads local OKX-history JSON candles;
-- evaluates strategy families against parameter grids;
+- evaluates strategies from the public strategy registry
+  (`src/research_lab/strategy_registry.py`, 12 deterministic strategies across
+  breakout / mean_reversion / trend / volume families);
+- labels each trade entry with a regime (volatility / trend / volume buckets,
+  computed without lookahead) and aggregates a per-regime breakdown;
+- grades each run (PROMOTE_FOR_PRESSURE_TEST / OBSERVE / REJECT), then
+  validator-lite assigns a validation status:
+  `REJECT` / `OBSERVE` / `REGIME_SPECIFIC` / `FORWARD_PAPER`;
 - writes private outputs to `trading-bot-research/strategy-lab`;
+- upserts every graded candidate into the private candidate registry
+  (`strategy-lab/candidate-registry/candidates.jsonl`);
 - indexes completed runs and queue jobs in `state/strategy_lab.sqlite`;
 - emits `metrics.json`, `candidates.csv`, `summary.md`, `graph_edges.csv`,
   `llm_review_pack.json`, `llm_review_prompt.md`, and Obsidian notes under
   `obsidian-vault/`.
 
-The first runner is deliberately code-first and LLM-later. LLM review should
-consume only the aggregate `llm_review_pack.json` after code metrics exist.
+Validation statuses are research labels, not profitability claims:
+`PROMOTE_FOR_PRESSURE_TEST` only means "worth validating", and
+`FORWARD_PAPER` only means "passed lite gates; track paper-forward".
+
+The runner stays code-first and LLM-later. LLM review consumes only the
+aggregate `llm_review_pack.json` / `llm_review_prompt.md` after code metrics
+exist; the pack asks the LLM to propose next experiment specs as drafts, and
+nothing the LLM produces is auto-enqueued.
