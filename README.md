@@ -164,15 +164,17 @@ bat\strategy_lab_start.bat
 ```
 
 This builds the data inventory, syncs the private state DB, queues the starter
-research pack, opens the local dashboard, and starts the one-worker queue loop.
-The worker processes one job at a time so the desktop is not flooded.
+research pack, generates a bounded set of follow-up specs from the private
+candidate registry, opens the local dashboard, and starts the one-worker queue
+loop. The worker processes one job at a time so the desktop is not flooded.
 
 Strategy Lab MVP 2.0 chain: data inventory -> strategy registry (12
 deterministic strategies) -> queue -> worker -> simulation -> regime labeling
 -> validator-lite (REJECT / OBSERVE / REGIME_SPECIFIC / FORWARD_PAPER) ->
-private candidate registry -> state DB -> dashboard -> Obsidian notes -> LLM
-review pack (prepared only, never auto-executed). Validation statuses are
-research labels, not profitability claims. Full doc:
+private candidate registry -> deterministic proposal generator -> state DB ->
+dashboard -> Obsidian notes -> LLM review pack (prepared only, never
+auto-executed). Validation statuses are research labels, not profitability
+claims. Full doc:
 [docs/strategy_lab_mvp2.md](docs/strategy_lab_mvp2.md).
 
 Data inventory for a spec:
@@ -186,6 +188,16 @@ Queue the starter research pack without starting the dashboard:
 ```bash
 python scripts/strategy_lab/enqueue_pack.py --dir configs/strategy_lab/starter --priority 50
 ```
+
+Generate and queue bounded follow-up specs from existing private candidates:
+
+```bash
+python scripts/strategy_lab/autopilot_once.py --max-proposals 8 --priority 70
+```
+
+This is deterministic code-only autonomy. It creates parameter-neighborhood and
+regime-specific follow-up specs from the private candidate registry. It does not
+call an LLM, trade, or publish private results.
 
 One-command smoke demo:
 
@@ -230,7 +242,7 @@ python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py test
 Strategy-lab tests:
 
 ```bash
-python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py -q
+python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py tests/test_research_lab_proposals.py -q
 ```
 
 ## Repository Map
