@@ -81,6 +81,7 @@ def test_write_inventory_has_no_absolute_paths(tmp_path):
     written = out.read_text(encoding="utf-8")
     rows_text = json.dumps(json.loads(written)["rows"])
     assert str(tmp_path).replace("\\", "\\\\") not in rows_text
+    assert str(tmp_path).replace("\\", "/") not in written.replace("\\", "/")
     assert "ETH_USDT_SWAP_90d.json" in rows_text
     assert (out.parent / "data_inventory.csv").exists()
 

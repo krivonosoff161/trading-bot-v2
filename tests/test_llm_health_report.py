@@ -57,3 +57,25 @@ def test_llm_health_report_summarizes_budget_and_usage(tmp_path, monkeypatch):
     assert report["totals"]["cost_rub"] == 1.5
     assert report["errors"] == {"LLM_MAX_CHIEF_PER_SCAN": 1}
     assert any(row["budget_skipped"] == 1 for row in report["models"])
+
+
+def test_live_probe_budget_is_persisted(monkeypatch):
+    captured = {}
+
+    def fake_write_budget(row):
+        captured.update(row)
+
+    monkeypatch.setattr(H.J, "write_budget", fake_write_budget)
+
+    H._write_probe_budget(
+        [
+            {"ok": True, "usage": {"total_tokens": 10, "cost_rub": 0.1}},
+            {"ok": False, "usage": {"total_tokens": 0, "cost_rub": 0.0}},
+        ]
+    )
+
+    assert captured["source"] == "llm_health_probe"
+    assert captured["n_probe_calls"] == 2
+    assert captured["n_llm_fail"] == 1
+    assert captured["total_tokens"] == 10
+    assert captured["cost_rub"] == 0.1

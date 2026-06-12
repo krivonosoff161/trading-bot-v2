@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -76,9 +77,13 @@ def upsert_entries(path: Path, entries: list[dict[str, Any]]) -> dict[str, int]:
         index[key] = entry
     path.parent.mkdir(parents=True, exist_ok=True)
     ordered = [index[k] for k in sorted(index, key=lambda k: (str(k[0]), str(k[1])))]
-    with path.open("w", encoding="utf-8", newline="\n") as f:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as f:
         for entry in ordered:
             f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
     stats["total"] = len(ordered)
     return stats
 

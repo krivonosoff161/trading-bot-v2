@@ -121,11 +121,19 @@ def build_inventory(data_glob: str, symbols: list[str] | None = None) -> dict[st
     return {
         "schema": "strategy_lab_data_inventory.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "glob_label": data_glob.replace("\\", "/"),
+        "glob_label": _glob_label(data_glob),
         "file_count": len(files),
         "quality_counts": counts,
         "rows": rows,
     }
+
+
+def _glob_label(data_glob: str) -> str:
+    normalized = data_glob.replace("\\", "/")
+    marker = "scripts/analysis/research/"
+    if marker in normalized:
+        return marker + normalized.rsplit(marker, 1)[-1]
+    return Path(normalized).name or "<glob>"
 
 
 def _missing_symbol_rows(files: list[dict[str, Any]], symbols: list[str]) -> list[dict[str, Any]]:

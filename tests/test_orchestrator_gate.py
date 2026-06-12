@@ -205,6 +205,31 @@ def test_chief_failure_marks_retryable():
 
 
 # 8b. cheap-only JOURNAL_NO_GO не помечается chief_error (обычный NO_GO как был)
+def test_cheap_budget_skip_is_retryable_without_chief():
+    out, n = _run(
+        _agent(
+            pre_verdict="",
+            materiality=0.0,
+            _ok=False,
+            _usage={
+                "role": "cheap",
+                "status": "budget_skipped",
+                "error_type": "LLM_SCAN_RUB_CAP",
+                "total_tokens": 0,
+                "cost_rub": 0.0,
+            },
+        ),
+        lead="LEADING",
+    )
+
+    assert n == 0
+    assert out["chief_called"] is False
+    assert out["llm_error"] is True
+    assert out["retry_status"] == "cheap_budget_skipped"
+    assert out["escalation_gate"] == "CHEAP_BUDGET_SKIPPED"
+    assert out["send_channel"] is False
+
+
 def test_cheap_only_no_go_not_marked_chief_error():
     out, n = _run(_agent(pre_verdict="JOURNAL_NO_GO", materiality=0.3))
     assert n == 0 and out["chief_error"] is False and out["retry_status"] is None

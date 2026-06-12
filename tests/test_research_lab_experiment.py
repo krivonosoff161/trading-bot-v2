@@ -99,6 +99,27 @@ def test_run_outputs_include_validation_and_registry(tmp_path):
     assert "validation_counts" in pack
 
 
+def test_run_outputs_do_not_reuse_same_run_dir(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_unique",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 5, "hold_bars": 2}]},
+        min_trades=1,
+    )
+    results = evaluate_spec(spec)
+
+    first = write_run_outputs(spec, results, tmp_path / "private")
+    second = write_run_outputs(spec, results, tmp_path / "private")
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
+
+
 def test_regime_filters_reduce_or_keep_signal_count(tmp_path):
     data = tmp_path / "ABC_USDT_SWAP_80d.json"
     _write_candles(data)

@@ -91,6 +91,24 @@ def test_queue_claim_complete_and_fail(tmp_path):
     assert statuses == {first: "failed", second: "completed"}
 
 
+def test_claim_next_job_leaves_running_job_unclaimed(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    first = enqueue_experiment(conn, tmp_path / "a.json", priority=10)
+
+    job = claim_next_job(conn)
+    second_claim = claim_next_job(conn)
+
+    row = conn.execute("SELECT status, attempts FROM queue WHERE job_id = ?", (first,)).fetchone()
+    conn.close()
+    assert job is not None
+    assert job["job_id"] == first
+    assert second_claim is None
+    assert row["status"] == "running"
+    assert row["attempts"] == 1
+
+
 def test_ensure_experiment_queued_does_not_duplicate_pending_job(tmp_path):
     db_path = default_db_path(tmp_path)
     conn = connect(db_path)

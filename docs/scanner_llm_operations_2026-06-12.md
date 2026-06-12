@@ -1,6 +1,6 @@
 # Scanner and LLM Operations Plan
 
-Status: 2026-06-12  
+Status: 2026-06-12
 Scope: paper-only scanner, main technical-analysis process, and private strategy-lab research.
 
 This document describes how the project should run paid LLM work without losing

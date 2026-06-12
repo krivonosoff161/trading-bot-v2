@@ -14,8 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.data_inventory import build_inventory, write_inventory  # noqa: E402
-
-DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
 def main() -> None:
@@ -27,6 +26,7 @@ def main() -> None:
         help="Private strategy-lab root (inventory goes to <root>/inventory)",
     )
     ap.add_argument("--dry-run", action="store_true", help="Print summary only, write nothing")
+    ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
 
     spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
@@ -41,7 +41,8 @@ def main() -> None:
     )
     if args.dry_run:
         return
-    out_path = write_inventory(inventory, Path(args.out_root).expanduser() / "inventory")
+    out_root = resolve_private_root(args.out_root, allow_public_output=args.allow_public_output)
+    out_path = write_inventory(inventory, out_root / "inventory")
     print(f"wrote {out_path.parent.name}/{out_path.name} (private root)")
 
 

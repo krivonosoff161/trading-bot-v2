@@ -29,6 +29,7 @@ except Exception:
 
 from src.utils import llm_budget_guard as B  # noqa: E402
 from src.utils import llm_client as L  # noqa: E402
+from src.scout import scanner_journal as J  # noqa: E402
 
 SCOUT_LOG_DIR = _ROOT / "logs" / "scout"
 REASONING = SCOUT_LOG_DIR / "scanner_reasoning.jsonl"
@@ -134,6 +135,23 @@ async def _probe_live() -> list[dict[str, Any]]:
     return results
 
 
+def _write_probe_budget(probe_rows: list[dict[str, Any]]) -> None:
+    usage_rows = [row.get("usage") or {} for row in probe_rows]
+    J.write_budget(
+        {
+            "source": "llm_health_probe",
+            "n_ingested": 0,
+            "n_fresh": 0,
+            "n_cards": 0,
+            "n_dropped": 0,
+            "n_llm_fail": sum(1 for row in probe_rows if not row.get("ok")),
+            "n_probe_calls": len(probe_rows),
+            "total_tokens": sum(int(u.get("total_tokens") or 0) for u in usage_rows),
+            "cost_rub": round(sum(float(u.get("cost_rub") or 0.0) for u in usage_rows), 4),
+        }
+    )
+
+
 def _print_human(report: dict[str, Any]) -> None:
     c = report["configured"]
     t = report["totals"]
@@ -161,6 +179,7 @@ def main() -> None:
     report = summarize(args.day)
     if args.probe_live:
         report["probe_live"] = asyncio.run(_probe_live())
+        _write_probe_budget(report["probe_live"])
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
