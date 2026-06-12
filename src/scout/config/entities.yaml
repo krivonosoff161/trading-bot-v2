@@ -77,7 +77,8 @@ layer_map:
   4: [CL]                                     # ресурсы (нефть)
   5: [NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, ARM, MRVL, MSFT, GOOGL, GOOG, META, AMZN, AAPL,
       TSLA, NFLX, COIN, MSTR, HOOD, PLTR, QQQ, SPY, CRWD, NOW, ORCL, ASML, ADBE, HPE, ASTS,
-      AVUV, OPENAI, ANTHROPIC, SPACEX]        # акции + pre-IPO перпы
+      AVUV, OPENAI, ANTHROPIC, SPACEX,
+      BX, TWLO, CRDO, CIEN, ISRG, FLNC, CGNX, ROK]        # акции + pre-IPO перпы
 
 # Якорь baseline по слою (excess vs index, не хардкод BTC). Off-OKX (металлы/нефть) → manual.
 baseline_by_layer:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from src.strategy.setup_confirmation import confirm_setup
 
 
-def _watch(side: str = "buy", expires_at: str = "2026-06-12T10:00:00Z") -> dict:
+def _watch(side: str = "buy", expires_at: str = "2099-06-12T10:00:00Z") -> dict:
     return {
         "watch_id": "watch_abc",
         "expires_at": expires_at,
