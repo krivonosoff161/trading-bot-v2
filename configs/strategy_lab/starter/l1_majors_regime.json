@@ -1,0 +1,31 @@
+{
+  "experiment_id": "l1_majors_regime_v0",
+  "data_glob": "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json",
+  "symbols": ["BTC_USDT_SWAP", "ETH_USDT_SWAP", "SOL_USDT_SWAP", "BNB_USDT_SWAP", "XRP_USDT_SWAP"],
+  "families": [
+    "momentum_breakout",
+    "donchian_breakout",
+    "trend_pullback",
+    "moving_average_reclaim"
+  ],
+  "fees_bps": 7,
+  "slippage_bps": 3,
+  "min_trades": 20,
+  "split_ratio": 0.7,
+  "max_runs": 80,
+  "parameter_grid": {
+    "momentum_breakout": [
+      {"lookback": 20, "threshold_pct": 0.0, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
+      {"lookback": 40, "threshold_pct": 1.0, "hold_bars": 8, "stop_pct": 10, "take_pct": 22}
+    ],
+    "donchian_breakout": [
+      {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 18}
+    ],
+    "trend_pullback": [
+      {"trend_ma": 30, "pullback_ma": 10, "hold_bars": 5, "stop_pct": 7, "take_pct": 14}
+    ],
+    "moving_average_reclaim": [
+      {"ma": 20, "below_bars": 3, "hold_bars": 5, "stop_pct": 7, "take_pct": 14}
+    ]
+  }
+}

@@ -31,7 +31,27 @@ bat\strategy_lab_start.bat
 ```
 
 Builds the data inventory, syncs the state DB, ensures one smoke job is queued,
-starts the dashboard (`http://127.0.0.1:8765`) and the one-worker loop.
+queues the starter research pack, starts the dashboard (`http://127.0.0.1:8765`)
+and the one-worker loop.
+
+## Starter research pack
+
+`configs/strategy_lab/starter/` is the first always-on pack. It queues multiple
+small specs instead of a single smoke job:
+
+- majors / regime baselines;
+- volatile L2 alts and meme-like assets;
+- down/sideways regime checks for fades and retests;
+- AI / equity proxy symbols.
+
+Queue it directly:
+
+```bash
+python scripts/strategy_lab/enqueue_pack.py --dir configs/strategy_lab/starter --priority 50
+```
+
+The worker still processes one job at a time. This keeps the desktop safe while
+allowing a richer 24/7 queue.
 
 ## Manual chain
 

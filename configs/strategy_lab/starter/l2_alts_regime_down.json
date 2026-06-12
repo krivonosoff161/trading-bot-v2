@@ -1,0 +1,32 @@
+{
+  "experiment_id": "l2_alts_regime_down_v0",
+  "data_glob": "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json",
+  "symbols": ["ZEC_USDT_SWAP", "HYPE_USDT_SWAP", "PENGU_USDT_SWAP", "PEPE_USDT_SWAP", "DOGE_USDT_SWAP"],
+  "families": [
+    "mean_reversion_fade",
+    "rsi_reversal",
+    "volume_exhaustion_fade",
+    "breakout_retest"
+  ],
+  "fees_bps": 9,
+  "slippage_bps": 6,
+  "min_trades": 10,
+  "split_ratio": 0.7,
+  "max_runs": 80,
+  "filters": {"trend": ["down", "sideways"], "volatility": ["medium", "high"]},
+  "parameter_grid": {
+    "mean_reversion_fade": [
+      {"lookback": 3, "move_pct": 12, "hold_bars": 2, "stop_pct": 10, "take_pct": 8},
+      {"lookback": 5, "move_pct": 18, "hold_bars": 3, "stop_pct": 14, "take_pct": 10}
+    ],
+    "rsi_reversal": [
+      {"period": 14, "oversold": 28, "overbought": 72, "hold_bars": 4, "stop_pct": 9, "take_pct": 12}
+    ],
+    "volume_exhaustion_fade": [
+      {"lookback": 20, "move_bars": 3, "min_move_pct": 12.0, "vol_mult": 3.0, "hold_bars": 3, "stop_pct": 12, "take_pct": 10}
+    ],
+    "breakout_retest": [
+      {"lookback": 20, "retest_window": 5, "retest_tol_pct": 1.0, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    ]
+  }
+}
