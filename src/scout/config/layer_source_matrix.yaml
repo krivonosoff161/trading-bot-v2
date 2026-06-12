@@ -87,7 +87,7 @@ layers:
       - retail_price_roundup
     realized_sources:
       - {source: google_news_metals, status: live, priority: 4, notes: "broad aggregator; noisy but gives coverage"}
-      - {source: investing_commodities, status: candidate, priority: 3, notes: "onboarding 2026-06-11: direct commodities wire with article bodies; kitco RSS dead (404), mining.com blocked (403)"}
+      - {source: investing_commodities, status: disabled, priority: 3, notes: "2026-06-12: 100% title_only (22 docs); investing.com JS-rendered. Re-enable with parser/adapter."}
     expected_sources:
       - {source: fred_calendar, status: live, priority: 1, notes: "Fed/CPI/NFP expected calendar for gold surprise"}
     watch_sources:
@@ -110,7 +110,7 @@ layers:
     realized_sources:
       - {source: google_news_energy, status: live, priority: 4, notes: "broad aggregator; often ambiguous"}
       - {source: oilprice, status: live, priority: 3, notes: "domain feed; useful only with strict gating"}
-      - {source: rigzone, status: candidate, priority: 3, notes: "onboarding 2026-06-11: direct upstream/LNG wire; compare idio/full_body vs oilprice over a week"}
+      - {source: rigzone, status: disabled, priority: 3, notes: "2026-06-12: 100% title_only (25 docs); rigzone.com requires JS rendering. Re-enable with parser/adapter."}
     expected_sources:
       - {source: eia, status: live, priority: 1, notes: "official WPSR next-release cadence for crude inventory"}
       - {source: opec, status: live, priority: 1, notes: "official next OPEC/OPEC+ meeting cadence from press releases"}

@@ -19,7 +19,10 @@ LLM не вызывается. Сеть — только в resolve_* (вызы�
 Троттлинг (аудит 11.06: бэкфил ~600×2 запросов за день → Google 429 «unusual traffic»,
 509 доков с ошибкой, 466 обёрток не раскрыто): пауза между сетевыми резолвами +
 cooldown после 429 (мягкий отказ, оригинальный URL остаётся фолбэком, петля не падает).
-Конфиг через env: SCANNER_GN_DELAY_S / SCANNER_GN_COOLDOWN_S. Метрики — metrics().
+Cap сетевых resolve за проход (SCANNER_GN_MAX_PER_PASS=20): лишние wrapper-обёртки
+пропускаются без ошибки с метрикой skipped_by_pass_cap.
+Конфиг через env: SCANNER_GN_DELAY_S / SCANNER_GN_COOLDOWN_S / SCANNER_GN_MAX_PER_PASS.
+Метрики — metrics().
 """
 from __future__ import annotations
 
@@ -49,10 +52,12 @@ def _env_float(name: str, default: float) -> float:
 
 RESOLVE_DELAY_S = _env_float("SCANNER_GN_DELAY_S", 4.0)        # пауза между резолвами
 COOLDOWN_429_S = _env_float("SCANNER_GN_COOLDOWN_S", 1800.0)   # стоп после 429 (~1 проход)
+MAX_RESOLVE_PER_PASS = int(_env_float("SCANNER_GN_MAX_PER_PASS", 20))  # cap сетевых resolve за проход
 
 _metrics = {"google_wrappers_seen": 0, "google_resolved": 0, "google_failed": 0,
-            "google_429": 0, "google_skipped_cooldown": 0, "google_backoff_seconds": 0.0}
-_state = {"last_resolve_ts": 0.0, "cooldown_until": 0.0}
+            "google_429": 0, "google_skipped_cooldown": 0, "google_backoff_seconds": 0.0,
+            "google_skipped_pass_cap": 0}
+_state = {"last_resolve_ts": 0.0, "cooldown_until": 0.0, "resolves_this_pass": 0}
 
 
 def _now() -> float:           # обёртки — monkeypatch в тестах вместо реального времени
@@ -73,6 +78,12 @@ def reset_metrics() -> None:
         _metrics[k] = 0.0 if k == "google_backoff_seconds" else 0
     _state["last_resolve_ts"] = 0.0
     _state["cooldown_until"] = 0.0
+    _state["resolves_this_pass"] = 0
+
+
+def reset_pass_counter() -> None:
+    """Сброс счётчика resolve за проход. Вызывать перед resolve_pending."""
+    _state["resolves_this_pass"] = 0
 
 
 def in_cooldown() -> bool:
@@ -169,6 +180,10 @@ def resolve_google_news_url(url: str, timeout: int = _TIMEOUT, http=None) -> str
     if in_cooldown():
         _metrics["google_skipped_cooldown"] += 1
         return None
+    if _state["resolves_this_pass"] >= MAX_RESOLVE_PER_PASS:
+        _metrics["google_skipped_pass_cap"] += 1
+        return None
+    _state["resolves_this_pass"] += 1
     try:
         if http is None:
             import requests as http  # noqa: PLC0415 — ленивый импорт, модуль остаётся чистым

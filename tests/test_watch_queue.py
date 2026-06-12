@@ -8,7 +8,7 @@ from src.scout import watch_queue as WQ
 
 
 def _row(verdict: str = "WATCH", side: str = "long") -> dict:
-    return J.build_row(
+    row = J.build_row(
         source_url=f"https://example.com/{verdict.lower()}-{side}",
         source_ts="2026-06-11T10:00:00Z",
         layer=2,
@@ -29,6 +29,8 @@ def _row(verdict: str = "WATCH", side: str = "long") -> dict:
         chief_called=True,
         summary="Synthetic watch row",
     )
+    row["ts_utc"] = "2026-06-11T10:00:00Z"
+    return row
 
 
 def test_watch_queue_writes_watch_and_go_but_not_no_go(tmp_path):
