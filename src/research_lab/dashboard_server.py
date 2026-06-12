@@ -72,6 +72,8 @@ def render_html(state: dict) -> str:
     runs = state.get("runs") or []
     state_db = state.get("state_db") or {}
     queue_counts = state_db.get("queue_counts") or {}
+    validation_counts = state_db.get("validation_counts") or totals.get("validation_counts") or {}
+    registry = state.get("candidate_registry") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -111,6 +113,13 @@ def render_html(state: dict) -> str:
     {metric_card("Queued", queue_counts.get("queued", 0), "warn")}
   </div>
 
+  <div class="grid">
+    {metric_card("Forward paper", validation_counts.get("FORWARD_PAPER", 0), "ok")}
+    {metric_card("Regime specific", validation_counts.get("REGIME_SPECIFIC", 0), "warn")}
+    {metric_card("Observe", validation_counts.get("OBSERVE", 0))}
+    {metric_card("Reject", validation_counts.get("REJECT", 0), "bad")}
+  </div>
+
   <section class="card">
     <h2>Latest Run</h2>
     {latest_run_html(latest)}
@@ -129,6 +138,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Latest Candidates</h2>
     {candidates_table((latest.get("top_candidates") or [])[:20])}
+  </section>
+
+  <section class="section card">
+    <h2>Candidate Registry</h2>
+    {registry_html(registry)}
   </section>
 
   <section class="section card">
@@ -211,7 +225,7 @@ def queue_table(rows_in: list[dict]) -> str:
 def candidates_table(candidates: list[dict]) -> str:
     if not candidates:
         return '<p class="muted">No candidates in latest run.</p>'
-    rows = ["<table><thead><tr><th>Run ID</th><th>Symbol</th><th>Family</th><th>Decision</th><th>Avg</th><th>OOS</th><th>PF</th><th>Reasons</th></tr></thead><tbody>"]
+    rows = ["<table><thead><tr><th>Run ID</th><th>Symbol</th><th>Family</th><th>Decision</th><th>Validation</th><th>Avg</th><th>OOS</th><th>PF</th><th>Reasons</th></tr></thead><tbody>"]
     for c in candidates:
         rows.append(
             "<tr>"
@@ -219,6 +233,7 @@ def candidates_table(candidates: list[dict]) -> str:
             f"<td>{esc(c.get('symbol', ''))}</td>"
             f"<td>{esc(c.get('family', ''))}</td>"
             f"<td>{esc(c.get('decision', ''))}</td>"
+            f"<td>{esc(c.get('validation_status', ''))}</td>"
             f"<td>{esc(c.get('avg_net_pct', ''))}</td>"
             f"<td>{esc(c.get('test_avg_net_pct', ''))}</td>"
             f"<td>{esc(c.get('profit_factor', ''))}</td>"
@@ -227,6 +242,20 @@ def candidates_table(candidates: list[dict]) -> str:
         )
     rows.append("</tbody></table>")
     return "\n".join(rows)
+
+
+def registry_html(registry: dict) -> str:
+    if not registry.get("exists"):
+        return '<p class="muted">Candidate registry not created yet.</p>'
+    by_status = registry.get("by_validation_status") or {}
+    statuses = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(by_status.items())) or "empty"
+    return "\n".join(
+        [
+            f"<p>entries: {esc(registry.get('entries', 0))}</p>",
+            f"<p>{statuses}</p>",
+            f"<p class=\"path\">registry: {esc(registry.get('registry_label', ''))}</p>",
+        ]
+    )
 
 
 def esc(value: object) -> str:

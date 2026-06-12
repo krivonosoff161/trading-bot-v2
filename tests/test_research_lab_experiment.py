@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from src.research_lab.experiment import ExperimentSpec, evaluate_spec, write_run_outputs
+from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs
 
 
 def _write_candles(path: Path) -> None:
@@ -65,6 +65,140 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert "[[Symbols/ABC_USDT_SWAP]]" in next((vault / "Candidates").glob("*.md")).read_text(encoding="utf-8")
 
 
+def test_run_outputs_include_validation_and_registry(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_validation",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 2, "stop_pct": 5, "take_pct": 10}
+            ],
+        },
+        min_trades=1,
+    )
+
+    results = evaluate_spec(spec)
+    out_dir = write_run_outputs(spec, results, tmp_path / "private")
+
+    assert results[0].validation_status in {"REJECT", "OBSERVE", "REGIME_SPECIFIC", "FORWARD_PAPER"}
+    assert results[0].next_action
+    assert "regime_breakdown" in results[0].metrics
+    csv_text = (out_dir / "candidates.csv").read_text(encoding="utf-8")
+    assert "validation_status" in csv_text
+    registry_file = tmp_path / "private" / "candidate-registry" / "candidates.jsonl"
+    assert registry_file.exists()
+    entry = json.loads(registry_file.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["experiment_id"] == "unit_validation"
+    assert entry["validation_status"] == results[0].validation_status
+    pack = json.loads((out_dir / "llm_review_pack.json").read_text(encoding="utf-8"))
+    assert pack["schema"] == "strategy_lab_llm_review_pack.v1"
+    assert "validation_counts" in pack
+
+
+def test_regime_filters_reduce_or_keep_signal_count(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    base = dict(
+        experiment_id="unit_filters",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 2, "stop_pct": 5, "take_pct": 10}
+            ],
+        },
+        min_trades=1,
+    )
+
+    unfiltered = evaluate_spec(ExperimentSpec(**base))
+    filtered = evaluate_spec(ExperimentSpec(**base, filters={"trend": ["down"]}))
+
+    assert filtered[0].metrics["n_trades"] <= unfiltered[0].metrics["n_trades"]
+
+
+def test_filters_eliminating_all_signals_yield_empty_metrics(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_empty",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 2, "stop_pct": 5, "take_pct": 10}
+            ],
+        },
+        min_trades=1,
+        filters={"volatility": ["no_such_bucket"]},
+    )
+
+    results = evaluate_spec(spec)
+
+    assert results[0].metrics["n_trades"] == 0
+    assert results[0].metrics["win_rate"] == 0.0
+    assert results[0].decision == "REJECT"
+    assert results[0].validation_status == "REJECT"
+
+
+def test_max_runs_caps_results(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_cap",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "hold_bars": 2},
+                {"lookback": 10, "hold_bars": 2},
+                {"lookback": 15, "hold_bars": 2},
+            ],
+        },
+        min_trades=1,
+        max_runs=2,
+    )
+
+    assert len(evaluate_spec(spec)) == 2
+
+
+def test_missing_symbol_file_is_skipped(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_missing",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP", "GHOST_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 5, "hold_bars": 2}]},
+        min_trades=1,
+    )
+
+    results = evaluate_spec(spec)
+
+    assert len(results) == 1
+    assert results[0].symbol == "ABC_USDT_SWAP"
+
+
+def test_choose_symbol_file_prefers_largest(tmp_path):
+    from src.research_lab.experiment import choose_symbol_file
+
+    small = tmp_path / "ABC_USDT_SWAP_10d.json"
+    big = tmp_path / "ABC_USDT_SWAP_80d.json"
+    small.write_text(json.dumps([{"ts": 1, "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1}]), encoding="utf-8")
+    _write_candles(big)
+
+    chosen = choose_symbol_file(str(tmp_path / "{symbol}_*.json"), "ABC_USDT_SWAP")
+
+    assert chosen == big
+
+
 def test_experiment_spec_loads_from_json(tmp_path):
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(
@@ -75,6 +209,7 @@ def test_experiment_spec_loads_from_json(tmp_path):
                 "symbols": ["BTC_USDT_SWAP"],
                 "families": ["momentum_breakout"],
                 "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
+                "filters": {"volatility": ["medium", "high"]},
             }
         ),
         encoding="utf-8",
@@ -84,3 +219,4 @@ def test_experiment_spec_loads_from_json(tmp_path):
 
     assert spec.experiment_id == "x"
     assert spec.parameter_grid["momentum_breakout"][0]["lookback"] == 3
+    assert spec.filters == {"volatility": ["medium", "high"]}

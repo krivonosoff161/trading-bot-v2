@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.candidate_registry import registry_path, registry_summary
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,11 +40,12 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
     runs = load_completed_runs(completed_root, private_root)
     state_db = dashboard_snapshot(default_db_path(private_root))
     return {
-        "schema": "strategy_lab_dashboard.v0",
+        "schema": "strategy_lab_dashboard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "private_root_label": "strategy-lab",
         "obsidian_vault_label": "strategy-lab/obsidian-vault",
         "state_db": state_db,
+        "candidate_registry": registry_summary(registry_path(private_root)),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
@@ -80,9 +82,12 @@ def load_run(run_dir: Path) -> dict[str, Any]:
     payload = _load_json(metrics_path)
     candidates = _load_candidates(candidates_path)
     counts: dict[str, int] = {}
+    validation_counts: dict[str, int] = {}
     for row in candidates:
         decision = str(row.get("decision") or "UNKNOWN")
         counts[decision] = counts.get(decision, 0) + 1
+        status = str(row.get("validation_status") or "UNKNOWN")
+        validation_counts[status] = validation_counts.get(status, 0) + 1
     return {
         "run_id": run_dir.name,
         "experiment_id": payload.get("experiment_id") or _experiment_from_run_name(run_dir.name),
@@ -94,6 +99,7 @@ def load_run(run_dir: Path) -> dict[str, Any]:
         ),
         "candidate_count": len(candidates),
         "counts": counts,
+        "validation_counts": validation_counts,
         "top_candidates": candidates[:12],
     }
 
@@ -127,9 +133,11 @@ def _load_candidates(path: Path) -> list[dict[str, Any]]:
     return sorted(out, key=lambda r: _candidate_sort_key(r), reverse=True)
 
 
-def _candidate_sort_key(row: dict[str, Any]) -> tuple[int, float, float]:
+def _candidate_sort_key(row: dict[str, Any]) -> tuple[int, int, float, float]:
+    validation_rank = {"FORWARD_PAPER": 4, "REGIME_SPECIFIC": 3, "OBSERVE": 2, "REJECT": 1}
     decision_rank = {"PROMOTE_FOR_PRESSURE_TEST": 3, "OBSERVE": 2, "REJECT": 1}
     return (
+        validation_rank.get(str(row.get("validation_status")), 0),
         decision_rank.get(str(row.get("decision")), 0),
         _float(row.get("avg_net_pct")),
         _float(row.get("test_avg_net_pct")),
@@ -145,13 +153,17 @@ def _float(value: Any) -> float:
 
 def aggregate_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     counts: dict[str, int] = {}
+    validation_counts: dict[str, int] = {}
     for run in runs:
         for key, value in (run.get("counts") or {}).items():
             counts[key] = counts.get(key, 0) + int(value or 0)
+        for key, value in (run.get("validation_counts") or {}).items():
+            validation_counts[key] = validation_counts.get(key, 0) + int(value or 0)
     return {
         "run_count": len(runs),
         "candidate_count": sum(int(r.get("candidate_count") or 0) for r in runs),
         "decision_counts": counts,
+        "validation_counts": validation_counts,
     }
 
 

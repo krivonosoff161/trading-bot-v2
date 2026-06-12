@@ -34,6 +34,9 @@ def _write_completed_run(root: Path, run_name: str = "20260612_010000_demo") -> 
                 "metrics": {"n_trades": 11, "avg_net_pct": 0.4},
                 "decision": "PROMOTE_FOR_PRESSURE_TEST",
                 "reasons": ["passed_basic_gates"],
+                "validation_status": "FORWARD_PAPER",
+                "validation_reasons": ["passed_lite_validation"],
+                "next_action": "track paper-forward only",
             },
             {
                 "run_id": "def",
@@ -117,4 +120,82 @@ def test_dashboard_snapshot_has_no_absolute_private_paths(tmp_path):
     assert snap["exists"] is True
     assert snap["totals"]["run_count"] == 1
     assert snap["queue_counts"]["queued"] == 1
+    assert snap["validation_counts"]["FORWARD_PAPER"] == 1
+    assert snap["candidates"][0]["validation_status"] == "FORWARD_PAPER"
     assert str(tmp_path) not in json.dumps(snap)
+
+
+def test_reimport_same_run_replaces_candidates(tmp_path):
+    run = _write_completed_run(tmp_path)
+    import_completed_runs(tmp_path)
+    payload = json.loads((run / "metrics.json").read_text(encoding="utf-8"))
+    payload["results"] = payload["results"][:1]
+    (run / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    stats = import_completed_runs(tmp_path)
+
+    assert stats["candidates"] == 1
+    conn = sqlite3.connect(default_db_path(tmp_path))
+    assert conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0] == 1
+    conn.close()
+
+
+def test_import_legacy_results_without_validation_fields(tmp_path):
+    run = tmp_path / "experiments" / "completed" / "20260601_000000_legacy"
+    run.mkdir(parents=True)
+    payload = {
+        "schema": "strategy_lab_results.v0",
+        "experiment_id": "legacy",
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "results": [
+            {
+                "run_id": "old1",
+                "symbol": "BTC_USDT_SWAP",
+                "family": "momentum_breakout",
+                "params": {},
+                "metrics": {"n_trades": 5},
+                "decision": "OBSERVE",
+                "reasons": ["weak_oos_sample"],
+            }
+        ],
+    }
+    (run / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    import_completed_runs(tmp_path)
+
+    conn = sqlite3.connect(default_db_path(tmp_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT validation_status, next_action FROM candidates").fetchone()
+    conn.close()
+    assert row["validation_status"] == ""
+    assert row["next_action"] == ""
+
+
+def test_schema_v1_db_is_migrated_with_validation_columns(tmp_path):
+    db_path = default_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE candidates (
+            run_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            family TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reasons TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, candidate_id)
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    conn = connect(db_path)
+    init_db(conn)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)")}
+    conn.close()
+
+    assert {"validation_status", "validation_reasons", "next_action"} <= columns
