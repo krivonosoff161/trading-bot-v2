@@ -1,0 +1,140 @@
+# -*- coding: utf-8 -*-
+
+import csv
+import json
+from pathlib import Path
+
+import pytest
+
+from src.research_lab.dashboard_server import render_html
+from src.research_lab.dashboard_state import (
+    aggregate_runs,
+    load_completed_runs,
+    load_dashboard_state,
+    resolve_allowed_path,
+)
+
+
+def _write_run(root: Path, name: str) -> Path:
+    run = root / "experiments" / "completed" / name
+    run.mkdir(parents=True)
+    (run / "metrics.json").write_text(
+        json.dumps({"experiment_id": "demo", "created_at": "2026-06-12T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    with (run / "candidates.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "run_id",
+                "symbol",
+                "family",
+                "decision",
+                "reasons",
+                "n_trades",
+                "win_rate",
+                "avg_net_pct",
+                "total_net_pct",
+                "profit_factor",
+                "max_drawdown_pct",
+                "test_avg_net_pct",
+                "best_trade_share",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "run_id": "abc",
+                "symbol": "BTC_USDT_SWAP",
+                "family": "momentum_breakout",
+                "decision": "PROMOTE_FOR_PRESSURE_TEST",
+                "reasons": "passed_basic_gates",
+                "n_trades": "22",
+                "win_rate": "0.5",
+                "avg_net_pct": "1.2",
+                "total_net_pct": "26.4",
+                "profit_factor": "1.3",
+                "max_drawdown_pct": "8",
+                "test_avg_net_pct": "0.7",
+                "best_trade_share": "0.2",
+            }
+        )
+    (run / "summary.md").write_text("# Summary\n", encoding="utf-8")
+    (run / "llm_review_prompt.md").write_text("# Prompt\n", encoding="utf-8")
+    return run
+
+
+def test_resolve_allowed_path_rejects_traversal(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    inside = root / "ok.txt"
+    inside.write_text("ok", encoding="utf-8")
+
+    assert resolve_allowed_path(inside, [root]) == inside.resolve()
+    with pytest.raises(ValueError):
+        resolve_allowed_path(tmp_path / "outside.txt", [root])
+
+
+def test_dashboard_state_loads_completed_runs(tmp_path, monkeypatch):
+    _write_run(tmp_path, "20260612_010000_demo")
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    monkeypatch.setattr("src.research_lab.dashboard_state.DEFAULT_PRIVATE_ROOT", tmp_path)
+
+    state = load_dashboard_state(tmp_path)
+
+    assert state["totals"]["run_count"] == 1
+    assert state["totals"]["decision_counts"]["PROMOTE_FOR_PRESSURE_TEST"] == 1
+    assert state["latest_run"]["top_candidates"][0]["symbol"] == "BTC_USDT_SWAP"
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_completed_runs_sort_newest_first(tmp_path):
+    _write_run(tmp_path, "20260612_010000_old")
+    _write_run(tmp_path, "20260612_020000_new")
+
+    runs = load_completed_runs(tmp_path / "experiments" / "completed", tmp_path)
+
+    assert runs[0]["run_id"] == "20260612_020000_new"
+
+
+def test_render_html_escapes_candidate_fields():
+    state = {
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "totals": {"run_count": 1, "candidate_count": 1, "decision_counts": {"PROMOTE_FOR_PRESSURE_TEST": 1}},
+        "llm_cost": {"today_rub": 0},
+        "latest_run": {
+            "run_id": "<bad>",
+            "experiment_id": "demo",
+            "candidate_count": 1,
+            "counts": {"PROMOTE_FOR_PRESSURE_TEST": 1},
+            "top_candidates": [
+                {
+                    "run_id": "x",
+                    "symbol": "<script>",
+                    "family": "f",
+                    "decision": "PROMOTE_FOR_PRESSURE_TEST",
+                    "avg_net_pct": "1",
+                    "test_avg_net_pct": "1",
+                    "profit_factor": "1",
+                    "reasons": "ok",
+                }
+            ],
+        },
+        "runs": [],
+    }
+
+    page = render_html(state)
+
+    assert "<script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_aggregate_runs_counts_decisions():
+    totals = aggregate_runs([
+        {"candidate_count": 2, "counts": {"REJECT": 1, "OBSERVE": 1}},
+        {"candidate_count": 1, "counts": {"REJECT": 1}},
+    ])
+
+    assert totals["candidate_count"] == 3
+    assert totals["decision_counts"]["REJECT"] == 2

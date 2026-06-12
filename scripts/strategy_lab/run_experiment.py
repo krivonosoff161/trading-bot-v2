@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
 
 
-DEFAULT_PRIVATE_ROOT = Path(r"C:\Users\krivo\github_projects\trading-bot-research\strategy-lab")
+DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 
 
 def main() -> None:
@@ -46,4 +46,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

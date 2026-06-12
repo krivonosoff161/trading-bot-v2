@@ -42,7 +42,8 @@ Main process:
 
 Private strategy lab:
 
-- lives in `C:\Users\krivo\github_projects\trading-bot-research`;
+- lives outside the public repository, by default under
+  `%USERPROFILE%\github_projects\trading-bot-research`;
 - stores real findings, parameters, candidate scorecards, graph exports, and
   Obsidian notes;
 - public repos may show methods and sanitized examples, not profitable private
@@ -225,6 +226,23 @@ Continuous loop:
 ```bash
 bat\strategy_lab_loop.bat
 ```
+
+Read-only local dashboard:
+
+```bash
+bat\strategy_lab_dashboard.bat
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The first dashboard intentionally has no write actions. It reads completed
+private runs, scanner LLM cost logs, and Obsidian paths. It does not read or
+display `.env`, does not execute shell commands from the UI, and does not import
+the live trading path.
 
 Current implementation:
 
