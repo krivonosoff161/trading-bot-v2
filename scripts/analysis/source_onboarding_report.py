@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import yaml
@@ -189,6 +190,9 @@ def render_md(data: dict) -> str:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="все источники реестра, не только онбординг")
     ap.add_argument("--json", action="store_true")
