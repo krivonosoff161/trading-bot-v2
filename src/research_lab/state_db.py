@@ -200,6 +200,22 @@ def enqueue_experiment(
     return int(cur.lastrowid)
 
 
+def ensure_experiment_queued(conn: sqlite3.Connection, spec_path: Path, *, priority: int = 100) -> tuple[int, bool]:
+    normalized = str(spec_path)
+    row = conn.execute(
+        """
+        SELECT job_id FROM queue
+        WHERE spec_path = ? AND status IN ('queued', 'running')
+        ORDER BY job_id ASC
+        LIMIT 1
+        """,
+        (normalized,),
+    ).fetchone()
+    if row is not None:
+        return int(row["job_id"]), False
+    return enqueue_experiment(conn, spec_path, priority=priority), True
+
+
 def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
     row = conn.execute(
         """

@@ -12,7 +12,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.research_lab.state_db import connect, default_db_path, enqueue_experiment, init_db  # noqa: E402
+from src.research_lab.state_db import (  # noqa: E402
+    connect,
+    default_db_path,
+    enqueue_experiment,
+    ensure_experiment_queued,
+    init_db,
+)
 
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 
@@ -21,6 +27,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", required=True, help="Experiment spec JSON")
     ap.add_argument("--priority", type=int, default=100)
+    ap.add_argument("--ensure", action="store_true", help="Do not duplicate queued/running job for the same spec")
     ap.add_argument(
         "--private-root",
         default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
@@ -35,9 +42,14 @@ def main() -> None:
     db_path = default_db_path(private_root)
     conn = connect(db_path)
     init_db(conn)
-    job_id = enqueue_experiment(conn, spec_path, priority=args.priority)
+    if args.ensure:
+        job_id, created = ensure_experiment_queued(conn, spec_path, priority=args.priority)
+    else:
+        job_id = enqueue_experiment(conn, spec_path, priority=args.priority)
+        created = True
     conn.close()
-    print(f"queued job_id={job_id} spec={spec_path.name} db={db_path}")
+    action = "queued" if created else "already_queued"
+    print(f"{action} job_id={job_id} spec={spec_path.name} db={db_path}")
 
 
 if __name__ == "__main__":

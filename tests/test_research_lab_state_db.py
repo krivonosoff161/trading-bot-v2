@@ -11,6 +11,7 @@ from src.research_lab.state_db import (
     dashboard_snapshot,
     default_db_path,
     enqueue_experiment,
+    ensure_experiment_queued,
     fail_job,
     import_completed_runs,
     init_db,
@@ -85,6 +86,22 @@ def test_queue_claim_complete_and_fail(tmp_path):
     }
     conn.close()
     assert statuses == {first: "failed", second: "completed"}
+
+
+def test_ensure_experiment_queued_does_not_duplicate_pending_job(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    spec = tmp_path / "spec.json"
+
+    first, first_created = ensure_experiment_queued(conn, spec, priority=50)
+    second, second_created = ensure_experiment_queued(conn, spec, priority=50)
+
+    assert first == second
+    assert first_created is True
+    assert second_created is False
+    assert conn.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 1
+    conn.close()
 
 
 def test_dashboard_snapshot_has_no_absolute_private_paths(tmp_path):
