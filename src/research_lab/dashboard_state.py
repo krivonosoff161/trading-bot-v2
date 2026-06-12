@@ -1,0 +1,195 @@
+# -*- coding: utf-8 -*-
+"""Read-only state model for the local strategy-lab dashboard."""
+
+from __future__ import annotations
+
+import csv
+import datetime as dt
+import json
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+SCOUT_BUDGET_LOG = ROOT / "logs" / "scout" / "llm_budget.jsonl"
+
+
+def resolve_allowed_path(path: Path, allowed_roots: list[Path]) -> Path:
+    """Resolve a path and ensure it stays inside one of the allowed roots."""
+    resolved = path.resolve()
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return resolved
+        except ValueError:
+            continue
+    raise ValueError(f"path outside allowed roots: {path}")
+
+
+def private_root_from_env(value: str | None = None) -> Path:
+    raw = value or ""
+    return Path(raw).expanduser() if raw.strip() else DEFAULT_PRIVATE_ROOT
+
+
+def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
+    private_root = private_root.expanduser().resolve()
+    completed_root = private_root / "experiments" / "completed"
+    runs = load_completed_runs(completed_root, private_root)
+    return {
+        "schema": "strategy_lab_dashboard.v0",
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "runs": runs,
+        "latest_run": runs[0] if runs else None,
+        "totals": aggregate_runs(runs),
+        "llm_cost": load_llm_cost_summary(SCOUT_BUDGET_LOG),
+        "safety": {
+            "bind_host": "127.0.0.1",
+            "mode": "read_only",
+            "shell_execution": False,
+            "env_values_exposed": False,
+            "live_trading": False,
+        },
+    }
+
+
+def load_completed_runs(completed_root: Path, private_root: Path) -> list[dict[str, Any]]:
+    completed_root = resolve_allowed_path(completed_root, [private_root])
+    if not completed_root.exists():
+        return []
+    runs = []
+    for run_dir in sorted([p for p in completed_root.iterdir() if p.is_dir()], reverse=True):
+        try:
+            run_dir = resolve_allowed_path(run_dir, [completed_root])
+        except ValueError:
+            continue
+        runs.append(load_run(run_dir))
+    return runs
+
+
+def load_run(run_dir: Path) -> dict[str, Any]:
+    metrics_path = run_dir / "metrics.json"
+    candidates_path = run_dir / "candidates.csv"
+    summary_path = run_dir / "summary.md"
+    prompt_path = run_dir / "llm_review_prompt.md"
+    payload = _load_json(metrics_path)
+    candidates = _load_candidates(candidates_path)
+    counts: dict[str, int] = {}
+    for row in candidates:
+        decision = str(row.get("decision") or "UNKNOWN")
+        counts[decision] = counts.get(decision, 0) + 1
+    return {
+        "run_id": run_dir.name,
+        "experiment_id": payload.get("experiment_id") or _experiment_from_run_name(run_dir.name),
+        "created_at": payload.get("created_at") or "",
+        "artifact_label": f"experiments/completed/{run_dir.name}",
+        "summary_label": f"experiments/completed/{run_dir.name}/summary.md" if summary_path.exists() else "",
+        "llm_review_prompt_label": (
+            f"experiments/completed/{run_dir.name}/llm_review_prompt.md" if prompt_path.exists() else ""
+        ),
+        "candidate_count": len(candidates),
+        "counts": counts,
+        "top_candidates": candidates[:12],
+    }
+
+
+def _experiment_from_run_name(name: str) -> str:
+    parts = name.split("_", 2)
+    return parts[2] if len(parts) == 3 else name
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_candidates(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                out.append(row)
+    except OSError:
+        return []
+    return sorted(out, key=lambda r: _candidate_sort_key(r), reverse=True)
+
+
+def _candidate_sort_key(row: dict[str, Any]) -> tuple[int, float, float]:
+    decision_rank = {"PROMOTE_FOR_PRESSURE_TEST": 3, "OBSERVE": 2, "REJECT": 1}
+    return (
+        decision_rank.get(str(row.get("decision")), 0),
+        _float(row.get("avg_net_pct")),
+        _float(row.get("test_avg_net_pct")),
+    )
+
+
+def _float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def aggregate_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for run in runs:
+        for key, value in (run.get("counts") or {}).items():
+            counts[key] = counts.get(key, 0) + int(value or 0)
+    return {
+        "run_count": len(runs),
+        "candidate_count": sum(int(r.get("candidate_count") or 0) for r in runs),
+        "decision_counts": counts,
+    }
+
+
+def load_llm_cost_summary(path: Path) -> dict[str, Any]:
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    total_rub = 0.0
+    today_rub = 0.0
+    total_tokens = 0
+    today_tokens = 0
+    passes = 0
+    latest = None
+    if not path.exists():
+        return {
+            "log_label": "logs/scout/llm_budget.jsonl",
+            "passes": 0,
+            "total_rub": 0.0,
+            "today_rub": 0.0,
+            "total_tokens": 0,
+            "today_tokens": 0,
+        }
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        passes += 1
+        latest = row
+        rub = float(row.get("cost_rub") or 0.0)
+        tokens = int(row.get("total_tokens") or 0)
+        total_rub += rub
+        total_tokens += tokens
+        if str(row.get("ts") or "")[:10] == today:
+            today_rub += rub
+            today_tokens += tokens
+    return {
+        "log_label": "logs/scout/llm_budget.jsonl",
+        "passes": passes,
+        "total_rub": round(total_rub, 4),
+        "today_rub": round(today_rub, 4),
+        "total_tokens": total_tokens,
+        "today_tokens": today_tokens,
+        "latest": latest,
+    }

@@ -160,6 +160,15 @@ For continuous local research, run `bat\strategy_lab_loop.bat`. It writes
 results to the private `trading-bot-research` workspace by default; public code
 shows the method, not the private candidate tables.
 
+Local read-only dashboard:
+
+```bash
+bat\strategy_lab_dashboard.bat
+```
+
+Open `http://127.0.0.1:8765`. The dashboard is read-only, localhost-only, and
+does not expose `.env` values or live-trading controls.
+
 Focused scanner tests:
 
 ```bash
