@@ -17,6 +17,7 @@ data inventory
   -> regime labeling (volatility / trend / volume, no lookahead)
   -> validator-lite (REJECT / OBSERVE / REGIME_SPECIFIC / FORWARD_PAPER)
   -> candidate registry (private JSONL, append/update safe)
+  -> deterministic proposal generator
   -> private artifacts (metrics, candidates, summary, graph edges)
   -> SQLite state DB (runs / candidates / queue index)
   -> read-only dashboard (127.0.0.1)
@@ -30,9 +31,9 @@ data inventory
 bat\strategy_lab_start.bat
 ```
 
-Builds the data inventory, syncs the state DB, ensures one smoke job is queued,
-queues the starter research pack, starts the dashboard (`http://127.0.0.1:8765`)
-and the one-worker loop.
+Builds the data inventory, syncs the state DB, queues the starter research pack,
+generates and queues a bounded set of follow-up specs, starts the dashboard
+(`http://127.0.0.1:8765`) and the one-worker loop.
 
 ## Starter research pack
 
@@ -53,12 +54,37 @@ python scripts/strategy_lab/enqueue_pack.py --dir configs/strategy_lab/starter -
 The worker still processes one job at a time. This keeps the desktop safe while
 allowing a richer 24/7 queue.
 
+## Deterministic autopilot proposals
+
+The lab can create the next small batch of experiment specs from its private
+candidate registry:
+
+```bash
+python scripts/strategy_lab/autopilot_once.py --max-proposals 8 --priority 70
+```
+
+The proposal generator is intentionally conservative:
+
+- `FORWARD_PAPER` and `OBSERVE` candidates become parameter-neighborhood sweeps.
+- `REGIME_SPECIFIC` candidates become reruns with the strong regime bucket as a
+  filter.
+- proposal specs and the proposal registry are written only under the private
+  `trading-bot-research/strategy-lab/proposals/` root by default.
+- no LLM is called, no live order path is touched, and no private result table is
+  written into the public repository.
+
+This is the first autonomous loop: code proposes bounded follow-ups, the worker
+runs them one job at a time, and the validator decides whether each result is
+rejected, observed, regime-specific, or worth forward-paper tracking. LLM review
+remains a prepared pack, not an automatic decision maker.
+
 ## Manual chain
 
 ```bash
 python scripts/strategy_lab/build_data_inventory.py --spec configs/strategy_lab/l2_smoke.json
 python scripts/strategy_lab/sync_state_db.py
 python scripts/strategy_lab/enqueue_experiment.py --spec configs/strategy_lab/l2_smoke.json --priority 50 --ensure
+python scripts/strategy_lab/autopilot_once.py --max-proposals 8 --priority 70
 python scripts/strategy_lab/worker_once.py
 ```
 
@@ -153,13 +179,14 @@ tables or parameter findings belong in public docs.
 ## Tests
 
 ```bash
-python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py -q
+python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py tests/test_research_lab_proposals.py -q
 python -m ruff check src/research_lab scripts/strategy_lab
 ```
 
 ## Known limits (MVP 3.0 candidates)
 
-- Parameter fragility is a placeholder flag; neighbor sweeps not implemented.
+- Parameter fragility is still a lite check; neighbor sweeps exist as bounded
+  follow-up proposals, not as a full statistical robustness surface.
 - Single-TP/SL bar-close simulation; no intra-bar ordering beyond stop-first scan.
 - Regime thresholds are fixed defaults (1D-tuned), not data-adaptive.
 - HTTP handler itself is untested (render/state layers are); localhost-only.
