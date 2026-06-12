@@ -156,6 +156,24 @@ Private strategy-lab smoke run:
 python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
 ```
 
+One-command local start:
+
+```bash
+bat\strategy_lab_start.bat
+```
+
+This syncs the private state DB, opens the local dashboard, and starts the
+one-worker queue loop. It does not enqueue new experiments by itself.
+
+One-command smoke demo:
+
+```bash
+bat\strategy_lab_demo_all.bat
+```
+
+This syncs state, queues `configs/strategy_lab/l2_smoke.json`, runs one queued
+job, and opens the dashboard.
+
 For continuous local research, run `bat\strategy_lab_loop.bat`. It writes
 results to the private `trading-bot-research` workspace by default; public code
 shows the method, not the private candidate tables.
