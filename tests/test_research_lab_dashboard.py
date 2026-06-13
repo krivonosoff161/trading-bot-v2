@@ -178,6 +178,38 @@ def test_dashboard_state_handles_missing_private_root(tmp_path):
     assert state["worker_status"] == {}
     assert state["totals"]["run_count"] == 0
     assert "llm_review" in state
+    assert state["obsidian_notes"] == 0
+    assert "next_run" in state
+
+
+def test_dashboard_state_has_research_summary_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    state = load_dashboard_state(tmp_path)
+    assert "obsidian_notes" in state
+    assert "next_run" in state
+    assert state["next_run"].get("allowed") is True  # no prior runs -> allowed
+
+
+def test_render_html_shows_research_summary():
+    state = {
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "totals": {"run_count": 1, "candidate_count": 1, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "obsidian_notes": 4,
+        "next_run": {"allowed": False, "reason": "min_seconds_between_jobs", "wait_seconds": 600},
+        "latest_run": {
+            "reducer_verdicts": {"FORWARD_PAPER": 2, "REJECT": 3},
+            "entry_timing": {"avg_capture_ratio": 0.4, "avg_mfe_pct": 5.0, "avg_mae_pct": 3.0, "late_entry_rate": 0.2},
+        },
+        "llm_cost": {},
+        "runs": [],
+    }
+    page = render_html(state)
+    assert "Research Summary" in page
+    assert "FORWARD_PAPER" in page
+    assert "Obsidian candidate notes" in page
+    assert "deferred" in page
 
 
 def test_render_html_shows_worker_health_and_llm():

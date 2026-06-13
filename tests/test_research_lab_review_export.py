@@ -17,7 +17,10 @@ def _entry(cid, status, avg, test_avg):
         "strategy_id": "momentum_breakout",
         "params": {"lookback": 20},
         "validation_status": status,
-        "metrics_summary": {"n_trades": 25, "avg_net_pct": avg, "test_avg_net_pct": test_avg, "profit_factor": 1.3},
+        "metrics_summary": {
+            "n_trades": 25, "avg_net_pct": avg, "test_avg_net_pct": test_avg, "profit_factor": 1.3,
+            "entry_timing": {"avg_capture_ratio": 0.4, "avg_mae_pct": 3.0, "late_entry_rate": 0.2},
+        },
         "risk_flags": ["parameter_fragility_unknown"],
         "next_action": "keep in registry",
         "artifact_label": "experiments/completed/run_x",
@@ -46,6 +49,9 @@ def test_build_pack_excludes_reject_and_has_framing():
     assert pack["candidates"][0]["validation_status"] == "FORWARD_PAPER"
     assert "not a profitability claim" in pack["disclaimer"].lower()
     assert "next tests only" in pack["disclaimer"].lower()
+    assert pack["top_questions"]
+    assert pack["entry_timing_pain"]["avg_capture_ratio"] == 0.4
+    assert "next tests only" in pack["instruction"].lower()
 
 
 def test_export_works_without_api_key_and_no_path_leak(tmp_path, monkeypatch):
