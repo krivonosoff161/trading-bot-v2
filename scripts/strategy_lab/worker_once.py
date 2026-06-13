@@ -8,8 +8,10 @@ periodically, while the worker itself handles one job and exits.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -18,6 +20,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
+from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.runtime_policy import (  # noqa: E402
+    cadence_path,
+    effective_variant_cap,
+    evaluate_cadence,
+    load_recent_starts,
+    record_start,
+    worker_status_path,
+    write_worker_status,
+)
 from src.research_lab.state_db import (  # noqa: E402
     claim_next_job,
     complete_job,
@@ -31,6 +43,10 @@ from src.research_lab.state_db import (  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
+def _night_mode(flag: bool) -> bool:
+    return flag or os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -38,37 +54,72 @@ def main() -> None:
         default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
         help="Private strategy-lab root",
     )
+    ap.add_argument("--night-mode", action="store_true", help="Opt in to relaxed night-mode resource limits")
+    ap.add_argument("--ignore-cadence", action="store_true", help="Skip the throttle check (manual single run)")
+    ap.add_argument("--include-rejects", action="store_true", help="Debug: also upsert REJECT rows into the candidate registry")
     ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
     private_root = resolve_private_root(args.private_root, allow_public_output=args.allow_public_output)
+    policy = load_resource_policy(night_mode=_night_mode(args.night_mode))
     db_path = default_db_path(private_root)
     conn = connect(db_path)
     init_db(conn)
     stale = reap_stale_jobs(conn)
     if stale:
         print(f"requeued stale jobs={stale} db=strategy-lab/state/{db_path.name}")
+
+    now = time.time()
+    cad_path = cadence_path(private_root)
+    status_path = worker_status_path(private_root)
+    if not args.ignore_cadence:
+        decision = evaluate_cadence(policy, load_recent_starts(cad_path), now)
+        if not decision.allowed:
+            print(
+                f"deferred reason={decision.reason} wait_seconds={decision.wait_seconds} "
+                f"mode={policy.mode} (resource policy throttle)"
+            )
+            write_worker_status(
+                status_path, status="deferred", reason=decision.reason,
+                wait_seconds=decision.wait_seconds, mode=policy.mode,
+            )
+            conn.close()
+            return
+
     job = claim_next_job(conn)
     if not job:
         print(f"db=strategy-lab/state/{db_path.name} queue=empty")
+        write_worker_status(status_path, status="queue_empty", mode=policy.mode)
         conn.close()
         return
+    record_start(cad_path, now)
     job_id = int(job["job_id"])
     try:
         spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
+        cap, capped = effective_variant_cap(policy, spec.max_runs)
+        if capped:
+            print(f"variant cap applied job_id={job_id} max_runs={spec.max_runs or 'unlimited'} -> {cap} mode={policy.mode}")
+            spec = dataclasses.replace(spec, max_runs=cap)
         results = evaluate_spec(spec)
         run_dir = write_run_outputs(
             spec,
             results,
             private_root,
             allow_public_output=args.allow_public_output,
+            include_rejects=args.include_rejects,
         )
         import_run_dir(conn, private_root, run_dir)
         conn.commit()
         label = str(run_dir.relative_to(private_root)).replace("\\", "/")
         complete_job(conn, job_id, label)
+        write_worker_status(
+            status_path, status="completed", job_id=job_id, run_label=label,
+            results=len(results), mode=policy.mode,
+        )
         print(f"completed job_id={job_id} run={label} results={len(results)}")
     except Exception as exc:  # pragma: no cover - defensive CLI boundary
-        fail_job(conn, job_id, "".join(traceback.format_exception_only(type(exc), exc)).strip())
+        reason = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        fail_job(conn, job_id, reason)
+        write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
         print(f"failed job_id={job_id} error={exc}")
         raise
     finally:

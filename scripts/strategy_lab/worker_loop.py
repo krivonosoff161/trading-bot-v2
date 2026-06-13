@@ -21,9 +21,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 
 
-def run_once(private_root: Path, *, allow_public_output: bool = False) -> subprocess.CompletedProcess[str]:
+def run_once(
+    private_root: Path,
+    *,
+    allow_public_output: bool = False,
+    night_mode: bool = False,
+) -> subprocess.CompletedProcess[str]:
     cmd = [
         sys.executable,
         "-X",
@@ -34,6 +40,8 @@ def run_once(private_root: Path, *, allow_public_output: bool = False) -> subpro
     ]
     if allow_public_output:
         cmd.append("--allow-public-output")
+    if night_mode:
+        cmd.append("--night-mode")
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     return subprocess.run(
@@ -60,14 +68,15 @@ def loop(
     error_sleep_seconds: int = 300,
     max_iterations: int = 0,
     allow_public_output: bool = False,
+    night_mode: bool = False,
 ) -> int:
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
     log_path = private_root / "logs" / "worker_loop.log"
-    append_log(log_path, "worker_loop started")
+    append_log(log_path, f"worker_loop started sleep={sleep_seconds}s night_mode={night_mode}")
     iteration = 0
     while True:
         iteration += 1
-        result = run_once(private_root, allow_public_output=allow_public_output)
+        result = run_once(private_root, allow_public_output=allow_public_output, night_mode=night_mode)
         if result.stdout.strip():
             append_log(log_path, f"stdout: {result.stdout.strip()}")
         if result.stderr.strip():
@@ -86,22 +95,37 @@ def main() -> None:
         default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
         help="Private strategy-lab root",
     )
-    ap.add_argument("--sleep-seconds", type=int, default=int(os.getenv("STRATEGY_LAB_SLEEP_SECONDS", "60")))
+    ap.add_argument(
+        "--sleep-seconds",
+        type=int,
+        default=None,
+        help="Loop sleep between jobs; defaults to resource_policy min_seconds_between_jobs",
+    )
     ap.add_argument(
         "--error-sleep-seconds",
         type=int,
         default=int(os.getenv("STRATEGY_LAB_ERROR_SLEEP_SECONDS", "300")),
     )
     ap.add_argument("--max-iterations", type=int, default=0)
+    ap.add_argument("--night-mode", action="store_true", help="Opt in to relaxed night-mode resource limits")
     ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
+    night_mode = args.night_mode or os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"}
+    sleep_seconds = args.sleep_seconds
+    if sleep_seconds is None:
+        env_sleep = os.getenv("STRATEGY_LAB_SLEEP_SECONDS")
+        if env_sleep:
+            sleep_seconds = int(env_sleep)
+        else:
+            sleep_seconds = load_resource_policy(night_mode=night_mode).min_seconds_between_jobs
     raise SystemExit(
         loop(
             Path(args.private_root),
-            sleep_seconds=max(1, args.sleep_seconds),
+            sleep_seconds=max(1, sleep_seconds),
             error_sleep_seconds=max(1, args.error_sleep_seconds),
             max_iterations=max(0, args.max_iterations),
             allow_public_output=args.allow_public_output,
+            night_mode=night_mode,
         )
     )
 

@@ -19,6 +19,7 @@ _REQUIRED = (
     "mode",
     "max_workers",
     "max_queue_size",
+    "max_variants_per_job",
     "autopilot_refill_when_queue_below",
     "autopilot_generate_max",
     "min_seconds_between_jobs",
@@ -28,7 +29,13 @@ _REQUIRED = (
     "process_priority",
     "llm_auto_execute",
 )
-_NIGHT_INT_KEYS = ("max_queue_size", "autopilot_generate_max", "min_seconds_between_jobs", "max_jobs_per_hour")
+_NIGHT_INT_KEYS = (
+    "max_queue_size",
+    "max_variants_per_job",
+    "autopilot_generate_max",
+    "min_seconds_between_jobs",
+    "max_jobs_per_hour",
+)
 _NIGHT_BOOL_KEYS = ("allow_heavy_jobs",)
 
 
@@ -44,6 +51,7 @@ class ResourcePolicy:
     mode: str
     max_workers: int
     max_queue_size: int
+    max_variants_per_job: int
     autopilot_refill_when_queue_below: int
     autopilot_generate_max: int
     min_seconds_between_jobs: int
@@ -85,6 +93,7 @@ def load_resource_policy(path: str | Path = DEFAULT_PATH, *, night_mode: bool = 
         mode=str(data["mode"]),
         max_workers=int(data["max_workers"]),
         max_queue_size=int(data["max_queue_size"]),
+        max_variants_per_job=int(data["max_variants_per_job"]),
         autopilot_refill_when_queue_below=int(data["autopilot_refill_when_queue_below"]),
         autopilot_generate_max=int(data["autopilot_generate_max"]),
         min_seconds_between_jobs=int(data["min_seconds_between_jobs"]),
