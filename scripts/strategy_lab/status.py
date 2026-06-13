@@ -58,6 +58,7 @@ def main() -> None:
     registry = state.get("candidate_registry") or {}
     proposals = state.get("proposals") or {}
     llm = state.get("llm_review") or {}
+    microscope = state.get("event_microscope") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -75,8 +76,12 @@ def main() -> None:
     print(f"Proposals    : {proposals.get('total', 0)} ({_fmt_counts(proposals.get('by_status'))}); "
           f"validated waiting for queue: {proposals.get('validated_waiting', 0)}")
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")
+    micro_state = "enabled" if microscope.get("enabled") else f"disabled ({microscope.get('disabled_reason', 'n/a')})"
+    print(f"Microscope   : 1m {micro_state}, trigger-only; data {_fmt_counts(microscope.get('availability_counts'))}")
     print("-" * 48)
-    print(f"LLM review   : export-only; auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}")
+    cap = "daily cap set" if llm.get("daily_cap_present") else "no daily cap"
+    print(f"LLM review   : export-only; auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}; "
+          f"send gate: {llm.get('would_send', 'export_only')} ({cap})")
     print("Proposal apply: manual only (queue requires explicit --apply)")
     print("Safety       : no live trading, no order engine, no paid API by default")
     print("Dashboard    : python scripts/strategy_lab/serve_dashboard.py  -> http://127.0.0.1:8765")

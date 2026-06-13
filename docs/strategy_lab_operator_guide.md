@@ -18,6 +18,15 @@ no `.env`/secrets, no automatic LLM spend.
 - **Event-driven sweep generation** (`generate_event_sweeps`): bounded sweeps
   from strong historical moves, compiled via `SweepSpec` -> `ExperimentSpec`.
 - **Reducer** verdicts with reason codes + first-class **entry-timing** metrics.
+- **Event-anchored entry timing** inside event-driven runs: when a job carries an
+  event context, each run also measures how late the entry was vs the event
+  (lag bars/minutes, capture ratio, missed move, MFE/MAE, a `late_entry` flag).
+- **1m event-microscope locator** (`microscope_scan`): read-only, capped, and
+  trigger-only. It locates existing local 1m files; it never downloads and reports
+  a clear SKIPPED reason when 1m data is absent.
+- **Gated LLM send path**: a provider-agnostic sender boundary whose only shipped
+  implementation is `NullReviewSender` (never calls a network). A real send needs
+  several explicit gates; export stays the default.
 - Private candidate registry (REJECT excluded by default), private **Obsidian
   graph** notes, SQLite queue/state, read-only dashboard, and an **export-only**
   LLM review pack.
@@ -25,8 +34,10 @@ no `.env`/secrets, no automatic LLM spend.
 ## What is planned (not done yet)
 
 - A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
-- A 1m event-microscope live data path / downloader.
-- Sending review packs to a model (export works; sending is gated off).
+- A 1m **downloader / live data path** (the locator and caps exist; there is no
+  network fetch — missing 1m data is reported, not downloaded).
+- A real LLM provider behind the send boundary (today only `NullReviewSender`;
+  sending stays export-only).
 
 See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
 
@@ -91,6 +102,7 @@ trades, or write to the public repo.
 | Export LLM review pack (no API) | `bat\strategy_lab_export_pack.bat` |
 | Preview next proposals (dry-run) | `bat\strategy_lab_proposals_dry_run.bat` |
 | Preview what would be queued | `bat\strategy_lab_queue_validated_dry_run.bat` |
+| Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -206,9 +218,56 @@ half-claimed job is requeued by `reap_stale_jobs` on the next start.
 python -m scripts.strategy_lab.export_llm_review_pack --limit 10
 ```
 
-- Sending to a model requires BOTH `STRATEGY_LAB_LLM_ENABLED=1` and `--send`,
-  and even then no client is wired, so it reports "not configured" and exits.
-  The dashboard shows `LLM review: disabled` unless the env flag is set.
+- Sending a pack to a model goes through a gated boundary
+  (`src/research_lab/llm_review_sender.py`). Every gate is required:
+  1. `--send` was passed; 2. not a dry-run; 3. `STRATEGY_LAB_LLM_ENABLED=1`;
+  4. a provider is configured; 5. a daily budget cap (`STRATEGY_LAB_LLM_DAILY_CAP`)
+  is present and not exhausted.
+- The only sender shipped today is `NullReviewSender`, which never calls a
+  network, so gate 4 fails and `--send` always falls back to export-only and
+  prints the blocking reason. Each attempt is recorded privately (no keys logged).
+  The dashboard/status show the send gate state and `LLM review: disabled` unless
+  the env flag is set.
+
+## Event microscope (1m)
+
+The 1m timeframe is a **trigger-only event microscope**, not a scanner. It is for
+zooming into a single already-detected move on a couple of high-volatility
+symbols — never a full-universe 1m sweep.
+
+```bash
+bat\strategy_lab_microscope_scan.bat
+python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta --json
+```
+
+- **Read-only and no downloader.** It only locates existing local 1m files. If a
+  symbol has no usable 1m file it is reported as `missing` / `too_short` /
+  `not_1m` — a clean skip, never a crash and never a network fetch.
+- **Capped by the 1m timeframe profile**: at most `max_symbols_per_cycle` symbols,
+  `max_event_windows` windows, `max_window_hours`×60 bars per window, and
+  `max_variants_per_setup` variants (see `configs/strategy_lab/timeframe_profiles.yaml`).
+- **Full-universe 1m sweeps stay blocked** in `sweep_spec` validation and the
+  resource policy (`allow_1m_jobs: trigger_only`).
+
+Today there is no local 1m data, so the scan reports every symbol as `missing` —
+that is the expected, honest result until a 1m data path is added.
+
+## What "late entry" means
+
+The lab's recurring pain is "direction was right, but the entry was late." When a
+run has an event context, it measures entry quality against the event, not just
+final PnL:
+
+- **lag_bars / lag_minutes** — how long after the move started the entry happened.
+- **capture_ratio** — fraction of the move captured from entry to move end.
+- **missed_move_pct** — how much of the move was already gone at entry.
+- **mfe_pct / mae_pct** — best favorable / worst adverse excursion after entry.
+- **late_entry** — flagged when little of the move is captured (capture < 0.3) or
+  most of it is already gone (missed ≥ 50%).
+
+These are honest diagnostics, **not** profitability claims. The reducer uses them
+to flag `entry_late`, so a setup that only "works" by entering late is not
+promoted.
 
 ## Inspecting the dashboard
 

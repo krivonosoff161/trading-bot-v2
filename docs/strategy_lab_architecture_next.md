@@ -177,11 +177,34 @@ worker -> new results, all deterministic and dry-run by default:
 This is separate from the older `proposals.py` autopilot (manual/advanced), which
 uses `proposals/proposal_registry.jsonl` + `proposals/specs/`.
 
+## MVP 4.0 (done 2026-06-13)
+
+- **1m event-microscope data path** — `src/research_lab/event_microscope.py` +
+  `scripts/strategy_lab/microscope_scan.py`. A read-only locator finds existing
+  local 1m files, derives caps from the trigger-only 1m profile + resource policy
+  (`max_symbols`, `max_event_windows`, `max_bars_per_window`, `max_variants`), and
+  reports `available / missing / too_short / not_1m`. No downloader; missing data
+  is a clean skip. Full-universe 1m sweeps remain blocked in `sweep_spec`.
+- **Event-anchored entry timing in runs** — `entry_timing.event_anchored_timing()`
+  plus an optional `event_context` on `ExperimentSpec`. When the event-driven
+  sweep path queues a job it carries the historical move's ts window; `evaluate_spec`
+  then measures the first trade's lag/capture/missed-move/MFE/MAE and a
+  `late_entry` flag. No look-ahead: the simulator still decides entries; future
+  bars are used only to measure the outcome. Without context, metrics are unchanged.
+  The reducer flags `entry_late` from either the proxy or the event-anchored rate.
+- **Controlled LLM send boundary** — `src/research_lab/llm_review_sender.py`: a
+  `ReviewSender` protocol, a default `NullReviewSender` (never networks), pure
+  `evaluate_send_gates`, and private `record_send_intent`. A send requires
+  `--send`, not-dry-run, `STRATEGY_LAB_LLM_ENABLED=1`, a configured provider, and a
+  daily budget cap that is not exhausted. Export stays the default.
+- **Dashboard/status visibility** — `event_microscope`, enriched `llm_review`
+  (provider/cap/last-pack/send gate), `queued_from_proposals`, and `queue_capacity`
+  are surfaced as labels only.
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
-- A 1m data path / live downloader for the event microscope.
-- Actually sending review packs to a model (export + gate exist; sending off).
-- Precise event-anchored entry-timing inside generic strategy runs (the
-  event-driven path uses the precise `entry_timing.py`; generic runs use the
-  per-trade MFE/MAE/capture proxy).
+- A 1m **downloader / live data path** (the locator + caps exist; no network fetch).
+- A **real LLM provider** behind the send boundary (only `NullReviewSender` ships).
+- Event-anchored entry-timing inside *generic* (non-event) runs (those still use
+  the per-trade MFE/MAE/capture proxy).

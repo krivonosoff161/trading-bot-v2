@@ -277,6 +277,46 @@ def test_render_html_shows_worker_health_and_llm():
     assert "disabled" in page
 
 
+def test_dashboard_state_includes_event_microscope_and_llm_gates(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
+    monkeypatch.delenv("STRATEGY_LAB_LLM_DAILY_CAP", raising=False)
+
+    state = load_dashboard_state(tmp_path)
+
+    em = state["event_microscope"]
+    assert em["enabled"] is True  # quiet_desktop allows trigger-only 1m
+    assert em["timeframe"] == "1m"
+    assert em["limits"]["max_symbols"] == 2
+    assert "availability_counts" in em
+    llm = state["llm_review"]
+    assert llm["provider_configured"] is False
+    assert llm["daily_cap_present"] is False
+    assert llm["would_send"] == "export_only_env_disabled"
+    assert "queue_capacity" in state
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_render_html_shows_event_microscope_card():
+    state = {
+        "private_root_label": "strategy-lab",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "event_microscope": {
+            "timeframe": "1m", "enabled": True, "disabled_reason": "",
+            "limits": {"max_symbols": 2, "max_event_windows": 3, "max_bars_per_window": 360, "max_variants": 8},
+            "availability_counts": {"missing": 2}, "scanned_group": "l2_high_beta",
+            "skipped_reasons": [{"symbol": "ZEC_USDT_SWAP", "reason": "no_1m_file"}],
+        },
+        "queue_capacity": {"max_queue_size": 10, "queued": 0, "full": False},
+        "llm_cost": {}, "latest_run": {}, "runs": [],
+    }
+    page = render_html(state)
+    assert "Event Microscope (1m)" in page
+    assert "trigger-only" in page
+    assert "no_1m_file" in page
+
+
 def test_aggregate_runs_counts_decisions():
     totals = aggregate_runs([
         {"candidate_count": 2, "counts": {"REJECT": 1, "OBSERVE": 1}},
