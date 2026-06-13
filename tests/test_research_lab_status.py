@@ -14,6 +14,8 @@ def test_status_runs_on_empty_root(tmp_path, monkeypatch, capsys):
     assert "Worker" in out
     assert "Queue" in out
     assert "Proposals" in out
+    assert "registry rows" in out
+    assert "unique" in out
     assert "auto-send disabled" in out
     assert "Proposal apply: manual only" in out
     assert "no live trading" in out

@@ -71,9 +71,23 @@ def test_registry_summary_counts_without_payload(tmp_path):
     summary = registry_summary(path)
 
     assert summary["entries"] == 2
+    assert summary["unique_candidates"] == 2
     assert summary["by_validation_status"] == {"FORWARD_PAPER": 1, "REJECT": 1}
     assert "BTC" not in json.dumps(summary)
     assert summary["registry_label"].startswith("strategy-lab/")
+
+
+def test_registry_summary_separates_rows_from_unique_candidates(tmp_path):
+    path = registry_path(tmp_path)
+    upsert_entries(path, [
+        build_entry("exp1", FakeResult(run_id="same"), "run1"),
+        build_entry("exp2", FakeResult(run_id="same", validation_status="OBSERVE"), "run2"),
+    ])
+
+    summary = registry_summary(path)
+
+    assert summary["entries"] == 2
+    assert summary["unique_candidates"] == 1
 
 
 def test_registry_file_is_sorted_jsonl(tmp_path):

@@ -43,7 +43,7 @@ def main() -> None:
         allow_public_output=args.allow_public_output,
     )
     print(
-        f"review pack written: {result['pack_label']} "
+        f"review pack written under private root: {result['pack_label']} "
         f"candidates={result['candidate_count']} registry_entries={result['registry_entries']}"
     )
     if args.send:
