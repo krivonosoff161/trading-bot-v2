@@ -65,7 +65,11 @@ def main() -> None:
     print(f"Private root : {configured}, {exists}")
     print(f"              label: {state.get('private_root_label', 'strategy-lab')}")
     print(f"Worker       : {_worker_line(state)}")
-    print(f"Queue        : {_fmt_counts(state_db.get('queue_counts'))}")
+    qc = state_db.get("queue_counts") or {}
+    print(
+        f"Queue        : pending: {qc.get('queued', 0)}, running: {qc.get('running', 0)}, "
+        f"completed: {qc.get('completed', 0)}, failed: {qc.get('failed', 0)}"
+    )
     print(f"Runs         : {totals.get('run_count', 0)} total; latest verdicts: "
           f"{_fmt_counts(latest.get('reducer_verdicts'))}")
     print(

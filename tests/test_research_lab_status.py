@@ -13,6 +13,7 @@ def test_status_runs_on_empty_root(tmp_path, monkeypatch, capsys):
     assert "Strategy Lab status" in out
     assert "Worker" in out
     assert "Queue" in out
+    assert "pending:" in out  # queue state is explicit, not just completed counts
     assert "Proposals" in out
     assert "registry rows" in out
     assert "unique" in out
