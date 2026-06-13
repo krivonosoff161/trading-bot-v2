@@ -1,0 +1,63 @@
+# Strategy Lab universe — research metadata only, NOT trading advice.
+#
+# Asset groups and relation hints used by the event-cluster layer to attach
+# "related symbols" to a detected move. Relations are research context (which
+# symbols tend to move together), not causal claims and not signals.
+schema: strategy_lab_universe.v1
+
+groups:
+  core_market:
+    - BTC_USDT_SWAP
+    - ETH_USDT_SWAP
+    - SOL_USDT_SWAP
+    - BNB_USDT_SWAP
+    - XRP_USDT_SWAP
+  l2_high_beta:
+    - ZEC_USDT_SWAP
+    - HYPE_USDT_SWAP
+    - ENA_USDT_SWAP
+    - ONDO_USDT_SWAP
+    - WLD_USDT_SWAP
+  meme_flow:
+    - PENGU_USDT_SWAP
+    - PEPE_USDT_SWAP
+    - DOGE_USDT_SWAP
+    - PUMP_USDT_SWAP
+  ai_equity_proxy:
+    - NVDA_USDT_SWAP
+    - AMD_USDT_SWAP
+    - COIN_USDT_SWAP
+    - MSTR_USDT_SWAP
+    - PLTR_USDT_SWAP
+
+# Relation hints. Each relation type maps a symbol to the symbols it tends to
+# track. Same-group "peers" are derived automatically from `groups` above and do
+# not need to be listed here. Empty list = no hint (e.g. a market anchor itself).
+relations:
+  # market_beta: majors whose direction commonly dominates this symbol's move.
+  market_beta:
+    BTC_USDT_SWAP: []
+    ETH_USDT_SWAP: [BTC_USDT_SWAP]
+    SOL_USDT_SWAP: [BTC_USDT_SWAP, ETH_USDT_SWAP]
+    BNB_USDT_SWAP: [BTC_USDT_SWAP]
+    XRP_USDT_SWAP: [BTC_USDT_SWAP]
+    ZEC_USDT_SWAP: [BTC_USDT_SWAP]
+    HYPE_USDT_SWAP: [BTC_USDT_SWAP, SOL_USDT_SWAP]
+    ENA_USDT_SWAP: [BTC_USDT_SWAP, ETH_USDT_SWAP]
+    ONDO_USDT_SWAP: [BTC_USDT_SWAP, ETH_USDT_SWAP]
+    WLD_USDT_SWAP: [BTC_USDT_SWAP, ETH_USDT_SWAP]
+    PENGU_USDT_SWAP: [SOL_USDT_SWAP]
+    PEPE_USDT_SWAP: [ETH_USDT_SWAP]
+    DOGE_USDT_SWAP: [BTC_USDT_SWAP]
+    PUMP_USDT_SWAP: [SOL_USDT_SWAP]
+    NVDA_USDT_SWAP: []
+    AMD_USDT_SWAP: [NVDA_USDT_SWAP]
+    COIN_USDT_SWAP: [BTC_USDT_SWAP]
+    MSTR_USDT_SWAP: [BTC_USDT_SWAP]
+    PLTR_USDT_SWAP: [NVDA_USDT_SWAP]
+  # risk_proxy: broad risk-on/off references useful as background context.
+  risk_proxy:
+    COIN_USDT_SWAP: [BTC_USDT_SWAP, NVDA_USDT_SWAP]
+    MSTR_USDT_SWAP: [BTC_USDT_SWAP]
+    PLTR_USDT_SWAP: [NVDA_USDT_SWAP]
+    HYPE_USDT_SWAP: [BTC_USDT_SWAP]

@@ -1,0 +1,28 @@
+# Strategy Lab resource policy — protects a shared, limited desktop.
+#
+# The lab runs alongside Telegram, a browser, VS Code and other agents on a
+# 4-core / 8-thread laptop. Default mode is intentionally quiet: one worker,
+# bounded queue, throttled job cadence, no heavy or full 1m jobs. `night_mode`
+# is an opt-in relaxation applied only when explicitly requested.
+schema: strategy_lab_resource_policy.v1
+
+mode: quiet_desktop
+max_workers: 1
+max_queue_size: 10
+autopilot_refill_when_queue_below: 2
+autopilot_generate_max: 3
+min_seconds_between_jobs: 900
+max_jobs_per_hour: 2
+allow_heavy_jobs: false
+allow_1m_jobs: trigger_only
+process_priority: idle_or_below_normal
+llm_auto_execute: false
+
+# Opt-in relaxation. Only the listed keys override the quiet defaults above;
+# everything else (workers, priority, llm_auto_execute) stays as set above.
+night_mode:
+  max_queue_size: 30
+  autopilot_generate_max: 8
+  min_seconds_between_jobs: 60
+  allow_heavy_jobs: true
+  allow_1m_jobs: trigger_only
