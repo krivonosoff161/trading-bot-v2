@@ -9,6 +9,7 @@ schema: strategy_lab_resource_policy.v1
 mode: quiet_desktop
 max_workers: 1
 max_queue_size: 10
+max_variants_per_job: 24
 autopilot_refill_when_queue_below: 2
 autopilot_generate_max: 3
 min_seconds_between_jobs: 900
@@ -19,6 +20,7 @@ process_priority: idle_or_below_normal
 llm_auto_execute: false
 night_mode:
   max_queue_size: 30
+  max_variants_per_job: 80
   autopilot_generate_max: 8
   min_seconds_between_jobs: 60
   allow_heavy_jobs: true
@@ -52,6 +54,7 @@ def test_night_mode_overrides_only_listed_keys(tmp_path):
     policy = load_resource_policy(_write(tmp_path, VALID), night_mode=True)
     assert policy.allow_heavy_jobs is True
     assert policy.max_queue_size == 30
+    assert policy.max_variants_per_job == 80
     assert policy.min_seconds_between_jobs == 60
     # not listed in night_mode -> unchanged from quiet defaults
     assert policy.max_workers == 1
