@@ -43,12 +43,20 @@ def build_registry_review_pack(entries: list[dict[str, Any]], *, limit: int = 10
         "disclaimer": DISCLAIMER,
         "instruction": (
             "Review these candidate summaries. Identify likely overfit, weak OOS, "
-            "regime dependence, and fragility. Propose 1-3 next experiment specs as "
-            "JSON drafts. Do NOT claim profitability or live-tradability."
+            "regime dependence, late entries, and fragility. Suggest next tests only — "
+            "propose 1-3 next experiment specs as JSON drafts. Do NOT claim "
+            "profitability or live-tradability."
         ),
         "candidate_total": len(candidates),
         "candidate_count": len(selected),
         "candidates": [_summarize(e) for e in selected],
+        "entry_timing_pain": _entry_timing_pain(selected),
+        "top_questions": [
+            "Which candidates survive a parameter-neighborhood re-test (not a single lucky best)?",
+            "Where is the entry late: low capture ratio or high adverse excursion before it works?",
+            "Which results depend on a single regime bucket and collapse otherwise?",
+            "What validation gate is still missing before a human looks at this?",
+        ],
         "suggested_next_checks": [
             "parameter-neighborhood sweep around each FORWARD_PAPER candidate",
             "regime-filtered re-run for REGIME_SPECIFIC candidates",
@@ -56,6 +64,23 @@ def build_registry_review_pack(entries: list[dict[str, Any]], *, limit: int = 10
             "out-of-sample window extension where test_trades is small",
         ],
     }
+
+
+def _entry_timing_pain(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate entry-timing pain across selected candidates (empty if none)."""
+    blocks = []
+    for e in entries:
+        metrics = e.get("metrics_summary") if isinstance(e.get("metrics_summary"), dict) else {}
+        if isinstance(metrics.get("entry_timing"), dict):
+            blocks.append(metrics["entry_timing"])
+    if not blocks:
+        return {}
+    out: dict[str, Any] = {}
+    for k in ("avg_capture_ratio", "avg_mfe_pct", "avg_mae_pct", "late_entry_rate"):
+        vals = [float(b[k]) for b in blocks if b.get(k) is not None]
+        if vals:
+            out[k] = round(sum(vals) / len(vals), 4)
+    return out
 
 
 def export_review_pack(
@@ -88,6 +113,7 @@ def _summarize(entry: dict[str, Any]) -> dict[str, Any]:
         "validation_status": entry.get("validation_status"),
         "params": entry.get("params"),
         "metrics": {k: metrics.get(k) for k in _METRIC_KEYS if k in metrics},
+        "entry_timing": metrics.get("entry_timing") if isinstance(metrics.get("entry_timing"), dict) else {},
         "risk_flags": entry.get("risk_flags") or [],
         "validation_reasons": entry.get("validation_reasons") or [],
         "next_action": entry.get("next_action") or "",

@@ -208,6 +208,18 @@ python scripts/strategy_lab/worker_once.py            # respects throttle + vari
 python -m scripts.strategy_lab.export_llm_review_pack --limit 10   # export only, no API call
 ```
 
+MVP 3.0 discovery loop (event clusters -> bounded sweeps -> reducer verdicts ->
+entry-timing -> private Obsidian graph). Each run also writes a private
+`reducer_report.json` with per-(family, symbol) verdicts (REJECT / OBSERVE /
+REGIME_SPECIFIC / FORWARD_PAPER / NEEDS_MORE_DATA) and reason codes; a single
+lucky parameter without neighbor support is never promoted:
+
+```bash
+python -m scripts.strategy_lab.generate_event_sweeps --universe l2_high_beta --timeframe 15m --dry-run
+python -m scripts.strategy_lab.generate_event_sweeps --universe l2_high_beta --timeframe 15m --apply
+python -m scripts.strategy_lab.build_obsidian_graph   # private notes for non-REJECT candidates
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:

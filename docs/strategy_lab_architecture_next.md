@@ -127,14 +127,38 @@ not only the schema:
 - The dashboard shows worker/queue health (incl. deferred reasons) and the
   LLM-review enabled/disabled flag.
 
-The executor itself is still the existing `evaluate_spec` over `ExperimentSpec`;
-`SweepSpec` remains the forward-looking contract for a coarse/GPU sweep.
+## MVP 3.0 research-farm path (done 2026-06-13)
+
+The discovery loop now runs end to end on the CPU, quietly:
+
+- `src/research_lab/sweep_compile.py` compiles a validated `SweepSpec` into one
+  bounded `ExperimentSpec` (grids expanded then clipped to the timeframe/policy
+  caps — never an unbounded cartesian explosion). The executor stays
+  `evaluate_spec`; there is still no GPU backend.
+- `src/research_lab/reducer.py` aggregates run variants by (family, symbol) into
+  verdicts `REJECT / OBSERVE / REGIME_SPECIFIC / FORWARD_PAPER / NEEDS_MORE_DATA`
+  with reason codes (`too_few_trades`, `unstable_parameters`, `regime_dependent`,
+  `entry_late`, `drawdown_too_high`, `weak_edge`, `candidate_for_forward`). A
+  single lucky parameter without neighbor support is never promoted. Each run now
+  writes `reducer_report.json`.
+- `src/research_lab/event_sweeps.py` + `scripts/strategy_lab/generate_event_sweeps.py`
+  turn strong historical moves into bounded sweep proposals (dry-run default).
+  The event is historical; sweeps run the normal no-lookahead simulator; 1m stays
+  trigger-only, never a full brute force.
+- Entry timing is first-class: `experiment.py` records per-trade MFE/MAE/capture
+  and an `entry_timing` metrics block; the reducer uses it for `entry_late`; the
+  review pack and dashboard surface the aggregate.
+- `src/research_lab/obsidian_graph.py` + `scripts/strategy_lab/build_obsidian_graph.py`
+  write one private Obsidian note per non-REJECT candidate (verdict, reasons,
+  related symbols, linked run, next test).
+- The dashboard adds a Research Summary card (latest reducer verdicts, entry
+  timing aggregate, Obsidian note count, next-run/deferred reason).
 
 ## Not implemented yet (next steps)
 
-- A dedicated coarse-sweep executor + reducer driven by `SweepSpec` (today plans
-  compile to the `ExperimentSpec` executor).
-- An event-driven spec generator (event cluster -> candidate sweep specs).
-- Optional GPU batch backend behind the `backend: gpu` field.
-- A 1m data path for the event microscope (no live downloader added here).
+- Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
+- A 1m data path / live downloader for the event microscope.
 - Actually sending review packs to a model (export + gate exist; sending off).
+- Precise event-anchored entry-timing inside generic strategy runs (the
+  event-driven path uses the precise `entry_timing.py`; generic runs use the
+  per-trade MFE/MAE/capture proxy).

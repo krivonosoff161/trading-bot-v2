@@ -77,6 +77,8 @@ def render_html(state: dict) -> str:
     lab_config = state.get("lab_config") or {}
     worker_status = state.get("worker_status") or {}
     llm_review = state.get("llm_review") or {}
+    next_run = state.get("next_run") or {}
+    obsidian_notes = state.get("obsidian_notes", 0)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -136,6 +138,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Worker &amp; Queue Health</h2>
     {worker_health_html(queue_counts, worker_status, llm_review)}
+  </section>
+
+  <section class="section card">
+    <h2>Research Summary</h2>
+    {research_summary_html(latest, next_run, obsidian_notes)}
   </section>
 
   <section class="section card">
@@ -269,6 +276,35 @@ def registry_html(registry: dict) -> str:
             f"<p class=\"path\">registry: {esc(registry.get('registry_label', ''))}</p>",
         ]
     )
+
+
+def research_summary_html(latest: dict, next_run: dict, obsidian_notes: object) -> str:
+    verdicts = (latest or {}).get("reducer_verdicts") or {}
+    verdict_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(verdicts.items())) or "no reducer report yet"
+    entry = (latest or {}).get("entry_timing") or {}
+    if entry:
+        entry_line = (
+            f"capture: {esc(entry.get('avg_capture_ratio', 'n/a'))} - "
+            f"MFE: {esc(entry.get('avg_mfe_pct', 'n/a'))}% - MAE: {esc(entry.get('avg_mae_pct', 'n/a'))}% - "
+            f"late entries: {esc(entry.get('late_entry_rate', 'n/a'))}"
+        )
+    else:
+        entry_line = '<span class="muted">no entry-timing aggregate yet</span>'
+    if next_run.get("allowed"):
+        next_line = 'next run: <span class="pill">allowed now</span>'
+    elif next_run:
+        next_line = (
+            f"next run: <span class=\"pill\">deferred</span> {esc(next_run.get('reason', ''))} "
+            f"(wait {esc(next_run.get('wait_seconds', 0))}s)"
+        )
+    else:
+        next_line = 'next run: <span class="muted">unknown</span>'
+    return "\n".join([
+        f"<p>latest reducer verdicts: {verdict_line}</p>",
+        f"<p>entry timing (latest run): {entry_line}</p>",
+        f"<p>Obsidian candidate notes: {esc(obsidian_notes)}</p>",
+        f"<p>{next_line}</p>",
+    ])
 
 
 def worker_health_html(queue_counts: dict, worker_status: dict, llm_review: dict) -> str:

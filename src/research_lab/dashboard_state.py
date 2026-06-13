@@ -12,8 +12,15 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
+from src.research_lab.obsidian_graph import count_notes
 from src.research_lab.resource_policy import load_resource_policy
-from src.research_lab.runtime_policy import read_worker_status, worker_status_path
+from src.research_lab.runtime_policy import (
+    cadence_path,
+    evaluate_cadence,
+    load_recent_starts,
+    read_worker_status,
+    worker_status_path,
+)
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
@@ -55,6 +62,8 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "lab_config": load_lab_config_summary(private_root),
         "worker_status": read_worker_status(worker_status_path(private_root)),
         "llm_review": llm_review_status(),
+        "obsidian_notes": count_notes(private_root),
+        "next_run": next_run_hint(private_root),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
@@ -89,6 +98,8 @@ def load_run(run_dir: Path) -> dict[str, Any]:
     summary_path = run_dir / "summary.md"
     prompt_path = run_dir / "llm_review_prompt.md"
     payload = _load_json(metrics_path)
+    reducer = _load_json(run_dir / "reducer_report.json")
+    pack = _load_json(run_dir / "llm_review_pack.json")
     candidates = _load_candidates(candidates_path)
     counts: dict[str, int] = {}
     validation_counts: dict[str, int] = {}
@@ -109,6 +120,8 @@ def load_run(run_dir: Path) -> dict[str, Any]:
         "candidate_count": len(candidates),
         "counts": counts,
         "validation_counts": validation_counts,
+        "reducer_verdicts": reducer.get("verdict_counts") or {},
+        "entry_timing": pack.get("entry_timing_aggregate") or {},
         "top_candidates": candidates[:12],
     }
 
@@ -207,6 +220,18 @@ def load_lab_config_summary(private_root: Path) -> dict[str, Any]:
     except Exception as exc:
         summary["resource_error"] = type(exc).__name__
     return summary
+
+
+def next_run_hint(private_root: Path) -> dict[str, Any]:
+    """Whether the worker could run now, or the throttle reason and wait time."""
+    try:
+        policy = load_resource_policy()
+        starts = load_recent_starts(cadence_path(private_root))
+        now = dt.datetime.now(dt.timezone.utc).timestamp()
+        decision = evaluate_cadence(policy, starts, now)
+        return {"allowed": decision.allowed, "wait_seconds": decision.wait_seconds, "reason": decision.reason}
+    except Exception as exc:
+        return {"error": type(exc).__name__}
 
 
 def llm_review_status() -> dict[str, Any]:

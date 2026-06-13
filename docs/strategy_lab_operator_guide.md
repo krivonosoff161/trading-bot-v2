@@ -15,13 +15,17 @@ no `.env`/secrets, no automatic LLM spend.
   opt-in only.
 - **Job generation from universe + timeframe** (`enqueue_research_plan`) with
   dry-run / apply and idempotent queueing.
-- Private candidate registry (REJECT excluded by default), SQLite queue/state,
-  read-only dashboard, and an **export-only** LLM review pack.
+- **Event-driven sweep generation** (`generate_event_sweeps`): bounded sweeps
+  from strong historical moves, compiled via `SweepSpec` -> `ExperimentSpec`.
+- **Reducer** verdicts with reason codes + first-class **entry-timing** metrics.
+- Private candidate registry (REJECT excluded by default), private **Obsidian
+  graph** notes, SQLite queue/state, read-only dashboard, and an **export-only**
+  LLM review pack.
 
 ## What is planned (not done yet)
 
-- A GPU batch backend (the `sweep_spec` field exists; no implementation).
-- A 1m event-microscope data path and event-driven plan generation.
+- A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
+- A 1m event-microscope live data path / downloader.
 - Sending review packs to a model (export works; sending is gated off).
 
 See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
@@ -75,6 +79,30 @@ set STRATEGY_LAB_START_DRY_RUN=1
 bat\strategy_lab_start.bat
 ```
 
+## Discovery loop (event sweeps, reducer, Obsidian)
+
+Beyond fixed plans, the lab can discover research targets from historical moves
+and aggregate results into verdicts:
+
+```bash
+# Propose bounded sweeps from strong historical moves (dry-run default):
+python -m scripts.strategy_lab.generate_event_sweeps --universe l2_high_beta --timeframe 15m --dry-run
+python -m scripts.strategy_lab.generate_event_sweeps --universe l2_high_beta --timeframe 15m --apply
+
+# After runs complete, write private Obsidian notes for non-REJECT candidates:
+python -m scripts.strategy_lab.build_obsidian_graph
+```
+
+- Event sweeps are bounded by the resource policy (`autopilot_generate_max`); the
+  event is historical and each sweep runs the normal no-lookahead simulator. 1m
+  stays a trigger-only microscope.
+- Every run now also writes `reducer_report.json` (private): per-(family, symbol)
+  verdicts (`REJECT / OBSERVE / REGIME_SPECIFIC / FORWARD_PAPER / NEEDS_MORE_DATA`)
+  with reason codes. A single lucky parameter without neighbor support is never
+  promoted.
+- Entry-timing aggregates (capture ratio, MFE/MAE, late-entry rate) are recorded
+  per run and shown on the dashboard.
+
 ## Dry-run vs apply
 
 - `--dry-run` (default) prints the planned job(s) and any skipped symbols
@@ -120,7 +148,9 @@ python scripts/strategy_lab/serve_dashboard.py   # or bat\strategy_lab_dashboard
 Open `http://127.0.0.1:8765`. Read-only, localhost-only, no secrets, no absolute
 private paths. Shows resource mode, universe coverage, queue health
 (pending/running/completed/failed), last worker status (incl. deferred reason),
-candidate counts by verdict, and the LLM-review enabled/disabled flag.
+a Research Summary card (latest reducer verdicts, entry-timing aggregate,
+Obsidian note count, next-run/deferred reason), candidate counts by verdict, and
+the LLM-review enabled/disabled flag.
 
 ## Where private outputs go
 
