@@ -108,13 +108,18 @@ def registry_summary(path: Path) -> dict[str, Any]:
     """Public-safe summary: counts and label only, no entry payloads."""
     entries = load_entries(path)
     by_status: dict[str, int] = {}
+    unique_candidate_ids: set[str] = set()
     for entry in entries:
         status = str(entry.get("validation_status") or "UNKNOWN")
         by_status[status] = by_status.get(status, 0) + 1
+        candidate_id = str(entry.get("candidate_id") or "")
+        if candidate_id:
+            unique_candidate_ids.add(candidate_id)
     return {
         "registry_label": "strategy-lab/candidate-registry/candidates.jsonl",
         "exists": path.exists(),
         "entries": len(entries),
+        "unique_candidates": len(unique_candidate_ids),
         "by_validation_status": by_status,
     }
 

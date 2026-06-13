@@ -67,7 +67,11 @@ def main() -> None:
     print(f"Queue        : {_fmt_counts(state_db.get('queue_counts'))}")
     print(f"Runs         : {totals.get('run_count', 0)} total; latest verdicts: "
           f"{_fmt_counts(latest.get('reducer_verdicts'))}")
-    print(f"Candidates   : {registry.get('entries', 0)} ({_fmt_counts(registry.get('by_validation_status'))})")
+    print(
+        f"Candidates   : {registry.get('entries', 0)} registry rows, "
+        f"{registry.get('unique_candidates', 0)} unique "
+        f"({_fmt_counts(registry.get('by_validation_status'))})"
+    )
     print(f"Proposals    : {proposals.get('total', 0)} ({_fmt_counts(proposals.get('by_status'))}); "
           f"validated waiting for queue: {proposals.get('validated_waiting', 0)}")
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")

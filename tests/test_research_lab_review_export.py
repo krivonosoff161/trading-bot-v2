@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import sys
 
 from src.research_lab.candidate_registry import registry_path
 from src.research_lab.review_export import (
@@ -76,3 +77,20 @@ def test_export_empty_registry_is_safe(tmp_path):
     result = export_review_pack(tmp_path, limit=5)
     assert result["registry_entries"] == 0
     assert result["candidate_count"] == 0
+
+
+def test_export_cli_labels_path_as_private_root_relative(tmp_path, monkeypatch, capsys):
+    import scripts.strategy_lab.export_llm_review_pack as cli
+
+    _write_registry(tmp_path, [_entry("a", "FORWARD_PAPER", 1.0, 0.8)])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_llm_review_pack", "--private-root", str(tmp_path), "--limit", "5"],
+    )
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "under private root" in out
+    assert str(tmp_path) not in out
