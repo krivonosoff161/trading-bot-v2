@@ -163,10 +163,20 @@ One-command local start:
 bat\strategy_lab_start.bat
 ```
 
-This builds the data inventory, syncs the private state DB, queues the starter
-research pack, generates a bounded set of follow-up specs from the private
-candidate registry, opens the local dashboard, and starts the one-worker queue
-loop. The worker processes one job at a time so the desktop is not flooded.
+This is the normal operator entrypoint. By default it syncs the private state
+DB, queues a bounded `core_market / 1d` research plan, opens the local
+dashboard, and starts the one-worker queue loop. The worker processes one job at
+a time and is throttled by `configs/strategy_lab/resource_policy.yaml`, so the
+desktop is not flooded.
+
+Optional overrides before running the bat:
+
+```bash
+set STRATEGY_LAB_UNIVERSE=l2_high_beta
+set STRATEGY_LAB_TIMEFRAME=15m
+set STRATEGY_LAB_FULL=1              # use full per-timeframe caps
+set STRATEGY_LAB_NIGHT_MODE=1        # opt in to relaxed night limits
+```
 
 Strategy Lab MVP 2.0 chain: data inventory -> strategy registry (12
 deterministic strategies) -> queue -> worker -> simulation -> regime labeling
@@ -187,8 +197,9 @@ MAE/MFE), and a validated coarse-sweep spec that gates 1m/heavy jobs.
 The resource policy is now enforced at runtime (not only the schema): the worker
 throttles by `min_seconds_between_jobs` / `max_jobs_per_hour`, caps per-job
 variants by `max_variants_per_job`, defaults to `quiet_desktop`, and treats
-`night_mode` as opt-in. Generate bounded jobs from a universe group + timeframe,
-then dry-run or apply:
+`night_mode` as opt-in. `bat\strategy_lab_start.bat` wraps the safe default
+chain. For diagnostics, generate bounded jobs from a universe group + timeframe,
+then dry-run or apply manually:
 
 ```bash
 python -m scripts.strategy_lab.enqueue_research_plan --universe core_market --timeframe 1d --dry-run
@@ -226,6 +237,10 @@ This is deterministic code-only autonomy. It creates parameter-neighborhood and
 regime-specific follow-up specs from the private candidate registry. It does not
 call an LLM, trade, or publish private results.
 
+The starter pack and `autopilot_once.py` are advanced/manual tools now. The
+default one-click start uses `enqueue_research_plan` so the active universe,
+timeframe, and resource-policy limits are visible and reproducible.
+
 One-command smoke demo:
 
 ```bash
@@ -235,9 +250,10 @@ bat\strategy_lab_demo_all.bat
 This syncs state, queues `configs/strategy_lab/l2_smoke.json`, runs one queued
 job, and opens the dashboard.
 
-For continuous local research, run `bat\strategy_lab_loop.bat`. It writes
-results to the private `trading-bot-research` workspace by default; public code
-shows the method, not the private candidate tables.
+For continuous local research, prefer `bat\strategy_lab_start.bat` or, if the
+queue is already prepared, `bat\strategy_lab_worker_loop.bat`. The older
+`bat\strategy_lab_loop.bat` is a legacy fixed-spec loop kept for manual
+diagnostics.
 
 Local read-only dashboard:
 

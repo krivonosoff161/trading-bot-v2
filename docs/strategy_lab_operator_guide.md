@@ -28,6 +28,27 @@ See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
 
 ## Safe start
 
+Normal operator start is one command:
+
+```bash
+bat\strategy_lab_start.bat
+```
+
+Default behavior: sync the private state DB, queue a bounded `core_market / 1d`
+research plan, open the dashboard, and start one throttled worker loop. The
+dashboard opens at `http://127.0.0.1:8765`.
+
+Optional overrides before running the bat:
+
+```bash
+set STRATEGY_LAB_UNIVERSE=l2_high_beta
+set STRATEGY_LAB_TIMEFRAME=15m
+set STRATEGY_LAB_FULL=1
+set STRATEGY_LAB_NIGHT_MODE=1
+```
+
+Manual/debug chain:
+
 ```bash
 # 1. See what would run (writes nothing):
 python -m scripts.strategy_lab.enqueue_research_plan --universe core_market --timeframe 1d --dry-run
@@ -46,6 +67,13 @@ python scripts/strategy_lab/worker_loop.py
 and is intentionally not used for full sweeps. Add `--full` to use the full
 per-timeframe caps instead of the smoke subset, and `--night-mode` to use the
 relaxed limits.
+
+For CI or dry-run checks of the bat itself, use:
+
+```bash
+set STRATEGY_LAB_START_DRY_RUN=1
+bat\strategy_lab_start.bat
+```
 
 ## Dry-run vs apply
 
@@ -66,9 +94,9 @@ used only when you pass `--night-mode` (or set `STRATEGY_LAB_NIGHT_MODE=1`).
 
 ## Stopping it
 
-There is no daemon. Stop the loop with Ctrl+C in its terminal (or close it). One
-job finishes at a time, so stopping is safe; a half-claimed job is requeued by
-`reap_stale_jobs` on the next start.
+There is no daemon. Stop the loop with Ctrl+C in the "Strategy Lab Worker"
+terminal (or close it). One job finishes at a time, so stopping is safe; a
+half-claimed job is requeued by `reap_stale_jobs` on the next start.
 
 ## Avoiding any LLM/API spend
 

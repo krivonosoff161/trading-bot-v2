@@ -31,9 +31,19 @@ data inventory
 bat\strategy_lab_start.bat
 ```
 
-Builds the data inventory, syncs the state DB, queues the starter research pack,
-generates and queues a bounded set of follow-up specs, starts the dashboard
-(`http://127.0.0.1:8765`) and the one-worker loop.
+Syncs the state DB, queues a bounded research plan from `universe + timeframe`
+(default: `core_market / 1d`), starts the dashboard (`http://127.0.0.1:8765`)
+and the one-worker loop. The worker is throttled by
+`configs/strategy_lab/resource_policy.yaml`.
+
+Optional operator overrides:
+
+```bash
+set STRATEGY_LAB_UNIVERSE=l2_high_beta
+set STRATEGY_LAB_TIMEFRAME=15m
+set STRATEGY_LAB_FULL=1
+set STRATEGY_LAB_NIGHT_MODE=1
+```
 
 ## Starter research pack
 
@@ -54,7 +64,7 @@ python scripts/strategy_lab/enqueue_pack.py --dir configs/strategy_lab/starter -
 The worker still processes one job at a time. This keeps the desktop safe while
 allowing a richer 24/7 queue.
 
-## Deterministic autopilot proposals
+## Deterministic autopilot proposals (manual / advanced)
 
 The lab can create the next small batch of experiment specs from its private
 candidate registry:
@@ -73,10 +83,11 @@ The proposal generator is intentionally conservative:
 - no LLM is called, no live order path is touched, and no private result table is
   written into the public repository.
 
-This is the first autonomous loop: code proposes bounded follow-ups, the worker
-runs them one job at a time, and the validator decides whether each result is
-rejected, observed, regime-specific, or worth forward-paper tracking. LLM review
-remains a prepared pack, not an automatic decision maker.
+This remains available for manual follow-up generation from the private
+candidate registry. The default one-command start now uses
+`enqueue_research_plan` so the active universe, timeframe, and resource-policy
+limits are explicit. LLM review remains a prepared pack, not an automatic
+decision maker.
 
 ## Manual chain
 
