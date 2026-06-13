@@ -191,6 +191,8 @@ def _patch_pipeline(monkeypatch, verdict, side="none"):
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
     monkeypatch.setattr(S.PS, "match_realized_event", lambda row: None)
+    monkeypatch.setattr(S.WQ, "upsert_watch", lambda row: None)
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
 
     async def fake_send(chat_id, payload, **kw):
         sent.append(payload)
@@ -240,7 +242,8 @@ def test_chief_no_go_sent_only_with_env_override(monkeypatch):
     assert len(sent) == 1
 
 
-def test_process_item_uses_structured_text_for_pre_routed_items():
+def test_process_item_uses_structured_text_for_pre_routed_items(monkeypatch):
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
     res = asyncio.run(
         S.process_item(
             {
