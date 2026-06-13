@@ -52,3 +52,18 @@ def test_write_notes_idempotent(tmp_path):
     write_candidate_notes(tmp_path, entries)
     write_candidate_notes(tmp_path, entries)
     assert count_notes(tmp_path) == 1  # same candidate -> same file, not duplicated
+
+
+def test_write_notes_count_matches_files_when_candidate_regraded(tmp_path):
+    # The registry keys rows by (experiment_id, candidate_id), so the same
+    # candidate can appear twice with different verdicts. Both map to one note
+    # file, so notes_written must equal the files on disk and the last grading wins.
+    entries = [
+        _entry("dup", "REGIME_SPECIFIC"),
+        _entry("dup", "FORWARD_PAPER"),
+    ]
+    result = write_candidate_notes(tmp_path, entries)
+    assert result["notes_written"] == 1
+    assert count_notes(tmp_path) == result["notes_written"]
+    note = next(obsidian_dir(tmp_path).glob("*.md")).read_text(encoding="utf-8")
+    assert "forward-paper" in note  # last grading wins

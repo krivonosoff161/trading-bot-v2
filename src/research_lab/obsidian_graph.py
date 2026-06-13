@@ -69,19 +69,26 @@ def write_candidate_notes(
     related_for: Any = None,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    """Write/update notes for all non-REJECT entries. `related_for(symbol)->tuple`."""
+    """Write one note per non-REJECT candidate. `related_for(symbol)->tuple`.
+
+    The registry keys rows by (experiment_id, candidate_id), so the same candidate
+    can be graded by more than one experiment. Notes are keyed by candidate
+    identity (filename), so collapse to one note per file (last grading wins) and
+    report the true count of files written, not the number of rows seen.
+    """
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
     out_dir = obsidian_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    written = 0
+    notes: dict[str, str] = {}
     for entry in entries:
         if str(entry.get("validation_status")) not in REGISTRY_STATUSES:
             continue
         related = tuple(related_for(str(entry.get("symbol") or ""))) if related_for else ()
         filename, markdown = build_candidate_note(entry, related=related)
+        notes[filename] = markdown
+    for filename, markdown in notes.items():
         (out_dir / filename).write_text(markdown, encoding="utf-8")
-        written += 1
-    return {"notes_written": written, "notes_label": "strategy-lab/obsidian"}
+    return {"notes_written": len(notes), "notes_label": "strategy-lab/obsidian"}
 
 
 def count_notes(private_root: Path) -> int:
