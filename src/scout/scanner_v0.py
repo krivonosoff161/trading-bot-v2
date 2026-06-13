@@ -62,6 +62,7 @@ from src.scout.sources.eia import fetch_eia_schedule                           #
 from src.scout.sources.opec import fetch_opec_schedule                         # noqa: E402
 from src.scout.sources.earnings_calendar import fetch_earnings_calendar        # noqa: E402
 from src.scout.sources.etf_flow import l1_context_line                          # noqa: E402
+from src.scout.sources.telegram_web import fetch_telegram_web_sources           # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
@@ -965,9 +966,10 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     unlock_items = [] if (dry or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
     dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
     risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
+    telegram_items = fetch_telegram_web_sources(limit_per_source=20)
     leading = listings + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
     native = dex_items                            # native event feed for L2 (COINCIDENT)
-    items = leading + risk_items + native + rss_items          # risk/official first, then coincident/native, then RSS
+    items = leading + risk_items + native + telegram_items + rss_items          # risk/official first, then TG/native/RSS
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
         J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
                          "headline": it.get("title"), "url": it.get("url")} for it in items])
@@ -979,7 +981,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
             f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + L2_RISK={len(risk_items)} + "
-            f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
+            f"L2_NATIVE(dex)={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
             f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
@@ -988,7 +990,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
         print(
             f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + L2_RISK={len(risk_items)} + "
-            f"L2_NATIVE(dex)={len(native)} + RSS={len(rss_items)} | "
+            f"L2_NATIVE(dex)={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
             f"новых={len(fresh)}\n"
         )
 

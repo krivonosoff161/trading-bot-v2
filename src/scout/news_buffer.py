@@ -480,7 +480,7 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                     elif phase == "CONTEXT":
                         drop_reason = "context_commentary"
 
-            event_key = make_event_key(asset, title) if asset else None
+            event_key = raw.get("event_key") or (make_event_key(asset, title) if asset else None)
             machine = {
                 "doc_id": row["doc_id"],
                 "source_id": source,

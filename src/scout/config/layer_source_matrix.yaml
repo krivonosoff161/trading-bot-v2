@@ -37,12 +37,15 @@ layers:
       - {source: cointelegraph, status: live, priority: 3, notes: "broad crypto wire; lagging but useful for event recall"}
       - {source: decrypt, status: live, priority: 3, notes: "broad crypto wire; better detail on incidents"}
       - {source: google_news_crypto, status: live, priority: 4, notes: "aggregator only; often post-factum"}
+      - {source: tg_markettwits, status: candidate, priority: 2, notes: "public Telegram web reader; fast RU market headlines, measured separately"}
+      - {source: tg_new_listings_feed, status: candidate, priority: 1, notes: "public Telegram web reader; exchange-listing events, one post may fan out to tickers"}
     expected_sources:
       - {source: fred_calendar, status: live, priority: 1, notes: "CPI/FOMC/jobs expected calendar for crypto macro surprise layer"}
     watch_sources:
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only until trust filters are in place"}
     tactical_sources:
       - {source: btc_eth_tactical, status: live, priority: 1, notes: "OKX public funding/OI/liquidation regime monitor; narrow and event-driven"}
+      - {source: tg_hyperliquid_liquidations, status: candidate, priority: 2, notes: "public Telegram web reader; liquidation flow is context/squeeze risk, not standalone GO"}
       - {source: etf_flow, status: candidate, priority: 1, notes: "context-only adapter wired (manual_csv slot, registry enabled:false until trader feeds CSV or live provider approved); replaces planned etf_flow_feed"}
 
   2:
@@ -64,11 +67,14 @@ layers:
       - educational_content
     realized_sources:
       - {source: okx_listings, status: live, priority: 2, notes: "already wired, but too narrow alone"}
+      - {source: tg_new_listings_feed, status: candidate, priority: 1, notes: "public Telegram web reader; all-exchange listing feed, source quality decides whether to keep"}
+      - {source: tg_markettwits, status: candidate, priority: 2, notes: "public Telegram web reader; fast alt/crypto headlines"}
       - {source: dexscreener, status: live, priority: 1, notes: "pairs/liquidity/volume discovery for alt flow"}
       - {source: goplus_rugcheck, status: live, priority: 1, notes: "token security / rug veto / exploit flags"}
     expected_sources:
       - {source: token_unlocks, status: live, priority: 1, notes: "Tokenomist upcoming unlock schedule; requires TOKENOMIST_API_KEY"}
     watch_sources:
+      - {source: tg_hyperliquid_liquidations, status: candidate, priority: 2, notes: "liquidation context/squeeze fuel; should update WATCH context rather than create GO by itself"}
       - {source: telegram_alpha, status: planned, priority: 2, notes: "watch-only signal enrichment"}
       - {source: onchain_whales_probe, status: research, priority: 2, notes: "wallet flow research exists, not live"}
 
@@ -110,6 +116,8 @@ layers:
     realized_sources:
       - {source: google_news_energy, status: live, priority: 4, notes: "broad aggregator; often ambiguous"}
       - {source: oilprice, status: live, priority: 3, notes: "domain feed; useful only with strict gating"}
+      - {source: tg_markettwits, status: candidate, priority: 2, notes: "public Telegram web reader; geopolitics/energy headlines, strict source-quality measurement"}
+      - {source: tg_hyperliquid_liquidations, status: candidate, priority: 3, notes: "liquidation context for CL/energy perps where present"}
       - {source: rigzone, status: disabled, priority: 3, notes: "2026-06-12: 100% title_only (25 docs); rigzone.com requires JS rendering. Re-enable with parser/adapter."}
     expected_sources:
       - {source: eia, status: live, priority: 1, notes: "official WPSR next-release cadence for crude inventory"}
@@ -136,6 +144,7 @@ layers:
       - opinion
     realized_sources:
       - {source: sec_edgar, status: live, priority: 1, notes: "best official realized source in this layer; primary-doc extraction live since 2026-06-11"}
+      - {source: tg_markettwits, status: candidate, priority: 2, notes: "public Telegram web reader; market-moving equities/pre-IPO headlines, measured separately"}
       - {source: google_news_equities, status: live, priority: 4, notes: "coverage only; mostly lagging and preview-heavy"}
       - {source: globenewswire_public, status: candidate, priority: 2, notes: "onboarding 2026-06-11: official company PR (IR-class primary); high volume is router-filtered pre-LLM; complements sec_edgar (PR != filing)"}
     expected_sources:

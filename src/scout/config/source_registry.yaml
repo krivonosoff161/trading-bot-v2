@@ -97,6 +97,59 @@ sources:
   gdelt:             {source_class: api, lead_class: LAGGING,    trust: aggregator, phase_prior: realized, keyless: true, layers: [3, 4], enabled: false}   # металлы/геополитика, медленный recall
   telegram_alpha:    {source_class: telegram, lead_class: LEADING, trust: tg_alpha, phase_prior: mixed,  keyless: false, layers: [1, 2], enabled: false}   # Telethon, нужен api_id трейдера
 
+  # ── Telegram public web fallback (без API/Telethon): https://t.me/s/<channel> ──
+  # Включены как отдельные source_id, чтобы source_quality_report видел качество каждого канала.
+  tg_new_listings_feed:
+    url: "https://t.me/s/NewListingsFeed"
+    channel: "NewListingsFeed"
+    source_class: telegram_web
+    telegram_kind: listing
+    lead_class: LEADING
+    trust: tg_alpha
+    phase_prior: realized
+    max_age_hours: 120
+    keyless: true
+    layers: [1, 2]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: telegram_text
+    quality_notes: "листинги бирж; один Telegram-пост может дать несколько ticker-events через event_key"
+    rate_limit_notes: "1 public web GET/проход, без логина и Telegram API"
+
+  tg_markettwits:
+    url: "https://t.me/s/markettwits"
+    channel: "markettwits"
+    source_class: telegram_web
+    telegram_kind: news
+    lead_class: LEADING
+    trust: tg_alpha
+    phase_prior: mixed
+    max_age_hours: 24
+    keyless: true
+    layers: [1, 2, 4, 5]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: telegram_text
+    quality_notes: "быстрые RU market headlines; нужен строгий дедуп и source-quality замер"
+    rate_limit_notes: "1 public web GET/проход, без логина и Telegram API"
+
+  tg_hyperliquid_liquidations:
+    url: "https://t.me/s/HyperliquidLiquidations"
+    channel: "HyperliquidLiquidations"
+    source_class: telegram_web
+    telegram_kind: liquidations
+    lead_class: COINCIDENT
+    trust: tg_alpha
+    phase_prior: realized
+    max_age_hours: 24
+    keyless: true
+    layers: [1, 2, 4]
+    enabled: true
+    onboarding_status: candidate
+    expected_body: telegram_text
+    quality_notes: "ликвидации = context/flow, не самостоятельный GO; полезно для сквиз-риска"
+    rate_limit_notes: "1 public web GET/проход, без логина и Telegram API"
+
   # ── ОНБОРДИНГ 11.06.2026 — эксперимент «ровно один источник на слой» ───────
   # Замер 24-48ч → scripts/analysis/source_onboarding_report.py → keep/disable.
   etf_flow:              # L1: дневные потоки спот-ETF (КОНТЕКСТ market_ctx, не карточки)
