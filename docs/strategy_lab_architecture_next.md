@@ -108,13 +108,33 @@ There is **no sweep executor and no GPU backend** in this pass.
   the public repo holds method, schemas, and config only.
 - No live trading, no order-engine changes, no `.env`/secrets touched.
 
+## Runtime integration (done 2026-06-13)
+
+The resource policy and universe/timeframe layers are now wired into the runtime,
+not only the schema:
+
+- `src/research_lab/runtime_policy.py` enforces job cadence
+  (`min_seconds_between_jobs`, `max_jobs_per_hour`) and a per-job variant cap
+  (`max_variants_per_job`). `worker_once.py` defers with a clear message when the
+  throttle blocks a run; `worker_loop.py` sleeps the policy interval by default.
+  `night_mode` is opt-in only.
+- `src/research_lab/research_plan.py` + `scripts/strategy_lab/enqueue_research_plan.py`
+  generate bounded ExperimentSpec jobs from a universe group and timeframe
+  (dry-run / apply, idempotent, missing-data reported as skipped).
+- `outputs.py` keeps REJECT rows out of the candidate registry by default.
+- `review_export.py` + `scripts/strategy_lab/export_llm_review_pack.py` export a
+  summaries-only review pack with no API call.
+- The dashboard shows worker/queue health (incl. deferred reasons) and the
+  LLM-review enabled/disabled flag.
+
+The executor itself is still the existing `evaluate_spec` over `ExperimentSpec`;
+`SweepSpec` remains the forward-looking contract for a coarse/GPU sweep.
+
 ## Not implemented yet (next steps)
 
-- Wire the universe/timeframe/resource layers into the worker and autopilot so
-  cadence, queue size, and 1m/heavy gating are enforced at runtime (currently the
-  policy is loadable and shown on the dashboard, but the worker loop does not yet
-  read it).
-- Sweep executor + reducer that turn a validated `SweepSpec` into runs.
+- A dedicated coarse-sweep executor + reducer driven by `SweepSpec` (today plans
+  compile to the `ExperimentSpec` executor).
 - An event-driven spec generator (event cluster -> candidate sweep specs).
 - Optional GPU batch backend behind the `backend: gpu` field.
 - A 1m data path for the event microscope (no live downloader added here).
+- Actually sending review packs to a model (export + gate exist; sending off).

@@ -177,16 +177,31 @@ auto-executed). Validation statuses are research labels, not profitability
 claims. Full doc:
 [docs/strategy_lab_mvp2.md](docs/strategy_lab_mvp2.md).
 
-Next-architecture foundation (loadable + tested, not yet wired into the runner):
-public config for a universe of asset groups and relation hints
-(`configs/strategy_lab/universe.yaml`), timeframe roles/limits
+Next-architecture machine: public config for a universe of asset groups and
+relation hints (`configs/strategy_lab/universe.yaml`), timeframe roles/limits
 (`configs/strategy_lab/timeframe_profiles.yaml`), and a desktop-safety resource
-policy (`configs/strategy_lab/resource_policy.yaml`, quiet by default). New
-modules add event clusters (label a historical move + attach related symbols),
-honest entry-timing metrics (lag, missed move, capture ratio, MAE/MFE), and a
-validated coarse-sweep spec that gates 1m/heavy jobs. GPU is a planned optional
-batch backend, not implemented. 1m is a trigger-only event microscope, not
-full-universe scanning. Design doc:
+policy (`configs/strategy_lab/resource_policy.yaml`, quiet by default). Modules
+add event clusters, honest entry-timing metrics (lag, missed move, capture ratio,
+MAE/MFE), and a validated coarse-sweep spec that gates 1m/heavy jobs.
+
+The resource policy is now enforced at runtime (not only the schema): the worker
+throttles by `min_seconds_between_jobs` / `max_jobs_per_hour`, caps per-job
+variants by `max_variants_per_job`, defaults to `quiet_desktop`, and treats
+`night_mode` as opt-in. Generate bounded jobs from a universe group + timeframe,
+then dry-run or apply:
+
+```bash
+python -m scripts.strategy_lab.enqueue_research_plan --universe core_market --timeframe 1d --dry-run
+python -m scripts.strategy_lab.enqueue_research_plan --universe l2_high_beta --timeframe 15m --apply
+python scripts/strategy_lab/worker_once.py            # respects throttle + variant cap
+python -m scripts.strategy_lab.export_llm_review_pack --limit 10   # export only, no API call
+```
+
+GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
+event microscope, not full-universe scanning. LLM review is export-only (no
+automatic API call). Full how-to:
+[docs/strategy_lab_operator_guide.md](docs/strategy_lab_operator_guide.md).
+Design doc:
 [docs/strategy_lab_architecture_next.md](docs/strategy_lab_architecture_next.md).
 
 Data inventory for a spec:

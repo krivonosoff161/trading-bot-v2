@@ -185,11 +185,10 @@ python -m ruff check src/research_lab scripts/strategy_lab
 
 ## Next-architecture foundation (added 2026-06-13)
 
-A foundation pass toward an event-driven research machine is now in the repo as
-loadable, tested building blocks. It is **not yet wired into the worker/runner** —
-it is the scaffolding the next sweep planner will use. See
-[strategy_lab_architecture_next.md](strategy_lab_architecture_next.md) for the
-full design. In short:
+A foundation pass toward an event-driven research machine, now wired into the
+runtime (see the runtime note below and the "Runtime integration" section of the
+architecture doc). The building blocks are
+[strategy_lab_architecture_next.md](strategy_lab_architecture_next.md). In short:
 
 - `configs/strategy_lab/universe.yaml` + `src/research_lab/universe.py` — asset
   groups and relation hints (research metadata, not trading advice).
@@ -205,8 +204,18 @@ full design. In short:
   1m/heavy jobs and a public private-output path.
 
 The dashboard now shows a read-only "Research Machine Config" card (universe
-group/symbol counts, timeframe profiles, resource mode, proposal-spec count).
-GPU remains a planned optional backend, not implemented.
+group/symbol counts, timeframe profiles, resource mode, proposal-spec count) and
+a "Worker & Queue Health" card (queue states, last worker status incl. deferred
+reasons, LLM-review enabled/disabled).
+
+Runtime now enforces the resource policy: the worker throttles
+(`min_seconds_between_jobs` / `max_jobs_per_hour`) and caps per-job variants
+(`max_variants_per_job`), `night_mode` is opt-in, jobs can be generated from a
+universe group + timeframe via `enqueue_research_plan` (dry-run / apply), REJECT
+rows are kept out of the candidate registry by default, and an export-only LLM
+review pack can be produced with no API call. Operator how-to:
+[strategy_lab_operator_guide.md](strategy_lab_operator_guide.md). GPU remains a
+planned optional backend, not implemented.
 
 ## Known limits (MVP 3.0 candidates)
 

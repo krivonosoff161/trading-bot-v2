@@ -1,0 +1,110 @@
+# Strategy Lab — Operator Guide
+
+Date: 2026-06-13. How to run the local research machine safely. It produces
+research labels and candidates, **not** profitability claims. No live trading,
+no `.env`/secrets, no automatic LLM spend.
+
+## What is implemented today
+
+- Deterministic strategy simulation over local candles (12 strategies, regime
+  labels, validator-lite).
+- **Runtime resource-policy enforcement**: the worker reads
+  `configs/strategy_lab/resource_policy.yaml` and throttles itself
+  (`min_seconds_between_jobs`, `max_jobs_per_hour`) and caps per-job variants
+  (`max_variants_per_job`). Default mode is `quiet_desktop`; `night_mode` is
+  opt-in only.
+- **Job generation from universe + timeframe** (`enqueue_research_plan`) with
+  dry-run / apply and idempotent queueing.
+- Private candidate registry (REJECT excluded by default), SQLite queue/state,
+  read-only dashboard, and an **export-only** LLM review pack.
+
+## What is planned (not done yet)
+
+- A GPU batch backend (the `sweep_spec` field exists; no implementation).
+- A 1m event-microscope data path and event-driven plan generation.
+- Sending review packs to a model (export works; sending is gated off).
+
+See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
+
+## Safe start
+
+```bash
+# 1. See what would run (writes nothing):
+python -m scripts.strategy_lab.enqueue_research_plan --universe core_market --timeframe 1d --dry-run
+
+# 2. Queue it (writes specs to the private root + SQLite queue):
+python -m scripts.strategy_lab.enqueue_research_plan --universe core_market --timeframe 1d --apply
+
+# 3. Run one job (respects the resource policy throttle/cap):
+python scripts/strategy_lab/worker_once.py
+
+# 4. Continuous worker (sleeps min_seconds_between_jobs between jobs by default):
+python scripts/strategy_lab/worker_loop.py
+```
+
+`--timeframe` accepts `1d`, `1h`, `15m`. `1m` is a trigger-only event microscope
+and is intentionally not used for full sweeps. Add `--full` to use the full
+per-timeframe caps instead of the smoke subset, and `--night-mode` to use the
+relaxed limits.
+
+## Dry-run vs apply
+
+- `--dry-run` (default) prints the planned job(s) and any skipped symbols
+  (e.g. `no_usable_data`) and writes nothing.
+- `--apply` writes one spec per planned job under
+  `trading-bot-research/strategy-lab/plans/specs/` and queues it. Re-running the
+  same plan does not duplicate pending jobs (idempotent by deterministic spec).
+
+## Resource policy (CPU safety)
+
+`configs/strategy_lab/resource_policy.yaml`, default `quiet_desktop`:
+one worker, `min_seconds_between_jobs: 900`, `max_jobs_per_hour: 2`,
+`max_variants_per_job: 24`, no heavy or full-1m jobs. When the throttle blocks a
+run, `worker_once.py` prints `deferred reason=... wait_seconds=...` and exits
+cleanly (no job consumed). `night_mode` relaxes only the keys it lists and is
+used only when you pass `--night-mode` (or set `STRATEGY_LAB_NIGHT_MODE=1`).
+
+## Stopping it
+
+There is no daemon. Stop the loop with Ctrl+C in its terminal (or close it). One
+job finishes at a time, so stopping is safe; a half-claimed job is requeued by
+`reap_stale_jobs` on the next start.
+
+## Avoiding any LLM/API spend
+
+- No code path calls a paid API.
+- `export_llm_review_pack` only writes a local summaries pack:
+
+```bash
+python -m scripts.strategy_lab.export_llm_review_pack --limit 10
+```
+
+- Sending to a model requires BOTH `STRATEGY_LAB_LLM_ENABLED=1` and `--send`,
+  and even then no client is wired, so it reports "not configured" and exits.
+  The dashboard shows `LLM review: disabled` unless the env flag is set.
+
+## Inspecting the dashboard
+
+```bash
+python scripts/strategy_lab/serve_dashboard.py   # or bat\strategy_lab_dashboard.bat
+```
+
+Open `http://127.0.0.1:8765`. Read-only, localhost-only, no secrets, no absolute
+private paths. Shows resource mode, universe coverage, queue health
+(pending/running/completed/failed), last worker status (incl. deferred reason),
+candidate counts by verdict, and the LLM-review enabled/disabled flag.
+
+## Where private outputs go
+
+`%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\` (override with
+`TRADING_BOT_RESEARCH_ROOT`): run artifacts, candidate registry, plan specs,
+review packs, SQLite state, Obsidian vault. The public repo holds code, configs,
+schemas, and docs only.
+
+## What "good candidate" means (and does not)
+
+A candidate that reaches `OBSERVE`, `REGIME_SPECIFIC`, or `FORWARD_PAPER` passed
+some lite gates and is **worth more testing** — it is not a profitable or
+live-tradable strategy. `FORWARD_PAPER` means "track on paper next", nothing
+more. `REJECT` rows stay in the run artifacts but are kept out of the candidate
+registry by default (use `--include-rejects` for debugging).

@@ -75,6 +75,8 @@ def render_html(state: dict) -> str:
     validation_counts = state_db.get("validation_counts") or totals.get("validation_counts") or {}
     registry = state.get("candidate_registry") or {}
     lab_config = state.get("lab_config") or {}
+    worker_status = state.get("worker_status") or {}
+    llm_review = state.get("llm_review") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -129,6 +131,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Recent Runs</h2>
     {runs_table(runs[:12])}
+  </section>
+
+  <section class="section card">
+    <h2>Worker &amp; Queue Health</h2>
+    {worker_health_html(queue_counts, worker_status, llm_review)}
   </section>
 
   <section class="section card">
@@ -262,6 +269,27 @@ def registry_html(registry: dict) -> str:
             f"<p class=\"path\">registry: {esc(registry.get('registry_label', ''))}</p>",
         ]
     )
+
+
+def worker_health_html(queue_counts: dict, worker_status: dict, llm_review: dict) -> str:
+    pending = queue_counts.get("queued", 0)
+    queue_line = (
+        f"pending: {esc(pending)} - running: {esc(queue_counts.get('running', 0))} - "
+        f"completed: {esc(queue_counts.get('completed', 0))} - failed: {esc(queue_counts.get('failed', 0))}"
+    )
+    if worker_status:
+        status = worker_status.get("status", "unknown")
+        reason = worker_status.get("reason") or worker_status.get("run_label") or ""
+        extra = f" - {esc(reason)}" if reason else ""
+        worker_line = f"last worker: <span class=\"pill\">{esc(status)}</span>{extra} at {esc(worker_status.get('updated_at', ''))}"
+    else:
+        worker_line = 'last worker: <span class="muted">no run recorded yet</span>'
+    llm_enabled = bool(llm_review.get("enabled"))
+    llm_line = (
+        f"LLM review: <span class=\"pill\">{'enabled' if llm_enabled else 'disabled'}</span> - "
+        f"{esc(llm_review.get('note', 'export-only'))}"
+    )
+    return "\n".join([f"<p>queue: {queue_line}</p>", f"<p>{worker_line}</p>", f"<p>{llm_line}</p>"])
 
 
 def lab_config_html(cfg: dict) -> str:
