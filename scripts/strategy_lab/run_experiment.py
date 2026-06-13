@@ -25,6 +25,7 @@ def main() -> None:
         help="Private strategy-lab root",
     )
     ap.add_argument("--dry-run", action="store_true", help="Evaluate but do not write outputs")
+    ap.add_argument("--include-rejects", action="store_true", help="Debug: also upsert REJECT rows into the candidate registry")
     ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
 
@@ -45,6 +46,7 @@ def main() -> None:
         results,
         out_root,
         allow_public_output=args.allow_public_output,
+        include_rejects=args.include_rejects,
     )
     print(f"wrote experiments/completed/{out_dir.name}")
 
