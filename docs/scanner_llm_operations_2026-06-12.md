@@ -221,9 +221,11 @@ Operator start:
 bat\strategy_lab_start.bat
 ```
 
-This builds the data inventory, syncs the state DB, ensures one smoke
-experiment is queued if the same spec is not already queued/running, starts the
-dashboard, starts the one-worker queue loop, and opens `http://127.0.0.1:8765`.
+This syncs the private state DB, queues the default bounded research plan
+(`core_market / 1d`) through `enqueue_research_plan`, starts the dashboard,
+starts the one-worker queue loop, and opens `http://127.0.0.1:8765`. Override
+`STRATEGY_LAB_UNIVERSE`, `STRATEGY_LAB_TIMEFRAME`, `STRATEGY_LAB_FULL`, or
+`STRATEGY_LAB_NIGHT_MODE` before running the bat when needed.
 
 Smoke demo:
 
@@ -243,8 +245,11 @@ python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smo
 Continuous loop:
 
 ```bash
-bat\strategy_lab_loop.bat
+bat\strategy_lab_worker_loop.bat
 ```
+
+`bat\strategy_lab_loop.bat` is a legacy fixed-spec loop kept for manual
+diagnostics; prefer the worker loop after queueing research-plan jobs.
 
 Read-only local dashboard:
 
