@@ -62,7 +62,9 @@ def main() -> None:
         f"limits  : symbols<={lim.max_symbols}, event_windows<={lim.max_event_windows}, "
         f"bars/window<={lim.max_bars_per_window}, variants<={lim.max_variants}"
     )
-    print(f"data    : {plan.availability_counts() or 'none scanned'}")
+    counts = plan.availability_counts()
+    counts_str = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) if counts else "none scanned"
+    print(f"data    : {counts_str}")
     for d in plan.data:
         tag = "OK " if d.status == "available" else "SKIP"
         extra = f" ({d.reason})" if d.reason else ""
