@@ -101,3 +101,32 @@ def test_news_buffer_keeps_distinct_prerouted_api_events_by_event_key(tmp_path):
 
     stats = NB.stats(path=db)
     assert stats["raw"][NB.STATUS_NEW] == 2
+
+
+def test_news_buffer_preserves_prerouted_event_key_after_normalize(tmp_path):
+    db = tmp_path / "news_buffer.sqlite"
+    item = {
+        "title": "$ARX added to Coinbase roadmap",
+        "text": "$ARX added to Coinbase roadmap",
+        "url": "https://t.me/NewListingsFeed/3321",
+        "time": "2026-06-09T20:03:42Z",
+        "source": "tg_new_listings_feed",
+        "source_class": "telegram_web",
+        "lead_class": "LEADING",
+        "asset": "ARX",
+        "okx_inst": "ARX-USDT-SWAP",
+        "layer": 2,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "REALIZED",
+        "event_type": "exchange_listing",
+        "trigger_type": "telegram_listing_feed",
+        "event_key": "tg_new_listings_feed:3321:ARX",
+    }
+
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    assert NB.resolve_pending(limit=10, path=db, dry=True)["resolved"] == 1
+    assert NB.normalize_pending(limit=10, path=db) == {"ready": 1, "dropped": 0}
+
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1
+    assert ready[0]["event_key"] == "tg_new_listings_feed:3321:ARX"
