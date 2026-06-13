@@ -131,7 +131,8 @@ def main() -> None:
         print("auto-prepare : disabled (start does not fetch; set STRATEGY_LAB_PREPARE_1M=1 to enable)")
     print("-" * 48)
     cap = "daily cap set" if llm.get("daily_cap_present") else "no daily cap"
-    print(f"LLM review   : export-only; auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}; "
+    print(f"LLM rev.pack : (registry review-pack send, separate from the proposal loop) export-only; "
+          f"auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}; "
           f"send gate: {llm.get('would_send', 'export_only')} ({cap})")
     print("Proposal apply: manual only (queue requires explicit --apply)")
     print("Safety       : no live trading, no order engine, no paid API by default")

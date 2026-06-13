@@ -27,7 +27,7 @@ def _loop_args(tmp_path, **over):
 
 
 def _llm_args(**over):
-    base = dict(llm_propose=True, apply=True, max_candidates=3)
+    base = dict(llm_propose=True, apply=True, max_candidates=3, allow_public_output=False)
     base.update(over)
     return Namespace(**base)
 

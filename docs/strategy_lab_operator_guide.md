@@ -350,7 +350,9 @@ python -m scripts.strategy_lab.research_loop --dry-run --duration-minutes 30 --s
 bat\strategy_lab_research_loop_30m_apply.bat
 python -m scripts.strategy_lab.research_loop --apply --duration-minutes 30 --sleep-seconds 60 --max-worker-jobs-per-iteration 1 --max-queued 5
 
-# Apply + cheap LLM proposing (COSTS MONEY): needs the STRATEGY_LAB_LLM_* env + a daily cap.
+# Apply + cheap LLM proposing (COSTS MONEY): requires the STRATEGY_LAB_LLM_* env above
+# (provider/base_url/key/model) + STRATEGY_LAB_LLM_DAILY_CAP. The LLM provider is chosen
+# ONLY by STRATEGY_LAB_LLM_PROVIDER; --provider is the DATA provider, never the LLM.
 python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-minutes 30
 ```
 
@@ -379,6 +381,16 @@ To enable lower timeframes, extend the existing public OKX adapter
 into the feasibility glob format, mirroring the capped `prepare_1m_data` flow (bounded
 pages, no full-market download, private-root only). Until then the honest behavior is
 a clear `MISSING_DATA` + TODO, never a faked run.
+
+**Prerequisite when adding multi-timeframe data:** the worker's file picker
+(`experiment.choose_symbol_file` / `evaluate_spec`) is currently timeframe-blind — it
+selects the largest candle file for a symbol regardless of timeframe, because today
+each symbol has only one timeframe (1d) on disk. The research-loop/session/cycle queue
+path is protected by the timeframe-aware readiness gate, but the *worker itself* and the
+older `enqueue_research_plan` path are not. Before a second timeframe file for any symbol
+lands in the glob, give `ExperimentSpec` a `timeframe` field and make `choose_symbol_file`
+match it (return no file → the job is skipped, not run on the wrong bars), so the safety
+holds at every entry point, not just the gated one.
 
 ## Dry-run vs apply
 
