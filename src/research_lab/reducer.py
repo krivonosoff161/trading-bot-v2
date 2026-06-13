@@ -87,6 +87,9 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
     support_ratio = round(len(positive) / n_variants, 4) if n_variants else 0.0
     best = max(metrics, key=lambda m: _f(m, "test_avg_net_pct"), default={})
     entry = _entry_timing_aggregate(metrics)
+    event_entry = _event_timing_aggregate(metrics)
+    if event_entry:
+        entry = {**entry, **event_entry}
 
     reasons: list[str] = []
     if total_trades < MIN_TRADES_FOR_DECISION:
@@ -117,7 +120,7 @@ def _structural_reasons(best: dict[str, Any], entry: dict[str, Any], reasons: li
         reasons.append(WEAK_EDGE)
     if _regime_carry(best):
         reasons.append(REGIME_DEPENDENT)
-    if entry and entry.get("avg_capture_ratio") is not None and entry["avg_capture_ratio"] < CAPTURE_MIN:
+    if _entry_is_late(entry):
         reasons.append(ENTRY_LATE)
 
 
@@ -152,6 +155,33 @@ def _entry_timing_aggregate(metrics: list[dict[str, Any]]) -> dict[str, Any]:
         if vals:
             out[k] = round(sum(vals) / len(vals), 4)
     return out
+
+
+def _event_timing_aggregate(metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate event-anchored timing across variants (empty if no event context)."""
+    blocks = [m.get("event_entry_timing") for m in metrics if isinstance(m.get("event_entry_timing"), dict)]
+    if not blocks:
+        return {}
+    out: dict[str, Any] = {"event_variants": len(blocks)}
+    caps = [float(b["capture_ratio"]) for b in blocks if b.get("capture_ratio") is not None]
+    lags = [float(b["lag_bars"]) for b in blocks if b.get("lag_bars") is not None]
+    if caps:
+        out["event_capture_ratio"] = round(sum(caps) / len(caps), 4)
+    if lags:
+        out["event_avg_lag_bars"] = round(sum(lags) / len(lags), 4)
+    out["event_late_entry_rate"] = round(sum(1 for b in blocks if b.get("late_entry")) / len(blocks), 4)
+    return out
+
+
+def _entry_is_late(entry: dict[str, Any]) -> bool:
+    """Late by the proxy capture ratio, or by a majority of event-anchored entries."""
+    if not entry:
+        return False
+    capture = entry.get("avg_capture_ratio")
+    if capture is not None and float(capture) < CAPTURE_MIN:
+        return True
+    event_late = entry.get("event_late_entry_rate")
+    return event_late is not None and float(event_late) >= 0.5
 
 
 def _regime_carry(best: dict[str, Any]) -> bool:

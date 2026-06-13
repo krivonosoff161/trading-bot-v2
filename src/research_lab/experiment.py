@@ -8,6 +8,7 @@ exports. Output writers live in src/research_lab/outputs.py.
 
 from __future__ import annotations
 
+import bisect
 import glob
 import hashlib
 import itertools
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.entry_timing import event_anchored_timing
 from src.research_lab.regime import regime_at, regime_breakdown, regime_matches
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.validator import validate_candidate
@@ -37,6 +39,7 @@ class ExperimentSpec:
     max_runs: int = 0
     filters: dict[str, list[str]] = field(default_factory=dict)
     regime_params: dict[str, Any] = field(default_factory=dict)
+    event_context: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, path: Path) -> "ExperimentSpec":
@@ -54,6 +57,7 @@ class ExperimentSpec:
             max_runs=int(data.get("max_runs", 0)),
             filters={str(k): [str(x) for x in v] for k, v in (data.get("filters") or {}).items()},
             regime_params=dict(data.get("regime_params") or {}),
+            event_context=dict(data.get("event_context") or {}),
         )
 
 
@@ -249,6 +253,62 @@ def _entry_timing_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def event_entry_timing_for_run(
+    candles: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    event_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Event-anchored timing for one run, when the spec carries an event context.
+
+    Maps the historical event's ts window onto this symbol's bars and measures the
+    first trade that entered at/after the move start. The simulator still made the
+    entry decision with no look-ahead; this only adds an event-anchored measurement.
+    Returns {} when there is no usable context or no qualifying trade (callers then
+    keep the existing proxy metrics unchanged).
+    """
+    if not event_context or not trades:
+        return {}
+    try:
+        start_ts = int(event_context["move_start_ts"])
+        end_ts = int(event_context["move_end_ts"])
+    except (KeyError, TypeError, ValueError):
+        return {}
+    direction = str(event_context.get("direction") or "up")
+    ts = [int(c["ts"]) for c in candles]
+    n = len(ts)
+    if n == 0:
+        return {}
+    move_start_idx = bisect.bisect_left(ts, start_ts)
+    if move_start_idx >= n:
+        return {}
+    move_end_idx = min(max(bisect.bisect_left(ts, end_ts), move_start_idx), n - 1)
+    entry_idx = None
+    for trade in trades:
+        try:
+            entry_ts = int(trade["entry_ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if entry_ts >= start_ts:
+            j = bisect.bisect_left(ts, entry_ts)
+            if 0 <= j < n:
+                entry_idx = j
+                break
+    if entry_idx is None:
+        return {}
+    eval_end = min(n - 1, max(entry_idx, move_end_idx))
+    try:
+        return event_anchored_timing(
+            candles,
+            move_start_idx=move_start_idx,
+            move_end_idx=move_end_idx,
+            entry_idx=entry_idx,
+            direction=direction,
+            eval_end_idx=eval_end,
+        )
+    except ValueError:
+        return {}
+
+
 def compute_metrics(
     trades: list[dict[str, Any]],
     split_ratio: float,
@@ -346,6 +406,10 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
             )
             metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
             metrics["data_file_label"] = path.name
+            if spec.event_context:
+                event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
+                if event_timing:
+                    metrics["event_entry_timing"] = event_timing
             decision, reasons = grade_candidate(metrics)
             validation = validate_candidate(metrics, decision)
             results.append(

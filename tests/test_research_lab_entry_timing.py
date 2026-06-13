@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.research_lab.entry_timing import entry_timing_metrics
+from src.research_lab.entry_timing import entry_timing_metrics, event_anchored_timing
 
 
 def _candles(rows: list[tuple[float, float, float, float]]) -> list[dict]:
@@ -90,3 +90,59 @@ def test_invalid_index_raises():
         entry_timing_metrics(candles, move_start_idx=10, move_end_idx=4, entry_idx=5, direction="long")
     with pytest.raises(ValueError):
         entry_timing_metrics(candles, move_start_idx=4, move_end_idx=10, entry_idx=5, direction="sideways")
+
+
+def test_event_anchored_early_entry_not_late():
+    m = event_anchored_timing(
+        _candles(_LONG_ROWS), move_start_idx=4, move_end_idx=10, entry_idx=5, direction="long"
+    )
+    # ts fields and a 15m bar step -> 15 minutes of lag; default signal is entry_idx-1.
+    assert m["event_ts"] == 1_700_000_000_000 + 4 * 900_000
+    assert m["first_entry_ts"] == 1_700_000_000_000 + 5 * 900_000
+    assert m["signal_ts"] == 1_700_000_000_000 + 4 * 900_000
+    assert m["lag_bars"] == 1
+    assert m["lag_minutes"] == pytest.approx(15.0)
+    assert m["capture_ratio"] == pytest.approx(1.0)
+    assert m["late_entry"] is False
+
+
+def test_event_anchored_late_entry_flagged():
+    m = event_anchored_timing(
+        _candles(_LONG_ROWS), move_start_idx=4, move_end_idx=10, entry_idx=9, direction="long"
+    )
+    assert m["missed_move_pct"] == pytest.approx(75.0)
+    assert m["capture_ratio"] == pytest.approx(0.25)
+    assert m["lag_minutes"] == pytest.approx(75.0)
+    assert m["late_entry"] is True  # capture < 0.3
+
+
+def test_event_anchored_short_direction():
+    rows = [
+        (100, 100, 100, 100), (100, 100, 100, 100), (100, 100, 100, 100),
+        (100, 100, 100, 100), (100, 100, 100, 100),
+        (100, 100, 95, 96), (96, 97, 91, 92), (92, 93, 87, 88),
+        (88, 89, 84, 85), (85, 86, 81, 82), (82, 83, 79, 80),
+    ]
+    m = event_anchored_timing(
+        _candles(rows), move_start_idx=4, move_end_idx=10, entry_idx=5, direction="short"
+    )
+    assert m["total_move_pct"] == pytest.approx(20.0)
+    assert m["capture_ratio"] == pytest.approx(1.0)
+    assert m["late_entry"] is False
+
+
+def test_event_anchored_zero_movement_not_late():
+    rows = [(100, 100, 100, 100)] * 12
+    m = event_anchored_timing(
+        _candles(rows), move_start_idx=4, move_end_idx=10, entry_idx=5, direction="long"
+    )
+    assert m["zero_movement"] is True
+    assert m["late_entry"] is False
+
+
+def test_event_anchored_signal_after_entry_raises():
+    with pytest.raises(ValueError):
+        event_anchored_timing(
+            _candles(_LONG_ROWS), move_start_idx=4, move_end_idx=10, entry_idx=5,
+            direction="long", signal_idx=6,
+        )

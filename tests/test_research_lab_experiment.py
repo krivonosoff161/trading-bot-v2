@@ -126,6 +126,41 @@ def test_metrics_include_entry_timing_block(tmp_path):
         assert et == {}
 
 
+def test_event_context_adds_event_entry_timing(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    base = dict(
+        experiment_id="unit_event_timing",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 4, "stop_pct": 8, "take_pct": 16}
+            ],
+        },
+        min_trades=1,
+    )
+    ts0 = 1_700_000_000_000  # matches _write_candles; daily bars
+    ctx = {
+        "anchor_symbol": "ABC_USDT_SWAP",
+        "move_start_ts": ts0,
+        "move_end_ts": ts0 + 30 * 86_400_000,
+        "direction": "up",
+    }
+
+    with_ctx = evaluate_spec(ExperimentSpec(**base, event_context=ctx))
+    without_ctx = evaluate_spec(ExperimentSpec(**base))
+
+    assert "event_entry_timing" not in without_ctx[0].metrics  # unchanged without context
+    if with_ctx[0].metrics["n_trades"] > 0:
+        et = with_ctx[0].metrics["event_entry_timing"]
+        assert {"event_ts", "signal_ts", "first_entry_ts", "lag_bars", "lag_minutes",
+                "capture_ratio", "missed_move_pct", "late_entry"} <= set(et)
+        assert et["event_ts"] == ts0
+        assert isinstance(et["late_entry"], bool)
+
+
 def test_reject_excluded_from_registry_unless_debug(tmp_path):
     data = tmp_path / "ABC_USDT_SWAP_80d.json"
     _write_candles(data)

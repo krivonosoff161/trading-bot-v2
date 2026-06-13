@@ -79,6 +79,22 @@ def build_event_sweeps(
     return out
 
 
+def event_context_for(event: EventCluster) -> dict[str, Any]:
+    """Compact, serializable event anchor for event-anchored entry timing in runs.
+
+    Carries only the historical move's time window and direction so `evaluate_spec`
+    can measure how late the entry was relative to the event. No look-ahead: this is
+    the event that already happened; the simulator still decides entries itself.
+    """
+    return {
+        "anchor_symbol": event.anchor_symbol,
+        "move_start_ts": int(event.move_start_ts),
+        "move_end_ts": int(event.move_end_ts),
+        "direction": event.direction,
+        "move_pct": event.move_pct,
+    }
+
+
 def sweep_proposal_dict(event: EventCluster, sweep: SweepSpec) -> dict[str, Any]:
     """Public-safe proposal summary (no private data, no profitability claim)."""
     return {
