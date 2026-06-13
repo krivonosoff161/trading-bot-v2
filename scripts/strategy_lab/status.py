@@ -60,6 +60,7 @@ def main() -> None:
     llm = state.get("llm_review") or {}
     microscope = state.get("event_microscope") or {}
     prep = state.get("last_prepare_1m") or {}
+    prep_cfg = state.get("prepare_workflow") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -88,6 +89,11 @@ def main() -> None:
               f"(missing: {prep.get('missing', 0)}, downloaded: {prep.get('downloaded', 0)})")
     else:
         print("1m data prep : not run yet (prepare_1m_data --dry-run shows what 1m data is needed)")
+    if prep_cfg.get("enabled"):
+        print(f"auto-prepare : on start: {prep_cfg.get('mode')}, provider={prep_cfg.get('provider')} "
+              f"(network fetch: {'yes' if prep_cfg.get('will_fetch_network') else 'no'})")
+    else:
+        print("auto-prepare : disabled (start does not fetch; set STRATEGY_LAB_PREPARE_1M=1 to enable)")
     print("-" * 48)
     cap = "daily cap set" if llm.get("daily_cap_present") else "no daily cap"
     print(f"LLM review   : export-only; auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}; "

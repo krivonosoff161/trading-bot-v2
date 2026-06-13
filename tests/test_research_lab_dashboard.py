@@ -324,6 +324,35 @@ def test_dashboard_state_includes_data_prep(tmp_path, monkeypatch):
     assert str(tmp_path) not in json.dumps(state)
 
 
+def test_dashboard_state_includes_prepare_workflow_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    for key in ("STRATEGY_LAB_PREPARE_1M", "STRATEGY_LAB_PREPARE_1M_APPLY", "STRATEGY_LAB_MARKET_DATA_PROVIDER"):
+        monkeypatch.delenv(key, raising=False)
+    state = load_dashboard_state(tmp_path)
+    pw = state["prepare_workflow"]
+    assert pw["enabled"] is False and pw["mode"] == "disabled"
+    assert pw["provider"] == "null" and pw["will_fetch_network"] is False
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_render_html_shows_auto_prepare_line():
+    state = {
+        "private_root_label": "strategy-lab",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "event_microscope": {
+            "timeframe": "1m", "enabled": True, "disabled_reason": "",
+            "limits": {"max_symbols": 2, "max_event_windows": 3, "max_bars_per_window": 360, "max_variants": 8},
+            "availability_counts": {"missing": 2}, "scanned_group": "l2_high_beta", "skipped_reasons": [],
+        },
+        "prepare_workflow": {"enabled": False, "mode": "disabled", "provider": "null", "will_fetch_network": False},
+        "llm_cost": {}, "latest_run": {}, "runs": [],
+    }
+    page = render_html(state)
+    assert "auto-prepare on start" in page
+    assert "disabled" in page
+
+
 def test_render_html_shows_data_prep_line():
     state = {
         "private_root_label": "strategy-lab",

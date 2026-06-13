@@ -15,6 +15,7 @@ from src.research_lab.data_prepare import read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.paths import one_minute_glob
+from src.research_lab.prepare_workflow import load_prepare_workflow_config
 from src.research_lab.obsidian_graph import count_notes
 from src.research_lab.proposal_schema import QUEUED, VALIDATED
 from src.research_lab.proposal_store import load_proposals, proposals_path, status_counts
@@ -71,6 +72,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "llm_review": llm_review_status(private_root),
         "event_microscope": load_microscope_summary(private_root),
         "last_prepare_1m": load_data_prep_summary(private_root),
+        "prepare_workflow": load_prepare_workflow_config().to_summary(),
         "proposals": load_proposal_summary(private_root),
         "obsidian_notes": count_notes(private_root),
         "next_run": next_run_hint(private_root),

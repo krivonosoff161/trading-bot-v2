@@ -79,7 +79,9 @@ def main() -> None:
     print("-" * 48)
     print("read-only: no download, no 1m sweep run, no live trading, no API")
     if not plan.available():
-        print("no usable 1m data found -> microscope has nothing to analyze (clean skip)")
+        print("no usable 1m data found (clean skip). To prepare it on demand:")
+        print("  python -m scripts.strategy_lab.prepare_1m_data --dry-run            # see needed 1m windows")
+        print("  python -m scripts.strategy_lab.prepare_1m_data --provider okx-public --apply   # fetch (public candles, no key)")
 
 
 if __name__ == "__main__":
