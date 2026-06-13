@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import glob
 import json
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
+from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
+from src.research_lab.timeframes import load_timeframe_profiles
+from src.research_lab.universe import load_universe
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
@@ -46,6 +50,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "obsidian_vault_label": "strategy-lab/obsidian-vault",
         "state_db": state_db,
         "candidate_registry": registry_summary(registry_path(private_root)),
+        "lab_config": load_lab_config_summary(private_root),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
@@ -165,6 +170,46 @@ def aggregate_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "decision_counts": counts,
         "validation_counts": validation_counts,
     }
+
+
+def load_lab_config_summary(private_root: Path) -> dict[str, Any]:
+    """Public-safe summary of the research-machine config (counts/mode only)."""
+    summary: dict[str, Any] = {
+        "universe_groups": 0,
+        "universe_symbols": 0,
+        "timeframe_profiles": [],
+        "resource_mode": "unknown",
+        "max_workers": 0,
+        "allow_heavy_jobs": False,
+        "allow_1m_jobs": "unknown",
+        "proposal_specs": _count_proposal_specs(private_root),
+    }
+    try:
+        universe = load_universe()
+        summary["universe_groups"] = len(universe.groups)
+        summary["universe_symbols"] = len(universe.all_symbols())
+    except Exception as exc:  # config optional; never break the dashboard
+        summary["universe_error"] = type(exc).__name__
+    try:
+        summary["timeframe_profiles"] = list(load_timeframe_profiles().names())
+    except Exception as exc:
+        summary["timeframe_error"] = type(exc).__name__
+    try:
+        policy = load_resource_policy()
+        summary["resource_mode"] = policy.mode
+        summary["max_workers"] = policy.max_workers
+        summary["allow_heavy_jobs"] = policy.allow_heavy_jobs
+        summary["allow_1m_jobs"] = policy.allow_1m_jobs
+    except Exception as exc:
+        summary["resource_error"] = type(exc).__name__
+    return summary
+
+
+def _count_proposal_specs(private_root: Path) -> int:
+    specs_dir = private_root / "proposals" / "specs"
+    if not specs_dir.exists():
+        return 0
+    return len(glob.glob(str(specs_dir / "*.json")))
 
 
 def load_llm_cost_summary(path: Path) -> dict[str, Any]:

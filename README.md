@@ -177,6 +177,18 @@ auto-executed). Validation statuses are research labels, not profitability
 claims. Full doc:
 [docs/strategy_lab_mvp2.md](docs/strategy_lab_mvp2.md).
 
+Next-architecture foundation (loadable + tested, not yet wired into the runner):
+public config for a universe of asset groups and relation hints
+(`configs/strategy_lab/universe.yaml`), timeframe roles/limits
+(`configs/strategy_lab/timeframe_profiles.yaml`), and a desktop-safety resource
+policy (`configs/strategy_lab/resource_policy.yaml`, quiet by default). New
+modules add event clusters (label a historical move + attach related symbols),
+honest entry-timing metrics (lag, missed move, capture ratio, MAE/MFE), and a
+validated coarse-sweep spec that gates 1m/heavy jobs. GPU is a planned optional
+batch backend, not implemented. 1m is a trigger-only event microscope, not
+full-universe scanning. Design doc:
+[docs/strategy_lab_architecture_next.md](docs/strategy_lab_architecture_next.md).
+
 Data inventory for a spec:
 
 ```bash
@@ -242,7 +254,7 @@ python -m pytest tests/test_scanner_router.py tests/test_scanner_runtime.py test
 Strategy-lab tests:
 
 ```bash
-python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_state_db.py tests/test_research_lab_dashboard.py tests/test_research_lab_data_inventory.py tests/test_research_lab_strategy_registry.py tests/test_research_lab_regime.py tests/test_research_lab_validator.py tests/test_research_lab_candidate_registry.py tests/test_research_lab_proposals.py -q
+python -m pytest tests/test_research_lab_*.py -q
 ```
 
 ## Repository Map

@@ -74,6 +74,7 @@ def render_html(state: dict) -> str:
     queue_counts = state_db.get("queue_counts") or {}
     validation_counts = state_db.get("validation_counts") or totals.get("validation_counts") or {}
     registry = state.get("candidate_registry") or {}
+    lab_config = state.get("lab_config") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -143,6 +144,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Candidate Registry</h2>
     {registry_html(registry)}
+  </section>
+
+  <section class="section card">
+    <h2>Research Machine Config</h2>
+    {lab_config_html(lab_config)}
   </section>
 
   <section class="section card">
@@ -254,6 +260,24 @@ def registry_html(registry: dict) -> str:
             f"<p>entries: {esc(registry.get('entries', 0))}</p>",
             f"<p>{statuses}</p>",
             f"<p class=\"path\">registry: {esc(registry.get('registry_label', ''))}</p>",
+        ]
+    )
+
+
+def lab_config_html(cfg: dict) -> str:
+    if not cfg:
+        return '<p class="muted">Research-machine config not loaded.</p>'
+    profiles = ", ".join(str(p) for p in (cfg.get("timeframe_profiles") or [])) or "none"
+    return "\n".join(
+        [
+            f"<p>universe: {esc(cfg.get('universe_groups', 0))} groups / "
+            f"{esc(cfg.get('universe_symbols', 0))} symbols</p>",
+            f"<p>timeframe profiles: {esc(profiles)}</p>",
+            f"<p>resource mode: <span class=\"pill\">{esc(cfg.get('resource_mode', 'unknown'))}</span> "
+            f"workers: {esc(cfg.get('max_workers', 0))} - "
+            f"heavy jobs: {esc(cfg.get('allow_heavy_jobs', False))} - "
+            f"1m jobs: {esc(cfg.get('allow_1m_jobs', 'unknown'))}</p>",
+            f"<p>proposal specs (private): {esc(cfg.get('proposal_specs', 0))}</p>",
         ]
     )
 
