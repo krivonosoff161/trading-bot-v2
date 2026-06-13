@@ -129,6 +129,7 @@ def export_review_pack(
         "registry_entries": len(entries),
         "candidate_count": pack["candidate_count"],
         "pack_label": f"reports/llm_review/{out_path.name}",
+        "pack": pack,
     }
 
 
