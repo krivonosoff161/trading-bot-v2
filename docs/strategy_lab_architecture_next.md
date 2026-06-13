@@ -281,11 +281,41 @@ orchestrates existing steps without becoming autonomous:
 - `status` + dashboard surface the last cycle; `bat/strategy_lab_cycle_dry_run.bat`
   is dry-run only.
 
+## MVP 4.4 (done 2026-06-13)
+
+Data-complete research sessions + an advisory LLM proposal loop (reusing the existing
+validator and send boundary, not duplicating them):
+
+- `src/research_lab/strategy_requirements.py` — `StrategyDataRequirement` +
+  `derive_requirement()`: reads the longest lookback from `strategy_registry`
+  parameter_defaults and sets `min_rows = lookback + warmup + buffer`. Minimal and
+  explicit (no speculative HTF/related-symbol fields).
+- `src/research_lab/data_readiness.py` — `assess()` / `assess_proposal()`: a thin
+  adapter over `inspect_file` / `choose_symbol_file` (+ `locate_microscope_data` only
+  for event-anchored jobs) returning READY / MISSING_DATA / TOO_SHORT / MALFORMED /
+  PARTIAL_CONTEXT / OUTSIDE_POLICY, with a suggested prepare command. No TA, no fetch.
+- `queue_validated()` gains `require_data_ready` (the cycle/session pass True): a
+  not-ready proposal is skipped with a reason, never queued. Cycle counts now include
+  `ready_jobs` / `skipped_missing_data` / `skipped_too_short` / `skipped_malformed`.
+- `run_research_cycle` wraps each step in try/except (proposal_error / data_check_error
+  / prepare_error / queue_error / worker_failed) — a component failure is recorded, not
+  fatal; the report write stays loud.
+- `src/research_lab/llm_proposals.py` — cheap->chief loop built on existing pieces:
+  `validate_llm_candidates()` reuses `coerce_proposal` + `validate_and_mark`; gates
+  reuse `llm_review_sender` (`evaluate_send_gates`, `daily_cap`, `env_enabled`) plus a
+  provider gate; `NullProposalSender` is the export-only default. No new sender stack,
+  no paid call by default, LLM output never executed. Alibaba/Qwen documented, disabled.
+- `scripts/strategy_lab/research_session.py` + `src/research_lab/research_session.py` —
+  a single-pass session CLI that wraps `run_research_cycle`, adds the LLM export/send
+  step (gated), and writes one session report. status + dashboard surface the session,
+  readiness counts and the LLM-loop mode.
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
 - More market-data providers / timeframes (today `okx-public` does 1m only). A
   full-market 1m download stays intentionally unsupported.
-- A **real LLM provider** behind the send boundary (only `NullReviewSender` ships).
+- A **real LLM provider** behind both the review-send and proposal-loop gates (only the
+  null/export-only path ships; Alibaba/Qwen are documented but disabled).
 - Event-anchored entry-timing inside *generic* (non-event) runs (those still use
   the per-trade MFE/MAE/capture proxy).

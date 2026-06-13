@@ -200,6 +200,42 @@ def test_result_json_schema_and_no_abs_paths(tmp_path):
     assert str(tmp_path) not in json.dumps(d)
 
 
+def test_queue_readiness_gate_skips_not_ready(tmp_path, monkeypatch):
+    import scripts.strategy_lab.queue_validated_proposals as q
+    from src.research_lab.data_readiness import MISSING_DATA, ProposalReadiness
+    from src.research_lab.proposal_schema import VALIDATED, coerce_proposal
+    from src.research_lab.proposal_store import proposals_path, upsert_proposals
+
+    p = coerce_proposal({
+        "proposal_id": "p1", "created_by": "rule_based", "hypothesis": "h",
+        "requested_timeframe": "1d", "setup_family": "momentum_breakout",
+        "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+        "status": VALIDATED, "created_at": "2026-06-13T00:00:00+00:00",
+    })
+    upsert_proposals(proposals_path(tmp_path), [p])
+    # force "data not ready" deterministically (no dependence on the archive)
+    monkeypatch.setattr(q, "assess_proposal", lambda *a, **k: ProposalReadiness(MISSING_DATA, (), "prep cmd"))
+
+    res = q.queue_validated(tmp_path, apply=True, require_data_ready=True)
+    assert res["queued"] == 0
+    assert res["skipped_missing_data"] == 1
+    assert res["skipped_not_ready"][0]["status"] == MISSING_DATA
+
+
+def test_cycle_records_step_failure_without_crashing(tmp_path, monkeypatch):
+    import scripts.strategy_lab.research_cycle as rc
+
+    def _boom(*a, **k):
+        raise RuntimeError("generator exploded")
+
+    monkeypatch.setattr(rc, "generate_proposals", _boom)
+    result = run_research_cycle(ResearchCycleConfig(apply=False), private_root=tmp_path)  # must not raise
+    gen = next(s for s in result.steps if s.name == "generate_proposals")
+    assert gen.status == "failed" and "proposal_error" in gen.detail
+    # the rest of the cycle still ran
+    assert any(s.name == "queue_proposals" for s in result.steps)
+
+
 def test_cycle_summary_and_dashboard_include_last_cycle(tmp_path, monkeypatch):
     from src.research_lab.dashboard_state import load_dashboard_state
     from src.research_lab.research_cycle import write_cycle_report

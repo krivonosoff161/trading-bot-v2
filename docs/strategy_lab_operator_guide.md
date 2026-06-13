@@ -33,6 +33,13 @@ no `.env`/secrets, no automatic LLM spend.
   inspect -> generate proposals -> check 1m data -> (optional) prepare -> queue
   (capped) -> one throttled worker step -> status report. Dry-run by default; no
   hidden loop; the worker respects the throttle (no storm).
+- **Data-complete research session** (`research_session`): wraps the cycle with a
+  data-readiness gate (queue only READY jobs; missing/short/malformed are skipped with
+  a reason, never faked) and an export-only LLM advisory loop (cheap -> chief, code
+  validates, no paid call by default). Single pass, not a daemon.
+- **Strategy data contract + readiness** (`strategy_requirements`, `data_readiness`):
+  each job declares its primary-timeframe history need; readiness is checked before any
+  TA runs.
 - **Gated LLM send path**: a provider-agnostic sender boundary whose only shipped
   implementation is `NullReviewSender` (never calls a network). A real send needs
   several explicit gates; export stays the default.
@@ -118,6 +125,7 @@ trades, or write to the public repo.
 | Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
 | See what 1m data is needed (dry-run) | `bat\strategy_lab_prepare_1m_data.bat` |
 | Run one controlled research cycle (dry-run) | `bat\strategy_lab_cycle_dry_run.bat` |
+| Plan a full research session (dry-run) | `python -m scripts.strategy_lab.research_session --dry-run` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -236,6 +244,73 @@ python -m scripts.strategy_lab.research_cycle --apply --prepare-1m --prepare-1m-
   the last cycle (mode, proposals queued, data missing/prepared, worker outcome).
 - **Stop**: the cycle is a single pass and returns; there is nothing to stop. To run
   it on a cadence, the operator re-runs it (no built-in daemon).
+
+## Research session (data-complete pass + LLM advisory)
+
+`research_session` is the highest-level operator command. It wraps one research
+cycle but adds two things the cycle alone does not: a **data-completeness gate**
+(never queue a job whose data is incomplete) and an **LLM advisory layer**
+(export-only by default). It is a single pass, not a daemon.
+
+```bash
+# Plan only (default): no queue writes, no worker, no network, no paid LLM.
+python -m scripts.strategy_lab.research_session --dry-run
+
+# Apply without network: queue ONLY data-ready validated proposals; one worker step.
+python -m scripts.strategy_lab.research_session --apply --max-candidates 5 --max-queued 5 --max-worker-jobs 1
+
+# Apply WITH explicit 1m prep (public OKX candles) for event-anchored work:
+python -m scripts.strategy_lab.research_session --apply --prepare-1m --prepare-1m-apply --provider okx-public --max-candidates 5 --max-queued 5 --max-worker-jobs 1
+
+# Export an LLM proposal-request pack (no API call), optionally attempt a gated send:
+python -m scripts.strategy_lab.research_session --apply --llm-export
+```
+
+**cycle vs session.** `research_cycle` is the mechanical loop (generate → check data
+→ optional prepare → queue → worker). `research_session` is the same loop plus the
+data-readiness gate on the queue and the LLM advisory step, with one combined report.
+Use the cycle for a quick mechanical pass; use the session for a "serious", data-
+complete research pass.
+
+### Why missing data blocks a test
+
+A job is queued only when its data is **READY**. The session/cycle check each
+proposal's primary-timeframe data (the local archive) before queueing:
+
+- `READY` — file present with enough rows → queued.
+- `MISSING_DATA` / `TOO_SHORT` / `MALFORMED` — **not queued**; recorded with a reason
+  (and a suggested `prepare_1m_data` command when 1m is missing). The lab never runs
+  technical analysis on missing/invalid data or fakes a result.
+
+To fill missing 1m windows, prepare them explicitly (see "Prepare 1m data on
+demand"), then re-run the session — the previously-missing jobs become READY.
+
+### LLM proposal loop (cheap → chief, advisory only)
+
+The LLM is advisory and disabled by default. The design is cheap → chief:
+
+- The **cheap** model is asked (via the exported request pack) to propose strategy/
+  filter/parameter variants as **strict JSON only** — no code, no shell, no trading.
+- **Code validates every candidate** with the deterministic validator (known family/
+  symbol/timeframe, bounded variants, safe wording, private boundary). Invalid
+  candidates are rejected with a reason.
+- Only the **validated** subset is eligible for a **chief** review pass (capped).
+- The LLM never decides what enters the queue — **code does**. LLM output is never
+  executed.
+
+Default is export-only and offline. A real send needs **all** gates:
+`STRATEGY_LAB_LLM_ENABLED=1`, `STRATEGY_LAB_LLM_PROVIDER=<provider>`, a configured
+provider client, a daily budget cap, and `--llm-send` (and never on dry-run).
+**Alibaba/Qwen** can be wired as a provider later, but **no provider ships today**,
+so `--llm-send` always falls back to export-only with a clear reason. No API keys
+are stored or printed (env names only).
+
+### Expected pace
+
+This is a controlled research machine, not a 24/7 poller. **One or two serious
+strategy/setup variants per day is an acceptable pace.** Heavy calculation is fine;
+flooding CPU/API is not — the worker is capped (`--max-worker-jobs`, default 1) and
+throttled by `resource_policy.yaml`, and network/LLM are opt-in.
 
 ## Dry-run vs apply
 
