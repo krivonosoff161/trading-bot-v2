@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.research_lab.event_sweeps import build_event_sweeps, sweep_proposal_dict  # noqa: E402
+from src.research_lab.event_sweeps import build_event_sweeps, event_context_for, sweep_proposal_dict  # noqa: E402
 from src.research_lab.experiment import choose_symbol_file, load_candles  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
@@ -116,7 +116,10 @@ def _apply(capped, args, profiles, policy) -> dict:
     queued, already = 0, 0
     try:
         for _event, sweep in capped:
-            exp = compile_sweep(sweep, data_glob=args.data_glob, timeframe_profiles=profiles, resource_policy=policy)
+            exp = compile_sweep(
+                sweep, data_glob=args.data_glob, timeframe_profiles=profiles,
+                resource_policy=policy, event_context=event_context_for(_event),
+            )
             spec_path = out_dir / f"{exp.experiment_id}.json"
             spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=args.priority)
@@ -139,6 +142,7 @@ def _exp_to_dict(exp) -> dict:
         "split_ratio": exp.split_ratio,
         "max_runs": exp.max_runs,
         "parameter_grid": exp.parameter_grid,
+        "event_context": exp.event_context,
     }
 
 

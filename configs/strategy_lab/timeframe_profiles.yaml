@@ -33,5 +33,6 @@ profiles:
     trigger_only: true
     max_symbols_per_cycle: 2
     max_window_hours: 6
+    max_event_windows: 3
     max_variants_per_setup: 8
     comment: do not run full-universe 1m sweeps by default

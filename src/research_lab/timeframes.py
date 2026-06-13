@@ -27,6 +27,7 @@ class TimeframeProfile:
     max_variants_per_setup: int
     trigger_only: bool = False
     max_window_hours: int | None = None
+    max_event_windows: int | None = None
     comment: str = ""
 
 
@@ -64,6 +65,7 @@ def _parse_profile(name: str, body: Any) -> TimeframeProfile:
         if key not in body:
             raise ValueError(f"timeframe profile '{name}' missing required key: {key}")
     window = body.get("max_window_hours")
+    event_windows = body.get("max_event_windows")
     return TimeframeProfile(
         timeframe=name,
         role=str(body["role"]),
@@ -72,5 +74,6 @@ def _parse_profile(name: str, body: Any) -> TimeframeProfile:
         max_variants_per_setup=int(body["max_variants_per_setup"]),
         trigger_only=bool(body.get("trigger_only", False)),
         max_window_hours=int(window) if window is not None else None,
+        max_event_windows=int(event_windows) if event_windows is not None else None,
         comment=str(body.get("comment", "")),
     )

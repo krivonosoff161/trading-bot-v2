@@ -19,6 +19,10 @@ Candle = dict[str, Any]
 _LONG = {"long", "up", "buy", "+1", "1"}
 _SHORT = {"short", "down", "sell", "-1"}
 
+# A late entry: little of the move captured, or most of it already gone at entry.
+LATE_ENTRY_CAPTURE_MIN = 0.3
+LATE_ENTRY_MISS_PCT = 50.0
+
 
 def _is_long(direction: str) -> bool:
     token = str(direction).strip().lower()
@@ -72,6 +76,63 @@ def entry_timing_metrics(
         "false_early_entry": bool(entry_before_impulse and mae >= float(adverse_tol_pct)),
         "zero_movement": zero_movement,
         "eval_end_idx": eval_end,
+    }
+
+
+def event_anchored_timing(
+    candles: list[Candle],
+    *,
+    move_start_idx: int,
+    move_end_idx: int,
+    entry_idx: int,
+    direction: str,
+    signal_idx: int | None = None,
+    eval_end_idx: int | None = None,
+    adverse_tol_pct: float = 2.0,
+) -> dict[str, Any]:
+    """Entry timing anchored to a known event (event time vs signal vs entry vs outcome).
+
+    No look-ahead is introduced here: `entry_idx`/`signal_idx` are produced by the
+    no-look-ahead simulator (it decides on bar idx-1 and enters at the open of idx).
+    Future bars (up to `eval_end_idx`) are used ONLY to measure the outcome
+    (MFE/MAE/capture), never to choose the entry. Deterministic arithmetic; not a
+    profitability claim.
+    """
+    base = entry_timing_metrics(
+        candles,
+        move_start_idx=move_start_idx,
+        move_end_idx=move_end_idx,
+        entry_idx=entry_idx,
+        direction=direction,
+        eval_end_idx=eval_end_idx,
+        adverse_tol_pct=adverse_tol_pct,
+    )
+    if signal_idx is None:
+        signal_idx = max(0, entry_idx - 1)
+    if not (0 <= signal_idx <= entry_idx < len(candles)):
+        raise ValueError(f"signal_idx out of range: {signal_idx} (entry_idx={entry_idx})")
+
+    event_ts = int(candles[move_start_idx]["ts"])
+    first_entry_ts = int(candles[entry_idx]["ts"])
+    signal_ts = int(candles[signal_idx]["ts"])
+    capture = float(base["capture_ratio"])
+    missed = float(base["missed_move_pct"])
+    zero = bool(base["zero_movement"])
+    late = (not zero) and (capture < LATE_ENTRY_CAPTURE_MIN or missed >= LATE_ENTRY_MISS_PCT)
+    return {
+        "event_ts": event_ts,
+        "signal_ts": signal_ts,
+        "first_entry_ts": first_entry_ts,
+        "lag_bars": base["entry_lag_bars"],
+        "lag_minutes": round((first_entry_ts - event_ts) / 60000.0, 4),
+        "capture_ratio": capture,
+        "missed_move_pct": missed,
+        "total_move_pct": base["total_move_pct"],
+        "mfe_pct": base["max_favorable_excursion_pct"],
+        "mae_pct": base["max_adverse_excursion_pct"],
+        "late_entry": late,
+        "false_early_entry": bool(base["false_early_entry"]),
+        "zero_movement": zero,
     }
 
 

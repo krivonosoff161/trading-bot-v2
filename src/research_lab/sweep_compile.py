@@ -42,6 +42,7 @@ def compile_sweep(
     fees_bps: float = 7.0,
     slippage_bps: float = 3.0,
     min_trades: int = 20,
+    event_context: dict[str, Any] | None = None,
 ) -> ExperimentSpec:
     """Validate safety gates, expand grids (bounded by cap), build an ExperimentSpec.
 
@@ -74,4 +75,5 @@ def compile_sweep(
         slippage_bps=slippage_bps,
         min_trades=min_trades,
         max_runs=job_cap,
+        event_context=dict(event_context or {}),
     )
