@@ -92,6 +92,7 @@ def render_html(state: dict) -> str:
     prepare_workflow = state.get("prepare_workflow") or {}
     last_cycle = state.get("last_cycle") or {}
     last_session = state.get("last_session") or {}
+    last_loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
     queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
@@ -167,7 +168,7 @@ def render_html(state: dict) -> str:
 
   <section class="section card">
     <h2>Research Cycle &amp; Session</h2>
-    {cycle_html(last_cycle, last_session, llm_loop)}
+    {cycle_html(last_cycle, last_session, llm_loop, last_loop)}
   </section>
 
   <section class="section card">
@@ -347,9 +348,11 @@ def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | Non
     ])
 
 
-def cycle_html(cycle: dict, session: dict | None = None, llm_loop: dict | None = None) -> str:
+def cycle_html(cycle: dict, session: dict | None = None, llm_loop: dict | None = None,
+               loop: dict | None = None) -> str:
     session = session or {}
     llm_loop = llm_loop or {}
+    loop = loop or {}
     lines: list[str] = []
     if cycle and cycle.get("available"):
         lines += [
@@ -373,12 +376,27 @@ def cycle_html(cycle: dict, session: dict | None = None, llm_loop: dict | None =
     else:
         lines.append('<p class="muted">No research session run yet '
                      '(python -m scripts.strategy_lab.research_session --dry-run).</p>')
+    if loop.get("available"):
+        lw = loop.get("last_worker") or {}
+        lines.append(
+            f"<p>last loop: <span class=\"pill\">{esc(loop.get('mode', ''))}</span> "
+            f"{esc(loop.get('iterations', 0))} iters / {esc(loop.get('duration_minutes', 0))} min - "
+            f"queued={esc(loop.get('proposals_queued', 0))} - missing data={esc(loop.get('skipped_missing_data', 0))} - "
+            f"worker done/deferred={esc(lw.get('completed', 0))}/{esc(lw.get('deferred', 0))} - "
+            f"LLM validated={esc(loop.get('llm_validated', 0))} (last {esc(loop.get('last_llm_status', 'n/a'))})</p>"
+        )
+    spend = llm_loop.get("today_spend") or {}
     lines.append(
-        f"<p>LLM proposal loop: <span class=\"pill\">{esc(llm_loop.get('mode', 'export_only'))}</span> "
+        f"<p>LLM proposal loop: <span class=\"pill\">{esc(llm_loop.get('mode', 'disabled'))}</span> "
         f"send={'enabled' if llm_loop.get('enabled') else 'disabled'} - provider={esc(llm_loop.get('provider', 'none'))} "
         f"(advisory; code validates; LLM never executed)</p>"
     )
-    lines.append(f"<p class=\"muted\">next: {esc((session.get('next_command') or cycle.get('next_command', '')))}</p>")
+    lines.append(
+        f"<p>LLM spend today (lab-private): {esc(spend.get('requests', 0))} req - "
+        f"{esc(spend.get('tokens', 0))} tok - {esc(spend.get('cost_rub', 0.0))} RUB - "
+        f"daily cap {'set' if llm_loop.get('daily_cap_present') else 'none'}</p>"
+    )
+    lines.append(f"<p class=\"muted\">next: {esc((loop.get('next_command') or session.get('next_command') or cycle.get('next_command', '')))}</p>")
     lines.append('<p class="muted">no live trading - no order engine - no paid LLM by default - network fetch is opt-in</p>')
     return "\n".join(lines)
 
