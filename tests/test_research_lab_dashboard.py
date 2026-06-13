@@ -196,6 +196,44 @@ def test_dashboard_state_has_research_summary_fields(tmp_path, monkeypatch):
     assert state["next_run"].get("allowed") is True  # no prior runs -> allowed
 
 
+def test_dashboard_state_shows_proposal_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    from src.research_lab.proposal_schema import VALIDATED, coerce_proposal
+    from src.research_lab.proposal_store import proposals_path, upsert_proposals
+    p = coerce_proposal({
+        "proposal_id": "p1", "created_by": "rule_based", "hypothesis": "h",
+        "requested_timeframe": "15m", "setup_family": "momentum_breakout",
+        "symbols": ["SOL_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+        "status": VALIDATED, "created_at": "2026-06-13T00:00:00+00:00", "reason_codes": ["unstable_parameters"],
+    })
+    upsert_proposals(proposals_path(tmp_path), [p])
+
+    state = load_dashboard_state(tmp_path)
+    assert state["proposals"]["total"] == 1
+    assert state["proposals"]["validated_waiting"] == 1
+    assert state["llm_review"]["auto_send"] is False
+    assert state["llm_review"]["queue_requires_apply"] is True
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_render_html_shows_proposals_card():
+    state = {
+        "private_root_label": "strategy-lab",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "proposals": {
+            "total": 3, "by_status": {"VALIDATED": 2, "REJECTED": 1}, "validated_waiting": 2,
+            "latest_reasons": [{"id": "p1", "status": "VALIDATED", "reasons": ["entry_late"]}],
+        },
+        "llm_review": {"auto_send": False},
+        "llm_cost": {}, "latest_run": {}, "runs": [],
+    }
+    page = render_html(state)
+    assert "Proposals (closed loop)" in page
+    assert "validated waiting for queue: 2" in page
+    assert "LLM auto-send" in page
+
+
 def test_render_html_shows_research_summary():
     state = {
         "private_root_label": "strategy-lab",

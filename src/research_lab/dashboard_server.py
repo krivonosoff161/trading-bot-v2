@@ -86,6 +86,7 @@ def render_html(state: dict) -> str:
     llm_review = state.get("llm_review") or {}
     next_run = state.get("next_run") or {}
     obsidian_notes = state.get("obsidian_notes", 0)
+    proposals = state.get("proposals") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -150,6 +151,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Research Summary</h2>
     {research_summary_html(latest, next_run, obsidian_notes)}
+  </section>
+
+  <section class="section card">
+    <h2>Proposals (closed loop)</h2>
+    {proposals_html(proposals, llm_review)}
   </section>
 
   <section class="section card">
@@ -285,6 +291,32 @@ def registry_html(registry: dict) -> str:
             f"<p class=\"path\">registry: {esc(registry.get('registry_label', ''))}</p>",
         ]
     )
+
+
+def proposals_html(proposals: dict, llm_review: dict) -> str:
+    if not proposals:
+        return '<p class="muted">No proposals generated yet.</p>'
+    by_status = proposals.get("by_status") or {}
+    status_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(by_status.items())) or "none"
+    rows = ["<table><thead><tr><th>Proposal</th><th>Status</th><th>Reasons</th></tr></thead><tbody>"]
+    for item in (proposals.get("latest_reasons") or [])[:5]:
+        rows.append(
+            "<tr>"
+            f"<td>{esc(item.get('id', ''))}</td>"
+            f"<td>{esc(item.get('status', ''))}</td>"
+            f"<td>{esc(', '.join(item.get('reasons') or []))}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table>")
+    table = "\n".join(rows) if (proposals.get("latest_reasons")) else '<p class="muted">No proposals yet.</p>'
+    auto_send = "disabled" if not llm_review.get("auto_send", False) else "ENABLED"
+    return "\n".join([
+        f"<p>total: {esc(proposals.get('total', 0))} - {status_line}</p>",
+        f"<p>validated waiting for queue: {esc(proposals.get('validated_waiting', 0))}</p>",
+        f"<p>LLM auto-send: <span class=\"pill\">{esc(auto_send)}</span> - "
+        f"queue requires explicit apply: <span class=\"pill\">yes</span></p>",
+        table,
+    ])
 
 
 def research_summary_html(latest: dict, next_run: dict, obsidian_notes: object) -> str:

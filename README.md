@@ -220,6 +220,19 @@ python -m scripts.strategy_lab.generate_event_sweeps --universe l2_high_beta --t
 python -m scripts.strategy_lab.build_obsidian_graph   # private notes for non-REJECT candidates
 ```
 
+Closed proposal loop (results -> review pack -> next proposals -> validate ->
+queue -> worker). Deterministic, dry-run by default, no paid API. Typed proposals
+flow `PROPOSED -> VALIDATED / REJECTED -> QUEUED` and are validated against
+resource caps, timeframe policy (no 1m full sweep), and the private/public
+boundary:
+
+```bash
+python -m scripts.strategy_lab.generate_next_proposals --limit 10 --dry-run
+python -m scripts.strategy_lab.generate_next_proposals --limit 10 --apply
+python -m scripts.strategy_lab.import_llm_proposals --file out.json --dry-run   # human-saved LLM output, no API
+python -m scripts.strategy_lab.queue_validated_proposals --apply                # idempotent, bounded
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:

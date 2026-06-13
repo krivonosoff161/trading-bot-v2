@@ -103,6 +103,44 @@ python -m scripts.strategy_lab.build_obsidian_graph
 - Entry-timing aggregates (capture ratio, MFE/MAE, late-entry rate) are recorded
   per run and shown on the dashboard.
 
+## Closed research loop (proposals)
+
+The lab can close the loop: results -> review pack -> next proposals -> validate ->
+queue -> worker -> new results. Every step is deterministic, dry-run by default,
+and never calls a paid API.
+
+```bash
+# 1. Generate next-experiment proposals from the registry (rule-based, deterministic):
+python -m scripts.strategy_lab.generate_next_proposals --limit 10 --dry-run
+python -m scripts.strategy_lab.generate_next_proposals --limit 10 --apply   # writes private proposals.jsonl
+
+# 2. (Optional) import proposals a human saved from an LLM (no API call here):
+python -m scripts.strategy_lab.import_llm_proposals --file path\to\llm_output.json --dry-run
+python -m scripts.strategy_lab.import_llm_proposals --file path\to\llm_output.json --apply
+
+# 3. Queue only VALIDATED proposals (idempotent, bounded by max_queue_size):
+python -m scripts.strategy_lab.queue_validated_proposals --dry-run
+python -m scripts.strategy_lab.queue_validated_proposals --apply
+
+# 4. Worker runs them as usual (throttled / capped):
+python scripts/strategy_lab/worker_once.py
+```
+
+- Proposals are typed objects with status `PROPOSED -> VALIDATED / REJECTED -> QUEUED`,
+  validated against resource caps, timeframe policy (no 1m full sweep), known
+  symbols/families, bounded variants, safe wording, and the private/public
+  boundary. They live in `strategy-lab/proposals/proposals.jsonl` (private).
+- The rule-based generator only *requests the next test* — it never promotes or
+  claims profitability. LLM review stays export-only; importing model output is a
+  manual file read, and queueing always requires an explicit `--apply`.
+- This is separate from the older `autopilot_once.py` (manual/advanced) which
+  writes `proposals/proposal_registry.jsonl` + `proposals/specs/`; the closed
+  loop uses `proposals/proposals.jsonl` + `proposals/queued_specs/`.
+
+The one-click start never generates or queues proposals by default. Set
+`STRATEGY_LAB_PROPOSAL_DRY_RUN=1` before `bat\strategy_lab_start.bat` to also run
+`generate_next_proposals --dry-run` (print only, never apply).
+
 ## Dry-run vs apply
 
 - `--dry-run` (default) prints the planned job(s) and any skipped symbols

@@ -154,6 +154,29 @@ The discovery loop now runs end to end on the CPU, quietly:
 - The dashboard adds a Research Summary card (latest reducer verdicts, entry
   timing aggregate, Obsidian note count, next-run/deferred reason).
 
+## Closed proposal loop (done 2026-06-13)
+
+results -> review pack -> proposal generation -> validation -> safe queueing ->
+worker -> new results, all deterministic and dry-run by default:
+
+- `src/research_lab/proposal_schema.py` + `proposal_store.py` — typed proposals
+  (`PROPOSED -> VALIDATED / REJECTED -> QUEUED`) stored privately in
+  `proposals/proposals.jsonl`.
+- `src/research_lab/proposal_generator.py` + `scripts/strategy_lab/generate_next_proposals.py`
+  — rule-based next-test proposals from the registry (never promotes; only
+  requests the next bounded test).
+- `src/research_lab/proposal_validator.py` — validates schema, resource caps,
+  timeframe policy (1m full sweep blocked), known symbols/families, bounded
+  variants, safe wording, and the private/public boundary.
+- `scripts/strategy_lab/queue_validated_proposals.py` — compiles VALIDATED
+  proposals to ExperimentSpec and queues them idempotently, bounded by
+  `max_queue_size`. `import_llm_proposals.py` imports human-saved LLM output via
+  a local file read (no API). The dashboard shows proposal counts and an explicit
+  "LLM auto-send: disabled / queue requires apply" status.
+
+This is separate from the older `proposals.py` autopilot (manual/advanced), which
+uses `proposals/proposal_registry.jsonl` + `proposals/specs/`.
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
