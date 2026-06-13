@@ -85,3 +85,9 @@ layers:
     filing:    ["8-k", "s-1", "424b", "sec filing", "10-k", "10-q", prospectus, "form 4"]
     ma:        [merger, acquisition, antitrust, buyout, takeover, stake]
     product:   [launches, unveils, recall, approval, "data center", chip]
+    pre_ipo_market_mechanics: [
+      "ipo", "pre-ipo", "public debut", "market debut", "trading debut", "nasdaq debut",
+      "historic debut", "largest ipo", "priced", "prices", "allocation", "allocations",
+      "underwriter", "tokenized", "tokenised", "xstocks", "spcx", "synthetic price",
+      "premium", "derivative", "derivatives", "refund", "scrap", "cancel"
+    ]

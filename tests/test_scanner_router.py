@@ -102,6 +102,18 @@ def test_materiality_equities_earnings_family():
     assert m["family"] == "earnings" and m["score"] >= 0.5
 
 
+def test_materiality_l5_preipo_market_mechanics():
+    cases = [
+        "SpaceX IPO: Whale Opens $22.3M SPCX Long as Synthetic Price Hits 30% premium",
+        "Morning Minute: SpaceX Prices Largest IPO Ever at $135",
+        "Crypto Firms Scrap Tokenized SpaceX Share Offerings as SPCX Surges After IPO",
+    ]
+    for headline in cases:
+        m = score_materiality(headline, 5)
+        assert m["family"] == "pre_ipo_market_mechanics"
+        assert m["score"] >= 0.5
+
+
 def test_layer_plan_matrix_loaded():
     l1 = layer_plan(1)
     l3 = layer_plan(3)

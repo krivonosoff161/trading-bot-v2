@@ -123,6 +123,59 @@ def split_flags(agent: dict) -> tuple[list[str], list[str]]:
     return classify_flags([], [], agent.get("red_flags"))
 
 
+_L5_PREIPO_ACTION_TERMS = (
+    "spcx", "xstocks", "tokenized", "tokenised", "pre-ipo", "public debut",
+    "market debut", "trading debut", "nasdaq debut", "historic debut",
+    "largest ipo", "prices largest ipo", "priced", "prices", "allocation",
+    "allocations", "underwriter", "synthetic price", "premium", "derivative",
+    "derivatives", "refund", "refunds", "scrap", "scraps", "cancel",
+    "cancels", "surges", "surged", "whale", "opens", "long",
+)
+_L5_PREIPO_CONTEXT_TERMS = (
+    "what does it mean", "how will", "bull and bear case", "is it a good investment",
+    "price analysis", "prediction", "opinion", "guide",
+)
+
+
+def _apply_l5_preipo_guard(data: dict, event: dict, layer: int) -> dict:
+    """Protect L5 pre-IPO/perp market mechanics from being discarded as generic IPO chatter."""
+    if int(layer or 0) != 5:
+        return data
+    headline = str(event.get("headline") or "")
+    low = headline.lower()
+    if not any(term in low for term in _L5_PREIPO_ACTION_TERMS):
+        return data
+    # Generic explainers stay weak unless they also contain concrete market mechanics.
+    if any(term in low for term in _L5_PREIPO_CONTEXT_TERMS) and not any(
+        term in low for term in ("spcx", "premium", "allocation", "priced", "surges", "$", "%")
+    ):
+        return data
+
+    out = dict(data)
+    out["event_type"] = out.get("event_type") or "pre_ipo_market_mechanics"
+    if str(out.get("event_type") or "unknown").lower() in ("unknown", "none", "unclassified"):
+        out["event_type"] = "pre_ipo_market_mechanics"
+    out["materiality"] = max(_num(out.get("materiality")), 0.65)
+    out["confidence"] = max(_num(out.get("confidence")), 0.55)
+    out["pre_verdict"] = "WATCH_CANDIDATE"
+    out["should_escalate"] = True
+    out["escalation_reason"] = (
+        out.get("escalation_reason")
+        or "L5 pre-IPO/tokenized market mechanics with concrete price/access/allocation facts"
+    )
+    out["trigger_text"] = out.get("trigger_text") or headline[:240]
+    if str(out.get("phase") or "").lower() not in ("expected", "realized"):
+        if any(term in low for term in ("surges", "surged", "priced", "prices", "debut", "refund", "cancel", "scrap")):
+            out["phase"] = "realized"
+    if str(out.get("direction") or "").lower() not in ("long", "short", "mixed"):
+        out["direction"] = "mixed"
+    facts = list(out.get("key_facts") or [])
+    if not facts:
+        facts.append(headline[:240])
+    out["key_facts"] = facts
+    return out
+
+
 async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
     """Событие + слой → структурные факты (dict) + _usage. На ошибке — пустой материальный 0."""
     cfg = _cfg()
@@ -141,6 +194,7 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
 
     raw, usage = await llm_client.call("cheap", system, user, json_mode=True, max_tokens=700)
     data = _parse(raw) or {}
+    data = _apply_l5_preipo_guard(data, event, layer)
 
     direction = str(data.get("direction", "none")).lower().strip()
     if direction not in ("long", "short", "none", "mixed"):
