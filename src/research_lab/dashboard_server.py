@@ -6,12 +6,19 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 from src.research_lab.dashboard_state import DEFAULT_PRIVATE_ROOT, load_dashboard_state
+
+
+def default_private_root() -> Path:
+    """Return the dashboard private root, honoring the same env var as workers."""
+    raw = os.getenv("TRADING_BOT_RESEARCH_ROOT", "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_PRIVATE_ROOT
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -176,7 +183,9 @@ def render_html(state: dict) -> str:
     <h2>Paths</h2>
     <p>Private root label:</p>
     <div class="path">{esc(state.get("private_root_label", ""))}</div>
-    <p>Obsidian vault:</p>
+    <p>Obsidian candidate graph:</p>
+    <div class="path">{esc(state.get("obsidian_graph_label", ""))}</div>
+    <p>Obsidian run vault:</p>
     <div class="path">{esc(state.get("obsidian_vault_label", ""))}</div>
     <p>State DB:</p>
     <div class="path">{esc(state_db.get("db_label", "not initialized"))}</div>
@@ -354,7 +363,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--private-root", default=str(DEFAULT_PRIVATE_ROOT))
+    ap.add_argument("--private-root", default=str(default_private_root()))
     args = ap.parse_args()
     run_server(args.host, args.port, Path(args.private_root))
 
