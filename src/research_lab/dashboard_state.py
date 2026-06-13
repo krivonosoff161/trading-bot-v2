@@ -7,11 +7,13 @@ import csv
 import datetime as dt
 import glob
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
 from src.research_lab.resource_policy import load_resource_policy
+from src.research_lab.runtime_policy import read_worker_status, worker_status_path
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
@@ -51,6 +53,8 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "state_db": state_db,
         "candidate_registry": registry_summary(registry_path(private_root)),
         "lab_config": load_lab_config_summary(private_root),
+        "worker_status": read_worker_status(worker_status_path(private_root)),
+        "llm_review": llm_review_status(),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
@@ -203,6 +207,16 @@ def load_lab_config_summary(private_root: Path) -> dict[str, Any]:
     except Exception as exc:
         summary["resource_error"] = type(exc).__name__
     return summary
+
+
+def llm_review_status() -> dict[str, Any]:
+    """Whether sending review packs to an LLM is enabled (export is always allowed)."""
+    enabled = os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+    return {
+        "enabled": enabled,
+        "auto_execute": False,
+        "note": "export-only; no automatic API call or spend",
+    }
 
 
 def _count_proposal_specs(private_root: Path) -> int:

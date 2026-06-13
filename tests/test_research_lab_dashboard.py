@@ -156,6 +156,51 @@ def test_render_html_shows_validation_and_registry():
     assert "candidates.jsonl" in page
 
 
+def test_dashboard_state_includes_worker_and_llm_sections(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
+    # persist a worker status as the worker would
+    from src.research_lab.runtime_policy import worker_status_path, write_worker_status
+    write_worker_status(worker_status_path(tmp_path), status="deferred", reason="max_jobs_per_hour", mode="quiet_desktop")
+
+    state = load_dashboard_state(tmp_path)
+
+    assert state["worker_status"]["status"] == "deferred"
+    assert state["llm_review"]["enabled"] is False
+    assert state["llm_review"]["auto_execute"] is False
+    assert state["lab_config"]["resource_mode"] == "quiet_desktop"
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_dashboard_state_handles_missing_private_root(tmp_path):
+    missing = tmp_path / "does_not_exist"
+    state = load_dashboard_state(missing)
+    assert state["worker_status"] == {}
+    assert state["totals"]["run_count"] == 0
+    assert "llm_review" in state
+
+
+def test_render_html_shows_worker_health_and_llm():
+    state = {
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {"queued": 3, "running": 1, "completed": 5, "failed": 2}},
+        "worker_status": {"status": "deferred", "reason": "min_seconds_between_jobs", "updated_at": "2026-06-13T00:00:00Z"},
+        "llm_review": {"enabled": False, "note": "export-only; no automatic API call or spend"},
+        "llm_cost": {},
+        "latest_run": {},
+        "runs": [],
+    }
+
+    page = render_html(state)
+
+    assert "Worker &amp; Queue Health" in page
+    assert "deferred" in page
+    assert "LLM review" in page
+    assert "disabled" in page
+
+
 def test_aggregate_runs_counts_decisions():
     totals = aggregate_runs([
         {"candidate_count": 2, "counts": {"REJECT": 1, "OBSERVE": 1}},
