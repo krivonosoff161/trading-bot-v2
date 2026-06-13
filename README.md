@@ -248,10 +248,14 @@ capped 1m windows the lab actually needs (event specs / queued jobs / a manual
 request), checks the local cache, and — only with `--apply` and a configured
 provider — writes just those windows under the private root. No full-market
 download; default provider is `null` (no network), so `--apply` without a provider
-prints "provider not configured / no data written":
+prints "provider not configured / no data written". The real provider is
+`okx-public` — OKX **public** 1m candles, read-only, **no API key**, no
+order/account endpoints (a small isolated public-only adapter; the existing
+order-capable OKX clients are not reused):
 
 ```bash
 python -m scripts.strategy_lab.prepare_1m_data --dry-run                  # shows which 1m windows are missing
+python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2026-06-10T00:00 --end 2026-06-10T03:00 --provider okx-public --apply
 ```
 
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only

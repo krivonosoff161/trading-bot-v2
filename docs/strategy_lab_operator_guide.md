@@ -27,7 +27,8 @@ no `.env`/secrets, no automatic LLM spend.
 - **Demand-driven 1m loader** (`prepare_1m_data`): derives the capped 1m windows
   the lab needs (event specs / queued jobs / a manual request), checks the local
   cache, and — only with `--apply` and a configured provider — writes just those
-  windows under the private root. Default provider is `null` (no network).
+  windows under the private root. Default provider is `null` (no network); the real
+  provider is `okx-public` (OKX public candles, read-only, **no API key**).
 - **Gated LLM send path**: a provider-agnostic sender boundary whose only shipped
   implementation is `NullReviewSender` (never calls a network). A real send needs
   several explicit gates; export stays the default.
@@ -38,9 +39,9 @@ no `.env`/secrets, no automatic LLM spend.
 ## What is planned (not done yet)
 
 - A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
-- A **real exchange market-data adapter** for `prepare_1m_data` (the loader path,
-  caps, cache and writer exist; shipped providers are `null` (no network) and an
-  offline `synthetic` test provider — there is no real network fetch yet).
+- More market-data providers / timeframes (today: `okx-public` fetches **1m only**;
+  `null` default + offline `synthetic` test provider remain). Full-market 1m
+  download is intentionally unsupported.
 - A real LLM provider behind the send boundary (today only `NullReviewSender`;
   sending stays export-only).
 
@@ -269,27 +270,34 @@ needs (current event sweeps / queued specs, or an explicit manual request).
 bat\strategy_lab_prepare_1m_data.bat
 python -m scripts.strategy_lab.prepare_1m_data --dry-run
 
-# A specific window (UTC), dry-run:
-python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2025-01-30T00:00 --end 2025-01-30T06:00 --dry-run
+# A specific window (UTC), dry-run (okx-public does NOT hit the network on dry-run):
+python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2026-06-10T00:00 --end 2026-06-10T03:00 --provider okx-public --dry-run
 
-# Actually fetch + write (requires a configured provider):
-python -m scripts.strategy_lab.prepare_1m_data --apply
+# Actually fetch public OKX candles + write (one symbol, small window):
+python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2026-06-10T00:00 --end 2026-06-10T03:00 --provider okx-public --apply
+
+# Confirm it is visible afterwards:
+python -m scripts.strategy_lab.microscope_scan --universe core_market
+python -m scripts.strategy_lab.status
 ```
 
 - **Default provider is `null` (no network).** With `--apply` and no configured
   provider it prints `provider not configured / no data written` and exits cleanly.
+- **`okx-public`** fetches OKX **public** 1m candles only — read-only, **no API
+  key**, no order/account/private endpoints, no symbol discovery. Dry-run makes no
+  network call; fetch happens only on `--apply`.
 - **No full-market download.** Requirements are capped by the 1m policy: at most
   `max_symbols_per_cycle` symbols, `max_event_windows` windows, and
   `max_window_hours`×60 bars per window. `--max-symbols` / `--max-windows` can only
-  *lower* those caps, never raise them.
-- Prepared 1m candles are written in the canonical OHLCV format (deduped, sorted)
-  under the private root at `strategy-lab/market_data/1m/` — never the public repo.
+  *lower* those caps, never raise them. The provider paginates only the requested
+  window with a bounded page count (no infinite pagination) and a short backoff.
+- Prepared 1m candles are written in the canonical OHLCV format (deduped, sorted,
+  UTC) under the private root at `strategy-lab/market_data/1m/` — never the public repo.
 - This is **research data only**: no live trading, no order/account endpoints, no
   paid LLM.
 - A built-in offline `synthetic` provider (deterministic, clearly tagged, **not**
   real market data) exists for pipeline testing/demos and is gated behind
-  `STRATEGY_LAB_ALLOW_SYNTHETIC=1`. A real exchange market-data adapter is a future
-  step.
+  `STRATEGY_LAB_ALLOW_SYNTHETIC=1`.
 
 ## What "late entry" means
 

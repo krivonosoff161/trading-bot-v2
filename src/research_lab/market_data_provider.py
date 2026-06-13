@@ -85,10 +85,14 @@ class SyntheticMarketDataProvider:
 def get_provider(name: str | None, *, allow_synthetic: bool = False) -> MarketDataProvider:
     """Resolve a provider by name. Unknown/unconfigured names fall back to Null.
 
-    'synthetic' is only returned when allow_synthetic is True (explicit opt-in);
-    otherwise (and for 'okx'/unknown, which have no shipped adapter) Null is used.
+    'okx-public' is a real, read-only public-candles provider (no key, no network
+    until fetch). 'synthetic' is only returned when allow_synthetic is True (explicit
+    opt-in). Everything else (incl. bare 'okx', unknown) falls back to Null.
     """
     token = (name or "null").strip().lower()
     if token == "synthetic" and allow_synthetic:
         return SyntheticMarketDataProvider()
+    if token in ("okx-public", "okx_public", "okxpublic"):
+        from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
+        return OkxPublicMarketDataProvider()
     return NullMarketDataProvider()

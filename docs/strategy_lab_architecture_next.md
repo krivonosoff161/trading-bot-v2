@@ -226,12 +226,28 @@ safe by default:
 - The microscope locator + dashboard/status now read `strategy-lab/market_data/1m/`
   and surface the last prepare report (provider/mode/missing/downloaded, labels only).
 
+## MVP 4.2 Phase 2 (done 2026-06-13)
+
+Real public market-data adapter for the loader:
+
+- `src/research_lab/providers/okx_public.py` — `OkxPublicMarketDataProvider`: a new,
+  isolated, **public-only** adapter (the existing OKX clients mix order/account/stream
+  code and were intentionally **not** reused). It calls only OKX
+  `/api/v5/market/history-candles` via stdlib `urllib` (no new dependency), needs no
+  API key, maps `BTC_USDT_SWAP -> BTC-USDT-SWAP`, paginates backward (`after` = oldest
+  ts) only across the requested window with a bounded page count (<= 20 pages) and a
+  short backoff, skips unconfirmed candles, and returns canonical OHLCV rows (deduped,
+  sorted, UTC, window-filtered). Network/parse failures raise `MarketDataError`, which
+  `prepare()` records as a structured `provider_error` (no crash, no partial write).
+- `get_provider("okx-public")` wires it behind the existing interface; `null` stays the
+  default and `synthetic` stays env-gated. `prepare_1m_data --provider okx-public`
+  fetches only on `--apply` (dry-run makes no network call).
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
-- A **real exchange market-data adapter** behind `prepare_1m_data` (loader path,
-  caps, cache and writer exist; shipped providers are `null` + offline `synthetic`,
-  no real network fetch yet). Must stay market-data only (no orders/accounts).
+- More market-data providers / timeframes (today `okx-public` does 1m only). A
+  full-market 1m download stays intentionally unsupported.
 - A **real LLM provider** behind the send boundary (only `NullReviewSender` ships).
 - Event-anchored entry-timing inside *generic* (non-event) runs (those still use
   the per-trade MFE/MAE/capture proxy).
