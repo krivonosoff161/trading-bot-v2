@@ -17,6 +17,7 @@ from typing import Any
 from src.research_lab.candidate_registry import build_entry, registry_path, upsert_entries
 from src.research_lab.experiment import ExperimentSpec, RunResult
 from src.research_lab.paths import resolve_private_root
+from src.research_lab.reducer import reduce_results
 
 VALIDATION_ORDER = ["FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE", "REJECT"]
 REGISTRY_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
@@ -44,11 +45,18 @@ def write_run_outputs(
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_candidates_csv(run_dir / "candidates.csv", results)
     _write_graph_edges(run_dir / "graph_edges.csv", results)
-    (run_dir / "llm_review_pack.json").write_text(
-        json.dumps(build_llm_review_pack(spec, results), ensure_ascii=False, indent=2),
+    reduce_report = reduce_results(results)
+    (run_dir / "reducer_report.json").write_text(
+        json.dumps(reduce_report.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (run_dir / "llm_review_prompt.md").write_text(_llm_review_prompt(spec, results), encoding="utf-8")
+    (run_dir / "llm_review_pack.json").write_text(
+        json.dumps(build_llm_review_pack(spec, results, reduce_report), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "llm_review_prompt.md").write_text(
+        _llm_review_prompt(spec, results, reduce_report), encoding="utf-8"
+    )
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
     _write_obsidian_notes(spec, results, out_root, run_dir.name)
     artifact_label = f"experiments/completed/{run_dir.name}"
@@ -134,7 +142,7 @@ def validation_counts(results: list[RunResult]) -> dict[str, int]:
     return counts
 
 
-def build_llm_review_pack(spec: ExperimentSpec, results: list[RunResult]) -> dict[str, Any]:
+def build_llm_review_pack(spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None) -> dict[str, Any]:
     by_decision: dict[str, int] = {}
     for r in results:
         by_decision[r.decision] = by_decision.get(r.decision, 0) + 1
@@ -155,30 +163,53 @@ def build_llm_review_pack(spec: ExperimentSpec, results: list[RunResult]) -> dic
         ),
         reverse=True,
     )[:10]
-    return {
-        "schema": "strategy_lab_llm_review_pack.v1",
+    pack = {
+        "schema": "strategy_lab_llm_review_pack.v2",
         "instruction": (
             "Review aggregate research metrics only. You must NOT declare any "
             "candidate profitable or live-tradable. Look for overfit, weak OOS, "
-            "regime dependence, and missing validation. Propose next experiment "
-            "specs as JSON drafts; a human must review and enqueue them manually."
+            "regime dependence, late entries, and missing validation. Suggest next "
+            "tests only — propose experiment specs as JSON drafts; a human must "
+            "review and enqueue them manually."
         ),
         "experiment_id": spec.experiment_id,
         "filters": spec.filters,
         "counts": by_decision,
         "validation_counts": validation_counts(results),
         "family_aggregates": by_family,
+        "entry_timing_aggregate": entry_timing_aggregate(results),
         "top_results": [result_dict(r) for r in top],
+        "top_questions": [
+            "Which FORWARD_PAPER groups survive a parameter-neighborhood re-test?",
+            "Where is the entry late (low capture, high adverse excursion before it works)?",
+            "Which results depend on a single regime bucket?",
+            "What validation gate is still missing before any human review?",
+        ],
         "required_followups": [
             "parameter neighborhood sweep around any FORWARD_PAPER candidate",
             "regime-filtered re-run for any REGIME_SPECIFIC candidate",
             "cost stress re-check before any promotion",
         ],
     }
+    if reduce_report is not None:
+        pack["reducer"] = reduce_report.to_dict()
+    return pack
 
 
-def _llm_review_prompt(spec: ExperimentSpec, results: list[RunResult]) -> str:
-    pack = build_llm_review_pack(spec, results)
+def entry_timing_aggregate(results: list[RunResult]) -> dict[str, Any]:
+    """Mean of per-run entry-timing blocks (empty if none recorded)."""
+    blocks = [r.metrics.get("entry_timing") for r in results if isinstance(r.metrics.get("entry_timing"), dict)]
+    keys = ("avg_capture_ratio", "avg_mfe_pct", "avg_mae_pct", "late_entry_rate")
+    out: dict[str, Any] = {}
+    for k in keys:
+        vals = [float(b[k]) for b in blocks if b.get(k) is not None]
+        if vals:
+            out[k] = round(sum(vals) / len(vals), 4)
+    return out
+
+
+def _llm_review_prompt(spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None) -> str:
+    pack = build_llm_review_pack(spec, results, reduce_report)
     v_counts = validation_counts(results)
     return "\n".join(
         [

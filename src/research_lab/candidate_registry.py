@@ -125,7 +125,10 @@ def _metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
         "max_drawdown_pct", "train_avg_net_pct", "test_avg_net_pct", "test_trades",
         "best_trade_share", "stress_avg_net_pct",
     ]
-    return {k: metrics.get(k) for k in keys if k in metrics}
+    summary = {k: metrics.get(k) for k in keys if k in metrics}
+    if isinstance(metrics.get("entry_timing"), dict):
+        summary["entry_timing"] = dict(metrics["entry_timing"])
+    return summary
 
 
 def _next_review(created_at: str, status: str) -> str:

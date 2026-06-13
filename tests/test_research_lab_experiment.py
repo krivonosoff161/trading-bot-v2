@@ -95,8 +95,35 @@ def test_run_outputs_include_validation_and_registry(tmp_path):
     assert entry["experiment_id"] == "unit_validation"
     assert entry["validation_status"] == results[0].validation_status
     pack = json.loads((out_dir / "llm_review_pack.json").read_text(encoding="utf-8"))
-    assert pack["schema"] == "strategy_lab_llm_review_pack.v1"
+    assert pack["schema"] == "strategy_lab_llm_review_pack.v2"
     assert "validation_counts" in pack
+    assert "reducer" in pack
+    assert (out_dir / "reducer_report.json").exists()
+
+
+def test_metrics_include_entry_timing_block(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_entry_timing",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 4, "stop_pct": 8, "take_pct": 16}
+            ],
+        },
+        min_trades=1,
+    )
+    results = evaluate_spec(spec)
+    et = results[0].metrics["entry_timing"]
+    if results[0].metrics["n_trades"] > 0:
+        assert set(et) == {"avg_mfe_pct", "avg_mae_pct", "avg_capture_ratio", "late_entry_rate"}
+        assert et["avg_mfe_pct"] >= 0
+        assert 0.0 <= et["late_entry_rate"] <= 1.0
+    else:
+        assert et == {}
 
 
 def test_reject_excluded_from_registry_unless_debug(tmp_path):
