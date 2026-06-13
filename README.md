@@ -258,6 +258,11 @@ python -m scripts.strategy_lab.prepare_1m_data --dry-run                  # show
 python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2026-06-10T00:00 --end 2026-06-10T03:00 --provider okx-public --apply
 ```
 
+`strategy_lab_start.bat` can run the prepare step automatically before the worker,
+but only when you opt in (`STRATEGY_LAB_PREPARE_1M=1`, plus `..._APPLY=1` +
+`STRATEGY_LAB_MARKET_DATA_PROVIDER=okx-public` to actually fetch). Default start
+fetches nothing; the worker never fetches by itself. See the operator guide.
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:

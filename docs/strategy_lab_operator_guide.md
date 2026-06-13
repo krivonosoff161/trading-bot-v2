@@ -68,6 +68,9 @@ set STRATEGY_LAB_FULL=1
 set STRATEGY_LAB_NIGHT_MODE=1
 ```
 
+By default the start **does not fetch any market data**. The 1m prepare step is
+opt-in (see "Auto-prepare on start" below).
+
 Manual/debug chain:
 
 ```bash
@@ -298,6 +301,41 @@ python -m scripts.strategy_lab.status
 - A built-in offline `synthetic` provider (deterministic, clearly tagged, **not**
   real market data) exists for pipeline testing/demos and is gated behind
   `STRATEGY_LAB_ALLOW_SYNTHETIC=1`.
+
+### Auto-prepare on start (opt-in, off by default)
+
+`strategy_lab_start.bat` can run the prepare step automatically before the worker,
+but **only when you opt in**. Default start fetches nothing. Env flags:
+
+| Env flag | Default | Effect |
+|---|---|---|
+| `STRATEGY_LAB_PREPARE_1M` | `0` | `1` adds a prepare step (`[2c]`) to start |
+| `STRATEGY_LAB_PREPARE_1M_APPLY` | `0` | `1` makes the step apply (fetch+write); `0` is dry-run |
+| `STRATEGY_LAB_MARKET_DATA_PROVIDER` | `null` | `okx-public` (real, public, no key) or `synthetic` |
+| `STRATEGY_LAB_PREPARE_1M_MAX_SYMBOLS` | — | optional, clamped to policy by the CLI |
+| `STRATEGY_LAB_PREPARE_1M_MAX_WINDOWS` | — | optional, clamped to policy by the CLI |
+
+- With `PREPARE_1M=1` and `APPLY=0` the step is a dry-run (no network, no writes).
+- A real fetch needs `PREPARE_1M=1` **and** `APPLY=1` **and** a real provider
+  (`okx-public`). With provider `null` the step prints
+  `provider not configured / no data written`.
+- A whole-start dry-run (`STRATEGY_LAB_START_DRY_RUN=1`) forces the prepare step to
+  dry-run regardless, so a dry-run start never fetches.
+- The worker itself never fetches; only this explicit start step (or the manual CLI)
+  can. `status` and the dashboard show whether auto-prepare is on, its mode/provider,
+  and whether it would touch the network.
+
+Example — fetch real public OKX candles on start (one-off, this shell only):
+
+```bash
+set STRATEGY_LAB_PREPARE_1M=1
+set STRATEGY_LAB_PREPARE_1M_APPLY=1
+set STRATEGY_LAB_MARKET_DATA_PROVIDER=okx-public
+bat\strategy_lab_start.bat
+```
+
+If 1m data is missing and auto-prepare is off, `microscope_scan` and `status` point
+you to the exact `prepare_1m_data` commands instead of silently degrading.
 
 ## What "late entry" means
 

@@ -89,6 +89,7 @@ def render_html(state: dict) -> str:
     proposals = state.get("proposals") or {}
     event_microscope = state.get("event_microscope") or {}
     data_prep = state.get("last_prepare_1m") or {}
+    prepare_workflow = state.get("prepare_workflow") or {}
     queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
 <html lang="en">
@@ -163,7 +164,7 @@ def render_html(state: dict) -> str:
 
   <section class="section card">
     <h2>Event Microscope (1m)</h2>
-    {microscope_html(event_microscope, data_prep)}
+    {microscope_html(event_microscope, data_prep, prepare_workflow)}
   </section>
 
   <section class="section card">
@@ -338,7 +339,7 @@ def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | Non
     ])
 
 
-def microscope_html(em: dict, data_prep: dict | None = None) -> str:
+def microscope_html(em: dict, data_prep: dict | None = None, prepare_workflow: dict | None = None) -> str:
     if not em or em.get("error"):
         return '<p class="muted">Event microscope not available.</p>'
     limits = em.get("limits") or {}
@@ -357,6 +358,16 @@ def microscope_html(em: dict, data_prep: dict | None = None) -> str:
         )
     else:
         prep_line = '<p class="muted">1m data prep: not run yet (prepared on demand, null provider by default)</p>'
+    pw = prepare_workflow or {}
+    if pw.get("enabled"):
+        auto_line = (
+            f"<p>auto-prepare on start: <span class=\"pill\">{esc(pw.get('mode', ''))}</span> "
+            f"provider={esc(pw.get('provider', 'null'))} - network fetch: "
+            f"<span class=\"pill\">{'yes' if pw.get('will_fetch_network') else 'no'}</span></p>"
+        )
+    else:
+        auto_line = ('<p class="muted">auto-prepare on start: disabled '
+                     '(default; no network fetch — set STRATEGY_LAB_PREPARE_1M=1 to enable)</p>')
     return "\n".join([
         f"<p>1m microscope: <span class=\"pill\">{state}</span> "
         f"(trigger-only; no downloader; full-universe 1m sweeps blocked)</p>",
@@ -367,6 +378,7 @@ def microscope_html(em: dict, data_prep: dict | None = None) -> str:
         f"<p>data availability ({esc(em.get('scanned_group', ''))}): {counts_line}</p>",
         f"<p class=\"muted\">skipped: {skipped_line}</p>",
         prep_line,
+        auto_line,
     ])
 
 

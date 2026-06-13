@@ -243,6 +243,23 @@ Real public market-data adapter for the loader:
   default and `synthetic` stays env-gated. `prepare_1m_data --provider okx-public`
   fetches only on `--apply` (dry-run makes no network call).
 
+## MVP 4.2 Phase 3 (done 2026-06-13)
+
+Operator-workflow integration of the prepare step — opt-in, never automatic:
+
+- `src/research_lab/prepare_workflow.py` — `load_prepare_workflow_config()` reads the
+  `STRATEGY_LAB_PREPARE_1M[_APPLY]` / `STRATEGY_LAB_MARKET_DATA_PROVIDER` /
+  `..._MAX_SYMBOLS` / `..._MAX_WINDOWS` env flags with safe fallbacks + warnings, and
+  exposes `mode` and `will_fetch_network`. Read-only; it never fetches or writes.
+- `bat/strategy_lab_start.bat` gains an opt-in `[2c]` prepare step: disabled by
+  default (no network), dry-run when `PREPARE_1M=1`/`APPLY=0`, apply only with
+  `APPLY=1` + a real provider. A whole-start dry-run forces the step to dry-run.
+- `status` and the dashboard surface the auto-prepare config (enabled/mode/provider/
+  will_fetch_network) alongside the last prepare result; `microscope_scan` and
+  `status` point to the exact `prepare_1m_data` commands when 1m data is missing.
+- The worker still never fetches by itself; only the explicit start step or the
+  manual CLI can.
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).

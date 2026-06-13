@@ -46,6 +46,7 @@ def test_status_shows_microscope_and_send_gate(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
     monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
     monkeypatch.delenv("STRATEGY_LAB_LLM_DAILY_CAP", raising=False)
+    monkeypatch.delenv("STRATEGY_LAB_PREPARE_1M", raising=False)
     monkeypatch.setattr(sys, "argv", ["status", "--private-root", str(tmp_path)])
     status.main()
     out = capsys.readouterr().out
@@ -53,4 +54,5 @@ def test_status_shows_microscope_and_send_gate(tmp_path, monkeypatch, capsys):
     assert "trigger-only" in out
     assert "send gate" in out
     assert "1m data prep" in out
+    assert "auto-prepare : disabled" in out
     assert str(tmp_path) not in out
