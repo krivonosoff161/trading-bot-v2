@@ -34,6 +34,11 @@ echo [2/5] Planning and queueing bounded research jobs...
 python -X utf8 -m scripts.strategy_lab.enqueue_research_plan --universe "%STRATEGY_LAB_UNIVERSE%" --timeframe "%STRATEGY_LAB_TIMEFRAME%" %FULL_ARG% %NIGHT_ARG% %PLAN_MODE% --priority %STRATEGY_LAB_PRIORITY%
 if errorlevel 1 goto fail
 
+if /I "%STRATEGY_LAB_PROPOSAL_DRY_RUN%"=="1" (
+  echo [2b] Proposal dry-run only ^(no apply, no queue^)...
+  python -X utf8 -m scripts.strategy_lab.generate_next_proposals --limit 10 --dry-run
+)
+
 if /I "%STRATEGY_LAB_START_DRY_RUN%"=="1" (
   echo Dry-run complete. Nothing was queued and no windows were started.
   exit /b 0
