@@ -19,6 +19,7 @@ from src.research_lab.experiment import ExperimentSpec, RunResult
 from src.research_lab.paths import resolve_private_root
 
 VALIDATION_ORDER = ["FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE", "REJECT"]
+REGISTRY_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
 
 
 def write_run_outputs(
@@ -27,6 +28,7 @@ def write_run_outputs(
     out_root: Path,
     *,
     allow_public_output: bool = False,
+    include_rejects: bool = False,
 ) -> Path:
     out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -50,8 +52,15 @@ def write_run_outputs(
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
     _write_obsidian_notes(spec, results, out_root, run_dir.name)
     artifact_label = f"experiments/completed/{run_dir.name}"
-    entries = [build_entry(spec.experiment_id, r, artifact_label) for r in results]
-    upsert_entries(registry_path(out_root), entries)
+    # The registry tracks candidates worth revisiting. REJECT rows stay in the
+    # full run artifacts (metrics.json / candidates.csv) but do not pollute the
+    # registry unless explicitly requested for debugging.
+    registrable = [
+        r for r in results if include_rejects or r.validation_status in REGISTRY_STATUSES
+    ]
+    entries = [build_entry(spec.experiment_id, r, artifact_label) for r in registrable]
+    if entries:
+        upsert_entries(registry_path(out_root), entries)
     return run_dir
 
 

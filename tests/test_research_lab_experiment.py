@@ -99,6 +99,36 @@ def test_run_outputs_include_validation_and_registry(tmp_path):
     assert "validation_counts" in pack
 
 
+def test_reject_excluded_from_registry_unless_debug(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_reject_filter",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {"lookback": 5, "threshold_pct": 0, "hold_bars": 2, "stop_pct": 5, "take_pct": 10}
+            ],
+        },
+        min_trades=1,
+        filters={"volatility": ["no_such_bucket"]},  # eliminates all signals -> REJECT
+    )
+    results = evaluate_spec(spec)
+    assert results[0].validation_status == "REJECT"
+
+    registry_file = tmp_path / "private" / "candidate-registry" / "candidates.jsonl"
+
+    write_run_outputs(spec, results, tmp_path / "private")
+    assert not registry_file.exists()  # REJECT not registered by default
+
+    write_run_outputs(spec, results, tmp_path / "private", include_rejects=True)
+    assert registry_file.exists()
+    entry = json.loads(registry_file.read_text(encoding="utf-8").splitlines()[0])
+    assert entry["validation_status"] == "REJECT"
+
+
 def test_run_outputs_do_not_reuse_same_run_dir(tmp_path):
     data = tmp_path / "ABC_USDT_SWAP_80d.json"
     _write_candles(data)
