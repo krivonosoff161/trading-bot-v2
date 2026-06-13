@@ -79,6 +79,39 @@ set STRATEGY_LAB_START_DRY_RUN=1
 bat\strategy_lab_start.bat
 ```
 
+## Daily checklist (one-command bats)
+
+These are the everyday operator commands. None of them spend money, run live
+trades, or write to the public repo.
+
+| Need | Command |
+|---|---|
+| Start dashboard + worker | `bat\strategy_lab_start.bat` |
+| See everything at a glance | `bat\strategy_lab_status.bat` |
+| Export LLM review pack (no API) | `bat\strategy_lab_export_pack.bat` |
+| Preview next proposals (dry-run) | `bat\strategy_lab_proposals_dry_run.bat` |
+| Preview what would be queued | `bat\strategy_lab_queue_validated_dry_run.bat` |
+| Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
+
+**Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
+verdicts, candidates, proposals and the private-root location; then
+`strategy_lab_start.bat` if the worker is not running.
+
+**During the day:** `strategy_lab_proposals_dry_run.bat` to preview follow-ups,
+then apply explicitly only when you agree:
+`python -m scripts.strategy_lab.generate_next_proposals --limit 10 --apply` and
+`python -m scripts.strategy_lab.queue_validated_proposals --apply`.
+
+**Evening:** `strategy_lab_status.bat` for the day's results, then
+`strategy_lab_stop_notes.bat` to close the two lab windows (safe; a half-claimed
+job is requeued on next start).
+
+Quick status from the terminal:
+
+```bash
+python -m scripts.strategy_lab.status
+```
+
 ## Discovery loop (event sweeps, reducer, Obsidian)
 
 Beyond fixed plans, the lab can discover research targets from historical moves
