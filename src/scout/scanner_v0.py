@@ -26,6 +26,7 @@ import datetime as dt
 import email.utils
 import html
 import json
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -42,8 +43,6 @@ try:
     load_dotenv(_ROOT / ".env")
 except Exception:
     pass
-
-import os  # noqa: E402
 
 from src.scout.page_extract import extract                       # noqa: E402
 from src.scout import google_news_url as GN                      # noqa: E402
@@ -86,6 +85,7 @@ TRIGGER = "rss_headline"
 
 SEEN_PATH = _ROOT / "logs" / "scout" / "scanner_seen.json"
 BUNDLE_PATH = _ROOT / "logs" / "scout" / "bundle_latest.json"
+TELEGRAM_DELIVERY_LOG = _ROOT / "logs" / "scout" / "telegram_delivery.jsonl"
 SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
 
 # Активы/слои/материальность/источники — в config/*.yaml (читает router.py), не хардкод.
@@ -115,6 +115,27 @@ def load_seen() -> set[str]:
 def save_seen(seen: set[str]) -> None:
     SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     SEEN_PATH.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+
+
+def write_telegram_delivery(event: dict) -> None:
+    """Append a delivery audit row without exposing token/chat secrets."""
+    payload = {
+        "ts": J.now_iso(),
+        "card_id": event.get("card_id"),
+        "asset": event.get("asset"),
+        "verdict": event.get("verdict"),
+        "source": event.get("source"),
+        "send_channel": bool(event.get("send_channel")),
+        "has_chat_id": bool(SCANNER_CHAT_ID),
+        "dry": bool(event.get("dry")),
+        "status": event.get("status"),
+        "reason": event.get("reason"),
+        "message_id": event.get("message_id"),
+        "error": event.get("error"),
+    }
+    TELEGRAM_DELIVERY_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with TELEGRAM_DELIVERY_LOG.open("a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 # ── chief-error retry (P0 аудита 11.06: кандидат не умирает тихим NO_GO) ────
@@ -859,17 +880,51 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     # 5+6) график + доставка — только GO/WATCH chief-карточки (should_send_to_channel);
     # NO_GO (chief или дешёвый) = журнал/датасет, в канал не идёт (SCANNER_SEND_NO_GO=true вернёт)
     sent = None
-    if cid and should_send_to_channel(verdict, bool(orch.get("send_channel"))) and SCANNER_CHAT_ID and not dry:
+    send_allowed = bool(cid) and should_send_to_channel(verdict, bool(orch.get("send_channel")))
+    if not send_allowed:
+        write_telegram_delivery({
+            "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+            "send_channel": bool(orch.get("send_channel")), "dry": dry,
+            "status": "skipped", "reason": "send_gate",
+        })
+    elif not SCANNER_CHAT_ID:
+        write_telegram_delivery({
+            "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+            "send_channel": bool(orch.get("send_channel")), "dry": dry,
+            "status": "skipped", "reason": "missing_scanner_chat_id",
+        })
+    elif dry:
+        write_telegram_delivery({
+            "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+            "send_channel": bool(orch.get("send_channel")), "dry": dry,
+            "status": "skipped", "reason": "dry_run",
+        })
+    else:
         chart_path = make_chart(inst, J.now_iso(), row) if inst else None
         try:
             if chart_path:
                 await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=format_caption(row), parse_mode="HTML")
-                await send_message_to(SCANNER_CHAT_ID, card)
+                message_id = await send_message_to(SCANNER_CHAT_ID, card)
+                write_telegram_delivery({
+                    "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+                    "send_channel": bool(orch.get("send_channel")), "dry": dry,
+                    "status": "sent", "reason": "photo_message", "message_id": message_id,
+                })
                 sent = "photo+message"
             else:
                 sent = await send_message_to(SCANNER_CHAT_ID, card)
+                write_telegram_delivery({
+                    "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+                    "send_channel": bool(orch.get("send_channel")), "dry": dry,
+                    "status": "sent", "reason": "message", "message_id": sent,
+                })
         except Exception as e:
             print(f"  telegram: {e}")
+            write_telegram_delivery({
+                "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
+                "send_channel": bool(orch.get("send_channel")), "dry": dry,
+                "status": "error", "reason": "exception", "error": str(e)[:300],
+            })
 
     return {"card_id": cid, "row": row, "card": card, "sent": sent,
             "asset": asset, "price": price, "canon": canon, "tokens": tokens,

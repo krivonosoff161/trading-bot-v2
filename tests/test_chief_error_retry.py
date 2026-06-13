@@ -61,6 +61,8 @@ def _patch_pipeline_chief_error(monkeypatch, tmp_path):
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
     monkeypatch.setattr(S.PS, "match_realized_event", lambda row: None)
+    monkeypatch.setattr(S.WQ, "upsert_watch", lambda row: None)
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
 
     async def fake_send(chat_id, payload, **kw):
         sent.append(payload)

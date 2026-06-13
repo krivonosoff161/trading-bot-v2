@@ -131,6 +131,7 @@ def test_new_source_cannot_create_go(monkeypatch):
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
     monkeypatch.setattr(S.PS, "match_realized_event", lambda row: None)
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
     if hasattr(S, "WQ"):   # параллельная ветка watch_queue (Codex) может быть не влита
         monkeypatch.setattr(S.WQ, "upsert_watch", lambda row: None)
 
