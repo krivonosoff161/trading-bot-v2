@@ -189,6 +189,8 @@ def simulate_trades(
         direction = 1 if side == "long" else -1
         ret_pct = direction * (exit_price / entry - 1) * 100
         net_pct = ret_pct - cost_pct * 100
+        mfe_pct, mae_pct = _trade_excursions(candles, idx, actual_exit_idx, entry, side)
+        capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
         trades.append(
             {
                 "entry_ts": candles[idx]["ts"],
@@ -200,9 +202,51 @@ def simulate_trades(
                 "outcome": outcome,
                 "reason": sig.get("reason"),
                 "regime": sig.get("regime") or {},
+                "mfe_pct": round(mfe_pct, 4),
+                "mae_pct": round(mae_pct, 4),
+                "capture_of_mfe": capture,
             }
         )
     return trades
+
+
+def _trade_excursions(
+    candles: list[dict[str, Any]],
+    entry_idx: int,
+    exit_idx: int,
+    entry: float,
+    side: str,
+) -> tuple[float, float]:
+    """Max favorable / adverse excursion (pct of entry) over the realized hold window."""
+    hi = max(float(candles[j]["high"]) for j in range(entry_idx, exit_idx + 1))
+    lo = min(float(candles[j]["low"]) for j in range(entry_idx, exit_idx + 1))
+    if side == "long":
+        favorable, adverse = (hi - entry) / entry * 100, (entry - lo) / entry * 100
+    else:
+        favorable, adverse = (entry - lo) / entry * 100, (hi - entry) / entry * 100
+    return max(0.0, favorable), max(0.0, adverse)
+
+
+def _entry_timing_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate per-trade timing: how much favorable move we captured vs heat taken.
+
+    Heuristic trade-quality proxy for the "direction right, entry late" pain.
+    The event-precise version (src/research_lab/entry_timing.py) is used in the
+    event-driven sweep path where a real pre-move window exists.
+    """
+    if not trades:
+        return {}
+    mfes = [float(t.get("mfe_pct") or 0.0) for t in trades]
+    maes = [float(t.get("mae_pct") or 0.0) for t in trades]
+    captures = [float(t.get("capture_of_mfe") or 0.0) for t in trades]
+    late = sum(1 for t in trades if float(t.get("mae_pct") or 0.0) > float(t.get("mfe_pct") or 0.0))
+    n = len(trades)
+    return {
+        "avg_mfe_pct": round(sum(mfes) / n, 4),
+        "avg_mae_pct": round(sum(maes) / n, 4),
+        "avg_capture_ratio": round(sum(captures) / n, 4),
+        "late_entry_rate": round(late / n, 4),
+    }
 
 
 def compute_metrics(
@@ -237,6 +281,7 @@ def compute_metrics(
         "min_trades": min_trades,
         "stress_avg_net_pct": round(avg - stress_extra_cost_pct, 4),
         "regime_breakdown": regime_breakdown(trades),
+        "entry_timing": _entry_timing_metrics(trades),
     }
 
 
