@@ -51,7 +51,10 @@ def main() -> None:
     ap.add_argument("--end", help="Manual request: UTC end, e.g. 2025-01-30T06:00")
     ap.add_argument("--max-symbols", type=int, help="Lower the symbol cap (cannot exceed policy)")
     ap.add_argument("--max-windows", type=int, help="Lower the event-window cap (cannot exceed policy)")
-    ap.add_argument("--provider", default="null", help="Data provider (default null = no network)")
+    ap.add_argument(
+        "--provider", default="null",
+        help="null (default, no network) | okx-public (public candles, no key) | synthetic (offline test)",
+    )
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
@@ -99,6 +102,8 @@ def _print_report(report, limits, args, allow_synth) -> None:
     print(f"Strategy Lab - prepare 1m data ({mode})")
     print("-" * 52)
     print(f"provider : {report.provider} (configured: {str(report.provider_configured).lower()})")
+    if report.provider == "okx-public":
+        print("           OKX public candles (read-only, no key); fetched only on --apply")
     if args.provider.strip().lower() == "synthetic" and not allow_synth:
         print("           synthetic provider requires STRATEGY_LAB_ALLOW_SYNTHETIC=1 (offline test data)")
     print(f"limits   : symbols<={limits.max_symbols}, windows<={limits.max_event_windows}, "
@@ -124,7 +129,7 @@ def _print_report(report, limits, args, allow_synth) -> None:
         print(f"would download: {report.would_download} window(s) (dry-run wrote nothing)")
         print("to actually fetch (only with a configured provider):")
         print("  python -m scripts.strategy_lab.prepare_1m_data --apply")
-    print("safety   : no live trading, no order endpoints, no account access, no paid LLM")
+    print("safety   : public market-data only; no live trading, no order endpoints, no account access, no paid LLM")
 
 
 if __name__ == "__main__":
