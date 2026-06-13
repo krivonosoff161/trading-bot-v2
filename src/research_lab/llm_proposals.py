@@ -121,14 +121,20 @@ class LLMSendDecision:
     reason: str
 
 
-def evaluate_llm_loop_gates(config: LLMLoopConfig, *, send_requested: bool, dry_run: bool) -> LLMSendDecision:
-    """All gates required to make a paid call. Reuses the review-sender gates + provider gate."""
+def evaluate_llm_loop_gates(config: LLMLoopConfig, *, send_requested: bool, dry_run: bool,
+                            spent_today: float = 0.0) -> LLMSendDecision:
+    """All gates required to make a paid call. Reuses the review-sender gates + provider gate.
+
+    `spent_today` lets the daily-cap-exhausted gate fire here too (defense-in-depth);
+    the loop also pre-checks it, so a paid call is blocked by both layers.
+    """
     decision = evaluate_send_gates(
         dry_run=dry_run,
         send_requested=send_requested,
         enabled=config.enabled,
         provider_configured=config.provider_configured,
         cap=config.daily_cap_value,
+        spent_today=spent_today,
     )
     if not decision.allowed:
         return LLMSendDecision(False, decision.reason)

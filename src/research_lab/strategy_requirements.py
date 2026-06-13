@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from src.research_lab.data_inventory import MIN_USABLE_ROWS
 from src.research_lab.strategy_registry import REGISTRY
 
 # Parameter names that imply how much history a strategy needs (a subset of the
@@ -60,9 +61,11 @@ def derive_requirement(
     """Derive the minimal primary-timeframe data requirement for one (strategy, symbol)."""
     lookback = _max_lookback(strategy_id, params)
     # A few strategies (squeeze/volatility) need ~2x lookback of context; warm-up =
-    # lookback covers that conservatively for all of them.
+    # lookback covers that conservatively for all of them. Floor at the inventory's
+    # own "usable" threshold so readiness never accepts a file the inventory calls
+    # too_short (keeps the two queue paths on one definition of "long enough").
     warmup = lookback
-    min_rows = lookback + warmup + MIN_TRADE_BUFFER
+    min_rows = max(MIN_USABLE_ROWS, lookback + warmup + MIN_TRADE_BUFFER)
     family = REGISTRY[strategy_id].family if strategy_id in REGISTRY else ""
     return StrategyDataRequirement(
         strategy_id=strategy_id,

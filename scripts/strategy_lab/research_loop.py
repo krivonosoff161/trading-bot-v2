@@ -46,6 +46,7 @@ from src.research_lab.universe import load_universe  # noqa: E402
 
 _HARD_ITER_CAP = 10_000  # backstop; the loop is bounded by duration/max-iterations anyway
 _MAX_DURATION_MIN = 240   # backstop ceiling
+_IDLE_FLOOR_SECONDS = 60  # when apply-mode work is throttled/idle, wait at least this (no busy-spin)
 
 
 def _truthy(name: str) -> bool:
@@ -84,7 +85,7 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     if cfg.daily_cap_value is not None and spent >= cfg.daily_cap_value:
         return {"status": "daily_cap_exhausted", "cost_rub": spent}
     if provider.name != "synthetic":  # real network provider needs all spend gates
-        gate = evaluate_llm_loop_gates(cfg, send_requested=True, dry_run=False)
+        gate = evaluate_llm_loop_gates(cfg, send_requested=True, dry_run=False, spent_today=spent)
         if not gate.allowed:
             return {"status": f"blocked:{gate.reason}"}
     created_at = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -96,7 +97,7 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
         )
     except LLMProviderError as exc:
         return {"status": f"error:{type(exc).__name__}"}
-    record_usage(private_root, usage)
+    record_usage(private_root, usage, allow_public_output=args.allow_public_output)
     if batch.validated:
         upsert_proposals(proposals_path(private_root), batch.validated)
     return {
@@ -147,13 +148,15 @@ def run_loop(args) -> dict:
         write_heartbeat(private_root, {"status": "running", "iteration": i, "mode": mode,
                                        "elapsed_seconds": round(time.monotonic() - start, 1)},
                         allow_public_output=args.allow_public_output)
-        llm = _llm_step(args, private_root, universe, profiles, policy)
+        try:  # one bad iteration must not kill the bounded run
+            llm = _llm_step(args, private_root, universe, profiles, policy)
+            cycle = run_research_cycle(config, private_root=private_root, allow_public_output=args.allow_public_output)
+            c = cycle.counts
+        except Exception as exc:  # noqa: BLE001 - record + continue; the loop is the safety boundary
+            llm, c = {"status": f"iteration_error:{type(exc).__name__}"}, {}
         totals["llm_validated"] += int(llm.get("validated", 0) or 0)
         totals["llm_rejected"] += int(llm.get("rejected", 0) or 0)
         llm_cost += float(llm.get("cost_rub", 0.0) or 0.0)
-
-        cycle = run_research_cycle(config, private_root=private_root, allow_public_output=args.allow_public_output)
-        c = cycle.counts
         for key in ("proposals_queued", "ready_jobs", "skipped_missing_data",
                     "worker_completed", "worker_deferred", "worker_failed"):
             totals[key] += int(c.get(key, 0) or 0)
@@ -173,7 +176,16 @@ def run_loop(args) -> dict:
 
         if i >= max_iter or elapsed >= duration_s:
             break
-        time.sleep(sleep_s)
+        # Avoid busy-spin: in apply mode, if the worker is throttled (deferred) or the
+        # queue is idle, nothing can progress until the cool-down passes -> wait at least
+        # the idle floor regardless of --sleep-seconds. Always cap by remaining time.
+        worker = iterations[-1]["worker"]
+        idle = bool(args.apply) and (worker["deferred"]
+                                     or (not c.get("ready_jobs", 0) and not c.get("proposals_queued", 0)))
+        eff_sleep = max(sleep_s, _IDLE_FLOOR_SECONDS) if idle else sleep_s
+        eff_sleep = min(eff_sleep, max(0.0, duration_s - (time.monotonic() - start)))
+        if eff_sleep > 0:
+            time.sleep(eff_sleep)
 
     report = _final_report(mode, args, iterations, totals, llm_cost, start)
     write_loop_report(private_root, report, allow_public_output=args.allow_public_output)

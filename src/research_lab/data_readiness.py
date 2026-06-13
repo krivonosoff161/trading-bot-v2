@@ -150,12 +150,14 @@ def assess_proposal(
     """Assess all symbols of a proposal; the worst per-symbol status wins."""
     family = getattr(proposal, "setup_family", "")
     timeframe = getattr(proposal, "requested_timeframe", "")
-    grid = (getattr(proposal, "parameter_grid", {}) or {}).get(family) or [{}]
-    params = grid[0] if grid else {}
+    variants = (getattr(proposal, "parameter_grid", {}) or {}).get(family) or [{}]
     results: list[ReadinessResult] = []
     for symbol in getattr(proposal, "symbols", []) or []:
-        req = derive_requirement(family, symbol, timeframe, params=params,
-                                 needs_1m_microscope=needs_1m_microscope)
+        # Size the requirement on the MOST demanding variant (largest lookback), so a
+        # file long enough for the smallest variant but not the largest is not READY.
+        reqs = [derive_requirement(family, symbol, timeframe, params=v,
+                                   needs_1m_microscope=needs_1m_microscope) for v in variants]
+        req = max(reqs, key=lambda r: r.min_rows)
         results.append(assess(req, data_glob=data_glob, private_root=private_root))
     if not results:
         return ProposalReadiness(MISSING_DATA, (), "")
