@@ -87,6 +87,8 @@ def render_html(state: dict) -> str:
     next_run = state.get("next_run") or {}
     obsidian_notes = state.get("obsidian_notes", 0)
     proposals = state.get("proposals") or {}
+    event_microscope = state.get("event_microscope") or {}
+    queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -155,7 +157,12 @@ def render_html(state: dict) -> str:
 
   <section class="section card">
     <h2>Proposals (closed loop)</h2>
-    {proposals_html(proposals, llm_review)}
+    {proposals_html(proposals, llm_review, queue_capacity)}
+  </section>
+
+  <section class="section card">
+    <h2>Event Microscope (1m)</h2>
+    {microscope_html(event_microscope)}
   </section>
 
   <section class="section card">
@@ -293,7 +300,7 @@ def registry_html(registry: dict) -> str:
     )
 
 
-def proposals_html(proposals: dict, llm_review: dict) -> str:
+def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | None = None) -> str:
     if not proposals:
         return '<p class="muted">No proposals generated yet.</p>'
     by_status = proposals.get("by_status") or {}
@@ -310,12 +317,45 @@ def proposals_html(proposals: dict, llm_review: dict) -> str:
     rows.append("</tbody></table>")
     table = "\n".join(rows) if (proposals.get("latest_reasons")) else '<p class="muted">No proposals yet.</p>'
     auto_send = "disabled" if not llm_review.get("auto_send", False) else "ENABLED"
+    cap = queue_capacity or {}
+    queue_line = ""
+    if cap:
+        full = "FULL" if cap.get("full") else "ok"
+        queue_line = (
+            f"<p>queue capacity: {esc(cap.get('queued', 0))}/{esc(cap.get('max_queue_size', 0))} "
+            f"<span class=\"pill\">{esc(full)}</span> "
+            f"(new proposals are skipped when full)</p>"
+        )
     return "\n".join([
         f"<p>total: {esc(proposals.get('total', 0))} - {status_line}</p>",
-        f"<p>validated waiting for queue: {esc(proposals.get('validated_waiting', 0))}</p>",
+        f"<p>validated waiting for queue: {esc(proposals.get('validated_waiting', 0))} - "
+        f"queued from proposals: {esc(proposals.get('queued_from_proposals', 0))}</p>",
+        queue_line,
         f"<p>LLM auto-send: <span class=\"pill\">{esc(auto_send)}</span> - "
         f"queue requires explicit apply: <span class=\"pill\">yes</span></p>",
         table,
+    ])
+
+
+def microscope_html(em: dict) -> str:
+    if not em or em.get("error"):
+        return '<p class="muted">Event microscope not available.</p>'
+    limits = em.get("limits") or {}
+    enabled = bool(em.get("enabled"))
+    state = "enabled" if enabled else f"disabled ({esc(em.get('disabled_reason', ''))})"
+    counts = em.get("availability_counts") or {}
+    counts_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(counts.items())) or "no symbols scanned"
+    skipped = em.get("skipped_reasons") or []
+    skipped_line = ", ".join(f"{esc(s.get('symbol'))}: {esc(s.get('reason'))}" for s in skipped[:6]) or "none"
+    return "\n".join([
+        f"<p>1m microscope: <span class=\"pill\">{state}</span> "
+        f"(trigger-only; no downloader; full-universe 1m sweeps blocked)</p>",
+        f"<p>caps: symbols&le;{esc(limits.get('max_symbols', 0))} - "
+        f"event windows&le;{esc(limits.get('max_event_windows', 0))} - "
+        f"bars/window&le;{esc(limits.get('max_bars_per_window', 0))} - "
+        f"variants&le;{esc(limits.get('max_variants', 0))}</p>",
+        f"<p>data availability ({esc(em.get('scanned_group', ''))}): {counts_line}</p>",
+        f"<p class=\"muted\">skipped: {skipped_line}</p>",
     ])
 
 

@@ -39,3 +39,16 @@ def test_status_reports_proposal_counts(tmp_path, monkeypatch, capsys):
     status.main()
     out = capsys.readouterr().out
     assert "validated waiting for queue: 1" in out
+
+
+def test_status_shows_microscope_and_send_gate(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
+    monkeypatch.delenv("STRATEGY_LAB_LLM_DAILY_CAP", raising=False)
+    monkeypatch.setattr(sys, "argv", ["status", "--private-root", str(tmp_path)])
+    status.main()
+    out = capsys.readouterr().out
+    assert "Microscope" in out
+    assert "trigger-only" in out
+    assert "send gate" in out
+    assert str(tmp_path) not in out

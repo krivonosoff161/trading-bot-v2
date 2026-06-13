@@ -7,13 +7,14 @@ import csv
 import datetime as dt
 import glob
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
+from src.research_lab.event_microscope import DEFAULT_1M_GLOB, plan_microscope
+from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.obsidian_graph import count_notes
-from src.research_lab.proposal_schema import VALIDATED
+from src.research_lab.proposal_schema import QUEUED, VALIDATED
 from src.research_lab.proposal_store import load_proposals, proposals_path, status_counts
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.runtime_policy import (
@@ -61,10 +62,12 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "obsidian_graph_label": "strategy-lab/obsidian",
         "obsidian_vault_label": "strategy-lab/obsidian-vault",
         "state_db": state_db,
+        "queue_capacity": queue_capacity((state_db or {}).get("queue_counts") or {}),
         "candidate_registry": registry_summary(registry_path(private_root)),
         "lab_config": load_lab_config_summary(private_root),
         "worker_status": read_worker_status(worker_status_path(private_root)),
-        "llm_review": llm_review_status(),
+        "llm_review": llm_review_status(private_root),
+        "event_microscope": load_microscope_summary(),
         "proposals": load_proposal_summary(private_root),
         "obsidian_notes": count_notes(private_root),
         "next_run": next_run_hint(private_root),
@@ -235,10 +238,38 @@ def load_proposal_summary(private_root: Path) -> dict[str, Any]:
         "total": len(proposals),
         "by_status": counts,
         "validated_waiting": counts.get(VALIDATED, 0),
+        "queued_from_proposals": counts.get(QUEUED, 0),
         "latest_reasons": [{"id": p.proposal_id, "status": p.status, "reasons": p.reason_codes} for p in latest],
         "last_created_at": latest[0].created_at if latest else "",
         "store_label": "strategy-lab/proposals/proposals.jsonl",
     }
+
+
+def load_microscope_summary() -> dict[str, Any]:
+    """Public-safe 1m event-microscope availability for a high-volatility group."""
+    try:
+        universe = load_universe()
+        profiles = load_timeframe_profiles()
+        policy = load_resource_policy()
+        group = "l2_high_beta" if "l2_high_beta" in universe.groups else next(iter(universe.groups), "")
+        symbols = list(universe.symbols_in(group)) if group else []
+        plan = plan_microscope(symbols, data_glob=DEFAULT_1M_GLOB, profiles=profiles, policy=policy)
+        summary = plan.to_summary()
+        summary["scanned_group"] = group
+        summary["data_glob_label"] = "1m glob (configurable); no downloader"
+        return summary
+    except Exception as exc:  # config optional; never break the dashboard
+        return {"error": type(exc).__name__, "enabled": False}
+
+
+def queue_capacity(queue_counts: dict[str, Any]) -> dict[str, Any]:
+    """Whether the queue is at the policy cap (a proxy for skipped_queue_full)."""
+    try:
+        max_size = int(load_resource_policy().max_queue_size)
+    except Exception:
+        return {}
+    pending = int((queue_counts or {}).get("queued", 0) or 0)
+    return {"max_queue_size": max_size, "queued": pending, "full": pending >= max_size}
 
 
 def next_run_hint(private_root: Path) -> dict[str, Any]:
@@ -253,17 +284,42 @@ def next_run_hint(private_root: Path) -> dict[str, Any]:
         return {"error": type(exc).__name__}
 
 
-def llm_review_status() -> dict[str, Any]:
-    """Whether sending review packs to an LLM is enabled (export is always allowed)."""
-    enabled = os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes"}
-    return {
+def llm_review_status(private_root: Path | None = None) -> dict[str, Any]:
+    """Whether sending review packs to an LLM is enabled (export is always allowed).
+
+    Today the only sender is NullReviewSender (no provider), so even with the env
+    flag a send is export-only. Surfaces the gate state and the last pack label.
+    """
+    enabled = env_enabled()
+    cap = daily_cap()
+    out: dict[str, Any] = {
         "enabled": enabled,
         "auto_execute": False,
         "auto_send": False,
+        "provider_configured": False,  # only NullReviewSender is shipped today
+        "daily_cap_present": cap is not None,
+        "would_send": "blocked_no_provider" if enabled else "export_only_env_disabled",
         "pack_schema": "strategy_lab_registry_review_pack.v3",
         "queue_requires_apply": True,
         "note": "export-only; no automatic API call or spend; queue requires explicit apply",
+        "last_pack_label": "",
+        "last_send_status": "none",
     }
+    if private_root is not None:
+        review_dir = private_root / "reports" / "llm_review"
+        packs = sorted(review_dir.glob("registry_review_pack_*.json"))
+        if packs:
+            out["last_pack_label"] = f"reports/llm_review/{packs[-1].name}"
+        send_log = review_dir / "send_log.jsonl"
+        if send_log.exists():
+            lines = [ln for ln in send_log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if lines:
+                try:
+                    last = json.loads(lines[-1])
+                    out["last_send_status"] = str(last.get("reason") or last.get("result_status") or "none")
+                except json.JSONDecodeError:
+                    pass
+    return out
 
 
 def _count_proposal_specs(private_root: Path) -> int:

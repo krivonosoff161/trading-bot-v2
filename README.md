@@ -233,6 +233,16 @@ python -m scripts.strategy_lab.import_llm_proposals --file out.json --dry-run   
 python -m scripts.strategy_lab.queue_validated_proposals --apply                # idempotent, bounded
 ```
 
+MVP 4.0 adds a read-only 1m **event-microscope** locator (capped, trigger-only, no
+downloader — missing 1m data is a clean skip), **event-anchored entry timing** in
+event-driven runs (lag, capture, missed move, `late_entry` — no look-ahead), and a
+**gated LLM send boundary** (only `NullReviewSender` ships; a real send needs
+`--send` + `STRATEGY_LAB_LLM_ENABLED=1` + a provider + a daily budget cap):
+
+```bash
+python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta   # read-only; reports missing if no 1m data
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:
