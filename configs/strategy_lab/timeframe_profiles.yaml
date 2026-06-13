@@ -1,0 +1,37 @@
+# Strategy Lab timeframe profiles — roles and per-cycle limits.
+#
+# Each timeframe has a research ROLE and bounded limits that the sweep planner
+# and resource policy use to keep the desktop quiet. Numbers are conservative
+# defaults, not optimization targets. 1m is a trigger-only event microscope.
+schema: strategy_lab_timeframe_profiles.v1
+
+profiles:
+  1d:
+    role: regime
+    default_use: broad regime context
+    max_symbols_per_cycle: 20
+    max_variants_per_setup: 6
+    trigger_only: false
+
+  1h:
+    role: setup
+    default_use: intraday setup context
+    max_symbols_per_cycle: 12
+    max_variants_per_setup: 10
+    trigger_only: false
+
+  15m:
+    role: entry
+    default_use: entry timing and short continuation/fade
+    max_symbols_per_cycle: 8
+    max_variants_per_setup: 16
+    trigger_only: false
+
+  1m:
+    role: event_microstructure
+    default_use: event microscope around one detected move
+    trigger_only: true
+    max_symbols_per_cycle: 2
+    max_window_hours: 6
+    max_variants_per_setup: 8
+    comment: do not run full-universe 1m sweeps by default
