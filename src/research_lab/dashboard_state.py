@@ -13,6 +13,8 @@ from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
 from src.research_lab.obsidian_graph import count_notes
+from src.research_lab.proposal_schema import VALIDATED
+from src.research_lab.proposal_store import load_proposals, proposals_path, status_counts
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.runtime_policy import (
     cadence_path,
@@ -63,6 +65,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "lab_config": load_lab_config_summary(private_root),
         "worker_status": read_worker_status(worker_status_path(private_root)),
         "llm_review": llm_review_status(),
+        "proposals": load_proposal_summary(private_root),
         "obsidian_notes": count_notes(private_root),
         "next_run": next_run_hint(private_root),
         "runs": runs,
@@ -223,6 +226,21 @@ def load_lab_config_summary(private_root: Path) -> dict[str, Any]:
     return summary
 
 
+def load_proposal_summary(private_root: Path) -> dict[str, Any]:
+    """Public-safe proposal summary: status counts + latest reasons (no payloads)."""
+    proposals = load_proposals(proposals_path(private_root))
+    counts = status_counts(proposals)
+    latest = sorted(proposals, key=lambda p: p.created_at, reverse=True)[:5]
+    return {
+        "total": len(proposals),
+        "by_status": counts,
+        "validated_waiting": counts.get(VALIDATED, 0),
+        "latest_reasons": [{"id": p.proposal_id, "status": p.status, "reasons": p.reason_codes} for p in latest],
+        "last_created_at": latest[0].created_at if latest else "",
+        "store_label": "strategy-lab/proposals/proposals.jsonl",
+    }
+
+
 def next_run_hint(private_root: Path) -> dict[str, Any]:
     """Whether the worker could run now, or the throttle reason and wait time."""
     try:
@@ -241,7 +259,10 @@ def llm_review_status() -> dict[str, Any]:
     return {
         "enabled": enabled,
         "auto_execute": False,
-        "note": "export-only; no automatic API call or spend",
+        "auto_send": False,
+        "pack_schema": "strategy_lab_registry_review_pack.v3",
+        "queue_requires_apply": True,
+        "note": "export-only; no automatic API call or spend; queue requires explicit apply",
     }
 
 

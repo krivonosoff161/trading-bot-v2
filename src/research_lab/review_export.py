@@ -17,8 +17,35 @@ from typing import Any
 from src.research_lab.candidate_registry import load_entries, registry_path
 from src.research_lab.paths import resolve_private_root
 
-SCHEMA = "strategy_lab_registry_review_pack.v1"
+SCHEMA = "strategy_lab_registry_review_pack.v3"
 REVIEW_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
+
+PROPOSAL_REQUEST = {
+    "instructions": [
+        "Do not claim profitability or live-tradability.",
+        "Suggest next tests only.",
+        "Output a JSON array of proposal objects ONLY (no prose).",
+        "Do not include live trading, order, or AUTO_TRADE instructions.",
+        "Keep exact symbols/parameters inside this private review.",
+        "A code/human validator must approve before anything is queued.",
+    ],
+    "proposal_json_schema_example": [
+        {
+            "created_by": "llm_review",
+            "hypothesis": "short research hypothesis; not a profitability claim",
+            "requested_universe": "l2_high_beta",
+            "requested_timeframe": "15m",
+            "setup_family": "momentum_breakout",
+            "symbols": ["SOL_USDT_SWAP"],
+            "filters": {"trend": ["up"]},
+            "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5}]},
+            "max_variants": 8,
+            "reason_codes": ["unstable_parameters"],
+            "expected_validation": "OBSERVE",
+            "risk_flags": [],
+        }
+    ],
+}
 _RANK = {"FORWARD_PAPER": 3, "REGIME_SPECIFIC": 2, "OBSERVE": 1}
 DISCLAIMER = (
     "This is not a profitability claim. Statuses are research labels. "
@@ -51,6 +78,7 @@ def build_registry_review_pack(entries: list[dict[str, Any]], *, limit: int = 10
         "candidate_count": len(selected),
         "candidates": [_summarize(e) for e in selected],
         "entry_timing_pain": _entry_timing_pain(selected),
+        "proposal_request": PROPOSAL_REQUEST,
         "top_questions": [
             "Which candidates survive a parameter-neighborhood re-test (not a single lucky best)?",
             "Where is the entry late: low capture ratio or high adverse excursion before it works?",
