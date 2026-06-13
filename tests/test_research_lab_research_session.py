@@ -49,7 +49,7 @@ def test_session_report_schema(tmp_path):
     d = report.to_dict()
     assert d["schema"] == "strategy_lab_research_session.v1"
     assert "cycle" in d and "llm" in d and "readiness" in d
-    assert d["llm"]["mode"] == "export_only" and d["llm"]["enabled"] is False
+    assert d["llm"]["mode"] == "disabled" and d["llm"]["enabled"] is False
 
 
 def test_session_apply_queues_ready_jobs(tmp_path):
@@ -84,5 +84,5 @@ def test_dashboard_includes_session_and_llm_loop(tmp_path, monkeypatch):
     write_session_report(tmp_path, report)
     state = load_dashboard_state(tmp_path)
     assert state["last_session"]["available"] is True
-    assert state["llm_loop"]["mode"] == "export_only"
+    assert state["llm_loop"]["mode"] == "disabled"
     assert str(tmp_path) not in json.dumps(state)

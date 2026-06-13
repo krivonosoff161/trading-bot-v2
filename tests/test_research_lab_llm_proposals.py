@@ -19,9 +19,15 @@ def _ctx():
     return load_universe(), load_timeframe_profiles(), load_resource_policy()
 
 
-def test_loop_config_default_is_export_only_disabled():
+def test_loop_config_default_is_disabled():
     c = load_llm_loop_config({})
     assert c.enabled is False and c.provider_configured is False
+    assert c.to_summary()["mode"] == "disabled"
+
+
+def test_loop_config_enabled_without_provider_is_export_only():
+    c = load_llm_loop_config({"STRATEGY_LAB_LLM_ENABLED": "1"})
+    assert c.enabled is True and c.provider_configured is False
     assert c.to_summary()["mode"] == "export_only"
 
 
