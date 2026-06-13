@@ -52,6 +52,17 @@ def test_malformed_file(tmp_path):
     assert r.status == MALFORMED
 
 
+def test_timeframe_mismatch_is_missing_not_silently_run(tmp_path):
+    # Only daily data on disk; a 15m proposal must NOT run on it.
+    _write_daily(tmp_path / "XRP_USDT_SWAP_x.json", 100)
+    req = derive_requirement("momentum_breakout", "XRP_USDT_SWAP", "15m")
+    r = assess(req, data_glob=_glob(tmp_path))
+    assert r.status == MISSING_DATA and not r.is_ready()
+    assert any("no_file_for_timeframe_15m" in reason for reason in r.reasons)
+    assert "TODO" in r.suggested_command  # honest hint; no false "prepare_1m" claim for a 15m gap
+    assert "prepare_1m_data" not in r.suggested_command
+
+
 def test_needs_1m_missing_gives_missing_with_suggested_command(tmp_path):
     _write_daily(tmp_path / "SOL_USDT_SWAP_x.json", 100)  # primary ok
     r = assess(_req("SOL_USDT_SWAP", needs_1m_microscope=True), data_glob=_glob(tmp_path), private_root=tmp_path)
