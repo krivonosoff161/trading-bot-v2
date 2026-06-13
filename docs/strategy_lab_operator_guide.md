@@ -125,7 +125,9 @@ trades, or write to the public repo.
 | Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
 | See what 1m data is needed (dry-run) | `bat\strategy_lab_prepare_1m_data.bat` |
 | Run one controlled research cycle (dry-run) | `bat\strategy_lab_cycle_dry_run.bat` |
-| Plan a full research session (dry-run) | `python -m scripts.strategy_lab.research_session --dry-run` |
+| Plan a full research session (dry-run) | `bat\strategy_lab_research_session_dry_run.bat` |
+| Watch a 30-min research loop (dry-run) | `bat\strategy_lab_research_loop_30m_dry_run.bat` |
+| Run a 30-min research loop (apply, no LLM) | `bat\strategy_lab_research_loop_30m_apply.bat` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -300,10 +302,29 @@ The LLM is advisory and disabled by default. The design is cheap → chief:
 
 Default is export-only and offline. A real send needs **all** gates:
 `STRATEGY_LAB_LLM_ENABLED=1`, `STRATEGY_LAB_LLM_PROVIDER=<provider>`, a configured
-provider client, a daily budget cap, and `--llm-send` (and never on dry-run).
-**Alibaba/Qwen** can be wired as a provider later, but **no provider ships today**,
-so `--llm-send` always falls back to export-only with a clear reason. No API keys
-are stored or printed (env names only).
+provider client, a daily budget cap, and `--llm-send` (and never on dry-run). No API
+keys are stored or printed (env names only).
+
+A real **proposal** provider now exists (separate from the review-pack send path,
+which still ships only `NullReviewSender`). It is OpenAI-compatible
+(**Alibaba/Qwen/openai-compatible**), synchronous, stdlib-only, and isolated from the
+scanner runtime and its budget. It is wired into the research **loop** (below) via
+`--llm-propose`. Configure it with:
+
+| Env | Meaning |
+|---|---|
+| `STRATEGY_LAB_LLM_ENABLED=1` | master switch (off → no network ever) |
+| `STRATEGY_LAB_LLM_PROVIDER` | `alibaba` / `qwen` / `openai-compatible` / `synthetic` |
+| `STRATEGY_LAB_LLM_BASE_URL` | OpenAI-compatible base (e.g. dashscope compatible-mode) |
+| `STRATEGY_LAB_LLM_API_KEY` | the key VALUE (header only; never logged/stored) |
+| `STRATEGY_LAB_LLM_MODEL_CHEAP` | the cheap model id |
+| `STRATEGY_LAB_LLM_DAILY_CAP` | RUB/day cap; a send/propose is blocked once reached |
+
+Spend is recorded in a **lab-private** usage log (`reports/llm_usage/`, tokens/cost
+only, never the scanner budget). `status` and the dashboard show the provider state
+(`disabled` / `export_only` / `ready`) and today's request/token/RUB spend. The
+offline `synthetic` provider (gated by `STRATEGY_LAB_ALLOW_SYNTHETIC=1`) returns
+fixed candidates for pipeline testing — no network, no cost.
 
 ### Expected pace
 
@@ -311,6 +332,53 @@ This is a controlled research machine, not a 24/7 poller. **One or two serious
 strategy/setup variants per day is an acceptable pace.** Heavy calculation is fine;
 flooding CPU/API is not — the worker is capped (`--max-worker-jobs`, default 1) and
 throttled by `resource_policy.yaml`, and network/LLM are opt-in.
+
+## Research loop (controlled, time-bounded)
+
+`research_loop` repeats the research session on a **wall-clock budget** and stops by
+itself. It is **not** a daemon: it ends at `--duration-minutes` or `--max-iterations`,
+sleeps `--sleep-seconds` between iterations, and writes a heartbeat each iteration. If
+the worker is in its throttle cool-down it records `deferred` and simply waits for the
+next iteration — it never storms the queue.
+
+```bash
+# Dry-run for 30 min: plan only each iteration; no queue writes, no worker, no network, no LLM.
+bat\strategy_lab_research_loop_30m_dry_run.bat
+python -m scripts.strategy_lab.research_loop --dry-run --duration-minutes 30 --sleep-seconds 60
+
+# Apply for 30 min: queue data-ready jobs + one worker step per iteration. No network, no paid LLM.
+bat\strategy_lab_research_loop_30m_apply.bat
+python -m scripts.strategy_lab.research_loop --apply --duration-minutes 30 --sleep-seconds 60 --max-worker-jobs-per-iteration 1 --max-queued 5
+
+# Apply + cheap LLM proposing (COSTS MONEY): needs the STRATEGY_LAB_LLM_* env + a daily cap.
+python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-minutes 30
+```
+
+- **Default is dry-run**: no queue writes, no worker, no network, no LLM. Only the
+  heartbeat + loop report under the private root (`state/research_loop/`).
+- **LLM proposing is gated and OFF by default.** `--llm-propose` does nothing on
+  dry-run (never calls), and on `--apply` it still needs the full provider env and an
+  unexhausted daily cap (a real network provider also re-checks the send gates). The
+  offline `synthetic` provider (`STRATEGY_LAB_ALLOW_SYNTHETIC=1` +
+  `STRATEGY_LAB_LLM_PROVIDER=synthetic`) exercises the path with no cost.
+- **Bounded by construction**: duration is clamped (≤ 4h), iterations are capped, and
+  each iteration runs at most `--max-worker-jobs-per-iteration` worker steps.
+- `status` and the dashboard show the last loop (mode, iterations, queued, missing
+  data, worker done/deferred, last LLM status + reject reasons) and today's LLM spend.
+
+### Multi-timeframe data (TODO)
+
+Readiness is **timeframe-aware**: a proposal is queued only if a candle file for its
+**requested** timeframe exists with enough rows. Today only **1d** candle JSON exists
+under the feasibility glob, so 1d proposals run while **15m / 1h / 4h** proposals are
+reported `MISSING_DATA` (with the present timeframes listed) instead of silently
+running on daily bars.
+
+To enable lower timeframes, extend the existing public OKX adapter
+(`src/research_lab/market_data_provider.py`, today 1m-only) to fetch 15m/1h/1d history
+into the feasibility glob format, mirroring the capped `prepare_1m_data` flow (bounded
+pages, no full-market download, private-root only). Until then the honest behavior is
+a clear `MISSING_DATA` + TODO, never a faked run.
 
 ## Dry-run vs apply
 

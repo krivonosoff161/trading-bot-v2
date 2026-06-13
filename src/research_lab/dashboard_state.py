@@ -15,9 +15,11 @@ from src.research_lab.data_prepare import read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.llm_proposals import load_llm_loop_config
+from src.research_lab.llm_provider import today_usage
 from src.research_lab.paths import one_minute_glob
 from src.research_lab.prepare_workflow import load_prepare_workflow_config
 from src.research_lab.research_cycle import cycle_summary, read_cycle_report
+from src.research_lab.research_loop import loop_summary, read_loop_report
 from src.research_lab.research_session import read_session_report, session_summary
 from src.research_lab.obsidian_graph import count_notes
 from src.research_lab.proposal_schema import QUEUED, VALIDATED
@@ -78,7 +80,8 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "prepare_workflow": load_prepare_workflow_config().to_summary(),
         "last_cycle": cycle_summary(read_cycle_report(private_root)),
         "last_session": session_summary(read_session_report(private_root)),
-        "llm_loop": load_llm_loop_config().to_summary(),
+        "last_loop": loop_summary(read_loop_report(private_root)),
+        "llm_loop": load_llm_loop_summary(private_root),
         "proposals": load_proposal_summary(private_root),
         "obsidian_notes": count_notes(private_root),
         "next_run": next_run_hint(private_root),
@@ -237,6 +240,17 @@ def load_lab_config_summary(private_root: Path) -> dict[str, Any]:
         summary["allow_1m_jobs"] = policy.allow_1m_jobs
     except Exception as exc:
         summary["resource_error"] = type(exc).__name__
+    return summary
+
+
+def load_llm_loop_summary(private_root: Path) -> dict[str, Any]:
+    """Config gate state (disabled/export_only/ready) + today's PRIVATE lab spend.
+
+    The spend is the lab's own usage log (reports/llm_usage), never the scanner budget.
+    No keys are read; today_usage returns counts/cost only.
+    """
+    summary = load_llm_loop_config().to_summary()
+    summary["today_spend"] = today_usage(private_root)
     return summary
 
 

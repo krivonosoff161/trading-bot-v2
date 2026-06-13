@@ -63,6 +63,7 @@ def main() -> None:
     prep_cfg = state.get("prepare_workflow") or {}
     cycle = state.get("last_cycle") or {}
     session = state.get("last_session") or {}
+    loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
 
     print("Strategy Lab status")
@@ -93,12 +94,28 @@ def main() -> None:
     if session.get("available"):
         print(f"Research ses : last {session.get('mode')} (ready: {session.get('ready_jobs', 0)}, "
               f"missing data: {session.get('skipped_missing_data', 0)}, queued: {session.get('proposals_queued', 0)}, "
-              f"LLM: {session.get('llm_mode', 'export_only')})")
+              f"LLM: {session.get('llm_mode', 'disabled')})")
     else:
         print("Research ses : not run yet (python -m scripts.strategy_lab.research_session --dry-run)")
+    if loop.get("available"):
+        lw = loop.get("last_worker") or {}
+        print(f"Research loop: last {loop.get('mode')} ({loop.get('iterations', 0)} iters, "
+              f"{loop.get('duration_minutes', 0)} min; queued: {loop.get('proposals_queued', 0)}, "
+              f"missing data: {loop.get('skipped_missing_data', 0)}, "
+              f"worker done/deferred: {lw.get('completed', 0)}/{lw.get('deferred', 0)})")
+        if loop.get("last_llm_status"):
+            reasons = _fmt_counts(loop.get("last_llm_reject_reasons"))
+            print(f"             : last LLM {loop.get('last_llm_status')} "
+                  f"(validated: {loop.get('llm_validated', 0)}, rejects: {reasons})")
+    else:
+        print("Research loop: not run yet (python -m scripts.strategy_lab.research_loop --dry-run --duration-minutes 5)")
     llm_send_status = "enabled" if llm_loop.get("enabled") else "disabled"
-    print(f"LLM loop     : {llm_loop.get('mode', 'export_only')} (advisory; send {llm_send_status}; "
+    spend = llm_loop.get("today_spend") or {}
+    print(f"LLM loop     : {llm_loop.get('mode', 'disabled')} (advisory; send {llm_send_status}; "
           f"provider={llm_loop.get('provider', 'none')}; code validates, LLM never executed)")
+    print(f"LLM spend    : today {spend.get('requests', 0)} req, {spend.get('tokens', 0)} tok, "
+          f"{spend.get('cost_rub', 0.0)} RUB (lab-private log; cap "
+          f"{'set' if llm_loop.get('daily_cap_present') else 'none'})")
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")
     micro_state = "enabled" if microscope.get("enabled") else f"disabled ({microscope.get('disabled_reason', 'n/a')})"
     print(f"Microscope   : 1m {micro_state}, trigger-only; data {_fmt_counts(microscope.get('availability_counts'))}")
