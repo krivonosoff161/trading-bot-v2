@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.research_lab.dashboard_server import render_html
+from src.research_lab.dashboard_server import default_private_root, render_html
 from src.research_lab.dashboard_state import (
     aggregate_runs,
     load_completed_runs,
@@ -88,6 +88,12 @@ def test_dashboard_state_loads_completed_runs(tmp_path, monkeypatch):
     assert state["candidate_registry"]["exists"] is False
     assert state["candidate_registry"]["registry_label"].startswith("strategy-lab/")
     assert str(tmp_path) not in json.dumps(state)
+
+
+def test_dashboard_default_private_root_honors_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(tmp_path))
+
+    assert default_private_root() == tmp_path
 
 
 def test_completed_runs_sort_newest_first(tmp_path):
