@@ -30,7 +30,7 @@ from scripts.strategy_lab.queue_validated_proposals import queue_validated  # no
 from scripts.strategy_lab.worker_once import run_worker_once  # noqa: E402
 from src.research_lab.candidate_registry import registry_path, registry_summary  # noqa: E402
 from src.research_lab.data_cache import resolve_requirements  # noqa: E402
-from src.research_lab.data_prepare import prepare  # noqa: E402
+from src.research_lab.data_prepare import prepare, write_prepare_report  # noqa: E402
 from src.research_lab.data_requirements import collect_requirements  # noqa: E402
 from src.research_lab.event_microscope import derive_limits  # noqa: E402
 from src.research_lab.market_data_provider import get_provider  # noqa: E402
@@ -52,8 +52,9 @@ def _next_command(config: ResearchCycleConfig, counts: dict) -> str:
     if not config.apply:
         return ("apply: python -m scripts.strategy_lab.research_cycle --apply "
                 "--max-proposals 5 --max-queue 5 --max-worker-jobs 1")
-    if counts.get("data_missing", 0) > 0 and counts.get("data_prepared", 0) == 0 and config.provider == "null":
-        return ("1m data missing -> prepare it: python -m scripts.strategy_lab.research_cycle "
+    blocked = counts.get("skipped_missing_data", 0) or counts.get("data_missing", 0)
+    if blocked and counts.get("data_prepared", 0) == 0 and config.provider == "null":
+        return ("data missing -> prepare it: python -m scripts.strategy_lab.research_cycle "
                 "--apply --prepare-1m --prepare-1m-apply --provider okx-public")
     return "python -m scripts.strategy_lab.status"
 
@@ -74,63 +75,95 @@ def run_research_cycle(config: ResearchCycleConfig, *, private_root, allow_publi
                 "proposals": len(proposals), "by_status": status_counts(proposals)},
     ))
 
-    # 2) generate next proposals
+    # 2) generate next proposals (resilient: a generator error is recorded, not fatal)
     if config.generate_proposals:
-        gen = generate_proposals(private_root, limit=config.max_proposals, apply=config.apply,
-                                 allow_public_output=allow_public_output)
-        counts["proposals_generated"] = gen["generated"]
-        counts["proposals_validated"] = gen["validated"]
-        result.steps.append(CycleStepResult(
-            "generate_proposals", "executed",
-            detail=f"generated={gen['generated']} validated={gen['validated']} stored={gen['applied']}",
-            counts={"generated": gen["generated"], "validated": gen["validated"], "stored": gen["applied"]},
-        ))
+        try:
+            gen = generate_proposals(private_root, limit=config.max_proposals, apply=config.apply,
+                                     allow_public_output=allow_public_output)
+            counts["proposals_generated"] = gen["generated"]
+            counts["proposals_validated"] = gen["validated"]
+            result.steps.append(CycleStepResult(
+                "generate_proposals", "executed",
+                detail=f"generated={gen['generated']} validated={gen['validated']} stored={gen['applied']}",
+                counts={"generated": gen["generated"], "validated": gen["validated"], "stored": gen["applied"]},
+            ))
+        except Exception as exc:
+            result.steps.append(CycleStepResult("generate_proposals", "failed",
+                                                detail=f"proposal_error:{type(exc).__name__}"))
     else:
         result.steps.append(CycleStepResult("generate_proposals", "skipped", detail="--no-proposals"))
 
-    # 3) check required 1m data
+    # 3) check required 1m data (resilient: a data-check error blocks prepare/worker safely)
     profiles = load_timeframe_profiles()
     policy = load_resource_policy()
-    limits = derive_limits(profiles, policy)
-    checks = resolve_requirements(
-        collect_requirements(private_root, limits=limits),
-        data_dir=one_minute_data_dir(private_root),
-    )
-    missing = sum(1 for c in checks if c.requirement.status in _MISSING)
-    counts["data_requirements"] = len(checks)
-    counts["data_missing"] = missing
-    result.steps.append(CycleStepResult(
-        "data_check", "executed", detail=f"requirements={len(checks)} missing={missing}",
-        counts={"requirements": len(checks), "missing": missing},
-    ))
+    checks: list = []
+    try:
+        limits = derive_limits(profiles, policy)
+        checks = resolve_requirements(
+            collect_requirements(private_root, limits=limits),
+            data_dir=one_minute_data_dir(private_root),
+        )
+        missing = sum(1 for c in checks if c.requirement.status in _MISSING)
+        counts["data_requirements"] = len(checks)
+        counts["data_missing"] = missing
+        result.steps.append(CycleStepResult(
+            "data_check", "executed", detail=f"requirements={len(checks)} missing={missing}",
+            counts={"requirements": len(checks), "missing": missing},
+        ))
+        data_check_ok = True
+    except Exception as exc:
+        result.steps.append(CycleStepResult("data_check", "failed",
+                                            detail=f"data_check_error:{type(exc).__name__}"))
+        data_check_ok = False
 
     # 4) optionally prepare 1m data (network only if explicitly allowed)
-    if config.prepare_1m:
-        provider = get_provider(config.provider, allow_synthetic=config.allow_synthetic)
-        prep_apply = config.apply and config.prepare_1m_apply
-        report = prepare(checks, provider=provider, private_root=private_root,
-                         apply=prep_apply, allow_public_output=allow_public_output)
-        counts["data_prepared"] = report.downloaded
-        result.steps.append(CycleStepResult(
-            "prepare_1m", "executed",
-            detail=(f"provider={report.provider} mode={'apply' if prep_apply else 'dry_run'} "
-                    f"downloaded={report.downloaded} would_download={report.would_download}"),
-            counts={"downloaded": report.downloaded, "would_download": report.would_download,
-                    "provider_configured": report.provider_configured},
-        ))
+    if config.prepare_1m and data_check_ok:
+        try:
+            provider = get_provider(config.provider, allow_synthetic=config.allow_synthetic)
+            prep_apply = config.apply and config.prepare_1m_apply
+            report = prepare(checks, provider=provider, private_root=private_root,
+                             apply=prep_apply, allow_public_output=allow_public_output)
+            counts["data_prepared"] = report.downloaded
+            # Record the prepare result so `status`/dashboard "1m data prep" reflects it.
+            write_prepare_report(private_root, report, allow_public_output=allow_public_output)
+            result.steps.append(CycleStepResult(
+                "prepare_1m", "executed",
+                detail=(f"provider={report.provider} mode={'apply' if prep_apply else 'dry_run'} "
+                        f"downloaded={report.downloaded} would_download={report.would_download}"),
+                counts={"downloaded": report.downloaded, "would_download": report.would_download,
+                        "provider_configured": report.provider_configured},
+            ))
+        except Exception as exc:
+            result.steps.append(CycleStepResult("prepare_1m", "failed",
+                                                detail=f"prepare_error:{type(exc).__name__}"))
+    elif config.prepare_1m:
+        result.steps.append(CycleStepResult("prepare_1m", "skipped", detail="data_check failed; prepare skipped"))
     else:
         result.steps.append(CycleStepResult("prepare_1m", "skipped", detail="--prepare-1m not set (no network)"))
 
-    # 5) queue validated proposals (capped)
+    # 5) queue validated proposals (capped, data-ready only -> never queue incomplete data)
     if config.queue:
-        q = queue_validated(private_root, priority=config.priority, apply=config.apply,
-                            max_queue=config.max_queue, allow_public_output=allow_public_output)
-        counts["proposals_queued"] = q["queued"]
-        result.steps.append(CycleStepResult(
-            "queue_proposals", "executed",
-            detail=f"ready={q['ready']} queued={q['queued']} skipped_full={q['skipped_full']} cap={q['max_queue']}",
-            counts={"ready": q["ready"], "queued": q["queued"], "skipped_full": q["skipped_full"]},
-        ))
+        try:
+            q = queue_validated(private_root, priority=config.priority, apply=config.apply,
+                                max_queue=config.max_queue, require_data_ready=True,
+                                allow_public_output=allow_public_output)
+            counts["proposals_queued"] = q["queued"]
+            counts["ready_jobs"] = q["ready"]
+            counts["skipped_missing_data"] = q.get("skipped_missing_data", 0)
+            counts["skipped_too_short"] = q.get("skipped_too_short", 0)
+            counts["skipped_malformed"] = q.get("skipped_malformed", 0)
+            result.steps.append(CycleStepResult(
+                "queue_proposals", "executed",
+                detail=(f"ready={q['ready']} queued={q['queued']} skipped_full={q['skipped_full']} "
+                        f"not_ready(missing={q.get('skipped_missing_data', 0)},"
+                        f"short={q.get('skipped_too_short', 0)},malformed={q.get('skipped_malformed', 0)}) "
+                        f"cap={q['max_queue']}"),
+                counts={"ready": q["ready"], "queued": q["queued"], "skipped_full": q["skipped_full"],
+                        "skipped_not_ready": q.get("skipped_not_ready", [])},
+            ))
+        except Exception as exc:
+            result.steps.append(CycleStepResult("queue_proposals", "failed",
+                                                detail=f"queue_error:{type(exc).__name__}"))
     else:
         result.steps.append(CycleStepResult("queue_proposals", "skipped", detail="--no-queue"))
 

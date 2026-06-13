@@ -91,6 +91,8 @@ def render_html(state: dict) -> str:
     data_prep = state.get("last_prepare_1m") or {}
     prepare_workflow = state.get("prepare_workflow") or {}
     last_cycle = state.get("last_cycle") or {}
+    last_session = state.get("last_session") or {}
+    llm_loop = state.get("llm_loop") or {}
     queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
 <html lang="en">
@@ -164,8 +166,8 @@ def render_html(state: dict) -> str:
   </section>
 
   <section class="section card">
-    <h2>Research Cycle</h2>
-    {cycle_html(last_cycle)}
+    <h2>Research Cycle &amp; Session</h2>
+    {cycle_html(last_cycle, last_session, llm_loop)}
   </section>
 
   <section class="section card">
@@ -345,21 +347,40 @@ def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | Non
     ])
 
 
-def cycle_html(cycle: dict) -> str:
-    if not cycle or not cycle.get("available"):
-        return ('<p class="muted">No research cycle run yet '
-                '(python -m scripts.strategy_lab.research_cycle --dry-run).</p>')
-    return "\n".join([
-        f"<p>last cycle: <span class=\"pill\">{esc(cycle.get('mode', ''))}</span> "
-        f"provider={esc(cycle.get('provider', 'null'))} at {esc(cycle.get('generated_at', ''))}</p>",
-        f"<p>proposals generated: {esc(cycle.get('proposals_generated', 0))} - "
-        f"queued: {esc(cycle.get('proposals_queued', 0))} - "
-        f"data missing: {esc(cycle.get('data_missing', 0))} - prepared: {esc(cycle.get('data_prepared', 0))}</p>",
-        f"<p>worker: completed {esc(cycle.get('worker_completed', 0))} - "
-        f"deferred {esc(cycle.get('worker_deferred', 0))} - failed {esc(cycle.get('worker_failed', 0))}</p>",
-        f"<p class=\"muted\">next: {esc(cycle.get('next_command', ''))}</p>",
-        '<p class="muted">no live trading - no order engine - no paid LLM - network fetch is opt-in</p>',
-    ])
+def cycle_html(cycle: dict, session: dict | None = None, llm_loop: dict | None = None) -> str:
+    session = session or {}
+    llm_loop = llm_loop or {}
+    lines: list[str] = []
+    if cycle and cycle.get("available"):
+        lines += [
+            f"<p>last cycle: <span class=\"pill\">{esc(cycle.get('mode', ''))}</span> "
+            f"provider={esc(cycle.get('provider', 'null'))} at {esc(cycle.get('generated_at', ''))}</p>",
+            f"<p>proposals generated: {esc(cycle.get('proposals_generated', 0))} - "
+            f"queued: {esc(cycle.get('proposals_queued', 0))} - "
+            f"data missing: {esc(cycle.get('data_missing', 0))} - prepared: {esc(cycle.get('data_prepared', 0))}</p>",
+            f"<p>worker: completed {esc(cycle.get('worker_completed', 0))} - "
+            f"deferred {esc(cycle.get('worker_deferred', 0))} - failed {esc(cycle.get('worker_failed', 0))}</p>",
+        ]
+    else:
+        lines.append('<p class="muted">No research cycle run yet '
+                     '(python -m scripts.strategy_lab.research_cycle --dry-run).</p>')
+    if session.get("available"):
+        lines.append(
+            f"<p>last session: <span class=\"pill\">{esc(session.get('mode', ''))}</span> "
+            f"ready={esc(session.get('ready_jobs', 0))} - missing data={esc(session.get('skipped_missing_data', 0))} - "
+            f"queued={esc(session.get('proposals_queued', 0))}</p>"
+        )
+    else:
+        lines.append('<p class="muted">No research session run yet '
+                     '(python -m scripts.strategy_lab.research_session --dry-run).</p>')
+    lines.append(
+        f"<p>LLM proposal loop: <span class=\"pill\">{esc(llm_loop.get('mode', 'export_only'))}</span> "
+        f"send={'enabled' if llm_loop.get('enabled') else 'disabled'} - provider={esc(llm_loop.get('provider', 'none'))} "
+        f"(advisory; code validates; LLM never executed)</p>"
+    )
+    lines.append(f"<p class=\"muted\">next: {esc((session.get('next_command') or cycle.get('next_command', '')))}</p>")
+    lines.append('<p class="muted">no live trading - no order engine - no paid LLM by default - network fetch is opt-in</p>')
+    return "\n".join(lines)
 
 
 def microscope_html(em: dict, data_prep: dict | None = None, prepare_workflow: dict | None = None) -> str:

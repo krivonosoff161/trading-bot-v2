@@ -274,6 +274,20 @@ python -m scripts.strategy_lab.research_cycle --dry-run
 python -m scripts.strategy_lab.research_cycle --apply --max-proposals 5 --max-queue 5 --max-worker-jobs 1
 ```
 
+MVP 4.4 adds **data-complete research sessions** + an advisory **LLM proposal loop**.
+`research_session` wraps the cycle with a data-readiness gate (a job is queued only
+when its data is READY; missing/short/malformed are skipped with a reason, never
+faked) and an export-only LLM layer (cheap → chief; code validates every candidate;
+the LLM never decides the queue and is never executed). LLM is disabled by default; a
+real send needs `STRATEGY_LAB_LLM_ENABLED=1` + `STRATEGY_LAB_LLM_PROVIDER` + a
+configured provider + a daily cap (Alibaba/Qwen documented but not shipped). Expected
+pace is one or two serious variants per day — not a 24/7 poller.
+
+```bash
+python -m scripts.strategy_lab.research_session --dry-run
+python -m scripts.strategy_lab.research_session --apply --max-candidates 5 --max-queued 5 --max-worker-jobs 1
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:

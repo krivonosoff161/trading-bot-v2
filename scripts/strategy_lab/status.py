@@ -62,6 +62,8 @@ def main() -> None:
     prep = state.get("last_prepare_1m") or {}
     prep_cfg = state.get("prepare_workflow") or {}
     cycle = state.get("last_cycle") or {}
+    session = state.get("last_session") or {}
+    llm_loop = state.get("llm_loop") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -88,6 +90,15 @@ def main() -> None:
               f"deferred: {cycle.get('worker_deferred', 0)})")
     else:
         print("Research cyc : not run yet (python -m scripts.strategy_lab.research_cycle --dry-run)")
+    if session.get("available"):
+        print(f"Research ses : last {session.get('mode')} (ready: {session.get('ready_jobs', 0)}, "
+              f"missing data: {session.get('skipped_missing_data', 0)}, queued: {session.get('proposals_queued', 0)}, "
+              f"LLM: {session.get('llm_mode', 'export_only')})")
+    else:
+        print("Research ses : not run yet (python -m scripts.strategy_lab.research_session --dry-run)")
+    llm_send_status = "enabled" if llm_loop.get("enabled") else "disabled"
+    print(f"LLM loop     : {llm_loop.get('mode', 'export_only')} (advisory; send {llm_send_status}; "
+          f"provider={llm_loop.get('provider', 'none')}; code validates, LLM never executed)")
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")
     micro_state = "enabled" if microscope.get("enabled") else f"disabled ({microscope.get('disabled_reason', 'n/a')})"
     print(f"Microscope   : 1m {micro_state}, trigger-only; data {_fmt_counts(microscope.get('availability_counts'))}")
