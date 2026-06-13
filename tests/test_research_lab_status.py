@@ -52,4 +52,5 @@ def test_status_shows_microscope_and_send_gate(tmp_path, monkeypatch, capsys):
     assert "Microscope" in out
     assert "trigger-only" in out
     assert "send gate" in out
+    assert "1m data prep" in out
     assert str(tmp_path) not in out

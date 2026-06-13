@@ -88,6 +88,7 @@ def render_html(state: dict) -> str:
     obsidian_notes = state.get("obsidian_notes", 0)
     proposals = state.get("proposals") or {}
     event_microscope = state.get("event_microscope") or {}
+    data_prep = state.get("last_prepare_1m") or {}
     queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
 <html lang="en">
@@ -162,7 +163,7 @@ def render_html(state: dict) -> str:
 
   <section class="section card">
     <h2>Event Microscope (1m)</h2>
-    {microscope_html(event_microscope)}
+    {microscope_html(event_microscope, data_prep)}
   </section>
 
   <section class="section card">
@@ -337,7 +338,7 @@ def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | Non
     ])
 
 
-def microscope_html(em: dict) -> str:
+def microscope_html(em: dict, data_prep: dict | None = None) -> str:
     if not em or em.get("error"):
         return '<p class="muted">Event microscope not available.</p>'
     limits = em.get("limits") or {}
@@ -347,6 +348,15 @@ def microscope_html(em: dict) -> str:
     counts_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(counts.items())) or "no symbols scanned"
     skipped = em.get("skipped_reasons") or []
     skipped_line = ", ".join(f"{esc(s.get('symbol'))}: {esc(s.get('reason'))}" for s in skipped[:6]) or "none"
+    prep = data_prep or {}
+    if prep.get("available"):
+        prep_line = (
+            f"<p>1m data prep: last <span class=\"pill\">{esc(prep.get('mode', ''))}</span> via "
+            f"{esc(prep.get('provider', 'null'))} provider - missing: {esc(prep.get('missing', 0))} - "
+            f"downloaded: {esc(prep.get('downloaded', 0))} (on demand; no full-market download)</p>"
+        )
+    else:
+        prep_line = '<p class="muted">1m data prep: not run yet (prepared on demand, null provider by default)</p>'
     return "\n".join([
         f"<p>1m microscope: <span class=\"pill\">{state}</span> "
         f"(trigger-only; no downloader; full-universe 1m sweeps blocked)</p>",
@@ -356,6 +366,7 @@ def microscope_html(em: dict) -> str:
         f"variants&le;{esc(limits.get('max_variants', 0))}</p>",
         f"<p>data availability ({esc(em.get('scanned_group', ''))}): {counts_line}</p>",
         f"<p class=\"muted\">skipped: {skipped_line}</p>",
+        prep_line,
     ])
 
 
