@@ -317,6 +317,34 @@ def test_render_html_shows_event_microscope_card():
     assert "no_1m_file" in page
 
 
+def test_dashboard_state_includes_data_prep(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    state = load_dashboard_state(tmp_path)
+    assert state["last_prepare_1m"]["available"] is False  # nothing prepared yet
+    assert str(tmp_path) not in json.dumps(state)
+
+
+def test_render_html_shows_data_prep_line():
+    state = {
+        "private_root_label": "strategy-lab",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "event_microscope": {
+            "timeframe": "1m", "enabled": True, "disabled_reason": "",
+            "limits": {"max_symbols": 2, "max_event_windows": 3, "max_bars_per_window": 360, "max_variants": 8},
+            "availability_counts": {"missing": 2}, "scanned_group": "l2_high_beta", "skipped_reasons": [],
+        },
+        "last_prepare_1m": {
+            "available": True, "provider": "null", "mode": "dry_run",
+            "missing": 1, "would_download": 1, "downloaded": 0, "files_written": 0,
+        },
+        "llm_cost": {}, "latest_run": {}, "runs": [],
+    }
+    page = render_html(state)
+    assert "1m data prep" in page
+    assert "no full-market download" in page
+
+
 def test_aggregate_runs_counts_decisions():
     totals = aggregate_runs([
         {"candidate_count": 2, "counts": {"REJECT": 1, "OBSERVE": 1}},

@@ -243,6 +243,17 @@ event-driven runs (lag, capture, missed move, `late_entry` — no look-ahead), a
 python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta   # read-only; reports missing if no 1m data
 ```
 
+MVP 4.2 adds a **demand-driven 1m loader** (`prepare_1m_data`): it derives the
+capped 1m windows the lab actually needs (event specs / queued jobs / a manual
+request), checks the local cache, and — only with `--apply` and a configured
+provider — writes just those windows under the private root. No full-market
+download; default provider is `null` (no network), so `--apply` without a provider
+prints "provider not configured / no data written":
+
+```bash
+python -m scripts.strategy_lab.prepare_1m_data --dry-run                  # shows which 1m windows are missing
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:

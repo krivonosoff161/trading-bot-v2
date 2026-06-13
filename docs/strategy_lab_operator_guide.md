@@ -24,6 +24,10 @@ no `.env`/secrets, no automatic LLM spend.
 - **1m event-microscope locator** (`microscope_scan`): read-only, capped, and
   trigger-only. It locates existing local 1m files; it never downloads and reports
   a clear SKIPPED reason when 1m data is absent.
+- **Demand-driven 1m loader** (`prepare_1m_data`): derives the capped 1m windows
+  the lab needs (event specs / queued jobs / a manual request), checks the local
+  cache, and — only with `--apply` and a configured provider — writes just those
+  windows under the private root. Default provider is `null` (no network).
 - **Gated LLM send path**: a provider-agnostic sender boundary whose only shipped
   implementation is `NullReviewSender` (never calls a network). A real send needs
   several explicit gates; export stays the default.
@@ -34,8 +38,9 @@ no `.env`/secrets, no automatic LLM spend.
 ## What is planned (not done yet)
 
 - A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
-- A 1m **downloader / live data path** (the locator and caps exist; there is no
-  network fetch — missing 1m data is reported, not downloaded).
+- A **real exchange market-data adapter** for `prepare_1m_data` (the loader path,
+  caps, cache and writer exist; shipped providers are `null` (no network) and an
+  offline `synthetic` test provider — there is no real network fetch yet).
 - A real LLM provider behind the send boundary (today only `NullReviewSender`;
   sending stays export-only).
 
@@ -103,6 +108,7 @@ trades, or write to the public repo.
 | Preview next proposals (dry-run) | `bat\strategy_lab_proposals_dry_run.bat` |
 | Preview what would be queued | `bat\strategy_lab_queue_validated_dry_run.bat` |
 | Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
+| See what 1m data is needed (dry-run) | `bat\strategy_lab_prepare_1m_data.bat` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -251,6 +257,39 @@ python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta --json
 
 Today there is no local 1m data, so the scan reports every symbol as `missing` —
 that is the expected, honest result until a 1m data path is added.
+
+## Prepare 1m data on demand
+
+The microscope only *reads* 1m data; it never downloads. `prepare_1m_data` is the
+demand-driven loader that fetches **only** the capped 1m windows the lab actually
+needs (current event sweeps / queued specs, or an explicit manual request).
+
+```bash
+# See what 1m windows are needed and which are missing (writes nothing):
+bat\strategy_lab_prepare_1m_data.bat
+python -m scripts.strategy_lab.prepare_1m_data --dry-run
+
+# A specific window (UTC), dry-run:
+python -m scripts.strategy_lab.prepare_1m_data --symbol BTC_USDT_SWAP --start 2025-01-30T00:00 --end 2025-01-30T06:00 --dry-run
+
+# Actually fetch + write (requires a configured provider):
+python -m scripts.strategy_lab.prepare_1m_data --apply
+```
+
+- **Default provider is `null` (no network).** With `--apply` and no configured
+  provider it prints `provider not configured / no data written` and exits cleanly.
+- **No full-market download.** Requirements are capped by the 1m policy: at most
+  `max_symbols_per_cycle` symbols, `max_event_windows` windows, and
+  `max_window_hours`×60 bars per window. `--max-symbols` / `--max-windows` can only
+  *lower* those caps, never raise them.
+- Prepared 1m candles are written in the canonical OHLCV format (deduped, sorted)
+  under the private root at `strategy-lab/market_data/1m/` — never the public repo.
+- This is **research data only**: no live trading, no order/account endpoints, no
+  paid LLM.
+- A built-in offline `synthetic` provider (deterministic, clearly tagged, **not**
+  real market data) exists for pipeline testing/demos and is gated behind
+  `STRATEGY_LAB_ALLOW_SYNTHETIC=1`. A real exchange market-data adapter is a future
+  step.
 
 ## What "late entry" means
 

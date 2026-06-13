@@ -201,10 +201,37 @@ uses `proposals/proposal_registry.jsonl` + `proposals/specs/`.
   (provider/cap/last-pack/send gate), `queued_from_proposals`, and `queue_capacity`
   are surfaced as labels only.
 
+## MVP 4.2 Phase 1 (done 2026-06-13)
+
+Demand-driven 1m data loader — prepares 1m data only for active needs, capped and
+safe by default:
+
+- `src/research_lab/data_requirements.py` — derive capped 1m windows (UTC) from
+  event specs / queued jobs (event_context) or an explicit manual request. Windows
+  are clipped to `max_bars_per_window`; `apply_policy_caps` marks anything beyond
+  `max_event_windows` / `max_symbols` as `outside_policy`.
+- `src/research_lab/data_cache.py` — read-only cache check: present / missing /
+  too_short / malformed by counting deduped bars inside the window. No download.
+- `src/research_lab/market_data_provider.py` — `MarketDataProvider` protocol
+  (market-data only), default `NullMarketDataProvider` (no network,
+  `provider_not_configured`), and an offline deterministic `SyntheticMarketDataProvider`
+  gated behind `STRATEGY_LAB_ALLOW_SYNTHETIC=1` for tests/demos. No real adapter ships.
+- `src/research_lab/data_prepare.py` — canonical 1m writer (deduped, sorted, atomic,
+  merge-safe) under `strategy-lab/market_data/1m/` (private root only), plus the
+  `prepare()` orchestration and a private prepare-report.
+- `scripts/strategy_lab/prepare_1m_data.py` + `bat\strategy_lab_prepare_1m_data.bat`
+  — dry-run by default; `--apply` writes only with a configured provider, else
+  `provider not configured / no data written`. `--max-symbols`/`--max-windows` only
+  lower caps.
+- The microscope locator + dashboard/status now read `strategy-lab/market_data/1m/`
+  and surface the last prepare report (provider/mode/missing/downloaded, labels only).
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
-- A 1m **downloader / live data path** (the locator + caps exist; no network fetch).
+- A **real exchange market-data adapter** behind `prepare_1m_data` (loader path,
+  caps, cache and writer exist; shipped providers are `null` + offline `synthetic`,
+  no real network fetch yet). Must stay market-data only (no orders/accounts).
 - A **real LLM provider** behind the send boundary (only `NullReviewSender` ships).
 - Event-anchored entry-timing inside *generic* (non-event) runs (those still use
   the per-trade MFE/MAE/capture proxy).

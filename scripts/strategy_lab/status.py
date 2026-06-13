@@ -59,6 +59,7 @@ def main() -> None:
     proposals = state.get("proposals") or {}
     llm = state.get("llm_review") or {}
     microscope = state.get("event_microscope") or {}
+    prep = state.get("last_prepare_1m") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -82,6 +83,11 @@ def main() -> None:
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")
     micro_state = "enabled" if microscope.get("enabled") else f"disabled ({microscope.get('disabled_reason', 'n/a')})"
     print(f"Microscope   : 1m {micro_state}, trigger-only; data {_fmt_counts(microscope.get('availability_counts'))}")
+    if prep.get("available"):
+        print(f"1m data prep : last {prep.get('mode')} via {prep.get('provider')} provider "
+              f"(missing: {prep.get('missing', 0)}, downloaded: {prep.get('downloaded', 0)})")
+    else:
+        print("1m data prep : not run yet (prepare_1m_data --dry-run shows what 1m data is needed)")
     print("-" * 48)
     cap = "daily cap set" if llm.get("daily_cap_present") else "no daily cap"
     print(f"LLM review   : export-only; auto-send {'ENABLED' if llm.get('auto_send') else 'disabled'}; "

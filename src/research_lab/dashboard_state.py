@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
-from src.research_lab.event_microscope import DEFAULT_1M_GLOB, plan_microscope
+from src.research_lab.data_prepare import read_prepare_report
+from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
+from src.research_lab.paths import one_minute_glob
 from src.research_lab.obsidian_graph import count_notes
 from src.research_lab.proposal_schema import QUEUED, VALIDATED
 from src.research_lab.proposal_store import load_proposals, proposals_path, status_counts
@@ -67,7 +69,8 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "lab_config": load_lab_config_summary(private_root),
         "worker_status": read_worker_status(worker_status_path(private_root)),
         "llm_review": llm_review_status(private_root),
-        "event_microscope": load_microscope_summary(),
+        "event_microscope": load_microscope_summary(private_root),
+        "last_prepare_1m": load_data_prep_summary(private_root),
         "proposals": load_proposal_summary(private_root),
         "obsidian_notes": count_notes(private_root),
         "next_run": next_run_hint(private_root),
@@ -245,7 +248,7 @@ def load_proposal_summary(private_root: Path) -> dict[str, Any]:
     }
 
 
-def load_microscope_summary() -> dict[str, Any]:
+def load_microscope_summary(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
     """Public-safe 1m event-microscope availability for a high-volatility group."""
     try:
         universe = load_universe()
@@ -253,13 +256,33 @@ def load_microscope_summary() -> dict[str, Any]:
         policy = load_resource_policy()
         group = "l2_high_beta" if "l2_high_beta" in universe.groups else next(iter(universe.groups), "")
         symbols = list(universe.symbols_in(group)) if group else []
-        plan = plan_microscope(symbols, data_glob=DEFAULT_1M_GLOB, profiles=profiles, policy=policy)
+        plan = plan_microscope(
+            symbols, data_glob=one_minute_glob(private_root), profiles=profiles, policy=policy,
+        )
         summary = plan.to_summary()
         summary["scanned_group"] = group
-        summary["data_glob_label"] = "1m glob (configurable); no downloader"
+        summary["data_glob_label"] = "strategy-lab/market_data/1m (prepared on demand; no downloader)"
         return summary
     except Exception as exc:  # config optional; never break the dashboard
         return {"error": type(exc).__name__, "enabled": False}
+
+
+def load_data_prep_summary(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
+    """Public-safe summary of the last 1m prepare run (counts/labels only)."""
+    rep = read_prepare_report(private_root)
+    if not rep:
+        return {"available": False}
+    return {
+        "available": True,
+        "provider": str(rep.get("provider", "null")),
+        "provider_configured": bool(rep.get("provider_configured", False)),
+        "mode": str(rep.get("mode", "dry_run")),
+        "missing": int(rep.get("missing", 0) or 0),
+        "would_download": int(rep.get("would_download", 0) or 0),
+        "downloaded": int(rep.get("downloaded", 0) or 0),
+        "files_written": len(rep.get("files_written", []) or []),
+        "generated_at": str(rep.get("generated_at", "")),
+    }
 
 
 def queue_capacity(queue_counts: dict[str, Any]) -> dict[str, Any]:

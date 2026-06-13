@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.research_lab.event_microscope import DEFAULT_1M_GLOB, plan_microscope  # noqa: E402
+from src.research_lab.event_microscope import plan_microscope  # noqa: E402
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, one_minute_glob  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
@@ -35,11 +36,14 @@ def _night_mode(flag: bool) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", default="l2_high_beta", help="Universe group to scan")
-    ap.add_argument("--data-glob", default=DEFAULT_1M_GLOB, help="1m data glob with a {symbol} placeholder")
+    ap.add_argument("--data-glob", default=None, help="1m data glob with a {symbol} placeholder (default: private market_data/1m)")
+    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--json", action="store_true", help="Print the machine-readable summary")
     args = ap.parse_args()
 
+    private_root = Path(args.private_root).expanduser()  # read-only scan, no writes
+    data_glob = args.data_glob or one_minute_glob(private_root)
     universe = load_universe()
     profiles = load_timeframe_profiles()
     policy = load_resource_policy(night_mode=_night_mode(args.night_mode))
@@ -48,7 +52,7 @@ def main() -> None:
         print(f"unknown or empty universe group: {args.universe}")
         return
 
-    plan = plan_microscope(symbols, data_glob=args.data_glob, profiles=profiles, policy=policy)
+    plan = plan_microscope(symbols, data_glob=data_glob, profiles=profiles, policy=policy)
     if args.json:
         print(json.dumps(plan.to_summary(), ensure_ascii=False, indent=2))
         return
