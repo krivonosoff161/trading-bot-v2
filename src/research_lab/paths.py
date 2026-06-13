@@ -27,3 +27,13 @@ def resolve_private_root(path: str | Path, *, allow_public_output: bool = False)
 
 def strategy_lab_label(*parts: str) -> str:
     return "/".join(("strategy-lab", *[p.strip("/\\") for p in parts if p]))
+
+
+def one_minute_data_dir(private_root: str | Path) -> Path:
+    """Where demand-prepared 1m candles live (under the private research root)."""
+    return Path(private_root).expanduser() / "market_data" / "1m"
+
+
+def one_minute_glob(private_root: str | Path) -> str:
+    """Glob (with a {symbol} placeholder) for prepared 1m files under the private root."""
+    return str(one_minute_data_dir(private_root) / "{symbol}_*_1m*.json")
