@@ -61,6 +61,7 @@ def main() -> None:
     microscope = state.get("event_microscope") or {}
     prep = state.get("last_prepare_1m") or {}
     prep_cfg = state.get("prepare_workflow") or {}
+    cycle = state.get("last_cycle") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -81,6 +82,12 @@ def main() -> None:
     )
     print(f"Proposals    : {proposals.get('total', 0)} ({_fmt_counts(proposals.get('by_status'))}); "
           f"validated waiting for queue: {proposals.get('validated_waiting', 0)}")
+    if cycle.get("available"):
+        print(f"Research cyc : last {cycle.get('mode')} (proposals queued: {cycle.get('proposals_queued', 0)}, "
+              f"data missing: {cycle.get('data_missing', 0)}, worker done: {cycle.get('worker_completed', 0)}, "
+              f"deferred: {cycle.get('worker_deferred', 0)})")
+    else:
+        print("Research cyc : not run yet (python -m scripts.strategy_lab.research_cycle --dry-run)")
     print(f"Obsidian     : {state.get('obsidian_notes', 0)} candidate notes")
     micro_state = "enabled" if microscope.get("enabled") else f"disabled ({microscope.get('disabled_reason', 'n/a')})"
     print(f"Microscope   : 1m {micro_state}, trigger-only; data {_fmt_counts(microscope.get('availability_counts'))}")

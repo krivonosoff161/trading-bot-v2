@@ -47,6 +47,92 @@ def _night_mode(flag: bool) -> bool:
     return flag or os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"}
 
 
+def run_worker_once(
+    private_root,
+    *,
+    night_mode: bool = False,
+    ignore_cadence: bool = False,
+    include_rejects: bool = False,
+    allow_public_output: bool = False,
+    verbose: bool = False,
+) -> dict:
+    """Run at most one queued job. Returns a status dict; raises only if a claimed
+    job's execution fails (after recording it). Callers (the research cycle) can wrap
+    this to record worker_failed without crashing the whole run.
+
+    status in {deferred, queue_empty, completed} on return; on job-execution error the
+    failure is recorded to the DB/status file and the exception is re-raised.
+    """
+    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    policy = load_resource_policy(night_mode=_night_mode(night_mode))
+    db_path = default_db_path(private_root)
+    conn = connect(db_path)
+    init_db(conn)
+    cad_path = cadence_path(private_root)
+    status_path = worker_status_path(private_root)
+    try:
+        stale = reap_stale_jobs(conn)
+        if stale and verbose:
+            print(f"requeued stale jobs={stale} db=strategy-lab/state/{db_path.name}")
+
+        now = time.time()
+        if not ignore_cadence:
+            decision = evaluate_cadence(policy, load_recent_starts(cad_path), now)
+            if not decision.allowed:
+                if verbose:
+                    print(f"deferred reason={decision.reason} wait_seconds={decision.wait_seconds} "
+                          f"mode={policy.mode} (resource policy throttle)")
+                write_worker_status(
+                    status_path, status="deferred", reason=decision.reason,
+                    wait_seconds=decision.wait_seconds, mode=policy.mode,
+                )
+                return {"status": "deferred", "reason": decision.reason,
+                        "wait_seconds": decision.wait_seconds, "mode": policy.mode}
+
+        job = claim_next_job(conn)
+        if not job:
+            if verbose:
+                print(f"db=strategy-lab/state/{db_path.name} queue=empty")
+            write_worker_status(status_path, status="queue_empty", mode=policy.mode)
+            return {"status": "queue_empty", "mode": policy.mode}
+
+        record_start(cad_path, now)
+        job_id = int(job["job_id"])
+        try:
+            spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
+            cap, capped = effective_variant_cap(policy, spec.max_runs)
+            if capped:
+                if verbose:
+                    print(f"variant cap applied job_id={job_id} max_runs={spec.max_runs or 'unlimited'} -> {cap} mode={policy.mode}")
+                spec = dataclasses.replace(spec, max_runs=cap)
+            results = evaluate_spec(spec)
+            run_dir = write_run_outputs(
+                spec, results, private_root,
+                allow_public_output=allow_public_output, include_rejects=include_rejects,
+            )
+            import_run_dir(conn, private_root, run_dir)
+            conn.commit()
+            label = str(run_dir.relative_to(private_root)).replace("\\", "/")
+            complete_job(conn, job_id, label)
+            write_worker_status(
+                status_path, status="completed", job_id=job_id, run_label=label,
+                results=len(results), mode=policy.mode,
+            )
+            if verbose:
+                print(f"completed job_id={job_id} run={label} results={len(results)}")
+            return {"status": "completed", "job_id": job_id, "run_label": label,
+                    "results": len(results), "mode": policy.mode}
+        except Exception as exc:
+            reason = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            fail_job(conn, job_id, reason)
+            write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
+            if verbose:
+                print(f"failed job_id={job_id} error={exc}")
+            raise
+    finally:
+        conn.close()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -59,71 +145,14 @@ def main() -> None:
     ap.add_argument("--include-rejects", action="store_true", help="Debug: also upsert REJECT rows into the candidate registry")
     ap.add_argument("--allow-public-output", action="store_true", help="Allow writing under this public repo")
     args = ap.parse_args()
-    private_root = resolve_private_root(args.private_root, allow_public_output=args.allow_public_output)
-    policy = load_resource_policy(night_mode=_night_mode(args.night_mode))
-    db_path = default_db_path(private_root)
-    conn = connect(db_path)
-    init_db(conn)
-    stale = reap_stale_jobs(conn)
-    if stale:
-        print(f"requeued stale jobs={stale} db=strategy-lab/state/{db_path.name}")
-
-    now = time.time()
-    cad_path = cadence_path(private_root)
-    status_path = worker_status_path(private_root)
-    if not args.ignore_cadence:
-        decision = evaluate_cadence(policy, load_recent_starts(cad_path), now)
-        if not decision.allowed:
-            print(
-                f"deferred reason={decision.reason} wait_seconds={decision.wait_seconds} "
-                f"mode={policy.mode} (resource policy throttle)"
-            )
-            write_worker_status(
-                status_path, status="deferred", reason=decision.reason,
-                wait_seconds=decision.wait_seconds, mode=policy.mode,
-            )
-            conn.close()
-            return
-
-    job = claim_next_job(conn)
-    if not job:
-        print(f"db=strategy-lab/state/{db_path.name} queue=empty")
-        write_worker_status(status_path, status="queue_empty", mode=policy.mode)
-        conn.close()
-        return
-    record_start(cad_path, now)
-    job_id = int(job["job_id"])
-    try:
-        spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
-        cap, capped = effective_variant_cap(policy, spec.max_runs)
-        if capped:
-            print(f"variant cap applied job_id={job_id} max_runs={spec.max_runs or 'unlimited'} -> {cap} mode={policy.mode}")
-            spec = dataclasses.replace(spec, max_runs=cap)
-        results = evaluate_spec(spec)
-        run_dir = write_run_outputs(
-            spec,
-            results,
-            private_root,
-            allow_public_output=args.allow_public_output,
-            include_rejects=args.include_rejects,
-        )
-        import_run_dir(conn, private_root, run_dir)
-        conn.commit()
-        label = str(run_dir.relative_to(private_root)).replace("\\", "/")
-        complete_job(conn, job_id, label)
-        write_worker_status(
-            status_path, status="completed", job_id=job_id, run_label=label,
-            results=len(results), mode=policy.mode,
-        )
-        print(f"completed job_id={job_id} run={label} results={len(results)}")
-    except Exception as exc:  # pragma: no cover - defensive CLI boundary
-        reason = "".join(traceback.format_exception_only(type(exc), exc)).strip()
-        fail_job(conn, job_id, reason)
-        write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
-        print(f"failed job_id={job_id} error={exc}")
-        raise
-    finally:
-        conn.close()
+    run_worker_once(
+        args.private_root,
+        night_mode=args.night_mode,
+        ignore_cadence=args.ignore_cadence,
+        include_rejects=args.include_rejects,
+        allow_public_output=args.allow_public_output,
+        verbose=True,
+    )
 
 
 if __name__ == "__main__":

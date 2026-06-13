@@ -263,6 +263,17 @@ but only when you opt in (`STRATEGY_LAB_PREPARE_1M=1`, plus `..._APPLY=1` +
 `STRATEGY_LAB_MARKET_DATA_PROVIDER=okx-public` to actually fetch). Default start
 fetches nothing; the worker never fetches by itself. See the operator guide.
 
+MVP 4.3 adds a **controlled research cycle** (`research_cycle`): one bounded pass —
+inspect → generate proposals → check 1m data → optionally prepare → queue (capped) →
+one throttled worker step → status report. Dry-run by default (no queue/worker/
+network); a real fetch needs `--apply --prepare-1m --prepare-1m-apply --provider
+okx-public`. No hidden loop; the worker respects the throttle:
+
+```bash
+python -m scripts.strategy_lab.research_cycle --dry-run
+python -m scripts.strategy_lab.research_cycle --apply --max-proposals 5 --max-queue 5 --max-worker-jobs 1
+```
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:
