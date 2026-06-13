@@ -29,6 +29,10 @@ no `.env`/secrets, no automatic LLM spend.
   cache, and — only with `--apply` and a configured provider — writes just those
   windows under the private root. Default provider is `null` (no network); the real
   provider is `okx-public` (OKX public candles, read-only, **no API key**).
+- **Controlled research cycle** (`research_cycle`): one bounded pass that orchestrates
+  inspect -> generate proposals -> check 1m data -> (optional) prepare -> queue
+  (capped) -> one throttled worker step -> status report. Dry-run by default; no
+  hidden loop; the worker respects the throttle (no storm).
 - **Gated LLM send path**: a provider-agnostic sender boundary whose only shipped
   implementation is `NullReviewSender` (never calls a network). A real send needs
   several explicit gates; export stays the default.
@@ -113,6 +117,7 @@ trades, or write to the public repo.
 | Preview what would be queued | `bat\strategy_lab_queue_validated_dry_run.bat` |
 | Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
 | See what 1m data is needed (dry-run) | `bat\strategy_lab_prepare_1m_data.bat` |
+| Run one controlled research cycle (dry-run) | `bat\strategy_lab_cycle_dry_run.bat` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -195,6 +200,42 @@ python scripts/strategy_lab/worker_once.py
 The one-click start never generates or queues proposals by default. Set
 `STRATEGY_LAB_PROPOSAL_DRY_RUN=1` before `bat\strategy_lab_start.bat` to also run
 `generate_next_proposals --dry-run` (print only, never apply).
+
+## Research cycle (one controlled pass)
+
+`research_cycle` runs the whole loop once, capped and operator-visible: inspect
+current state -> generate next proposals -> check required 1m data -> optionally
+prepare it -> queue validated proposals (capped) -> run one throttled worker step ->
+write a status report. It only orchestrates the existing, individually-safe steps —
+there is **no hidden loop** and **no automatic network fetch**.
+
+```bash
+# 1) Dry-run (default): inspect + plan only. No queue writes, no worker, no network.
+bat\strategy_lab_cycle_dry_run.bat
+python -m scripts.strategy_lab.research_cycle --dry-run
+
+# 2) Apply without network: store proposals, queue up to the cap, run one worker step.
+python -m scripts.strategy_lab.research_cycle --apply --max-proposals 5 --max-queue 5 --max-worker-jobs 1
+
+# 3) Apply WITH explicit 1m prep using public OKX candles (no key, public market-data only):
+python -m scripts.strategy_lab.research_cycle --apply --prepare-1m --prepare-1m-apply --provider okx-public --max-proposals 5 --max-queue 5 --max-worker-jobs 1
+```
+
+- **Default is safe**: `--dry-run` writes nothing except the status report
+  (`state/research_cycle/latest.json`, private), queues nothing, runs no worker, and
+  makes no network call.
+- **Apply** stores/queues (capped by `--max-queue`, itself clamped to the resource
+  policy) and runs at most `--max-worker-jobs` worker steps (default 1). The worker
+  obeys the throttle: if it is in the cool-down it records `deferred` and stops — it
+  never bypasses `resource_policy.yaml`.
+- **Network fetch happens only** with `--apply` **and** `--prepare-1m` **and**
+  `--prepare-1m-apply` **and** `--provider okx-public`. With `--provider null` the
+  prepare step is a clean no-op (`provider not configured / no data written`).
+  `--provider synthetic` (offline test data) needs `STRATEGY_LAB_ALLOW_SYNTHETIC=1`.
+- `--no-worker` / `--no-proposals` skip those steps. `status` and the dashboard show
+  the last cycle (mode, proposals queued, data missing/prepared, worker outcome).
+- **Stop**: the cycle is a single pass and returns; there is nothing to stop. To run
+  it on a cadence, the operator re-runs it (no built-in daemon).
 
 ## Dry-run vs apply
 

@@ -53,35 +53,37 @@ def _exp_to_dict(exp) -> dict:
     }
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--priority", type=int, default=72)
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
-    ap.add_argument("--allow-public-output", action="store_true")
-    mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true")
-    mode.add_argument("--apply", action="store_true")
-    args = ap.parse_args()
+def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
+                    max_queue: int | None = None, allow_public_output: bool = False) -> dict:
+    """Queue VALIDATED proposals (idempotent, capped). Dry-run (apply=False) queues nothing.
 
-    private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
+    The effective queue cap is the resource policy's max_queue_size, optionally lowered
+    by `max_queue`. Returns counts; no LLM, no network, no public output.
+    """
+    private_root = resolve_private_root(Path(private_root), allow_public_output=allow_public_output)
     universe = load_universe()
     profiles = load_timeframe_profiles()
     policy = load_resource_policy()
+    cap = policy.max_queue_size if max_queue is None else min(policy.max_queue_size, max(0, int(max_queue)))
     proposals = [p for p in load_proposals(proposals_path(private_root)) if p.status == VALIDATED]
 
     ready = []
+    skipped_invalid = []
     for p in proposals:
         outcome = validate_proposal(p, universe=universe, timeframe_profiles=profiles, resource_policy=policy)
         if outcome.status != VALIDATED:
-            print(f"skip {p.proposal_id} no_longer_valid={','.join(outcome.reason_codes)}")
+            skipped_invalid.append({"id": p.proposal_id, "reasons": list(outcome.reason_codes)})
             continue
         ready.append(p)
-        print(f"ready {p.proposal_id} family={p.setup_family} symbols={len(p.symbols)} variants={p.max_variants}")
-    print(f"validated_waiting={len(proposals)} ready={len(ready)}")
-
-    if not args.apply:
-        print("dry-run: nothing queued (use --apply)")
-        return
+    result = {
+        "validated_waiting": len(proposals), "ready": len(ready),
+        "ready_items": [{"id": p.proposal_id, "family": p.setup_family,
+                         "symbols": len(p.symbols), "variants": p.max_variants} for p in ready],
+        "skipped_invalid": skipped_invalid, "max_queue": cap,
+        "queued": 0, "already_pending": 0, "skipped_full": 0, "applied": False,
+    }
+    if not apply:
+        return result
 
     out_dir = queued_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,21 +95,47 @@ def main() -> None:
             "SELECT COUNT(*) FROM queue WHERE status IN ('queued', 'running')"
         ).fetchone()[0])
         for p in ready:
-            if pending + queued >= policy.max_queue_size:
+            if pending + queued >= cap:
                 skipped_full += 1
                 continue
             exp = compile_proposal(p, policy=policy)
             spec_path = out_dir / f"{exp.experiment_id}.json"
             spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=args.priority)
+            _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=priority)
             queued += int(created)
             already += int(not created)
             set_status(proposals_path(private_root), p.proposal_id, QUEUED)
     finally:
         conn.close()
-    msg = f"applied queued={queued} already_pending={already}"
-    if skipped_full:
-        msg += f" skipped_queue_full={skipped_full} (max_queue_size={policy.max_queue_size})"
+    result.update(queued=queued, already_pending=already, skipped_full=skipped_full, applied=True)
+    return result
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--priority", type=int, default=72)
+    ap.add_argument("--max-queue", type=int, default=None, help="Optional lower cap (clamped to policy)")
+    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
+    ap.add_argument("--allow-public-output", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    args = ap.parse_args()
+
+    res = queue_validated(args.private_root, priority=args.priority, apply=args.apply,
+                          max_queue=args.max_queue, allow_public_output=args.allow_public_output)
+    for item in res["skipped_invalid"]:
+        print(f"skip {item['id']} no_longer_valid={','.join(item['reasons'])}")
+    for item in res["ready_items"]:
+        print(f"ready {item['id']} family={item['family']} symbols={item['symbols']} variants={item['variants']}")
+    print(f"validated_waiting={res['validated_waiting']} ready={res['ready']}")
+
+    if not args.apply:
+        print("dry-run: nothing queued (use --apply)")
+        return
+    msg = f"applied queued={res['queued']} already_pending={res['already_pending']}"
+    if res["skipped_full"]:
+        msg += f" skipped_queue_full={res['skipped_full']} (max_queue={res['max_queue']})"
     print(msg)
 
 

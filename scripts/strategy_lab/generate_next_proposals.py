@@ -32,6 +32,37 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
 
+def generate_proposals(private_root, *, limit: int = 10, apply: bool = False,
+                       allow_public_output: bool = False) -> dict:
+    """Generate + validate next-experiment proposals (and store them on apply).
+
+    Returns a dict with counts and the proposal objects. Deterministic, no LLM, no
+    network. Dry-run (apply=False) writes nothing.
+    """
+    private_root = resolve_private_root(Path(private_root), allow_public_output=allow_public_output)
+    universe = load_universe()
+    profiles = load_timeframe_profiles()
+    policy = load_resource_policy()
+    entries = load_entries(registry_path(private_root))
+    created_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    raw = generate_proposals_from_registry(
+        entries, universe=universe, created_at=created_at, limit=max(1, limit)
+    )
+    proposals = [
+        validate_and_mark(p, universe=universe, timeframe_profiles=profiles, resource_policy=policy)
+        for p in raw
+    ]
+    validated = sum(1 for p in proposals if p.status == VALIDATED)
+    result = {
+        "registry_entries": len(entries), "generated": len(proposals), "validated": validated,
+        "proposals": proposals, "added": 0, "updated": 0, "total": 0, "applied": False,
+    }
+    if apply:
+        stats = upsert_proposals(proposals_path(private_root), proposals)
+        result.update(added=stats["added"], updated=stats["updated"], total=stats["total"], applied=True)
+    return result
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=10)
@@ -42,31 +73,18 @@ def main() -> None:
     mode.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
-    private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
-    universe = load_universe()
-    profiles = load_timeframe_profiles()
-    policy = load_resource_policy()
-    entries = load_entries(registry_path(private_root))
-    created_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    raw = generate_proposals_from_registry(
-        entries, universe=universe, created_at=created_at, limit=max(1, args.limit)
-    )
-    proposals = [
-        validate_and_mark(p, universe=universe, timeframe_profiles=profiles, resource_policy=policy)
-        for p in raw
-    ]
-    validated = sum(1 for p in proposals if p.status == VALIDATED)
-    for p in proposals:
+    res = generate_proposals(args.private_root, limit=args.limit, apply=args.apply,
+                             allow_public_output=args.allow_public_output)
+    for p in res["proposals"]:
         flag = "VALIDATED" if p.status == VALIDATED else f"REJECTED({p.rejection_reason})"
         print(f"proposal {p.proposal_id} {flag} rule={','.join(p.reason_codes)} "
               f"family={p.setup_family} tf={p.requested_timeframe} variants={p.max_variants}")
-    print(f"registry_entries={len(entries)} generated={len(proposals)} validated={validated}")
+    print(f"registry_entries={res['registry_entries']} generated={res['generated']} validated={res['validated']}")
 
     if not args.apply:
         print("dry-run: nothing written (use --apply to store proposals)")
         return
-    stats = upsert_proposals(proposals_path(private_root), proposals)
-    print(f"applied added={stats['added']} updated={stats['updated']} total={stats['total']} validated={validated}")
+    print(f"applied added={res['added']} updated={res['updated']} total={res['total']} validated={res['validated']}")
 
 
 if __name__ == "__main__":

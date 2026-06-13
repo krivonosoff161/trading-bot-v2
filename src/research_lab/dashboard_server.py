@@ -90,6 +90,7 @@ def render_html(state: dict) -> str:
     event_microscope = state.get("event_microscope") or {}
     data_prep = state.get("last_prepare_1m") or {}
     prepare_workflow = state.get("prepare_workflow") or {}
+    last_cycle = state.get("last_cycle") or {}
     queue_capacity = state.get("queue_capacity") or {}
     return f"""<!doctype html>
 <html lang="en">
@@ -160,6 +161,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Proposals (closed loop)</h2>
     {proposals_html(proposals, llm_review, queue_capacity)}
+  </section>
+
+  <section class="section card">
+    <h2>Research Cycle</h2>
+    {cycle_html(last_cycle)}
   </section>
 
   <section class="section card">
@@ -336,6 +342,23 @@ def proposals_html(proposals: dict, llm_review: dict, queue_capacity: dict | Non
         f"<p>LLM auto-send: <span class=\"pill\">{esc(auto_send)}</span> - "
         f"queue requires explicit apply: <span class=\"pill\">yes</span></p>",
         table,
+    ])
+
+
+def cycle_html(cycle: dict) -> str:
+    if not cycle or not cycle.get("available"):
+        return ('<p class="muted">No research cycle run yet '
+                '(python -m scripts.strategy_lab.research_cycle --dry-run).</p>')
+    return "\n".join([
+        f"<p>last cycle: <span class=\"pill\">{esc(cycle.get('mode', ''))}</span> "
+        f"provider={esc(cycle.get('provider', 'null'))} at {esc(cycle.get('generated_at', ''))}</p>",
+        f"<p>proposals generated: {esc(cycle.get('proposals_generated', 0))} - "
+        f"queued: {esc(cycle.get('proposals_queued', 0))} - "
+        f"data missing: {esc(cycle.get('data_missing', 0))} - prepared: {esc(cycle.get('data_prepared', 0))}</p>",
+        f"<p>worker: completed {esc(cycle.get('worker_completed', 0))} - "
+        f"deferred {esc(cycle.get('worker_deferred', 0))} - failed {esc(cycle.get('worker_failed', 0))}</p>",
+        f"<p class=\"muted\">next: {esc(cycle.get('next_command', ''))}</p>",
+        '<p class="muted">no live trading - no order engine - no paid LLM - network fetch is opt-in</p>',
     ])
 
 

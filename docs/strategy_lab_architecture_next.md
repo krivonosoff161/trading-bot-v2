@@ -260,6 +260,27 @@ Operator-workflow integration of the prepare step — opt-in, never automatic:
 - The worker still never fetches by itself; only the explicit start step or the
   manual CLI can.
 
+## MVP 4.3 (done 2026-06-13)
+
+Controlled event-driven research cycle — one bounded, operator-visible pass that
+orchestrates existing steps without becoming autonomous:
+
+- `src/research_lab/research_cycle.py` — JSON-friendly models (`ResearchCycleConfig`,
+  `CycleStepResult`, `ResearchCycleResult`) + the private status-report writer/reader
+  and a compact `cycle_summary`.
+- `scripts/strategy_lab/research_cycle.py` — `run_research_cycle()` + CLI. Steps:
+  inspect -> generate proposals -> check 1m data -> optional prepare -> queue (capped)
+  -> one throttled worker step -> write `state/research_cycle/latest.json`. Dry-run by
+  default (no queue writes, no worker, no network). A real fetch needs
+  `--apply --prepare-1m --prepare-1m-apply --provider okx-public`. The worker step
+  reuses `run_worker_once` and respects the cadence throttle; on `deferred` it records
+  and stops — no storm, no hidden loop.
+- `worker_once.py`, `generate_next_proposals.py`, `queue_validated_proposals.py` were
+  refactored minimally to expose `run_worker_once()` / `generate_proposals()` /
+  `queue_validated()` functions (CLIs preserved) so the cycle reuses them.
+- `status` + dashboard surface the last cycle; `bat/strategy_lab_cycle_dry_run.bat`
+  is dry-run only.
+
 ## Not implemented yet (next steps)
 
 - Optional GPU batch backend behind the `backend: gpu` field (CPU only today).
