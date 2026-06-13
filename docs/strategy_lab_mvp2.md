@@ -183,6 +183,31 @@ python -m pytest tests/test_research_lab_experiment.py tests/test_research_lab_s
 python -m ruff check src/research_lab scripts/strategy_lab
 ```
 
+## Next-architecture foundation (added 2026-06-13)
+
+A foundation pass toward an event-driven research machine is now in the repo as
+loadable, tested building blocks. It is **not yet wired into the worker/runner** —
+it is the scaffolding the next sweep planner will use. See
+[strategy_lab_architecture_next.md](strategy_lab_architecture_next.md) for the
+full design. In short:
+
+- `configs/strategy_lab/universe.yaml` + `src/research_lab/universe.py` — asset
+  groups and relation hints (research metadata, not trading advice).
+- `configs/strategy_lab/timeframe_profiles.yaml` + `src/research_lab/timeframes.py`
+  — per-timeframe role and bounded limits; 1m is trigger-only.
+- `configs/strategy_lab/resource_policy.yaml` + `src/research_lab/resource_policy.py`
+  — quiet-desktop limits with an opt-in `night_mode`.
+- `src/research_lab/event_cluster.py` — detect a historical move and attach
+  related symbols (with a no-lookahead pre-move slice helper).
+- `src/research_lab/entry_timing.py` — honest entry-quality metrics (lag, missed
+  move, capture ratio, MAE/MFE, false-early-entry).
+- `src/research_lab/sweep_spec.py` — a validated coarse-sweep schema that gates
+  1m/heavy jobs and a public private-output path.
+
+The dashboard now shows a read-only "Research Machine Config" card (universe
+group/symbol counts, timeframe profiles, resource mode, proposal-spec count).
+GPU remains a planned optional backend, not implemented.
+
 ## Known limits (MVP 3.0 candidates)
 
 - Parameter fragility is still a lite check; neighbor sweeps exist as bounded
