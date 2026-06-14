@@ -70,7 +70,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "obsidian_graph_label": "strategy-lab/obsidian",
         "obsidian_vault_label": "strategy-lab/obsidian-vault",
         "state_db": state_db,
-        "queue_capacity": queue_capacity((state_db or {}).get("queue_counts") or {}),
+        "queue_capacity": queue_capacity((state_db or {}).get("queue_counts") or {}, private_root),
         "candidate_registry": registry_summary(registry_path(private_root)),
         "lab_config": load_lab_config_summary(private_root),
         "worker_status": read_worker_status(worker_status_path(private_root)),
@@ -307,10 +307,16 @@ def load_data_prep_summary(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[st
     }
 
 
-def queue_capacity(queue_counts: dict[str, Any]) -> dict[str, Any]:
+def _last_loop_night_mode(private_root: Path) -> bool:
+    loop = read_loop_report(private_root)
+    safety = loop.get("safety") if isinstance(loop, dict) else {}
+    return bool(isinstance(safety, dict) and safety.get("night_mode"))
+
+
+def queue_capacity(queue_counts: dict[str, Any], private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
     """Whether the queue is at the policy cap (a proxy for skipped_queue_full)."""
     try:
-        max_size = int(load_resource_policy().max_queue_size)
+        max_size = int(load_resource_policy(night_mode=_last_loop_night_mode(private_root)).max_queue_size)
     except Exception:
         return {}
     pending = int((queue_counts or {}).get("queued", 0) or 0)
@@ -320,7 +326,7 @@ def queue_capacity(queue_counts: dict[str, Any]) -> dict[str, Any]:
 def next_run_hint(private_root: Path) -> dict[str, Any]:
     """Whether the worker could run now, or the throttle reason and wait time."""
     try:
-        policy = load_resource_policy()
+        policy = load_resource_policy(night_mode=_last_loop_night_mode(private_root))
         starts = load_recent_starts(cadence_path(private_root))
         now = dt.datetime.now(dt.timezone.utc).timestamp()
         decision = evaluate_cadence(policy, starts, now)
