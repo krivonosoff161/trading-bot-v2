@@ -40,6 +40,7 @@ class ExperimentSpec:
     filters: dict[str, list[str]] = field(default_factory=dict)
     regime_params: dict[str, Any] = field(default_factory=dict)
     event_context: dict[str, Any] = field(default_factory=dict)
+    timeframe: str = "1d"
 
     @classmethod
     def from_json(cls, path: Path) -> "ExperimentSpec":
@@ -58,6 +59,7 @@ class ExperimentSpec:
             filters={str(k): [str(x) for x in v] for k, v in (data.get("filters") or {}).items()},
             regime_params=dict(data.get("regime_params") or {}),
             event_context=dict(data.get("event_context") or {}),
+            timeframe=str(data.get("timeframe") or "1d"),
         )
 
 
@@ -100,15 +102,28 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
     return sorted(out, key=lambda r: int(r["ts"]))
 
 
-def choose_symbol_file(pattern: str, symbol: str) -> Path | None:
+def choose_symbol_file(
+    pattern: str, symbol: str, *, timeframe: str | None = None,
+) -> Path | None:
     normalized = symbol.replace("-", "_").replace("/", "_")
     candidates = [Path(p) for p in glob.glob(pattern.format(symbol=normalized))]
     if not candidates:
         candidates = [Path(p) for p in glob.glob(pattern.format(symbol=symbol))]
     if not candidates:
         return None
-    # Prefer the file with the largest number of candles, then deterministic path.
-    return sorted(candidates, key=lambda p: (_safe_row_count(p), str(p)), reverse=True)[0]
+    if timeframe is None:
+        return sorted(candidates, key=lambda p: (_safe_row_count(p), str(p)), reverse=True)[0]
+    from src.research_lab.data_inventory import inspect_file
+    wanted = str(timeframe).strip().lower()
+    matching: list[tuple[int, Path]] = []
+    for p in candidates:
+        info = inspect_file(p)
+        if info.get("timeframe", "").lower() == wanted and info.get("quality_status") == "usable":
+            matching.append((int(info.get("rows") or 0), p))
+    if not matching:
+        return None
+    matching.sort(key=lambda rp: (-rp[0], str(rp[1])))
+    return matching[0][1]
 
 
 def _safe_row_count(path: Path) -> int:
@@ -388,8 +403,9 @@ def stable_run_id(symbol: str, family: str, params: dict[str, Any]) -> str:
 def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
     results = []
+    tf = spec.timeframe if spec.timeframe else None
     for symbol, family in itertools.product(spec.symbols, spec.families):
-        path = choose_symbol_file(spec.data_glob, symbol)
+        path = choose_symbol_file(spec.data_glob, symbol, timeframe=tf)
         if not path:
             continue
         candles = load_candles(path)
@@ -406,6 +422,7 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
             )
             metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
             metrics["data_file_label"] = path.name
+            metrics["data_file_timeframe"] = tf or ""
             if spec.event_context:
                 event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
                 if event_timing:

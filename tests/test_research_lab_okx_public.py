@@ -117,9 +117,16 @@ def test_pagination_is_bounded_by_max_pages():
     assert len(out) <= 300  # <= max_pages * PAGE_LIMIT
 
 
-def test_rejects_non_1m():
+def test_rejects_unsupported_timeframe():
     with pytest.raises(ValueError):
-        _provider(_make_http_get([])).fetch_ohlcv("BTC_USDT_SWAP", "15m", START, START + MINUTE)
+        _provider(_make_http_get([])).fetch_ohlcv("BTC_USDT_SWAP", "5m", START, START + MINUTE)
+
+
+def test_supports_15m_1h_4h_1d():
+    p = _provider(_make_http_get([]))
+    for tf in ("15m", "1h", "4h", "1d"):
+        rows = p.fetch_ohlcv("BTC_USDT_SWAP", tf, START, START)
+        assert isinstance(rows, list)
 
 
 def test_rejects_absurd_window():

@@ -177,6 +177,7 @@ def _build_job(
         "split_ratio": 0.7,
         "max_runs": cap,
         "parameter_grid": grid,
+        "timeframe": timeframe,
         "plan_meta": plan_meta,
     }
     return PlannedJob(

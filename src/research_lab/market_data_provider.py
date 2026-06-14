@@ -52,19 +52,29 @@ class SyntheticMarketDataProvider:
     name = "synthetic"
     configured = True
 
+    _TF_INTERVAL: dict[str, int] = {
+        "1m": MINUTE_MS,
+        "15m": 15 * MINUTE_MS,
+        "1h": 60 * MINUTE_MS,
+        "4h": 4 * 60 * MINUTE_MS,
+        "1d": 24 * 60 * 60_000,
+    }
+
     def fetch_ohlcv(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-        if timeframe != "1m":
-            raise ValueError(f"synthetic provider only supports 1m, got {timeframe!r}")
-        start = int(start_ts) - (int(start_ts) % MINUTE_MS)
+        tf = str(timeframe).strip().lower()
+        if tf not in self._TF_INTERVAL:
+            raise ValueError(f"synthetic provider supports 1m/15m/1h/4h/1d, got {timeframe!r}")
+        interval = self._TF_INTERVAL[tf]
+        start = int(start_ts) - (int(start_ts) % interval)
         end = int(end_ts)
-        n = (end - start) // MINUTE_MS + 1
+        n = (end - start) // interval + 1
         if n <= 0:
             return []
         if n > _SYNTHETIC_MAX_BARS:
             raise ValueError(f"synthetic window {n} bars exceeds cap {_SYNTHETIC_MAX_BARS}")
         rows: list[dict[str, Any]] = []
         for i in range(n):
-            ts = start + i * MINUTE_MS
+            ts = start + i * interval
             base = 100.0 + 5.0 * math.sin(i / 20.0)
             close = base + 0.5 * math.sin(i / 7.0)
             high = max(base, close) + 0.3
