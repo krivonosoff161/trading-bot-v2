@@ -65,6 +65,7 @@ from src.scout.sources.etf_flow import l1_context_line                          
 from src.scout.sources.telegram_web import fetch_telegram_web_sources           # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import trigger_context as TC                                     # noqa: E402
+from src.scout.temporal import classify_temporal                                # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
 from src.scout import pending_store as PS                        # noqa: E402
@@ -557,6 +558,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     source_class = item.get("source_class", "rss")
     source = item.get("source", "cointelegraph")
     source_cfg = source_meta(source)
+    context_status = None  # Phase 5: tracks no-buffer / source-is-confirmation status
     allowed = list(source_cfg.get("layers") or [])
     source_phase_prior = str(source_cfg.get("phase_prior") or "mixed")
     headline_temporal = route_temporal(headline)
@@ -587,7 +589,26 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         layer, conf = int(item.get("layer", 2)), 1.0
         baseline_sym = item.get("baseline")
         mat = {"family": item.get("event_type", "unclassified"), "score": 0.6}
-        phase = item.get("phase", "REALIZED")
+        # Temporal classification: use source-aware analysis instead of hardcoding
+        src_kind = item.get("channel_kind") or item.get("trigger_type", "")
+        temp = classify_temporal(
+            text=item.get("text") or headline,
+            source_kind=src_kind,
+            source_ts=item.get("time"),
+            event_type=item.get("event_type", ""),
+            phase_prior=source_phase_prior,
+        )
+        phase = temp["phase"]
+        if temp.get("is_stale"):
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=asset, layer=layer, asset_confidence=conf,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=phase, materiality_score=mat.get("score"),
+                materiality_family=mat.get("family"), skipped="stale_article",
+                note=temp.get("temporal_reason", ""),
+            )
+            return {"skipped": "stale_article", "headline": headline, "asset": asset}
     else:
         allowed_set = set(allowed) or None
         routed = route_asset(headline, allowed_layers=allowed_set)   # слои источника ограничивают кандидатов
@@ -710,6 +731,12 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         news["identity_reason"] = item["identity_reason"]
     if item.get("identity_confidence") is not None:
         news["identity_confidence"] = item["identity_confidence"]
+    if item.get("flow_context"):
+        news["flow_context"] = item["flow_context"]
+    if item.get("channel_kind"):
+        news["channel_kind"] = item["channel_kind"]
+    if context_status:
+        news["context_status"] = context_status
 
     # L1-обогащение: строка ETF-потоков в рыночный фон (контекст для cheap/chief,
     # НЕ сигнал и НЕ гейт — пусто, если SCANNER_ETF_FLOW_PROVIDER не сконфигурирован)
@@ -722,32 +749,58 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     # Context building for items that need it (requires_context=True from identity resolver)
     requires_context = bool(item.get("requires_context"))
     trigger_context_pkg = None
+    context_status = None
     if requires_context and not dry:
-        trigger_context_pkg = TC.build_context(
-            symbol=asset,
-            text=(item.get("text") or headline)[:500],
-            asset_class=item.get("asset_class", "unknown"),
-            source_id=source,
-        )
-        if not trigger_context_pkg.get("context_found"):
-            missing = trigger_context_pkg.get("context_missing", [])
-            write_routing_snapshot(
-                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
-                asset=asset, layer=layer, asset_confidence=conf,
-                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
-                final_phase=phase, materiality_score=mat.get("score"),
-                materiality_family=mat.get("family"), skipped="needs_context",
-                note=f"identity:{item.get('identity_reason','')} missing:{','.join(missing[:3])}",
-                context_found=False,
-                context_missing=missing,
-            )
-            return {"skipped": "needs_context", "headline": headline, "asset": asset,
-                    "trigger_context": trigger_context_pkg}
+        if not use_buffer:
+            # No buffer: context search is unreliable — mark as not available
+            context_status = "not_available_no_buffer"
+            # Official/leading sources are self-confirming — allow through
+            is_official = source_cfg.get("trust") in ("official", "primary")
+            is_leading = lead_class == "LEADING"
+            if is_official or is_leading:
+                # Source itself is confirmation — skip context gate
+                context_status = "source_is_confirmation"
+            elif item.get("asset_class") in ("tokenized_equity", "pre_ipo_equity"):
+                # Equity/tokenized without buffer: conservative drop
+                write_routing_snapshot(
+                    item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                    asset=asset, layer=layer, asset_confidence=conf,
+                    source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                    final_phase=phase, materiality_score=mat.get("score"),
+                    materiality_family=mat.get("family"), skipped="needs_context_no_buffer",
+                    note=f"identity:{item.get('identity_reason','')} no_buffer_for_equity",
+                    context_found=False,
+                    context_missing=["no_buffer_available"],
+                )
+                return {"skipped": "needs_context_no_buffer", "headline": headline, "asset": asset}
+            # Other assets without buffer: allow through with context_status note
         else:
-            # Context found — enrich the news dict for LLM
-            ctx_summary = trigger_context_pkg.get("context_summary", "")
-            if ctx_summary:
-                news["context_package"] = ctx_summary
+            trigger_context_pkg = TC.build_context(
+                symbol=asset,
+                text=(item.get("text") or headline)[:500],
+                asset_class=item.get("asset_class", "unknown"),
+                source_id=source,
+                flow_context=item.get("flow_context"),
+            )
+            if not trigger_context_pkg.get("context_found"):
+                missing = trigger_context_pkg.get("context_missing", [])
+                write_routing_snapshot(
+                    item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                    asset=asset, layer=layer, asset_confidence=conf,
+                    source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                    final_phase=phase, materiality_score=mat.get("score"),
+                    materiality_family=mat.get("family"), skipped="needs_context",
+                    note=f"identity:{item.get('identity_reason','')} missing:{','.join(missing[:3])}",
+                    context_found=False,
+                    context_missing=missing,
+                )
+                return {"skipped": "needs_context", "headline": headline, "asset": asset,
+                        "trigger_context": trigger_context_pkg}
+            else:
+                # Context found — enrich the news dict for LLM
+                ctx_summary = trigger_context_pkg.get("context_summary", "")
+                if ctx_summary:
+                    news["context_package"] = ctx_summary
 
     # 3) ОРКЕСТРАТОР: дешёвый слой-агент → кодовый гейт → chief (только кандидаты). dry = заглушка без LLM.
     if dry:
@@ -875,6 +928,16 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         forecast=fields["forecast"], summary=fields["summary"],
         low_confidence=low_conf,
         outcome_source=("okx" if price is not None else "manual"),
+        # Phase 4: identity/context fields
+        asset_class=item.get("asset_class"),
+        trigger_role=item.get("trigger_role"),
+        channel_kind=item.get("channel_kind"),
+        context_found=trigger_context_pkg.get("context_found") if trigger_context_pkg else None,
+        context_missing=trigger_context_pkg.get("context_missing") if trigger_context_pkg else None,
+        identity_reason=item.get("identity_reason"),
+        identity_confidence=item.get("identity_confidence"),
+        temporal_phase=temp if (pre_routed and temp) else None,
+        temporal_reason=temp.get("temporal_reason") if (pre_routed and temp) else None,
     )
     cid = ("DRY-" + J.card_id_for(canon)) if dry else J.write_row(row)
     if cid and not dry:
@@ -1117,7 +1180,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                 if not dry:
                     stage = {"no_tracked_asset": "router", "dup_event": "dedup",
                          "context_commentary": "gate", "stale_article": "gate",
-                         "asset_capped": "cap", "needs_context": "context"}.get(skipped, "materiality")
+                         "asset_capped": "cap", "needs_context": "context",
+                         "needs_context_no_buffer": "context"}.get(skipped, "materiality")
                     J.write_drop(
                         it["url"], it["title"], skipped,
                         asset=res.get("asset"), drop_stage=stage, source=it.get("source"),
