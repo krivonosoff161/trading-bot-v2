@@ -245,6 +245,19 @@ class TestRunValidation:
             assert report.exists()
             assert verdict.exists()
 
+    def test_insufficient_data_writes_report_for_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            c = _make_candidate(trades=[], equity_curve=[])
+            result = run_validation(c, Path(td), dry_run=False)
+            assert result["hard_status"] == "NEEDS_MORE_DATA"
+            report = Path(td) / "hard_validation" / "reports" / "c-001.json"
+            verdict = Path(td) / "hard_validation" / "verdicts" / "c-001.json"
+            assert report.exists()
+            assert verdict.exists()
+            data = json.loads(report.read_text())
+            assert data["symbol"] == "BTC-USDT-SWAP"
+            assert data["timeframe"] == "15m"
+
     def test_report_has_disclaimer(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             c = _make_candidate()
@@ -252,6 +265,10 @@ class TestRunValidation:
             md_path = Path(td) / "hard_validation" / "reports" / "c-001.md"
             md = md_path.read_text()
             assert "not imply profitability" in md
+
+    def test_regime_specific_maps_to_hard_status(self) -> None:
+        c = _make_candidate(lite_status="REGIME_SPECIFIC")
+        assert _map_failed_to_status(["forward_readiness"], c) == "REGIME_ONLY"
 
 
 class TestRunValidationBatch:

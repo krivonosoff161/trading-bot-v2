@@ -41,7 +41,7 @@ _SUPPORTED_TIMEFRAMES: dict[str, tuple[str, int]] = {
     "15m": ("15m", 15 * MINUTE_MS),
     "1h": ("1H", 60 * MINUTE_MS),
     "4h": ("4H", 4 * 60 * MINUTE_MS),
-    "1d": ("1D", 24 * 60 * 60_000),
+    "1d": ("1Dutc", 24 * 60 * 60_000),
 }
 SUPPORTED_TIMEFRAMES = tuple(_SUPPORTED_TIMEFRAMES.keys())
 

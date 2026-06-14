@@ -11,13 +11,14 @@ Default is dry-run: prints what would be exported, writes nothing.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.research_lab.hard_validation_export import export_requests
-from src.research_lab.paths import DEFAULT_PRIVATE_ROOT
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
 
 
 def main() -> None:
@@ -49,16 +50,17 @@ def main() -> None:
         help="Export specific candidate",
     )
     parser.add_argument(
-        "--private-root", type=str, default=str(DEFAULT_PRIVATE_ROOT),
+        "--private-root", type=str, default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
         help="Path to private research root",
     )
+    parser.add_argument("--allow-public-output", action="store_true")
     args = parser.parse_args()
 
-    private_root = Path(args.private_root)
+    private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
     dry_run = not args.apply
 
     mode = "DRY-RUN" if dry_run else "APPLY"
-    print(f"[{mode}] Exporting hard validation requests from {private_root}")
+    print(f"[{mode}] Exporting hard validation requests")
 
     summary = export_requests(
         private_root,
@@ -78,7 +80,7 @@ def main() -> None:
     if dry_run:
         print("  (dry-run: no files written)")
     else:
-        print(f"  Requests written to: {private_root}/hard_validation/requests/")
+        print("  Requests written to: hard_validation/requests/ (private root)")
 
 
 if __name__ == "__main__":

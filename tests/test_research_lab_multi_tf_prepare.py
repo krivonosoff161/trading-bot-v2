@@ -61,7 +61,7 @@ def test_resolve_timeframe_returns_correct_bar_and_interval():
     assert bar == "4H"
     assert interval == 4 * HOUR_MS
     bar, interval = _resolve_timeframe("1d")
-    assert bar == "1D"
+    assert bar == "1Dutc"
     assert interval == DAY_MS
 
 

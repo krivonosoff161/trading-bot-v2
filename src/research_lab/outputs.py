@@ -39,7 +39,10 @@ def write_run_outputs(
         "schema": "strategy_lab_results.v1",
         "experiment_id": spec.experiment_id,
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "timeframe": spec.timeframe,
         "filters": spec.filters,
+        "fees_bps": spec.fees_bps,
+        "slippage_bps": spec.slippage_bps,
         "results": [result_dict(r) for r in results],
     }
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -66,7 +69,7 @@ def write_run_outputs(
     registrable = [
         r for r in results if include_rejects or r.validation_status in REGISTRY_STATUSES
     ]
-    entries = [build_entry(spec.experiment_id, r, artifact_label) for r in registrable]
+    entries = [build_entry(spec.experiment_id, r, artifact_label, spec=spec) for r in registrable]
     if entries:
         upsert_entries(registry_path(out_root), entries)
     return run_dir

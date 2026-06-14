@@ -83,6 +83,7 @@ def write_setup_library(
         d.mkdir(parents=True, exist_ok=True)
 
     index_path = lib_dir / INDEX_FILE
+    index_rows = _load_index(index_path)
     for card in cards:
         card_dict = card.to_dict()
         card_path = cards_dir / f"{card.setup_id}.json"
@@ -106,13 +107,39 @@ def write_setup_library(
             created_at=card.created_at,
             updated_at=card.updated_at,
         )
-        with index_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+        index_rows[card.setup_id] = entry.to_dict()
 
         summary["cards_written"] += 1
         summary["index_rows"] += 1
+    _write_index(index_path, index_rows)
 
     return summary
+
+
+def _load_index(path: Path) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        setup_id = str(row.get("setup_id") or "")
+        if setup_id:
+            rows[setup_id] = row
+    return rows
+
+
+def _write_index(path: Path, rows: dict[str, dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = [rows[k] for k in sorted(rows)]
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in ordered),
+        encoding="utf-8",
+    )
 
 
 def _write_group_link(group_dir: Path, setup_id: str) -> None:
@@ -122,6 +149,15 @@ def _write_group_link(group_dir: Path, setup_id: str) -> None:
 
 
 def _entry_exit_summary(verdict: dict[str, Any]) -> str:
+    hard_status = str(verdict.get("hard_status") or "")
+    if hard_status == "NEEDS_MORE_DATA":
+        msg = str(verdict.get("message") or "More validation data is required.")
+        return f"Hard validation did not run enough checks: {msg}"
+    if hard_status and hard_status != "PAPER_FORWARD_READY":
+        failed_for_status = verdict.get("failed_checks") or []
+        if failed_for_status:
+            return f"Failed checks: {', '.join(failed_for_status)}."
+        return f"Hard validation status: {hard_status}."
     failed = verdict.get("failed_checks") or []
     if not failed:
         return "All checks passed — paper forward ready."

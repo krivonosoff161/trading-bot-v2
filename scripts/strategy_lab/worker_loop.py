@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.stop_intent import is_stop_requested  # noqa: E402
 
 
 def run_once(
@@ -75,6 +76,9 @@ def loop(
     append_log(log_path, f"worker_loop started sleep={sleep_seconds}s night_mode={night_mode}")
     iteration = 0
     while True:
+        if is_stop_requested(private_root):
+            append_log(log_path, "worker_loop stopped by stop intent")
+            return 0
         iteration += 1
         result = run_once(private_root, allow_public_output=allow_public_output, night_mode=night_mode)
         if result.stdout.strip():

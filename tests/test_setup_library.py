@@ -131,6 +131,15 @@ class TestWriteSetupLibrary:
             assert entry["setup_id"] == "setup-c-001"
             assert entry["main_engine_ready"] is False
 
+    def test_index_upserts_same_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            card = build_setup_card(_make_report_dict())
+            write_setup_library(Path(td), [card], dry_run=False)
+            write_setup_library(Path(td), [card], dry_run=False)
+            index = Path(td) / "setup_library" / "setup_index.jsonl"
+            lines = index.read_text().strip().split("\n")
+            assert len(lines) == 1
+
 
 class TestHelpers:
     def test_entry_exit_summary_all_pass(self) -> None:

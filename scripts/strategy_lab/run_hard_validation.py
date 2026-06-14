@@ -10,6 +10,7 @@ Default is dry-run: shows pending requests, writes nothing.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from src.research_lab.honest_backtest_bridge import (
     bridge_available,
     run_validation_batch,
 )
-from src.research_lab.paths import DEFAULT_PRIVATE_ROOT
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root
 
 
 def main() -> None:
@@ -35,12 +36,13 @@ def main() -> None:
         help="Max candidates to validate",
     )
     parser.add_argument(
-        "--private-root", type=str, default=str(DEFAULT_PRIVATE_ROOT),
+        "--private-root", type=str, default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
         help="Path to private research root",
     )
+    parser.add_argument("--allow-public-output", action="store_true")
     args = parser.parse_args()
 
-    private_root = Path(args.private_root)
+    private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
     requests_dir = private_root / "hard_validation" / "requests"
     dry_run = not args.apply
 
@@ -49,7 +51,7 @@ def main() -> None:
     print(f"  Bridge status: {bridge_available()}")
 
     if not requests_dir.exists():
-        print(f"  No requests directory: {requests_dir}")
+        print("  No requests directory: hard_validation/requests/ (private root)")
         print("  Run export_hard_validation_requests.py first.")
         return
 
@@ -74,8 +76,8 @@ def main() -> None:
     if dry_run:
         print("  (dry-run: no files written)")
     else:
-        print(f"  Reports: {private_root}/hard_validation/reports/")
-        print(f"  Verdicts: {private_root}/hard_validation/verdicts/")
+        print("  Reports: hard_validation/reports/ (private root)")
+        print("  Verdicts: hard_validation/verdicts/ (private root)")
 
 
 if __name__ == "__main__":

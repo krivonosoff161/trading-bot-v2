@@ -8,13 +8,13 @@ All deterministic — no LLM calls.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.hard_validation_contract import (
     FailureFeedback,
     HardValidationReport,
-    append_jsonl,
 )
 
 FEEDBACK_DIR = "hard_validation/feedback"
@@ -164,7 +164,19 @@ def write_feedback(
     feedback_dir = private_root / FEEDBACK_DIR
     feedback_dir.mkdir(parents=True, exist_ok=True)
     path = feedback_dir / "feedback.jsonl"
-    append_jsonl(path, feedback.to_dict())
+    rows = {
+        (str(row.get("candidate_id") or ""), str(row.get("hard_status") or "")): row
+        for row in load_feedback_queue(private_root)
+    }
+    rows[(feedback.candidate_id, feedback.hard_status)] = feedback.to_dict()
+    ordered = [rows[k] for k in sorted(rows)]
+    path.write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False) + "\n"
+            for row in ordered
+        ),
+        encoding="utf-8",
+    )
     return path
 
 

@@ -32,6 +32,7 @@ def build_entry(
     result: Any,
     artifact_label: str,
     created_at: str | None = None,
+    spec: Any | None = None,
 ) -> dict[str, Any]:
     """Build a registry entry from a RunResult-like object."""
     created = created_at or dt.datetime.now(dt.timezone.utc).isoformat()
@@ -43,6 +44,10 @@ def build_entry(
         "symbol": result.symbol,
         "strategy_id": result.family,
         "params": result.params,
+        "timeframe": getattr(spec, "timeframe", ""),
+        "filters": dict(getattr(spec, "filters", {}) or {}),
+        "fees_bps": float(getattr(spec, "fees_bps", 7.0)) if spec is not None else 7.0,
+        "slippage_bps": float(getattr(spec, "slippage_bps", 3.0)) if spec is not None else 3.0,
         "metrics_summary": _metrics_summary(result.metrics),
         "decision": result.decision,
         "validation_status": status,

@@ -54,6 +54,20 @@ def _stale_hints(state: dict) -> list[str]:
     return hints
 
 
+def _count_files(root: Path, rel: str, pattern: str = "*.json") -> int:
+    path = root / rel
+    if not path.exists():
+        return 0
+    return len(list(path.glob(pattern)))
+
+
+def _count_jsonl_rows(root: Path, rel: str, filename: str) -> int:
+    path = root / rel / filename
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
 def _stop_hint(private_root: Path) -> str:
     stop = read_stop_intent(private_root)
     if stop:
@@ -70,7 +84,6 @@ def generate_morning_report(private_root: Path) -> dict:
 
     snapshot = dashboard_snapshot(default_db_path(private_root))
     queue_counts = snapshot.get("queue_counts") or {}
-    validation_counts = snapshot.get("validation_counts") or {}
     candidates = snapshot.get("candidates") or []
 
     reg = registry_summary(registry_path(private_root))
@@ -124,7 +137,7 @@ def generate_morning_report(private_root: Path) -> dict:
         "candidates": {
             "total": reg.get("entries", 0),
             "unique": reg.get("unique_candidates", 0),
-            "by_validation": validation_counts,
+            "by_validation": reg.get("by_validation_status") or {},
         },
         "rejects": {"reasons": reject_reasons, "total": sum(reject_reasons.values())},
         "llm": {
@@ -136,6 +149,17 @@ def generate_morning_report(private_root: Path) -> dict:
         },
         "data_missing_by_timeframe": _missing_by_timeframe(snapshot),
         "proposals": props,
+        "hard_validation": {
+            "requests": _count_files(private_root, "hard_validation/requests"),
+            "reports": _count_files(private_root, "hard_validation/reports"),
+            "verdicts": _count_files(private_root, "hard_validation/verdicts"),
+            "feedback": _count_jsonl_rows(private_root, "hard_validation/feedback", "feedback.jsonl"),
+        },
+        "setup_library": {
+            "cards": _count_files(private_root, "setup_library/cards"),
+            "reports": _count_files(private_root, "setup_library/reports", "*.md"),
+            "index": _count_jsonl_rows(private_root, "setup_library", "setup_index.jsonl"),
+        },
         "proposal_reject_reasons": prop_reject_reasons,
         "stale_hints": stale,
         "stop_hint": stop_hint,
@@ -187,6 +211,11 @@ def _print_report(report: dict) -> None:
 
     print(f"\nData missing: {report['data_missing_by_timeframe']}")
     print(f"Proposals: {_fmt_counts(report['proposals'])}")
+    hv = report["hard_validation"]
+    print(f"Hard validation: requests={hv['requests']}, reports={hv['reports']}, "
+          f"verdicts={hv['verdicts']}, feedback={hv['feedback']}")
+    sl = report["setup_library"]
+    print(f"Setup library: cards={sl['cards']}, reports={sl['reports']}, index={sl['index']}")
     if report.get("proposal_reject_reasons"):
         print(f"  Rejection reasons: {_fmt_counts(report['proposal_reject_reasons'])}")
 

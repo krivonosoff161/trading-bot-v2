@@ -50,7 +50,7 @@ def collect_sweeps(universe, profiles, policy, *, group, timeframe, data_glob, w
     pairs = []
     skipped = []
     for symbol in symbols:
-        path = choose_symbol_file(data_glob, symbol)
+        path = choose_symbol_file(data_glob, symbol, timeframe=timeframe)
         if not path:
             skipped.append((symbol, "no_data_file"))
             continue
@@ -135,6 +135,7 @@ def _exp_to_dict(exp) -> dict:
         "experiment_id": exp.experiment_id,
         "data_glob": exp.data_glob,
         "symbols": exp.symbols,
+        "timeframe": exp.timeframe,
         "families": exp.families,
         "fees_bps": exp.fees_bps,
         "slippage_bps": exp.slippage_bps,
@@ -142,6 +143,7 @@ def _exp_to_dict(exp) -> dict:
         "split_ratio": exp.split_ratio,
         "max_runs": exp.max_runs,
         "parameter_grid": exp.parameter_grid,
+        "filters": exp.filters,
         "event_context": exp.event_context,
     }
 

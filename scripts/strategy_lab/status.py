@@ -42,6 +42,20 @@ def _fmt_counts(counts: dict) -> str:
     return ", ".join(f"{k}: {v}" for k, v in sorted((counts or {}).items())) or "none"
 
 
+def _count_files(root: Path, rel: str, pattern: str = "*.json") -> int:
+    path = root / rel
+    if not path.exists():
+        return 0
+    return len(list(path.glob(pattern)))
+
+
+def _count_jsonl_rows(root: Path, rel: str, filename: str) -> int:
+    path = root / rel / filename
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
@@ -85,6 +99,19 @@ def main() -> None:
     )
     print(f"Proposals    : {proposals.get('total', 0)} ({_fmt_counts(proposals.get('by_status'))}); "
           f"validated waiting for queue: {proposals.get('validated_waiting', 0)}")
+    print(
+        "Hard valid.  : "
+        f"requests: {_count_files(root, 'hard_validation/requests')}, "
+        f"reports: {_count_files(root, 'hard_validation/reports')}, "
+        f"verdicts: {_count_files(root, 'hard_validation/verdicts')}, "
+        f"feedback rows: {_count_jsonl_rows(root, 'hard_validation/feedback', 'feedback.jsonl')}"
+    )
+    print(
+        "Setup library: "
+        f"cards: {_count_files(root, 'setup_library/cards')}, "
+        f"reports: {_count_files(root, 'setup_library/reports', '*.md')}, "
+        f"index rows: {_count_jsonl_rows(root, 'setup_library', 'setup_index.jsonl')}"
+    )
     if cycle.get("available"):
         print(f"Research cyc : last {cycle.get('mode')} (proposals queued: {cycle.get('proposals_queued', 0)}, "
               f"data missing: {cycle.get('data_missing', 0)}, worker done: {cycle.get('worker_completed', 0)}, "

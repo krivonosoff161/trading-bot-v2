@@ -48,6 +48,7 @@ def _exp_to_dict(exp) -> dict:
         "experiment_id": exp.experiment_id,
         "data_glob": exp.data_glob,
         "symbols": exp.symbols,
+        "timeframe": exp.timeframe,
         "families": exp.families,
         "fees_bps": exp.fees_bps,
         "slippage_bps": exp.slippage_bps,
