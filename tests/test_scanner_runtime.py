@@ -250,7 +250,7 @@ def test_process_item_uses_structured_text_for_pre_routed_items(monkeypatch):
                 "title": "PEPE DEX volume spike: +18.4% / 24h with $910,000 volume on uniswap",
                 "text": "DexScreener observed PEPE against WETH on ethereum/uniswap. Liquidity $240,000.",
                 "url": "https://dexscreener.com/ethereum/pair-pepe-good",
-                "time": "2026-06-07T12:00:00Z",
+                "time": S.J.now_iso(),
                 "source": "dexscreener",
                 "source_class": "api",
                 "lead_class": "COINCIDENT",
