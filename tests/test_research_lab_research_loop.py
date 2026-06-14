@@ -12,6 +12,7 @@ from src.research_lab.research_loop import (
     write_loop_report,
 )
 from src.research_lab.resource_policy import load_resource_policy
+from src.research_lab.state_db import connect, default_db_path, enqueue_experiment, init_db
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
 
@@ -27,7 +28,7 @@ def _loop_args(tmp_path, **over):
 
 
 def _llm_args(**over):
-    base = dict(llm_propose=True, apply=True, max_candidates=3, allow_public_output=False)
+    base = dict(llm_propose=True, apply=True, max_candidates=3, max_queued=5, allow_public_output=False)
     base.update(over)
     return Namespace(**base)
 
@@ -100,6 +101,22 @@ def test_llm_step_provider_not_configured_when_env_unset(tmp_path, monkeypatch):
     universe, profiles, policy = _ctx()
     out = _llm_step(_llm_args(), tmp_path, universe, profiles, policy)
     assert out["status"] == "provider_not_configured"
+
+
+def test_llm_step_skips_when_active_queue_at_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "synthetic")
+    monkeypatch.setenv("STRATEGY_LAB_ALLOW_SYNTHETIC", "1")
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    enqueue_experiment(conn, tmp_path / "spec.json")
+    conn.close()
+    universe, profiles, policy = _ctx()
+
+    out = _llm_step(_llm_args(max_candidates=3, max_queued=1), tmp_path, universe, profiles, policy)
+
+    assert out["status"] == "queue_at_cap"
+    assert out["active_queue"] == 1
 
 
 def test_llm_step_synthetic_validates_and_stores(tmp_path, monkeypatch):

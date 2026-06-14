@@ -42,6 +42,7 @@ from src.research_lab.proposal_store import load_proposals, proposals_path, stat
 from src.research_lab.research_cycle import ResearchCycleConfig  # noqa: E402
 from src.research_lab.research_loop import write_heartbeat, write_loop_report  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.state_db import connect, default_db_path, init_db  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
@@ -62,6 +63,21 @@ def _build_summary(private_root: Path) -> str:
             f"by_validation={reg.get('by_validation_status', {})}, proposals_by_status={props}")
 
 
+def _active_queue_count(private_root: Path) -> int:
+    db_path = default_db_path(private_root)
+    if not db_path.exists():
+        return 0
+    conn = connect(db_path)
+    try:
+        init_db(conn)
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM queue WHERE status IN ('queued', 'running')"
+        ).fetchone()
+        return int(row["n"] if row is not None else 0)
+    finally:
+        conn.close()
+
+
 def _synthetic_candidates(universe) -> list[dict]:
     syms = sorted(universe.all_symbols())[:2] or ["BTC_USDT_SWAP"]
     return [{
@@ -78,6 +94,9 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
         return {"status": "disabled"}
     if not args.apply:
         return {"status": "dry_run_no_call"}
+    active_queue = _active_queue_count(private_root)
+    if active_queue >= max(1, int(args.max_queued)):
+        return {"status": "queue_at_cap", "active_queue": active_queue, "max_queued": int(args.max_queued)}
     allow_synth = _truthy("STRATEGY_LAB_ALLOW_SYNTHETIC")
     provider = load_provider(allow_synthetic=allow_synth, synthetic_candidates=_synthetic_candidates(universe))
     if not getattr(provider, "configured", False):
