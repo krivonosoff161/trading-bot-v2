@@ -26,6 +26,15 @@ HTML = """
 </section>
 """
 
+SPCXX_HTML = """
+<section class="tgme_channel_history js-message_history">
+<div class="tgme_widget_message_wrap js-widget_message_wrap"><div class="tgme_widget_message js-widget_message" data-post="NewListingsFeed/3322">
+  <div class="tgme_widget_message_text js-message_text" dir="auto"><b>&#036;SPCXX</b> listed on Bybit spot</div>
+  <a class="tgme_widget_message_date" href="https://t.me/NewListingsFeed/3322"><time datetime="2026-06-12T16:22:26+00:00" class="time">16:22</time></a>
+</div></div>
+</section>
+"""
+
 
 def test_parse_channel_html_extracts_posts():
     posts = TG.parse_channel_html(HTML, channel="NewListingsFeed")
@@ -52,6 +61,26 @@ def test_listing_post_fans_out_to_ticker_events(monkeypatch):
     assert by_asset["ARX"]["source_class"] == "telegram_web"
     assert by_asset["ARX"]["lead_class"] == "LEADING"
     assert by_asset["ARX"]["layer"] == 2
+
+
+def test_tokenized_equity_listing_routes_to_l5(monkeypatch):
+    monkeypatch.setattr(TG, "source_meta", lambda source_id: {
+        "enabled": True,
+        "source_class": "telegram_web",
+        "channel": "NewListingsFeed",
+        "url": "https://t.me/s/NewListingsFeed",
+        "telegram_kind": "listing",
+        "lead_class": "LEADING",
+    })
+
+    items = TG.fetch_source("tg_new_listings_feed", fetch=lambda url: SPCXX_HTML)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["asset"] == "SPCXX"
+    assert item["layer"] == 5
+    assert item["baseline"] == "QQQ-USDT-SWAP"
+    assert item["event_type"] == "tokenized_equity_listing"
 
 
 def test_liquidation_post_is_coincident_context(monkeypatch):
