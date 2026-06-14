@@ -97,6 +97,12 @@ async def decide(event: dict, agent: dict, price: float | None, market_ctx: str 
         f"  veto_flags={agent.get('veto_flags') if agent.get('veto_flags') is not None else agent.get('red_flags')}"
         f" · слабости={agent.get('no_edge_flags') or []} · механика={agent.get('mechanics')}",
     ]
+    if event.get("asset_class"):
+        parts.append(f"\nТИП АКТИВА: {event['asset_class']}")
+    if event.get("trigger_role"):
+        parts.append(f"РОЛЬ ТРИГГЕРА: {event['trigger_role']}")
+    if event.get("context_package"):
+        parts.append(f"КОНТЕКСТ ИЗ ИСТОЧНИКОВ: {event['context_package']}")
     if market_ctx:
         parts += ["", f"РЫНОЧНЫЙ ФОН (контекст риска): {market_ctx}"]
     body = (event.get("text") or "").strip()

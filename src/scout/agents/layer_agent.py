@@ -185,11 +185,19 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
     system += "\nФОКУС СЛОЯ (что материально): " + li.get("focus", "")
 
     parts = [f"АКТИВ (предв.): {asset}" if asset else "", f"ЗАГОЛОВОК: {event.get('headline', '')}"]
+    if event.get("asset_class"):
+        parts.append(f"ТИП АКТИВА: {event['asset_class']}")
+    if event.get("trigger_role"):
+        parts.append(f"РОЛЬ ТРИГГЕРА: {event['trigger_role']}")
+    if event.get("identity_reason"):
+        parts.append(f"ПРИЧИНА ИДЕНТИФИКАЦИИ: {event['identity_reason']}")
     if event.get("date"):
         parts.append(f"ДАТА: {event['date']}")
     body = (event.get("text") or "").strip()
     if body:
         parts.append("ТЕКСТ: " + body[:2500])
+    if event.get("context_package"):
+        parts.append(f"КОНТЕКСТ ИЗ ИСТОЧНИКОВ: {event['context_package']}")
     user = "\n".join(p for p in parts if p)
 
     raw, usage = await llm_client.call("cheap", system, user, json_mode=True, max_tokens=700)

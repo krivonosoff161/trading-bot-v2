@@ -1,0 +1,127 @@
+# asset_identity.yaml — deterministic asset identity catalog (0 LLM, 0 network).
+# Purpose: before routing to a layer, resolve WHAT the object IS.
+# Used by: asset_identity.py → telegram_web.py → scanner pipeline.
+
+# asset_classes: canonical classification of what an object represents
+#   crypto_major — BTC/ETH/SOL etc (layer 1)
+#   crypto_alt   — alts/memes/tokens traded on crypto exchanges (layer 2)
+#   meme         — meme coins specifically (subset of crypto_alt, layer 2)
+#   equity       — publicly traded company stock (layer 5)
+#   pre_ipo_equity — pre-IPO / not-yet-public company (layer 5)
+#   tokenized_equity — tokenized/ synthetic share of real company (layer 5)
+#   commodity    — metals/softs (layer 3)
+#   energy       — oil/gas (layer 4)
+#   liquidation_flow — liquidation event, context/flow not standalone (layer depends on underlying)
+#   unknown      — cannot determine, needs context
+
+# Known equity/pre-IPO/tokenized names → L5 (never fall to L2)
+equity_names:
+  # Public companies (strong aliases)
+  - names: [nvidia, nvda]
+    sym: NVDA
+    asset_class: equity
+  - names: [tesla, tsla]
+    sym: TSLA
+    asset_class: equity
+  - names: [microstrategy, "strategy inc", mstr]
+    sym: MSTR
+    asset_class: equity
+  - names: [coinbase, coin]
+    sym: COIN
+    asset_class: equity
+  - names: [amd]
+    sym: AMD
+    asset_class: equity
+  - names: [apple, aapl]
+    sym: AAPL
+    asset_class: equity
+  - names: [microsoft, msft]
+    sym: MSFT
+    asset_class: equity
+  - names: [google, alphabet, googl, goog]
+    sym: GOOGL
+    asset_class: equity
+  - names: [meta, facebook]
+    sym: META
+    asset_class: equity
+  - names: [amazon, amzn]
+    sym: AMZN
+    asset_class: equity
+
+  # Pre-IPO / not-yet-public
+  - names: [openai]
+    sym: OPENAI
+    asset_class: pre_ipo_equity
+  - names: [anthropic]
+    sym: ANTHROPIC
+    asset_class: pre_ipo_equity
+  - names: [spacex]
+    sym: SPACEX
+    asset_class: pre_ipo_equity
+
+# Tokenized equity tickers — known tokenized/pre-IPO instruments
+tokenized_tickers:
+  SPCX: {sym: SPCX, asset_class: tokenized_equity, underlying: SPACEX, layer: 5}
+  SPCXX: {sym: SPCXX, asset_class: tokenized_equity, underlying: SPACEX, layer: 5}
+
+# Context keywords that signal equity/pre-IPO/tokenized nature
+# If a ticker is unknown BUT these appear in text → equity/pre-IPO/tokenized
+# NOTE: intentionally narrow — "stock/share/synthetic/derivative" are too generic
+# in crypto context. Only keywords that unambiguously signal equity/pre-IPO.
+equity_context_keywords:
+  - pre[-\s]?ipo
+  - ipo
+  - xstocks?
+  - tokeni[sz]ed
+  - tokenised
+  - equity
+
+# Layer classification by asset class
+layer_by_asset_class:
+  crypto_major: 1
+  crypto_alt: 2
+  meme: 2
+  equity: 5
+  pre_ipo_equity: 5
+  tokenized_equity: 5
+  commodity: 3
+  energy: 4
+  liquidation_flow: null    # depends on underlying asset
+  unknown: null
+
+# Baseline by layer
+baseline_by_layer:
+  1: BTC-USDT-SWAP
+  2: BTC-USDT-SWAP
+  3: XAU-USDT-SWAP
+  4: CL-USDT-SWAP
+  5: QQQ-USDT-SWAP
+
+# Trigger roles
+#   signal           — direct actionable signal (crypto listing from official source)
+#   context_trigger  — flow/context, not standalone GO (liquidations, rumors)
+#   needs_context    — requires confirmation from other sources before acting
+trigger_roles:
+  signal: "direct signal, can proceed to LLM pipeline"
+  context_trigger: "flow/context trigger, needs confirmation before standalone GO"
+  needs_context: "requires additional context from other sources"
+
+# Context requirements by asset class (what to look for)
+context_requirements:
+  tokenized_equity:
+    - exchange_confirmation    # official exchange announcement
+    - price_discovery          # actual trading price exists
+    - liquidity_evidence       # volume/spread data
+    - related_news             # corroborating headlines from other sources
+  pre_ipo_equity:
+    - official_announcement    # company/underwriter statement
+    - pricing_data             # IPO price / allocation info
+    - source_confirmation      # multiple credible sources
+  equity:
+    - earnings_data            # actual earnings/guidance
+    - sec_filing               # 8-K, 10-Q, etc.
+  crypto_alt:
+    - exchange_listing         # confirmed listing on major exchange
+  meme:
+    - volume_signature         # unusual volume pattern
+    - social_momentum          # multi-platform mention spike

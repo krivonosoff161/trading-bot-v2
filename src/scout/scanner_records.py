@@ -353,6 +353,13 @@ def build_event_block(
                 "time": source_item.get("time"),
             },
         },
+        "identity": {
+            "asset_class": source_item.get("asset_class"),
+            "trigger_role": source_item.get("trigger_role"),
+            "requires_context": source_item.get("requires_context"),
+            "identity_reason": source_item.get("identity_reason"),
+            "identity_confidence": source_item.get("identity_confidence"),
+        },
     }
 
 
