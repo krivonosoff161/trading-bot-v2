@@ -16,7 +16,7 @@ from typing import Any
 
 import requests
 
-from src.scout.router import baseline_for_layer, enabled_sources, source_meta
+from src.scout.router import baseline_for_layer, classify_layer, enabled_sources, source_meta
 
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 telegram-web-source; keyless)"}
 TIMEOUT = 20
@@ -31,6 +31,11 @@ _BR_RE = re.compile(r"<br\s*/?>", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _CASHTAG_RE = re.compile(r"(?<![A-Z0-9])\$([A-Z][A-Z0-9]{1,14})\b")
 _HASH_SYMBOL_RE = re.compile(r"(?<![A-Z0-9])#(?:[A-Za-z0-9_]+:)?([A-Z][A-Z0-9]{1,14})\b")
+_TOKENIZED_EQUITY_TICKERS = {"SPCX", "SPCXX"}
+_EQUITY_CONTEXT_RE = re.compile(
+    r"\b(pre[-\s]?ipo|ipo|xstocks?|tokeni[sz]ed|shares?|stocks?|equity)\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -133,15 +138,16 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
     if channel_kind == "listing" and tickers:
         items = []
         for ticker in tickers:
+            layer = _classify_listing_layer(ticker, post.text)
             items.append(
                 {
                     **base,
                     "title": f"${ticker} listing signal: {_title_for_post(post.text)}",
                     "asset": ticker,
                     "okx_inst": f"{ticker}-USDT-SWAP",
-                    "layer": 2,
-                    "baseline": baseline_for_layer(2),
-                    "event_type": "exchange_listing",
+                    "layer": layer,
+                    "baseline": baseline_for_layer(layer),
+                    "event_type": "tokenized_equity_listing" if layer == 5 else "exchange_listing",
                     "phase": "REALIZED",
                     "event_key": f"{source_id}:{post.post_id}:{ticker}",
                 }
@@ -204,6 +210,16 @@ def _extract_tickers(text: str) -> list[str]:
             if ticker not in found and 2 <= len(ticker) <= 15:
                 found.append(ticker)
     return found
+
+
+def _classify_listing_layer(ticker: str, text: str) -> int:
+    layer = classify_layer(ticker)
+    if layer == 2 and (
+        ticker.upper() in _TOKENIZED_EQUITY_TICKERS
+        or _EQUITY_CONTEXT_RE.search(text or "")
+    ):
+        return 5
+    return layer
 
 
 def _title_for_post(text: str) -> str:

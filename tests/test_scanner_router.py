@@ -145,7 +145,7 @@ def test_layer_plan_matrix_loaded():
 
 def test_okx_stock_listing_symbols_route_to_l5():
     # OKX can list stock-style swaps. They must not fall through to the L2 alt/meme default.
-    for sym in ("TWLO", "CGNX", "ROK", "BX", "CRDO", "CIEN", "ISRG", "FLNC"):
+    for sym in ("TWLO", "CGNX", "ROK", "BX", "CRDO", "CIEN", "ISRG", "FLNC", "SPCX", "SPCXX"):
         assert classify_layer(sym) == 5
     assert baseline_for_layer(5) == "QQQ-USDT-SWAP"
 
