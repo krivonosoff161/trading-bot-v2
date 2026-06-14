@@ -288,6 +288,11 @@ python -m scripts.strategy_lab.research_session --dry-run
 python -m scripts.strategy_lab.research_session --apply --max-candidates 5 --max-queued 5 --max-worker-jobs 1
 ```
 
+The first unattended controlled cycle is summarized as a public-safe showcase in
+[examples/strategy_lab_first_cycle](examples/strategy_lab_first_cycle/README.md).
+It proves the queue/worker/reporting loop can run unattended and stop cleanly;
+the complete result corpus remains in the private research root.
+
 GPU is a planned optional batch backend, not implemented. 1m is a trigger-only
 event microscope, not full-universe scanning. LLM review is export-only (no
 automatic API call). Full how-to:
