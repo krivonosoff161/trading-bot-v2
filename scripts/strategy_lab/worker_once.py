@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
 import sys
 import time
@@ -42,6 +43,40 @@ from src.research_lab.state_db import (  # noqa: E402
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
+_WORKER_LOCK_MAX_AGE_SECONDS = 6 * 3600
+
+
+def _worker_lock_path(private_root: Path) -> Path:
+    return private_root / "state" / "worker.lock"
+
+
+def _acquire_worker_lock(private_root: Path) -> tuple[bool, Path]:
+    """Best-effort cross-process singleton lock for the quiet desktop worker."""
+    path = _worker_lock_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    try:
+        if path.exists() and now - path.stat().st_mtime > _WORKER_LOCK_MAX_AGE_SECONDS:
+            path.unlink()
+    except OSError:
+        pass
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False, path
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"pid": os.getpid(), "created_at": time.time()}))
+    return True, path
+
+
+def _release_worker_lock(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
 
 def _night_mode(flag: bool) -> bool:
     return flag or os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"}
@@ -64,6 +99,14 @@ def run_worker_once(
     failure is recorded to the DB/status file and the exception is re-raised.
     """
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    locked, lock_path = _acquire_worker_lock(private_root)
+    if not locked:
+        status_path = worker_status_path(private_root)
+        write_worker_status(status_path, status="deferred", reason="worker_already_running",
+                            wait_seconds=60, mode="unknown")
+        if verbose:
+            print("deferred reason=worker_already_running wait_seconds=60")
+        return {"status": "deferred", "reason": "worker_already_running", "wait_seconds": 60, "mode": "unknown"}
     policy = load_resource_policy(night_mode=_night_mode(night_mode))
     db_path = default_db_path(private_root)
     conn = connect(db_path)
@@ -131,6 +174,7 @@ def run_worker_once(
             raise
     finally:
         conn.close()
+        _release_worker_lock(lock_path)
 
 
 def main() -> None:

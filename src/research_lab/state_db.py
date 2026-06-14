@@ -88,6 +88,9 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_queue_status_priority
             ON queue(status, priority, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_spec_active
+            ON queue(spec_path)
+            WHERE status IN ('queued', 'running');
         """
     )
     _migrate_candidate_columns(conn)
@@ -218,18 +221,47 @@ def enqueue_experiment(
 
 def ensure_experiment_queued(conn: sqlite3.Connection, spec_path: Path, *, priority: int = 100) -> tuple[int, bool]:
     normalized = str(spec_path)
-    row = conn.execute(
-        """
-        SELECT job_id FROM queue
-        WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
-        ORDER BY job_id ASC
-        LIMIT 1
-        """,
-        (normalized,),
-    ).fetchone()
-    if row is not None:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT job_id FROM queue
+            WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
+            ORDER BY job_id ASC
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+        if row is not None:
+            conn.commit()
+            return int(row["job_id"]), False
+        now = utc_now()
+        cur = conn.execute(
+            """
+            INSERT INTO queue(spec_path, status, priority, created_at)
+            VALUES (?, 'queued', ?, ?)
+            """,
+            (normalized, int(priority), now),
+        )
+        conn.commit()
+        return int(cur.lastrowid), True
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        row = conn.execute(
+            """
+            SELECT job_id FROM queue
+            WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
+            ORDER BY job_id ASC
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            raise
         return int(row["job_id"]), False
-    return enqueue_experiment(conn, spec_path, priority=priority), True
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:

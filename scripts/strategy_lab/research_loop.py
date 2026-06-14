@@ -50,6 +50,12 @@ _HARD_ITER_CAP = 10_000  # backstop; the loop is bounded by duration/max-iterati
 _MAX_DURATION_MIN = 240   # quiet desktop backstop ceiling
 _NIGHT_MAX_DURATION_MIN = 720
 _IDLE_FLOOR_SECONDS = 60  # when apply-mode work is throttled/idle, wait at least this (no busy-spin)
+_CONTRACT_FAILURE_REASONS = {
+    "json_parse_error",
+    "wrong_top_level_shape",
+    "missing_proposals_array",
+    "malformed_json",
+}
 
 
 def _truthy(name: str) -> bool:
@@ -88,6 +94,17 @@ def _synthetic_candidates(universe) -> list[dict]:
     } for s in syms]
 
 
+def _is_contract_failure(llm: dict) -> bool:
+    if llm.get("status") != "ok":
+        return False
+    if int(llm.get("validated", 0) or 0) > 0:
+        return False
+    reasons = llm.get("reject_reasons") or {}
+    if not isinstance(reasons, dict) or not reasons:
+        return False
+    return all(str(reason) in _CONTRACT_FAILURE_REASONS for reason in reasons)
+
+
 def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     """Optional cheap-LLM propose -> validate -> store. Gated; dry-run never calls."""
     if not args.llm_propose:
@@ -104,7 +121,7 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     cfg = load_llm_loop_config(max_candidates=max(1, args.max_candidates), allow_synthetic=allow_synth)
     spent = today_usage(private_root)["cost_rub"]
     if cfg.daily_cap_value is not None and spent >= cfg.daily_cap_value:
-        return {"status": "daily_cap_exhausted", "cost_rub": spent}
+        return {"status": "daily_cap_exhausted", "spent_today_rub": spent, "cost_rub": 0.0}
     if provider.name != "synthetic":  # real network provider needs all spend gates
         gate = evaluate_llm_loop_gates(cfg, send_requested=True, dry_run=False, spent_today=spent)
         if not gate.allowed:
@@ -165,6 +182,7 @@ def run_loop(args) -> dict:
                              "worker_completed", "worker_deferred", "worker_failed",
                              "llm_validated", "llm_rejected")}
     llm_cost = 0.0
+    llm_contract_failures = 0
     iterations: list[dict] = []
     start = time.monotonic()
     i = 0
@@ -174,7 +192,15 @@ def run_loop(args) -> dict:
                                        "elapsed_seconds": round(time.monotonic() - start, 1)},
                         allow_public_output=args.allow_public_output)
         try:  # one bad iteration must not kill the bounded run
-            llm = _llm_step(args, private_root, universe, profiles, policy)
+            if args.llm_propose and llm_contract_failures >= max(1, int(args.max_llm_contract_failures)):
+                llm = {
+                    "status": "contract_breaker",
+                    "reason": "too_many_consecutive_contract_failures",
+                    "consecutive_failures": llm_contract_failures,
+                    "cost_rub": 0.0,
+                }
+            else:
+                llm = _llm_step(args, private_root, universe, profiles, policy)
             cycle = run_research_cycle(config, private_root=private_root, allow_public_output=args.allow_public_output)
             c = cycle.counts
         except Exception as exc:  # noqa: BLE001 - record + continue; the loop is the safety boundary
@@ -182,6 +208,10 @@ def run_loop(args) -> dict:
         totals["llm_validated"] += int(llm.get("validated", 0) or 0)
         totals["llm_rejected"] += int(llm.get("rejected", 0) or 0)
         llm_cost += float(llm.get("cost_rub", 0.0) or 0.0)
+        if _is_contract_failure(llm):
+            llm_contract_failures += 1
+        elif llm.get("status") not in {"contract_breaker"}:
+            llm_contract_failures = 0
         for key in ("proposals_queued", "ready_jobs", "skipped_missing_data",
                     "worker_completed", "worker_deferred", "worker_failed"):
             totals[key] += int(c.get(key, 0) or 0)
@@ -258,6 +288,8 @@ def main() -> None:
     ap.add_argument("--max-iterations", type=int, default=1000)
     ap.add_argument("--sleep-seconds", type=int, default=60)
     ap.add_argument("--llm-propose", action="store_true", help="Ask the cheap LLM for candidates (gated; dry-run never calls)")
+    ap.add_argument("--max-llm-contract-failures", type=int, default=3,
+                    help="Disable LLM proposals for this run after N consecutive parse/schema failures")
     ap.add_argument("--load-env", default="", help="Optional .env file to load before provider resolution")
     ap.add_argument("--night-mode", action="store_true", help="Use opt-in night resource policy and longer duration cap")
     ap.add_argument("--prepare-missing-data", action="store_true")

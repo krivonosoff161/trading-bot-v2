@@ -1,19 +1,9 @@
 # -*- coding: utf-8 -*-
-"""LLM proposal loop — advisory only, export-only by default, code decides everything.
+"""LLM proposal loop: advisory only, export-only by default, code decides.
 
-The cheap model is a research DISPATCHER: it proposes bounded JSON candidates only
-(strategy family, symbols, timeframe, parameter grid, filters, a short rationale, and
-an expected failure mode to check). It never computes backtests, never makes trading
-decisions, and its output is never executed. `proposal_validator` validates every
-candidate and code decides what enters the queue.
-
-Built ON TOP of existing safe pieces:
-- the real provider client + cost log live in `llm_provider.py` (gated, off by default);
-- candidate validation reuses `proposal_validator.validate_and_mark`;
-- the gated SEND boundary reuses `llm_review_sender`.
-
-No paid call happens unless every gate passes AND a real provider is configured. No API
-keys are stored or logged (env names only).
+The cheap model is a research dispatcher. It may propose bounded JSON candidates,
+but it never runs code, never computes backtests, never trades, and never decides
+what enters the queue. The deterministic proposal validator owns that boundary.
 """
 
 from __future__ import annotations
@@ -43,20 +33,19 @@ DEFAULT_MAX_CANDIDATES = 8
 DEFAULT_MAX_REVIEWS = 3
 _HARD_ITEM_CAP = 200
 
-# Structural fields a candidate must never carry (defence-in-depth; LLM output is data).
 _DENY_KEYS = {
     "code", "shell", "exec", "eval", "command", "cmd", "script",
     "order", "orders", "place_order", "live_trade", "auto_trade", "autotrade",
     "api_key", "apikey", "secret", "password", "private_key", "token",
 }
 
-# Validator reason code -> the loop's reject vocabulary.
 _REJECT_MAP = {
     "unknown_family": "unknown_strategy_family",
     "unknown_symbol": "unknown_symbol",
     "disallowed_timeframe": "unknown_timeframe",
     "one_minute_full_sweep_blocked": "unknown_timeframe",
     "too_many_variants": "variants_too_large",
+    "heavy_job_not_allowed": "variants_too_large",
     "unsafe_wording": "unsafe_field",
     "output_boundary_violation": "unsafe_field",
     "missing_hypothesis": "missing_rationale",
@@ -103,7 +92,6 @@ def load_llm_loop_config(
 ) -> LLMLoopConfig:
     env = environ if environ is not None else os.environ
     provider = str(env.get(ENV_PROVIDER, "") or env.get(SCANNER_ENV_PROVIDER, "") or "").strip().lower()
-    # provider_configured reflects a REAL (network) provider being fully set up.
     configured = load_provider(env, allow_synthetic=allow_synthetic).configured and provider != "synthetic"
     return LLMLoopConfig(
         enabled=env_enabled(env),
@@ -121,13 +109,13 @@ class LLMSendDecision:
     reason: str
 
 
-def evaluate_llm_loop_gates(config: LLMLoopConfig, *, send_requested: bool, dry_run: bool,
-                            spent_today: float = 0.0) -> LLMSendDecision:
-    """All gates required to make a paid call. Reuses the review-sender gates + provider gate.
-
-    `spent_today` lets the daily-cap-exhausted gate fire here too (defense-in-depth);
-    the loop also pre-checks it, so a paid call is blocked by both layers.
-    """
+def evaluate_llm_loop_gates(
+    config: LLMLoopConfig,
+    *,
+    send_requested: bool,
+    dry_run: bool,
+    spent_today: float = 0.0,
+) -> LLMSendDecision:
     decision = evaluate_send_gates(
         dry_run=dry_run,
         send_requested=send_requested,
@@ -143,10 +131,7 @@ def evaluate_llm_loop_gates(config: LLMLoopConfig, *, send_requested: bool, dry_
     return LLMSendDecision(True, "all_gates_passed")
 
 
-# ── strict cheap-model contract ────────────────────────────────────────────────
-
 def allowed_timeframes(profiles: TimeframeProfiles) -> list[str]:
-    """Timeframes a proposal may target (everything except the trigger-only 1m)."""
     return [tf for tf in profiles.names() if tf != "1m"]
 
 
@@ -157,44 +142,134 @@ def build_proposal_prompt(
     profiles: TimeframeProfiles,
     max_candidates: int,
 ) -> tuple[str, str]:
-    """Build (system, user). The model must return JSON only — no prose, no code."""
     families = ", ".join(strategy_ids())
     tfs = ", ".join(allowed_timeframes(profiles))
     symbols = ", ".join(sorted(universe.all_symbols())[:60])
+    example = {
+        "proposals": [
+            {
+                "setup_family": "momentum_breakout",
+                "requested_timeframe": "1d",
+                "symbols": ["BTC_USDT_SWAP"],
+                "parameter_grid": {
+                    "momentum_breakout": [
+                        {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+                    ]
+                },
+                "hypothesis": "Test whether a conservative breakout variant still enters too late.",
+                "expected_validation": "Reject if trades are too few, fragile, or late-entry dominated.",
+                "risk_flags": [],
+                "max_variants": 4,
+            }
+        ]
+    }
     system = (
-        "You are a research dispatcher for a local backtesting lab. You ONLY propose "
-        "bounded experiment candidates as STRICT JSON. You never run code, never trade, "
-        "never make profitability claims. Output a JSON object {\"proposals\": [ ... ]} and "
-        "NOTHING else (no prose, no markdown). Each proposal MUST have: setup_family (one of "
-        f"the known families), requested_timeframe (one of: {tfs}), symbols (known symbols), "
-        "parameter_grid (a small grid keyed by setup_family), hypothesis (short rationale), "
-        "expected_failure_mode (what to check). Do NOT include any code, shell, order, or "
-        "live-trading fields. Keep each proposal small (few symbols, few variants)."
+        "You are a research dispatcher for a local backtesting lab. You only propose "
+        "bounded experiment candidates as strict JSON. You never run code, never trade, "
+        "never make profitability claims. Output a JSON object with exactly one top-level "
+        "key: proposals. Do not output prose, markdown, code fences, XML tags, or comments. "
+        "Every proposal must include setup_family, requested_timeframe, symbols, "
+        "parameter_grid, hypothesis, expected_validation, risk_flags, and max_variants. "
+        f"setup_family must be one of the known families. requested_timeframe must be one of: {tfs}. "
+        "parameter_grid must be keyed by setup_family and contain a short list of parameter "
+        "objects. Do not include code, shell, order, account, key, or live-trading fields. "
+        "Keep each proposal small: one to two symbols and one to four grid variants."
     )
     user = (
         f"Known families: {families}\n"
         f"Allowed timeframes: {tfs}\n"
         f"Known symbols (subset): {symbols}\n"
         f"Propose at most {max_candidates} bounded candidates as JSON.\n\n"
+        f"Exact response shape example:\n{json.dumps(example, ensure_ascii=False, sort_keys=True)}\n\n"
         f"Recent lab state to react to:\n{summary}\n"
     )
     return system, user
 
 
 def parse_llm_proposals(text: str) -> list[dict[str, Any]]:
-    """Parse strict-JSON model output into a list of proposal dicts. Raises on non-JSON."""
-    cleaned = str(text).strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
+    cleaned = _extract_json_payload(str(text))
     data = json.loads(cleaned)
-    if isinstance(data, dict) and isinstance(data.get("proposals"), list):
-        data = data["proposals"]
+    if isinstance(data, dict):
+        for key in ("proposals", "candidates", "experiments"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+        else:
+            if _looks_like_candidate(data):
+                data = [data]
+            else:
+                raise ValueError("missing_proposals_array")
     if not isinstance(data, list):
-        raise ValueError("expected a JSON array or {proposals: [...]}")
+        raise ValueError("wrong_top_level_shape")
     return [x for x in data if isinstance(x, dict)]
+
+
+def _extract_json_payload(text: str) -> str:
+    cleaned = str(text or "").strip().lstrip("\ufeff")
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    cleaned = _strip_think_blocks(cleaned)
+    if cleaned.startswith("{") or cleaned.startswith("["):
+        end = _balanced_json_end(cleaned, 0)
+        if end < 0:
+            raise ValueError("json_parse_error")
+        return cleaned[:end]
+    start = min([p for p in (cleaned.find("{"), cleaned.find("[")) if p >= 0], default=-1)
+    if start < 0:
+        raise ValueError("json_parse_error")
+    end = _balanced_json_end(cleaned, start)
+    if end < 0:
+        raise ValueError("json_parse_error")
+    return cleaned[start:end]
+
+
+def _strip_think_blocks(text: str) -> str:
+    out = text
+    while True:
+        low = out.lower()
+        start = low.find("<think>")
+        end = low.find("</think>")
+        if start < 0 or end < start:
+            return out.strip()
+        out = (out[:start] + out[end + len("</think>"):]).strip()
+
+
+def _balanced_json_end(text: str, start: int) -> int:
+    opener = text[start]
+    stack = ["}" if opener == "{" else "]"]
+    in_str = False
+    esc = False
+    for idx in range(start + 1, len(text)):
+        ch = text[idx]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or ch != stack[-1]:
+                return -1
+            stack.pop()
+            if not stack:
+                return idx + 1
+    return -1
+
+
+def _looks_like_candidate(data: dict[str, Any]) -> bool:
+    keys = {str(k) for k in data}
+    return bool(keys & {"setup_family", "strategy", "family", "requested_timeframe", "timeframe", "parameter_grid", "params"})
 
 
 @dataclass(frozen=True)
@@ -217,6 +292,48 @@ def _has_unsafe_field(item: dict[str, Any]) -> bool:
     return any(str(k).strip().lower() in _DENY_KEYS for k in item.keys())
 
 
+def _normalize_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    out = dict(item)
+    if not out.get("setup_family"):
+        out["setup_family"] = out.get("strategy") or out.get("strategy_id") or out.get("family") or out.get("setup")
+    if not out.get("requested_timeframe"):
+        out["requested_timeframe"] = out.get("timeframe") or out.get("tf")
+    if not out.get("hypothesis"):
+        out["hypothesis"] = out.get("rationale") or out.get("reason") or out.get("idea")
+    if not out.get("expected_validation"):
+        out["expected_validation"] = out.get("expected_failure_mode") or out.get("validation") or out.get("check")
+    if isinstance(out.get("symbols"), str):
+        out["symbols"] = [out["symbols"]]
+    family = str(out.get("setup_family") or "")
+    raw_grid = out.get("parameter_grid")
+    if not raw_grid:
+        params = out.get("params") or out.get("parameters") or out.get("parameter_set")
+        if isinstance(params, dict) and family:
+            variants = params.get(family) if isinstance(params.get(family), list) else None
+            out["parameter_grid"] = {family: variants or [params]}
+        elif isinstance(params, list) and family:
+            out["parameter_grid"] = {family: [dict(v) for v in params if isinstance(v, dict)]}
+    if not out.get("risk_flags"):
+        out["risk_flags"] = []
+    if not out.get("max_variants"):
+        grid = out.get("parameter_grid") or {}
+        variants = grid.get(family) if isinstance(grid, dict) else []
+        symbol_count = len(out.get("symbols") or [])
+        out["max_variants"] = max(1, min(4, symbol_count * len(variants or [])))
+    return out
+
+
+def _coerce_error_reason(exc: ValueError) -> str:
+    msg = str(exc)
+    if "hypothesis" in msg:
+        return "missing_rationale"
+    if "requested_timeframe" in msg:
+        return "unknown_timeframe"
+    if "setup_family" in msg:
+        return "unknown_strategy_family"
+    return "malformed_json"
+
+
 def validate_llm_candidates(
     items: list[dict[str, Any]],
     *,
@@ -226,14 +343,14 @@ def validate_llm_candidates(
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
 ) -> LLMProposalBatch:
-    """Validate cheap-model candidates deterministically (no exec). Maps reject reasons."""
     validated: list[Proposal] = []
     rejected: list[dict[str, str]] = []
     seen_ids: set[str] = set()
-    for item in list(items)[:_HARD_ITEM_CAP]:
-        if not isinstance(item, dict):
+    for raw in list(items)[:_HARD_ITEM_CAP]:
+        if not isinstance(raw, dict):
             rejected.append({"id": "?", "reason": "malformed_json"})
             continue
+        item = _normalize_candidate(raw)
         if _has_unsafe_field(item):
             rejected.append({"id": proposal_id_for(item), "reason": "unsafe_field"})
             continue
@@ -244,8 +361,7 @@ def validate_llm_candidates(
                 "created_at": item.get("created_at") or created_at,
             })
         except ValueError as exc:
-            reason = "missing_rationale" if "hypothesis" in str(exc) else "malformed_json"
-            rejected.append({"id": proposal_id_for(item), "reason": reason})
+            rejected.append({"id": proposal_id_for(item), "reason": _coerce_error_reason(exc)})
             continue
         if proposal.proposal_id in seen_ids:
             rejected.append({"id": proposal.proposal_id, "reason": "duplicate_candidate"})
@@ -258,7 +374,7 @@ def validate_llm_candidates(
             if len(validated) < max(0, int(max_candidates)):
                 validated.append(marked)
             else:
-                rejected.append({"id": marked.proposal_id, "reason": "variants_too_large"})  # over cap
+                rejected.append({"id": marked.proposal_id, "reason": "variants_too_large"})
         else:
             codes = marked.rejection_reason.split(",") if marked.rejection_reason else []
             reason = next((_REJECT_MAP[c] for c in codes if c in _REJECT_MAP), "malformed_json")
@@ -276,14 +392,16 @@ def generate_proposals_via_llm(
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
 ):
-    """Ask the provider for candidates, parse strict JSON, validate. Returns (batch, usage)."""
     system, user = build_proposal_prompt(summary, universe=universe, profiles=timeframe_profiles,
                                          max_candidates=max_candidates)
-    text, usage = provider.generate(system, user)  # may raise LLMProviderError (caller handles)
+    text, usage = provider.generate(system, user)
     try:
         items = parse_llm_proposals(text)
-    except (ValueError, json.JSONDecodeError):
-        return LLMProposalBatch(validated=[], rejected=[{"id": "?", "reason": "malformed_json"}]), usage
+    except ValueError as exc:
+        reason = str(exc) if str(exc) in {"json_parse_error", "wrong_top_level_shape", "missing_proposals_array"} else "json_parse_error"
+        return LLMProposalBatch(validated=[], rejected=[{"id": "?", "reason": reason}]), usage
+    except json.JSONDecodeError:
+        return LLMProposalBatch(validated=[], rejected=[{"id": "?", "reason": "json_parse_error"}]), usage
     batch = validate_llm_candidates(
         items, universe=universe, timeframe_profiles=timeframe_profiles,
         resource_policy=resource_policy, created_at=created_at, max_candidates=max_candidates,
@@ -292,5 +410,4 @@ def generate_proposals_via_llm(
 
 
 def chief_review_candidates(batch: LLMProposalBatch, config: LLMLoopConfig) -> list[Proposal]:
-    """The chief pass only ever sees the VALIDATED subset, capped to max_reviews."""
     return list(batch.validated)[: max(0, int(config.max_reviews))]

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
 from argparse import Namespace
+from types import SimpleNamespace
 
+import scripts.strategy_lab.research_loop as loop_mod
 from scripts.strategy_lab.research_loop import _llm_step, _synthetic_candidates, run_loop
 from src.research_lab.llm_provider import LLMUsage, record_usage
 from src.research_lab.research_loop import (
@@ -22,7 +24,8 @@ def _loop_args(tmp_path, **over):
                 sleep_seconds=0, llm_propose=False, prepare_missing_data=False,
                 provider="null", max_candidates=3, max_queued=5,
                 max_worker_jobs_per_iteration=1, private_root=str(tmp_path),
-                allow_public_output=False, load_env="", night_mode=False)
+                allow_public_output=False, load_env="", night_mode=False,
+                max_llm_contract_failures=3)
     base.update(over)
     return Namespace(**base)
 
@@ -141,6 +144,46 @@ def test_llm_step_daily_cap_blocks_call(tmp_path, monkeypatch):
     universe, profiles, policy = _ctx()
     out = _llm_step(_llm_args(), tmp_path, universe, profiles, policy)
     assert out["status"] == "daily_cap_exhausted"
+    assert out["cost_rub"] == 0.0 and out["spent_today_rub"] == 5.0
+
+
+def test_run_loop_does_not_add_prior_daily_spend_to_cost(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "synthetic")
+    monkeypatch.setenv("STRATEGY_LAB_ALLOW_SYNTHETIC", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_DAILY_CAP", "1")
+    record_usage(tmp_path, LLMUsage(provider="synthetic", model="x", total_tokens=10, cost_rub=5.0))
+
+    report = run_loop(_loop_args(tmp_path, dry_run=False, apply=True, llm_propose=True, max_iterations=1))
+
+    assert report["llm_cost_rub"] == 0.0
+    assert report["iteration_log"][-1]["llm"]["status"] == "daily_cap_exhausted"
+
+
+def test_run_loop_contract_breaker_stops_repeated_bad_llm_calls(tmp_path, monkeypatch):
+    calls = {"llm": 0}
+
+    def bad_llm(*args, **kwargs):
+        calls["llm"] += 1
+        return {"status": "ok", "validated": 0, "rejected": 1,
+                "reject_reasons": {"json_parse_error": 1}, "cost_rub": 0.5}
+
+    def fake_cycle(*args, **kwargs):
+        return SimpleNamespace(counts={
+            "proposals_queued": 0, "ready_jobs": 1, "skipped_missing_data": 0,
+            "worker_completed": 0, "worker_deferred": 0, "worker_failed": 0,
+        })
+
+    monkeypatch.setattr(loop_mod, "_llm_step", bad_llm)
+    monkeypatch.setattr(loop_mod, "run_research_cycle", fake_cycle)
+
+    report = run_loop(_loop_args(tmp_path, dry_run=False, apply=True, llm_propose=True,
+                                 max_iterations=3, max_llm_contract_failures=1))
+
+    assert calls["llm"] == 1
+    assert report["totals"]["llm_rejected"] == 1
+    assert report["llm_cost_rub"] == 0.5
+    assert report["iteration_log"][-1]["llm"]["status"] == "contract_breaker"
 
 
 def test_synthetic_candidates_are_bounded():
