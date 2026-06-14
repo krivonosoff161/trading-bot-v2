@@ -187,6 +187,24 @@ def test_worker_runs_at_most_max_jobs(tmp_path):
     assert result.counts["worker_completed"] == 1  # fresh cadence -> the one job runs
 
 
+def test_cycle_passes_night_mode_to_worker(tmp_path, monkeypatch):
+    import scripts.strategy_lab.research_cycle as rc
+
+    captured = {}
+
+    def _fake_worker(private_root, *, allow_public_output=False, night_mode=False):
+        captured["night_mode"] = night_mode
+        return {"status": "queue_empty"}
+
+    monkeypatch.setattr(rc, "run_worker_once", _fake_worker)
+    run_research_cycle(
+        ResearchCycleConfig(apply=True, generate_proposals=False, queue=False, night_mode=True),
+        private_root=tmp_path,
+    )
+
+    assert captured["night_mode"] is True
+
+
 # ---- result schema + visibility -------------------------------------------
 
 def test_result_json_schema_and_no_abs_paths(tmp_path):

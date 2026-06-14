@@ -189,7 +189,8 @@ def _run_worker_step(config, private_root, counts, allow_public_output) -> Cycle
     status = "executed"
     for _ in range(max(1, int(config.max_worker_jobs))):
         try:
-            out = run_worker_once(private_root, allow_public_output=allow_public_output)
+            out = run_worker_once(private_root, allow_public_output=allow_public_output,
+                                  night_mode=config.night_mode)
         except Exception as exc:  # job execution failure was already recorded by the worker
             counts["worker_failed"] += 1
             details.append(f"failed:{type(exc).__name__}")
