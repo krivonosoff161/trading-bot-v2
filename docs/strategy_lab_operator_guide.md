@@ -128,8 +128,11 @@ trades, or write to the public repo.
 | Plan a full research session (dry-run) | `bat\strategy_lab_research_session_dry_run.bat` |
 | Watch a 30-min research loop (dry-run) | `bat\strategy_lab_research_loop_30m_dry_run.bat` |
 | Run a 30-min research loop (apply, no LLM) | `bat\strategy_lab_research_loop_30m_apply.bat` |
-| Overnight no-LLM research loop (8h) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
-| Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
+| Bounded no-LLM research loop (default 8h, configurable) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
+| Morning summary after a loop | `bat\strategy_lab_morning_report.bat` |
+| Gracefully stop the loop after current iteration | `bat\strategy_lab_graceful_stop.bat` |
+| Clear a previous stop request | `bat\strategy_lab_clear_stop.bat` |
+| Stop old dashboard/worker windows | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
 verdicts, candidates, proposals and the private-root location; then
@@ -146,18 +149,29 @@ job is requeued on next start).
 
 **Overnight (no-LLM, safe default):**
 
-```bash
-bat\strategy_lab_research_loop_overnight_no_llm.bat
+```powershell
+.\bat\strategy_lab_research_loop_overnight_no_llm.bat
 ```
 
-This starts an 8-hour bounded research loop with no paid LLM, no network fetch,
+This starts a bounded research loop with no paid LLM, no network fetch,
 and no live trading. It prints the private root, duration, sleep, queue cap,
 and the morning status command before starting. When the loop finishes (or is
 stopped with Ctrl+C), run:
 
-```bash
-python -m scripts.strategy_lab.status
+```powershell
+.\bat\strategy_lab_morning_report.bat
 ```
+
+Default duration is 480 minutes. For a day run, set the duration before launching:
+
+```powershell
+$env:STRATEGY_LAB_LOOP_MINUTES = "300"
+.\bat\strategy_lab_research_loop_overnight_no_llm.bat
+```
+
+Use `300` for 5 hours, `360` for 6 hours, or `420` for 7 hours. Optional knobs:
+`STRATEGY_LAB_LOOP_SLEEP_SECONDS` (default `60`) and
+`STRATEGY_LAB_LOOP_MAX_QUEUED` (default `20`).
 
 The overnight loop uses night-mode resource policy (relaxed caps) and runs
 data-ready local jobs only. If you have prepared 15m/1h/4h data, those

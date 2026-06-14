@@ -9,8 +9,9 @@ as a low-surprise overnight research machine.
 
 After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 
-- One command starts an 8-hour bounded research loop (`bat\strategy_lab_research_loop_overnight_no_llm.bat`).
-- Morning report summarizes results (`python -m scripts.strategy_lab.morning_report`).
+- One command starts a bounded research loop (`bat\strategy_lab_research_loop_overnight_no_llm.bat`).
+- Default duration is 480 minutes; set `STRATEGY_LAB_LOOP_MINUTES` for shorter day runs.
+- Morning report summarizes results (`bat\strategy_lab_morning_report.bat`).
 - Graceful stop writes intent; current iteration finishes cleanly.
 - Stale running jobs can be requeued explicitly.
 - Timeframe contract prevents silent wrong-timeframe execution.
@@ -80,13 +81,23 @@ No-LLM overnight:
 
 ```powershell
 cd C:\Users\krivo\trading-bot-v2
-bat\strategy_lab_research_loop_overnight_no_llm.bat
+.\bat\strategy_lab_research_loop_overnight_no_llm.bat
 ```
+
+5-7 hour day run:
+
+```powershell
+cd C:\Users\krivo\trading-bot-v2
+$env:STRATEGY_LAB_LOOP_MINUTES = "360"
+.\bat\strategy_lab_research_loop_overnight_no_llm.bat
+```
+
+Use `300` for 5 hours, `360` for 6 hours, or `420` for 7 hours.
 
 Morning report:
 
 ```powershell
-python -m scripts.strategy_lab.morning_report
+.\bat\strategy_lab_morning_report.bat
 ```
 
 Status:
@@ -104,7 +115,7 @@ python -m scripts.strategy_lab.prepare_1m_data --dry-run
 Graceful stop:
 
 ```powershell
-bat\strategy_lab_graceful_stop.bat
+.\bat\strategy_lab_graceful_stop.bat
 ```
 
 Requeue stale jobs:
