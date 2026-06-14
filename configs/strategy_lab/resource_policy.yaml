@@ -26,5 +26,6 @@ night_mode:
   max_variants_per_job: 80
   autopilot_generate_max: 8
   min_seconds_between_jobs: 60
+  max_jobs_per_hour: 20
   allow_heavy_jobs: true
   allow_1m_jobs: trigger_only

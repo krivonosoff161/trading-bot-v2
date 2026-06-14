@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.strategy_lab.research_cycle import run_research_cycle  # noqa: E402
 from src.research_lab.candidate_registry import registry_path, registry_summary  # noqa: E402
+from src.research_lab.env_file import load_env_file  # noqa: E402
 from src.research_lab.llm_proposals import (  # noqa: E402
     evaluate_llm_loop_gates,
     generate_proposals_via_llm,
@@ -45,7 +46,8 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
 _HARD_ITER_CAP = 10_000  # backstop; the loop is bounded by duration/max-iterations anyway
-_MAX_DURATION_MIN = 240   # backstop ceiling
+_MAX_DURATION_MIN = 240   # quiet desktop backstop ceiling
+_NIGHT_MAX_DURATION_MIN = 720
 _IDLE_FLOOR_SECONDS = 60  # when apply-mode work is throttled/idle, wait at least this (no busy-spin)
 
 
@@ -121,17 +123,21 @@ def _iteration_config(args) -> ResearchCycleConfig:
         prepare_1m_apply=bool(args.prepare_missing_data) and bool(args.apply),
         provider=args.provider,
         allow_synthetic=allow_synth,
+        night_mode=bool(args.night_mode),
     )
 
 
 def run_loop(args) -> dict:
     private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
+    if args.load_env:
+        load_env_file(args.load_env, override=False)
     universe = load_universe()
     profiles = load_timeframe_profiles()
-    policy = load_resource_policy()
+    policy = load_resource_policy(night_mode=bool(args.night_mode))
     config = _iteration_config(args)
 
-    duration_s = min(max(0.0, args.duration_minutes), _MAX_DURATION_MIN) * 60.0
+    duration_cap = _NIGHT_MAX_DURATION_MIN if args.night_mode else _MAX_DURATION_MIN
+    duration_s = min(max(0.0, args.duration_minutes), duration_cap) * 60.0
     max_iter = min(max(1, args.max_iterations), _HARD_ITER_CAP)
     sleep_s = max(0, int(args.sleep_seconds))
     mode = "apply" if args.apply else "dry_run"
@@ -203,7 +209,8 @@ def _final_report(mode, args, iterations, totals, llm_cost, start) -> dict:
         "iteration_log": iterations[-20:],
         "next_command": "python -m scripts.strategy_lab.status",
         "safety": {"no_live_trading": True, "no_order_engine": True, "no_paid_llm_default": True,
-                   "data_provider": args.provider, "single_run": True},
+                   "data_provider": args.provider, "single_run": True,
+                   "night_mode": bool(args.night_mode)},
     }
 
 
@@ -232,6 +239,8 @@ def main() -> None:
     ap.add_argument("--max-iterations", type=int, default=1000)
     ap.add_argument("--sleep-seconds", type=int, default=60)
     ap.add_argument("--llm-propose", action="store_true", help="Ask the cheap LLM for candidates (gated; dry-run never calls)")
+    ap.add_argument("--load-env", default="", help="Optional .env file to load before provider resolution")
+    ap.add_argument("--night-mode", action="store_true", help="Use opt-in night resource policy and longer duration cap")
     ap.add_argument("--prepare-missing-data", action="store_true")
     ap.add_argument("--provider", default="null", choices=["null", "synthetic", "okx-public"], help="DATA provider for prepare")
     ap.add_argument("--max-candidates", type=int, default=5)

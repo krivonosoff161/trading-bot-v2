@@ -17,6 +17,9 @@ Env (all optional; default = no network / export-only):
 - STRATEGY_LAB_LLM_API_KEY_ENV  (NAME of the env var holding the key; default STRATEGY_LAB_LLM_API_KEY)
 - STRATEGY_LAB_LLM_MODEL_CHEAP
 - STRATEGY_LAB_LLM_TIMEOUT (seconds), STRATEGY_LAB_LLM_RATE_RUB_PER_1K
+If the STRATEGY_LAB_* provider fields are absent, the lab may reuse scanner-style
+aliases (LLM_PROVIDER, ALIBABA_BASE_URL, ALIBABA_API_KEY, LLM_CHEAP_MODEL), but
+only after STRATEGY_LAB_LLM_ENABLED=1 is explicitly set.
 The API key VALUE is read only into the Authorization header; it is never logged, never
 returned, and never written to any report.
 """
@@ -42,6 +45,10 @@ ENV_MODEL_CHEAP = "STRATEGY_LAB_LLM_MODEL_CHEAP"
 ENV_TIMEOUT = "STRATEGY_LAB_LLM_TIMEOUT"
 ENV_RATE = "STRATEGY_LAB_LLM_RATE_RUB_PER_1K"
 DEFAULT_API_KEY_ENV = "STRATEGY_LAB_LLM_API_KEY"
+SCANNER_ENV_PROVIDER = "LLM_PROVIDER"
+SCANNER_ENV_ALIBABA_BASE_URL = "ALIBABA_BASE_URL"
+SCANNER_ENV_ALIBABA_API_KEY = "ALIBABA_API_KEY"
+SCANNER_ENV_CHEAP_MODEL = "LLM_CHEAP_MODEL"
 
 OPENAI_COMPATIBLE = {"alibaba", "qwen", "openai-compatible", "openai"}
 DEFAULT_TIMEOUT = 30.0
@@ -171,6 +178,29 @@ def _truthy(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_first(env: Mapping[str, str], *names: str) -> str:
+    for name in names:
+        value = str(env.get(name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _provider_name(env: Mapping[str, str]) -> str:
+    return _env_first(env, ENV_PROVIDER, SCANNER_ENV_PROVIDER).lower()
+
+
+def _api_key_env_name(env: Mapping[str, str]) -> str:
+    configured = str(env.get(ENV_API_KEY_ENV, "") or "").strip()
+    if configured:
+        return configured
+    if env.get(DEFAULT_API_KEY_ENV):
+        return DEFAULT_API_KEY_ENV
+    if env.get(SCANNER_ENV_ALIBABA_API_KEY):
+        return SCANNER_ENV_ALIBABA_API_KEY
+    return DEFAULT_API_KEY_ENV
+
+
 def load_provider(
     environ: Mapping[str, str] | None = None,
     *,
@@ -182,14 +212,14 @@ def load_provider(
     env = environ if environ is not None else os.environ
     if not _truthy(env.get(ENV_ENABLED, "")):
         return NullProposalProvider()
-    provider = str(env.get(ENV_PROVIDER, "") or "").strip().lower()
+    provider = _provider_name(env)
     if provider == "synthetic":
         return SyntheticProposalProvider(synthetic_candidates or []) if allow_synthetic else NullProposalProvider()
     if provider in OPENAI_COMPATIBLE:
-        key_env = str(env.get(ENV_API_KEY_ENV, "") or DEFAULT_API_KEY_ENV).strip()
+        key_env = _api_key_env_name(env)
         api_key = str(env.get(key_env, "") or "").strip()
-        base_url = str(env.get(ENV_BASE_URL, "") or "").strip()
-        model = str(env.get(ENV_MODEL_CHEAP, "") or "").strip()
+        base_url = _env_first(env, ENV_BASE_URL, SCANNER_ENV_ALIBABA_BASE_URL)
+        model = _env_first(env, ENV_MODEL_CHEAP, SCANNER_ENV_CHEAP_MODEL)
         if api_key and base_url and model:
             return OpenAICompatibleProvider(
                 provider=provider, base_url=base_url, api_key=api_key, model=model,

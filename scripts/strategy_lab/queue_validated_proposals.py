@@ -61,7 +61,7 @@ def _exp_to_dict(exp) -> dict:
 
 def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
                     max_queue: int | None = None, require_data_ready: bool = False,
-                    allow_public_output: bool = False) -> dict:
+                    allow_public_output: bool = False, night_mode: bool = False) -> dict:
     """Queue VALIDATED proposals (idempotent, capped). Dry-run (apply=False) queues nothing.
 
     The effective queue cap is the resource policy's max_queue_size, optionally lowered
@@ -73,7 +73,7 @@ def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
     private_root = resolve_private_root(Path(private_root), allow_public_output=allow_public_output)
     universe = load_universe()
     profiles = load_timeframe_profiles()
-    policy = load_resource_policy()
+    policy = load_resource_policy(night_mode=night_mode)
     cap = policy.max_queue_size if max_queue is None else min(policy.max_queue_size, max(0, int(max_queue)))
     proposals = [p for p in load_proposals(proposals_path(private_root)) if p.status == VALIDATED]
 
