@@ -42,6 +42,13 @@ def test_synthetic_generates_sorted_marked_1m():
         assert r.get("synthetic") is True  # clearly not real market data
 
 
-def test_synthetic_rejects_non_1m():
+def test_synthetic_rejects_unsupported_timeframe():
     with pytest.raises(ValueError):
-        SyntheticMarketDataProvider().fetch_ohlcv("X_USDT_SWAP", "15m", 0, MINUTE)
+        SyntheticMarketDataProvider().fetch_ohlcv("X_USDT_SWAP", "5m", 0, MINUTE)
+
+
+def test_synthetic_supports_15m_1h_4h_1d():
+    p = SyntheticMarketDataProvider()
+    for tf in ("15m", "1h", "4h", "1d"):
+        rows = p.fetch_ohlcv("BTC_USDT_SWAP", tf, 1_700_000_000_000, 1_700_000_000_000 + 10 * MINUTE)
+        assert len(rows) > 0

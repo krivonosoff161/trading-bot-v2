@@ -87,4 +87,5 @@ def loop_summary(report: dict[str, Any]) -> dict[str, Any]:
         "last_llm_reject_reasons": dict(last_llm.get("reject_reasons", {}) or {}),
         "last_worker": dict(last.get("worker", {}) or {}),
         "next_command": report.get("next_command", ""),
+        "stop_requested": bool(report.get("stop_requested")),
     }

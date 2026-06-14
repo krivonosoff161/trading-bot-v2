@@ -3,10 +3,10 @@
 
 Talks ONLY to the OKX public history-candles endpoint
 (`/api/v5/market/history-candles`). No API key, no account/private/order endpoints,
-no symbol discovery. It fetches just the requested 1m window, paginating backward
-(`after` = oldest ts seen) with a bounded page count and a short sleep between
-pages, then normalizes rows to the canonical OHLCV format (deduped, sorted, UTC,
-window-filtered, confirmed candles only).
+no symbol discovery. Supports 1m, 15m, 1h, 4h, and 1d public candles. It fetches
+the requested window, paginating backward (`after` = oldest ts seen) with a bounded
+page count and a short sleep between pages, then normalizes rows to the canonical
+OHLCV format (deduped, sorted, UTC, window-filtered, confirmed candles only).
 
 Network/parse failures raise `MarketDataError`; the caller (data_prepare.prepare)
 records this as a structured `provider_error` and writes nothing — it never crashes
@@ -35,6 +35,16 @@ DEFAULT_TIMEOUT = 10.0
 DEFAULT_SLEEP_SECONDS = 0.2
 _USER_AGENT = "strategy-lab-research/1.0 (+public-market-data)"
 
+# Timeframe -> OKX bar parameter + interval in milliseconds
+_SUPPORTED_TIMEFRAMES: dict[str, tuple[str, int]] = {
+    "1m": ("1m", MINUTE_MS),
+    "15m": ("15m", 15 * MINUTE_MS),
+    "1h": ("1H", 60 * MINUTE_MS),
+    "4h": ("4H", 4 * 60 * MINUTE_MS),
+    "1d": ("1D", 24 * 60 * 60_000),
+}
+SUPPORTED_TIMEFRAMES = tuple(_SUPPORTED_TIMEFRAMES.keys())
+
 # HTTP getter: (url, timeout) -> parsed JSON dict. Injected in tests (no real network).
 HttpGet = Callable[[str, float], Any]
 
@@ -54,8 +64,18 @@ def _default_http_get(url: str, timeout: float) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _resolve_timeframe(timeframe: str) -> tuple[str, int]:
+    """Return (okx_bar, interval_ms) for a supported timeframe."""
+    key = str(timeframe).strip().lower()
+    if key not in _SUPPORTED_TIMEFRAMES:
+        raise ValueError(
+            f"okx-public supports {', '.join(sorted(_SUPPORTED_TIMEFRAMES))}; got {timeframe!r}"
+        )
+    return _SUPPORTED_TIMEFRAMES[key]
+
+
 class OkxPublicMarketDataProvider:
-    """Public, read-only OKX 1m candle provider. No keys, no private endpoints."""
+    """Public, read-only OKX candle provider. Supports 1m/15m/1h/4h/1d. No keys."""
 
     name = "okx-public"
     configured = True
@@ -78,20 +98,19 @@ class OkxPublicMarketDataProvider:
         self._sleep = sleep or time.sleep
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-        if timeframe != "1m":
-            raise ValueError(f"okx-public supports only 1m in this phase, got {timeframe!r}")
+        okx_bar, interval_ms = _resolve_timeframe(timeframe)
         start_ts, end_ts = int(start_ts), int(end_ts)
         if end_ts < start_ts:
             raise ValueError("end_ts before start_ts")
-        if (end_ts - start_ts) // MINUTE_MS + 1 > MAX_WINDOW_BARS:
+        if (end_ts - start_ts) // interval_ms + 1 > MAX_WINDOW_BARS:
             raise ValueError(f"window exceeds {MAX_WINDOW_BARS} bars; refuse unbounded fetch")
 
         inst_id = to_inst_id(symbol)
         collected: dict[int, dict[str, Any]] = {}
-        cursor = end_ts + MINUTE_MS  # 'after' returns candles strictly older than cursor
+        cursor = end_ts + interval_ms  # 'after' returns candles strictly older than cursor
 
         for _page in range(self.max_pages):
-            rows = self._fetch_page(inst_id, cursor)
+            rows = self._fetch_page(inst_id, okx_bar, cursor)
             if not rows:
                 break
             page_oldest: int | None = None
@@ -111,9 +130,9 @@ class OkxPublicMarketDataProvider:
 
         return [collected[ts] for ts in sorted(collected)]
 
-    def _fetch_page(self, inst_id: str, after_ts: int) -> list[Any]:
+    def _fetch_page(self, inst_id: str, bar: str, after_ts: int) -> list[Any]:
         query = urllib.parse.urlencode({
-            "instId": inst_id, "bar": "1m", "after": str(int(after_ts)), "limit": str(PAGE_LIMIT),
+            "instId": inst_id, "bar": bar, "after": str(int(after_ts)), "limit": str(PAGE_LIMIT),
         })
         url = f"{self.base_url}{HISTORY_CANDLES_PATH}?{query}"
         try:

@@ -58,6 +58,7 @@ def compile_proposal(proposal: Proposal, *, policy: ResourcePolicy, data_glob: s
         parameter_grid={proposal.setup_family: list(grid)},
         filters=dict(proposal.filters),
         max_runs=cap,
+        timeframe=proposal.requested_timeframe or "1d",
     )
 
 

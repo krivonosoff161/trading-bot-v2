@@ -128,6 +128,7 @@ trades, or write to the public repo.
 | Plan a full research session (dry-run) | `bat\strategy_lab_research_session_dry_run.bat` |
 | Watch a 30-min research loop (dry-run) | `bat\strategy_lab_research_loop_30m_dry_run.bat` |
 | Run a 30-min research loop (apply, no LLM) | `bat\strategy_lab_research_loop_30m_apply.bat` |
+| Overnight no-LLM research loop (8h) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
 | Stop the lab safely | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
@@ -142,6 +143,35 @@ then apply explicitly only when you agree:
 **Evening:** `strategy_lab_status.bat` for the day's results, then
 `strategy_lab_stop_notes.bat` to close the two lab windows (safe; a half-claimed
 job is requeued on next start).
+
+**Overnight (no-LLM, safe default):**
+
+```bash
+bat\strategy_lab_research_loop_overnight_no_llm.bat
+```
+
+This starts an 8-hour bounded research loop with no paid LLM, no network fetch,
+and no live trading. It prints the private root, duration, sleep, queue cap,
+and the morning status command before starting. When the loop finishes (or is
+stopped with Ctrl+C), run:
+
+```bash
+python -m scripts.strategy_lab.status
+```
+
+The overnight loop uses night-mode resource policy (relaxed caps) and runs
+data-ready local jobs only. If you have prepared 15m/1h/4h data, those
+timeframes will be tested too; otherwise only 1d jobs run.
+
+**Overnight (with paid LLM, explicit opt-in only):**
+
+```bash
+bat\strategy_lab_research_loop_overnight_llm.bat
+```
+
+This requires you to first set `STRATEGY_LAB_LLM_ENABLED=1` and configure the
+LLM provider env. It will NOT auto-enable paid LLM. Run a tiny live test first
+(see "Tiny LLM live test" below) before using this overnight.
 
 Quick status from the terminal:
 

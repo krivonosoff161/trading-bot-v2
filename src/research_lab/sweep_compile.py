@@ -76,4 +76,5 @@ def compile_sweep(
         min_trades=min_trades,
         max_runs=job_cap,
         event_context=dict(event_context or {}),
+        timeframe=spec.timeframe,
     )

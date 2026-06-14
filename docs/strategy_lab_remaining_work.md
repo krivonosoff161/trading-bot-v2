@@ -1,155 +1,117 @@
 # Strategy Lab Remaining Work
 
-Date: 2026-06-14.
+Date: 2026-06-14. Updated after overnight-readiness patch.
 
 This document tracks what is still required before the Strategy Lab can be treated
-as a low-surprise overnight research machine. The current code is a controlled,
-bounded research runner. It is not a profit engine, not a live-trading system, and
-not a fully autonomous daemon.
+as a low-surprise overnight research machine.
 
-## Current Baseline
+## Overnight Readiness: YES (no-LLM)
 
-Implemented and verified:
+After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 
-- Private-root state, SQLite queue, worker, dashboard/status, and operator bats.
-- Runtime resource policy: worker throttle, max jobs per hour, max variants per job.
-- Strategy registry, validator-lite, reducer, entry-timing metrics, and candidate registry.
-- Event-driven research cycle and bounded research loop.
-- 1m microscope and demand-driven 1m data preparation.
-- OKX public-only 1m market-data provider.
-- Advisory LLM proposal loop with explicit gates, daily cap, usage log, JSON guardrails,
-  and a contract breaker for repeated malformed responses.
-- Worker singleton lock and active queue dedup guard.
-- Safe default: no live trading, no order engine, no paid LLM, no automatic network fetch.
+- One command starts an 8-hour bounded research loop (`bat\strategy_lab_research_loop_overnight_no_llm.bat`).
+- Morning report summarizes results (`python -m scripts.strategy_lab.morning_report`).
+- Graceful stop writes intent; current iteration finishes cleanly.
+- Stale running jobs can be requeued explicitly.
+- Timeframe contract prevents silent wrong-timeframe execution.
+- Multi-timeframe data (15m/1h/4h/1d) can be prepared via the OKX public provider.
+- All safety guards intact: no live trading, no order engine, no paid LLM by default.
 
-Latest verification before this note:
+## What Changed (this patch)
 
-- `python -m pytest -q` -> 644 passed.
-- Targeted ruff checks -> clean.
-- `git diff --check` -> clean except normal CRLF warnings.
-- Temporary-root smoke run completed with LLM disabled and `cost_rub=0.0`.
+### P0 — Timeframe contract (Phase 1)
+- `ExperimentSpec` now has an explicit `timeframe` field (default "1d").
+- `choose_symbol_file()` is timeframe-aware: only picks files matching the requested TF.
+- `compile_proposal()`, `compile_sweep()`, and `research_plan` pass timeframe through.
+- Worker returns empty results when no matching file exists (no silent wrong-TF execution).
+- 8 new tests covering TF contract edge cases.
 
-## P0 Before Confident Overnight Runs
+### P0 — Multi-timeframe loader (Phase 2)
+- OKX public provider now supports 1m, 15m, 1h, 4h, 1d (was 1m only).
+- Synthetic provider supports all 5 timeframes for testing.
+- `prepare_market_data()` writes candles per timeframe under `market_data/{tf}/`.
+- `paths.py` adds `market_data_dir()` and `market_data_glob()` for any TF.
+- 12 new tests covering multi-TF provider, readiness, and prepare workflow.
 
-1. **Timeframe contract in `ExperimentSpec`**
+### P0 — Overnight operator bat (Phase 3)
+- `bat\strategy_lab_research_loop_overnight_no_llm.bat` — one-command safe overnight run.
+- Prints private root, duration, sleep, queue cap, worker cap, LLM state, morning command.
+- Operator guide updated with overnight section.
 
-   Problem: readiness can be timeframe-aware, but execution still has paths where
-   the worker ultimately resolves candle files by symbol and file size. Once 15m,
-   1h, or 4h files exist next to 1d files, this can silently run a spec on the wrong
-   timeframe.
+### P0/P1 — Graceful stop + stale requeue (Phase 4)
+- `stop_intent.py` — write/check/clear stop-intent file under private root.
+- Research loop checks stop intent between iterations.
+- `requeue_stale_jobs.py` — dry-run shows stale jobs; --apply requeues them.
+- `bat\strategy_lab_graceful_stop.bat` and `bat\strategy_lab_clear_stop.bat`.
+- 7 new tests covering stop intent, stale detection, and requeue behavior.
 
-   Required work:
+### P1 — Morning report (Phase 5)
+- `morning_report.py` — summarizes last loop: jobs, strategies, symbols, candidates,
+  rejects, LLM cost, data missing by timeframe, stale hints, next command.
+- `bat\strategy_lab_morning_report.bat`.
+- 6 new tests covering empty state, loop data, stop reflection, no absolute paths.
 
-   - Add an explicit timeframe field to `ExperimentSpec`.
-   - Preserve `Proposal.requested_timeframe` during compile.
-   - Make `choose_symbol_file()` timeframe-aware.
-   - Worker must return/defer `DATA_NOT_READY` instead of running with a wrong file.
-   - Tests: 15m spec with only 1d data must not execute.
+### P1 — LLM tiny test harness (Phase 6)
+- `bat\strategy_lab_llm_tiny_test.bat` — refuses unless env is set; tiny caps;
+  cost warning; no live trading.
+- 8 tests verifying env gates and safety.
 
-2. **Market-data loader for 15m / 1h / 4h / 1d**
+### P1 — Proposal quality scoring (Phase 7)
+- `rejection_reason_counts()` tallies why proposals were rejected.
+- Morning report shows proposal rejection reasons by category.
+- 6 tests covering all major rejection reasons.
 
-   Problem: the real public provider currently prepares 1m only. The lab needs
-   multiple timeframes:
+## P1 Still Remaining
 
-   - `1d`: regime and broad context.
-   - `4h` / `1h`: setup testing.
-   - `15m`: entry timing.
-   - `1m`: event microscope only, not full sweeps.
-
-   Required work:
-
-   - Extend the public OKX provider to fetch capped 15m, 1h, 4h, and 1d candles.
-   - Keep the same safety model: public market-data only, no keys, no order/account
-     endpoints, no full-market downloads, private-root writes only.
-   - Add readiness checks and tests per timeframe.
-
-3. **Operator-grade overnight command**
-
-   Problem: the pieces are safe, but the operator still has to remember command
-   details.
-
-   Required work:
-
-   - Add a safe no-LLM overnight bat.
-   - Keep paid LLM overnight as explicit opt-in only.
-   - Print the private root, expected duration, queue cap, worker cap, LLM state,
-     and next morning status command before starting.
-   - Do not auto-enable paid provider env.
-
-4. **Graceful stop and requeue-now**
-
-   Problem: force-kill is survivable but not ideal. A quick restart after a killed
-   worker can leave a job in `running` until stale timeout.
-
-   Required work:
-
-   - Add a stop command that writes intent and lets the current job finish.
-   - Add an explicit maintenance command to requeue stale/running jobs when the
-     operator confirms the worker is not alive.
-   - Status/dashboard should show worker lock and stale-running hints.
-
-## P1 Quality And Morning Review
-
-5. **Morning report**
-
-   Required work:
-
-   - One command that summarizes the last overnight run:
-     - jobs completed/deferred/failed;
-     - strategies and symbols tested;
-     - new candidates by verdict;
-     - rejects and reasons;
-     - LLM requests/tokens/cost;
-     - data missing by timeframe;
-     - recommended next command.
-
-6. **Tiny real LLM live test**
-
-   Required work:
-
-   - Run Alibaba/Qwen with a 1-2 RUB cap and one or two iterations.
-   - Verify JSON contract, validation results, usage accounting, and contract breaker.
-   - Do not use the overnight LLM bat until this passes.
-
-7. **Proposal quality scoring**
-
-   Required work:
-
-   - Track why LLM proposals were useful or rejected.
-   - Separate bad JSON, unknown strategy, wrong timeframe, heavy job, missing data,
-     duplicate candidate, and unsafe field in reports.
-   - Use this to tune prompts, not to bypass code validation.
+1. **Tiny real LLM live test (manual step)**
+   - Run `bat\strategy_lab_llm_tiny_test.bat` with real provider env.
+   - Verify JSON contract, validation, usage accounting, contract breaker.
+   - Do not use overnight LLM until this passes.
 
 ## P2 Later Work
 
-8. **GPU backend**
-
-   Keep future-only until the CPU path is stable. GPU should be a batch accelerator,
-   not a separate decision path.
-
-9. **Richer dashboard**
-
-   Add queue/history charts, per-timeframe data coverage, and candidate drilldown.
-   Keep private result data out of the public repository.
-
-10. **More strategies and parameter families**
-
-   Add only after the execution/data contract is reliable. The current priority is
-   clean measurement, not more variants.
+2. **GPU backend** — keep future-only until CPU path is stable.
+3. **Richer dashboard** — queue/history charts, per-TF data coverage, candidate drilldown.
+4. **More strategies and parameter families** — add only after execution/data contract is reliable.
 
 ## Safe Commands Today
 
-No paid LLM:
+No-LLM overnight:
 
 ```powershell
 cd C:\Users\krivo\trading-bot-v2
-python -m scripts.strategy_lab.research_loop --apply --night-mode --duration-minutes 480 --sleep-seconds 60 --max-queued 20 --max-worker-jobs-per-iteration 1
+bat\strategy_lab_research_loop_overnight_no_llm.bat
+```
+
+Morning report:
+
+```powershell
+python -m scripts.strategy_lab.morning_report
 ```
 
 Status:
 
 ```powershell
 python -m scripts.strategy_lab.status
+```
+
+Prepare multi-TF data:
+
+```powershell
+python -m scripts.strategy_lab.prepare_1m_data --dry-run
+```
+
+Graceful stop:
+
+```powershell
+bat\strategy_lab_graceful_stop.bat
+```
+
+Requeue stale jobs:
+
+```powershell
+python -m scripts.strategy_lab.requeue_stale_jobs --dry-run
+python -m scripts.strategy_lab.requeue_stale_jobs --apply
 ```
 
 Do not use paid LLM overnight until the tiny live test passes.

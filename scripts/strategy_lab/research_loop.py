@@ -43,6 +43,7 @@ from src.research_lab.research_cycle import ResearchCycleConfig  # noqa: E402
 from src.research_lab.research_loop import write_heartbeat, write_loop_report  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.state_db import connect, default_db_path, init_db  # noqa: E402
+from src.research_lab.stop_intent import is_stop_requested  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
@@ -188,8 +189,10 @@ def run_loop(args) -> dict:
     i = 0
     while True:
         i += 1
+        if is_stop_requested(private_root):
+            break
         write_heartbeat(private_root, {"status": "running", "iteration": i, "mode": mode,
-                                       "elapsed_seconds": round(time.monotonic() - start, 1)},
+                                        "elapsed_seconds": round(time.monotonic() - start, 1)},
                         allow_public_output=args.allow_public_output)
         try:  # one bad iteration must not kill the bounded run
             if args.llm_propose and llm_contract_failures >= max(1, int(args.max_llm_contract_failures)):
@@ -231,6 +234,10 @@ def run_loop(args) -> dict:
 
         if i >= max_iter or elapsed >= duration_s:
             break
+        if is_stop_requested(private_root):
+            iterations[-1]["stop_requested"] = True
+            _write_running_report(private_root, mode, args, iterations, totals, llm_cost, start, args.allow_public_output)
+            break
         # Avoid busy-spin: in apply mode, if the worker is throttled (deferred) or the
         # queue is idle, nothing can progress until the cool-down passes -> wait at least
         # the idle floor regardless of --sleep-seconds. Always cap by remaining time.
@@ -256,6 +263,7 @@ def _final_report(mode, args, iterations, totals, llm_cost, start) -> dict:
         "duration_minutes": round((time.monotonic() - start) / 60.0, 2),
         "totals": totals, "llm_cost_rub": round(llm_cost, 4),
         "iteration_log": iterations[-20:],
+        "stop_requested": any(it.get("stop_requested") for it in iterations),
         "next_command": "python -m scripts.strategy_lab.status",
         "safety": {"no_live_trading": True, "no_order_engine": True, "no_paid_llm_default": True,
                    "data_provider": args.provider, "single_run": True,

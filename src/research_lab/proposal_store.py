@@ -74,6 +74,19 @@ def status_counts(proposals: list[Proposal]) -> dict[str, int]:
     return counts
 
 
+def rejection_reason_counts(proposals: list[Proposal]) -> dict[str, int]:
+    """Tally rejection reasons across REJECTED proposals."""
+    counts: dict[str, int] = {}
+    for p in proposals:
+        if p.status != "REJECTED":
+            continue
+        for reason in (p.rejection_reason or "").split(","):
+            reason = reason.strip()
+            if reason:
+                counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
 def _write_all(path: Path, proposals: list[Proposal]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
