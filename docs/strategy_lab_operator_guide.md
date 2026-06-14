@@ -368,6 +368,24 @@ python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-mi
 - `status` and the dashboard show the last loop (mode, iterations, queued, missing
   data, worker done/deferred, last LLM status + reject reasons) and today's LLM spend.
 
+### First controlled cycle showcase
+
+The first unattended controlled cycle is documented as a public-safe example:
+
+```text
+examples/strategy_lab_first_cycle/README.md
+```
+
+It ran the closed proposal queue for four hours under the safe desktop policy:
+8 worker jobs completed, 0 failed, 0 missing-data skips, and 0 LLM/API spend.
+The run produced private candidate rows and Obsidian/report artifacts, but only
+aggregated proof-of-operation numbers are published. Full candidate tables,
+parameters, SQLite state, and follow-up specs stay in the private research root.
+
+The run also confirmed a deliberate safety ceiling: `research_loop` clamps
+requested duration to four hours. A true overnight mode should be an explicit
+future change, not an accidental removal of the safety cap.
+
 ### Multi-timeframe data (TODO)
 
 Readiness is **timeframe-aware**: a proposal is queued only if a candle file for its
