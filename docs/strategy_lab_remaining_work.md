@@ -5,7 +5,7 @@ Date: 2026-06-14. Updated after overnight-readiness patch.
 This document tracks what is still required before the Strategy Lab can be treated
 as a low-surprise overnight research machine.
 
-## Overnight Readiness: YES (no-LLM)
+## Overnight Readiness: YES (no-LLM and local-calculator)
 
 After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 
@@ -19,6 +19,10 @@ After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 - Hard-validation now writes complete machine-readable artifacts even when a
   candidate needs more data: request, report, verdict, feedback, and setup card.
 - Setup-library and feedback queues are idempotent for repeated pipeline runs.
+- Operator-facing `prepare_market_data` now covers 15m/1h/4h/1d as a dry-run
+  default command with explicit `--apply` for public OKX fetches.
+- Local Ollama `calculator` mode can propose bounded JSON candidates with no API
+  key and zero RUB cost; code still validates every proposal before queueing.
 - All safety guards intact: no live trading, no order engine, no paid LLM by default.
 
 ## What Changed (this patch)
@@ -86,10 +90,11 @@ After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
    - Verify JSON contract, validation, usage accounting, contract breaker.
    - Do not use overnight LLM until this passes.
 
-2. **Real 15m/1h/4h data preparation workflow**
-   - The lower-level provider supports these timeframes, but the operator-facing
-     prepare command is still named around 1m and should be generalized before
-     relying on intraday 24/7 research.
+2. **Local calculator behavior review after first overnight**
+   - Inspect reject reasons, validated proposal shapes, skipped missing-data
+     counts, hard-validation requests, and setup-card output.
+   - If the model mostly returns invalid JSON or low-value proposals, tighten the
+     Modelfile/system prompt or lower `STRATEGY_LAB_LOOP_MAX_CANDIDATES`.
 
 ## P2 Later Work
 
@@ -131,7 +136,15 @@ python -m scripts.strategy_lab.status
 Prepare multi-TF data:
 
 ```powershell
-python -m scripts.strategy_lab.prepare_1m_data --dry-run
+.\bat\strategy_lab_prepare_market_data.bat
+python -m scripts.strategy_lab.prepare_market_data --timeframe 1h --symbol BTC_USDT_SWAP --provider okx-public --apply
+```
+
+Local calculator overnight:
+
+```powershell
+ollama create calculator -f configs\strategy_lab\ollama_calculator.Modelfile
+.\bat\strategy_lab_research_loop_overnight_calculator.bat
 ```
 
 Graceful stop:

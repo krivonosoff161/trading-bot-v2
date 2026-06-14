@@ -135,6 +135,35 @@ def test_llm_step_synthetic_validates_and_stores(tmp_path, monkeypatch):
     assert len(load_proposals(proposals_path(tmp_path))) >= 1  # stored
 
 
+def test_llm_step_ollama_does_not_require_daily_cap(tmp_path, monkeypatch):
+    class FakeOllama:
+        name = "ollama"
+        configured = True
+
+        def generate(self, system, user):
+            text = (
+                '{"proposals":[{"setup_family":"momentum_breakout",'
+                '"requested_timeframe":"1d","symbols":["BTC_USDT_SWAP"],'
+                '"parameter_grid":{"momentum_breakout":[{"lookback":20,"hold_bars":5}]},'
+                '"hypothesis":"bounded local calculator test",'
+                '"expected_validation":"reject if fragile","risk_flags":[],"max_variants":1}]}'
+            )
+            return text, LLMUsage(provider="ollama", model="calculator", total_tokens=100, cost_rub=0.0)
+
+    monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_MODEL_CHEAP", "calculator")
+    monkeypatch.delenv("STRATEGY_LAB_LLM_DAILY_CAP", raising=False)
+    monkeypatch.setattr(loop_mod, "load_provider", lambda **_kwargs: FakeOllama())
+    universe, profiles, policy = _ctx()
+
+    out = _llm_step(_llm_args(max_candidates=1), tmp_path, universe, profiles, policy)
+
+    assert out["status"] == "ok" and out["provider"] == "ollama"
+    assert out["validated"] == 1 and out["cost_rub"] == 0.0
+
+
 def test_llm_step_daily_cap_blocks_call(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
     monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "synthetic")

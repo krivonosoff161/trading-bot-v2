@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
-from src.research_lab.data_prepare import read_prepare_report
+from src.research_lab.data_prepare import read_market_data_prepare_report, read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.llm_proposals import load_llm_loop_config
@@ -77,6 +77,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "llm_review": llm_review_status(private_root),
         "event_microscope": load_microscope_summary(private_root),
         "last_prepare_1m": load_data_prep_summary(private_root),
+        "last_prepare_market_data": load_market_data_prep_summary(private_root),
         "prepare_workflow": load_prepare_workflow_config().to_summary(),
         "last_cycle": cycle_summary(read_cycle_report(private_root)),
         "last_session": session_summary(read_session_report(private_root)),
@@ -305,6 +306,27 @@ def load_data_prep_summary(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[st
         "files_written": len(rep.get("files_written", []) or []),
         "generated_at": str(rep.get("generated_at", "")),
     }
+
+
+def load_market_data_prep_summary(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
+    """Public-safe summary of the latest operator market-data prepare per timeframe."""
+    out: dict[str, Any] = {}
+    for tf in ("15m", "1h", "4h", "1d"):
+        rep = read_market_data_prepare_report(private_root, tf)
+        if not rep:
+            out[tf] = {"available": False}
+            continue
+        out[tf] = {
+            "available": True,
+            "provider": str(rep.get("provider", "null")),
+            "provider_configured": bool(rep.get("provider_configured", False)),
+            "mode": str(rep.get("mode", "dry_run")),
+            "would_download": int(rep.get("would_download", 0) or 0),
+            "downloaded": int(rep.get("downloaded", 0) or 0),
+            "files_written": len(rep.get("files_written", []) or []),
+            "generated_at": str(rep.get("generated_at", "")),
+        }
+    return out
 
 
 def _last_loop_night_mode(private_root: Path) -> bool:

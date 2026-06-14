@@ -9,10 +9,8 @@ request). It never reads candles for analysis and never fetches; a missing-for-t
 timeframe / too-short / malformed input yields a clear status + reason, so the cycle
 skips the job instead of faking a result or running TA on the wrong timeframe.
 
-Data note: today only 1d candle JSON exists under the feasibility glob; 15m/1h/4h JSON
-has no loader yet, so a proposal on those timeframes is reported MISSING_DATA with a
-TODO rather than silently run on daily bars. The extension point (add a multi-timeframe
-public OKX fetch) is documented in docs/strategy_lab_operator_guide.md.
+Data note: missing 15m/1h/4h/1d files are reported as MISSING_DATA with an
+operator prepare command rather than silently running on the wrong timeframe.
 """
 
 from __future__ import annotations
@@ -59,6 +57,8 @@ class ReadinessResult:
 
 _PREPARE_1M = ("python -m scripts.strategy_lab.prepare_1m_data "
                "--symbol {symbol} --provider okx-public --apply")
+_PREPARE_MARKET = ("python -m scripts.strategy_lab.prepare_market_data "
+                   "--timeframe {timeframe} --symbol {symbol} --provider okx-public --apply")
 
 
 def _symbol_candidate_paths(data_glob: str, symbol: str) -> list[Path]:
@@ -71,11 +71,10 @@ def _symbol_candidate_paths(data_glob: str, symbol: str) -> list[Path]:
 
 
 def _prepare_hint(req: StrategyDataRequirement) -> str:
-    """An honest next step. Only 1m has a real loader; other timeframes get a TODO."""
+    """An honest next step for the exact missing timeframe."""
     if str(req.timeframe).strip().lower() == "1m":
         return _PREPARE_1M.format(symbol=req.symbol)
-    return (f"TODO: no {req.timeframe} primary-data loader yet (only 1m prepare exists); "
-            f"see docs/strategy_lab_operator_guide.md")
+    return _PREPARE_MARKET.format(timeframe=req.timeframe, symbol=req.symbol)
 
 
 def assess(

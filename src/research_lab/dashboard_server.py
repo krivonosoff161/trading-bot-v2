@@ -89,6 +89,7 @@ def render_html(state: dict) -> str:
     proposals = state.get("proposals") or {}
     event_microscope = state.get("event_microscope") or {}
     data_prep = state.get("last_prepare_1m") or {}
+    market_prep = state.get("last_prepare_market_data") or {}
     prepare_workflow = state.get("prepare_workflow") or {}
     last_cycle = state.get("last_cycle") or {}
     last_session = state.get("last_session") or {}
@@ -173,7 +174,7 @@ def render_html(state: dict) -> str:
 
   <section class="section card">
     <h2>Event Microscope (1m)</h2>
-    {microscope_html(event_microscope, data_prep, prepare_workflow)}
+    {microscope_html(event_microscope, data_prep, prepare_workflow, market_prep)}
   </section>
 
   <section class="section card">
@@ -401,7 +402,12 @@ def cycle_html(cycle: dict, session: dict | None = None, llm_loop: dict | None =
     return "\n".join(lines)
 
 
-def microscope_html(em: dict, data_prep: dict | None = None, prepare_workflow: dict | None = None) -> str:
+def microscope_html(
+    em: dict,
+    data_prep: dict | None = None,
+    prepare_workflow: dict | None = None,
+    market_prep: dict | None = None,
+) -> str:
     if not em or em.get("error"):
         return '<p class="muted">Event microscope not available.</p>'
     limits = em.get("limits") or {}
@@ -430,6 +436,18 @@ def microscope_html(em: dict, data_prep: dict | None = None, prepare_workflow: d
     else:
         auto_line = ('<p class="muted">auto-prepare on start: disabled '
                      '(default; no network fetch — set STRATEGY_LAB_PREPARE_1M=1 to enable)</p>')
+    prep_market = market_prep or {}
+    market_parts = []
+    for tf in ("15m", "1h", "4h", "1d"):
+        item = prep_market.get(tf) or {}
+        if item.get("available"):
+            market_parts.append(
+                f"{esc(tf)}:<span class=\"pill\">{esc(item.get('mode', ''))}</span> "
+                f"{esc(item.get('provider', 'null'))} dl={esc(item.get('downloaded', 0))}"
+            )
+        else:
+            market_parts.append(f"{esc(tf)}:<span class=\"pill\">not run</span>")
+    market_line = "<p>market-data prep: " + " - ".join(market_parts) + "</p>"
     return "\n".join([
         f"<p>1m microscope: <span class=\"pill\">{state}</span> "
         f"(trigger-only; no downloader; full-universe 1m sweeps blocked)</p>",
@@ -440,6 +458,7 @@ def microscope_html(em: dict, data_prep: dict | None = None, prepare_workflow: d
         f"<p>data availability ({esc(em.get('scanned_group', ''))}): {counts_line}</p>",
         f"<p class=\"muted\">skipped: {skipped_line}</p>",
         prep_line,
+        market_line,
         auto_line,
     ])
 

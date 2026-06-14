@@ -74,6 +74,7 @@ def main() -> None:
     llm = state.get("llm_review") or {}
     microscope = state.get("event_microscope") or {}
     prep = state.get("last_prepare_1m") or {}
+    market_prep = state.get("last_prepare_market_data") or {}
     prep_cfg = state.get("prepare_workflow") or {}
     cycle = state.get("last_cycle") or {}
     session = state.get("last_session") or {}
@@ -151,6 +152,18 @@ def main() -> None:
               f"(missing: {prep.get('missing', 0)}, downloaded: {prep.get('downloaded', 0)})")
     else:
         print("1m data prep : not run yet (prepare_1m_data --dry-run shows what 1m data is needed)")
+    if market_prep:
+        parts = []
+        for tf in ("15m", "1h", "4h", "1d"):
+            item = market_prep.get(tf) or {}
+            if item.get("available"):
+                parts.append(
+                    f"{tf}:{item.get('mode')} via {item.get('provider')} "
+                    f"dl={item.get('downloaded', 0)}"
+                )
+            else:
+                parts.append(f"{tf}:not_run")
+        print("Market prep  : " + "; ".join(parts))
     if prep_cfg.get("enabled"):
         print(f"auto-prepare : on start: {prep_cfg.get('mode')}, provider={prep_cfg.get('provider')} "
               f"(network fetch: {'yes' if prep_cfg.get('will_fetch_network') else 'no'})")

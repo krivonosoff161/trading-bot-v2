@@ -251,6 +251,37 @@ def read_prepare_report(private_root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def market_data_prepare_report_path(private_root: Path, timeframe: str) -> Path:
+    tf = str(timeframe).strip().lower()
+    return private_root / "reports" / "data_prep" / f"last_prepare_{tf}.json"
+
+
+def write_market_data_prepare_report(
+    private_root: Path,
+    report: "MarketDataPrepareReport",
+    *,
+    allow_public_output: bool = False,
+) -> Path:
+    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    path = market_data_prepare_report_path(private_root, report.timeframe)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(report.to_dict())
+    payload["generated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def read_market_data_prepare_report(private_root: Path, timeframe: str) -> dict[str, Any]:
+    path = market_data_prepare_report_path(private_root, timeframe)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 @dataclass(frozen=True)
 class MarketDataPrepareItem:
     symbol: str

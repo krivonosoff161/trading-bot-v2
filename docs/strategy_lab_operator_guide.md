@@ -50,9 +50,9 @@ no `.env`/secrets, no automatic LLM spend.
 ## What is planned (not done yet)
 
 - A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
-- More market-data providers / timeframes (today: `okx-public` fetches **1m only**;
-  `null` default + offline `synthetic` test provider remain). Full-market 1m
-  download is intentionally unsupported.
+- More market-data providers (today: `okx-public` fetches public candles for
+  `1m`, `15m`, `1h`, `4h`, `1d`; `null` default + offline `synthetic` test
+  provider remain). Full-market 1m download is intentionally unsupported.
 - A real LLM provider behind the send boundary (today only `NullReviewSender`;
   sending stays export-only).
 
@@ -124,11 +124,13 @@ trades, or write to the public repo.
 | Preview what would be queued | `bat\strategy_lab_queue_validated_dry_run.bat` |
 | Check 1m event-microscope data | `bat\strategy_lab_microscope_scan.bat` |
 | See what 1m data is needed (dry-run) | `bat\strategy_lab_prepare_1m_data.bat` |
+| Prepare 15m/1h/4h/1d market data (dry-run default) | `bat\strategy_lab_prepare_market_data.bat` |
 | Run one controlled research cycle (dry-run) | `bat\strategy_lab_cycle_dry_run.bat` |
 | Plan a full research session (dry-run) | `bat\strategy_lab_research_session_dry_run.bat` |
 | Watch a 30-min research loop (dry-run) | `bat\strategy_lab_research_loop_30m_dry_run.bat` |
 | Run a 30-min research loop (apply, no LLM) | `bat\strategy_lab_research_loop_30m_apply.bat` |
 | Bounded no-LLM research loop (default 8h, configurable) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
+| Bounded local-calculator loop (Ollama, no API key) | `bat\strategy_lab_research_loop_overnight_calculator.bat` |
 | Morning summary after a loop | `bat\strategy_lab_morning_report.bat` |
 | Run hard validation + feedback + setup cards | `bat\strategy_lab_validate_candidates_pipeline.bat --apply --limit 10` |
 | Gracefully stop the loop after current iteration | `bat\strategy_lab_graceful_stop.bat` |
@@ -189,6 +191,18 @@ Use `300` for 5 hours, `360` for 6 hours, or `420` for 7 hours. Optional knobs:
 The overnight loop uses night-mode resource policy (relaxed caps) and runs
 data-ready local jobs only. If you have prepared 15m/1h/4h data, those
 timeframes will be tested too; otherwise only 1d jobs run.
+
+**Overnight (local calculator via Ollama, no API key):**
+
+```powershell
+ollama create calculator -f configs\strategy_lab\ollama_calculator.Modelfile
+.\bat\strategy_lab_research_loop_overnight_calculator.bat
+```
+
+This uses the local `calculator` model only as a bounded JSON dispatcher. It can
+propose small candidate specs, but code validates the JSON, enforces resource
+caps, checks data readiness, and decides what enters the queue. The model has no
+tool execution, no file access, no order path, and no live-trading authority.
 
 **Overnight (with paid LLM, explicit opt-in only):**
 
@@ -363,19 +377,34 @@ provider client, a daily budget cap, and `--llm-send` (and never on dry-run). No
 keys are stored or printed (env names only).
 
 A real **proposal** provider now exists (separate from the review-pack send path,
-which still ships only `NullReviewSender`). It is OpenAI-compatible
-(**Alibaba/Qwen/openai-compatible**), synchronous, stdlib-only, and isolated from the
+which still ships only `NullReviewSender`). It supports OpenAI-compatible
+(**Alibaba/Qwen/openai-compatible**) and local **Ollama** mode, is synchronous,
+stdlib-only, and isolated from the
 scanner runtime and its budget. It is wired into the research **loop** (below) via
 `--llm-propose`. Configure it with:
 
 | Env | Meaning |
 |---|---|
 | `STRATEGY_LAB_LLM_ENABLED=1` | master switch (off → no network ever) |
-| `STRATEGY_LAB_LLM_PROVIDER` | `alibaba` / `qwen` / `openai-compatible` / `synthetic` |
+| `STRATEGY_LAB_LLM_PROVIDER` | `alibaba` / `qwen` / `openai-compatible` / `ollama` / `synthetic` |
 | `STRATEGY_LAB_LLM_BASE_URL` | OpenAI-compatible base (e.g. dashscope compatible-mode) |
 | `STRATEGY_LAB_LLM_API_KEY` | the key VALUE (header only; never logged/stored) |
 | `STRATEGY_LAB_LLM_MODEL_CHEAP` | the cheap model id |
 | `STRATEGY_LAB_LLM_DAILY_CAP` | RUB/day cap; a send/propose is blocked once reached |
+
+For local Ollama calculator mode:
+
+```powershell
+ollama pull qwen2.5:1.5b
+ollama create calculator -f configs\strategy_lab\ollama_calculator.Modelfile
+set STRATEGY_LAB_LLM_ENABLED=1
+set STRATEGY_LAB_LLM_PROVIDER=ollama
+set STRATEGY_LAB_LLM_BASE_URL=http://127.0.0.1:11434/v1
+set STRATEGY_LAB_LLM_MODEL_CHEAP=calculator
+```
+
+No API key is required for `ollama`. The provider records token counts if the
+local endpoint returns them and records `0` RUB cost.
 
 Spend is recorded in a **lab-private** usage log (`reports/llm_usage/`, tokens/cost
 only, never the scanner budget). `status` and the dashboard show the provider state
@@ -581,6 +610,31 @@ python -m scripts.strategy_lab.status
 - A built-in offline `synthetic` provider (deterministic, clearly tagged, **not**
   real market data) exists for pipeline testing/demos and is gated behind
   `STRATEGY_LAB_ALLOW_SYNTHETIC=1`.
+
+## Prepare 15m/1h/4h/1d market data on demand
+
+Primary strategy runs use the requested timeframe exactly. If a proposal asks
+for `15m`, `1h`, `4h`, or `1d` and that data is missing, the readiness gate skips
+the job and prints a `prepare_market_data` command instead of running on the
+wrong file.
+
+```powershell
+# Dry-run, no network:
+bat\strategy_lab_prepare_market_data.bat
+python -m scripts.strategy_lab.prepare_market_data --timeframe 1h --symbol BTC_USDT_SWAP --dry-run
+
+# Public OKX fetch, explicit apply:
+python -m scripts.strategy_lab.prepare_market_data --timeframe 1h --symbol BTC_USDT_SWAP --provider okx-public --apply
+
+# Universe window, capped by timeframe profile:
+python -m scripts.strategy_lab.prepare_market_data --timeframe 15m --universe l2_high_beta --provider okx-public --apply
+```
+
+The command writes canonical OHLCV JSON under
+`strategy-lab/market_data/{timeframe}/` in the private root. It is market-data
+only: no private endpoints, no order/account calls, no API key, and no public
+repo output. The default provider is `null`, so a dry-run or unconfigured apply
+cannot fetch anything accidentally.
 
 ### Auto-prepare on start (opt-in, off by default)
 
