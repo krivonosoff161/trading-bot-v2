@@ -95,7 +95,7 @@ def run_research_cycle(config: ResearchCycleConfig, *, private_root, allow_publi
 
     # 3) check required 1m data (resilient: a data-check error blocks prepare/worker safely)
     profiles = load_timeframe_profiles()
-    policy = load_resource_policy()
+    policy = load_resource_policy(night_mode=config.night_mode)
     checks: list = []
     try:
         limits = derive_limits(profiles, policy)
@@ -146,7 +146,8 @@ def run_research_cycle(config: ResearchCycleConfig, *, private_root, allow_publi
         try:
             q = queue_validated(private_root, priority=config.priority, apply=config.apply,
                                 max_queue=config.max_queue, require_data_ready=True,
-                                allow_public_output=allow_public_output)
+                                allow_public_output=allow_public_output,
+                                night_mode=config.night_mode)
             counts["proposals_queued"] = q["queued"]
             counts["ready_jobs"] = q["ready"]
             counts["skipped_missing_data"] = q.get("skipped_missing_data", 0)
@@ -265,6 +266,7 @@ def main() -> None:
         prepare_1m_apply=bool(args.prepare_1m_apply),
         provider=args.provider,
         allow_synthetic=allow_synthetic,
+        night_mode=os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"},
     )
     result = run_research_cycle(config, private_root=args.private_root, allow_public_output=args.allow_public_output)
     write_cycle_report(Path(args.private_root), result, allow_public_output=args.allow_public_output)

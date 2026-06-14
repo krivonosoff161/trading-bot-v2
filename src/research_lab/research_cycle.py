@@ -52,6 +52,7 @@ class ResearchCycleConfig:
     prepare_1m_apply: bool = False
     provider: str = "null"
     allow_synthetic: bool = False
+    night_mode: bool = False
 
     @property
     def mode(self) -> str:

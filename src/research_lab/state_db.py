@@ -221,7 +221,7 @@ def ensure_experiment_queued(conn: sqlite3.Connection, spec_path: Path, *, prior
     row = conn.execute(
         """
         SELECT job_id FROM queue
-        WHERE spec_path = ? AND status IN ('queued', 'running')
+        WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
         ORDER BY job_id ASC
         LIMIT 1
         """,

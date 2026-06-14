@@ -23,7 +23,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from src.research_lab.llm_provider import load_provider
+from src.research_lab.llm_provider import SCANNER_ENV_PROVIDER, load_provider
 from src.research_lab.llm_review_sender import (
     NullReviewSender,
     daily_cap,
@@ -102,7 +102,7 @@ def load_llm_loop_config(
     allow_synthetic: bool = False,
 ) -> LLMLoopConfig:
     env = environ if environ is not None else os.environ
-    provider = str(env.get(ENV_PROVIDER, "") or "").strip().lower()
+    provider = str(env.get(ENV_PROVIDER, "") or env.get(SCANNER_ENV_PROVIDER, "") or "").strip().lower()
     # provider_configured reflects a REAL (network) provider being fully set up.
     configured = load_provider(env, allow_synthetic=allow_synthetic).configured and provider != "synthetic"
     return LLMLoopConfig(

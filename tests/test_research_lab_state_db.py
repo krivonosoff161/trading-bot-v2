@@ -164,6 +164,23 @@ def test_ensure_experiment_queued_does_not_duplicate_pending_job(tmp_path):
     conn.close()
 
 
+def test_ensure_experiment_queued_does_not_duplicate_completed_job(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    spec = tmp_path / "spec.json"
+
+    first, first_created = ensure_experiment_queued(conn, spec, priority=50)
+    complete_job(conn, first, "experiments/completed/demo")
+    second, second_created = ensure_experiment_queued(conn, spec, priority=50)
+
+    assert first == second
+    assert first_created is True
+    assert second_created is False
+    assert conn.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 1
+    conn.close()
+
+
 def test_dashboard_snapshot_has_no_absolute_private_paths(tmp_path):
     _write_completed_run(tmp_path)
     import_completed_runs(tmp_path)

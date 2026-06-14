@@ -68,6 +68,29 @@ def test_openai_compatible_configured_with_full_env():
     assert p.configured is True and p.name == "alibaba"
 
 
+def test_scanner_style_alibaba_aliases_work_only_after_strategy_gate():
+    env = {
+        "STRATEGY_LAB_LLM_ENABLED": "1",
+        "LLM_PROVIDER": "alibaba",
+        "ALIBABA_BASE_URL": "https://example.invalid/compatible-mode/v1",
+        "ALIBABA_API_KEY": "sk-SECRET-do-not-log",
+        "LLM_CHEAP_MODEL": "qwen-test",
+    }
+    p = load_provider(env)
+    assert isinstance(p, OpenAICompatibleProvider)
+    assert p.configured is True and p.name == "alibaba"
+
+
+def test_scanner_style_aliases_do_not_enable_provider_without_lab_gate():
+    env = {
+        "LLM_PROVIDER": "alibaba",
+        "ALIBABA_BASE_URL": "https://example.invalid/compatible-mode/v1",
+        "ALIBABA_API_KEY": "sk-SECRET-do-not-log",
+        "LLM_CHEAP_MODEL": "qwen-test",
+    }
+    assert load_provider(env).configured is False
+
+
 # ── mocked HTTP transport (no real network) ────────────────────────────────────
 
 def test_mocked_http_parses_content_and_computes_cost():

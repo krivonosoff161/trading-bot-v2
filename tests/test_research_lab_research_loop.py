@@ -21,7 +21,7 @@ def _loop_args(tmp_path, **over):
                 sleep_seconds=0, llm_propose=False, prepare_missing_data=False,
                 provider="null", max_candidates=3, max_queued=5,
                 max_worker_jobs_per_iteration=1, private_root=str(tmp_path),
-                allow_public_output=False)
+                allow_public_output=False, load_env="", night_mode=False)
     base.update(over)
     return Namespace(**base)
 
