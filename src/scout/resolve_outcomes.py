@@ -214,12 +214,14 @@ def resolve(limit: int | None = None) -> None:
                 btc0 = _price_at(baseline_path, t0_ms)
 
             if not inst or p0 in (None, 0):
+                price_reason = r.get("price_reason") or ("no_instrument" if not inst else "price_unavailable")
                 rec = {"card_id": cid, "resolved_ts": now_iso(), "scored": False,
-                       "note": "manual — актив вне OKX / нет цены входа, исход дописывает трейдер",
+                       "note": f"manual — {price_reason}, исход дописывает трейдер",
+                       "price_reason": price_reason,
                        "verdict": r.get("verdict"), "asset": r.get("asset")}
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 manual += 1
-                print(f"  [{i}/{matured}] [manual] {r.get('verdict')} {r.get('asset')} — вне OKX, исход вручную")
+                print(f"  [{i}/{matured}] [manual:{price_reason}] {r.get('verdict')} {r.get('asset')}")
                 continue
 
             path = [c for c in path if t0_ms <= c[0] <= t_end_ms] or fetch_path(inst, t0_ms, t_end_ms)

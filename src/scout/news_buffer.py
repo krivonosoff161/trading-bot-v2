@@ -27,9 +27,11 @@ if str(_ROOT) not in sys.path:
 
 from src.scout import google_news_url as GN  # noqa: E402
 from src.scout import page_extract  # noqa: E402
+from src.scout.asset_identity import identify_asset  # noqa: E402
 from src.scout.dedup import event_key as make_event_key  # noqa: E402
 from src.scout.sources import sec_edgar as SEC  # noqa: E402
 from src.scout.router import baseline_for_layer, route_asset, route_temporal, score_materiality, source_meta  # noqa: E402
+from src.scout.trigger_policy import get_policy  # noqa: E402
 
 DB_PATH = _ROOT / "data" / "scout" / "news_buffer.sqlite"
 
@@ -481,6 +483,34 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                         drop_reason = "context_commentary"
 
             event_key = raw.get("event_key") or (make_event_key(asset, title) if asset else None)
+
+            # Identity resolution: extract from raw_json (pre-routed items) or resolve
+            identity = {}
+            if asset:
+                if raw.get("asset_class"):
+                    identity = {
+                        "asset_class": raw.get("asset_class"),
+                        "trigger_role": raw.get("trigger_role"),
+                        "requires_context": raw.get("requires_context"),
+                        "identity_reason": raw.get("identity_reason"),
+                        "identity_confidence": raw.get("identity_confidence"),
+                        "channel_kind": raw.get("channel_kind"),
+                        "context_requirements": raw.get("context_requirements"),
+                    }
+                else:
+                    src_meta = source_meta(source)
+                    policy = get_policy(source, src_meta)
+                    ident = identify_asset(asset, title or "", src_meta)
+                    identity = {
+                        "asset_class": ident.get("asset_class"),
+                        "trigger_role": ident.get("trigger_role"),
+                        "requires_context": ident.get("requires_context"),
+                        "identity_reason": ident.get("reason"),
+                        "identity_confidence": ident.get("confidence"),
+                        "channel_kind": policy.get("channel_kind"),
+                        "context_requirements": ident.get("context_requirements"),
+                    }
+
             machine = {
                 "doc_id": row["doc_id"],
                 "source_id": source,
@@ -498,6 +528,12 @@ def normalize_pending(limit: int = 100, path: Path = DB_PATH) -> dict:
                 "event_type_hint": mat.get("family") or raw.get("event_type") or "unclassified",
                 "phase_hint": phase,
                 "lead_class": lead_class,
+                "asset_class": identity.get("asset_class"),
+                "trigger_role": identity.get("trigger_role"),
+                "requires_context": identity.get("requires_context"),
+                "identity_reason": identity.get("identity_reason"),
+                "identity_confidence": identity.get("identity_confidence"),
+                "channel_kind": identity.get("channel_kind"),
                 "extraction": {
                     "method": row["extraction_method"],
                     "status": row["extraction_status"],
@@ -609,6 +645,12 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
                 "extraction_quality": row["extraction_quality"],
                 "extraction_status": row["extraction_status"],
                 "extraction_method": row["extraction_method"],
+                "asset_class": mj.get("asset_class"),
+                "trigger_role": mj.get("trigger_role"),
+                "requires_context": mj.get("requires_context"),
+                "identity_reason": mj.get("identity_reason"),
+                "identity_confidence": mj.get("identity_confidence"),
+                "channel_kind": mj.get("channel_kind"),
             }
         )
     return out

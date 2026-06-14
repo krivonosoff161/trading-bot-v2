@@ -70,6 +70,7 @@ from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
 from src.scout import pending_store as PS                        # noqa: E402
 from src.scout import watch_queue as WQ                          # noqa: E402
+from src.scout.price_provider import get_price as _get_price     # noqa: E402
 from src.utils import llm_budget_guard as LBG                    # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
@@ -264,17 +265,14 @@ def fetch_rss(limit: int = 25) -> list[dict]:
 
 
 def okx_last(inst_id: str | None) -> float | None:
-    if not inst_id:
-        return None
-    try:
-        r = requests.get("https://www.okx.com/api/v5/market/ticker",
-                         params={"instId": inst_id}, headers=UA, timeout=TIMEOUT)
-        d = r.json()
-        if str(d.get("code")) == "0" and d.get("data"):
-            return float(d["data"][0]["last"])
-    except Exception:
-        return None
-    return None
+    """Backward-compatible price fetch (returns price or None)."""
+    price, _reason = _get_price(inst_id)
+    return price
+
+
+def okx_last_with_reason(inst_id: str | None) -> tuple[float | None, str]:
+    """Price fetch with explicit reason for unavailability."""
+    return _get_price(inst_id)
 
 
 CHARTS_DIR = _ROOT / "logs" / "scout" / "charts"
@@ -719,7 +717,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     else:
         baseline_price = None
 
-    price = okx_last(inst) if (not dry and inst) else None
+    price, price_reason = (okx_last_with_reason(inst) if (not dry and inst) else (None, "no_instrument"))
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
     # Inject identity metadata for LLM framing (asset_class, trigger_role, etc.)
@@ -940,6 +938,7 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         forecast=fields["forecast"], summary=fields["summary"],
         low_confidence=low_conf,
         outcome_source=("okx" if price is not None else "manual"),
+        price_reason=price_reason,
         # Phase 4: identity/context fields
         asset_class=item.get("asset_class"),
         trigger_role=item.get("trigger_role"),
