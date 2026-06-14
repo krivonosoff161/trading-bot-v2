@@ -353,7 +353,7 @@ python -m scripts.strategy_lab.research_loop --apply --duration-minutes 30 --sle
 # Apply + cheap LLM proposing (COSTS MONEY): requires the STRATEGY_LAB_LLM_* env above
 # (provider/base_url/key/model) + STRATEGY_LAB_LLM_DAILY_CAP. The LLM provider is chosen
 # ONLY by STRATEGY_LAB_LLM_PROVIDER; --provider is the DATA provider, never the LLM.
-python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-minutes 30
+python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-minutes 30 --max-llm-contract-failures 3
 ```
 
 - **Default is dry-run**: no queue writes, no worker, no network, no LLM. Only the
@@ -365,6 +365,15 @@ python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-mi
   `STRATEGY_LAB_LLM_PROVIDER=synthetic`) exercises the path with no cost.
 - **Bounded by construction**: duration is clamped (≤ 4h), iterations are capped, and
   each iteration runs at most `--max-worker-jobs-per-iteration` worker steps.
+  Note: explicit `--night-mode` raises the duration ceiling to 12h; it does not
+  remove worker throttling, queue caps, LLM daily caps, or the LLM contract breaker.
+- **LLM contract breaker**: if the provider repeatedly returns invalid proposal JSON
+  or the wrong top-level shape, `--max-llm-contract-failures` disables LLM proposing
+  for the rest of that bounded run. The worker can continue processing already-ready
+  queue items without burning more model calls.
+- **Overnight paid LLM is explicit**: `bat\strategy_lab_research_loop_overnight_llm.bat`
+  refuses to auto-enable paid calls. Set `STRATEGY_LAB_LLM_ENABLED=1` yourself first,
+  keep `STRATEGY_LAB_LLM_DAILY_CAP` small, and watch `strategy_lab_status.bat`.
 - `status` and the dashboard show the last loop (mode, iterations, queued, missing
   data, worker done/deferred, last LLM status + reject reasons) and today's LLM spend.
 

@@ -6,6 +6,7 @@ from src.research_lab.llm_proposals import (
     chief_review_candidates,
     evaluate_llm_loop_gates,
     load_llm_loop_config,
+    parse_llm_proposals,
     validate_llm_candidates,
 )
 from src.research_lab.resource_policy import load_resource_policy
@@ -62,6 +63,39 @@ def test_validate_candidates_accepts_valid_rejects_invalid():
                                     resource_policy=policy, created_at=_AT)
     assert len(batch.validated) == 1
     assert len(batch.rejected) == 2
+
+
+def test_parse_accepts_common_wrappers_and_think_prefix():
+    text = '<think>draft</think>\n{"candidates": [{"strategy": "momentum_breakout"}]} trailing'
+    assert parse_llm_proposals(text) == [{"strategy": "momentum_breakout"}]
+
+
+def test_validate_normalizes_model_aliases_into_proposal():
+    universe, profiles, policy = _ctx()
+    items = [{
+        "strategy": "momentum_breakout",
+        "timeframe": "1d",
+        "symbols": "BTC_USDT_SWAP",
+        "params": {"lookback": 20, "hold_bars": 5},
+        "rationale": "test breakout timing",
+        "expected_failure_mode": "late entry",
+    }]
+    batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
+                                    resource_policy=policy, created_at=_AT)
+    assert len(batch.validated) == 1
+    proposal = batch.validated[0]
+    assert proposal.setup_family == "momentum_breakout"
+    assert proposal.requested_timeframe == "1d"
+    assert proposal.parameter_grid["momentum_breakout"][0]["lookback"] == 20
+
+
+def test_parse_wrong_shape_gets_specific_error():
+    try:
+        parse_llm_proposals('{"note": "not a proposal batch"}')
+    except ValueError as exc:
+        assert str(exc) == "missing_proposals_array"
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def test_unsafe_wording_candidate_rejected_not_executed():

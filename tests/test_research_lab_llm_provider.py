@@ -109,6 +109,32 @@ def test_mocked_http_parses_content_and_computes_cost():
     assert seen["auth"].startswith("Bearer ")  # key only in the header
 
 
+def test_structured_json_payload_does_not_set_max_tokens():
+    seen = {}
+
+    def fake_post(url, payload, headers, timeout):
+        seen["payload"] = payload
+        return _envelope('{"proposals": []}', total_tokens=100)
+
+    p = load_provider(_FULL_ENV, http_post=fake_post)
+    p.generate("system", "user")
+
+    assert seen["payload"]["response_format"] == {"type": "json_object"}
+    assert "max_tokens" not in seen["payload"]
+
+
+def test_finish_reason_length_is_truncated_json_error():
+    def fake_post(url, payload, headers, timeout):
+        return {
+            "choices": [{"finish_reason": "length", "message": {"content": '{"proposals": ['}}],
+            "usage": {"total_tokens": 100},
+        }
+
+    p = load_provider(_FULL_ENV, http_post=fake_post)
+    with pytest.raises(LLMProviderError, match="truncated_json"):
+        p.generate("system", "user")
+
+
 def test_mocked_http_error_raises_provider_error():
     def boom(url, payload, headers, timeout):
         raise urllib.error.URLError("offline")

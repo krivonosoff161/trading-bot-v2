@@ -164,6 +164,24 @@ def test_ensure_experiment_queued_does_not_duplicate_pending_job(tmp_path):
     conn.close()
 
 
+def test_queue_unique_index_blocks_duplicate_active_specs(tmp_path):
+    db_path = default_db_path(tmp_path)
+    conn = connect(db_path)
+    init_db(conn)
+    spec = tmp_path / "spec.json"
+
+    enqueue_experiment(conn, spec, priority=50)
+
+    try:
+        enqueue_experiment(conn, spec, priority=50)
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("expected duplicate active spec to be blocked")
+    assert conn.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 1
+    conn.close()
+
+
 def test_ensure_experiment_queued_does_not_duplicate_completed_job(tmp_path):
     db_path = default_db_path(tmp_path)
     conn = connect(db_path)

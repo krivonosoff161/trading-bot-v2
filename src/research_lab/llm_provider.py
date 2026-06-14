@@ -53,7 +53,6 @@ SCANNER_ENV_CHEAP_MODEL = "LLM_CHEAP_MODEL"
 OPENAI_COMPATIBLE = {"alibaba", "qwen", "openai-compatible", "openai"}
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RATE_RUB_PER_1K = 0.5  # fallback cost model, mirrors the scanner's RUB style
-_MAX_TOKENS = 1200
 _USER_AGENT = "strategy-lab-research/1.0 (+llm-proposals)"
 
 
@@ -146,7 +145,7 @@ class OpenAICompatibleProvider:
         headers = {"Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
                    "User-Agent": _USER_AGENT}
         payload = {
-            "model": self._model, "max_tokens": _MAX_TOKENS,
+            "model": self._model,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
@@ -159,7 +158,11 @@ class OpenAICompatibleProvider:
         if not isinstance(data, dict):
             raise LLMProviderError("llm returned an unexpected payload")
         try:
-            text = str(data["choices"][0]["message"]["content"] or "").strip()
+            choice = data["choices"][0]
+            finish_reason = str(choice.get("finish_reason") or "")
+            if finish_reason == "length":
+                raise LLMProviderError("truncated_json")
+            text = str(choice["message"]["content"] or "").strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMProviderError("llm response missing choices/content") from exc
         usage = self._usage(data.get("usage") or {})
