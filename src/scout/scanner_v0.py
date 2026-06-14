@@ -64,6 +64,7 @@ from src.scout.sources.earnings_calendar import fetch_earnings_calendar        #
 from src.scout.sources.etf_flow import l1_context_line                          # noqa: E402
 from src.scout.sources.telegram_web import fetch_telegram_web_sources           # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
+from src.scout import trigger_context as TC                                     # noqa: E402
 from src.scout import scanner_journal as J                       # noqa: E402
 from src.scout import scanner_records as R                       # noqa: E402
 from src.scout import pending_store as PS                        # noqa: E402
@@ -502,6 +503,8 @@ def write_routing_snapshot(
     note: str | None = None,
     veto_flags: list | None = None,
     no_edge_flags: list | None = None,
+    context_found: bool | None = None,
+    context_missing: list | None = None,
 ) -> None:
     J.write_routing_audit(
         {
@@ -529,6 +532,12 @@ def write_routing_snapshot(
             "note": note,
             "veto_flags": veto_flags,
             "no_edge_flags": no_edge_flags,
+            "asset_class": item.get("asset_class"),
+            "trigger_role": item.get("trigger_role"),
+            "requires_context": item.get("requires_context"),
+            "context_found": context_found,
+            "context_missing": context_missing,
+            "identity_reason": item.get("identity_reason"),
         }
     )
 
@@ -537,7 +546,8 @@ def write_routing_snapshot(
 async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
                        recent: list | None = None, dedup_min: int = 88,
-                       carded: dict | None = None, max_per_asset: int = 1) -> dict | None:
+                       carded: dict | None = None, max_per_asset: int = 1,
+                       use_buffer: bool = False) -> dict | None:
     headline = item["title"]
     url = item.get("url")
     doc_id = item.get("buffer_doc_id")
@@ -691,6 +701,16 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     price = okx_last(inst) if (not dry and inst) else None
     news = {"headline": headline, "text": body_text, "date": source_ts, "url": url or canon}
 
+    # Inject identity metadata for LLM framing (asset_class, trigger_role, etc.)
+    if item.get("asset_class"):
+        news["asset_class"] = item["asset_class"]
+    if item.get("trigger_role"):
+        news["trigger_role"] = item["trigger_role"]
+    if item.get("identity_reason"):
+        news["identity_reason"] = item["identity_reason"]
+    if item.get("identity_confidence") is not None:
+        news["identity_confidence"] = item["identity_confidence"]
+
     # L1-обогащение: строка ETF-потоков в рыночный фон (контекст для cheap/chief,
     # НЕ сигнал и НЕ гейт — пусто, если SCANNER_ETF_FLOW_PROVIDER не сконфигурирован)
     ctx_line = mline
@@ -698,6 +718,36 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         etf_line = l1_context_line()
         if etf_line:
             ctx_line = f"{mline} | {etf_line}" if mline else etf_line
+
+    # Context building for items that need it (requires_context=True from identity resolver)
+    requires_context = bool(item.get("requires_context"))
+    trigger_context_pkg = None
+    if requires_context and not dry:
+        trigger_context_pkg = TC.build_context(
+            symbol=asset,
+            text=(item.get("text") or headline)[:500],
+            asset_class=item.get("asset_class", "unknown"),
+            source_id=source,
+        )
+        if not trigger_context_pkg.get("context_found"):
+            missing = trigger_context_pkg.get("context_missing", [])
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=asset, layer=layer, asset_confidence=conf,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=phase, materiality_score=mat.get("score"),
+                materiality_family=mat.get("family"), skipped="needs_context",
+                note=f"identity:{item.get('identity_reason','')} missing:{','.join(missing[:3])}",
+                context_found=False,
+                context_missing=missing,
+            )
+            return {"skipped": "needs_context", "headline": headline, "asset": asset,
+                    "trigger_context": trigger_context_pkg}
+        else:
+            # Context found — enrich the news dict for LLM
+            ctx_summary = trigger_context_pkg.get("context_summary", "")
+            if ctx_summary:
+                news["context_package"] = ctx_summary
 
     # 3) ОРКЕСТРАТОР: дешёвый слой-агент → кодовый гейт → chief (только кандидаты). dry = заглушка без LLM.
     if dry:
@@ -956,17 +1006,61 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     except Exception as e:
         print(f"RSS ОШИБКА: {e}")
         rss_items = []
-    listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
-    sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
-    tactical_items = [] if (dry or not source_meta("btc_eth_tactical").get("enabled")) else fetch_btc_eth_tactical(limit=4)
-    fred_items = [] if (dry or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
-    eia_items = [] if (dry or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
-    opec_items = [] if (dry or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
-    earnings_items = [] if (dry or not source_meta("earnings_calendar").get("enabled")) else fetch_earnings_calendar(limit=8)
-    unlock_items = [] if (dry or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
-    dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
-    risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
-    telegram_items = fetch_telegram_web_sources(limit_per_source=20)
+    try:
+        listings = [] if dry else fetch_new_listings(within_hours=24, limit=5)
+    except Exception as e:
+        print(f"OKX listings ОШИБКА: {e}")
+        listings = []
+    try:
+        sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
+    except Exception as e:
+        print(f"SEC filings ОШИБКА: {e}")
+        sec_items = []
+    try:
+        tactical_items = [] if (dry or not source_meta("btc_eth_tactical").get("enabled")) else fetch_btc_eth_tactical(limit=4)
+    except Exception as e:
+        print(f"BTC/ETH tactical ОШИБКА: {e}")
+        tactical_items = []
+    try:
+        fred_items = [] if (dry or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
+    except Exception as e:
+        print(f"FRED calendar ОШИБКА: {e}")
+        fred_items = []
+    try:
+        eia_items = [] if (dry or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
+    except Exception as e:
+        print(f"EIA schedule ОШИБКА: {e}")
+        eia_items = []
+    try:
+        opec_items = [] if (dry or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
+    except Exception as e:
+        print(f"OPEC schedule ОШИБКА: {e}")
+        opec_items = []
+    try:
+        earnings_items = [] if (dry or not source_meta("earnings_calendar").get("enabled")) else fetch_earnings_calendar(limit=8)
+    except Exception as e:
+        print(f"Earnings calendar ОШИБКА: {e}")
+        earnings_items = []
+    try:
+        unlock_items = [] if (dry or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
+    except Exception as e:
+        print(f"Token unlocks ОШИБКА: {e}")
+        unlock_items = []
+    try:
+        dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
+    except Exception as e:
+        print(f"Dexscreener ОШИБКА: {e}")
+        dex_items = []
+    try:
+        risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
+    except Exception as e:
+        print(f"GoPlus rugcheck ОШИБКА: {e}")
+        risk_items = []
+    try:
+        telegram_items = fetch_telegram_web_sources(limit_per_source=20)
+    except Exception as e:
+        print(f"Telegram web ОШИБКА: {e}")
+        telegram_items = []
     leading = listings + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
     native = dex_items                            # native event feed for L2 (COINCIDENT)
     items = leading + risk_items + native + telegram_items + rss_items          # risk/official first, then TG/native/RSS
@@ -1002,7 +1096,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         canon = canonical_url(it.get("url") or "")
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
                                  recent=recent, dedup_min=dedup_min,
-                                 carded=carded, max_per_asset=max_per_asset)
+                                 carded=carded, max_per_asset=max_per_asset,
+                                 use_buffer=use_buffer)
         doc_id = it.get("buffer_doc_id")
         skipped = res.get("skipped") if res else None
         # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)
@@ -1022,7 +1117,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                 if not dry:
                     stage = {"no_tracked_asset": "router", "dup_event": "dedup",
                          "context_commentary": "gate", "stale_article": "gate",
-                         "asset_capped": "cap"}.get(skipped, "materiality")
+                         "asset_capped": "cap", "needs_context": "context"}.get(skipped, "materiality")
                     J.write_drop(
                         it["url"], it["title"], skipped,
                         asset=res.get("asset"), drop_stage=stage, source=it.get("source"),

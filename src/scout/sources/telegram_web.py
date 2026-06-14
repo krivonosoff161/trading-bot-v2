@@ -5,6 +5,14 @@ This is the no-API fallback for channels that expose public `https://t.me/s/...`
 pages. It does not log in, does not send messages, and does not use Telegram
 client credentials. The output is normalized into the same source-item shape as
 RSS/API feeds so the existing buffer/router/agent pipeline can replay it.
+
+Identity resolution: Telegram posts are triggers, not final signals.
+Each ticker goes through asset_identity.resolve() to determine:
+  - asset_class (crypto_major/alt/meme/equity/pre_ipo/tokenized/commodity/energy/unknown)
+  - layer (1-5)
+  - trigger_role (signal/context_trigger/needs_context)
+  - requires_context (bool)
+  - context_requirements (list of what's missing)
 """
 from __future__ import annotations
 
@@ -16,7 +24,8 @@ from typing import Any
 
 import requests
 
-from src.scout.router import baseline_for_layer, classify_layer, enabled_sources, source_meta
+from src.scout.asset_identity import identify_asset
+from src.scout.router import baseline_for_layer, enabled_sources, source_meta
 
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 telegram-web-source; keyless)"}
 TIMEOUT = 20
@@ -31,11 +40,6 @@ _BR_RE = re.compile(r"<br\s*/?>", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _CASHTAG_RE = re.compile(r"(?<![A-Z0-9])\$([A-Z][A-Z0-9]{1,14})\b")
 _HASH_SYMBOL_RE = re.compile(r"(?<![A-Z0-9])#(?:[A-Za-z0-9_]+:)?([A-Z][A-Z0-9]{1,14})\b")
-_TOKENIZED_EQUITY_TICKERS = {"SPCX", "SPCXX"}
-_EQUITY_CONTEXT_RE = re.compile(
-    r"\b(pre[-\s]?ipo|ipo|xstocks?|tokeni[sz]ed|shares?|stocks?|equity)\b",
-    re.I,
-)
 
 
 @dataclass(frozen=True)
@@ -138,36 +142,75 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
     if channel_kind == "listing" and tickers:
         items = []
         for ticker in tickers:
-            layer = _classify_listing_layer(ticker, post.text)
+            identity = identify_asset(ticker, post.text, meta)
+            layer = identity["layer"] or 2
+            event_type = _event_type_for_identity(identity)
             items.append(
                 {
                     **base,
                     "title": f"${ticker} listing signal: {_title_for_post(post.text)}",
                     "asset": ticker,
-                    "okx_inst": f"{ticker}-USDT-SWAP",
+                    "okx_inst": identity.get("okx_inst") or f"{ticker}-USDT-SWAP",
                     "layer": layer,
-                    "baseline": baseline_for_layer(layer),
-                    "event_type": "tokenized_equity_listing" if layer == 5 else "exchange_listing",
+                    "baseline": identity.get("baseline") or baseline_for_layer(layer),
+                    "event_type": event_type,
                     "phase": "REALIZED",
                     "event_key": f"{source_id}:{post.post_id}:{ticker}",
+                    "asset_class": identity["asset_class"],
+                    "trigger_role": identity["trigger_role"],
+                    "requires_context": identity["requires_context"],
+                    "context_requirements": identity["context_requirements"],
+                    "identity_reason": identity["reason"],
+                    "identity_confidence": identity["confidence"],
                 }
             )
         return items
     if channel_kind == "liquidations" and tickers:
         ticker = tickers[0]
-        layer = 4 if ticker in {"CL", "NG"} else 1 if ticker in {"BTC", "ETH", "SOL", "BNB", "XRP"} else 2
+        identity = identify_asset(ticker, post.text, meta)
+        layer = identity["layer"] or 2
         return [
             {
                 **base,
                 "asset": ticker,
-                "okx_inst": f"{ticker}-USDT-SWAP",
+                "okx_inst": identity.get("okx_inst") or f"{ticker}-USDT-SWAP",
                 "layer": layer,
-                "baseline": baseline_for_layer(layer),
+                "baseline": identity.get("baseline") or baseline_for_layer(layer),
                 "event_type": "liquidation_flow",
                 "phase": "REALIZED",
                 "event_key": f"{source_id}:{post.post_id}:{ticker}",
+                "asset_class": identity["asset_class"],
+                "trigger_role": identity["trigger_role"],
+                "requires_context": identity["requires_context"],
+                "context_requirements": identity["context_requirements"],
+                "identity_reason": identity["reason"],
+                "identity_confidence": identity["confidence"],
             }
         ]
+    if channel_kind == "news" and tickers:
+        items = []
+        for ticker in tickers:
+            identity = identify_asset(ticker, post.text, meta)
+            layer = identity["layer"] or 2
+            items.append(
+                {
+                    **base,
+                    "asset": ticker,
+                    "okx_inst": identity.get("okx_inst") or f"{ticker}-USDT-SWAP",
+                    "layer": layer,
+                    "baseline": identity.get("baseline") or baseline_for_layer(layer),
+                    "event_type": "news_trigger",
+                    "phase": "AMBIGUOUS",
+                    "event_key": f"{source_id}:{post.post_id}:{ticker}",
+                    "asset_class": identity["asset_class"],
+                    "trigger_role": identity["trigger_role"],
+                    "requires_context": identity["requires_context"],
+                    "context_requirements": identity["context_requirements"],
+                    "identity_reason": identity["reason"],
+                    "identity_confidence": identity["confidence"],
+                }
+            )
+        return items
     return [base]
 
 
@@ -212,14 +255,16 @@ def _extract_tickers(text: str) -> list[str]:
     return found
 
 
-def _classify_listing_layer(ticker: str, text: str) -> int:
-    layer = classify_layer(ticker)
-    if layer == 2 and (
-        ticker.upper() in _TOKENIZED_EQUITY_TICKERS
-        or _EQUITY_CONTEXT_RE.search(text or "")
-    ):
-        return 5
-    return layer
+def _event_type_for_identity(identity: dict) -> str:
+    """Map asset_class to event_type for scanner pipeline."""
+    ac = identity.get("asset_class", "unknown")
+    if ac in ("tokenized_equity", "pre_ipo_equity"):
+        return "tokenized_equity_listing"
+    if ac == "equity":
+        return "equity_listing"
+    if ac == "liquidation_flow":
+        return "liquidation_flow"
+    return "exchange_listing"
 
 
 def _title_for_post(text: str) -> str:
