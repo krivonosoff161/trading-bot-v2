@@ -52,7 +52,7 @@ escalation:
   watch_materiality_min: 0.55
   watch_confidence_min: 0.5
   metals_lagging_materiality_min: 0.8   # L3 lagging-пересказы: аудит 0/22 idio → строже
-  flow_sources: [dexscreener, goplus_rugcheck]   # flow/телеметрия: cheap-кандидат достаточен
+  flow_sources: [dexscreener, goplus_rugcheck, tg_hyperliquid_liquidations]   # flow/телеметрия: cheap-кандидат достаточен
 
 layers:
   1: {name: "крипта-история BTC/ETH/мажоры", focus: "ETF-потоки, регуляторка SEC/CFTC, взломы протоколов, макро Fed/ставки/CPI, листинги, потоки китов/бирж"}

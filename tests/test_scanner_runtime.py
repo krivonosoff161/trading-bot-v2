@@ -271,3 +271,56 @@ def test_process_item_uses_structured_text_for_pre_routed_items(monkeypatch):
     assert res["row"]["asset"] == "PEPE"
     assert res["row"]["source"] == "dexscreener"
     assert res["row"]["low_confidence"] is False
+
+
+def test_context_status_not_always_none(monkeypatch):
+    """context_status is injected into news dict AFTER context-building, not before.
+
+    Regression: context_status was injected at line 725 (before context block at 752),
+    so it was always None. After fix, source_is_confirmation reaches LLM framing.
+    """
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
+    monkeypatch.setattr(S, "okx_last", lambda inst: None)
+    monkeypatch.setattr(S, "extract", lambda url: {"text": "x" * 600, "date": "2026-06-14"})
+    monkeypatch.setattr(S, "is_stale_story", lambda *a, **k: False)
+    monkeypatch.setattr(S.J, "write_row", lambda row: row["card_id"])
+    monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+    monkeypatch.setattr(S.R, "write_event_block", lambda b: True)
+    monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
+    monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
+    monkeypatch.setattr(S.PS, "match_realized_event", lambda row: None)
+    monkeypatch.setattr(S.WQ, "upsert_watch", lambda row: None)
+
+    captured_news = {}
+
+    async def fake_orch(news, asset, layer, lead_class, price, mline, **kw):
+        captured_news.update(news)
+        return {"decision": "journal", "verdict": "NO_GO", "side": "none",
+                "chief_called": False, "agent": {"direction": "none", "confidence": 0.5,
+                "phase": "realized", "asset": asset, "event_type": "listing",
+                "materiality": 0.6, "red_flags": [], "veto_flags": [],
+                "no_edge_flags": [], "mechanics": [], "key_facts": []},
+                "chief": None, "usage": [{}], "send_channel": False,
+                "pre_verdict": "JOURNAL_NO_GO", "should_escalate": False,
+                "escalation_gate": "CHEAP_NO_GO", "escalation_reason": "test",
+                "veto_flags": [], "no_edge_flags": [], "chief_error": False,
+                "llm_error": False, "retry_status": None}
+    monkeypatch.setattr(S.orchestrator, "process", fake_orch)
+
+    # Item with requires_context=True + official source → source_is_confirmation
+    item = {
+        "title": "$SPCXX listed on OKX spot",
+        "text": "$SPCXX listed on OKX spot",
+        "url": "https://t.me/NewListingsFeed/9999",
+        "source": "tg_new_listings_feed", "source_class": "telegram_web",
+        "lead_class": "LEADING", "asset": "SPCXX", "okx_inst": "SPCXX-USDT-SWAP",
+        "layer": 5, "baseline": "QQQ-USDT-SWAP", "asset_class": "tokenized_equity",
+        "trigger_role": "needs_context", "requires_context": True,
+        "identity_reason": "known_tokenized_ticker:SPCXX",
+    }
+    asyncio.run(S.process_item(item, None, dry=False, use_buffer=False))
+
+    # context_status should be "source_is_confirmation" in the news dict passed to LLM
+    assert captured_news.get("context_status") == "source_is_confirmation", (
+        f"context_status should be 'source_is_confirmation' but got: {captured_news.get('context_status')}"
+    )
