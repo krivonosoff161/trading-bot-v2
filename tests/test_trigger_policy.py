@@ -145,6 +145,40 @@ def test_policy_has_all_required_fields():
             assert field in p, f"{source_id} missing field: {field}"
 
 
+# ── Context gate survival tests ──────────────────────────────────────────
+
+
+def test_hyperliquid_survives_context_gate():
+    """HyperliquidLiquidations with any asset class never killed by context gate."""
+    meta = {"telegram_kind": "liquidations", "source_class": "telegram_web"}
+    for ac in ("crypto_major", "crypto_alt", "liquidation_flow", "unknown"):
+        assert should_require_context("tg_hyperliquid_liquidations", meta, ac) is False, \
+            f"hyperliquid should not require context for {ac}"
+
+
+def test_listing_survives_context_gate_for_known_crypto():
+    """NewListingsFeed with known crypto never killed by context gate."""
+    meta = {"telegram_kind": "listing", "source_class": "telegram_web"}
+    for ac in ("crypto_major", "crypto_alt"):
+        assert should_require_context("tg_new_listings_feed", meta, ac) is False, \
+            f"listing should not require context for {ac}"
+
+
+def test_listing_killed_by_context_gate_for_tokenized():
+    """NewListingsFeed with tokenized equity DOES require context (conservative)."""
+    meta = {"telegram_kind": "listing", "source_class": "telegram_web"}
+    assert should_require_context("tg_new_listings_feed", meta, "tokenized_equity") is True
+    assert should_require_context("tg_new_listings_feed", meta, "pre_ipo_equity") is True
+
+
+def test_markettwits_context_gate_depends_on_asset():
+    """Markettwits: always requires context (news channel, unknown tickers risky)."""
+    meta = {"telegram_kind": "news", "source_class": "telegram_web"}
+    assert should_require_context("tg_markettwits", meta, "crypto_major") is True
+    assert should_require_context("tg_markettwits", meta, "crypto_alt") is True
+    assert should_require_context("tg_markettwits", meta, "unknown") is True
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in list(globals().items()):

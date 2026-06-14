@@ -130,3 +130,141 @@ def test_news_buffer_preserves_prerouted_event_key_after_normalize(tmp_path):
     ready = NB.ready_items(limit=10, path=db)
     assert len(ready) == 1
     assert ready[0]["event_key"] == "tg_new_listings_feed:3321:ARX"
+
+
+# ── Phase 1: identity/context field persistence ────────────────────────────
+
+
+def test_identity_fields_prerouted_tokenized_equity(tmp_path):
+    """Pre-routed tokenized equity item preserves identity fields through buffer."""
+    db = tmp_path / "nb_ident_tok.sqlite"
+    item = {
+        "title": "SPACEX listing on OKX via SPCX token",
+        "url": "https://t.me/NewListingsFeed/9999",
+        "time": "2026-06-14T10:00:00Z",
+        "source": "tg_new_listings_feed",
+        "source_class": "telegram_web",
+        "lead_class": "LEADING",
+        "asset": "SPACEX",
+        "okx_inst": "SPACEX-USDT-SWAP",
+        "layer": 5,
+        "baseline": "QQQ-USDT-SWAP",
+        "phase": "LEADING",
+        "event_type": "tokenized_equity_listing",
+        "event_key": "tg_new_listings_feed:9999:SPACEX",
+        "asset_class": "pre_ipo_equity",
+        "trigger_role": "signal",
+        "requires_context": True,
+        "identity_reason": "equity_alias_match:spacex",
+        "identity_confidence": 0.90,
+        "channel_kind": "listing",
+    }
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1
+    r = ready[0]
+    assert r["asset"] == "SPACEX"
+    assert r["asset_class"] == "pre_ipo_equity"
+    assert r["trigger_role"] == "signal"
+    assert r["requires_context"] is True
+    assert r["identity_reason"] == "equity_alias_match:spacex"
+    assert r["channel_kind"] == "listing"
+
+
+def test_identity_fields_normal_crypto_rss(tmp_path):
+    """RSS crypto item gets identity fields from identify_asset during normalize."""
+    db = tmp_path / "nb_ident_rss.sqlite"
+    item = {
+        "title": "Bitcoin surges past $64,000 as ETF inflows rebound",
+        "url": "https://cointelegraph.com/news/btc-etf",
+        "time": "2026-06-14",
+        "source": "cointelegraph",
+        "source_class": "rss",
+        "lead_class": "LAGGING",
+        "text": "Bitcoin surged past $64,000 on renewed ETF inflows. " * 20,
+    }
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1
+    r = ready[0]
+    assert r["asset"] == "BTC"
+    assert r["asset_class"] is not None
+    assert r["trigger_role"] is not None
+
+
+def test_identity_fields_liquidation_flow(tmp_path):
+    """Liquidation flow item preserves identity fields through buffer."""
+    db = tmp_path / "nb_ident_liq.sqlite"
+    item = {
+        "title": "ETH Liquidated Long: $352K at $1,656",
+        "url": "https://t.me/HyperliquidLiquidations/12345",
+        "time": "2026-06-14T14:40:31Z",
+        "source": "tg_hyperliquid_liquidations",
+        "source_class": "telegram_web",
+        "lead_class": "COINCIDENT",
+        "asset": "ETH",
+        "okx_inst": "ETH-USDT-SWAP",
+        "layer": 1,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "COINCIDENT",
+        "event_type": "liquidation_flow",
+        "event_key": "tg_hyperliquid_liquidations:12345:ETH",
+        "asset_class": "liquidation_flow",
+        "trigger_role": "context_trigger",
+        "requires_context": False,
+        "identity_reason": "liquidation_flow_source",
+        "identity_confidence": 0.85,
+        "channel_kind": "liquidations",
+    }
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1
+    r = ready[0]
+    assert r["asset"] == "ETH"
+    assert r["asset_class"] == "liquidation_flow"
+    assert r["trigger_role"] == "context_trigger"
+    assert r["requires_context"] is False
+    assert r["channel_kind"] == "liquidations"
+
+
+def test_identity_fields_markettwits_unknown_ticker(tmp_path):
+    """Markettwits item with unknown ticker gets needs_context identity."""
+    db = tmp_path / "nb_ident_mt.sqlite"
+    item = {
+        "title": "$G7 саммит лидеров стран G7 во Франции",
+        "url": "https://t.me/markettwits/55555",
+        "time": "2026-06-14T12:46:33Z",
+        "source": "tg_markettwits",
+        "source_class": "telegram_web",
+        "lead_class": "LEADING",
+        "asset": "G7",
+        "okx_inst": None,
+        "layer": None,
+        "baseline": None,
+        "phase": "AMBIGUOUS",
+        "event_type": "news_trigger",
+        "event_key": "tg_markettwits:55555:G7",
+        "asset_class": "unknown",
+        "trigger_role": "needs_context",
+        "requires_context": True,
+        "identity_reason": "unknown_ticker_no_entity_match",
+        "identity_confidence": 0.30,
+        "channel_kind": "news",
+    }
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+    ready = NB.ready_items(limit=10, path=db)
+    assert len(ready) == 1
+    r = ready[0]
+    assert r["asset"] == "G7"
+    assert r["asset_class"] == "unknown"
+    assert r["trigger_role"] == "needs_context"
+    assert r["requires_context"] is True
+    assert r["channel_kind"] == "news"

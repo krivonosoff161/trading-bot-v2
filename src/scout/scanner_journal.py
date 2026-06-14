@@ -88,6 +88,7 @@ def build_row(
     summary: str = "",
     low_confidence: bool = False,
     outcome_source: str = "okx",
+    price_reason: str | None = None,
     event_type: str = "unclassified",
     event_phase: str = "unknown",
     materiality_score: float | None = None,
@@ -175,6 +176,7 @@ def build_row(
         "low_confidence": low_confidence,
         "dedup_key": event_key or f"{(asset or 'NA')}::{cid}",
         "outcome_source": outcome_source,    # okx | coingecko | manual
+        "price_reason": price_reason,        # supported | instrument_not_listed | provider_403 | ...
         "outcome": None,                     # {ret_pct, baseline_pct, excess_pct, scored, ...}
         "outcome_ts": None,
         # Phase 4: identity/context segmentation fields
