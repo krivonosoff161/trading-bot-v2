@@ -735,8 +735,6 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         news["flow_context"] = item["flow_context"]
     if item.get("channel_kind"):
         news["channel_kind"] = item["channel_kind"]
-    if context_status:
-        news["context_status"] = context_status
 
     # L1-обогащение: строка ETF-потоков в рыночный фон (контекст для cheap/chief,
     # НЕ сигнал и НЕ гейт — пусто, если SCANNER_ETF_FLOW_PROVIDER не сконфигурирован)
@@ -797,10 +795,24 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                 return {"skipped": "needs_context", "headline": headline, "asset": asset,
                         "trigger_context": trigger_context_pkg}
             else:
-                # Context found — enrich the news dict for LLM
+                context_status = "context_found"
                 ctx_summary = trigger_context_pkg.get("context_summary", "")
                 if ctx_summary:
                     news["context_package"] = ctx_summary
+
+    # Phase 5: inject context_status AFTER context-building (was injected before, always None)
+    if context_status:
+        news["context_status"] = context_status
+    # For liquidation flow: build lightweight flow context package for audit even if requires_context=False
+    if item.get("asset_class") == "liquidation_flow" and not trigger_context_pkg and not dry:
+        trigger_context_pkg = TC.build_context(
+            symbol=asset,
+            text=(item.get("text") or headline)[:500],
+            asset_class="liquidation_flow",
+            source_id=source,
+            flow_context=item.get("flow_context"),
+        )
+        context_status = "flow_context_built"
 
     # 3) ОРКЕСТРАТОР: дешёвый слой-агент → кодовый гейт → chief (только кандидаты). dry = заглушка без LLM.
     if dry:

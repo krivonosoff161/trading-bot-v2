@@ -22,12 +22,14 @@ channels:
     context_profile: null
     unknown_ticker_policy: default_to_crypto_alt_l2
     max_items_per_pass: 20
-    phase_default: REALIZED
+    phase_default: MIXED   # temporal classifier overrides: LEADING for official listings
     flow_fields: null
     notes: >
-      Listing announcements. Unknown tickers default to L2 crypto_alt
-      (new crypto listing assumption). Equity/tokenized detected by
-      identity resolver → needs_context=true from identity, not from channel.
+      Listing announcements. Phase is determined by temporal classifier (LEADING for
+      official listing sources, FUTURE if wording is upcoming, REALIZED if past tense).
+      This config default is a safe fallback; temporal.py has the authoritative logic.
+      Unknown tickers default to L2 crypto_alt (new crypto listing assumption).
+      Equity/tokenized detected by identity resolver → needs_context=true from identity.
 
   tg_markettwits:
     channel_kind: news

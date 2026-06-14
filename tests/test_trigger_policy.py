@@ -31,7 +31,7 @@ def test_new_listings_feed_policy():
     assert p["default_trigger_role"] == "signal"
     assert p["unknown_ticker_policy"] == "default_to_crypto_alt_l2"
     assert p["requires_context"] is False
-    assert p["phase_default"] == "REALIZED"
+    assert p["phase_default"] == "MIXED"  # temporal classifier overrides to LEADING
 
 
 def test_markettwits_policy():
@@ -100,6 +100,20 @@ def test_should_require_context_liquidation_never():
     """Liquidation flow never needs context (flow IS the context)."""
     meta = {"telegram_kind": "liquidations", "source_class": "telegram_web"}
     assert should_require_context("tg_hyperliquid_liquidations", meta, "liquidation_flow") is False
+
+
+def test_hyperliquid_in_flow_sources():
+    """tg_hyperliquid_liquidations is in flow_sources for FLOW_SIGNAL escalation."""
+    from src.scout.agents import orchestrator
+    esc = orchestrator._esc()
+    assert "tg_hyperliquid_liquidations" in esc.get("flow_sources", [])
+
+
+def test_listing_phase_default_is_mixed():
+    """Listing channel phase_default is MIXED (temporal classifier overrides)."""
+    meta = {"telegram_kind": "listing", "source_class": "telegram_web"}
+    p = get_policy("tg_new_listings_feed", meta)
+    assert p["phase_default"] == "MIXED"
 
 
 def test_should_require_context_markettwits_unknown():
