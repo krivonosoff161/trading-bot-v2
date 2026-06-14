@@ -131,6 +131,13 @@ def _build_candidate(
         return None
 
     trades = metrics.pop("_trades", [])
+    filters = dict(entry.get("filters") or metrics.pop("_filters", {}) or {})
+    fee_value = entry["fees_bps"] if "fees_bps" in entry else metrics.pop("_fees_bps", 7.0)
+    slippage_value = (
+        entry["slippage_bps"] if "slippage_bps" in entry else metrics.pop("_slippage_bps", 3.0)
+    )
+    fees_bps = float(fee_value or 7.0)
+    slippage_bps = float(slippage_value or 3.0)
     equity_curve = _build_equity_curve(trades)
     data_window = _build_data_window(trades)
 
@@ -141,14 +148,16 @@ def _build_candidate(
         normalized_symbol=str(entry.get("symbol", "").replace("-", "_")),
         timeframe=str(
             metrics.get("data_file_timeframe")
+            or entry.get("timeframe")
+            or metrics.get("_timeframe")
             or entry.get("params", {}).get("timeframe", "")
             or "unknown"
         ),
         strategy_id=str(entry.get("strategy_id") or ""),
         params=dict(entry.get("params") or {}),
-        filters=dict(entry.get("filters") or {}),
-        fees_bps=0.0,
-        slippage_bps=0.0,
+        filters=filters,
+        fees_bps=fees_bps,
+        slippage_bps=slippage_bps,
         lite_status=str(entry.get("validation_status") or ""),
         lite_reasons=list(entry.get("validation_reasons") or []),
         risk_flags=list(entry.get("risk_flags") or []),
@@ -188,12 +197,19 @@ def _load_experiment_metrics(
             data = json.loads(metrics_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        context = {
+            "_filters": dict(data.get("filters") or {}),
+            "_fees_bps": float(data.get("fees_bps", entry.get("fees_bps", 7.0)) or 7.0),
+            "_slippage_bps": float(data.get("slippage_bps", entry.get("slippage_bps", 3.0)) or 3.0),
+            "_timeframe": str(data.get("timeframe") or entry.get("timeframe") or ""),
+        }
         results = data.get("results") or []
         candidate_id = str(entry.get("candidate_id") or "")
         for r in results:
             if str(r.get("run_id") or "") == candidate_id:
                 out = dict(r.get("metrics") or {})
                 out["_trades"] = list(r.get("_trades") or r.get("trades") or [])
+                out.update(context)
                 return out
         if results:
             first = dict(results[0].get("metrics") or {})
@@ -202,6 +218,7 @@ def _load_experiment_metrics(
                 or results[0].get("trades")
                 or []
             )
+            first.update(context)
             return first
 
     return dict(entry.get("metrics_summary") or {})

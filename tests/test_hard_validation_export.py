@@ -115,11 +115,21 @@ class TestDeduplicate:
 
 class TestBuildCandidate:
     def test_builds_candidate_from_entry_no_artifact(self) -> None:
-        entry = _make_entry()
+        entry = {
+            **_make_entry(),
+            "timeframe": "1h",
+            "filters": {"trend": ["up"]},
+            "fees_bps": 9.0,
+            "slippage_bps": 4.0,
+        }
         c = _build_candidate(entry, Path("/tmp/nonexistent"))
         assert c is not None
         assert c.candidate_id == "c-001"
         assert c.lite_status == "FORWARD_PAPER"
+        assert c.timeframe == "1h"
+        assert c.filters == {"trend": ["up"]}
+        assert c.fees_bps == 9.0
+        assert c.slippage_bps == 4.0
 
     def test_builds_candidate_with_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:

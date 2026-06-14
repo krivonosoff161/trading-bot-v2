@@ -148,6 +148,16 @@ class TestWriteFeedback:
             queue = load_feedback_queue(Path(td))
             assert len(queue) == 3
 
+    def test_same_candidate_status_upserts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            report = _make_report(hard_status="FAILED_COSTS", failed_checks=["costs"])
+            fb = generate_feedback(report)
+            assert fb is not None
+            write_feedback(Path(td), fb, dry_run=False)
+            write_feedback(Path(td), fb, dry_run=False)
+            queue = load_feedback_queue(Path(td))
+            assert len(queue) == 1
+
 
 class TestLoadFeedbackQueue:
     def test_empty_when_no_file(self) -> None:

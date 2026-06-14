@@ -24,6 +24,7 @@ from scripts.strategy_lab.requeue_stale_jobs import (
     find_stale_jobs,
     requeue_stale_jobs,
 )
+from scripts.strategy_lab.worker_loop import loop as worker_loop
 
 
 def _make_db(private_root: Path) -> Path:
@@ -131,3 +132,11 @@ def test_stop_intent_no_absolute_paths(tmp_path):
     blob = json.dumps(data)
     assert str(tmp_path) not in blob
     assert "github_projects" not in blob
+
+
+def test_worker_loop_respects_stop_intent_before_running(tmp_path):
+    request_stop(tmp_path, reason="test")
+    rc = worker_loop(tmp_path, sleep_seconds=1, error_sleep_seconds=1, max_iterations=1)
+    assert rc == 0
+    log = tmp_path / "logs" / "worker_loop.log"
+    assert "stopped by stop intent" in log.read_text(encoding="utf-8")

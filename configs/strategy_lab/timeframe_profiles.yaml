@@ -20,6 +20,13 @@ profiles:
     max_variants_per_setup: 10
     trigger_only: false
 
+  4h:
+    role: swing_setup
+    default_use: multi-session setup context
+    max_symbols_per_cycle: 12
+    max_variants_per_setup: 8
+    trigger_only: false
+
   15m:
     role: entry
     default_use: entry timing and short continuation/fade

@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 
 from src.research_lab.experiment import ExperimentSpec, choose_symbol_file, evaluate_spec
+from scripts.strategy_lab.generate_event_sweeps import _exp_to_dict as event_exp_to_dict
+from scripts.strategy_lab.queue_validated_proposals import _exp_to_dict as queued_exp_to_dict
 
 
 def _write_candles(path: Path, interval_ms: int, count: int, price: float = 100.0) -> None:
@@ -178,3 +180,16 @@ def test_experiment_spec_json_roundtrip_preserves_timeframe(tmp_path):
     }), encoding="utf-8")
     spec2 = ExperimentSpec.from_json(out_path)
     assert spec2.timeframe == "4h"
+
+
+def test_queue_and_event_spec_serializers_preserve_timeframe():
+    spec = ExperimentSpec(
+        experiment_id="tf_serialize",
+        data_glob="data/{symbol}.json",
+        symbols=["BTC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 3}]},
+        timeframe="15m",
+    )
+    assert queued_exp_to_dict(spec)["timeframe"] == "15m"
+    assert event_exp_to_dict(spec)["timeframe"] == "15m"

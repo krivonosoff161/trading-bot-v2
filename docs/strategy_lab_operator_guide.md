@@ -130,6 +130,7 @@ trades, or write to the public repo.
 | Run a 30-min research loop (apply, no LLM) | `bat\strategy_lab_research_loop_30m_apply.bat` |
 | Bounded no-LLM research loop (default 8h, configurable) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
 | Morning summary after a loop | `bat\strategy_lab_morning_report.bat` |
+| Run hard validation + feedback + setup cards | `bat\strategy_lab_validate_candidates_pipeline.bat --apply --limit 10` |
 | Gracefully stop the loop after current iteration | `bat\strategy_lab_graceful_stop.bat` |
 | Clear a previous stop request | `bat\strategy_lab_clear_stop.bat` |
 | Stop old dashboard/worker windows | `bat\strategy_lab_stop_notes.bat` |
@@ -161,6 +162,18 @@ stopped with Ctrl+C), run:
 ```powershell
 .\bat\strategy_lab_morning_report.bat
 ```
+
+If the report shows `FORWARD_PAPER` or `REGIME_SPECIFIC` candidates, run the
+hard-validation path before treating them as reusable setups:
+
+```powershell
+.\bat\strategy_lab_validate_candidates_pipeline.bat --apply --limit 10
+.\bat\strategy_lab_morning_report.bat
+```
+
+That path writes private-root requests, reports, verdicts, feedback rows and
+setup cards. It does not enable the main engine and does not imply live-trading
+readiness.
 
 Default duration is 480 minutes. For a day run, set the duration before launching:
 

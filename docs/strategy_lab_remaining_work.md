@@ -16,6 +16,9 @@ After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 - Stale running jobs can be requeued explicitly.
 - Timeframe contract prevents silent wrong-timeframe execution.
 - Multi-timeframe data (15m/1h/4h/1d) can be prepared via the OKX public provider.
+- Hard-validation now writes complete machine-readable artifacts even when a
+  candidate needs more data: request, report, verdict, feedback, and setup card.
+- Setup-library and feedback queues are idempotent for repeated pipeline runs.
 - All safety guards intact: no live trading, no order engine, no paid LLM by default.
 
 ## What Changed (this patch)
@@ -62,12 +65,31 @@ After this patch, the Strategy Lab is safe for **overnight no-LLM runs**:
 - Morning report shows proposal rejection reasons by category.
 - 6 tests covering all major rejection reasons.
 
+### P0/P1 - Hard-validation product path (latest audit)
+
+- Hard-validation CLI commands now use the same private-root guard/env handling
+  as the rest of Strategy Lab.
+- `NEEDS_MORE_DATA` and bridge-unavailable cases write reports, not verdict-only
+  files, so deterministic feedback reaches the farm.
+- Setup cards receive candidate context: params, filters, lite status, data
+  window, and risk flags.
+- `REGIME_SPECIFIC` hard-validation outcomes map to `REGIME_ONLY`, not an invalid
+  hard status.
+- Status and morning report show hard-validation and setup-library counts.
+- Legacy `bat\strategy_lab_loop.bat` is disabled unless explicitly forced with
+  `STRATEGY_LAB_ALLOW_LEGACY_LOOP=1`.
+
 ## P1 Still Remaining
 
 1. **Tiny real LLM live test (manual step)**
    - Run `bat\strategy_lab_llm_tiny_test.bat` with real provider env.
    - Verify JSON contract, validation, usage accounting, contract breaker.
    - Do not use overnight LLM until this passes.
+
+2. **Real 15m/1h/4h data preparation workflow**
+   - The lower-level provider supports these timeframes, but the operator-facing
+     prepare command is still named around 1m and should be generalized before
+     relying on intraday 24/7 research.
 
 ## P2 Later Work
 

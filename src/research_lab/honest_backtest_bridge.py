@@ -82,14 +82,14 @@ def run_validation(
     if not _HAS_NUMPY or not _HAS_BACKTEST_SANITY:
         result = _bridge_unavailable(candidate)
         if not dry_run:
-            _write_verdict_only(private_root, candidate, result)
+            _write_minimal_artifacts(private_root, candidate, result)
         return result
 
     returns = _extract_returns(candidate)
     if len(returns) < 3:
         result = _insufficient_data(candidate, len(returns))
         if not dry_run:
-            _write_verdict_only(private_root, candidate, result)
+            _write_minimal_artifacts(private_root, candidate, result)
         return result
 
     checks = _run_all_checks(candidate, returns)
@@ -436,7 +436,9 @@ def _map_failed_to_status(
     if "significance" in failed:
         return "REGIME_ONLY"
     if "forward_readiness" in failed:
-        return candidate.lite_status or "NEEDS_MORE_DATA"
+        if candidate.lite_status == "REGIME_SPECIFIC":
+            return "REGIME_ONLY"
+        return "NEEDS_MORE_DATA"
     return "PAPER_FORWARD_READY"
 
 
@@ -483,24 +485,47 @@ def _write_artifacts(
     write_json(verdict_path, verdict.to_dict())
 
 
-def _write_verdict_only(
+def _write_minimal_artifacts(
     private_root: Path,
     candidate: CandidateForValidation,
     result: dict[str, Any],
 ) -> None:
-    """Write a minimal verdict file for cases where full validation couldn't run."""
+    """Write verdict + report for cases where full validation couldn't run.
+
+    The downstream pipeline builds feedback from reports. If insufficient-data
+    cases only write a verdict, the farm never receives the "collect more data"
+    feedback loop and the product path silently stops after validation.
+    """
+    reports_dir = private_root / REPORTS_DIR
     verdicts_dir = private_root / VERDICTS_DIR
+    reports_dir.mkdir(parents=True, exist_ok=True)
     verdicts_dir.mkdir(parents=True, exist_ok=True)
+    created_at = dt.datetime.now(dt.timezone.utc).isoformat()
     verdict_data = {
         "candidate_id": candidate.candidate_id,
         "hard_status": result.get("hard_status", "NEEDS_MORE_DATA"),
         "checks": [],
         "failed_checks": [],
-        "reason_codes": [],
+        "reason_codes": ["insufficient_validation_data"],
         "message": result.get("message", ""),
+        "created_at": created_at,
     }
+    report = HardValidationReport(
+        candidate_id=candidate.candidate_id,
+        source_run_id=candidate.source_run_id,
+        symbol=candidate.symbol,
+        timeframe=candidate.timeframe,
+        strategy_id=candidate.strategy_id,
+        verdict=verdict_data,
+        checks_summary={"total": 0, "passed": 0, "failed": 0},
+        created_at=created_at,
+    )
     verdict_path = verdicts_dir / f"{candidate.candidate_id}.json"
     write_json(verdict_path, verdict_data)
+    report_path = reports_dir / f"{candidate.candidate_id}.json"
+    write_json(report_path, report.to_dict())
+    md_path = reports_dir / f"{candidate.candidate_id}.md"
+    md_path.write_text(report.to_markdown(), encoding="utf-8")
 
 
 def _read_json(path: Path) -> Any:
