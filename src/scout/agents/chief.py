@@ -101,6 +101,14 @@ async def decide(event: dict, agent: dict, price: float | None, market_ctx: str 
         parts.append(f"\nТИП АКТИВА: {event['asset_class']}")
     if event.get("trigger_role"):
         parts.append(f"РОЛЬ ТРИГГЕРА: {event['trigger_role']}")
+    if event.get("channel_kind"):
+        parts.append(f"КАНАЛ: {event['channel_kind']}")
+    if event.get("flow_context"):
+        fc = event["flow_context"]
+        parts.append(f"FLOW: направление={fc.get('direction_hint')}, "
+                     f"сумма=${fc.get('notional_usd')}, "
+                     f"цена входа={fc.get('entry_price')}, "
+                     f"площадка={fc.get('venue')}")
     if event.get("context_package"):
         parts.append(f"КОНТЕКСТ ИЗ ИСТОЧНИКОВ: {event['context_package']}")
     if market_ctx:

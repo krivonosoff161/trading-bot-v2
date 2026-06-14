@@ -89,19 +89,19 @@ def build_row(
     low_confidence: bool = False,
     outcome_source: str = "okx",
     event_type: str = "unclassified",
-    event_phase: str = "unknown",        # FUTURE/REALIZED/CONTEXT/AMBIGUOUS (темпорал-роутер)
+    event_phase: str = "unknown",
     materiality_score: float | None = None,
-    lead_class: str = "LAGGING",         # LEADING/COINCIDENT/LAGGING (карта источника)
-    source: str = "cointelegraph",       # имя фида (per-source метрики/latency)
+    lead_class: str = "LAGGING",
+    source: str = "cointelegraph",
     source_class: str = "rss",
-    baseline_symbol: str | None = None,  # per-layer якорь excess (не хардкод BTC)
+    baseline_symbol: str | None = None,
     router_version: str = "v0",
     asset_confidence: float | None = None,
     source_count: int = 1,
     event_key: str | None = None,
     chief_called: bool = False,
-    escalation_gate: str | None = None,  # за что позвали/не позвали chief (кодовый гейт)
-    agent_direction: str = "none",       # намёк дешёвого слой-агента (long/short/none/mixed)
+    escalation_gate: str | None = None,
+    agent_direction: str = "none",
     agent_confidence: float | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
@@ -109,7 +109,17 @@ def build_row(
     source_phase_prior: str | None = None,
     headline_phase: str | None = None,
     allowed_layers_from_source: list[int] | None = None,
-    cross_layer: bool = False,           # актив восстановлен сильным алиасом вне слоя источника
+    cross_layer: bool = False,
+    # New identity/context fields (Phase 4)
+    asset_class: str | None = None,
+    trigger_role: str | None = None,
+    channel_kind: str | None = None,
+    context_found: bool | None = None,
+    context_missing: list[str] | None = None,
+    identity_reason: str | None = None,
+    identity_confidence: float | None = None,
+    temporal_phase: str | None = None,
+    temporal_reason: str | None = None,
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -167,6 +177,16 @@ def build_row(
         "outcome_source": outcome_source,    # okx | coingecko | manual
         "outcome": None,                     # {ret_pct, baseline_pct, excess_pct, scored, ...}
         "outcome_ts": None,
+        # Phase 4: identity/context segmentation fields
+        "asset_class": asset_class,
+        "trigger_role": trigger_role,
+        "channel_kind": channel_kind,
+        "context_found": context_found,
+        "context_missing": context_missing,
+        "identity_reason": identity_reason,
+        "identity_confidence": identity_confidence,
+        "temporal_phase": temporal_phase,
+        "temporal_reason": temporal_reason,
     }
 
 

@@ -191,6 +191,14 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
         parts.append(f"РОЛЬ ТРИГГЕРА: {event['trigger_role']}")
     if event.get("identity_reason"):
         parts.append(f"ПРИЧИНА ИДЕНТИФИКАЦИИ: {event['identity_reason']}")
+    if event.get("channel_kind"):
+        parts.append(f"КАНАЛ: {event['channel_kind']}")
+    if event.get("flow_context"):
+        fc = event["flow_context"]
+        parts.append(f"FLOW: направление={fc.get('direction_hint')}, "
+                     f"сумма=${fc.get('notional_usd')}, "
+                     f"цена входа={fc.get('entry_price')}, "
+                     f"площадка={fc.get('venue')}")
     if event.get("date"):
         parts.append(f"ДАТА: {event['date']}")
     body = (event.get("text") or "").strip()

@@ -26,6 +26,8 @@ import requests
 
 from src.scout.asset_identity import identify_asset
 from src.scout.router import baseline_for_layer, enabled_sources, source_meta
+from src.scout.trigger_policy import get_policy
+from src.scout.temporal import classify_temporal
 
 UA = {"User-Agent": "Mozilla/5.0 (trading-bot-v2 telegram-web-source; keyless)"}
 TIMEOUT = 20
@@ -123,6 +125,7 @@ def parse_channel_html(body: str, *, channel: str) -> list[TelegramPost]:
 def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> list[dict[str, Any]]:
     channel_kind = str(meta.get("telegram_kind") or "").strip().lower()
     tickers = _extract_tickers(post.text)
+    policy = get_policy(source_id, meta)
     base = {
         "title": _title_for_post(post.text),
         "url": post.url,
@@ -138,6 +141,7 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
         "channel": post.channel,
         "post_id": post.post_id,
         "links": list(post.links),
+        "channel_kind": channel_kind,
     }
     if channel_kind == "listing" and tickers:
         items = []
@@ -145,6 +149,11 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
             identity = identify_asset(ticker, post.text, meta)
             layer = identity["layer"] or 2
             event_type = _event_type_for_identity(identity)
+            temporal = classify_temporal(
+                text=post.text, source_kind="listing",
+                source_ts=post.published_at, event_type=event_type,
+                phase_prior="realized",
+            )
             items.append(
                 {
                     **base,
@@ -154,7 +163,8 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
                     "layer": layer,
                     "baseline": identity.get("baseline") or baseline_for_layer(layer),
                     "event_type": event_type,
-                    "phase": "REALIZED",
+                    "phase": temporal["phase"],
+                    "temporal_reason": temporal.get("temporal_reason"),
                     "event_key": f"{source_id}:{post.post_id}:{ticker}",
                     "asset_class": identity["asset_class"],
                     "trigger_role": identity["trigger_role"],
@@ -169,6 +179,7 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
         ticker = tickers[0]
         identity = identify_asset(ticker, post.text, meta)
         layer = identity["layer"] or 2
+        flow_ctx = _parse_flow_context(post.text, policy)
         return [
             {
                 **base,
@@ -177,14 +188,15 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
                 "layer": layer,
                 "baseline": identity.get("baseline") or baseline_for_layer(layer),
                 "event_type": "liquidation_flow",
-                "phase": "REALIZED",
+                "phase": policy.get("phase_default", "COINCIDENT"),
                 "event_key": f"{source_id}:{post.post_id}:{ticker}",
                 "asset_class": identity["asset_class"],
                 "trigger_role": identity["trigger_role"],
-                "requires_context": identity["requires_context"],
+                "requires_context": policy.get("requires_context", False),
                 "context_requirements": identity["context_requirements"],
                 "identity_reason": identity["reason"],
                 "identity_confidence": identity["confidence"],
+                "flow_context": flow_ctx,
             }
         ]
     if channel_kind == "news" and tickers:
@@ -199,8 +211,8 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
                     "okx_inst": identity.get("okx_inst") or f"{ticker}-USDT-SWAP",
                     "layer": layer,
                     "baseline": identity.get("baseline") or baseline_for_layer(layer),
-                    "event_type": "news_trigger",
-                    "phase": "AMBIGUOUS",
+                    "event_type": policy.get("default_event_type", "news_trigger"),
+                    "phase": policy.get("phase_default", "AMBIGUOUS"),
                     "event_key": f"{source_id}:{post.post_id}:{ticker}",
                     "asset_class": identity["asset_class"],
                     "trigger_role": identity["trigger_role"],
@@ -212,6 +224,59 @@ def _post_to_items(post: TelegramPost, source_id: str, meta: dict[str, Any]) -> 
             )
         return items
     return [base]
+
+
+def _parse_flow_context(text: str, policy: dict) -> dict:
+    """Parse flow-specific fields from liquidation post text.
+
+    Extracts: direction_hint, notional_usd, entry_price, venue.
+    Returns dict with parsed fields (None if not parseable).
+    """
+    flow: dict[str, Any] = {}
+    low = (text or "").lower()
+
+    # Direction hint from "Liquidated Short/Long"
+    if "liquidated short" in low or "short" in low:
+        flow["direction_hint"] = "short"
+    elif "liquidated long" in low or "long" in low:
+        flow["direction_hint"] = "long"
+    else:
+        flow["direction_hint"] = None
+
+    # Notional: "$64.6K" → 64600, "$1.2M" → 1200000
+    notional_re = re.compile(r"\$([0-9.,]+)\s*([KkMmBb])?")
+    notional_match = notional_re.search(text or "")
+    if notional_match:
+        try:
+            val = float(notional_match.group(1).replace(",", ""))
+            suffix = (notional_match.group(2) or "").upper()
+            multiplier = {"K": 1000, "M": 1000000, "B": 1000000000}.get(suffix, 1)
+            flow["notional_usd"] = val * multiplier
+        except (TypeError, ValueError):
+            flow["notional_usd"] = None
+    else:
+        flow["notional_usd"] = None
+
+    # Entry price: "at $80.77"
+    price_re = re.compile(r"at\s+\$([0-9.,]+)", re.I)
+    price_match = price_re.search(text or "")
+    if price_match:
+        try:
+            flow["entry_price"] = float(price_match.group(1).replace(",", ""))
+        except (TypeError, ValueError):
+            flow["entry_price"] = None
+    else:
+        flow["entry_price"] = None
+
+    # Venue: last word after " - " or known venues
+    venue_re = re.compile(r"\s*-\s*(\w+)\s*$")
+    venue_match = venue_re.search(text or "")
+    if venue_match:
+        flow["venue"] = venue_match.group(1).lower()
+    else:
+        flow["venue"] = None
+
+    return flow
 
 
 def _fetch_url(url: str) -> str:

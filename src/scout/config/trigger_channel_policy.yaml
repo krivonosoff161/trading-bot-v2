@@ -1,0 +1,111 @@
+# trigger_channel_policy.yaml — channel-specific trigger semantics.
+#
+# Defines HOW each Telegram channel (and generic fallbacks) produces trigger items:
+#   - default_trigger_role: signal / context_trigger / needs_context
+#   - default_event_type: exchange_listing / liquidation_flow / news_trigger / ...
+#   - requires_context: whether context search is mandatory before LLM
+#   - context_profile: which context_requirements to use from asset_identity.yaml
+#   - unknown_ticker_policy: can unknown tickers from this channel become L2?
+#   - max_items_per_pass: cap on items per scanner pass from this channel
+#   - phase_default: what phase to assign if source doesn't specify
+#   - flow_fields: optional fields to parse for flow-type triggers
+#
+# This config is loaded by trigger_policy.py and consulted by telegram_web.py
+# and scanner_v0.py to make channel-aware decisions.
+
+channels:
+  tg_new_listings_feed:
+    channel_kind: listing
+    default_trigger_role: signal
+    default_event_type: exchange_listing
+    requires_context: false
+    context_profile: null
+    unknown_ticker_policy: default_to_crypto_alt_l2
+    max_items_per_pass: 20
+    phase_default: REALIZED
+    flow_fields: null
+    notes: >
+      Listing announcements. Unknown tickers default to L2 crypto_alt
+      (new crypto listing assumption). Equity/tokenized detected by
+      identity resolver → needs_context=true from identity, not from channel.
+
+  tg_markettwits:
+    channel_kind: news
+    default_trigger_role: needs_context
+    default_event_type: news_trigger
+    requires_context: true
+    context_profile: markettwits_news
+    unknown_ticker_policy: needs_context
+    max_items_per_pass: 15
+    phase_default: AMBIGUOUS
+    flow_fields: null
+    notes: >
+      Fast RU market headlines. Cashtags may be crypto, equity, or
+      anything. Unknown tickers MUST NOT default to L2 — they stay
+      needs_context until identity resolver + context confirms.
+
+  tg_hyperliquid_liquidations:
+    channel_kind: liquidations
+    default_trigger_role: context_trigger
+    default_event_type: liquidation_flow
+    requires_context: false
+    context_profile: liquidation_flow
+    unknown_ticker_policy: flow_only
+    max_items_per_pass: 30
+    phase_default: COINCIDENT
+    flow_fields:
+      - direction_hint    # "Liquidated Short" → short, "Liquidated Long" → long
+      - notional_usd      # "$64.6K" → 64600
+      - entry_price       # "at $80.77"
+      - venue             # "hyperlens" / "hyperliquid"
+    notes: >
+      Flow/context trigger, NOT standalone GO signal. Each post is
+      a real-time liquidation event. Context model is flow confirmation
+      (cumulative flow, squeeze risk), NOT news corroboration.
+      requires_context=false because the flow IS the context.
+      Escalation to chief happens only if cheap agent sees mechanical edge.
+
+  # Generic fallback for any telegram_web source not listed above
+  _default_telegram:
+    channel_kind: news
+    default_trigger_role: needs_context
+    default_event_type: news_trigger
+    requires_context: true
+    context_profile: generic_news
+    unknown_ticker_policy: needs_context
+    max_items_per_pass: 10
+    phase_default: AMBIGUOUS
+    flow_fields: null
+    notes: >
+      Conservative default for new/unknown Telegram sources.
+      Always requires context. Unknown tickers stay unknown.
+
+# Context profiles — map to specific context_requirements in asset_identity.yaml
+# and flow-specific fields for liquidation.
+context_profiles:
+  liquidation_flow:
+    description: "Flow confirmation model — not news corroboration"
+    min_mentions: 0
+    require_official: false
+    flow_context_fields:
+      - direction_hint
+      - notional_usd
+      - cumulative_flow_1h
+      - squeeze_risk_score
+    missing_rules:
+      - nothing    # liquidation flow is self-confirming via source
+
+  markettwits_news:
+    description: "News trigger — needs corroboration from other sources"
+    min_mentions: 1
+    require_official: false
+    missing_rules:
+      - source_corroboration
+      - asset_identification
+
+  generic_news:
+    description: "Generic news — conservative"
+    min_mentions: 1
+    require_official: false
+    missing_rules:
+      - source_corroboration
