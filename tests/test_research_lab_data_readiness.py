@@ -59,7 +59,8 @@ def test_timeframe_mismatch_is_missing_not_silently_run(tmp_path):
     r = assess(req, data_glob=_glob(tmp_path))
     assert r.status == MISSING_DATA and not r.is_ready()
     assert any("no_file_for_timeframe_15m" in reason for reason in r.reasons)
-    assert "TODO" in r.suggested_command  # honest hint; no false "prepare_1m" claim for a 15m gap
+    assert "scripts.strategy_lab.prepare_market_data" in r.suggested_command
+    assert "--timeframe 15m" in r.suggested_command
     assert "prepare_1m_data" not in r.suggested_command
 
 

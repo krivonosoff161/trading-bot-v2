@@ -12,7 +12,7 @@ budget ledger. Default behaviour is fully offline: no provider unless every env 
 
 Env (all optional; default = no network / export-only):
 - STRATEGY_LAB_LLM_ENABLED=1
-- STRATEGY_LAB_LLM_PROVIDER = alibaba | qwen | openai-compatible | synthetic
+- STRATEGY_LAB_LLM_PROVIDER = alibaba | qwen | openai-compatible | ollama | synthetic
 - STRATEGY_LAB_LLM_BASE_URL  (OpenAI-compatible base, e.g. https://.../compatible-mode/v1)
 - STRATEGY_LAB_LLM_API_KEY_ENV  (NAME of the env var holding the key; default STRATEGY_LAB_LLM_API_KEY)
 - STRATEGY_LAB_LLM_MODEL_CHEAP
@@ -51,7 +51,9 @@ SCANNER_ENV_ALIBABA_API_KEY = "ALIBABA_API_KEY"
 SCANNER_ENV_CHEAP_MODEL = "LLM_CHEAP_MODEL"
 
 OPENAI_COMPATIBLE = {"alibaba", "qwen", "openai-compatible", "openai"}
+LOCAL_OLLAMA = {"ollama", "ollama-local"}
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_OLLAMA_TIMEOUT = 120.0
 DEFAULT_RATE_RUB_PER_1K = 0.5  # fallback cost model, mirrors the scanner's RUB style
 _USER_AGENT = "strategy-lab-research/1.0 (+llm-proposals)"
 
@@ -177,6 +179,63 @@ class OpenAICompatibleProvider:
                         output_tokens=out, total_tokens=total, cost_rub=cost)
 
 
+class OllamaProposalProvider:
+    """Local Ollama chat client. No API key, no paid provider, no tool access."""
+
+    name = "ollama"
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        timeout: float = DEFAULT_TIMEOUT,
+        http_post: HttpPost | None = None,
+    ):
+        self.configured = bool(base_url and model)
+        self._url = base_url.rstrip("/") + "/chat/completions"
+        self._model = model
+        self._timeout = float(timeout)
+        self._http_post = http_post or _default_http_post
+
+    def generate(self, system: str, user: str) -> tuple[str, LLMUsage]:
+        if not self.configured:
+            raise LLMProviderError("provider_not_configured")
+        headers = {"Content-Type": "application/json", "User-Agent": _USER_AGENT}
+        payload = {
+            "model": self._model,
+            "stream": False,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }
+        try:
+            data = self._http_post(self._url, payload, headers, self._timeout)
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
+            raise LLMProviderError(f"ollama request failed: {type(exc).__name__}") from exc
+        except json.JSONDecodeError as exc:
+            raise LLMProviderError("ollama returned invalid JSON envelope") from exc
+        if not isinstance(data, dict):
+            raise LLMProviderError("ollama returned an unexpected payload")
+        try:
+            choice = data["choices"][0]
+            text = str(choice["message"]["content"] or "").strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMProviderError("ollama response missing choices/content") from exc
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        inp = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        total = int(usage.get("total_tokens") or (inp + out))
+        return text, LLMUsage(
+            provider=self.name,
+            model=self._model,
+            input_tokens=inp,
+            output_tokens=out,
+            total_tokens=total,
+            cost_rub=0.0,
+        )
+
+
 def _truthy(value: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -230,6 +289,15 @@ def load_provider(
                 rate_rub_per_1k=float(env.get(ENV_RATE, DEFAULT_RATE_RUB_PER_1K) or DEFAULT_RATE_RUB_PER_1K),
                 http_post=http_post,
             )
+    if provider in LOCAL_OLLAMA:
+        base_url = _env_first(env, ENV_BASE_URL) or "http://127.0.0.1:11434/v1"
+        model = _env_first(env, ENV_MODEL_CHEAP) or "calculator"
+        return OllamaProposalProvider(
+            base_url=base_url,
+            model=model,
+            timeout=float(env.get(ENV_TIMEOUT, DEFAULT_OLLAMA_TIMEOUT) or DEFAULT_OLLAMA_TIMEOUT),
+            http_post=http_post,
+        )
     return NullProposalProvider()
 
 

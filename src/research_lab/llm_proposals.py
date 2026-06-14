@@ -28,7 +28,7 @@ from src.research_lab.timeframes import TimeframeProfiles
 from src.research_lab.universe import Universe
 
 ENV_PROVIDER = "STRATEGY_LAB_LLM_PROVIDER"
-KNOWN_PROVIDERS = ("alibaba", "qwen", "openai-compatible")
+KNOWN_PROVIDERS = ("alibaba", "qwen", "openai-compatible", "ollama")
 DEFAULT_MAX_CANDIDATES = 8
 DEFAULT_MAX_REVIEWS = 3
 _HARD_ITEM_CAP = 200

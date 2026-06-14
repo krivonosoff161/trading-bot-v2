@@ -123,7 +123,7 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     spent = today_usage(private_root)["cost_rub"]
     if cfg.daily_cap_value is not None and spent >= cfg.daily_cap_value:
         return {"status": "daily_cap_exhausted", "spent_today_rub": spent, "cost_rub": 0.0}
-    if provider.name != "synthetic":  # real network provider needs all spend gates
+    if provider.name not in {"synthetic", "ollama"}:  # paid/network provider needs all spend gates
         gate = evaluate_llm_loop_gates(cfg, send_requested=True, dry_run=False, spent_today=spent)
         if not gate.allowed:
             return {"status": f"blocked:{gate.reason}"}

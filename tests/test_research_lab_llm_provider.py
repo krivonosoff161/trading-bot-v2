@@ -8,6 +8,7 @@ import pytest
 from src.research_lab.llm_provider import (
     LLMProviderError,
     NullProposalProvider,
+    OllamaProposalProvider,
     OpenAICompatibleProvider,
     SyntheticProposalProvider,
     load_provider,
@@ -66,6 +67,45 @@ def test_openai_compatible_configured_with_full_env():
     p = load_provider(_FULL_ENV)
     assert isinstance(p, OpenAICompatibleProvider)
     assert p.configured is True and p.name == "alibaba"
+
+
+def test_ollama_provider_needs_no_api_key():
+    env = {
+        "STRATEGY_LAB_LLM_ENABLED": "1",
+        "STRATEGY_LAB_LLM_PROVIDER": "ollama",
+        "STRATEGY_LAB_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+        "STRATEGY_LAB_LLM_MODEL_CHEAP": "calculator",
+    }
+    p = load_provider(env)
+    assert isinstance(p, OllamaProposalProvider)
+    assert p.configured is True and p.name == "ollama"
+
+
+def test_mocked_ollama_has_no_auth_header_and_zero_cost():
+    seen = {}
+
+    def fake_post(url, payload, headers, timeout):
+        seen["url"] = url
+        seen["headers"] = headers
+        seen["payload"] = payload
+        return _envelope('{"proposals": []}', total_tokens=200)
+
+    p = load_provider(
+        {
+            "STRATEGY_LAB_LLM_ENABLED": "1",
+            "STRATEGY_LAB_LLM_PROVIDER": "ollama",
+            "STRATEGY_LAB_LLM_BASE_URL": "http://127.0.0.1:11434/v1",
+            "STRATEGY_LAB_LLM_MODEL_CHEAP": "calculator",
+        },
+        http_post=fake_post,
+    )
+    text, usage = p.generate("system", "user")
+    assert text == '{"proposals": []}'
+    assert usage.provider == "ollama" and usage.model == "calculator"
+    assert usage.total_tokens == 200 and usage.cost_rub == 0.0
+    assert seen["url"].endswith("/chat/completions")
+    assert "Authorization" not in seen["headers"]
+    assert seen["payload"]["temperature"] == 0
 
 
 def test_scanner_style_alibaba_aliases_work_only_after_strategy_gate():
