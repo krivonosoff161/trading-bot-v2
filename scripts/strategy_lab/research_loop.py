@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -106,6 +107,48 @@ def _is_contract_failure(llm: dict) -> bool:
     return all(str(reason) in _CONTRACT_FAILURE_REASONS for reason in reasons)
 
 
+def _is_provider_error(llm: dict) -> bool:
+    """A transport/HTTP/parse failure from the provider call (LLMProviderError)."""
+    return str(llm.get("status", "")).startswith("error:")
+
+
+# Markers in the (already key-free) LLMProviderError message that mean "transient,
+# a retry could succeed" vs a structural/config problem that won't fix itself mid-run.
+_RETRYABLE_MARKERS = ("request failed", "timeout", "timed out", "truncated",
+                      "invalid json envelope", "unexpected payload", "missing choices")
+
+
+def _sanitize_error_message(message: str) -> str:
+    """Defense-in-depth: provider errors carry only static reasons/type names, but
+    strip anything that could resemble a URL or bearer token before it reaches a report."""
+    text = str(message)
+    text = re.sub(r"https?://\S+", "<url>", text)
+    text = re.sub(r"(?i)bearer\s+\S+", "bearer <redacted>", text)
+    text = re.sub(r"sk-\S+", "<redacted>", text)
+    return text[:200]
+
+
+def _provider_error_payload(exc: LLMProviderError, provider) -> dict:
+    """Turn an LLMProviderError into a safe, actionable loop-report row (no keys/URLs)."""
+    message = _sanitize_error_message(str(exc))
+    retryable = any(marker in message.lower() for marker in _RETRYABLE_MARKERS)
+    next_action = (
+        "transient provider error; loop retries and the breaker stops it after the cap"
+        if retryable else
+        "non-retryable; check provider/model availability and config before the next run"
+    )
+    return {
+        "status": f"error:{type(exc).__name__}",
+        "error_type": type(exc).__name__,
+        "error_message": message,
+        "provider": getattr(provider, "name", "unknown"),
+        "model": getattr(provider, "_model", "") or "",
+        "retryable": retryable,
+        "next_action": next_action,
+        "cost_rub": 0.0,
+    }
+
+
 def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     """Optional cheap-LLM propose -> validate -> store. Gated; dry-run never calls."""
     if not args.llm_propose:
@@ -118,7 +161,16 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
     allow_synth = _truthy("STRATEGY_LAB_ALLOW_SYNTHETIC")
     provider = load_provider(allow_synthetic=allow_synth, synthetic_candidates=_synthetic_candidates(universe))
     if not getattr(provider, "configured", False):
-        return {"status": "provider_not_configured"}
+        return {
+            "status": "provider_not_configured",
+            "error_type": "ProviderNotConfigured",
+            "error_message": "provider_not_configured",
+            "provider": getattr(provider, "name", "unknown"),
+            "model": getattr(provider, "_model", "") or "",
+            "retryable": False,
+            "next_action": "configure STRATEGY_LAB_LLM_* env or run without --llm-propose",
+            "cost_rub": 0.0,
+        }
     cfg = load_llm_loop_config(max_candidates=max(1, args.max_candidates), allow_synthetic=allow_synth)
     spent = today_usage(private_root)["cost_rub"]
     if cfg.daily_cap_value is not None and spent >= cfg.daily_cap_value:
@@ -135,7 +187,7 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
             max_candidates=max(1, args.max_candidates),
         )
     except LLMProviderError as exc:
-        return {"status": f"error:{type(exc).__name__}"}
+        return _provider_error_payload(exc, provider)
     record_usage(private_root, usage, allow_public_output=args.allow_public_output)
     if batch.validated:
         upsert_proposals(proposals_path(private_root), batch.validated)
@@ -184,6 +236,7 @@ def run_loop(args) -> dict:
                              "llm_validated", "llm_rejected")}
     llm_cost = 0.0
     llm_contract_failures = 0
+    llm_provider_errors = 0
     iterations: list[dict] = []
     start = time.monotonic()
     i = 0
@@ -194,12 +247,24 @@ def run_loop(args) -> dict:
         write_heartbeat(private_root, {"status": "running", "iteration": i, "mode": mode,
                                         "elapsed_seconds": round(time.monotonic() - start, 1)},
                         allow_public_output=args.allow_public_output)
+        breaker_cap = max(1, int(args.max_llm_contract_failures))
         try:  # one bad iteration must not kill the bounded run
-            if args.llm_propose and llm_contract_failures >= max(1, int(args.max_llm_contract_failures)):
+            if args.llm_propose and llm_contract_failures >= breaker_cap:
                 llm = {
                     "status": "contract_breaker",
                     "reason": "too_many_consecutive_contract_failures",
                     "consecutive_failures": llm_contract_failures,
+                    "next_action": "fix the model's JSON output or drop --llm-propose; "
+                                   "loop keeps draining the queue/worker",
+                    "cost_rub": 0.0,
+                }
+            elif args.llm_propose and llm_provider_errors >= breaker_cap:
+                llm = {
+                    "status": "provider_breaker",
+                    "reason": "too_many_consecutive_provider_errors",
+                    "consecutive_failures": llm_provider_errors,
+                    "next_action": "LLM provider unreachable/failing; loop stopped calling it and "
+                                   "keeps draining the queue. Check Ollama/provider, then restart.",
                     "cost_rub": 0.0,
                 }
             else:
@@ -211,10 +276,16 @@ def run_loop(args) -> dict:
         totals["llm_validated"] += int(llm.get("validated", 0) or 0)
         totals["llm_rejected"] += int(llm.get("rejected", 0) or 0)
         llm_cost += float(llm.get("cost_rub", 0.0) or 0.0)
+        # Two independent breaker streaks: malformed-but-answered (contract) vs the provider
+        # call itself failing (transport/HTTP/parse). A clean 'ok' resets both; latched
+        # breaker statuses and neutral gates (queue_at_cap, daily_cap, ...) leave them as-is.
         if _is_contract_failure(llm):
             llm_contract_failures += 1
-        elif llm.get("status") not in {"contract_breaker"}:
+        elif _is_provider_error(llm):
+            llm_provider_errors += 1
+        elif llm.get("status") == "ok":
             llm_contract_failures = 0
+            llm_provider_errors = 0
         for key in ("proposals_queued", "ready_jobs", "skipped_missing_data",
                     "worker_completed", "worker_deferred", "worker_failed"):
             totals[key] += int(c.get(key, 0) or 0)

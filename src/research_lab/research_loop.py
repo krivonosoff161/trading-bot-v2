@@ -85,6 +85,10 @@ def loop_summary(report: dict[str, Any]) -> dict[str, Any]:
         # last-iteration detail (operator wants: what did the LLM/worker just do?)
         "last_llm_status": str(last_llm.get("status", "")),
         "last_llm_reject_reasons": dict(last_llm.get("reject_reasons", {}) or {}),
+        # recovery path: why the last LLM step failed and what to do (key-free, sanitized)
+        "last_llm_reason": str(last_llm.get("error_message") or last_llm.get("reason") or ""),
+        "last_llm_next_action": str(last_llm.get("next_action") or ""),
+        "last_llm_retryable": last_llm.get("retryable"),
         "last_worker": dict(last.get("worker", {}) or {}),
         "next_command": report.get("next_command", ""),
         "stop_requested": bool(report.get("stop_requested")),
