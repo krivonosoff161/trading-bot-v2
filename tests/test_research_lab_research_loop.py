@@ -4,8 +4,14 @@ from argparse import Namespace
 from types import SimpleNamespace
 
 import scripts.strategy_lab.research_loop as loop_mod
-from scripts.strategy_lab.research_loop import _llm_step, _synthetic_candidates, run_loop
-from src.research_lab.llm_provider import LLMUsage, record_usage
+from scripts.strategy_lab.research_loop import (
+    _llm_step,
+    _provider_error_payload,
+    _sanitize_error_message,
+    _synthetic_candidates,
+    run_loop,
+)
+from src.research_lab.llm_provider import LLMProviderError, LLMUsage, record_usage
 from src.research_lab.research_loop import (
     heartbeat_path,
     loop_report_path,
@@ -104,6 +110,9 @@ def test_llm_step_provider_not_configured_when_env_unset(tmp_path, monkeypatch):
     universe, profiles, policy = _ctx()
     out = _llm_step(_llm_args(), tmp_path, universe, profiles, policy)
     assert out["status"] == "provider_not_configured"
+    assert out["retryable"] is False
+    assert out["error_message"] == "provider_not_configured"
+    assert out["next_action"]
 
 
 def test_llm_step_skips_when_active_queue_at_cap(tmp_path, monkeypatch):
@@ -219,3 +228,99 @@ def test_synthetic_candidates_are_bounded():
     cands = _synthetic_candidates(load_universe())
     assert 1 <= len(cands) <= 2
     assert all(c["requested_timeframe"] == "1d" and c["setup_family"] for c in cands)
+
+
+# ── provider-error recovery path (the overnight failure mode) ─────────────────
+
+class _BoomProvider:
+    """Provider whose call fails like a dead Ollama (connection refused / timeout)."""
+
+    name = "ollama"
+    configured = True
+    _model = "calculator"
+
+    def __init__(self, message="ollama request failed: URLError"):
+        self._message = message
+
+    def generate(self, system, user):
+        raise LLMProviderError(self._message)
+
+
+def test_llm_step_provider_error_keeps_safe_actionable_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "ollama")
+    monkeypatch.setattr(loop_mod, "load_provider", lambda **_kw: _BoomProvider())
+    universe, profiles, policy = _ctx()
+
+    out = _llm_step(_llm_args(max_candidates=1), tmp_path, universe, profiles, policy)
+
+    assert out["status"] == "error:LLMProviderError"
+    assert out["error_type"] == "LLMProviderError"
+    assert out["provider"] == "ollama" and out["model"] == "calculator"
+    assert out["retryable"] is True  # "request failed" -> transient
+    assert out["next_action"] and out["cost_rub"] == 0.0
+    # the actual reason is preserved, not collapsed to a bare label
+    assert "request failed" in out["error_message"].lower()
+
+
+def test_provider_error_message_is_sanitized_of_url_and_key():
+    leaky = "POST https://host.internal/v1/chat failed bearer sk-SECRET-123 token"
+    cleaned = _sanitize_error_message(leaky)
+    assert "https://" not in cleaned
+    assert "sk-SECRET-123" not in cleaned and "SECRET" not in cleaned
+    assert "<url>" in cleaned and "<redacted>" in cleaned
+
+
+def test_provider_error_payload_marks_non_retryable_config_problem():
+    out = _provider_error_payload(LLMProviderError("provider_not_configured"), _BoomProvider())
+    assert out["retryable"] is False
+    assert "non-retryable" in out["next_action"].lower()
+
+
+def test_run_loop_provider_breaker_stops_repeated_provider_errors(tmp_path, monkeypatch):
+    calls = {"llm": 0}
+
+    def boom_llm(*args, **kwargs):
+        calls["llm"] += 1
+        return _provider_error_payload(LLMProviderError("ollama request failed: URLError"),
+                                       _BoomProvider())
+
+    def fake_cycle(*args, **kwargs):
+        return SimpleNamespace(counts={
+            "proposals_queued": 0, "ready_jobs": 0, "skipped_missing_data": 0,
+            "worker_completed": 0, "worker_deferred": 0, "worker_failed": 0,
+        })
+
+    monkeypatch.setattr(loop_mod, "_llm_step", boom_llm)
+    monkeypatch.setattr(loop_mod, "run_research_cycle", fake_cycle)
+
+    report = run_loop(_loop_args(tmp_path, dry_run=False, apply=True, llm_propose=True,
+                                 max_iterations=5, max_llm_contract_failures=2))
+
+    # 2 consecutive provider errors trip the breaker; the LLM is not called again
+    assert calls["llm"] == 2
+    assert report["iterations"] == 5  # loop keeps running (draining queue), LLM latched off
+    assert report["iteration_log"][-1]["llm"]["status"] == "provider_breaker"
+    assert report["iteration_log"][-1]["llm"]["next_action"]
+
+
+def test_loop_summary_exposes_provider_error_recovery(tmp_path):
+    report = {
+        "mode": "apply", "iterations": 1, "duration_minutes": 0.1,
+        "totals": {"worker_completed": 0},
+        "llm_cost_rub": 0.0,
+        "iteration_log": [{
+            "iteration": 1,
+            "llm": {"status": "error:LLMProviderError",
+                    "error_message": "ollama request failed: URLError",
+                    "retryable": True,
+                    "next_action": "transient provider error; loop retries"},
+            "worker": {"completed": 0, "deferred": 0, "failed": 0},
+        }],
+    }
+    write_loop_report(tmp_path, report)
+    s = loop_summary(read_loop_report(tmp_path))
+    assert s["last_llm_status"] == "error:LLMProviderError"
+    assert "request failed" in s["last_llm_reason"].lower()
+    assert s["last_llm_retryable"] is True
+    assert s["last_llm_next_action"]

@@ -135,6 +135,10 @@ def main() -> None:
             reasons = _fmt_counts(loop.get("last_llm_reject_reasons"))
             print(f"             : last LLM {loop.get('last_llm_status')} "
                   f"(validated: {loop.get('llm_validated', 0)}, rejects: {reasons})")
+            if loop.get("last_llm_reason"):
+                print(f"             : reason: {loop.get('last_llm_reason')}")
+            if loop.get("last_llm_next_action"):
+                print(f"             : next: {loop.get('last_llm_next_action')}")
     else:
         print("Research loop: not run yet (python -m scripts.strategy_lab.research_loop --dry-run --duration-minutes 5)")
     llm_send_status = "enabled" if llm_loop.get("enabled") else "disabled"

@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.candidate_registry import registry_path, registry_summary  # noqa: E402
+from src.research_lab.llm_provider import today_usage  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.proposal_store import load_proposals, proposals_path, rejection_reason_counts, status_counts  # noqa: E402
 from src.research_lab.research_loop import loop_summary, read_loop_report  # noqa: E402
@@ -85,6 +86,7 @@ def generate_morning_report(private_root: Path) -> dict:
     snapshot = dashboard_snapshot(default_db_path(private_root))
     queue_counts = snapshot.get("queue_counts") or {}
     candidates = snapshot.get("candidates") or []
+    usage = today_usage(private_root)
 
     reg = registry_summary(registry_path(private_root))
     props = status_counts(load_proposals(proposals_path(private_root)))
@@ -121,16 +123,27 @@ def generate_morning_report(private_root: Path) -> dict:
             "iterations": loop.get("iterations", 0),
             "stop_requested": loop.get("stop_requested", False),
         },
+        # NOTE: jobs.* counts ONLY this loop's own worker steps. The queue can also be
+        # drained by a concurrent worker (strategy_lab_worker_loop / autopilot), so
+        # queue.completed (cumulative DB) is normally >= jobs.completed — that is expected,
+        # not a lost job. Cross-check the DB when they diverge.
         "jobs": {
             "completed": loop.get("worker_completed", 0),
             "deferred": loop.get("worker_deferred", 0),
             "failed": loop.get("worker_failed", 0),
+            "note": "this loop's own worker steps; concurrent workers also drain the queue",
         },
         "queue": {
             "pending": queue_counts.get("queued", 0),
             "running": queue_counts.get("running", 0),
             "completed": queue_counts.get("completed", 0),
             "failed": queue_counts.get("failed", 0),
+        },
+        "llm_recovery": {
+            "last_status": loop.get("last_llm_status", ""),
+            "reason": loop.get("last_llm_reason", ""),
+            "retryable": loop.get("last_llm_retryable"),
+            "next_action": loop.get("last_llm_next_action", ""),
         },
         "strategies_tested": sorted(families_tested),
         "symbols_tested": sorted(symbols_tested),
@@ -141,8 +154,8 @@ def generate_morning_report(private_root: Path) -> dict:
         },
         "rejects": {"reasons": reject_reasons, "total": sum(reject_reasons.values())},
         "llm": {
-            "requests": 0,
-            "tokens": 0,
+            "requests": usage.get("requests", 0),
+            "tokens": usage.get("tokens", 0),
             "cost_rub": loop.get("llm_cost_rub", 0.0),
             "validated": loop.get("llm_validated", 0),
             "rejected": loop.get("llm_rejected", 0),
@@ -178,11 +191,24 @@ def _print_report(report: dict) -> None:
         print("  ** Stop was requested during the loop **")
 
     jobs = report["jobs"]
-    print(f"\nJobs: completed={jobs['completed']}, deferred={jobs['deferred']}, failed={jobs['failed']}")
+    print(f"\nJobs: completed={jobs['completed']}, deferred={jobs['deferred']}, "
+          f"failed={jobs['failed']}  (this loop's own worker steps)")
 
     queue = report["queue"]
     print(f"Queue: pending={queue['pending']}, running={queue['running']}, "
-          f"completed={queue['completed']}, failed={queue['failed']}")
+          f"completed={queue['completed']}, failed={queue['failed']}  (DB cumulative; "
+          f"a concurrent worker can drain it too)")
+
+    rec = report.get("llm_recovery") or {}
+    status = str(rec.get("last_status") or "")
+    if status and status not in {"ok", "disabled"}:
+        print(f"\nLLM last step: {status}")
+        if rec.get("reason"):
+            print(f"  reason: {rec['reason']}")
+        if rec.get("retryable") is not None:
+            print(f"  retryable: {rec['retryable']}")
+        if rec.get("next_action"):
+            print(f"  next: {rec['next_action']}")
 
     if report["strategies_tested"]:
         print(f"\nStrategies tested: {', '.join(report['strategies_tested'])}")
