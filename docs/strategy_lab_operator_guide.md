@@ -47,16 +47,20 @@ no `.env`/secrets, no automatic LLM spend.
   graph** notes, SQLite queue/state, read-only dashboard, and an **export-only**
   LLM review pack.
 - **GPU backend contract (`cpu` / `gpu` / `auto`)** with capability detection
-  (`gpu_runtime.py`), a `gpu_doctor`, and a real cupy-accelerated signal kernel
-  for the `momentum_breakout` family (CPU/GPU parity proven). `cpu` is unchanged;
+  (`gpu_runtime.py`), a `gpu_doctor`, a cupy-accelerated `momentum_breakout`
+  signal kernel (`gpu_kernels.py`) AND a cupy-accelerated **batched trade
+  simulator** (`gpu_simulator.py`: first-touch SL/TP/max-hold, long & short,
+  fees+slippage) — both with CPU/GPU parity proven by tests. `cpu` is unchanged;
   `gpu` runs on a real GPU backend or errors (never silent CPU); `auto` uses the
-  GPU when present, else CPU with a recorded reason. See "GPU backend" below.
+  GPU when present, else CPU with a recorded reason. Signal and simulation
+  backends are reported separately. See "GPU backend" below.
 
 ## What is planned (not done yet)
 
-- Broaden the GPU kernel support matrix beyond `momentum_breakout`, and a
-  vectorized path-independent trade-simulation kernel (today the simulation stays
-  CPU-only because it is sequential/path-dependent).
+- Broaden the GPU support matrix: more signal families on the GPU kernel, and
+  more exit modes (trailing stops, ATR exits, partials) in the batched simulator
+  (today only the `fixed_sl_tp_hold_long_short` exit mode is GPU-accelerated;
+  every other exit mode falls back to the CPU reference with an explicit reason).
 - More market-data providers (today: `okx-public` fetches public candles for
   `1m`, `15m`, `1h`, `4h`, `1d`; `null` default + offline `synthetic` test
   provider remain). Full-market 1m download is intentionally unsupported.
@@ -398,9 +402,13 @@ artifacts carry a real timeframe.
 
 ## GPU backend (cpu / gpu / auto)
 
-The sweep worker has an honest backend contract. The numeric signal kernel for the
-`momentum_breakout` family can run on a real GPU array backend (cupy); everything
-else (and the path-dependent trade simulation) runs on the CPU scalar path.
+The sweep worker has an honest backend contract with **two independently
+GPU-accelerated stages**: (1) the `momentum_breakout` signal kernel, and (2) the
+**batched trade simulation** (first-touch SL/TP/max-hold barrier scan, long &
+short, fees+slippage) for the supported exit mode. Both run on a real GPU array
+backend (cupy) when one is usable; otherwise they fall back to the CPU scalar
+reference. The signal and simulation backends are reported separately, so a run
+can be e.g. CPU-signal + GPU-simulation.
 
 ```bash
 # Is a GPU backend actually usable here?
@@ -424,18 +432,30 @@ Backend semantics (set on `SweepSpec.backend` / `ExperimentSpec.backend`):
 - **Capability detection is honest**: it probes cupy/torch/numba and runs a tiny
   real GPU compute, so a half-installed cupy (device visible but no CUDA headers)
   is reported *unavailable*, not faked. `nvidia-smi` presence is reported separately.
-- **Run metadata is recorded** in each run's `metrics.json` under `runtime`:
-  `requested_backend`, `effective_backend`, `gpu_available`, `backend_name`,
-  `device_name`, `fallback_reason`, `elapsed_ms`, `accelerated_runs`,
-  `cpu_fallback_families`.
-- **Support matrix**: GPU-accelerated families = `momentum_breakout` (see
-  `gpu_runtime.GPU_SUPPORTED_FAMILIES`). Other families run on CPU even under
-  `gpu`, recorded in `cpu_fallback_families`. The trade simulation is CPU-only by
-  design (sequential / path-dependent).
+- **Run metadata is the source of truth**, recorded in each run's `metrics.json`
+  under `runtime`: `requested_backend`, `effective_backend`, `signal_backend`,
+  `simulation_backend`, `gpu_available`, `backend_name`, `device_name`,
+  `fallback_reason`, `simulation_fallback_reason`, `elapsed_ms`,
+  `accelerated_signal_runs`, `accelerated_simulation_runs`, `accelerated_runs`
+  (back-compat alias of signal runs), `cpu_fallback_families`,
+  `gpu_supported_simulation_modes`. (The worker's verbose log is a convenience
+  only — read `metrics.json.runtime` for evidence.)
+- **Support matrix — signals**: GPU-accelerated families = `momentum_breakout`
+  (`gpu_runtime.GPU_SUPPORTED_FAMILIES`). Other families generate signals on CPU
+  even under `gpu`, recorded in `cpu_fallback_families`.
+- **Support matrix — simulation**: the batched simulator reproduces the
+  `fixed_sl_tp_hold_long_short` exit mode exactly (params `hold_bars`, `stop_pct`,
+  `take_pct`; long & short; fees+slippage). Any other exit modifier (e.g.
+  `trailing_stop_pct`) is an **unsupported mode** -> CPU simulation with
+  `simulation_fallback_reason=unsupported_exit_mode:<key>`. A batch whose
+  `signals x (hold_bars+1)` exceeds the VRAM cap falls back to CPU with
+  `gpu_batch_exceeds_vram_cap` (cap sized for a 3GB GTX 1050; see
+  `gpu_simulator.GPU_SIM_MEMORY_CAP_CELLS`). Parity with the CPU reference is
+  enforced by tests (`tests/test_research_lab_gpu_simulator.py`).
 - **Honest performance note**: on tiny per-symbol data the GPU has first-call JIT
   (NVRTC) + host/device transfer overhead, so the speedup is small or negative;
-  the GPU path pays off as data size and grids grow. Correctness (CPU/GPU parity)
-  holds regardless.
+  the GPU path pays off as signal counts / hold windows / grids grow. Correctness
+  (CPU/GPU parity) holds regardless of size.
 
 Install / recovery for the GPU path (NVIDIA CUDA 12):
 

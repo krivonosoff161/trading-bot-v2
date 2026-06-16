@@ -158,11 +158,13 @@ and are not sent to Telegram.
 Private strategy-lab smoke run:
 
 Use CPU/offline paths for smoke checks and deterministic validation. The sweep
-worker has a real backend contract (`cpu`/`gpu`/`auto`): the `momentum_breakout`
-signal kernel runs on a cupy GPU backend when one is usable (CPU/GPU parity
-proven), otherwise it falls back to CPU honestly. Separately, the 24/7
-local-Ollama loop offloads the calculator model to GPU. Check the sweep GPU
-backend with:
+worker has a real backend contract (`cpu`/`gpu`/`auto`) with two GPU-accelerated
+stages: the `momentum_breakout` signal kernel AND the batched trade simulation
+(SL/TP/max-hold first-touch, long & short) for the supported exit mode. Both run
+on a cupy GPU backend when usable (CPU/GPU parity proven by tests); unsupported
+exit modes and over-cap batches fall back to CPU with an explicit reason. CPU
+stays the reference path. Separately, the 24/7 local-Ollama loop offloads the
+calculator model to GPU. Check the sweep GPU backend with:
 
 ```bash
 python -m scripts.strategy_lab.gpu_doctor
@@ -317,12 +319,13 @@ The first unattended controlled cycle is summarized as a public-safe showcase in
 It proves the queue/worker/reporting loop can run unattended and stop cleanly;
 the complete result corpus remains in the private research root.
 
-The GPU backend is optional and capability-gated: the `momentum_breakout` signal
-kernel runs on cupy when a real GPU backend is usable (`cpu`/`gpu`/`auto`,
-`gpu_doctor` reports it); the path-dependent trade simulation stays CPU-only. 1m
-is a trigger-only event microscope, not full-universe scanning. LLM review is
-export-only (no automatic API call). Full how-to:
-[docs/strategy_lab_operator_guide.md](docs/strategy_lab_operator_guide.md).
+The GPU backend is optional and capability-gated: both the `momentum_breakout`
+signal kernel and the batched trade simulation (supported `fixed_sl_tp_hold`
+mode) run on cupy when a real GPU backend is usable (`cpu`/`gpu`/`auto`,
+`gpu_doctor` reports it); unsupported exit modes and over-cap batches fall back to
+the CPU reference with an explicit reason. 1m is a trigger-only event microscope,
+not full-universe scanning. LLM review is export-only (no automatic API call).
+Full how-to: [docs/strategy_lab_operator_guide.md](docs/strategy_lab_operator_guide.md).
 Design doc:
 [docs/strategy_lab_architecture_next.md](docs/strategy_lab_architecture_next.md).
 

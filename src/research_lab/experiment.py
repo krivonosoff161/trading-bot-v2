@@ -30,6 +30,9 @@ from src.research_lab.gpu_runtime import (
     resolve_backend,
 )
 
+# Descriptor of the exit mode the GPU/batched simulator faithfully reproduces.
+GPU_SUPPORTED_SIMULATION_MODES = ("fixed_sl_tp_hold_long_short",)
+
 COST_STRESS_MULT = 1.5  # validator stress: costs scaled by this factor
 
 
@@ -228,28 +231,48 @@ def simulate_trades(
                 if take and low <= take:
                     exit_price, outcome, actual_exit_idx = take, "take", j
                     break
-        direction = 1 if side == "long" else -1
-        ret_pct = direction * (exit_price / entry - 1) * 100
-        net_pct = ret_pct - cost_pct * 100
-        mfe_pct, mae_pct = _trade_excursions(candles, idx, actual_exit_idx, entry, side)
-        capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
         trades.append(
-            {
-                "entry_ts": candles[idx]["ts"],
-                "exit_ts": candles[actual_exit_idx]["ts"],
-                "side": side,
-                "entry": round(entry, 10),
-                "exit": round(exit_price, 10),
-                "net_pct": round(net_pct, 4),
-                "outcome": outcome,
-                "reason": sig.get("reason"),
-                "regime": sig.get("regime") or {},
-                "mfe_pct": round(mfe_pct, 4),
-                "mae_pct": round(mae_pct, 4),
-                "capture_of_mfe": capture,
-            }
+            finalize_trade(candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct)
         )
     return trades
+
+
+def finalize_trade(
+    candles: list[dict[str, Any]],
+    idx: int,
+    actual_exit_idx: int,
+    side: str,
+    entry: float,
+    exit_price: float,
+    outcome: str,
+    sig: dict[str, Any],
+    cost_pct: float,
+) -> dict[str, Any]:
+    """Build one trade dict from a decided exit (entry, exit_price, outcome, bars).
+
+    Single source of truth for the trade arithmetic + rounding, shared by the CPU
+    simulator and the GPU/batched simulator so their outputs are identical by
+    construction (the GPU path only decides exit_price/outcome/actual_exit_idx).
+    """
+    direction = 1 if side == "long" else -1
+    ret_pct = direction * (exit_price / entry - 1) * 100
+    net_pct = ret_pct - cost_pct * 100
+    mfe_pct, mae_pct = _trade_excursions(candles, idx, actual_exit_idx, entry, side)
+    capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
+    return {
+        "entry_ts": candles[idx]["ts"],
+        "exit_ts": candles[actual_exit_idx]["ts"],
+        "side": side,
+        "entry": round(entry, 10),
+        "exit": round(exit_price, 10),
+        "net_pct": round(net_pct, 4),
+        "outcome": outcome,
+        "reason": sig.get("reason"),
+        "regime": sig.get("regime") or {},
+        "mfe_pct": round(mfe_pct, 4),
+        "mae_pct": round(mae_pct, 4),
+        "capture_of_mfe": capture,
+    }
 
 
 def _trade_excursions(
@@ -444,10 +467,13 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         raise RuntimeError(resolution.error)
     use_gpu = resolution.effective_backend == GPU
     xp = array_module(resolution.backend_name) if use_gpu else None
+    from src.research_lab import gpu_simulator  # local import avoids an import cycle
 
     started = time.perf_counter()
-    accelerated_runs = 0
+    accelerated_signal_runs = 0
+    accelerated_simulation_runs = 0
     cpu_fallback_families: set[str] = set()
+    sim_fallback_reasons: set[str] = set()
 
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
     results = []
@@ -468,18 +494,34 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         for params in spec.parameter_grid.get(family, []):
             if gpu_family:
                 signals = gpu_kernels.generate_signals_vectorized(candles, family, params, xp=xp)
-                accelerated_runs += 1
+                accelerated_signal_runs += 1
             else:
                 signals = generate_signals(candles, family, params)
             signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
             signals = filter_signals(signals, spec.filters)
-            trades = simulate_trades(
-                candles,
-                signals,
-                params,
-                fees_bps=spec.fees_bps,
-                slippage_bps=spec.slippage_bps,
-            )
+            # Simulation backend is decided per variant: GPU only for the supported
+            # exit mode and a batch that fits the VRAM cap; otherwise CPU with a
+            # recorded reason (never a silent wrong-GPU result).
+            use_gpu_sim = use_gpu
+            if use_gpu:
+                ok_mode, mode_reason = gpu_simulator.supported_simulation_mode(params)
+                if not ok_mode:
+                    use_gpu_sim, reason = False, mode_reason
+                elif not gpu_simulator.within_memory_cap(len(signals), int(params.get("hold_bars", 5))):
+                    use_gpu_sim, reason = False, "gpu_batch_exceeds_vram_cap"
+                if not use_gpu_sim:
+                    sim_fallback_reasons.add(reason)
+            if use_gpu_sim:
+                trades = gpu_simulator.simulate_trades_batched(
+                    candles, signals, params,
+                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps, xp=xp,
+                )
+                accelerated_simulation_runs += 1
+            else:
+                trades = simulate_trades(
+                    candles, signals, params,
+                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                )
             metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
             metrics["data_file_label"] = path.name
             metrics["data_file_timeframe"] = file_tf or ""
@@ -506,22 +548,35 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
                 )
             )
             if spec.max_runs and len(results) >= spec.max_runs:
-                _finalize_runtime_meta(runtime_meta, started, accelerated_runs, cpu_fallback_families)
+                _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
+                                       accelerated_simulation_runs, cpu_fallback_families,
+                                       sim_fallback_reasons)
                 return results
-    _finalize_runtime_meta(runtime_meta, started, accelerated_runs, cpu_fallback_families)
+    _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
+                           accelerated_simulation_runs, cpu_fallback_families,
+                           sim_fallback_reasons)
     return results
 
 
 def _finalize_runtime_meta(
     runtime_meta: dict[str, Any] | None,
     started: float,
-    accelerated_runs: int,
+    accelerated_signal_runs: int,
+    accelerated_simulation_runs: int,
     cpu_fallback_families: set[str],
+    sim_fallback_reasons: set[str],
 ) -> None:
     if runtime_meta is None:
         return
     runtime_meta["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
-    runtime_meta["accelerated_runs"] = accelerated_runs
+    # accelerated_runs kept as the signal-run count for backward compatibility.
+    runtime_meta["accelerated_runs"] = accelerated_signal_runs
+    runtime_meta["accelerated_signal_runs"] = accelerated_signal_runs
+    runtime_meta["accelerated_simulation_runs"] = accelerated_simulation_runs
+    runtime_meta["signal_backend"] = GPU if accelerated_signal_runs > 0 else "cpu"
+    runtime_meta["simulation_backend"] = GPU if accelerated_simulation_runs > 0 else "cpu"
+    runtime_meta["simulation_fallback_reason"] = "; ".join(sorted(sim_fallback_reasons))
+    runtime_meta["gpu_supported_simulation_modes"] = list(GPU_SUPPORTED_SIMULATION_MODES)
     runtime_meta["cpu_fallback_families"] = sorted(cpu_fallback_families)
 
 
