@@ -148,10 +148,19 @@ def run_worker_once(
                 if verbose:
                     print(f"variant cap applied job_id={job_id} max_runs={spec.max_runs or 'unlimited'} -> {cap} mode={policy.mode}")
                 spec = dataclasses.replace(spec, max_runs=cap)
-            results = evaluate_spec(spec)
+            runtime_meta: dict = {}
+            results = evaluate_spec(spec, runtime_meta)
+            if verbose:
+                print(f"backend requested={runtime_meta.get('requested_backend')} "
+                      f"effective={runtime_meta.get('effective_backend')} "
+                      f"gpu_available={runtime_meta.get('gpu_available')} "
+                      f"accelerated_runs={runtime_meta.get('accelerated_runs')} "
+                      f"elapsed_ms={runtime_meta.get('elapsed_ms')}"
+                      + (f" fallback={runtime_meta.get('fallback_reason')}" if runtime_meta.get('fallback_reason') else ""))
             run_dir = write_run_outputs(
                 spec, results, private_root,
                 allow_public_output=allow_public_output, include_rejects=include_rejects,
+                runtime_meta=runtime_meta,
             )
             import_run_dir(conn, private_root, run_dir)
             conn.commit()

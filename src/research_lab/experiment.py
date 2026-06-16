@@ -13,6 +13,7 @@ import glob
 import hashlib
 import itertools
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,13 @@ from src.research_lab.entry_timing import event_anchored_timing
 from src.research_lab.regime import regime_at, regime_breakdown, regime_matches
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.validator import validate_candidate
+from src.research_lab import gpu_kernels
+from src.research_lab.gpu_runtime import (
+    GPU,
+    GPU_SUPPORTED_FAMILIES,
+    array_module,
+    resolve_backend,
+)
 
 COST_STRESS_MULT = 1.5  # validator stress: costs scaled by this factor
 
@@ -41,6 +49,7 @@ class ExperimentSpec:
     regime_params: dict[str, Any] = field(default_factory=dict)
     event_context: dict[str, Any] = field(default_factory=dict)
     timeframe: str = "1d"
+    backend: str = "cpu"
 
     @classmethod
     def from_json(cls, path: Path) -> "ExperimentSpec":
@@ -60,6 +69,7 @@ class ExperimentSpec:
             regime_params=dict(data.get("regime_params") or {}),
             event_context=dict(data.get("event_context") or {}),
             timeframe=str(data.get("timeframe") or "1d"),
+            backend=str(data.get("backend") or "cpu"),
         )
 
 
@@ -413,7 +423,32 @@ def stable_run_id(symbol: str, family: str, params: dict[str, Any]) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
+def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = None) -> list[RunResult]:
+    """Run a spec. ``backend`` decides the signal-generation path:
+
+    cpu  -> the scalar reference path (unchanged).
+    gpu  -> the vectorized array kernel on a GPU backend for supported families
+            (others fall back to the scalar path, recorded honestly). Raises if
+            ``gpu`` was requested but no GPU backend is available (never silent CPU).
+    auto -> gpu when available, else cpu with a recorded fallback reason.
+
+    ``runtime_meta`` (optional) is filled with the resolved backend, gpu
+    availability, fallback reason, elapsed_ms, and accelerated-run count.
+    """
+    resolution = resolve_backend(spec.backend)
+    if runtime_meta is not None:
+        runtime_meta.update(resolution.to_dict())
+        runtime_meta["gpu_supported_families"] = list(GPU_SUPPORTED_FAMILIES)
+    if not resolution.ok():
+        # gpu explicitly requested but unavailable: explicit error, never CPU-in-disguise.
+        raise RuntimeError(resolution.error)
+    use_gpu = resolution.effective_backend == GPU
+    xp = array_module(resolution.backend_name) if use_gpu else None
+
+    started = time.perf_counter()
+    accelerated_runs = 0
+    cpu_fallback_families: set[str] = set()
+
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
     results = []
     tf = spec.timeframe if spec.timeframe else None
@@ -427,8 +462,15 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
         # spec carries no explicit timeframe, derive it from the candle spacing
         # instead of leaving it blank (the old behavior that produced "unknown").
         file_tf = tf or _derive_timeframe(candles)
+        gpu_family = use_gpu and gpu_kernels.supported_family(family)
+        if use_gpu and not gpu_family:
+            cpu_fallback_families.add(family)
         for params in spec.parameter_grid.get(family, []):
-            signals = generate_signals(candles, family, params)
+            if gpu_family:
+                signals = gpu_kernels.generate_signals_vectorized(candles, family, params, xp=xp)
+                accelerated_runs += 1
+            else:
+                signals = generate_signals(candles, family, params)
             signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
             signals = filter_signals(signals, spec.filters)
             trades = simulate_trades(
@@ -464,8 +506,23 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
                 )
             )
             if spec.max_runs and len(results) >= spec.max_runs:
+                _finalize_runtime_meta(runtime_meta, started, accelerated_runs, cpu_fallback_families)
                 return results
+    _finalize_runtime_meta(runtime_meta, started, accelerated_runs, cpu_fallback_families)
     return results
+
+
+def _finalize_runtime_meta(
+    runtime_meta: dict[str, Any] | None,
+    started: float,
+    accelerated_runs: int,
+    cpu_fallback_families: set[str],
+) -> None:
+    if runtime_meta is None:
+        return
+    runtime_meta["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    runtime_meta["accelerated_runs"] = accelerated_runs
+    runtime_meta["cpu_fallback_families"] = sorted(cpu_fallback_families)
 
 
 def _regime_summary(metrics: dict[str, Any]) -> dict[str, Any]:

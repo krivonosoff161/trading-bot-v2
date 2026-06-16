@@ -73,8 +73,14 @@ def validate_sweep_spec(
 
     if spec.backend not in BACKENDS:
         errors.append(f"unknown backend '{spec.backend}' (allowed: {', '.join(BACKENDS)})")
-    elif spec.backend != "cpu":
-        errors.append(f"backend '{spec.backend}' is declared but not implemented yet (cpu only today)")
+    elif spec.backend == "gpu":
+        # Capability-checked, not blanket-rejected. 'gpu' requires a real GPU
+        # backend; if absent it is an error here (never a silent CPU run). 'auto'
+        # is always allowed and resolves to CPU at runtime with a recorded reason.
+        from src.research_lab.gpu_runtime import detect_gpu
+        cap = detect_gpu()
+        if not cap.gpu_available:
+            errors.append(f"backend 'gpu' requested but unavailable: {cap.reason_if_unavailable}")
     if spec.resource_class not in RESOURCE_CLASSES:
         errors.append(f"unknown resource_class '{spec.resource_class}'")
 

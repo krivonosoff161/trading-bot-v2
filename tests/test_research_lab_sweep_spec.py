@@ -119,8 +119,30 @@ def test_unknown_backend_rejected(profiles, quiet):
     assert not result.ok
 
 
-def test_declared_gpu_backend_rejected_until_executor_exists(profiles, quiet):
+def test_gpu_backend_capability_checked(profiles, quiet, monkeypatch):
+    """gpu is capability-checked now: rejected when no GPU backend, allowed when present.
+
+    (Previously gpu was blanket-rejected as 'not implemented yet'; the GPU path now
+    exists, so validation depends on real capability.)
+    """
+    from src.research_lab import gpu_runtime
+    from src.research_lab.gpu_runtime import GpuCapability
+
     spec = _light_spec(backend="gpu")
+
+    monkeypatch.setattr(gpu_runtime, "detect_gpu",
+                        lambda: GpuCapability(False, "none", "", "no GPU backend installed (test)"))
+    unavailable = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
+    assert not unavailable.ok
+    assert any("unavailable" in e for e in unavailable.errors)
+
+    monkeypatch.setattr(gpu_runtime, "detect_gpu",
+                        lambda: GpuCapability(True, "cupy", "TEST GPU", ""))
+    available = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
+    assert available.ok
+
+
+def test_auto_backend_always_allowed(profiles, quiet):
+    spec = _light_spec(backend="auto")
     result = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
-    assert not result.ok
-    assert any("not implemented yet" in e for e in result.errors)
+    assert result.ok
