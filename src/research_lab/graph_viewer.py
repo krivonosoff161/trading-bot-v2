@@ -488,7 +488,7 @@ def _html(data: dict[str, Any]) -> str:
       if (n.kind === 'verdict') return 15;
       return 9;
     }}
-    function shortLabel(s) {{ s = String(s || ''); return s.length > 22 ? s.slice(0, 21) + '…' : s; }}
+    function shortLabel(s) {{ s = String(s || ''); return s.length > 22 ? s.slice(0, 21) + '...' : s; }}
     function screenToWorld(ev) {{
       const rect = canvas.getBoundingClientRect();
       return {{x: (ev.clientX - rect.left - offsetX) / scale, y: (ev.clientY - rect.top - offsetY) / scale}};
