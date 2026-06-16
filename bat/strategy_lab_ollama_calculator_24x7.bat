@@ -6,7 +6,8 @@ set "PYTHONUTF8=1"
 
 rem 24/7 Strategy Lab loop with the local Ollama calculator.
 rem Important: this puts the LLM dispatcher on GPU when Ollama offloads it.
-rem The strategy sweep executor is still CPU-only until a real GPU backend exists.
+rem Scanner-driven sweeps can request backend=auto/gpu/cpu; unsupported modes
+rem fall back honestly and record runtime evidence in metrics.json.
 rem No API keys. No paid LLM. No tool execution. No live trading. No order engine.
 
 where nvidia-smi >nul 2>&1
@@ -37,7 +38,7 @@ echo  Sleep:        %STRATEGY_LAB_LOOP_SLEEP_SECONDS% seconds
 echo  Max queued:   %STRATEGY_LAB_LOOP_MAX_QUEUED%
 echo  Candidates:   %STRATEGY_LAB_LOOP_MAX_CANDIDATES% per LLM step
 echo  Worker jobs:  1 per iteration
-echo  Sweep backend: CPU today; GPU backend not implemented yet
+echo  Sweep backend: from queued spec (cpu/gpu/auto), runtime fallback recorded
 echo  Live trading: OFF
 echo  Order engine: OFF
 echo.

@@ -67,7 +67,7 @@ def collect_sweeps(universe, profiles, policy, *, group, timeframe, data_glob, w
     return pairs, skipped
 
 
-def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, limit):
+def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, limit, backend):
     """Build bounded sweeps from open scanner WATCH/GO rows.
 
     Returns (items, skipped) where each item is a (context, sweep) pair ready for
@@ -85,7 +85,7 @@ def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, l
     # missing-data symbol does not consume the budget.
     results = watches_to_sweeps(
         watches, timeframe=timeframe, families=SCANNER_FAMILIES,
-        max_variants=max_variants, max_symbols=MAX_SYMBOLS_CAP,
+        max_variants=max_variants, max_symbols=MAX_SYMBOLS_CAP, backend=backend,
     )
     user_cap = min(max(1, int(max_symbols)), MAX_SYMBOLS_CAP)
     items = []
@@ -118,6 +118,14 @@ def main() -> None:
     ap.add_argument("--max-variants", type=int, default=8, help="Cap variants per scanner sweep")
     ap.add_argument("--max-symbols", type=int, default=8, help="Cap distinct scanner symbols per run")
     ap.add_argument("--limit", type=int, default=0, help="Max scanner watches to read (0 = all open)")
+    ap.add_argument(
+        "--backend",
+        choices=["cpu", "gpu", "auto"],
+        default=os.getenv("STRATEGY_LAB_SCANNER_BRIDGE_BACKEND")
+        or os.getenv("STRATEGY_LAB_SWEEP_BACKEND")
+        or "auto",
+        help="Execution backend for scanner-driven sweeps (auto records GPU/CPU fallback honestly)",
+    )
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--priority", type=int, default=75)
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
@@ -134,6 +142,7 @@ def main() -> None:
         items, skipped = collect_scanner_sweeps(
             timeframe=args.timeframe, data_glob=args.data_glob,
             max_variants=args.max_variants, max_symbols=args.max_symbols, limit=args.limit,
+            backend=args.backend,
         )
         proposals = [sweep_scanner_proposal_dict(ctx, sweep) for ctx, sweep in items]
     else:
@@ -175,6 +184,7 @@ def sweep_scanner_proposal_dict(context: dict, sweep) -> dict:
         "timeframe": sweep.timeframe,
         "setup_family": sweep.setup_family,
         "max_variants": sweep.max_variants,
+        "backend": sweep.backend,
         "scanner_verdict": context.get("verdict"),
         "layer": context.get("layer"),
         "source": context.get("source"),
@@ -221,6 +231,7 @@ def _exp_to_dict(exp) -> dict:
         "parameter_grid": exp.parameter_grid,
         "filters": exp.filters,
         "event_context": exp.event_context,
+        "backend": exp.backend,
     }
 
 

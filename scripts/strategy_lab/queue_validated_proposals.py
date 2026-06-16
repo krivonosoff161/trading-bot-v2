@@ -57,6 +57,7 @@ def _exp_to_dict(exp) -> dict:
         "max_runs": exp.max_runs,
         "parameter_grid": exp.parameter_grid,
         "filters": exp.filters,
+        "backend": exp.backend,
     }
 
 
