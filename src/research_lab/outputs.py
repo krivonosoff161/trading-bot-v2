@@ -30,6 +30,7 @@ def write_run_outputs(
     *,
     allow_public_output: bool = False,
     include_rejects: bool = False,
+    runtime_meta: dict[str, Any] | None = None,
 ) -> Path:
     out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -40,6 +41,8 @@ def write_run_outputs(
         "experiment_id": spec.experiment_id,
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "timeframe": spec.timeframe,
+        "requested_backend": spec.backend,
+        "runtime": dict(runtime_meta or {}),
         "filters": spec.filters,
         "fees_bps": spec.fees_bps,
         "slippage_bps": spec.slippage_bps,

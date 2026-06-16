@@ -18,3 +18,11 @@ rapidfuzz==3.14.5     # event-дедуп заголовков (Этап 2)
 # Test/dev tooling
 pytest>=8.0
 ruff>=0.6.0
+
+# --- OPTIONAL GPU sweep backend (NOT required; the lab runs CPU without it) ---
+# The momentum_breakout signal kernel can run on a real GPU via cupy. Install
+# only to enable backend=gpu/auto. NVIDIA CUDA 12 wheels (bundle the toolkit):
+#   pip install "cupy-cuda12x[ctk]"          # numpy 2.x line (cupy 14)
+#   pip install "numpy>=1.26,<2" "cupy-cuda12x>=13,<14"   # keep numpy 1.26 pin
+# Then verify: python -m scripts.strategy_lab.gpu_doctor
+# cupy is intentionally absent here so a CPU-only install never pulls CUDA wheels.

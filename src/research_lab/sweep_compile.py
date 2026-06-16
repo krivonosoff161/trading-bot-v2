@@ -83,4 +83,5 @@ def compile_sweep(
         event_context=dict(event_context or {}),
         timeframe=spec.timeframe,
         filters=filters,
+        backend=spec.backend,
     )

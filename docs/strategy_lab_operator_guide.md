@@ -46,10 +46,17 @@ no `.env`/secrets, no automatic LLM spend.
 - Private candidate registry (REJECT excluded by default), private **Obsidian
   graph** notes, SQLite queue/state, read-only dashboard, and an **export-only**
   LLM review pack.
+- **GPU backend contract (`cpu` / `gpu` / `auto`)** with capability detection
+  (`gpu_runtime.py`), a `gpu_doctor`, and a real cupy-accelerated signal kernel
+  for the `momentum_breakout` family (CPU/GPU parity proven). `cpu` is unchanged;
+  `gpu` runs on a real GPU backend or errors (never silent CPU); `auto` uses the
+  GPU when present, else CPU with a recorded reason. See "GPU backend" below.
 
 ## What is planned (not done yet)
 
-- A GPU batch backend (the `sweep_spec.backend` field exists; CPU only today).
+- Broaden the GPU kernel support matrix beyond `momentum_breakout`, and a
+  vectorized path-independent trade-simulation kernel (today the simulation stays
+  CPU-only because it is sequential/path-dependent).
 - More market-data providers (today: `okx-public` fetches public candles for
   `1m`, `15m`, `1h`, `4h`, `1d`; `null` default + offline `synthetic` test
   provider remain). Full-market 1m download is intentionally unsupported.
@@ -388,6 +395,57 @@ python -m scripts.strategy_lab.repair_hard_validation_metadata --apply
 Going forward this is not needed: the run evaluator now derives the timeframe from
 candle spacing and the exporter recovers it from the data-file label, so new
 artifacts carry a real timeframe.
+
+## GPU backend (cpu / gpu / auto)
+
+The sweep worker has an honest backend contract. The numeric signal kernel for the
+`momentum_breakout` family can run on a real GPU array backend (cupy); everything
+else (and the path-dependent trade simulation) runs on the CPU scalar path.
+
+```bash
+# Is a GPU backend actually usable here?
+python -m scripts.strategy_lab.gpu_doctor            # human report
+python -m scripts.strategy_lab.gpu_doctor --json     # machine report
+
+# Bounded, visible probe (paper-only): backend status + one tiny sweep + parity.
+bat\strategy_lab_gpu_probe.bat
+python -m scripts.strategy_lab.gpu_probe --backend auto --parity
+python -m scripts.strategy_lab.gpu_probe --backend gpu --parity
+```
+
+Backend semantics (set on `SweepSpec.backend` / `ExperimentSpec.backend`):
+
+| backend | behavior |
+|---|---|
+| `cpu` | the scalar reference path, unchanged. Always available. |
+| `gpu` | runs the GPU kernel for supported families on a real GPU backend. If **no** GPU backend is usable it is an **explicit error / rejected spec** — never a silent CPU run. |
+| `auto` | GPU when a backend is available, otherwise CPU with a recorded `fallback_reason`. Safe default for 24/7. |
+
+- **Capability detection is honest**: it probes cupy/torch/numba and runs a tiny
+  real GPU compute, so a half-installed cupy (device visible but no CUDA headers)
+  is reported *unavailable*, not faked. `nvidia-smi` presence is reported separately.
+- **Run metadata is recorded** in each run's `metrics.json` under `runtime`:
+  `requested_backend`, `effective_backend`, `gpu_available`, `backend_name`,
+  `device_name`, `fallback_reason`, `elapsed_ms`, `accelerated_runs`,
+  `cpu_fallback_families`.
+- **Support matrix**: GPU-accelerated families = `momentum_breakout` (see
+  `gpu_runtime.GPU_SUPPORTED_FAMILIES`). Other families run on CPU even under
+  `gpu`, recorded in `cpu_fallback_families`. The trade simulation is CPU-only by
+  design (sequential / path-dependent).
+- **Honest performance note**: on tiny per-symbol data the GPU has first-call JIT
+  (NVRTC) + host/device transfer overhead, so the speedup is small or negative;
+  the GPU path pays off as data size and grids grow. Correctness (CPU/GPU parity)
+  holds regardless.
+
+Install / recovery for the GPU path (NVIDIA CUDA 12):
+
+```bash
+pip install "cupy-cuda12x[ctk]"   # cupy + bundled CUDA toolkit headers (NVRTC)
+python -m scripts.strategy_lab.gpu_doctor
+```
+
+`STRATEGY_LAB_FORCE_CPU=1` forces CPU detection off (skips probing) for clean
+CPU-only operation.
 
 ## Closed research loop (proposals)
 
