@@ -190,6 +190,9 @@ def test_queue_and_event_spec_serializers_preserve_timeframe():
         families=["momentum_breakout"],
         parameter_grid={"momentum_breakout": [{"lookback": 3}]},
         timeframe="15m",
+        backend="auto",
     )
     assert queued_exp_to_dict(spec)["timeframe"] == "15m"
     assert event_exp_to_dict(spec)["timeframe"] == "15m"
+    assert queued_exp_to_dict(spec)["backend"] == "auto"
+    assert event_exp_to_dict(spec)["backend"] == "auto"

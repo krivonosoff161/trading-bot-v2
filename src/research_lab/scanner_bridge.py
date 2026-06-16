@@ -109,6 +109,7 @@ def watch_to_sweep(
     timeframe: str = "1d",
     families: tuple[str, ...] = DEFAULT_FAMILIES,
     max_variants: int = 8,
+    backend: str = "auto",
 ) -> BridgeResult:
     """Build one bounded SweepSpec from a single scanner watch row.
 
@@ -144,7 +145,7 @@ def watch_to_sweep(
         setup_grid=setup_grid,
         exit_grid=exit_grid,
         max_variants=capped_variants,
-        backend="cpu",
+        backend=backend,
         resource_class="normal",
         private_output_policy="private_only",
     )
@@ -158,6 +159,7 @@ def watches_to_sweeps(
     families: tuple[str, ...] = DEFAULT_FAMILIES,
     max_variants: int = 8,
     max_symbols: int = MAX_SYMBOLS_CAP,
+    backend: str = "auto",
 ) -> list[BridgeResult]:
     """Convert many scanner watches into bounded sweep results, capped by count.
 
@@ -170,6 +172,7 @@ def watches_to_sweeps(
     for watch in watches:
         result = watch_to_sweep(
             watch, timeframe=timeframe, families=families, max_variants=max_variants,
+            backend=backend,
         )
         key = result.symbol.upper()
         if result.ok:

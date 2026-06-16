@@ -40,7 +40,7 @@ def test_watch_to_sweep_ok_builds_bounded_spec():
     assert res.symbol == "SPACE-USDT-SWAP"
     assert isinstance(res.sweep, SweepSpec)
     assert res.sweep.anchor_symbol == "SPACE-USDT-SWAP"
-    assert res.sweep.backend == "cpu"
+    assert res.sweep.backend == "auto"
     assert res.sweep.private_output_policy == "private_only"
     assert res.sweep.symbol_scope() == 1
     assert res.sweep.variant_count() <= res.sweep.max_variants
@@ -48,6 +48,12 @@ def test_watch_to_sweep_ok_builds_bounded_spec():
     assert res.context["origin"] == "scanner_watch"
     assert res.context["verdict"] == "GO"
     assert "not a profitability claim" in res.context["note"]
+
+
+def test_watch_to_sweep_honors_explicit_backend():
+    res = watch_to_sweep(_watch(), timeframe="1d", max_variants=8, backend="cpu")
+    assert res.ok
+    assert res.sweep.backend == "cpu"
 
 
 def test_watch_to_sweep_spec_passes_validation():
