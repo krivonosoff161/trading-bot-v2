@@ -6,7 +6,7 @@ them into deterministic next steps:
 
   * NARROW_PARAMS -> a bounded follow-up sweep queued for the worker.
   * WIDEN_PARAMS  -> a hard-capped follow-up sweep, else a note.
-  * REGIME_SWEEP  -> a note (regime_filter_not_implemented).
+  * REGIME_SWEEP  -> a bounded regime-filtered follow-up sweep when evidence exists.
   * REQUIRE_MORE_DATA / PROMOTE / SUPPRESS / REJECT -> notes only.
 
 Dry-run by default. ``--apply`` compiles + queues the allowed follow-up sweeps
@@ -57,14 +57,36 @@ def _load_cards(private_root: Path) -> list[dict]:
     return out
 
 
-def _params_by_candidate(private_root: Path) -> dict[str, dict]:
+def _candidate_context_by_id(private_root: Path) -> dict[str, dict]:
     registry_file = private_root / "candidate-registry" / "candidates.jsonl"
     out: dict[str, dict] = {}
     for e in load_entries(registry_file):
         cid = str(e.get("candidate_id") or "")
-        if cid and cid not in out:
-            out[cid] = dict(e.get("params") or {})
+        if not cid:
+            continue
+        context = {
+            "params": dict(e.get("params") or {}),
+            "filters": dict(e.get("filters") or {}),
+            "validation_reasons": list(e.get("validation_reasons") or []),
+            "regime_summary": dict(e.get("regime_summary") or {}),
+            "validation_status": str(e.get("validation_status") or ""),
+        }
+        if cid not in out or _context_score(context) > _context_score(out[cid]):
+            out[cid] = context
     return out
+
+
+def _context_score(context: dict) -> int:
+    score = 0
+    if context.get("validation_status") == "REGIME_SPECIFIC":
+        score += 20
+    if context.get("filters"):
+        score += 10
+    if any(str(r).startswith("strong_regime_bucket:") for r in context.get("validation_reasons") or []):
+        score += 10
+    if context.get("regime_summary"):
+        score += 1
+    return score
 
 
 def _night_mode() -> bool:
@@ -79,8 +101,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=10, help="Max recommendations to process")
     ap.add_argument("--max-variants", type=int, default=8, help="Cap variants per follow-up sweep")
     ap.add_argument("--max-symbols", type=int, default=5, help="Cap distinct follow-up symbols to queue")
-    ap.add_argument("--allowed-actions", default="NARROW_PARAMS",
-                    help="Comma-separated actions allowed to queue (default: NARROW_PARAMS)")
+    ap.add_argument("--allowed-actions", default="NARROW_PARAMS,REGIME_SWEEP",
+                    help="Comma-separated actions allowed to queue (default: NARROW_PARAMS,REGIME_SWEEP)")
     ap.add_argument("--data-glob", default=DEFAULT_DATA_GLOB)
     ap.add_argument("--priority", type=int, default=70)
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
@@ -93,7 +115,7 @@ def main() -> None:
 
     recs = build_recommendations(load_feedback_queue(private_root), _load_cards(private_root))
     plans = plan_followups(
-        recs, _params_by_candidate(private_root),
+        recs, _candidate_context_by_id(private_root),
         max_recommendations=args.limit, max_variants=args.max_variants,
         max_symbols=args.max_symbols, allowed_actions=allowed,
     )

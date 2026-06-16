@@ -46,7 +46,7 @@ class SweepSpec:
 
     def variant_count(self) -> int:
         total = 1
-        for grid in (self.setup_grid, self.entry_grid, self.exit_grid, self.filter_grid):
+        for grid in (self.setup_grid, self.entry_grid, self.exit_grid):
             for values in grid.values():
                 if values:
                     total *= len(values)

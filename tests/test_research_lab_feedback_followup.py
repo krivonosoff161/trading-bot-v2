@@ -45,10 +45,30 @@ def test_failed_costs_biases_hold_bars_up():
     assert min(hold_bars) >= PARAMS["hold_bars"]
 
 
-def test_regime_sweep_not_implemented_note():
+def test_regime_sweep_queues_when_strong_bucket_exists():
+    context = {
+        "params": PARAMS,
+        "validation_reasons": ["strong_regime_bucket:high|up|normal"],
+    }
+    plan = plan_followup(_rec(fr.REGIME_SWEEP, status="REGIME_ONLY"), context)
+    assert plan.queued is True
+    assert plan.sweep is not None
+    assert plan.sweep.filter_grid == {
+        "volatility": ["high"],
+        "trend": ["up"],
+        "volume": ["normal"],
+    }
+    result = validate_sweep_spec(
+        plan.sweep, timeframe_profiles=load_timeframe_profiles(),
+        resource_policy=load_resource_policy(),
+    )
+    assert result.ok, result.errors
+
+
+def test_regime_sweep_blocks_without_regime_evidence():
     plan = plan_followup(_rec(fr.REGIME_SWEEP, status="REGIME_ONLY"), PARAMS)
     assert plan.queued is False
-    assert plan.not_queued_reason == "regime_filter_not_implemented"
+    assert plan.not_queued_reason == "missing_regime_filter"
 
 
 def test_require_more_data_is_note():
@@ -113,6 +133,14 @@ def test_symbol_cap_and_allowed_actions():
     plans2 = plan_followups(recs, params, max_symbols=5, allowed_actions=set())
     assert all(not p.queued for p in plans2)
     assert all(p.not_queued_reason == "action_not_allowed" for p in plans2)
+
+
+def test_allowed_actions_can_queue_regime_sweep():
+    recs = [_rec(fr.REGIME_SWEEP, status="REGIME_ONLY", cid="r1")]
+    params = {"r1": {"params": PARAMS, "regime_summary": {"dominant_bucket": "medium|down|normal"}}}
+    plans = plan_followups(recs, params, allowed_actions={fr.REGIME_SWEEP})
+    assert plans[0].queued is True
+    assert plans[0].sweep.filter_grid["trend"] == ["down"]
 
 
 def test_narrow_followup_is_idempotent_sweep_id():

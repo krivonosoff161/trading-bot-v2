@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ def test_fetch_fred_calendar_silent_without_key(monkeypatch):
 
 def test_fetch_fred_calendar_builds_expected_macro_items(monkeypatch):
     monkeypatch.setenv("FRED_API_KEY", "fred-test")
+    today = dt.datetime.now(dt.timezone.utc).date()
 
     def fake_get(url, params=None, headers=None, timeout=None):
         assert params["api_key"] == "fred-test"
@@ -31,10 +33,18 @@ def test_fetch_fred_calendar_builds_expected_macro_items(monkeypatch):
         return _Resp(
             {
                 "release_dates": [
-                    {"release_id": 10, "release_name": "Consumer Price Index", "date": "2026-06-15"},
-                    {"release_id": 11, "release_name": "Employment Situation", "date": "2026-06-16"},
-                    {"release_id": 12, "release_name": "Federal Open Market Committee", "date": "2026-06-17"},
-                    {"release_id": 13, "release_name": "Retail Sales", "date": "2026-06-18"},
+                    {"release_id": 10, "release_name": "Consumer Price Index", "date": today.isoformat()},
+                    {
+                        "release_id": 11,
+                        "release_name": "Employment Situation",
+                        "date": (today + dt.timedelta(days=1)).isoformat(),
+                    },
+                    {
+                        "release_id": 12,
+                        "release_name": "Federal Open Market Committee",
+                        "date": (today + dt.timedelta(days=2)).isoformat(),
+                    },
+                    {"release_id": 13, "release_name": "Retail Sales", "date": (today + dt.timedelta(days=3)).isoformat()},
                 ]
             }
         )

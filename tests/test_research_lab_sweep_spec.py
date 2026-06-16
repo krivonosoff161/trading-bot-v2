@@ -84,6 +84,17 @@ def test_variant_grid_exceeding_cap_rejected(profiles, quiet):
     assert any("exceeds max_variants" in e for e in result.errors)
 
 
+def test_filter_grid_does_not_multiply_parameter_variants(profiles, quiet):
+    spec = _light_spec(
+        max_variants=2,
+        setup_grid={"lookback": [10, 20]},
+        filter_grid={"trend": ["up", "down"], "volatility": ["low", "high"]},
+    )
+    assert spec.variant_count() == 2
+    result = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
+    assert result.ok, result.errors
+
+
 def test_heavy_job_rejected_under_quiet_but_allowed_at_night(profiles, quiet, night):
     spec = _light_spec(resource_class="heavy")
     quiet_result = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)

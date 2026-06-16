@@ -39,11 +39,17 @@ def test_expand_grids_cartesian():
 
 def test_compile_valid_sweep_builds_experiment_spec():
     profiles, policy = _ctx()
-    spec = _spec(setup_grid={"lookback": [10, 20]}, exit_grid={"hold_bars": [3, 5]})
+    spec = _spec(
+        setup_grid={"lookback": [10, 20]},
+        exit_grid={"hold_bars": [3, 5]},
+        filter_grid={"trend": ["up"], "volatility": ["high"]},
+    )
     exp = compile_sweep(spec, data_glob=GLOB, timeframe_profiles=profiles, resource_policy=policy)
     assert exp.families == ["momentum_breakout"]
     assert exp.symbols == ["SOL_USDT_SWAP", "BTC_USDT_SWAP"]
     assert len(exp.parameter_grid["momentum_breakout"]) == 4  # 2x2
+    assert all("trend" not in row and "volatility" not in row for row in exp.parameter_grid["momentum_breakout"])
+    assert exp.filters == {"trend": ["up"], "volatility": ["high"]}
     assert exp.experiment_id == "sweep_s1"
 
 
