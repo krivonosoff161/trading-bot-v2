@@ -3,9 +3,10 @@
 
 This is the bridge between the coarse-sweep contract (SweepSpec) and the existing
 deterministic executor (evaluate_spec over ExperimentSpec). It expands the
-setup/entry/exit grids into a capped list of parameter variants — never an
-unbounded cartesian explosion — and applies the timeframe-profile + resource
-policy gates first. No GPU, no execution here.
+setup/entry/exit grids into a capped list of parameter variants, never an
+unbounded cartesian explosion, and applies the timeframe-profile + resource
+policy gates first. It does not execute the run; it forwards the requested
+backend into ExperimentSpec for evaluate_spec.
 """
 
 from __future__ import annotations
