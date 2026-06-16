@@ -1,4 +1,4 @@
-# Strategy Lab — Operator Guide
+# Strategy Lab -- Operator Guide
 
 Date: 2026-06-13. How to run the local research machine safely. It produces
 research labels and candidates, **not** profitability claims. No live trading,
@@ -26,7 +26,7 @@ no `.env`/secrets, no automatic LLM spend.
   a clear SKIPPED reason when 1m data is absent.
 - **Demand-driven 1m loader** (`prepare_1m_data`): derives the capped 1m windows
   the lab needs (event specs / queued jobs / a manual request), checks the local
-  cache, and — only with `--apply` and a configured provider — writes just those
+  cache, and -- only with `--apply` and a configured provider -- writes just those
   windows under the private root. Default provider is `null` (no network); the real
   provider is `okx-public` (OKX public candles, read-only, **no API key**).
 - **Controlled research cycle** (`research_cycle`): one bounded pass that orchestrates
@@ -132,7 +132,12 @@ trades, or write to the public repo.
 | Bounded no-LLM research loop (default 8h, configurable) | `bat\strategy_lab_research_loop_overnight_no_llm.bat` |
 | Bounded local-calculator loop (Ollama, no API key) | `bat\strategy_lab_research_loop_overnight_calculator.bat` |
 | Morning summary after a loop | `bat\strategy_lab_morning_report.bat` |
+| Build bounded sweeps from scanner WATCH/GO events (dry-run) | `python -m scripts.strategy_lab.generate_event_sweeps --from-scanner --timeframe 1d --dry-run` |
 | Run hard validation + feedback + setup cards | `bat\strategy_lab_validate_candidates_pipeline.bat --apply --limit 10` |
+| Read verdicts -> farm recommendations | `python -m scripts.strategy_lab.read_feedback` |
+| Apply recommendations as bounded follow-up sweeps (dry-run) | `python -m scripts.strategy_lab.apply_feedback_recommendations --dry-run` |
+| Repair lost timeframe metadata (dry-run) | `python -m scripts.strategy_lab.repair_hard_validation_metadata --dry-run` |
+| One bounded paper-only demo (seeds from existing watch_queue) | `bat\research_machine_demo_visible.bat` |
 | Gracefully stop the loop after current iteration | `bat\strategy_lab_graceful_stop.bat` |
 | Clear a previous stop request | `bat\strategy_lab_clear_stop.bat` |
 | Stop old dashboard/worker windows | `bat\strategy_lab_stop_notes.bat` |
@@ -244,6 +249,146 @@ python -m scripts.strategy_lab.build_obsidian_graph
 - Entry-timing aggregates (capture ratio, MFE/MAE, late-entry rate) are recorded
   per run and shown on the dashboard.
 
+## Scanner-to-farm bridge (news event -> bounded sweep)
+
+The news scanner writes `WATCH`/`GO` events to `logs/scout/watch_queue.jsonl`
+(`NO_GO` is never queued). The bridge turns those events into bounded research
+input for the farm: the scanner chooses *which* symbol to study; the sweep then
+explores a small parameter grid on that symbol's local history with the normal
+no-lookahead simulator. The news trigger is recorded as provenance (in the
+spec's `event_context`), never fed to the simulator as a price anchor.
+
+```bash
+# Preview bounded sweeps built from open scanner WATCH/GO rows (writes nothing):
+python -m scripts.strategy_lab.generate_event_sweeps --from-scanner --timeframe 1d --dry-run
+
+# Compile + queue them (private root + SQLite queue), capped:
+python -m scripts.strategy_lab.generate_event_sweeps --from-scanner --timeframe 1d --max-symbols 1 --apply
+```
+
+- **Bounded by construction**: `--max-variants` (hard cap 12) and `--max-symbols`
+  (hard cap 8). Each scanner sweep is single-asset (`symbol_scope == 1`),
+  `backend=cpu`, `private_output_policy=private_only`.
+- **Missing data never crashes**: a watch whose OKX instrument has no usable
+  local candle file is reported `skipped ... reason=missing_data` and the run
+  continues. Watches with no asset / no timeframe-compatible family are skipped
+  with their reason. The user's `--max-symbols` is applied *after* the
+  data-availability check, so a leading missing-data symbol does not consume the
+  budget.
+- It does **not** open trades, touch the order engine, make paid LLM calls, or
+  write to the public repo.
+
+## Feedback reader (verdicts -> farm recommendations)
+
+After hard validation writes per-candidate feedback and setup cards, the feedback
+reader aggregates them into deterministic, farm-level recommendations so the next
+research cycle is informed by what hard validation found.
+
+```bash
+python -m scripts.strategy_lab.read_feedback          # print recommendations (read-only)
+python -m scripts.strategy_lab.read_feedback --apply  # also persist recommendations.jsonl (private root)
+```
+
+Minimal recommendation contract (one action per (strategy, symbol, timeframe)):
+
+| hard_status | action | meaning |
+|---|---|---|
+| `PAPER_FORWARD_READY` (from cards) | `PROMOTE` | track in forward paper log -- **not** main-engine ready |
+| `FAILED_COSTS` | `NARROW_PARAMS` | lower turnover; **do not widen** this setup |
+| `FAILED_OOS` | `REQUIRE_MORE_DATA` | different split / more bars |
+| `FAILED_FRAGILITY` | `NARROW_PARAMS` | test plateau, reject isolated spikes |
+| `FAILED_OVERFIT` | `SUPPRESS` (high) | reduce search space; suppress until longer track record |
+| `FAILED_DATA_QUALITY` | `REQUIRE_MORE_DATA` | verify/rebuild candles |
+| `REGIME_ONLY` | `REGIME_SWEEP` | run a bounded regime-filtered sweep |
+| `NEEDS_MORE_DATA` | `REQUIRE_MORE_DATA` | collect more / wait for forward period |
+| `HARD_REJECT` | `REJECT` | archive and stop spending on this setup |
+
+The reader is deterministic and read-only: no LLM, no queueing, no live trading.
+A recommendation never auto-queues a sweep and `main_engine_ready` is never set
+true here -- turning a recommendation into a queued sweep stays a separate,
+explicit, deterministically-validated `--apply` step (next section).
+
+## Apply feedback recommendations (bounded follow-up research)
+
+`apply_feedback_recommendations` is the explicit, deterministic step that turns
+recommendations into next-step research. It is **separate** from the read-only
+reader so a "read" never silently queues work.
+
+```bash
+python -m scripts.strategy_lab.apply_feedback_recommendations --dry-run
+python -m scripts.strategy_lab.apply_feedback_recommendations --apply --limit 5
+```
+
+Per-action behavior (only some actions ever queue a sweep):
+
+| action | result |
+|---|---|
+| `NARROW_PARAMS` | bounded follow-up sweep: a **narrower** grid around the candidate's own params (for `FAILED_COSTS`, `hold_bars` is biased up = lower turnover), validated then queued |
+| `WIDEN_PARAMS` | a follow-up sweep **only** if every widened axis has a hard cap; otherwise a note (`widen_unsafe_no_cap`) |
+| `REGIME_SWEEP` | **note only** -- `not_queued_reason=regime_filter_not_implemented` (the sweep/compile path cannot apply a regime filter today; this is honest, not faked) |
+| `REQUIRE_MORE_DATA` | note: data-requirement / prepare hint, no sweep |
+| `PROMOTE` | note: forward-paper tracking only, no queue, not main-engine ready |
+| `SUPPRESS` / `REJECT` | note: suppress/archive, no queue |
+
+- **Bounded**: `--limit` (recommendations), `--max-variants` (<=12 hard cap),
+  `--max-symbols`, and `--allowed-actions` (default `NARROW_PARAMS`). A spec that
+  fails `validate_sweep_spec` is skipped with its error, never queued.
+- **Idempotent**: each follow-up sweep has a deterministic `sweep_id`
+  (`fb_<candidate>_<strategy>_<action>`), so re-running never double-queues.
+- Every decision (queued or note) is logged to
+  `hard_validation/followups.jsonl` (private root). No LLM, no order engine, no
+  live trading -- it compiles bounded research sweeps only.
+
+## Full-cycle-ish demo (bounded, visible, paper-only)
+
+`run_research_machine_demo` chains the existing entrypoints once on tiny limits.
+**By default it seeds from the EXISTING scanner watch_queue -- it does NOT run a
+fresh scanner pass.** It exercises the farm + validation + feedback half of the
+loop: bridge -> worker (one job) -> hard-validation pipeline -> feedback reader ->
+apply feedback follow-ups -> status.
+
+```bash
+bat\research_machine_demo_visible.bat              # apply, tiny limits, visible window
+python -m scripts.strategy_lab.run_research_machine_demo            # same, no window
+python -m scripts.strategy_lab.run_research_machine_demo --dry-run  # preview only
+# opt in to the two live, keyless ends of the scanner loop:
+python -m scripts.strategy_lab.run_research_machine_demo --run-scanner-pass --run-outcomes
+```
+
+- Everything is bounded and **paper-only**: no order engine, no live trading, no
+  `AUTO_TRADE`, no paid LLM. Real artifacts go to the private research root.
+- **The fresh scanner pass and outcome resolver are opt-in (default OFF)** because
+  they make live keyless network calls. `--run-scanner-pass` runs one bounded
+  `scanner_v0 --buffer` pass with Telegram send force-disabled for the demo child
+  (the `.env` file is never modified); `--run-outcomes` runs `resolve_outcomes`
+  (scores only already-mature cards). Without these flags the demo honestly
+  reports them as *not exercised this run*.
+- **Honest end status** (`result_status`): `completed_new_run` (a new bounded run
+  finished), `reused_existing_run` (the idempotent spec already completed; prior
+  artifacts persist and validation/feedback re-ran against them),
+  `no_usable_event`, `worker_deferred`, or `dry_run`.
+- **Graceful fallback**: if the watch_queue has no data-available event
+  (`detected=0`), the demo enqueues a clearly-labelled synthetic smoke spec so the
+  farm still has one bounded run. That seed is a demo seed, not a live signal.
+- On any step failure the demo stops with a recovery message naming the failed step.
+
+## Repair lost timeframe metadata
+
+Candidates exported before the timeframe was recorded carry `timeframe="unknown"`
+in their request/report/feedback/setup artifacts. `repair_hard_validation_metadata`
+backfills the real timeframe (recovered from the run's data-file label, e.g.
+`DOGE_USDT_SWAP_430d_1Dutc.json` -> `1d`); unrecoverable rows stay `unknown` and are
+reported, never faked.
+
+```bash
+python -m scripts.strategy_lab.repair_hard_validation_metadata --dry-run
+python -m scripts.strategy_lab.repair_hard_validation_metadata --apply
+```
+
+Going forward this is not needed: the run evaluator now derives the timeframe from
+candle spacing and the exporter recovers it from the data-file label, so new
+artifacts carry a real timeframe.
+
 ## Closed research loop (proposals)
 
 The lab can close the loop: results -> review pack -> next proposals -> validate ->
@@ -271,7 +416,7 @@ python scripts/strategy_lab/worker_once.py
   validated against resource caps, timeframe policy (no 1m full sweep), known
   symbols/families, bounded variants, safe wording, and the private/public
   boundary. They live in `strategy-lab/proposals/proposals.jsonl` (private).
-- The rule-based generator only *requests the next test* — it never promotes or
+- The rule-based generator only *requests the next test* -- it never promotes or
   claims profitability. LLM review stays export-only; importing model output is a
   manual file read, and queueing always requires an explicit `--apply`.
 - This is separate from the older `autopilot_once.py` (manual/advanced) which
@@ -287,7 +432,7 @@ The one-click start never generates or queues proposals by default. Set
 `research_cycle` runs the whole loop once, capped and operator-visible: inspect
 current state -> generate next proposals -> check required 1m data -> optionally
 prepare it -> queue validated proposals (capped) -> run one throttled worker step ->
-write a status report. It only orchestrates the existing, individually-safe steps —
+write a status report. It only orchestrates the existing, individually-safe steps --
 there is **no hidden loop** and **no automatic network fetch**.
 
 ```bash
@@ -307,7 +452,7 @@ python -m scripts.strategy_lab.research_cycle --apply --prepare-1m --prepare-1m-
   makes no network call.
 - **Apply** stores/queues (capped by `--max-queue`, itself clamped to the resource
   policy) and runs at most `--max-worker-jobs` worker steps (default 1). The worker
-  obeys the throttle: if it is in the cool-down it records `deferred` and stops — it
+  obeys the throttle: if it is in the cool-down it records `deferred` and stops -- it
   never bypasses `resource_policy.yaml`.
 - **Network fetch happens only** with `--apply` **and** `--prepare-1m` **and**
   `--prepare-1m-apply` **and** `--provider okx-public`. With `--provider null` the
@@ -339,8 +484,8 @@ python -m scripts.strategy_lab.research_session --apply --prepare-1m --prepare-1
 python -m scripts.strategy_lab.research_session --apply --llm-export
 ```
 
-**cycle vs session.** `research_cycle` is the mechanical loop (generate → check data
-→ optional prepare → queue → worker). `research_session` is the same loop plus the
+**cycle vs session.** `research_cycle` is the mechanical loop (generate -> check data
+-> optional prepare -> queue -> worker). `research_session` is the same loop plus the
 data-readiness gate on the queue and the LLM advisory step, with one combined report.
 Use the cycle for a quick mechanical pass; use the session for a "serious", data-
 complete research pass.
@@ -350,25 +495,25 @@ complete research pass.
 A job is queued only when its data is **READY**. The session/cycle check each
 proposal's primary-timeframe data (the local archive) before queueing:
 
-- `READY` — file present with enough rows → queued.
-- `MISSING_DATA` / `TOO_SHORT` / `MALFORMED` — **not queued**; recorded with a reason
+- `READY` -- file present with enough rows -> queued.
+- `MISSING_DATA` / `TOO_SHORT` / `MALFORMED` -- **not queued**; recorded with a reason
   (and a suggested `prepare_1m_data` command when 1m is missing). The lab never runs
   technical analysis on missing/invalid data or fakes a result.
 
 To fill missing 1m windows, prepare them explicitly (see "Prepare 1m data on
-demand"), then re-run the session — the previously-missing jobs become READY.
+demand"), then re-run the session -- the previously-missing jobs become READY.
 
-### LLM proposal loop (cheap → chief, advisory only)
+### LLM proposal loop (cheap -> chief, advisory only)
 
-The LLM is advisory and disabled by default. The design is cheap → chief:
+The LLM is advisory and disabled by default. The design is cheap -> chief:
 
 - The **cheap** model is asked (via the exported request pack) to propose strategy/
-  filter/parameter variants as **strict JSON only** — no code, no shell, no trading.
+  filter/parameter variants as **strict JSON only** -- no code, no shell, no trading.
 - **Code validates every candidate** with the deterministic validator (known family/
   symbol/timeframe, bounded variants, safe wording, private boundary). Invalid
   candidates are rejected with a reason.
 - Only the **validated** subset is eligible for a **chief** review pass (capped).
-- The LLM never decides what enters the queue — **code does**. LLM output is never
+- The LLM never decides what enters the queue -- **code does**. LLM output is never
   executed.
 
 Default is export-only and offline. A real send needs **all** gates:
@@ -385,7 +530,7 @@ scanner runtime and its budget. It is wired into the research **loop** (below) v
 
 | Env | Meaning |
 |---|---|
-| `STRATEGY_LAB_LLM_ENABLED=1` | master switch (off → no network ever) |
+| `STRATEGY_LAB_LLM_ENABLED=1` | master switch (off -> no network ever) |
 | `STRATEGY_LAB_LLM_PROVIDER` | `alibaba` / `qwen` / `openai-compatible` / `ollama` / `synthetic` |
 | `STRATEGY_LAB_LLM_BASE_URL` | OpenAI-compatible base (e.g. dashscope compatible-mode) |
 | `STRATEGY_LAB_LLM_API_KEY` | the key VALUE (header only; never logged/stored) |
@@ -410,13 +555,13 @@ Spend is recorded in a **lab-private** usage log (`reports/llm_usage/`, tokens/c
 only, never the scanner budget). `status` and the dashboard show the provider state
 (`disabled` / `export_only` / `ready`) and today's request/token/RUB spend. The
 offline `synthetic` provider (gated by `STRATEGY_LAB_ALLOW_SYNTHETIC=1`) returns
-fixed candidates for pipeline testing — no network, no cost.
+fixed candidates for pipeline testing -- no network, no cost.
 
 ### Expected pace
 
 This is a controlled research machine, not a 24/7 poller. **One or two serious
 strategy/setup variants per day is an acceptable pace.** Heavy calculation is fine;
-flooding CPU/API is not — the worker is capped (`--max-worker-jobs`, default 1) and
+flooding CPU/API is not -- the worker is capped (`--max-worker-jobs`, default 1) and
 throttled by `resource_policy.yaml`, and network/LLM are opt-in.
 
 ## Research loop (controlled, time-bounded)
@@ -425,7 +570,7 @@ throttled by `resource_policy.yaml`, and network/LLM are opt-in.
 itself. It is **not** a daemon: it ends at `--duration-minutes` or `--max-iterations`,
 sleeps `--sleep-seconds` between iterations, and writes a heartbeat each iteration. If
 the worker is in its throttle cool-down it records `deferred` and simply waits for the
-next iteration — it never storms the queue.
+next iteration -- it never storms the queue.
 
 ```bash
 # Dry-run for 30 min: plan only each iteration; no queue writes, no worker, no network, no LLM.
@@ -449,7 +594,7 @@ python -m scripts.strategy_lab.research_loop --apply --llm-propose --duration-mi
   unexhausted daily cap (a real network provider also re-checks the send gates). The
   offline `synthetic` provider (`STRATEGY_LAB_ALLOW_SYNTHETIC=1` +
   `STRATEGY_LAB_LLM_PROVIDER=synthetic`) exercises the path with no cost.
-- **Bounded by construction**: duration is clamped (≤ 4h), iterations are capped, and
+- **Bounded by construction**: duration is clamped (<= 4h), iterations are capped, and
   each iteration runs at most `--max-worker-jobs-per-iteration` worker steps.
   Note: explicit `--night-mode` raises the duration ceiling to 12h; it does not
   remove worker throttling, queue caps, LLM daily caps, or the LLM contract breaker.
@@ -496,13 +641,13 @@ pages, no full-market download, private-root only). Until then the honest behavi
 a clear `MISSING_DATA` + TODO, never a faked run.
 
 **Prerequisite when adding multi-timeframe data:** the worker's file picker
-(`experiment.choose_symbol_file` / `evaluate_spec`) is currently timeframe-blind — it
+(`experiment.choose_symbol_file` / `evaluate_spec`) is currently timeframe-blind -- it
 selects the largest candle file for a symbol regardless of timeframe, because today
 each symbol has only one timeframe (1d) on disk. The research-loop/session/cycle queue
 path is protected by the timeframe-aware readiness gate, but the *worker itself* and the
 older `enqueue_research_plan` path are not. Before a second timeframe file for any symbol
 lands in the glob, give `ExperimentSpec` a `timeframe` field and make `choose_symbol_file`
-match it (return no file → the job is skipped, not run on the wrong bars), so the safety
+match it (return no file -> the job is skipped, not run on the wrong bars), so the safety
 holds at every entry point, not just the gated one.
 
 ## Dry-run vs apply
@@ -552,7 +697,7 @@ python -m scripts.strategy_lab.export_llm_review_pack --limit 10
 
 The 1m timeframe is a **trigger-only event microscope**, not a scanner. It is for
 zooming into a single already-detected move on a couple of high-volatility
-symbols — never a full-universe 1m sweep.
+symbols -- never a full-universe 1m sweep.
 
 ```bash
 bat\strategy_lab_microscope_scan.bat
@@ -561,14 +706,14 @@ python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta --json
 
 - **Read-only and no downloader.** It only locates existing local 1m files. If a
   symbol has no usable 1m file it is reported as `missing` / `too_short` /
-  `not_1m` — a clean skip, never a crash and never a network fetch.
+  `not_1m` -- a clean skip, never a crash and never a network fetch.
 - **Capped by the 1m timeframe profile**: at most `max_symbols_per_cycle` symbols,
-  `max_event_windows` windows, `max_window_hours`×60 bars per window, and
+  `max_event_windows` windows, `max_window_hours`x60 bars per window, and
   `max_variants_per_setup` variants (see `configs/strategy_lab/timeframe_profiles.yaml`).
 - **Full-universe 1m sweeps stay blocked** in `sweep_spec` validation and the
   resource policy (`allow_1m_jobs: trigger_only`).
 
-Today there is no local 1m data, so the scan reports every symbol as `missing` —
+Today there is no local 1m data, so the scan reports every symbol as `missing` --
 that is the expected, honest result until a 1m data path is added.
 
 ## Prepare 1m data on demand
@@ -595,16 +740,16 @@ python -m scripts.strategy_lab.status
 
 - **Default provider is `null` (no network).** With `--apply` and no configured
   provider it prints `provider not configured / no data written` and exits cleanly.
-- **`okx-public`** fetches OKX **public** 1m candles only — read-only, **no API
+- **`okx-public`** fetches OKX **public** 1m candles only -- read-only, **no API
   key**, no order/account/private endpoints, no symbol discovery. Dry-run makes no
   network call; fetch happens only on `--apply`.
 - **No full-market download.** Requirements are capped by the 1m policy: at most
   `max_symbols_per_cycle` symbols, `max_event_windows` windows, and
-  `max_window_hours`×60 bars per window. `--max-symbols` / `--max-windows` can only
+  `max_window_hours`x60 bars per window. `--max-symbols` / `--max-windows` can only
   *lower* those caps, never raise them. The provider paginates only the requested
   window with a bounded page count (no infinite pagination) and a short backoff.
 - Prepared 1m candles are written in the canonical OHLCV format (deduped, sorted,
-  UTC) under the private root at `strategy-lab/market_data/1m/` — never the public repo.
+  UTC) under the private root at `strategy-lab/market_data/1m/` -- never the public repo.
 - This is **research data only**: no live trading, no order/account endpoints, no
   paid LLM.
 - A built-in offline `synthetic` provider (deterministic, clearly tagged, **not**
@@ -646,8 +791,8 @@ but **only when you opt in**. Default start fetches nothing. Env flags:
 | `STRATEGY_LAB_PREPARE_1M` | `0` | `1` adds a prepare step (`[2c]`) to start |
 | `STRATEGY_LAB_PREPARE_1M_APPLY` | `0` | `1` makes the step apply (fetch+write); `0` is dry-run |
 | `STRATEGY_LAB_MARKET_DATA_PROVIDER` | `null` | `okx-public` (real, public, no key) or `synthetic` |
-| `STRATEGY_LAB_PREPARE_1M_MAX_SYMBOLS` | — | optional, clamped to policy by the CLI |
-| `STRATEGY_LAB_PREPARE_1M_MAX_WINDOWS` | — | optional, clamped to policy by the CLI |
+| `STRATEGY_LAB_PREPARE_1M_MAX_SYMBOLS` | -- | optional, clamped to policy by the CLI |
+| `STRATEGY_LAB_PREPARE_1M_MAX_WINDOWS` | -- | optional, clamped to policy by the CLI |
 
 - With `PREPARE_1M=1` and `APPLY=0` the step is a dry-run (no network, no writes).
 - A real fetch needs `PREPARE_1M=1` **and** `APPLY=1` **and** a real provider
@@ -659,7 +804,7 @@ but **only when you opt in**. Default start fetches nothing. Env flags:
   can. `status` and the dashboard show whether auto-prepare is on, its mode/provider,
   and whether it would touch the network.
 
-Example — fetch real public OKX candles on start (one-off, this shell only):
+Example -- fetch real public OKX candles on start (one-off, this shell only):
 
 ```bash
 set STRATEGY_LAB_PREPARE_1M=1
@@ -677,12 +822,12 @@ The lab's recurring pain is "direction was right, but the entry was late." When 
 run has an event context, it measures entry quality against the event, not just
 final PnL:
 
-- **lag_bars / lag_minutes** — how long after the move started the entry happened.
-- **capture_ratio** — fraction of the move captured from entry to move end.
-- **missed_move_pct** — how much of the move was already gone at entry.
-- **mfe_pct / mae_pct** — best favorable / worst adverse excursion after entry.
-- **late_entry** — flagged when little of the move is captured (capture < 0.3) or
-  most of it is already gone (missed ≥ 50%).
+- **lag_bars / lag_minutes** -- how long after the move started the entry happened.
+- **capture_ratio** -- fraction of the move captured from entry to move end.
+- **missed_move_pct** -- how much of the move was already gone at entry.
+- **mfe_pct / mae_pct** -- best favorable / worst adverse excursion after entry.
+- **late_entry** -- flagged when little of the move is captured (capture < 0.3) or
+  most of it is already gone (missed >= 50%).
 
 These are honest diagnostics, **not** profitability claims. The reducer uses them
 to flag `entry_late`, so a setup that only "works" by entering late is not
@@ -711,7 +856,7 @@ schemas, and docs only.
 ## What "good candidate" means (and does not)
 
 A candidate that reaches `OBSERVE`, `REGIME_SPECIFIC`, or `FORWARD_PAPER` passed
-some lite gates and is **worth more testing** — it is not a profitable or
+some lite gates and is **worth more testing** -- it is not a profitable or
 live-tradable strategy. `FORWARD_PAPER` means "track on paper next", nothing
 more. `REJECT` rows stay in the run artifacts but are kept out of the candidate
 registry by default (use `--include-rejects` for debugging).

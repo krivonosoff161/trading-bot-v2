@@ -73,6 +73,8 @@ def validate_sweep_spec(
 
     if spec.backend not in BACKENDS:
         errors.append(f"unknown backend '{spec.backend}' (allowed: {', '.join(BACKENDS)})")
+    elif spec.backend != "cpu":
+        errors.append(f"backend '{spec.backend}' is declared but not implemented yet (cpu only today)")
     if spec.resource_class not in RESOURCE_CLASSES:
         errors.append(f"unknown resource_class '{spec.resource_class}'")
 

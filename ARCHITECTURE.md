@@ -147,10 +147,15 @@ Safe reuse from frozen code:
 Scanner:
 
 ```bash
+bat\news_scanner_loop.bat
 python -u src\scout\scanner_v0.py --buffer --limit 5
 python -m src.scout.news_buffer stats
 python src/scout/resolve_outcomes.py --limit 50
 ```
+
+`bat\news_scanner_loop.bat` keeps the feedback loop closed by running
+`resolve_outcomes.py --limit %SCANNER_OUTCOME_LIMIT%` after each scanner pass.
+The resolver is bounded and keyless; it writes only mature forward outcomes.
 
 Reports:
 
@@ -166,3 +171,45 @@ Focused checks:
 ```bash
 python -m pytest tests/test_source_onboarding.py tests/test_watch_queue.py tests/test_setup_confirmation.py tests/test_build_watch_queue.py -q
 ```
+
+## Research machine (scanner -> farm -> validation -> feedback -> follow-ups)
+
+The scanner is wired to the Strategy Lab farm and the honest-backtest validator
+as one paper-only research loop. Each stage is bounded and individually safe; no
+stage touches the order engine, `AUTO_TRADE`, or live trading.
+
+```text
+scanner_v0 --buffer        (writes logs/scout/watch_queue.jsonl; run separately, not by the demo)
+resolve_outcomes           (scores mature forward outcomes; run by news_scanner_loop, not the demo)
+  v
+scanner WATCH/GO (logs/scout/watch_queue.jsonl)
+  -> scanner_bridge        (src/research_lab/scanner_bridge.py)
+  -> generate_event_sweeps --from-scanner   (bounded SweepSpec -> queue, missing_data is graceful)
+  -> worker_once           (no-lookahead simulation on local candles)
+  -> candidate registry    (private root)
+  -> validate_candidates_pipeline  (export -> honest-backtest -> verdict -> feedback -> setup card)
+  -> read_feedback         (verdicts -> farm recommendations; read-only)
+  -> apply_feedback_recommendations  (NARROW_PARAMS -> bounded follow-up sweep; others -> notes)
+  -> next research cycle
+```
+
+A bounded, visible, paper-only pass of the **farm -> validation -> feedback** half
+(it seeds from the existing watch_queue; the fresh scanner pass + outcome
+resolver are opt-in, default OFF):
+
+```bash
+bat\research_machine_demo_visible.bat
+python -m scripts.strategy_lab.run_research_machine_demo --dry-run
+python -m scripts.strategy_lab.run_research_machine_demo --run-scanner-pass --run-outcomes
+```
+
+The scanner only chooses which symbol to research; the news trigger is recorded
+as provenance in the spec's `event_context` and is never used as a price anchor.
+The sweep executor is **CPU-only** today (the `gpu`/`auto` backends are rejected
+by `validate_sweep_spec` until a real GPU executor exists). Regime-filtered
+follow-up sweeps are **not** implemented (`compile_sweep` does not forward filters);
+`apply_feedback_recommendations` records `REGIME_SWEEP` as a note, not a queued
+sweep. Strategy timeframe is recorded end-to-end (run evaluator derives it from
+candle spacing; the exporter recovers it from the data-file label;
+`repair_hard_validation_metadata` backfills legacy artifacts). Full operator
+detail: [strategy_lab_operator_guide.md](docs/strategy_lab_operator_guide.md).
