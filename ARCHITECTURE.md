@@ -206,11 +206,16 @@ python -m scripts.strategy_lab.run_research_machine_demo --run-scanner-pass --ru
 The scanner only chooses which symbol to research; the news trigger is recorded
 as provenance in the spec's `event_context` and is never used as a price anchor.
 The sweep worker has a real backend contract (`cpu`/`gpu`/`auto`, see
-`src/research_lab/gpu_runtime.py` + `gpu_kernels.py`): the `momentum_breakout`
-signal kernel runs on a cupy GPU backend when one is usable (CPU/GPU parity
-proven), `gpu` errors instead of silently using CPU when no backend is available,
-and `auto` falls back to CPU with a recorded reason. The path-dependent trade
-simulation stays CPU-only. Check with `python -m scripts.strategy_lab.gpu_doctor`.
+`src/research_lab/gpu_runtime.py` + `gpu_kernels.py` + `gpu_simulator.py`) with
+two independently GPU-accelerated stages: the `momentum_breakout` signal kernel
+and the batched trade simulation (first-touch SL/TP/max-hold barrier, long &
+short, fees+slippage) for the supported exit mode. Both run on a cupy GPU backend
+when usable (CPU/GPU parity proven by tests); `gpu` errors instead of silently
+using CPU when no backend is available, and `auto` falls back to CPU with a
+recorded reason. Unsupported exit modes (e.g. trailing stops) and over-cap
+batches fall back to CPU with an explicit `simulation_fallback_reason`; the
+`signal_backend` and `simulation_backend` are recorded separately in
+`metrics.json.runtime`. Check with `python -m scripts.strategy_lab.gpu_doctor`.
 Regime-filtered
 follow-up sweeps are **not** implemented (`compile_sweep` does not forward filters);
 `apply_feedback_recommendations` records `REGIME_SWEEP` as a note, not a queued

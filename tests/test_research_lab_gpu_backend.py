@@ -234,3 +234,87 @@ def test_validate_sweep_spec_backend_capability(monkeypatch):
 
     _patch_gpu(monkeypatch, available=True)
     assert validate_sweep_spec(_spec_b("gpu"), timeframe_profiles=profiles, resource_policy=policy).ok
+
+
+# --- simulation backend split (GPU/batched trade simulation) ----------------
+
+def test_gpu_simulation_backend_used_and_matches_cpu(monkeypatch, syn_glob):
+    # GPU "available" (numpy-backed): the batched simulator runs and must match CPU.
+    _patch_gpu(monkeypatch, available=True, backend_name="cupy")
+    rt_gpu: dict = {}
+    gpu = evaluate_spec(_spec(syn_glob, "gpu"), rt_gpu)
+    assert rt_gpu["signal_backend"] == "gpu"
+    assert rt_gpu["simulation_backend"] == "gpu"
+    assert rt_gpu["accelerated_simulation_runs"] == 2
+    assert rt_gpu["simulation_fallback_reason"] == ""
+
+    _patch_gpu(monkeypatch, available=False)
+    cpu = evaluate_spec(_spec(syn_glob, "cpu"), {})
+    assert [r.run_id for r in gpu] == [r.run_id for r in cpu]
+    for g, c in zip(gpu, cpu):
+        assert g.metrics["n_trades"] == c.metrics["n_trades"]
+        assert g.metrics["total_net_pct"] == c.metrics["total_net_pct"]
+        assert g.metrics["win_rate"] == c.metrics["win_rate"]
+
+
+def test_cpu_backend_simulation_stays_cpu(monkeypatch, syn_glob):
+    _patch_gpu(monkeypatch, available=True)  # GPU present, but cpu must stay cpu
+    rt: dict = {}
+    evaluate_spec(_spec(syn_glob, "cpu"), rt)
+    assert rt["signal_backend"] == "cpu"
+    assert rt["simulation_backend"] == "cpu"
+    assert rt["accelerated_simulation_runs"] == 0
+
+
+def test_auto_records_cpu_simulation_when_gpu_unavailable(monkeypatch, syn_glob):
+    _patch_gpu(monkeypatch, available=False)
+    rt: dict = {}
+    evaluate_spec(_spec(syn_glob, "auto"), rt)
+    assert rt["simulation_backend"] == "cpu"
+    assert rt["accelerated_simulation_runs"] == 0
+    assert "cpu fallback" in rt["fallback_reason"]
+
+
+def test_unsupported_simulation_mode_falls_back_with_reason(monkeypatch, syn_glob):
+    _patch_gpu(monkeypatch, available=True, backend_name="cupy")
+    spec = ExperimentSpec(
+        experiment_id="gpu_test_unsupported", data_glob=syn_glob, symbols=["SYN_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [
+            {"lookback": 20, "threshold_pct": 0.0, "hold_bars": 5, "trailing_stop_pct": 3},
+        ]},
+        timeframe="1d", backend="gpu",
+    )
+    rt: dict = {}
+    evaluate_spec(spec, rt)
+    # signal still accelerated, but the simulation falls back to CPU with a reason
+    assert rt["simulation_backend"] == "cpu"
+    assert rt["accelerated_simulation_runs"] == 0
+    assert "unsupported_exit_mode:trailing_stop_pct" in rt["simulation_fallback_reason"]
+
+
+def test_runtime_metadata_has_all_new_fields(monkeypatch, syn_glob):
+    _patch_gpu(monkeypatch, available=True, backend_name="cupy")
+    rt: dict = {}
+    evaluate_spec(_spec(syn_glob, "gpu"), rt)
+    for field in ("signal_backend", "simulation_backend", "accelerated_signal_runs",
+                  "accelerated_simulation_runs", "simulation_fallback_reason",
+                  "gpu_supported_simulation_modes"):
+        assert field in rt, field
+    assert isinstance(rt["gpu_supported_simulation_modes"], list)
+    assert "accelerated_runs" in rt  # backward-compat field preserved
+
+
+def test_metrics_json_runtime_records_simulation_backend(monkeypatch, syn_glob, tmp_path):
+    _patch_gpu(monkeypatch, available=True, backend_name="cupy")
+    rt: dict = {}
+    spec = _spec(syn_glob, "gpu")
+    results = evaluate_spec(spec, rt)
+    run_dir = write_run_outputs(spec, results, tmp_path / "priv", allow_public_output=True, runtime_meta=rt)
+    payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    runtime = payload["runtime"]
+    assert runtime["signal_backend"] == "gpu"
+    assert runtime["simulation_backend"] == "gpu"
+    assert runtime["accelerated_simulation_runs"] == 2
+    assert "gpu_supported_simulation_modes" in runtime
+    assert "simulation_fallback_reason" in runtime

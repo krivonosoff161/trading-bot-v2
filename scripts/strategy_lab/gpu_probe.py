@@ -101,9 +101,14 @@ def main() -> None:
     results = evaluate_spec(spec, runtime)
     print(f"  runs={len(results)}")
     print(f"  requested_backend={runtime.get('requested_backend')} effective_backend={runtime.get('effective_backend')}")
-    print(f"  accelerated_runs={runtime.get('accelerated_runs')} elapsed_ms={runtime.get('elapsed_ms')}")
+    print(f"  signal_backend={runtime.get('signal_backend')} simulation_backend={runtime.get('simulation_backend')}")
+    print(f"  accelerated_signal_runs={runtime.get('accelerated_signal_runs')} "
+          f"accelerated_simulation_runs={runtime.get('accelerated_simulation_runs')} "
+          f"elapsed_ms={runtime.get('elapsed_ms')}")
     if runtime.get("fallback_reason"):
         print(f"  fallback_reason={runtime.get('fallback_reason')}")
+    if runtime.get("simulation_fallback_reason"):
+        print(f"  simulation_fallback_reason={runtime.get('simulation_fallback_reason')}")
     if args.parity:
         print("  " + _parity_check(args.symbol, args.timeframe))
     print()
