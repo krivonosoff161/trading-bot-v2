@@ -9,8 +9,8 @@ becomes:
                        candidate's own params) that the worker can run.
     WIDEN_PARAMS    -> a follow-up SweepSpec ONLY if every widened axis has a
                        hard cap; otherwise a note (widen_unsafe_no_cap).
-    REGIME_SWEEP    -> a note only: the sweep/compile path cannot apply a regime
-                       filter today (not_queued_reason=regime_filter_not_implemented).
+    REGIME_SWEEP    -> a bounded follow-up SweepSpec filtered to the candidate's
+                       stored strong regime bucket, when evidence is available.
     REQUIRE_MORE_DATA -> a data-requirement / prepare hint note (no sweep).
     PROMOTE         -> a forward-paper tracking note (no queue, not main-engine ready).
     SUPPRESS/REJECT -> a suppress/archive note (no queue).
@@ -33,7 +33,7 @@ from src.research_lab.strategy_registry import REGISTRY, get_strategy
 from src.research_lab.sweep_spec import SweepSpec
 
 # Actions that may produce a queued follow-up sweep.
-QUEUEABLE_ACTIONS = {fr.NARROW_PARAMS, fr.WIDEN_PARAMS}
+QUEUEABLE_ACTIONS = {fr.NARROW_PARAMS, fr.WIDEN_PARAMS, fr.REGIME_SWEEP}
 # A safe absolute ceiling for any widened axis (multiple of the family default).
 WIDEN_CEILING_MULT = 2
 
@@ -109,6 +109,42 @@ def _widen_grids(family: str, params: dict[str, Any]) -> tuple[dict, dict, bool]
     return (setup_grid, exit_grid, True)
 
 
+def _candidate_params(candidate_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if candidate_context is None:
+        return None
+    params = candidate_context.get("params")
+    if isinstance(params, dict):
+        return dict(params)
+    return dict(candidate_context)
+
+
+def _filters_from_bucket(bucket: str) -> dict[str, list[str]]:
+    parts = [p for p in str(bucket or "").split("|") if p and p != "unknown"]
+    keys = ("volatility", "trend", "volume")
+    return {key: [value] for key, value in zip(keys, parts) if value}
+
+
+def _regime_filters(rec: fr.Recommendation, candidate_context: dict[str, Any] | None) -> dict[str, list[str]]:
+    if candidate_context:
+        filters = candidate_context.get("filters")
+        if isinstance(filters, dict) and filters:
+            return {str(k): [str(x) for x in v] for k, v in filters.items() if v}
+        for reason in candidate_context.get("validation_reasons") or []:
+            text = str(reason)
+            if text.startswith("strong_regime_bucket:"):
+                return _filters_from_bucket(text.split(":", 1)[1])
+        summary = candidate_context.get("regime_summary")
+        if isinstance(summary, dict):
+            filters = _filters_from_bucket(str(summary.get("dominant_bucket") or ""))
+            if filters:
+                return filters
+    for reason in rec.reason_codes:
+        text = str(reason)
+        if text.startswith("strong_regime_bucket:"):
+            return _filters_from_bucket(text.split(":", 1)[1])
+    return {}
+
+
 def plan_followup(
     rec: fr.Recommendation,
     candidate_params: dict[str, Any] | None,
@@ -128,16 +164,12 @@ def plan_followup(
         return _note_plan(rec, cid, reason="needs_more_data",
                           note=f"collect more history for {rec.symbol}@{rec.timeframe} "
                                f"(prepare_market_data / wait for forward period); no sweep queued")
-    if rec.action == fr.REGIME_SWEEP:
-        return _note_plan(rec, cid, reason="regime_filter_not_implemented",
-                          note="regime-filtered sweep cannot be compiled today "
-                               "(compile_sweep does not forward filters); recorded as TODO, not queued")
-
     if rec.action not in QUEUEABLE_ACTIONS:
         return _note_plan(rec, cid, reason="unknown_action", note=f"no handler for action {rec.action}")
 
-    # Queueable: NARROW_PARAMS / WIDEN_PARAMS -> need a valid candidate, family, timeframe.
-    if not cid or candidate_params is None:
+    # Queueable actions need a valid candidate, family, timeframe.
+    params = _candidate_params(candidate_params)
+    if not cid or params is None:
         return _note_plan(rec, cid, reason="no_candidate_params",
                           note="no stored candidate params to narrow around; not queued")
     tf = normalize_timeframe(rec.timeframe)
@@ -149,15 +181,23 @@ def plan_followup(
         return _note_plan(rec, cid, reason="unknown_strategy",
                           note=f"strategy '{rec.strategy_id}' not in registry; not queued")
 
-    if rec.action == fr.WIDEN_PARAMS:
-        setup_grid, exit_grid, ok = _widen_grids(rec.strategy_id, candidate_params)
+    filter_grid: dict[str, list[str]] = {}
+    if rec.action == fr.REGIME_SWEEP:
+        filter_grid = _regime_filters(rec, candidate_params)
+        if not filter_grid:
+            return _note_plan(rec, cid, reason="missing_regime_filter",
+                              note="REGIME_SWEEP needs a stored strong_regime_bucket/filter; not queued")
+        setup_grid, exit_grid = _narrow_grids(rec.strategy_id, params, lower_turnover=False)
+        note = "bounded regime-filtered follow-up around candidate params"
+    elif rec.action == fr.WIDEN_PARAMS:
+        setup_grid, exit_grid, ok = _widen_grids(rec.strategy_id, params)
         if not ok:
             return _note_plan(rec, cid, reason="widen_unsafe_no_cap",
                               note="cannot derive a safe widening ceiling; not queued")
         note = "bounded widen follow-up (hard-capped axes)"
     else:  # NARROW_PARAMS
         lower_turnover = rec.hard_status in ("FAILED_COSTS",)
-        setup_grid, exit_grid = _narrow_grids(rec.strategy_id, candidate_params, lower_turnover=lower_turnover)
+        setup_grid, exit_grid = _narrow_grids(rec.strategy_id, params, lower_turnover=lower_turnover)
         note = "bounded narrow follow-up around candidate params"
 
     capped_variants = min(max(1, int(max_variants)), MAX_VARIANTS_CAP)
@@ -169,6 +209,7 @@ def plan_followup(
         setup_family=rec.strategy_id,
         setup_grid=setup_grid,
         exit_grid=exit_grid,
+        filter_grid=filter_grid,
         max_variants=capped_variants,
         backend="cpu",
         resource_class="normal",
@@ -177,7 +218,7 @@ def plan_followup(
     return FollowupPlan(
         action=rec.action, candidate_id=cid, symbol=rec.symbol, strategy_id=rec.strategy_id,
         timeframe=tf, queued=True, not_queued_reason=None, note=note, sweep=sweep,
-        grid_preview={"setup_grid": setup_grid, "exit_grid": exit_grid},
+        grid_preview={"setup_grid": setup_grid, "exit_grid": exit_grid, "filter_grid": filter_grid},
     )
 
 

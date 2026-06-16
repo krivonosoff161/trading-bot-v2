@@ -51,6 +51,7 @@ class Recommendation:
     hard_status: str
     priority: str
     candidate_ids: list[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +63,7 @@ class Recommendation:
             "hard_status": self.hard_status,
             "priority": self.priority,
             "candidate_ids": list(self.candidate_ids),
+            "reason_codes": list(self.reason_codes),
         }
 
 
@@ -79,24 +81,31 @@ def recommendations_from_feedback(feedback_rows: list[dict[str, Any]]) -> list[R
     Rows that share a scope and hard_status are merged into a single
     recommendation carrying all contributing candidate ids.
     """
-    grouped: dict[tuple[str, str, str, str], list[str]] = {}
+    grouped: dict[tuple[str, str, str, str], dict[str, set[str]]] = {}
     for row in feedback_rows:
         status = str(row.get("hard_status") or "")
         if status == "PAPER_FORWARD_READY":
             continue  # passed: handled by promotions, not failure feedback
         scope = _scope_key(row)
         key = (*scope, status)
-        grouped.setdefault(key, []).append(str(row.get("candidate_id") or ""))
+        bucket = grouped.setdefault(key, {"candidate_ids": set(), "reason_codes": set()})
+        candidate_id = str(row.get("candidate_id") or "")
+        if candidate_id:
+            bucket["candidate_ids"].add(candidate_id)
+        for code in row.get("reason_codes") or []:
+            if code:
+                bucket["reason_codes"].add(str(code))
 
     out: list[Recommendation] = []
-    for (strategy_id, symbol, timeframe, status), cand_ids in sorted(grouped.items()):
+    for (strategy_id, symbol, timeframe, status), data in sorted(grouped.items()):
         action, reason, priority = _STATUS_ACTION.get(
             status, (REJECT, "unknown status; default to reject", "low")
         )
         out.append(Recommendation(
             action=action, strategy_id=strategy_id, symbol=symbol, timeframe=timeframe,
             reason=reason, hard_status=status, priority=priority,
-            candidate_ids=sorted(c for c in cand_ids if c),
+            candidate_ids=sorted(data["candidate_ids"]),
+            reason_codes=sorted(data["reason_codes"]),
         ))
     return out
 

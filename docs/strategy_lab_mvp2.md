@@ -137,6 +137,11 @@ Omitted filters mean "run all". Regime labels are metadata and gating, not a
 profitability claim. Default thresholds are tuned for 1D crypto-perp candles
 and can be overridden per spec via `regime_params`.
 
+`SweepSpec.filter_grid` compiles into `ExperimentSpec.filters`; it is a regime
+gate, not a parameter-grid axis. Therefore it does not multiply
+`variant_count`. Feedback-driven `REGIME_SWEEP` uses the candidate's stored
+strong regime bucket when available and queues only bounded research sweeps.
+
 ## Validator-lite
 
 `src/research_lab/validator.py`. The grading decision

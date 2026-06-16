@@ -325,13 +325,13 @@ Per-action behavior (only some actions ever queue a sweep):
 |---|---|
 | `NARROW_PARAMS` | bounded follow-up sweep: a **narrower** grid around the candidate's own params (for `FAILED_COSTS`, `hold_bars` is biased up = lower turnover), validated then queued |
 | `WIDEN_PARAMS` | a follow-up sweep **only** if every widened axis has a hard cap; otherwise a note (`widen_unsafe_no_cap`) |
-| `REGIME_SWEEP` | **note only** -- `not_queued_reason=regime_filter_not_implemented` (the sweep/compile path cannot apply a regime filter today; this is honest, not faked) |
+| `REGIME_SWEEP` | bounded regime-filtered follow-up sweep when the candidate registry/feedback contains a `strong_regime_bucket`, stored `filters`, or a usable `regime_summary`; otherwise a note (`missing_regime_filter`) |
 | `REQUIRE_MORE_DATA` | note: data-requirement / prepare hint, no sweep |
 | `PROMOTE` | note: forward-paper tracking only, no queue, not main-engine ready |
 | `SUPPRESS` / `REJECT` | note: suppress/archive, no queue |
 
 - **Bounded**: `--limit` (recommendations), `--max-variants` (<=12 hard cap),
-  `--max-symbols`, and `--allowed-actions` (default `NARROW_PARAMS`). A spec that
+  `--max-symbols`, and `--allowed-actions` (default `NARROW_PARAMS,REGIME_SWEEP`). A spec that
   fails `validate_sweep_spec` is skipped with its error, never queued.
 - **Idempotent**: each follow-up sweep has a deterministic `sweep_id`
   (`fb_<candidate>_<strategy>_<action>`), so re-running never double-queues.

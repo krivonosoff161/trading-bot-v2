@@ -58,8 +58,13 @@ def compile_sweep(
     if blocking:
         raise ValueError("invalid sweep spec: " + "; ".join(blocking))
 
-    variants = expand_grids(spec.setup_grid, spec.entry_grid, spec.exit_grid, spec.filter_grid)
+    variants = expand_grids(spec.setup_grid, spec.entry_grid, spec.exit_grid)
     variants = variants[: max(1, result.effective_max_variants)]
+    filters = {
+        str(key): [str(value) for value in values]
+        for key, values in spec.filter_grid.items()
+        if values
+    }
 
     symbols = [spec.anchor_symbol, *spec.related_symbols]
     runs = len(symbols) * len(variants)
@@ -77,4 +82,5 @@ def compile_sweep(
         max_runs=job_cap,
         event_context=dict(event_context or {}),
         timeframe=spec.timeframe,
+        filters=filters,
     )
