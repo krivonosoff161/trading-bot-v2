@@ -4,8 +4,9 @@
 This describes WHAT a coarse sweep would run (anchor, related symbols, timeframe,
 setup/entry/exit/filter grids, variant budget, backend, resource class) and
 validates it against the timeframe profiles and resource policy. It does NOT run
-anything and does NOT implement a GPU backend — the goal is to make the planned
-architecture explicit and enforce the desktop-safety gates up front.
+anything; execution happens after compilation through ExperimentSpec/evaluate_spec.
+The goal is to make the architecture explicit and enforce the desktop-safety gates
+up front.
 """
 
 from __future__ import annotations
