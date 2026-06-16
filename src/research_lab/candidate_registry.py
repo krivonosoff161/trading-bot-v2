@@ -44,7 +44,10 @@ def build_entry(
         "symbol": result.symbol,
         "strategy_id": result.family,
         "params": result.params,
-        "timeframe": getattr(spec, "timeframe", ""),
+        "timeframe": (
+            getattr(spec, "timeframe", "")
+            or str((getattr(result, "metrics", {}) or {}).get("data_file_timeframe") or "")
+        ),
         "filters": dict(getattr(spec, "filters", {}) or {}),
         "fees_bps": float(getattr(spec, "fees_bps", 7.0)) if spec is not None else 7.0,
         "slippage_bps": float(getattr(spec, "slippage_bps", 3.0)) if spec is not None else 3.0,

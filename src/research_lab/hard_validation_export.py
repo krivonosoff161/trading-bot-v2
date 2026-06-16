@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import load_entries
+from src.research_lab.data_inventory import normalize_timeframe, timeframe_from_filename
 from src.research_lab.hard_validation_contract import (
     CandidateForValidation,
     CONTRACT_VERSION,
@@ -146,13 +147,7 @@ def _build_candidate(
         source_run_id=str(entry.get("experiment_id") or ""),
         symbol=str(entry.get("symbol") or ""),
         normalized_symbol=str(entry.get("symbol", "").replace("-", "_")),
-        timeframe=str(
-            metrics.get("data_file_timeframe")
-            or entry.get("timeframe")
-            or metrics.get("_timeframe")
-            or entry.get("params", {}).get("timeframe", "")
-            or "unknown"
-        ),
+        timeframe=_recover_timeframe(metrics, entry),
         strategy_id=str(entry.get("strategy_id") or ""),
         params=dict(entry.get("params") or {}),
         filters=filters,
@@ -171,6 +166,26 @@ def _build_candidate(
         ),
         contract_version=CONTRACT_VERSION,
     )
+
+
+def _recover_timeframe(metrics: dict[str, Any], entry: dict[str, Any]) -> str:
+    """Resolve the strategy timeframe, recovering it instead of defaulting to 'unknown'.
+
+    Ordered chain: explicit run/registry timeframe -> the run's data-file label
+    (e.g. 'DOGE_USDT_SWAP_430d_1Dutc.json' -> '1d') -> params timeframe. Only when
+    nothing is recoverable does it fall back to 'unknown'.
+    """
+    for source in (
+        metrics.get("data_file_timeframe"),
+        entry.get("timeframe"),
+        metrics.get("_timeframe"),
+        entry.get("params", {}).get("timeframe"),
+    ):
+        tf = normalize_timeframe(source)
+        if tf:
+            return tf
+    tf = timeframe_from_filename(str(metrics.get("data_file_label") or ""))
+    return tf or "unknown"
 
 
 def _load_experiment_metrics(

@@ -106,3 +106,10 @@ def test_unknown_backend_rejected(profiles, quiet):
     spec = _light_spec(backend="quantum")
     result = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
     assert not result.ok
+
+
+def test_declared_gpu_backend_rejected_until_executor_exists(profiles, quiet):
+    spec = _light_spec(backend="gpu")
+    result = validate_sweep_spec(spec, timeframe_profiles=profiles, resource_policy=quiet)
+    assert not result.ok
+    assert any("not implemented yet" in e for e in result.errors)

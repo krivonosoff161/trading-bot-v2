@@ -143,6 +143,10 @@ python scripts/analysis/build_watch_queue.py --dry-run
 python -X utf8 src/scout/calibration_report.py
 ```
 
+`bat\news_scanner_loop.bat` runs the scanner and then, by default, resolves
+mature outcomes after every pass. Tune it with `SCANNER_OUTCOME_LIMIT` and set
+`SCANNER_RUN_OUTCOMES=false` only for diagnostics.
+
 LLM budget controls enforce any non-zero local caps by default. Tune
 `LLM_DAILY_RUB_CAP`,
 `LLM_SCAN_RUB_CAP`, `LLM_MAX_TOKENS_PER_SCAN`, and
@@ -152,6 +156,18 @@ manual diagnostics. Budget skips are logged as model usage with
 and are not sent to Telegram.
 
 Private strategy-lab smoke run:
+
+Use CPU/offline paths for smoke checks and deterministic validation. The current
+24/7 local-Ollama loop can offload the calculator model to GPU, but the strategy
+sweep executor is still CPU-only until the planned GPU backend is implemented:
+
+```bash
+bat\strategy_lab_ollama_calculator_24x7.bat
+ollama ps
+```
+
+Expected during an LLM call: `calculator:latest` shows `PROCESSOR 100% GPU`.
+Stop it with `bat\strategy_lab_graceful_stop.bat` or Ctrl+C in the window.
 
 ```bash
 python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
@@ -234,8 +250,8 @@ python -m scripts.strategy_lab.queue_validated_proposals --apply                
 ```
 
 MVP 4.0 adds a read-only 1m **event-microscope** locator (capped, trigger-only, no
-downloader — missing 1m data is a clean skip), **event-anchored entry timing** in
-event-driven runs (lag, capture, missed move, `late_entry` — no look-ahead), and a
+downloader -- missing 1m data is a clean skip), **event-anchored entry timing** in
+event-driven runs (lag, capture, missed move, `late_entry` -- no look-ahead), and a
 **gated LLM send boundary** (only `NullReviewSender` ships; a real send needs
 `--send` + `STRATEGY_LAB_LLM_ENABLED=1` + a provider + a daily budget cap):
 
@@ -245,11 +261,11 @@ python -m scripts.strategy_lab.microscope_scan --universe l2_high_beta   # read-
 
 MVP 4.2 adds a **demand-driven 1m loader** (`prepare_1m_data`): it derives the
 capped 1m windows the lab actually needs (event specs / queued jobs / a manual
-request), checks the local cache, and — only with `--apply` and a configured
-provider — writes just those windows under the private root. No full-market
+request), checks the local cache, and -- only with `--apply` and a configured
+provider -- writes just those windows under the private root. No full-market
 download; default provider is `null` (no network), so `--apply` without a provider
 prints "provider not configured / no data written". The real provider is
-`okx-public` — OKX **public** 1m candles, read-only, **no API key**, no
+`okx-public` -- OKX **public** 1m candles, read-only, **no API key**, no
 order/account endpoints (a small isolated public-only adapter; the existing
 order-capable OKX clients are not reused):
 
@@ -263,9 +279,9 @@ but only when you opt in (`STRATEGY_LAB_PREPARE_1M=1`, plus `..._APPLY=1` +
 `STRATEGY_LAB_MARKET_DATA_PROVIDER=okx-public` to actually fetch). Default start
 fetches nothing; the worker never fetches by itself. See the operator guide.
 
-MVP 4.3 adds a **controlled research cycle** (`research_cycle`): one bounded pass —
-inspect → generate proposals → check 1m data → optionally prepare → queue (capped) →
-one throttled worker step → status report. Dry-run by default (no queue/worker/
+MVP 4.3 adds a **controlled research cycle** (`research_cycle`): one bounded pass --
+inspect -> generate proposals -> check 1m data -> optionally prepare -> queue (capped) ->
+one throttled worker step -> status report. Dry-run by default (no queue/worker/
 network); a real fetch needs `--apply --prepare-1m --prepare-1m-apply --provider
 okx-public`. No hidden loop; the worker respects the throttle:
 
@@ -277,11 +293,11 @@ python -m scripts.strategy_lab.research_cycle --apply --max-proposals 5 --max-qu
 MVP 4.4 adds **data-complete research sessions** + an advisory **LLM proposal loop**.
 `research_session` wraps the cycle with a data-readiness gate (a job is queued only
 when its data is READY; missing/short/malformed are skipped with a reason, never
-faked) and an export-only LLM layer (cheap → chief; code validates every candidate;
+faked) and an export-only LLM layer (cheap -> chief; code validates every candidate;
 the LLM never decides the queue and is never executed). LLM is disabled by default; a
 real send needs `STRATEGY_LAB_LLM_ENABLED=1` + `STRATEGY_LAB_LLM_PROVIDER` + a
 configured provider + a daily cap (Alibaba/Qwen documented but not shipped). Expected
-pace is one or two serious variants per day — not a 24/7 poller.
+pace is one or two serious variants per day -- not a 24/7 poller.
 
 ```bash
 python -m scripts.strategy_lab.research_session --dry-run

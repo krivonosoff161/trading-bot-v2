@@ -27,6 +27,30 @@ _TIMEFRAME_BUCKETS = [
 ]
 _SYMBOL_RE = re.compile(r"^([A-Z0-9]+(?:_[A-Z0-9]+)*?_SWAP)", re.IGNORECASE)
 
+# Canonical normalized timeframe tokens (lowercase), aligned with the timeframe
+# profiles / registry convention.
+KNOWN_TIMEFRAMES = {label.lower() for _, label in _TIMEFRAME_BUCKETS}
+# Match the bar-timeframe token in feasibility filenames like
+# "DOGE_USDT_SWAP_430d_1Dutc.json" -> "1D" (the history-count token "430d" has no
+# trailing "utc", so it is not matched).
+_TF_IN_NAME_RE = re.compile(r"_(\d+[mhdwMHDW])(?:utc)?\.json$", re.IGNORECASE)
+
+
+def normalize_timeframe(value: Any) -> str:
+    """Lowercase + validate a timeframe token; '' if not a known timeframe."""
+    tf = str(value or "").strip().lower()
+    return tf if tf in KNOWN_TIMEFRAMES else ""
+
+
+def timeframe_from_filename(name: str) -> str:
+    """Recover a normalized timeframe from a data-file name, '' if not encoded.
+
+    e.g. "DOGE_USDT_SWAP_430d_1Dutc.json" -> "1d". Returns '' for non-candle
+    files (e.g. "..._funding_100.json").
+    """
+    match = _TF_IN_NAME_RE.search(str(name or ""))
+    return normalize_timeframe(match.group(1)) if match else ""
+
 
 def file_label(path: Path) -> str:
     """Public-safe label: file name only, never the absolute path."""

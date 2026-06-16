@@ -102,6 +102,19 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
     return sorted(out, key=lambda r: int(r["ts"]))
 
 
+def _derive_timeframe(candles: list[dict[str, Any]]) -> str:
+    """Best-effort timeframe label from candle spacing (e.g. '1d', '15m').
+
+    Returns '' when it cannot be inferred. Normalized to lowercase so it matches
+    the timeframe-profile / registry convention (1d, 1h, 4h, 15m, 1m).
+    """
+    from src.research_lab.data_inventory import infer_timeframe
+
+    ts_values = [int(c["ts"]) for c in candles if "ts" in c]
+    label = infer_timeframe(ts_values)
+    return "" if label == "unknown" else label.lower()
+
+
 def choose_symbol_file(
     pattern: str, symbol: str, *, timeframe: str | None = None,
 ) -> Path | None:
@@ -409,6 +422,11 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
         if not path:
             continue
         candles = load_candles(path)
+        # Record the resolved timeframe so downstream provenance (candidate
+        # registry -> hard validation -> setup cards) never loses it. When the
+        # spec carries no explicit timeframe, derive it from the candle spacing
+        # instead of leaving it blank (the old behavior that produced "unknown").
+        file_tf = tf or _derive_timeframe(candles)
         for params in spec.parameter_grid.get(family, []):
             signals = generate_signals(candles, family, params)
             signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
@@ -422,7 +440,7 @@ def evaluate_spec(spec: ExperimentSpec) -> list[RunResult]:
             )
             metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
             metrics["data_file_label"] = path.name
-            metrics["data_file_timeframe"] = tf or ""
+            metrics["data_file_timeframe"] = file_tf or ""
             if spec.event_context:
                 event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
                 if event_timing:

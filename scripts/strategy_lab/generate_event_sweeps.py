@@ -27,6 +27,8 @@ from src.research_lab.event_sweeps import build_event_sweeps, event_context_for,
 from src.research_lab.experiment import choose_symbol_file, load_candles  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.scanner_bridge import DEFAULT_FAMILIES as SCANNER_FAMILIES  # noqa: E402
+from src.research_lab.scanner_bridge import watches_to_sweeps  # noqa: E402
 from src.research_lab.sweep_compile import compile_sweep  # noqa: E402
 from src.research_lab.state_db import connect, default_db_path, ensure_experiment_queued, init_db  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -65,14 +67,57 @@ def collect_sweeps(universe, profiles, policy, *, group, timeframe, data_glob, w
     return pairs, skipped
 
 
+def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, limit):
+    """Build bounded sweeps from open scanner WATCH/GO rows.
+
+    Returns (items, skipped) where each item is a (context, sweep) pair ready for
+    compile/queue. Rows with no usable asset, no compatible family, or no local
+    candle file are reported as skipped (missing_data is not a crash).
+    """
+    from src.research_lab.scanner_bridge import MAX_SYMBOLS_CAP  # hard backstop
+    from src.scout.watch_queue import open_watches  # local import: scanner side
+
+    watches = open_watches()
+    if limit and limit > 0:
+        watches = watches[:limit]
+    # Bridge dedupes by symbol and applies the hard backstop. The user's
+    # --max-symbols is applied below, after data availability, so a leading
+    # missing-data symbol does not consume the budget.
+    results = watches_to_sweeps(
+        watches, timeframe=timeframe, families=SCANNER_FAMILIES,
+        max_variants=max_variants, max_symbols=MAX_SYMBOLS_CAP,
+    )
+    user_cap = min(max(1, int(max_symbols)), MAX_SYMBOLS_CAP)
+    items = []
+    skipped = []
+    for res in results:
+        if not res.ok:
+            skipped.append((res.symbol or res.context.get("watch_id") or "?", res.status))
+            continue
+        path = choose_symbol_file(data_glob, res.symbol, timeframe=timeframe)
+        if not path:
+            skipped.append((res.symbol, "missing_data"))
+            continue
+        if len(items) >= user_cap:
+            skipped.append((res.symbol, "symbol_cap_reached"))
+            continue
+        items.append((res.context, res.sweep))
+    return items, skipped
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--universe", required=True)
+    ap.add_argument("--universe", help="Universe group for price-event mode (required unless --from-scanner)")
+    ap.add_argument("--from-scanner", action="store_true",
+                    help="Build bounded sweeps from open scanner WATCH/GO rows instead of price events")
     ap.add_argument("--timeframe", default="15m")
     ap.add_argument("--data-glob", default=DEFAULT_DATA_GLOB)
     ap.add_argument("--window", type=int, default=5)
     ap.add_argument("--min-move-pct", type=float, default=8.0)
     ap.add_argument("--max-events", type=int, default=3, help="Max events detected per symbol")
+    ap.add_argument("--max-variants", type=int, default=8, help="Cap variants per scanner sweep")
+    ap.add_argument("--max-symbols", type=int, default=8, help="Cap distinct scanner symbols per run")
+    ap.add_argument("--limit", type=int, default=0, help="Max scanner watches to read (0 = all open)")
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--priority", type=int, default=75)
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
@@ -82,21 +127,35 @@ def main() -> None:
     mode.add_argument("--apply", action="store_true")
     args = ap.parse_args()
 
-    universe = load_universe()
     profiles = load_timeframe_profiles()
     policy = load_resource_policy(night_mode=_night_mode(args.night_mode))
-    pairs, skipped = collect_sweeps(
-        universe, profiles, policy, group=args.universe, timeframe=args.timeframe,
-        data_glob=args.data_glob, window=args.window, min_move_pct=args.min_move_pct,
-        max_events=max(1, args.max_events),
-    )
+
+    if args.from_scanner:
+        items, skipped = collect_scanner_sweeps(
+            timeframe=args.timeframe, data_glob=args.data_glob,
+            max_variants=args.max_variants, max_symbols=args.max_symbols, limit=args.limit,
+        )
+        proposals = [sweep_scanner_proposal_dict(ctx, sweep) for ctx, sweep in items]
+    else:
+        if not args.universe:
+            ap.error("--universe is required unless --from-scanner is set")
+        universe = load_universe()
+        pairs, skipped = collect_sweeps(
+            universe, profiles, policy, group=args.universe, timeframe=args.timeframe,
+            data_glob=args.data_glob, window=args.window, min_move_pct=args.min_move_pct,
+            max_events=max(1, args.max_events),
+        )
+        items = [(event_context_for(event), sweep) for event, sweep in pairs]
+        proposals = [sweep_proposal_dict(event, sweep) for event, sweep in pairs]
+
     # bound generation by the resource policy
-    capped = pairs[: max(1, policy.autopilot_generate_max)]
-    for event, sweep in capped:
-        print(f"sweep {json.dumps(sweep_proposal_dict(event, sweep), ensure_ascii=False)}")
+    cap = max(1, policy.autopilot_generate_max)
+    capped = items[:cap]
+    for proposal in proposals[:cap]:
+        print(f"sweep {json.dumps(proposal, ensure_ascii=False)}")
     for symbol, reason in skipped:
         print(f"skipped symbol={symbol} reason={reason}")
-    print(f"detected={len(pairs)} proposed={len(capped)} (cap={policy.autopilot_generate_max})")
+    print(f"detected={len(items)} proposed={len(capped)} (cap={policy.autopilot_generate_max})")
 
     if not args.apply:
         print("dry-run: nothing written (use --apply to compile + queue)")
@@ -104,6 +163,23 @@ def main() -> None:
 
     result = _apply(capped, args, profiles, policy)
     print(f"applied queued={result['queued']} already_pending={result['already_pending']} db={result['db_label']}")
+
+
+def sweep_scanner_proposal_dict(context: dict, sweep) -> dict:
+    """Public-safe proposal summary for a scanner-driven sweep."""
+    return {
+        "sweep_id": sweep.sweep_id,
+        "origin": "scanner_watch",
+        "watch_id": context.get("watch_id"),
+        "anchor_symbol": sweep.anchor_symbol,
+        "timeframe": sweep.timeframe,
+        "setup_family": sweep.setup_family,
+        "max_variants": sweep.max_variants,
+        "scanner_verdict": context.get("verdict"),
+        "layer": context.get("layer"),
+        "source": context.get("source"),
+        "note": context.get("note"),
+    }
 
 
 def _apply(capped, args, profiles, policy) -> dict:
@@ -115,10 +191,10 @@ def _apply(capped, args, profiles, policy) -> dict:
     init_db(conn)
     queued, already = 0, 0
     try:
-        for _event, sweep in capped:
+        for context, sweep in capped:
             exp = compile_sweep(
                 sweep, data_glob=args.data_glob, timeframe_profiles=profiles,
-                resource_policy=policy, event_context=event_context_for(_event),
+                resource_policy=policy, event_context=context,
             )
             spec_path = out_dir / f"{exp.experiment_id}.json"
             spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
