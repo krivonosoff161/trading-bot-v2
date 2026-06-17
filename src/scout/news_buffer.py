@@ -144,6 +144,7 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_items(status, updated_at);
             CREATE INDEX IF NOT EXISTS idx_norm_status ON normalized_events(status, updated_at);
             CREATE INDEX IF NOT EXISTS idx_norm_event_key ON normalized_events(event_key);
+            CREATE INDEX IF NOT EXISTS idx_norm_asset_upper ON normalized_events(UPPER(asset), created_at);
             """
         )
 
@@ -663,6 +664,57 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
             }
         )
     return out
+
+
+def recent_mentions(asset: str, *, limit: int = 8, since_iso: str | None = None,
+                    path: Path = DB_PATH) -> list[dict]:
+    """Recent buffer mentions of one asset (newest first) for trigger enrichment.
+
+    Read-only. Joins normalized_events + raw_items on doc_id, filtered by asset.
+    Used to attach corroborating context to a trigger without re-fetching anything.
+    """
+    init_db(path)
+    sym = str(asset or "").upper().strip()
+    if not sym:
+        return []
+    where = "WHERE UPPER(n.asset)=?"
+    params: list = [sym]
+    if since_iso:
+        where += " AND n.created_at >= ?"
+        params.append(since_iso)
+    params.append(int(limit))
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT n.asset, n.layer, n.event_type_hint, n.phase_hint, n.materiality_score,
+                   n.event_key, n.status, n.created_at, r.title, r.source_id, r.url,
+                   r.published_at, r.lead_class
+            FROM normalized_events n
+            JOIN raw_items r ON r.doc_id = n.doc_id
+            {where}
+            ORDER BY n.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "asset": row["asset"],
+            "layer": row["layer"],
+            "event_type": row["event_type_hint"],
+            "phase": row["phase_hint"],
+            "materiality_score": row["materiality_score"],
+            "event_key": row["event_key"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "title": row["title"],
+            "source": row["source_id"],
+            "url": row["url"],
+            "published_at": row["published_at"],
+            "lead_class": row["lead_class"],
+        }
+        for row in rows
+    ]
 
 
 def mark_status(doc_id: str, status: str, drop_reason: str | None = None, path: Path = DB_PATH) -> None:

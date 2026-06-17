@@ -6,6 +6,8 @@ from src.research_lab.scanner_bridge import (
     MAX_SYMBOLS_CAP,
     MAX_VARIANTS_CAP,
     STATUS_NO_ASSET,
+    STATUS_NO_FAMILY,
+    STATUS_NOT_ELIGIBLE,
     STATUS_OK,
     watch_to_sweep,
     watches_to_sweeps,
@@ -29,6 +31,7 @@ def _watch(symbol="SPACE", inst="SPACE-USDT-SWAP", verdict="GO", watch_id="watch
             "event_type": "listing", "lead_class": "leading",
         },
         "asset": {"symbol": symbol, "okx_inst": inst, "baseline_symbol": "BTC-USDT-SWAP"},
+        "farm": {"eligible": True, "selected_timeframe": "1h", "data_readiness_status": "usable"},
         "trigger": {"headline": "New listing X", "source": "tg_new_listings_feed"},
     }
 
@@ -90,6 +93,59 @@ def test_watches_to_sweeps_dedupes_and_caps_symbols():
     ok = [r for r in results if r.ok]
     symbols = {r.symbol for r in ok}
     assert symbols == {"SPACE-USDT-SWAP", "DOGE-USDT-SWAP"}  # dup collapsed
+
+
+def test_watch_to_sweep_honors_scanner_selected_timeframe():
+    w = _watch()
+    w["farm"] = {"eligible": True, "selected_timeframe": "15m", "data_readiness_status": "usable"}
+    res = watch_to_sweep(w, timeframe="1d")   # default 1d overridden by scanner's 15m
+    assert res.ok
+    assert res.sweep.timeframe == "15m"
+
+
+def test_watch_to_sweep_falls_back_from_1m_to_sweepable():
+    w = _watch()
+    w["farm"] = {"eligible": True, "selected_timeframe": "1m"}  # 1m is trigger-only, never swept
+    res = watch_to_sweep(w, timeframe="1d")
+    assert res.ok
+    assert res.sweep.timeframe != "1m"
+
+
+def test_watch_to_sweep_no_compatible_family_is_skipped():
+    res = watch_to_sweep(_watch(), timeframe="1d", families=())
+    assert not res.ok
+    assert res.status == STATUS_NO_FAMILY
+    assert res.sweep is None
+
+
+def test_watch_not_farm_eligible_is_skipped_with_reason():
+    w = _watch()
+    w["asset"]["okx_resolved"] = False
+    w["farm"] = {"eligible": False, "pending_reason": "no_okx_instrument"}
+    res = watch_to_sweep(w)
+    assert not res.ok
+    assert res.status == STATUS_NOT_ELIGIBLE
+    assert res.sweep is None
+    assert res.context["farm_pending_reason"] == "no_okx_instrument"
+
+
+def test_new_farm_block_without_positive_eligibility_is_skipped():
+    w = _watch()
+    w["farm"] = {"eligible": None, "pending_reason": "readiness_not_assessed"}
+    res = watch_to_sweep(w)
+    assert not res.ok
+    assert res.status == STATUS_NOT_ELIGIBLE
+    assert res.sweep is None
+    assert res.context["farm_pending_reason"] == "readiness_not_assessed"
+
+
+def test_legacy_watch_without_farm_gate_is_skipped():
+    w = _watch()
+    w.pop("farm")
+    res = watch_to_sweep(w)
+    assert not res.ok
+    assert res.status == STATUS_NOT_ELIGIBLE
+    assert res.sweep is None
 
 
 def test_watches_to_sweeps_respects_symbol_cap():

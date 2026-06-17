@@ -11,6 +11,10 @@ rem - existing RSS/Telegram/API sources stay enabled
 
 set "SCANNER_OKX_DAY_TEST=true"
 
+rem Verify WATCH/GO instruments against OKX public instruments + assess candle
+rem readiness so the farm gate is real (no fake GEOD-USDT-SWAP). Paper-only.
+if "%SCANNER_FARM_RESOLVE%"=="" set "SCANNER_FARM_RESOLVE=true"
+
 if "%SCANNER_LOOP_LIMIT%"=="" set "SCANNER_LOOP_LIMIT=5"
 if "%SCANNER_LOOP_SLEEP_SECONDS%"=="" set "SCANNER_LOOP_SLEEP_SECONDS=300"
 if "%SCANNER_RUN_OUTCOMES%"=="" set "SCANNER_RUN_OUTCOMES=true"
@@ -20,6 +24,7 @@ echo ============================================
 echo  Scanner Day Test - existing feeds + OKX
 echo ============================================
 echo  Adds:      okx_announcements + okx_market_tape
+echo  Resolve:   %SCANNER_FARM_RESOLVE% ^(OKX instrument + candle-readiness farm gate^)
 echo  Limit:     %SCANNER_LOOP_LIMIT% cards per pass
 echo  Outcomes:  %SCANNER_RUN_OUTCOMES% ^(limit %SCANNER_OUTCOME_LIMIT% mature cards per pass^)
 echo  Sleep:     %SCANNER_LOOP_SLEEP_SECONDS% seconds between passes

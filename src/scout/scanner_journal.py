@@ -31,7 +31,7 @@ EVENT_AUDIT = OUT_DIR / "event_audit.jsonl"     # deterministic event audit befo
 
 ROUTING_AUDIT = OUT_DIR / "routing_audit.jsonl"
 
-SCHEMA_VERSION = 3   # v3: +source routing/phase provenance fields
+SCHEMA_VERSION = 4   # v4: +OKX instrument resolution + data-readiness/farm fields
 
 # Поля, без которых карточку НЕ пишем (анти-survivorship + измеримость исхода).
 # price_at_decision может быть None (актив вне OKX → outcome_source=manual), но
@@ -122,6 +122,15 @@ def build_row(
     identity_confidence: float | None = None,
     temporal_phase: str | None = None,
     temporal_reason: str | None = None,
+    # OKX instrument resolution + data-readiness / farm fields (productization)
+    okx_resolved: bool | None = None,
+    okx_inst_type: str | None = None,
+    okx_asset_class: str | None = None,
+    okx_resolution_reason: str | None = None,
+    data_readiness_status: str | None = None,
+    selected_timeframe: str | None = None,
+    farm_eligible: bool | None = None,
+    farm_pending_reason: str | None = None,
 ) -> dict:
     """Собрать запись журнала в момент РЕШЕНИЯ (outcome пустой — дописывается позже)."""
     url = source_url or ""
@@ -190,6 +199,15 @@ def build_row(
         "identity_confidence": identity_confidence,
         "temporal_phase": temporal_phase,
         "temporal_reason": temporal_reason,
+        # OKX instrument resolution + data-readiness / farm gating (productization)
+        "okx_resolved": okx_resolved,                # verified against public/instruments
+        "okx_inst_type": okx_inst_type,              # SWAP | SPOT | None
+        "okx_asset_class": okx_asset_class,          # OKX-verified class (vs identity asset_class)
+        "okx_resolution_reason": okx_resolution_reason,
+        "data_readiness_status": data_readiness_status,   # usable|too_short|missing|fresh_listing_pending|provider_error
+        "selected_timeframe": selected_timeframe,    # TF chosen by data, not habit
+        "farm_eligible": farm_eligible,              # resolved AND usable (paper research, never order)
+        "farm_pending_reason": farm_pending_reason,  # why not farm-eligible (visible reason)
     }
 
 

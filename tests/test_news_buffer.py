@@ -38,6 +38,67 @@ def test_news_buffer_ingest_resolve_normalize_ready(tmp_path):
     assert stats["raw"][NB.STATUS_ANALYZED] == 1
 
 
+def test_recent_mentions_returns_asset_history(tmp_path):
+    db = tmp_path / "nb_mentions.sqlite"
+    item = {
+        "title": "ZEC Crashes 38% as Zcash Discloses Critical Counterfeiting Vulnerability",
+        "url": "https://decrypt.co/example-zec-mentions",
+        "time": "2026-06-06",
+        "source": "decrypt",
+        "source_class": "rss",
+        "lead_class": "LAGGING",
+        "text": "Zcash disclosed a critical counterfeiting vulnerability. " * 20,
+    }
+    NB.ingest_items([item], path=db)
+    NB.resolve_pending(limit=10, path=db, dry=True)
+    NB.normalize_pending(limit=10, path=db)
+
+    hits = NB.recent_mentions("ZEC", limit=5, path=db)
+    assert len(hits) == 1
+    assert hits[0]["asset"] == "ZEC"
+    assert hits[0]["source"] == "decrypt"
+    assert hits[0]["title"]
+    # Unknown asset yields nothing, never raises.
+    assert NB.recent_mentions("NOPE", path=db) == []
+    assert NB.recent_mentions("", path=db) == []
+
+
+def test_recent_mentions_newest_first_and_limit(tmp_path, monkeypatch):
+    db = tmp_path / "nb_order.sqlite"
+
+    # Monotonic clock so each item's created_at is strictly later than the previous,
+    # making the ORDER BY created_at DESC deterministic (ordering is on created_at,
+    # set per normalize batch, NOT on the item's published time).
+    counter = {"n": 0}
+
+    def _clock():
+        counter["n"] += 1
+        n = counter["n"]
+        return f"2026-06-17T00:{n // 60:02d}:{n % 60:02d}Z"
+
+    monkeypatch.setattr(NB, "now_iso", _clock)
+
+    def _ingest_one(url, title):
+        item = {"title": title, "url": url, "time": "2026-06-17", "source": "decrypt",
+                "source_class": "rss", "lead_class": "LAGGING",
+                "text": "Zcash discloses a critical counterfeiting vulnerability. " * 20}
+        NB.ingest_items([item], path=db)
+        NB.resolve_pending(limit=10, path=db, dry=True)
+        NB.normalize_pending(limit=10, path=db)
+
+    _ingest_one("https://decrypt.co/zec-older", "ZEC older Zcash story one")
+    _ingest_one("https://decrypt.co/zec-newer", "ZEC newer Zcash story two")
+
+    hits = NB.recent_mentions("ZEC", limit=5, path=db)
+    assert len(hits) == 2
+    assert hits[0]["url"].endswith("zec-newer")     # newest first
+    assert hits[1]["url"].endswith("zec-older")
+    # limit truncation returns only the newest.
+    top = NB.recent_mentions("ZEC", limit=1, path=db)
+    assert len(top) == 1
+    assert top[0]["url"].endswith("zec-newer")
+
+
 def test_news_buffer_propagates_cross_layer_flag(tmp_path):
     # L5-имя от крипто-ленты (decrypt allows [1,2]) → восстановлено strong cross-layer, флаг должен дойти
     db = tmp_path / "nb_xl.sqlite"
