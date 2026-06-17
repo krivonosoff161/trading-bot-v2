@@ -27,6 +27,7 @@ PENDING = OUT_DIR / "pending_events.jsonl"      # skeleton «будет» (ан�
 DROPS = OUT_DIR / "drops.jsonl"                 # отброшенное фильтром (анти-survivorship)
 BUDGET = OUT_DIR / "llm_budget.jsonl"           # наблюдаемость стоимости LLM
 INGEST = OUT_DIR / "ingest_log.jsonl"           # КАЖДОЕ входящее событие до фильтров (полный аудит)
+EVENT_AUDIT = OUT_DIR / "event_audit.jsonl"     # deterministic event audit before LLM
 
 ROUTING_AUDIT = OUT_DIR / "routing_audit.jsonl"
 
@@ -276,6 +277,34 @@ def write_ingest(records: list) -> int:
                 existing.add(c)
                 n += 1
     return n
+
+
+def write_event_audit(record: dict) -> bool:
+    """Append a deterministic event audit row, idempotent by audit_id."""
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    audit_id = str(record.get("audit_id") or "")
+    if not audit_id:
+        base = "::".join(
+            str(record.get(k) or "")
+            for k in ("source", "event_key", "source_url", "headline", "asset", "event_phase")
+        )
+        audit_id = hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
+    if EVENT_AUDIT.exists():
+        try:
+            with EVENT_AUDIT.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if str(row.get("audit_id")) == audit_id:
+                        return False
+        except Exception:
+            pass
+    payload = {"schema": "ScoutEventAudit.v1", "audit_id": audit_id, "ts_utc": now_iso(), **record}
+    payload["audit_id"] = audit_id
+    with EVENT_AUDIT.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    return True
 
 
 def recent_events(hours: int = 48) -> list:

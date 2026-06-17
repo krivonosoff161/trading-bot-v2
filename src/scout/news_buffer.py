@@ -622,6 +622,10 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
             mj = json.loads(row["machine_json"] or "{}")
         except Exception:
             mj = {}
+        try:
+            raw = json.loads(row["raw_json"] or "{}")
+        except Exception:
+            raw = {}
         out.append(
             {
                 "buffer_doc_id": row["doc_id"],
@@ -651,6 +655,11 @@ def ready_items(limit: int = 50, path: Path = DB_PATH) -> list[dict]:
                 "identity_reason": mj.get("identity_reason"),
                 "identity_confidence": mj.get("identity_confidence"),
                 "channel_kind": mj.get("channel_kind"),
+                "market_tape_trigger": raw.get("market_tape_trigger"),
+                "move_1h_pct": raw.get("move_1h_pct"),
+                "move_24h_pct": raw.get("move_24h_pct"),
+                "volume_quote_24h": raw.get("volume_quote_24h"),
+                "ann_type": raw.get("ann_type"),
             }
         )
     return out

@@ -67,7 +67,16 @@ def collect_sweeps(universe, profiles, policy, *, group, timeframe, data_glob, w
     return pairs, skipped
 
 
-def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, limit, backend):
+def collect_scanner_sweeps(
+    *,
+    timeframe,
+    data_glob,
+    max_variants,
+    max_symbols,
+    limit,
+    backend,
+    include_expired=False,
+):
     """Build bounded sweeps from open scanner WATCH/GO rows.
 
     Returns (items, skipped) where each item is a (context, sweep) pair ready for
@@ -75,9 +84,15 @@ def collect_scanner_sweeps(*, timeframe, data_glob, max_variants, max_symbols, l
     candle file are reported as skipped (missing_data is not a crash).
     """
     from src.research_lab.scanner_bridge import MAX_SYMBOLS_CAP  # hard backstop
-    from src.scout.watch_queue import open_watches  # local import: scanner side
+    from src.scout.watch_queue import STATUS_EXPIRED, STATUS_OPEN, _read_rows, open_watches  # local import: scanner side
 
-    watches = open_watches()
+    if include_expired:
+        watches = [
+            row for row in _read_rows()
+            if row.get("status") in {STATUS_OPEN, STATUS_EXPIRED}
+        ]
+    else:
+        watches = open_watches()
     if limit and limit > 0:
         watches = watches[:limit]
     # Bridge dedupes by symbol and applies the hard backstop. The user's
@@ -119,6 +134,11 @@ def main() -> None:
     ap.add_argument("--max-symbols", type=int, default=8, help="Cap distinct scanner symbols per run")
     ap.add_argument("--limit", type=int, default=0, help="Max scanner watches to read (0 = all open)")
     ap.add_argument(
+        "--include-expired-scanner-watches",
+        action="store_true",
+        help="Scanner backlog mode: include expired WATCH/GO rows instead of only currently open rows",
+    )
+    ap.add_argument(
         "--backend",
         choices=["cpu", "gpu", "auto"],
         default=os.getenv("STRATEGY_LAB_SCANNER_BRIDGE_BACKEND")
@@ -143,6 +163,7 @@ def main() -> None:
             timeframe=args.timeframe, data_glob=args.data_glob,
             max_variants=args.max_variants, max_symbols=args.max_symbols, limit=args.limit,
             backend=args.backend,
+            include_expired=args.include_expired_scanner_watches,
         )
         proposals = [sweep_scanner_proposal_dict(ctx, sweep) for ctx, sweep in items]
     else:

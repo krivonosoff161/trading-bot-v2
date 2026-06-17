@@ -135,6 +135,41 @@ def test_news_buffer_preserves_prerouted_event_key_after_normalize(tmp_path):
 # ── Phase 1: identity/context field persistence ────────────────────────────
 
 
+def test_news_buffer_preserves_okx_market_tape_fields(tmp_path):
+    db = tmp_path / "news_buffer.sqlite"
+    item = {
+        "title": "BTC OKX market mover: 1h +15.00% / 24h +18.00%",
+        "text": "OKX public market tape observed BTC-USDT-SWAP moving up.",
+        "url": "https://www.okx.com/trade-swap/btc-usdt-swap",
+        "time": "2026-06-17T03:00:00Z",
+        "source": "okx_market_tape",
+        "source_class": "api",
+        "lead_class": "COINCIDENT",
+        "asset": "BTC",
+        "okx_inst": "BTC-USDT-SWAP",
+        "layer": 1,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "REALIZED",
+        "event_type": "market_mover",
+        "trigger_type": "okx_market_tape",
+        "event_key": "okx_tape:BTC-USDT-SWAP:1h_move:20260617T0300Z",
+        "market_tape_trigger": "1h_move",
+        "move_1h_pct": 15.0,
+        "move_24h_pct": 18.0,
+        "volume_quote_24h": 123456789.0,
+    }
+
+    assert NB.ingest_items([item], path=db)["inserted"] == 1
+    assert NB.resolve_pending(limit=10, path=db, dry=True)["resolved"] == 1
+    assert NB.normalize_pending(limit=10, path=db) == {"ready": 1, "dropped": 0}
+
+    ready = NB.ready_items(limit=10, path=db)
+    assert ready[0]["market_tape_trigger"] == "1h_move"
+    assert ready[0]["move_1h_pct"] == 15.0
+    assert ready[0]["move_24h_pct"] == 18.0
+    assert ready[0]["volume_quote_24h"] == 123456789.0
+
+
 def test_identity_fields_prerouted_tokenized_equity(tmp_path):
     """Pre-routed tokenized equity item preserves identity fields through buffer."""
     db = tmp_path / "nb_ident_tok.sqlite"

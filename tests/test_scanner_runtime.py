@@ -324,3 +324,125 @@ def test_context_status_not_always_none(monkeypatch):
     assert captured_news.get("context_status") == "source_is_confirmation", (
         f"context_status should be 'source_is_confirmation' but got: {captured_news.get('context_status')}"
     )
+
+
+def test_future_prerouted_event_goes_to_pending_without_llm(monkeypatch):
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
+    monkeypatch.setattr(S, "is_stale_story", lambda *a, **k: False)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda rec: True)
+    monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+
+    pending_records = []
+
+    def fake_upsert(record):
+        pending_records.append(record)
+        return record["pending_id"], True
+
+    monkeypatch.setattr(S.PS, "upsert_pending", fake_upsert)
+
+    async def fail_orch(*args, **kwargs):
+        raise AssertionError("future/expected events must not call LLM")
+
+    monkeypatch.setattr(S.orchestrator, "process", fail_orch)
+
+    item = {
+        "title": "OKX will launch PROS/USD and PROS/EUR for spot trading",
+        "text": "Official OKX announcement: OKX will launch PROS/USD and PROS/EUR for spot trading.",
+        "url": "https://www.okx.com/help/pros-listing",
+        "time": S.J.now_iso(),
+        "source": "okx_announcements",
+        "source_class": "api",
+        "lead_class": "LEADING",
+        "asset": "PROS",
+        "okx_inst": "PROS-USDT-SWAP",
+        "layer": 2,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "FUTURE",
+        "event_type": "listing",
+        "trigger_type": "okx_official_announcement",
+        "event_key": "okx_ann:a1:PROS",
+    }
+
+    res = asyncio.run(S.process_item(item, None, dry=False, use_buffer=False))
+
+    assert res["handled"] == "future_pending_no_llm"
+    assert pending_records
+    assert pending_records[0]["asset"] == "PROS"
+    assert pending_records[0]["event_type"] == "listing"
+
+
+def test_market_mover_goes_to_audit_without_llm(monkeypatch):
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
+    monkeypatch.setattr(S, "is_stale_story", lambda *a, **k: False)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda rec: True)
+    monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+
+    async def fail_orch(*args, **kwargs):
+        raise AssertionError("market_mover audit events must not call LLM")
+
+    monkeypatch.setattr(S.orchestrator, "process", fail_orch)
+
+    item = {
+        "title": "BTC OKX market mover: 1h +15.00% / 24h +18.00%",
+        "text": "OKX public market tape observed BTC-USDT-SWAP moving up.",
+        "url": "https://www.okx.com/trade-swap/btc-usdt-swap",
+        "time": S.J.now_iso(),
+        "source": "okx_market_tape",
+        "source_class": "api",
+        "lead_class": "COINCIDENT",
+        "asset": "BTC",
+        "okx_inst": "BTC-USDT-SWAP",
+        "layer": 1,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "REALIZED",
+        "event_type": "market_mover",
+        "trigger_type": "okx_market_tape",
+        "event_key": "okx_tape:BTC-USDT-SWAP:1h_move:20260617T0300Z",
+        "market_tape_trigger": "1h_move",
+        "move_1h_pct": 15.0,
+        "move_24h_pct": 18.0,
+    }
+
+    res = asyncio.run(S.process_item(item, None, dry=False, use_buffer=False))
+
+    assert res["handled"] == "market_mover_audit_only"
+    assert res["asset"] == "BTC"
+
+
+def test_tg_markettwits_calendar_digest_goes_to_audit_without_llm(monkeypatch):
+    monkeypatch.setattr(S, "write_telegram_delivery", lambda event: None)
+    monkeypatch.setattr(S, "is_stale_story", lambda *a, **k: False)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda rec: True)
+    monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+
+    async def fail_orch(*args, **kwargs):
+        raise AssertionError("calendar digest must not call LLM")
+
+    monkeypatch.setattr(S.orchestrator, "process", fail_orch)
+
+    item = {
+        "title": "КАЛЕНДАРЬ НА СЕГОДНЯ — 2026.06.17 CPI 09:00мск",
+        "text": "КАЛЕНДАРЬ НА СЕГОДНЯ — 2026.06.17 CPI 09:00мск",
+        "url": "https://t.me/markettwits/1",
+        "time": S.J.now_iso(),
+        "source": "tg_markettwits",
+        "source_class": "telegram_web",
+        "lead_class": "LEADING",
+        "asset": "BTC",
+        "okx_inst": "BTC-USDT-SWAP",
+        "layer": 1,
+        "baseline": "BTC-USDT-SWAP",
+        "phase": "AMBIGUOUS",
+        "event_type": "news_trigger",
+    }
+
+    res = asyncio.run(S.process_item(item, None, dry=False, use_buffer=False))
+
+    assert res["handled"] == "calendar_digest_audit_only"
+
+
+def test_tg_markettwits_calendar_digest_detects_mojibake():
+    assert S.is_channel_calendar_digest(
+        {"title": "mt в max РљРђР›Р•РќР”РђР Р¬ РќРђ РЎР•Р“РћР”РќРЇ"},
+        "tg_markettwits",
+    )
