@@ -302,7 +302,7 @@ class MarketDataPrepareItem:
         }
 
 
-def _timeframe_ms(timeframe: str) -> int:
+def timeframe_ms(timeframe: str) -> int:
     tf = str(timeframe).strip().lower()
     intervals = {
         "1m": 60_000,
@@ -314,6 +314,9 @@ def _timeframe_ms(timeframe: str) -> int:
     if tf not in intervals:
         raise ValueError(f"unsupported timeframe for market-data prepare: {timeframe!r}")
     return intervals[tf]
+
+
+_timeframe_ms = timeframe_ms  # backward-compatible private alias (existing internal callers)
 
 
 @dataclass(frozen=True)
