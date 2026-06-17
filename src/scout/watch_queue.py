@@ -108,6 +108,17 @@ def build_watch_record(row: dict[str, Any]) -> dict[str, Any] | None:
             "okx_inst": row.get("okx_inst"),
             "baseline_symbol": row.get("baseline_symbol"),
             "price_at_decision": row.get("price_at_decision"),
+            "okx_resolved": row.get("okx_resolved"),
+            "okx_inst_type": row.get("okx_inst_type"),
+            "okx_asset_class": row.get("okx_asset_class"),
+        },
+        # Farm hand-off context (paper research scheduling only — never execution).
+        "farm": {
+            "eligible": row.get("farm_eligible"),
+            "pending_reason": row.get("farm_pending_reason"),
+            "data_readiness_status": row.get("data_readiness_status"),
+            "selected_timeframe": row.get("selected_timeframe"),
+            "okx_resolution_reason": row.get("okx_resolution_reason"),
         },
         "trigger": {
             "headline": row.get("headline"),

@@ -1,0 +1,36 @@
+# Strategy Lab readiness profiles — how the data-readiness selector picks a
+# timeframe and decides "enough candles" per asset class. Numbers are
+# conservative defaults, not optimization targets. The scanner uses
+# asset_class_timeframes (1m allowed for fresh/meme analysis); the farm scheduler
+# uses farm_timeframes (1m is trigger-only and never swept).
+schema: strategy_lab_readiness_profiles.v1
+
+# Minimal usable CONFIRMED candles per timeframe. Floored so it never accepts
+# less than data_inventory MIN_USABLE_ROWS (60) — keeps live readiness and the
+# local-file farm readiness on one definition of "long enough".
+min_usable_rows:
+  1m: 120
+  15m: 96
+  1h: 72
+  4h: 60
+  1d: 60
+
+# Candidate timeframes per OKX-verified asset class, finest-acceptable first.
+asset_class_timeframes:
+  crypto_major: [1h, 4h, 1d]
+  crypto_alt: [15m, 1h, 4h]
+  meme: [1m, 15m, 1h]
+  new_listing: [1m, 15m, 1h]
+  commodity: [1h, 4h, 1d]
+  energy: [1h, 4h, 1d]
+  equity: [1h, 4h, 1d]
+  tokenized_equity: [1h, 4h, 1d]
+  pre_ipo_equity: [1h, 4h, 1d]
+  unknown: [15m, 1h, 4h]
+
+# Sweepable timeframes for the GPU farm (1m is trigger-only, never a full sweep).
+farm_timeframes: [15m, 1h, 4h, 1d]
+
+# A SWAP listed more recently than this, with too few candles, is classified as
+# fresh_listing_pending (recheck later) rather than a dead too_short skip.
+fresh_listing_max_age_hours: 72

@@ -281,6 +281,40 @@ def okx_last_with_reason(inst_id: str | None) -> tuple[float | None, str]:
     return _get_price(inst_id)
 
 
+def farm_resolve_enabled() -> bool:
+    """OKX instrument resolution + data-readiness for WATCH/GO rows (off by default).
+
+    Enabled by the scanner loop launchers (SCANNER_FARM_RESOLVE=true); kept off in
+    unit tests and the default no-buffer path so they never hit the public network.
+    """
+    return env_enabled("SCANNER_FARM_RESOLVE")
+
+
+def enrich_trigger(item: dict, asset: str | None, inst: str | None,
+                   body_text: str | None, use_buffer: bool) -> dict:
+    """Verify the OKX instrument + assess candle readiness → build_row farm kwargs.
+
+    Public/paper-only and lazily imported so the scanner import tree stays minimal
+    (the no-order-path isolation guard never loads the research-lab chain). Any
+    failure degrades to {} so a card never depends on the resolver being up.
+    """
+    from src.scout import trigger_enrichment as TE
+    from src.research_lab.market_data_provider import get_provider
+    try:
+        provider = get_provider("okx-public")
+    except Exception:
+        provider = None
+    mentions_fn = (lambda a: NB.recent_mentions(a, limit=6)) if use_buffer else None
+    pkg = TE.build_trigger_package(
+        asset=asset, okx_inst=inst, asset_class=item.get("asset_class"),
+        headline=item.get("title"), body_text=body_text, source=item.get("source"),
+        extraction_status=item.get("extraction_status"),
+        list_time_ms=item.get("list_time_ms"),
+        provider=provider, mentions_fn=mentions_fn,
+    )
+    return TE.package_to_journal_fields(pkg)
+
+
 CHARTS_DIR = _ROOT / "logs" / "scout" / "charts"
 
 
@@ -420,6 +454,29 @@ def layer_label(layer) -> str:
         return "—"
 
 
+_FARM_PENDING_RU = {
+    "fresh_listing_pending": "свежий листинг — ждём свечей",
+    "too_short": "мало свечей — отложено до накопления",
+    "missing": "нет свечей на OKX — отложено",
+    "provider_error": "данные OKX временно недоступны",
+    "no_okx_instrument": "нет торгуемого инструмента на OKX",
+    "readiness_not_assessed": "готовность данных не проверена",
+}
+
+
+def farm_status_ru(row: dict) -> str | None:
+    """Human exchange/data status for a card (None when resolution was not run)."""
+    if row.get("okx_resolved") is None:
+        return None
+    if not row.get("okx_resolved"):
+        return _FARM_PENDING_RU["no_okx_instrument"]
+    if row.get("farm_eligible"):
+        tf = row.get("selected_timeframe")
+        return f"данные готовы · расчёт ТФ {tf}" if tf else "данные готовы · расчёт"
+    reason = str(row.get("farm_pending_reason") or row.get("data_readiness_status") or "")
+    return _FARM_PENDING_RU.get(reason, "данные не готовы — отложено")
+
+
 def format_caption(row: dict) -> str:
     """Минимальная подпись к графику; смысловой разбор идет отдельным сообщением."""
     tf = _bar_for_horizon(row.get("horizon_hours"))
@@ -477,8 +534,18 @@ def format_card(row: dict) -> str:
     if meta_bits:
         L.append("<i>" + " · ".join(meta_bits) + "</i>")
 
+    # Биржа/данные: торгуемый инструмент + готовность свечей + статус фермы (GO/WATCH).
+    if verdict in ("GO", "WATCH"):
+        fs = farm_status_ru(row)
+        if fs:
+            inst_bit = ""
+            if row.get("okx_resolved") and row.get("okx_inst"):
+                cls = row.get("okx_asset_class")
+                inst_bit = f" · {row.get('okx_inst')}" + (f" ({cls})" if cls else "")
+            L.append(f"<b>Биржа/данные:</b> {_esc(fs)}{_esc(inst_bit)}")
+
     if row.get("low_confidence"):
-        L.append("⚠️ тело не извлечено — оценка по заголовку")
+        L.append("⚠️ оценка по заголовку (полный текст источника недоступен)")
     if _meaningful(row.get("headline")):
         L.append(f"<b>Оригинал:</b> {_esc(_cap(row.get('headline'), 220))}")
 
@@ -1087,6 +1154,17 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                     or "дешёвый фильтр: chief не звали — в журнал (датасет)"),
     }
 
+    # 3b) OKX instrument resolution + data readiness (WATCH/GO only — paper farm gate).
+    # Verifies the instrument really trades on OKX (no more guessed GEOD-USDT-SWAP) and
+    # picks a timeframe by data, not habit. Off by default; never an order path.
+    farm_fields: dict = {}
+    if not dry and verdict in ("WATCH", "GO") and farm_resolve_enabled():
+        try:
+            farm_fields = enrich_trigger(item, agent.get("asset") or asset, inst, body_text, use_buffer)
+        except Exception as exc:
+            print(f"  farm-resolve: {exc}")
+            farm_fields = {}
+
     # 4) строка журнала
     row = J.build_row(
         source_url=canon, source_ts=source_ts, layer=layer,
@@ -1127,8 +1205,9 @@ async def process_item(item: dict, mline: str | None, dry: bool,
         context_missing=trigger_context_pkg.get("context_missing") if trigger_context_pkg else None,
         identity_reason=item.get("identity_reason"),
         identity_confidence=item.get("identity_confidence"),
-        temporal_phase=temp if (pre_routed and temp) else None,
+        temporal_phase=temp.get("phase") if (pre_routed and temp) else None,
         temporal_reason=temp.get("temporal_reason") if (pre_routed and temp) else None,
+        **farm_fields,   # okx_resolved/inst_type/asset_class/readiness/selected_tf/farm_eligible (WATCH/GO)
     )
     cid = ("DRY-" + J.card_id_for(canon)) if dry else J.write_row(row)
     if cid and not dry:
@@ -1418,6 +1497,14 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         J.write_budget({"n_ingested": len(items), "n_fresh": len(fresh), "n_cards": made,
                         "n_dropped": n_dropped, "n_llm_fail": n_llm_fail,
                         "total_tokens": total_tokens, "cost_rub": cost})
+        # Storage hygiene: rotate oversized append-only logs + LRU-bound the hot cache
+        # (no-op until a cap is hit; never breaks the scan). Hot/cold policy, paper-only.
+        try:
+            from src.research_lab import storage_policy as SPOL
+            SPOL.maintain([J.JOURNAL, J.INGEST, J.DROPS, J.BUDGET, J.EVENT_AUDIT, J.ROUTING_AUDIT],
+                          apply=True)
+        except Exception as exc:
+            print(f"  storage-maintain: {exc}")
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"
           f"{' (dry — не сохранён)' if dry else ''} · токенов={total_tokens} (~{cost} RUB) · журнал={J.JOURNAL} ===")
 

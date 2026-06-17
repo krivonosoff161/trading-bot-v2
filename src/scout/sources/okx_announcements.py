@@ -30,6 +30,9 @@ INTERESTING_TYPES = {
 _PAIR_RE = re.compile(r"\b([A-Z0-9]{2,15})/(?:USDT|USD|EUR|BTC|ETH)\b")
 _TOKEN_RE = re.compile(r"\b(?:list|launch|support|delist|suspend)[^\n]{0,90}\b([A-Z0-9]{2,15})\s+token\b", re.I)
 _TICKER_QUOTE_RE = re.compile(r"\b([A-Z0-9]{2,15})\s*\((?:[A-Z][A-Za-z0-9 .'-]{2,80})\)")
+# Perp/dash pairs ("RE-USDT-SWAP", "GRAM-USDT") common in trading-update titles.
+_PERP_RE = re.compile(r"\b([A-Z0-9]{2,15})-(?:USDT|USD|USDC)(?:-SWAP)?\b")
+_EXCLUDE_TICKERS = {"OKX", "USD", "USDT", "USDC", "EUR", "BTC", "ETH", "SWAP", "API"}
 
 
 def _ms_to_iso(value) -> str:
@@ -68,10 +71,10 @@ def _announcement_rows() -> list[dict]:
 
 def _extract_assets(title: str) -> list[str]:
     out: list[str] = []
-    for regex in (_PAIR_RE, _TOKEN_RE, _TICKER_QUOTE_RE):
+    for regex in (_PAIR_RE, _PERP_RE, _TOKEN_RE, _TICKER_QUOTE_RE):
         for match in regex.finditer(title or ""):
             sym = match.group(1).upper()
-            if sym in {"OKX", "USD", "USDT", "BTC", "ETH", "EUR"}:
+            if sym in _EXCLUDE_TICKERS or sym.isdigit():
                 continue
             if sym not in out:
                 out.append(sym)
@@ -152,16 +155,52 @@ def _row_to_items(row: dict) -> list[dict]:
                 "identity_reason": "okx_official_announcement",
                 "identity_confidence": 0.9,
                 "ann_type": ann_type,
+                # Provenance: official id/type/time/url preserved; body filled on demand.
+                "announcement_id": ann_id,
+                "detail_url": url or None,
+                "extraction_status": "title_only",
             }
         )
     return out
 
 
-def fetch_okx_announcements(limit: int = 12) -> list[dict]:
-    """Return official OKX announcement items."""
+def _detail_text(url: str, fetch) -> tuple[str, str]:
+    """Best-effort detail-page body via an injected/lazy extractor → (text, status)."""
+    if not url:
+        return "", "no_detail_url"
+    if fetch is None:
+        from src.scout.page_extract import extract as fetch  # lazy: keep import tree light
+    try:
+        ext = fetch(url) or {}
+    except Exception:
+        return "", "detail_fetch_error"
+    body = str(ext.get("text") or "").strip()
+    if len(body) >= 200:
+        return body, "api_detail_body"
+    return "", "detail_too_short"
+
+
+def fetch_okx_announcements(limit: int = 12, *, with_body: bool = False, fetch=None) -> list[dict]:
+    """Return official OKX announcement items (LEADING, primary).
+
+    ``with_body=True`` enriches each item with the detail-page body via ``fetch``
+    (defaults to page_extract.extract). Off by default so the hot scanner loop adds
+    no per-announcement network; the body is then resolved later in the buffer path.
+    """
     items: list[dict] = []
     for row in _announcement_rows():
         items.extend(_row_to_items(row))
         if len(items) >= limit:
             break
-    return items[:limit]
+    items = items[:limit]
+    if with_body:
+        body_cache: dict[str, tuple[str, str]] = {}
+        for item in items:
+            url = item.get("detail_url") or ""
+            if url not in body_cache:
+                body_cache[url] = _detail_text(url, fetch)
+            body, status = body_cache[url]
+            item["extraction_status"] = status
+            if body:
+                item["text"] = f"{item['text']} Detail: {body[:4000]}"
+    return items

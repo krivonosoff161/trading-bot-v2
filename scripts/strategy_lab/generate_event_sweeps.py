@@ -109,7 +109,8 @@ def collect_scanner_sweeps(
         if not res.ok:
             skipped.append((res.symbol or res.context.get("watch_id") or "?", res.status))
             continue
-        path = choose_symbol_file(data_glob, res.symbol, timeframe=timeframe)
+        # Use the timeframe the scanner selected by data (res.sweep.timeframe), not a blind 1d.
+        path = choose_symbol_file(data_glob, res.symbol, timeframe=res.sweep.timeframe)
         if not path:
             skipped.append((res.symbol, "missing_data"))
             continue

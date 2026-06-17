@@ -44,6 +44,19 @@ MAX_SYMBOLS_CAP = 8
 STATUS_OK = "ok"
 STATUS_NO_ASSET = "no_asset"
 STATUS_NO_FAMILY = "no_compatible_family"
+STATUS_NOT_ELIGIBLE = "not_farm_eligible"  # scanner judged the instrument not farmable
+
+
+def _sweep_timeframe(selected: str | None, default: str) -> str:
+    """Pick a sweepable timeframe: honor the scanner's selection, never sweep 1m."""
+    from src.research_lab.data_readiness_selector import farm_timeframes
+    fts = farm_timeframes()
+    sel = str(selected or "").lower()
+    if sel in fts:
+        return sel
+    if sel == "1m" and fts:  # 1m is trigger-only -> finest sweepable timeframe
+        return fts[0]
+    return default
 
 
 @dataclass(frozen=True)
@@ -74,6 +87,7 @@ def scanner_trigger_context(watch: dict[str, Any]) -> dict[str, Any]:
     scanner = watch.get("scanner") or {}
     asset = watch.get("asset") or {}
     trigger = watch.get("trigger") or {}
+    farm = watch.get("farm") or {}
     return {
         "origin": "scanner_watch",
         "watch_id": watch.get("watch_id"),
@@ -86,6 +100,12 @@ def scanner_trigger_context(watch: dict[str, Any]) -> dict[str, Any]:
         "lead_class": scanner.get("lead_class"),
         "symbol": asset.get("symbol"),
         "okx_inst": asset.get("okx_inst"),
+        "okx_resolved": asset.get("okx_resolved"),
+        "okx_asset_class": asset.get("okx_asset_class"),
+        "farm_eligible": farm.get("eligible"),
+        "farm_pending_reason": farm.get("pending_reason"),
+        "selected_timeframe": farm.get("selected_timeframe"),
+        "data_readiness_status": farm.get("data_readiness_status"),
         "source": _trimmed(trigger.get("source"), 80),
         "headline": _trimmed(trigger.get("headline")),
         "created_at": watch.get("created_at"),
@@ -110,19 +130,27 @@ def watch_to_sweep(
     families: tuple[str, ...] = DEFAULT_FAMILIES,
     max_variants: int = 8,
     backend: str = "auto",
+    respect_eligibility: bool = True,
 ) -> BridgeResult:
     """Build one bounded SweepSpec from a single scanner watch row.
 
-    Returns a :class:`BridgeResult`. On any structural problem (no asset, no
-    family compatible with the timeframe) it returns a non-``ok`` result with a
-    reason in ``status`` instead of raising -- callers must not crash on one bad
-    row.
+    Returns a :class:`BridgeResult`. On any structural problem (no asset, scanner
+    judged the instrument not farm-eligible, no family compatible with the chosen
+    timeframe) it returns a non-``ok`` result with a reason in ``status`` instead of
+    raising -- callers must not crash on one bad row. The sweep timeframe is the one
+    the scanner selected by data (``farm.selected_timeframe``), never a blind ``1d``.
     """
     context = scanner_trigger_context(watch)
     symbol = _resolve_symbol(watch)
     if not symbol:
         return BridgeResult(STATUS_NO_ASSET, "", None, context)
 
+    # Eligibility gate: a watch the scanner verified as not farmable (no OKX
+    # instrument / insufficient candles) never becomes a sweep — its reason is visible.
+    if respect_eligibility and context.get("farm_eligible") is not True:
+        return BridgeResult(STATUS_NOT_ELIGIBLE, symbol, None, context)
+
+    timeframe = _sweep_timeframe(context.get("selected_timeframe"), timeframe)
     usable = compatible_families(timeframe, families)
     if not usable:
         return BridgeResult(STATUS_NO_FAMILY, symbol, None, context)
