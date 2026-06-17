@@ -76,10 +76,15 @@ def funding_zscore_at(candles: list[Candle], idx: int, window: int = 48) -> floa
     vals = [v for v in series if v is not None]
     if len(vals) < window:
         return None
+    # Constant funding -> z-score 0. Check max==min directly: a float-imperfect
+    # mean of identical values leaves a tiny non-zero std and would otherwise yield
+    # a spurious +-1.0 instead of 0.0.
+    if max(vals) - min(vals) <= 0.0:
+        return 0.0
     mean = sum(vals) / len(vals)
     var = sum((v - mean) ** 2 for v in vals) / len(vals)
     std = var ** 0.5
-    if std == 0:
+    if std <= 0.0:
         return 0.0
     return round((vals[-1] - mean) / std, 4)
 
