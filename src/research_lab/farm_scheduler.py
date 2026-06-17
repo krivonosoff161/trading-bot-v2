@@ -46,6 +46,7 @@ def _empty_counters() -> dict:
         "watches_read": 0,
         "resolved": 0,
         "unresolved": 0,
+        "eligible": 0,
         "data_usable": 0,
         "data_too_short": 0,
         "pending_recheck": 0,
@@ -117,6 +118,7 @@ def plan_jobs(
                 counters["skipped_missing_data"] += 1
             skipped.append({"symbol": symbol, "reason": reason})
             continue
+        counters["eligible"] += 1  # passed the eligibility gate (before dedup/cap drops)
 
         key = str(inst or symbol or "").upper()
         if not key:
