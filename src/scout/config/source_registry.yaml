@@ -90,7 +90,8 @@ sources:
 
   sec_edgar:         {source_class: api, lead_class: LEADING,    trust: official, phase_prior: realized, keyless: true,  layers: [5],    enabled: true}    # 8-K/S-1/424B — официально, до новостного цикла
   btc_eth_tactical:  {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: realized, keyless: true,  layers: [1],    enabled: true}    # OKX public funding/OI/liquidation regime
-  okx_announcements: {source_class: ws,  lead_class: LEADING,    trust: official, phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}   # upcoming листинги = будет; live = произошло
+  okx_announcements: {source_class: api, lead_class: LEADING,    trust: official, phase_prior: mixed,    keyless: true,  layers: [1, 2], enabled: false}   # official OKX announcements; day-test can enable via env
+  okx_market_tape:   {source_class: api, lead_class: COINCIDENT, trust: primary,  phase_prior: realized, keyless: true,  layers: [1, 2, 3, 4, 5], enabled: false}  # public OKX market movers for missed-move audit
   dexscreener:       {source_class: api, lead_class: COINCIDENT, trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: true}
   goplus_rugcheck:   {source_class: api, lead_class: LEADING,    trust: primary,  phase_prior: realized, keyless: true,  layers: [2],    enabled: true}   # red-flag VETO
   oilprice:          {url: "https://oilprice.com/rss/main",      source_class: rss, lead_class: LAGGING, trust: wire,     phase_prior: mixed,    max_age_hours: 96, keyless: true,  layers: [4],    enabled: true}

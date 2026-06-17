@@ -52,6 +52,8 @@ from src.scout.router import (route_asset, route_temporal, score_materiality,   
 from src.scout.dedup import is_duplicate, event_key as make_event_key          # noqa: E402
 from src.scout import news_buffer as NB                                        # noqa: E402
 from src.scout.sources.okx_listings import fetch_new_listings                   # noqa: E402
+from src.scout.sources.okx_announcements import fetch_okx_announcements         # noqa: E402
+from src.scout.sources.okx_market_tape import fetch_okx_market_tape             # noqa: E402
 from src.scout.sources.sec_edgar import fetch_recent_filings                    # noqa: E402
 from src.scout.sources.dexscreener import fetch_alt_flow_signals                # noqa: E402
 from src.scout.sources.goplus_rugcheck import fetch_token_risk_signals          # noqa: E402
@@ -95,6 +97,10 @@ SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
 # Активы/слои/материальность/источники — в config/*.yaml (читает router.py), не хардкод.
 ROUTER_VERSION = "v1"          # config-driven router (entities.yaml)
 RATE_RUB_PER_1K = 0.5          # fallback, если usage не вернул cost_rub
+
+
+def env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def canonical_url(url: str) -> str:
@@ -542,6 +548,106 @@ def write_routing_snapshot(
 
 
 # ── одна карточка (async — LLM + Telegram) ───────────────────────────────────
+def audit_bucket_for_phase(phase: str | None, event_type: str | None) -> str:
+    p = str(phase or "").upper()
+    et = str(event_type or "").lower()
+    if p in {"FUTURE", "EXPECTED"}:
+        return "future_pending"
+    if p == "LEADING":
+        return "leading_seen"
+    if et == "market_mover":
+        return "market_mover"
+    if p in {"REALIZED", "COINCIDENT"}:
+        return "realized_seen"
+    return "other_seen"
+
+
+def is_channel_calendar_digest(item: dict, source: str) -> bool:
+    text = f"{item.get('title') or ''}\n{item.get('text') or ''}".lower()
+    calendar_markers = (
+        "календарь",
+        "calendar",
+        "рљрђр›р•рќр”рђр",  # mojibake for "КАЛЕНДАР..."
+        "рєр°р»рµрѕрґр°р",  # alternate mojibake/lowercase rendering
+    )
+    if source == "tg_markettwits" and any(marker in text for marker in calendar_markers):
+        return True
+    return False
+
+
+def write_deterministic_event_audit(
+    *,
+    item: dict,
+    asset: str | None,
+    layer: int | None,
+    phase: str | None,
+    event_type: str | None,
+    source: str,
+    source_class: str,
+    lead_class: str,
+    canon: str,
+    source_ts: str | None,
+) -> bool:
+    bucket = "calendar_digest" if is_channel_calendar_digest(item, source) else audit_bucket_for_phase(phase, event_type)
+    return J.write_event_audit(
+        {
+            "audit_bucket": bucket,
+            "source": source,
+            "source_class": source_class,
+            "lead_class": lead_class,
+            "source_url": canon,
+            "source_ts": source_ts,
+            "headline": item.get("title"),
+            "asset": asset,
+            "layer": layer,
+            "okx_inst": item.get("okx_inst"),
+            "event_type": event_type,
+            "event_phase": phase,
+            "event_key": item.get("event_key"),
+            "market_tape_trigger": item.get("market_tape_trigger"),
+            "move_1h_pct": item.get("move_1h_pct"),
+            "move_24h_pct": item.get("move_24h_pct"),
+            "llm_called": False,
+        }
+    )
+
+
+def upsert_future_pending_without_llm(
+    *,
+    item: dict,
+    asset: str | None,
+    layer: int | None,
+    phase: str | None,
+    event_type: str | None,
+    source: str,
+    canon: str,
+    source_ts: str | None,
+) -> tuple[str, bool]:
+    expected_ts = item.get("expected_start_ts") or item.get("event_time") or source_ts or J.now_iso()
+    rec = PS.build_pending_record(
+        asset=asset,
+        layer=layer,
+        event_type=event_type or "unknown",
+        expected_start_ts=expected_ts,
+        expected_end_ts=item.get("expected_end_ts") or expected_ts,
+        kind=PS.KIND_INFERRED,
+        source_id=source,
+        source_ref=canon,
+        expected_direction=item.get("bias_hint") or item.get("expected_direction") or "unknown",
+        expectation_text=item.get("text") or item.get("title") or "",
+        confidence=item.get("identity_confidence"),
+        created_from_event_key=item.get("event_key"),
+        metadata={
+            "headline": item.get("title"),
+            "phase": phase,
+            "lead_class": item.get("lead_class"),
+            "trigger_type": item.get("trigger_type"),
+            "audit_bucket": "future_pending",
+        },
+    )
+    return PS.upsert_pending(rec)
+
+
 async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
                        recent: list | None = None, dedup_min: int = 88,
@@ -708,6 +814,80 @@ async def process_item(item: dict, mline: str | None, dry: bool,
             materiality_family=mat.get("family"), skipped="stale_article",
         )
         return {"skipped": "stale_article", "headline": headline, "asset": asset}
+
+    event_type_for_audit = item.get("event_type") or mat.get("family") or "unclassified"
+    if not dry:
+        write_deterministic_event_audit(
+            item=item,
+            asset=asset,
+            layer=layer,
+            phase=phase,
+            event_type=event_type_for_audit,
+            source=source,
+            source_class=source_class,
+            lead_class=lead_class,
+            canon=canon,
+            source_ts=source_ts,
+        )
+    if str(event_type_for_audit or "").lower() == "market_mover":
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=event_type_for_audit, skipped="market_mover_audit_only",
+            note="recorded_to_event_audit_without_llm",
+        )
+        return {
+            "handled": "market_mover_audit_only",
+            "headline": headline,
+            "asset": asset,
+            "tokens": 0,
+            "cost_rub": 0.0,
+        }
+    if is_channel_calendar_digest(item, source):
+        write_routing_snapshot(
+            item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+            asset=asset, layer=layer, asset_confidence=conf,
+            source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+            final_phase=phase, materiality_score=mat.get("score"),
+            materiality_family=event_type_for_audit, skipped="calendar_digest_audit_only",
+            note="channel digest recorded to event_audit without llm",
+        )
+        return {
+            "handled": "calendar_digest_audit_only",
+            "headline": headline,
+            "asset": asset,
+            "tokens": 0,
+            "cost_rub": 0.0,
+        }
+    if str(phase or "").upper() in {"FUTURE", "EXPECTED"}:
+        if not dry:
+            pending_id, changed = upsert_future_pending_without_llm(
+                item=item,
+                asset=asset,
+                layer=layer,
+                phase=phase,
+                event_type=event_type_for_audit,
+                source=source,
+                canon=canon,
+                source_ts=source_ts,
+            )
+            write_routing_snapshot(
+                item=item, source=source, source_cfg=source_cfg, allowed_layers=allowed,
+                asset=asset, layer=layer, asset_confidence=conf,
+                source_phase_prior=source_phase_prior, headline_phase=headline_phase,
+                final_phase=phase, materiality_score=mat.get("score"),
+                materiality_family=event_type_for_audit, skipped="future_pending_no_llm",
+                note=f"pending_id={pending_id};changed={changed}",
+            )
+        return {
+            "handled": "future_pending_no_llm",
+            "headline": headline,
+            "asset": asset,
+            "tokens": 0,
+            "cost_rub": 0.0,
+        }
 
     # baseline-цена ПО СЛОЮ (excess vs index): BTC из btc_ref, иначе снять (None = manual, off-OKX)
     if baseline_sym == "BTC-USDT-SWAP":
@@ -1063,6 +1243,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     J.ensure_pending_store()
     if not dry:
         PS.expire_old()
+    okx_day_test = env_enabled("SCANNER_OKX_DAY_TEST")
+    okx_only = env_enabled("SCANNER_OKX_ONLY")
     seen = load_seen()
     mline = market_ctx_line()
     btc_ref = okx_last("BTC-USDT-SWAP") if not dry else None   # якорь baseline на проход
@@ -1072,11 +1254,12 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     max_per_asset = int(limits_config().get("max_cards_per_asset_per_run", 1))
     carded: dict = {}                                            # кап карточек на актив за проход
     print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | {'BUFFER' if use_buffer else 'RSS+листинги'} | "
+          f"{'OKX_DAY_TEST' if okx_day_test else 'NORMAL'} | "
           f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
 
     try:
-        rss_items = fetch_rss()                   # уже тегированы source/lead_class в fetch_rss
+        rss_items = [] if okx_only else fetch_rss()
     except Exception as e:
         print(f"RSS ОШИБКА: {e}")
         rss_items = []
@@ -1086,7 +1269,19 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         print(f"OKX listings ОШИБКА: {e}")
         listings = []
     try:
-        sec_items = [] if dry else fetch_recent_filings(within_hours=24, limit=8)
+        ann_enabled = bool(source_meta("okx_announcements").get("enabled")) or okx_day_test
+        announcement_items = [] if (dry or not ann_enabled) else fetch_okx_announcements(limit=12)
+    except Exception as e:
+        print(f"OKX announcements ОШИБКА: {e}")
+        announcement_items = []
+    try:
+        tape_enabled = bool(source_meta("okx_market_tape").get("enabled")) or okx_day_test
+        market_tape_items = [] if (dry or not tape_enabled) else fetch_okx_market_tape(limit=12)
+    except Exception as e:
+        print(f"OKX market tape ОШИБКА: {e}")
+        market_tape_items = []
+    try:
+        sec_items = [] if (dry or okx_only) else fetch_recent_filings(within_hours=24, limit=8)
     except Exception as e:
         print(f"SEC filings ОШИБКА: {e}")
         sec_items = []
@@ -1096,47 +1291,47 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         print(f"BTC/ETH tactical ОШИБКА: {e}")
         tactical_items = []
     try:
-        fred_items = [] if (dry or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
+        fred_items = [] if (dry or okx_only or not source_meta("fred_calendar").get("enabled")) else fetch_fred_calendar(limit=8)
     except Exception as e:
         print(f"FRED calendar ОШИБКА: {e}")
         fred_items = []
     try:
-        eia_items = [] if (dry or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
+        eia_items = [] if (dry or okx_only or not source_meta("eia").get("enabled")) else fetch_eia_schedule(limit=2)
     except Exception as e:
         print(f"EIA schedule ОШИБКА: {e}")
         eia_items = []
     try:
-        opec_items = [] if (dry or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
+        opec_items = [] if (dry or okx_only or not source_meta("opec").get("enabled")) else fetch_opec_schedule(limit=2)
     except Exception as e:
         print(f"OPEC schedule ОШИБКА: {e}")
         opec_items = []
     try:
-        earnings_items = [] if (dry or not source_meta("earnings_calendar").get("enabled")) else fetch_earnings_calendar(limit=8)
+        earnings_items = [] if (dry or okx_only or not source_meta("earnings_calendar").get("enabled")) else fetch_earnings_calendar(limit=8)
     except Exception as e:
         print(f"Earnings calendar ОШИБКА: {e}")
         earnings_items = []
     try:
-        unlock_items = [] if (dry or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
+        unlock_items = [] if (dry or okx_only or not source_meta("token_unlocks").get("enabled")) else fetch_upcoming_unlocks(limit=12)
     except Exception as e:
         print(f"Token unlocks ОШИБКА: {e}")
         unlock_items = []
     try:
-        dex_items = [] if (dry or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
+        dex_items = [] if (dry or okx_only or not source_meta("dexscreener").get("enabled")) else fetch_alt_flow_signals(limit=8)
     except Exception as e:
         print(f"Dexscreener ОШИБКА: {e}")
         dex_items = []
     try:
-        risk_items = [] if (dry or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
+        risk_items = [] if (dry or okx_only or not source_meta("goplus_rugcheck").get("enabled")) else fetch_token_risk_signals(dex_items, limit=6)
     except Exception as e:
         print(f"GoPlus rugcheck ОШИБКА: {e}")
         risk_items = []
     try:
-        telegram_items = fetch_telegram_web_sources(limit_per_source=20)
+        telegram_items = [] if okx_only else fetch_telegram_web_sources(limit_per_source=20)
     except Exception as e:
         print(f"Telegram web ОШИБКА: {e}")
         telegram_items = []
-    leading = listings + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
-    native = dex_items                            # native event feed for L2 (COINCIDENT)
+    leading = listings + announcement_items + sec_items + unlock_items + tactical_items + fred_items + eia_items + opec_items + earnings_items   # опережающие/прямые сигналы
+    native = market_tape_items + dex_items        # native event/market feeds (COINCIDENT)
     items = leading + risk_items + native + telegram_items + rss_items          # risk/official first, then TG/native/RSS
     if not dry and items:                         # полный аудит: лог КАЖДОГО входящего до фильтров
         J.write_ingest([{"canon": canonical_url(it.get("url") or ""), "source": it.get("source", "?"),
@@ -1148,8 +1343,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         normalized_stats = NB.normalize_pending(limit=buffer_batch)
         fresh = NB.ready_items(limit=max(limit * 10, limit))
         print(
-            f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + L2_RISK={len(risk_items)} + "
-            f"L2_NATIVE(dex)={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(okx_list+okx_ann+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + OKX_TAPE={len(market_tape_items)} + L2_RISK={len(risk_items)} + "
+            f"L2_NATIVE={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
             f"buffer insert={ing['inserted']} update={ing['updated']} "
             f"resolve={resolved['resolved']} ready+={normalized_stats['ready']} "
             f"drop+={normalized_stats['dropped']} | к агентам={len(fresh)}\n"
@@ -1157,8 +1352,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     else:
         fresh = [it for it in items if canonical_url(it.get("url") or "") not in seen]
         print(
-            f"источники: LEADING(лист+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + L2_RISK={len(risk_items)} + "
-            f"L2_NATIVE(dex)={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
+            f"источники: LEADING(okx_list+okx_ann+SEC+unlock+tactical+fred+eia+opec+earnings)={len(leading)} + OKX_TAPE={len(market_tape_items)} + L2_RISK={len(risk_items)} + "
+            f"L2_NATIVE={len(native)} + TG_WEB={len(telegram_items)} + RSS={len(rss_items)} | "
             f"новых={len(fresh)}\n"
         )
 
@@ -1200,6 +1395,11 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
                     if use_buffer and doc_id:
                         NB.mark_status(doc_id, NB.STATUS_DROPPED, skipped)
             print(f"  · скип [{skipped}]: {res['headline'][:65]}")
+            continue
+        if res.get("handled"):
+            if use_buffer and doc_id and not dry:
+                NB.mark_status(doc_id, NB.STATUS_ANALYZED)
+            print(f"  · handled [{res['handled']}]: {res['headline'][:65]}")
             continue
         made += 1
         if use_buffer and doc_id and not dry:

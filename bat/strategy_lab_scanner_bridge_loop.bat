@@ -15,6 +15,11 @@ if "%STRATEGY_LAB_SCANNER_BRIDGE_MAX_VARIANTS%"=="" set "STRATEGY_LAB_SCANNER_BR
 if "%STRATEGY_LAB_SCANNER_BRIDGE_LIMIT%"=="" set "STRATEGY_LAB_SCANNER_BRIDGE_LIMIT=25"
 if "%STRATEGY_LAB_SCANNER_BRIDGE_PRIORITY%"=="" set "STRATEGY_LAB_SCANNER_BRIDGE_PRIORITY=85"
 if "%STRATEGY_LAB_SCANNER_BRIDGE_BACKEND%"=="" set "STRATEGY_LAB_SCANNER_BRIDGE_BACKEND=auto"
+if "%STRATEGY_LAB_SCANNER_BRIDGE_DATA_GLOB%"=="" set "STRATEGY_LAB_SCANNER_BRIDGE_DATA_GLOB=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\market_data\%STRATEGY_LAB_SCANNER_BRIDGE_TIMEFRAME%\{symbol}_*_*.json"
+set "STRATEGY_LAB_SCANNER_BRIDGE_NIGHT_ARG="
+if /I "%STRATEGY_LAB_NIGHT_MODE%"=="1" set "STRATEGY_LAB_SCANNER_BRIDGE_NIGHT_ARG=--night-mode"
+if /I "%STRATEGY_LAB_NIGHT_MODE%"=="true" set "STRATEGY_LAB_SCANNER_BRIDGE_NIGHT_ARG=--night-mode"
+if /I "%STRATEGY_LAB_NIGHT_MODE%"=="yes" set "STRATEGY_LAB_SCANNER_BRIDGE_NIGHT_ARG=--night-mode"
 
 echo ============================================================
 echo   Strategy Lab - Scanner Bridge Loop (visible, paper-only)
@@ -25,6 +30,8 @@ echo   Timeframe:    %STRATEGY_LAB_SCANNER_BRIDGE_TIMEFRAME%
 echo   Max symbols:  %STRATEGY_LAB_SCANNER_BRIDGE_MAX_SYMBOLS% per pass
 echo   Max variants: %STRATEGY_LAB_SCANNER_BRIDGE_MAX_VARIANTS% per sweep
 echo   Backend:      %STRATEGY_LAB_SCANNER_BRIDGE_BACKEND% (auto records GPU/CPU fallback)
+echo   Data glob:    %STRATEGY_LAB_SCANNER_BRIDGE_DATA_GLOB%
+echo   Night mode:   %STRATEGY_LAB_NIGHT_MODE%
 echo   Sleep:        %STRATEGY_LAB_SCANNER_BRIDGE_SLEEP_SECONDS% seconds
 echo   Live trading: OFF
 echo   Order engine: OFF
@@ -37,7 +44,7 @@ python -X utf8 -c "from src.research_lab.stop_intent import is_stop_requested; f
 if "%ERRORLEVEL%"=="3" goto stopped
 
 echo [%date% %time%] Scanner bridge pass...
-python -X utf8 -m scripts.strategy_lab.generate_event_sweeps --from-scanner --timeframe %STRATEGY_LAB_SCANNER_BRIDGE_TIMEFRAME% --max-symbols %STRATEGY_LAB_SCANNER_BRIDGE_MAX_SYMBOLS% --max-variants %STRATEGY_LAB_SCANNER_BRIDGE_MAX_VARIANTS% --limit %STRATEGY_LAB_SCANNER_BRIDGE_LIMIT% --backend %STRATEGY_LAB_SCANNER_BRIDGE_BACKEND% --priority %STRATEGY_LAB_SCANNER_BRIDGE_PRIORITY% --apply
+python -X utf8 -m scripts.strategy_lab.generate_event_sweeps --from-scanner --timeframe %STRATEGY_LAB_SCANNER_BRIDGE_TIMEFRAME% --data-glob "%STRATEGY_LAB_SCANNER_BRIDGE_DATA_GLOB%" --max-symbols %STRATEGY_LAB_SCANNER_BRIDGE_MAX_SYMBOLS% --max-variants %STRATEGY_LAB_SCANNER_BRIDGE_MAX_VARIANTS% --limit %STRATEGY_LAB_SCANNER_BRIDGE_LIMIT% --backend %STRATEGY_LAB_SCANNER_BRIDGE_BACKEND% --priority %STRATEGY_LAB_SCANNER_BRIDGE_PRIORITY% %STRATEGY_LAB_SCANNER_BRIDGE_NIGHT_ARG% --apply
 set "RC=%ERRORLEVEL%"
 echo [%date% %time%] Scanner bridge finished with code %RC%.
 
