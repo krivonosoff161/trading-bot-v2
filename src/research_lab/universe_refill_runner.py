@@ -95,7 +95,7 @@ def _prepare_missing(symbols, unit, *, glob, state, provider, private_root, appl
     return prepares_left
 
 
-def _queue_plan(plan, unit, *, private_root, conn, apply, priority, counters, eff) -> None:
+def _queue_plan(plan, unit, *, private_root, conn, apply, priority, backend, counters, eff) -> None:
     for job in plan.jobs:
         if not apply:
             counters["would_queue"] += 1
@@ -106,7 +106,8 @@ def _queue_plan(plan, unit, *, private_root, conn, apply, priority, counters, ef
         out_dir = private_root / "plans" / "specs"
         out_dir.mkdir(parents=True, exist_ok=True)
         spec_path = out_dir / f"{job.experiment_id}.json"
-        spec_path.write_text(json.dumps(job.spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        spec = {**job.spec, "backend": backend}  # let the farm request gpu/auto; never silent
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=priority)
         counters["jobs_queued" if created else "already_queued"] += 1
         eff["decisions"].append({"group": unit.group, "timeframe": unit.timeframe,
@@ -133,6 +134,7 @@ def run_refill_cycle(
     full: bool = False,
     priority: int = 80,
     max_failures: int = 3,
+    backend: str = "cpu",
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
     """Prepare + plan + queue the given units. Returns counters/decisions/skipped."""
@@ -155,6 +157,6 @@ def run_refill_cycle(
                                    timeframe=unit.timeframe, data_glob=glob,
                                    families=unit.families, inventory=inventory, smoke=not full)
         _queue_plan(plan, unit, private_root=private_root, conn=conn, apply=apply,
-                    priority=priority, counters=counters, eff=eff)
+                    priority=priority, backend=backend, counters=counters, eff=eff)
     return {"counters": counters, "decisions": eff["decisions"], "skipped": eff["skipped"],
             "prepares_left": prepares_left}
