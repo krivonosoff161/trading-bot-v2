@@ -96,7 +96,7 @@ def _run_cycle(args, *, apply: bool) -> dict:
     if apply:
         from src.research_lab.market_data_provider import get_provider
         from src.research_lab.state_db import connect, default_db_path, init_db
-        provider = get_provider("okx-public")
+        provider = get_provider(args.provider, allow_synthetic=(args.provider == "synthetic"))
         conn = connect(default_db_path(private_root))
         init_db(conn)
     try:
@@ -104,7 +104,7 @@ def _run_cycle(args, *, apply: bool) -> dict:
             units, universe=universe, profiles=profiles, policy=policy, private_root=private_root,
             provider=provider, state=state, apply=apply, now_ms=int(time.time() * 1000), conn=conn,
             max_prepares=args.max_prepares_per_cycle, data_days=args.data_days, full=args.full,
-            allow_public_output=args.allow_public_output,
+            backend=args.backend, allow_public_output=args.allow_public_output,
         )
     finally:
         if conn is not None:
@@ -134,6 +134,10 @@ def main() -> None:
     ap.add_argument("--timeframes", default="", help="comma-separated timeframes (default: 1h,4h,1d,15m)")
     ap.add_argument("--full", action="store_true", help="full per-timeframe caps instead of the smoke subset")
     ap.add_argument("--night-mode", action="store_true")
+    ap.add_argument("--provider", choices=["okx-public", "synthetic"], default="okx-public",
+                    help="market-data provider; synthetic = offline deterministic demo (not real data)")
+    ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto",
+                    help="compute backend; auto = GPU when available, else honest CPU fallback")
     ap.add_argument("--data-days", type=int, default=None)
     ap.add_argument("--sleep-seconds", type=int, default=120)
     ap.add_argument("--stop-file", default="")
