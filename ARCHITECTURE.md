@@ -22,7 +22,25 @@ Neither the scanner nor the farm may place orders. The farm is fully isolated fr
 money path (no `.env`/`AUTO_TRADE`/orders/private endpoints/Telegram), enforced by an AST
 import test over the farm modules.
 
-## Current Active Flow
+## Current Active Flow (calculation farm)
+
+The active core is the universe-driven calculation farm. Full detail:
+[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
+
+```text
+intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery snapshot)
+  -> data_planner            (per symbol/tf: prepare / defer / enrich / block-with-reason)
+  -> farm_coordinator        (brain: state/farm_tasks.sqlite, typed tasks, fingerprint re-arm)
+       prepare_data (public candles) / enrich_funding / enrich_oi (public OKX, keyless)
+  -> run_sweep               (materialized into state/strategy_lab.sqlite compute queue)
+  -> worker_once             (no-lookahead simulation; cpu/gpu/auto)
+  -> classify_result         (-> unique_candidates)
+  -> validation_orchestrator (export -> honest-backtest -> STAMP-BACK)   [--run-validation]
+  -> pivot (work_available / advanced_lifecycle / discovery_refill / blocked:no_eligible_tasks)
+  -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
+```
+
+## Scanner Intake Flow (upstream source, not the center)
 
 ```text
 sources
@@ -33,13 +51,14 @@ sources
   -> orchestrator code gate
   -> chief model for selected candidates
   -> logs/scout/scanner_journal.jsonl
-  -> logs/scout/watch_queue.jsonl
+  -> logs/scout/watch_queue.jsonl        (consumed by the farm via intake_adapter)
   -> setup_confirmation engine
   -> future paper confirmation journal
 ```
 
 The scanner can send `GO/WATCH` cards to Telegram, but those are paper research
-cards, not trade instructions.
+cards, not trade instructions. Telegram returns only as a notification layer after a
+validated farm result — see [docs/farm_notification_layer.md](docs/farm_notification_layer.md).
 
 ## Scanner Components
 

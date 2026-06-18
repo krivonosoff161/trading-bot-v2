@@ -98,9 +98,32 @@ Known current problems:
 
 ## Near-Term Roadmap
 
-### v0.6 - Calibration And Telegram Hygiene
+### F1 - Calculation Farm (current core, primary track)
 
-Goal: make the current scanner easier to judge and less noisy.
+Goal: the universe-driven research farm is the active core; everything below (scanner
+v0.6+) is now a **support track** that feeds it. Canonical:
+[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
+
+Done:
+
+- continuous self-deciding lifecycle (`farm_loop` → `farm_coordinator` → `farm_tasks.sqlite`);
+- fingerprint-based re-arm — no `already_queued` spin; defer/block carry machine reasons;
+- public keyless OI loader → `NEEDS_OI_DATA` is a managed data task that auto-unblocks
+  `run_sweep` (microstructure stays an honest `NEEDS_MICRO_DATA`, no public provider);
+- auto honest-validation stamp-back; structured farm logs; bounded storage.
+
+Next:
+
+- wire `farm_loop` into the default operator one-click path (replace the legacy
+  `strategy_lab_start.bat` / `universe_farm_loop` / `scanner_farm_loop`);
+- discovery ranking by movers; GPU kernels for more families;
+- manual-hypothesis intake channel (trader notes → structured spec → dry-run → farm task);
+- microstructure data source (currently deferred).
+
+### v0.6 - Calibration And Telegram Hygiene (scanner support track)
+
+Goal: make the upstream scanner intake easier to judge and less noisy. The scanner is no
+longer the project center; it is one intake source for the farm.
 
 Tasks:
 

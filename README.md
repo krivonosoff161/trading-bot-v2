@@ -1,9 +1,12 @@
 # Trading Bot V2
 
 Research project for market-data and news-driven trading infrastructure around OKX
-crypto futures. The current active work is not live auto-trading. It is an
-`info-edge scanner`: a paper-only event pipeline that collects market/news events,
-routes them by asset and layer, records decisions, and later measures outcomes.
+crypto futures. The current active work is not live auto-trading. The active core is the
+**universe-driven calculation farm** (`python -m scripts.strategy_lab.farm_loop`): a
+paper-only, self-deciding research lifecycle that grinds the OKX universe, fetches data
+(candles + public funding/OI), runs strategy sweeps, classifies, and hands candidates to
+honest validation. The `info-edge scanner` (`src/scout/`) is now an **upstream intake
+source** that feeds the farm, not the center.
 
 > **Status:** research / paper / demo only. No profitability is claimed. This is
 > not financial advice, not a signal service, and not a promise of future returns.
@@ -448,12 +451,15 @@ trading-bot-v2/
 
 ## Documentation
 
-Read these first:
+Read these first (calculation farm = current active core):
 
+- [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md) - the canonical continuous research cycle (`farm_loop`).
+- [docs/farm_ownership_map.md](docs/farm_ownership_map.md) - which loop owns what; legacy/archive paths.
+- [docs/farm_runbook.md](docs/farm_runbook.md) - how to operate the farm (run/stop/restart, storage).
 - [CURRENT_STATE.md](CURRENT_STATE.md) - short operational status.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - current project boundaries.
-- [ROADMAP.md](ROADMAP.md) - current development sequence.
-- [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design and as-built notes.
+- [ROADMAP.md](ROADMAP.md) - current development sequence (Farm track first).
+- [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design (now an upstream **intake source**, not the center).
 - [docs/scanner_llm_operations_2026-06-12.md](docs/scanner_llm_operations_2026-06-12.md) - LLM budget, scanner/main/strategy-lab operating plan.
 - [docs/scanner_source_onboarding_2026-06-11.md](docs/scanner_source_onboarding_2026-06-11.md) - current one-source-per-layer experiment.
 - [docs/scanner_ta_confirmation_contract.md](docs/scanner_ta_confirmation_contract.md) - scanner-to-TA bridge contract.
