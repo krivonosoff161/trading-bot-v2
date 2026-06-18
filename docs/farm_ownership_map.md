@@ -32,23 +32,48 @@ untouched.
 | `scripts/strategy_lab/requeue_stale_jobs.py` | **keep — maintenance** | Manual stale-job recovery (worker_once also auto-reaps). |
 | `scripts/strategy_lab/sync_state_db.py` | **keep — must not delete** | Backfill/repair: import completed run dirs when a worker crashed before import. |
 
-## Main engine / legacy strategy logic — extraction decision
+## Main engine / legacy strategy logic — what is closed vs what is still open
 
-**No net-new extraction is warranted.** Every legacy strategy pattern is already a
-research_lab family with its own causal, lab-native feature implementation (the lab
-imports nothing from `src/strategy`):
+**The distinction that matters:** the old live/paper *runners* are closed **as trading
+engines** — they must not be imported, run, or wired into any order / main / Telegram
+path. But their **reusable logic, data, and hypotheses are NOT exhausted** — they can be
+extracted into `research_lab` as research hypotheses (lab-native, causal, no live import)
+and must pass the farm's normal dry-run → validation path before becoming a candidate.
 
-| Pattern | Status |
-|---|---|
-| BB / volume fade | ported — `strategies/bb_fade.py` (`bb_volume_fade`). Live 5m extras (ATR-thrust/slope-turn) are an *exit-disease* refinement, not warranted before the base family clears validation. |
-| FVG | ported — `strategies/fvg_family.py` + `features/fvg.py`. |
-| Fractal / swing | ported — `strategies/fractal_family.py` + `features/structure.py`. |
-| Pump / dump | ported (continuation detector) — `strategies/pump_dump.py`. **Reversal + impulse variants are CLOSED** (`strategy_pump_reversal_postmortem.md`, `strategy_impulse_postmortem.md`: "Не реанимировать без нового research"). Do not revive. |
-| Scalp / regime | ported single-TF — `strategies/regime_family.py` (`main_fast_swing_regime`). The multi-TF live `compute_signal` is the *product*, deliberately not a lab family (Strategy E postmortem: multi-filter confluence → 0 signals). |
+A baseline port already exists for the headline patterns (so the farm is not empty):
 
-The live trading engine (`src/data/*_engine.py`, `main.py`, `src/exchange/okx_client.py`)
-is the money path and is **not** imported by the farm — enforced by
-`tests/test_farm_loop_integration.py::test_new_modules_have_no_live_trading_coupling`.
+| Pattern | Baseline ported | Still-open hypotheses to extract (research, not engine) |
+|---|---|---|
+| BB / volume fade | `strategies/bb_fade.py` (`bb_volume_fade`) | `not_thrust` (no ATR-thrust), `slope_fading`, entry-quality filters from the live 5m fade. |
+| FVG | `strategies/fvg_family.py` + `features/fvg.py` | lab-native seed only — **not exhausted**; gap-quality, mitigation depth, displacement variants open. |
+| Fractal / swing | `strategies/fractal_family.py` + `features/structure.py` | lab-native seed only — **not exhausted**; sweep/retest geometry, multi-pivot structure open. |
+| Pump / dump / impulse | `strategies/pump_dump.py` (continuation detector) | **Closed as live engines** (`strategy_pump_reversal_postmortem.md`, `strategy_impulse_postmortem.md` — fee-blocked / forward NO-GO). Still-open as research: event detectors, MFE/MAE logs, pair-risk containment, continuation/geometry hypotheses. |
+| Scalp / main `compute_signal` | `strategies/regime_family.py` (`main_fast_swing_regime`, single-TF) | Extract only **isolated hypotheses**: regime labels, lag/freshness, DRIFT both-side behavior, style-specific geometry, late-entry filters. Never import the multi-TF live engine. |
+
+So "ported" means *a baseline seed exists*, **not** "this idea is finished." New
+hypotheses from these patterns are welcome — as farm research tasks, never as live imports.
+
+**Hard rule:** the live trading engine (`src/data/*_engine.py`, `main.py`,
+`src/exchange/okx_client.py`) is the money path and is **not** imported by the farm —
+enforced by `tests/test_farm_loop_integration.py::test_new_modules_have_no_live_trading_coupling`.
+Reuse = copy a pure function / re-derive the math in the lab, never import the runner.
+
+## Manual research intake (trader ideas are first-class, not lost)
+
+Trader notes / screenshots / manual calculations are a valid hypothesis source. The
+pipeline (deterministic gate before any promotion):
+
+```
+trader note / screenshot / manual calc
+  -> structured hypothesis card / spec (symbol, timeframe, family/feature, rule, rationale)
+  -> dry-run validation (farm_loop --dry-run / a scoped sweep)
+  -> farm research task ONLY after deterministic validation
+  -> normal lifecycle: classify -> honest validation -> candidate
+```
+
+No manual idea is promoted directly to a candidate or to main/live. It enters as a
+research hypothesis and earns its place through the same dry-run → validation path as any
+other sweep. Tracked in [../BACKLOG.md](../BACKLOG.md) under "Manual research intake".
 
 ## Wiring note
 
