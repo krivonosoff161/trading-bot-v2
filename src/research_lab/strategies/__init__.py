@@ -12,6 +12,8 @@ from src.research_lab.strategies.breakout import (
 from src.research_lab.strategies.flow_family import (
     signals_oi_funding_squeeze,
     signals_oi_price_quadrant,
+    signals_oi_price_quadrant_continuation,
+    signals_oi_price_quadrant_trap_fade,
 )
 from src.research_lab.strategies.fractal_family import signals_fractal_swing_break_retest
 from src.research_lab.strategies.fvg_family import signals_fvg_reclaim_reject
@@ -51,6 +53,8 @@ __all__ = [
     "signals_moving_average_reclaim",
     "signals_oi_funding_squeeze",
     "signals_oi_price_quadrant",
+    "signals_oi_price_quadrant_continuation",
+    "signals_oi_price_quadrant_trap_fade",
     "signals_pump_dump_scalp",
     "signals_range_breakout",
     "signals_range_volume_breakout",
