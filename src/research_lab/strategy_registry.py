@@ -30,6 +30,10 @@ class StrategyDef:
     compatible_timeframes: tuple[str, ...] = _ALL_TF
     parameter_defaults: dict[str, Any] = field(default_factory=dict)
     risk_notes: str = ""
+    # Optional candle data a family needs beyond OHLCV. When absent on the data, the
+    # farm classifies the result as NEEDS_<...>_DATA instead of pretending it's active.
+    # Tokens: "oi" | "funding" | "microstructure".
+    required_data: tuple[str, ...] = ()
 
 
 _DEFS: list[StrategyDef] = [
@@ -181,14 +185,35 @@ _DEFS: list[StrategyDef] = [
         parameter_defaults={"oi_lookback": 5, "oi_surge_min": 1.0, "funding_warn": 0.0005,
                             "funding_block": 0.001, "hold_bars": 4, "stop_pct": 8, "take_pct": 12},
         risk_notes="Research candidate; single-regime/survivor-biased history. Forward-validate only.",
+        required_data=("oi", "funding"),
     ),
     StrategyDef(
         "oi_price_quadrant", "OI x Price Quadrant", "flow",
-        "dOI x dPrice quadrant continuation (new_longs->long, new_shorts->short). Needs OI data.",
+        "dOI x dPrice quadrant continuation (new_longs->long, new_shorts->short). Needs OI data. "
+        "Backward-compat alias; prefer the explicit continuation/trap_fade A/B variants.",
         s.signals_oi_price_quadrant,
         parameter_defaults={"oi_lookback": 5, "fade_traps": False,
                             "hold_bars": 4, "stop_pct": 8, "take_pct": 12},
         risk_notes="Audit verdict: NULL/inconclusive by construction. Candidate feature, NOT a money edge.",
+        required_data=("oi",),
+    ),
+    StrategyDef(
+        "oi_price_quadrant_continuation", "OI x Price Quadrant (Continuation A)", "flow",
+        "A-hypothesis: fresh positions push the move. new_longs->long, new_shorts->short. Needs OI.",
+        s.signals_oi_price_quadrant_continuation,
+        parameter_defaults={"oi_lookback": 5, "hold_bars": 4, "stop_pct": 8, "take_pct": 12},
+        risk_notes="A side of an explicit A/B vs trap_fade. NULL by construction; forward-validate only.",
+        required_data=("oi",),
+    ),
+    StrategyDef(
+        "oi_price_quadrant_trap_fade", "OI x Price Quadrant (Trap-Fade B)", "flow",
+        "B-hypothesis (old research note): fresh positions are a trap. new_shorts->long (fade up), "
+        "new_longs->short (fade down). Opposite of continuation. Needs OI.",
+        s.signals_oi_price_quadrant_trap_fade,
+        parameter_defaults={"oi_lookback": 5, "hold_bars": 4, "stop_pct": 8, "take_pct": 12},
+        risk_notes="B side of an explicit A/B. Preserves the OI-up+price-down = short-trap reading. "
+                   "NULL by construction; forward-validate only.",
+        required_data=("oi",),
     ),
     StrategyDef(
         "bb_volume_fade", "Bollinger Volume Fade", "mean_reversion",
@@ -220,6 +245,7 @@ _DEFS: list[StrategyDef] = [
         parameter_defaults={"range_lookback": 20, "min_obi": 0.15, "min_trade_delta": 0.0,
                             "max_spread_bps": 5.0, "hold_bars": 3, "stop_pct": 8, "take_pct": 12},
         risk_notes="Microstructure is not reconstructable from OHLCV; only public snapshots, no private endpoints.",
+        required_data=("microstructure",),
     ),
 ]
 

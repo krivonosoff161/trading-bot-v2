@@ -35,6 +35,28 @@ GPU_SUPPORTED_SIMULATION_MODES = ("fixed_sl_tp_hold_long_short",)
 
 COST_STRESS_MULT = 1.5  # validator stress: costs scaled by this factor
 
+# A family's required_data token -> (candle field that proves it's present, NEEDS status).
+# When a required field is absent on every bar, the family is data-starved: it is
+# classified NEEDS_<...>_DATA instead of being presented as an active (and rejected) edge.
+_REQUIRED_DATA_FIELD = {
+    "oi": ("oi", "NEEDS_OI_DATA"),
+    "funding": ("funding", "NEEDS_FLOW_DATA"),
+    "microstructure": ("obi_top5", "NEEDS_MICRO_DATA"),
+}
+
+
+def missing_required_data(family: str, candles: list[dict[str, Any]]) -> str | None:
+    """NEEDS_<...>_DATA status if the family needs a candle field that is absent, else None."""
+    try:
+        required = get_strategy(family).required_data
+    except ValueError:
+        return None
+    for token in required:
+        field_name, status = _REQUIRED_DATA_FIELD.get(token, (None, None))
+        if field_name and not any(c.get(field_name) is not None for c in candles):
+            return status
+    return None
+
 
 @dataclass(frozen=True)
 class ExperimentSpec:
@@ -499,6 +521,18 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         # spec carries no explicit timeframe, derive it from the candle spacing
         # instead of leaving it blank (the old behavior that produced "unknown").
         file_tf = tf or _derive_timeframe(candles)
+        needs = missing_required_data(family, candles)
+        if needs is not None:
+            zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
+            zero["data_file_label"] = path.name
+            zero["data_file_timeframe"] = file_tf or ""
+            results.append(RunResult(
+                run_id=stable_run_id(symbol, family, {}), symbol=symbol, family=family,
+                params={}, metrics=zero, decision=needs, reasons=["missing_required_data"],
+                validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
+                next_action="provide the required OI/funding/microstructure data, then re-run",
+                regime_summary={}))
+            continue
         gpu_family = use_gpu and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
             cpu_fallback_families.add(family)

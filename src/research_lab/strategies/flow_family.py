@@ -41,7 +41,11 @@ def signals_oi_funding_squeeze(candles: list[Candle], params: dict[str, Any]) ->
 
 
 def signals_oi_price_quadrant(candles: list[Candle], params: dict[str, Any]) -> list[dict[str, Any]]:
-    """dOI×dPrice continuation: new_longs -> long, new_shorts -> short (trap quadrants skipped)."""
+    """dOI×dPrice continuation: new_longs -> long, new_shorts -> short (trap quadrants skipped).
+
+    Kept for backward compatibility; the explicit A/B variants below are the tested
+    hypotheses (continuation vs trap-fade) — do not silently treat one as ported truth.
+    """
     oi_lookback = int(params.get("oi_lookback", 5))
     fade_traps = bool(params.get("fade_traps", False))
     signals: list[dict[str, Any]] = []
@@ -58,3 +62,26 @@ def signals_oi_price_quadrant(candles: list[Candle], params: dict[str, Any]) -> 
         elif fade_traps and quadrant == "long_liquidation":
             signals.append({"idx": idx + 1, "side": "long", "reason": "oi_long_flush_fade"})
     return signals
+
+
+def _quadrant_directional(candles: list[Candle], params: dict[str, Any], mapping: dict[str, str]) -> list[dict[str, Any]]:
+    """Map dOI×dPrice quadrants to entry sides (shared by the A/B variants)."""
+    oi_lookback = int(params.get("oi_lookback", 5))
+    signals: list[dict[str, Any]] = []
+    for idx in range(oi_lookback, len(candles) - 1):
+        quadrant = flow.oi_price_quadrant_at(candles, idx, oi_lookback)
+        side = mapping.get(quadrant or "")
+        if side:
+            signals.append({"idx": idx + 1, "side": side, "reason": f"oi_{quadrant}_{side}"})
+    return signals
+
+
+def signals_oi_price_quadrant_continuation(candles: list[Candle], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """A: fresh positions push the move. OI up + price up -> long; OI up + price down -> short."""
+    return _quadrant_directional(candles, params, {"new_longs": "long", "new_shorts": "short"})
+
+
+def signals_oi_price_quadrant_trap_fade(candles: list[Candle], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """B (old research note): fresh positions are a trap. OI up + price down = short-trap ->
+    fade up (long); OI up + price up = long-trap -> fade down (short). Opposite of A."""
+    return _quadrant_directional(candles, params, {"new_longs": "short", "new_shorts": "long"})
