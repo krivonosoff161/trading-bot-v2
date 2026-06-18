@@ -58,6 +58,8 @@ class FarmTasksDB:
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode = WAL")
+        # Optional audit hook: set to a callable(record: dict) to log every state change.
+        self.on_transition = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -225,6 +227,7 @@ class FarmTasksDB:
             (now, tid),
         )
         self._conn.commit()
+        self._emit_transition(tid, "running", "claimed", now)
         return self.get_task(tid)
 
     def eligible_count(self, now: float | None = None, *, task_types: tuple[str, ...] | None = None) -> int:
@@ -278,6 +281,23 @@ class FarmTasksDB:
         vals.append(int(task_id))
         self._conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE task_id=?", vals)
         self._conn.commit()
+        self._emit_transition(int(task_id), state, reason, now)
+
+    def _emit_transition(self, task_id: int, state: str, reason: str, now: float) -> None:
+        """Fire the optional audit hook with the post-update task identity (best-effort)."""
+        if self.on_transition is None:
+            return
+        row = self._conn.execute(
+            "SELECT task_key, task_type FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        try:
+            self.on_transition({
+                "ts": round(float(now), 3), "task_id": task_id,
+                "task_key": row["task_key"] if row else None,
+                "task_type": row["task_type"] if row else None,
+                "to_state": state, "reason": reason,
+            })
+        except Exception:  # noqa: BLE001 - logging must never break a state transition
+            pass
 
     def complete_task(self, task_id: int, *, last_result_ref: str | None = None,
                       run_dir_label: str | None = None, materialized_queue_job_id: int | None = None,

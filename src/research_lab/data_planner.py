@@ -60,9 +60,11 @@ def _family_decision(symbol: str, tf: str, fam: str, state: dict[str, Any]) -> d
     if "microstructure" in required:
         return _decision("run_sweep", symbol=symbol, timeframe=tf, family=fam,
                          reason="NEEDS_MICRO_DATA", block=True)
-    if "oi" in required and not state.get("oi_available"):
+    if "oi" in required and "oi" not in enrichment:
+        # OI history is keyless-public: block the sweep AND request an enrich task that
+        # forward-fills the oi field onto the candles, which then unblocks it.
         return _decision("run_sweep", symbol=symbol, timeframe=tf, family=fam,
-                         reason="NEEDS_OI_DATA", block=True)
+                         reason="NEEDS_OI_DATA", block=True, needs_enrich="oi")
     if "funding" in required and "funding" not in enrichment:
         # Funding is keyless-public: block the sweep AND request an enrich task that
         # unblocks it once the funding field is forward-filled onto the file.

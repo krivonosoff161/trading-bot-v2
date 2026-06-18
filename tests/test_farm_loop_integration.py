@@ -149,6 +149,7 @@ NEW_MODULES = [
     "src/research_lab/farm_data_state.py", "src/research_lab/farm_sweep_runner.py",
     "src/research_lab/farm_classifier.py", "src/research_lab/farm_coordinator.py",
     "src/research_lab/validation_orchestrator.py", "scripts/strategy_lab/farm_loop.py",
+    "src/research_lab/farm_journal.py", "src/research_lab/providers/okx_flow.py",
 ]
 # Module paths the research farm must NEVER import (the live/money/secrets/Telegram path).
 FORBIDDEN_IMPORTS = (

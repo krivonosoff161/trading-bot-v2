@@ -110,6 +110,27 @@ def _enrich_one(path: Path, key: str, symbol: str, *, provider, state, now_ms, t
     return budget - 1
 
 
+def enrich_oi_one(path: Path, symbol: str, timeframe: str, *, provider, now_ms: int) -> tuple[str, int]:
+    """Fetch public OI history and forward-fill an ``oi`` field onto a candle file.
+
+    Mirrors funding enrichment but for open interest (public, keyless). Returns
+    (status, points): enriched | no_candles | no_points | fetch_failed. OI is optional
+    context — a fetch failure is reported, never raised, so the loop proceeds.
+    """
+    from src.research_lab.flow_merge import merge_oi
+    rows = _read_rows(path)
+    if not rows:
+        return "no_candles", 0
+    try:
+        points = provider.fetch_open_interest(symbol, timeframe, int(rows[0]["ts"]), int(rows[-1]["ts"]))
+    except Exception:  # noqa: BLE001 - provider/network error must never crash the loop
+        return "fetch_failed", 0
+    if not points:
+        return "no_points", 0
+    path.write_text(json.dumps(merge_oi(rows, points), ensure_ascii=False), encoding="utf-8")
+    return "enriched", len(points)
+
+
 def run_flow_enrich(
     units: list,
     *,
