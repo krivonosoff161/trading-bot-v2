@@ -10,16 +10,19 @@ from src.research_lab.farm_cockpit import build_cockpit
 from src.research_lab.instrument_discovery import build_snapshot, save_snapshot
 from src.research_lab.state_db import connect, default_db_path, import_run_dir, init_db
 
-SECTIONS = ("loop_state", "data_readiness", "gpu_cpu", "results", "universe_coverage", "safety")
+SECTIONS = ("loop_state", "lifecycle", "data_readiness", "gpu_cpu", "results",
+            "universe_coverage", "safety")
 
 
 def test_cockpit_on_empty_root_does_not_crash(tmp_path):
     cockpit = build_cockpit(tmp_path)
-    assert cockpit["schema"] == "strategy_lab_farm_cockpit.v1"
+    assert cockpit["schema"] == "strategy_lab_farm_cockpit.v2"
     for section in SECTIONS:
         assert section in cockpit
     assert cockpit["results"]["available"] is False
+    assert cockpit["lifecycle"]["available"] is False
     assert cockpit["safety"]["read_only"] is True
+    assert cockpit["safety"]["live_trading"] is False
 
 
 def _write_run(private_root: Path) -> Path:

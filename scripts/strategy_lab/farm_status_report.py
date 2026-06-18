@@ -138,6 +138,11 @@ def collect(db_path: Path) -> dict:
                 "GROUP_CONCAT(DISTINCT fallback_reason) fallbacks "
                 "FROM runtime_stats GROUP BY effective_backend, signal_backend, simulation_backend")]
         report["ready_for_validation"] = _ready_for_validation(conn)
+        try:  # the continuous-farm lifecycle (farm_tasks.sqlite), if the new loop has run
+            from src.research_lab.farm_cockpit import _lifecycle_section
+            report["lifecycle"] = _lifecycle_section(db_path.parent.parent)
+        except Exception:  # noqa: BLE001 - report must never crash on the optional new DB
+            report["lifecycle"] = {"available": False}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -165,6 +170,18 @@ def _print(report: dict) -> None:
         print(f"  data quality: {report['data_quality']}")
     fc = report.get("flow_coverage") or {}
     print(f"  flow coverage: {fc.get('funding') if fc.get('tracked') else 'not tracked yet'}")
+    lc = report.get("lifecycle") or {}
+    if lc.get("available"):
+        print(f"  lifecycle tasks: {lc.get('by_state') or '(none)'}")
+        print(f"    by type: {lc.get('by_task_type') or '(none)'}")
+        if lc.get("blocked_reasons"):
+            print(f"    blocked: {lc['blocked_reasons']}")
+        if lc.get("deferred_reasons"):
+            print(f"    deferred: {lc['deferred_reasons']}")
+        print(f"    intake_unconsumed={lc.get('intake_unconsumed', 0)} "
+              f"calcs_today={lc.get('calcs_completed_today', 0)} "
+              f"unique_candidates={lc.get('unique_candidates', 0)} "
+              f"validation={lc.get('validation') or '(none)'}")
     ho = report.get("handoff")
     if ho:
         print(f"  validation handoff: exported={ho['validation_exported']} "
