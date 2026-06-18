@@ -69,9 +69,21 @@ class RefillUnit:
         return f"{self.group}::{self.timeframe}"
 
 
+# OHLCV-only families for OKX-discovered groups: discovered symbols have no OI/funding/
+# microstructure data by default, so flow families would just report NEEDS_*_DATA noise.
+OHLCV_FAMILIES: tuple[str, ...] = (
+    "main_fast_swing_regime", "range_volume_breakout", "volatility_squeeze_breakout_v2",
+    "vwap_reclaim_reject", "fvg_reclaim_reject", "fractal_swing_break_retest",
+    "bb_volume_fade", "pump_dump_scalp",
+)
+
+
 def families_for_group(group: str, timeframe: str) -> tuple[str, ...]:
     """Preferred families for a group, filtered to those valid on the timeframe."""
-    wanted = GROUP_FAMILIES.get(group, FARM_FAMILIES)
+    if group.startswith("discovered_"):
+        wanted: tuple[str, ...] = OHLCV_FAMILIES
+    else:
+        wanted = GROUP_FAMILIES.get(group, FARM_FAMILIES)
     return tuple(compatible_families(timeframe, wanted))
 
 
