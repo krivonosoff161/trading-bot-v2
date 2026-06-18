@@ -36,8 +36,9 @@ def merge_funding(candles: list[Candle], funding_points: list[tuple[int, float]]
 
 
 def merge_oi(candles: list[Candle], oi_points: list[tuple[int, float]]) -> list[Candle]:
-    """Forward-fill open interest onto candles (field ``oi``). Provider slot: OI
-    history is not shipped keyless, so callers pass points only when available."""
+    """Forward-fill open interest onto candles (field ``oi``). Points come from the
+    keyless public OKX OI-history loader (providers.okx_flow.OkxPublicOpenInterestProvider)
+    or a manually recorded oi_slot fallback; callers pass points only when available."""
     return forward_fill(candles, oi_points, "oi")
 
 
