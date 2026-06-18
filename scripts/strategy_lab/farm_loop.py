@@ -170,8 +170,7 @@ def main() -> None:
     try:
         if not args.loop:
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
-            if not args.quiet:
-                _print_cycle(out)
+            _print_cycle(out)  # a single explicit cycle is always shown
             return
         prev_sig = None
         while True:
@@ -180,11 +179,13 @@ def main() -> None:
                 break
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
             sig = _cycle_signature(out)
-            changed = sig != prev_sig
-            if args.verbose or (changed and not args.quiet) or out.get("errors"):
+            # Always show a CHANGED cycle or any error (never hide a changed block, even with
+            # --quiet). Unchanged cycle: heartbeat by default; with --quiet, print nothing.
+            show_full = args.verbose or sig != prev_sig or bool(out.get("errors"))
+            if show_full:
                 print(f"\n=== farm cycle @ {int(time.time())} ===")
                 _print_cycle(out)
-            else:  # no state change -> one-line heartbeat instead of reprinting the block
+            elif not args.quiet:
                 print(f"  heartbeat @ {int(time.time())} pivot={out['pivot']} active={out['active_tasks']}")
             prev_sig = sig
             time.sleep(max(1, args.sleep_seconds))
