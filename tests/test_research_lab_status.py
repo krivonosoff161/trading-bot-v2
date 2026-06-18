@@ -11,6 +11,7 @@ def test_status_runs_on_empty_root(tmp_path, monkeypatch, capsys):
     status.main()
     out = capsys.readouterr().out
     assert "Strategy Lab status" in out
+    assert "Private root : configured (--private-root)" in out
     assert "Worker" in out
     assert "Queue" in out
     assert "pending:" in out  # queue state is explicit, not just completed counts

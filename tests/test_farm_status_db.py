@@ -33,6 +33,7 @@ def _write_run(private_root: Path) -> Path:
         "created_at": "2026-01-01T00:00:00+00:00",
         "timeframe": "1h",
         "requested_backend": "auto",
+        "plan_meta": {"group": "core_market", "timeframe_role": "intraday"},
         "runtime": {
             "requested_backend": "auto", "effective_backend": "cpu", "signal_backend": "cpu",
             "simulation_backend": "cpu", "gpu_available": False, "fallback_reason": "no_gpu_backend",
@@ -73,9 +74,9 @@ def test_import_populates_farm_results_and_runtime(tmp_path):
     assert btc["backend"] == "cpu"
     assert btc["data_quality"] == "ok"          # 25 >= 20 min_trades
     assert btc["validation_status"] == "FORWARD_PAPER"
-    assert btc["asset_group"] in ("core_market", "btc_eth_tactical")  # BTC is in both
+    assert btc["asset_group"] == "core_market"  # plan provenance wins over static duplicate groups
     assert fr["DOGE_USDT_SWAP"]["data_quality"] == "no_trades"
-    assert fr["DOGE_USDT_SWAP"]["asset_group"] == "meme_flow"
+    assert fr["DOGE_USDT_SWAP"]["asset_group"] == "core_market"
 
     rt = dict(conn.execute("SELECT * FROM runtime_stats").fetchone())
     assert rt["effective_backend"] == "cpu"

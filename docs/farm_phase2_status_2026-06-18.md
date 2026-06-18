@@ -32,7 +32,9 @@ live engine, private OKX/account/order endpoints, or Telegram were touched.
 5. **OKX instrument discovery** (`ec68622`): public instruments → live USDT-perp
    filter → confident classification (ambiguous → unknown, never guessed) → snapshot +
    TTL + diff (new/delisted/group-change) → `discovered_<group>` universe the loop
-   grinds bounded by resource policy + caps. Verified live: **367 OKX perps classified**.
+   grinds bounded by resource policy + caps. The CLI now reuses a fresh snapshot by TTL
+   unless `--force-refresh` is passed, so it does not call OKX pointlessly. Verified
+   live: **367 OKX perps classified**.
 6. **Result classification + validation handoff** (`312a772`): schema v4 (additive
    ALTER) adds `max_drawdown_pct`, `gpu_signal_supported`, `hard_status`,
    `validation_exported` to `farm_results`. `validation_handoff` reads the
@@ -40,8 +42,8 @@ live engine, private OKX/account/order endpoints, or Telegram were touched.
    `validation_state` derives VALIDATION_EXPORTED/PASSED/FAILED/NEEDS_MORE_DATA.
 7. **Dashboard cockpit** (`0164629`): `farm_cockpit` adds a read-only operator view
    (loop state, data readiness, GPU/CPU split, results + handoff, manual-vs-discovered
-   universe coverage) to the existing localhost JSON dashboard. Defensive on old DBs;
-   labels only, no secrets/absolute paths.
+   universe coverage) to the existing localhost JSON dashboard and HTML page. Defensive
+   on old DBs; labels only, no secrets/absolute paths.
 8. **Obsidian farm memory** (`3fe8b49`): `farm_obsidian` writes deterministic
    daily/symbol/family/candidate notes with graph wikilinks and data tags from
    farm_results + the registry (exact params on candidate notes).
@@ -81,10 +83,11 @@ python -m scripts.strategy_lab.enrich_oi_data --symbol BTC_USDT_SWAP --timeframe
 
 ## Still partial / not done (honest)
 
-- **GPU signal kernels: 3/13 families** (`momentum_breakout`, `range_volume_breakout`,
-  `pump_dump_scalp`). The rest run signals on CPU (simulation still runs on GPU). Next:
-  a kernel for a non-recurrent family if a parity-safe one remains; `squeeze_v2` is
-  intentionally excluded (sequential ATR-percentile).
+- **GPU signal kernels: 3 accelerated signal families** (`momentum_breakout`,
+  `range_volume_breakout`, `pump_dump_scalp`) across the larger strategy registry. The
+  rest run signals on CPU when selected (simulation can still run on GPU for supported
+  exit modes). Next: a kernel for a non-recurrent family if a parity-safe one remains;
+  `squeeze_v2` is intentionally excluded (sequential ATR-percentile).
 - **OI data is a recorded slot, not a live feed**: keyless per-instId OI history is not
   reliably public, so OI families are NEEDS_OI_DATA until the slot is populated.
 - **Discovery is by classification, not volume-ranked movers**: coverage is systematic

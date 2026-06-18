@@ -58,11 +58,19 @@ def _count_jsonl_rows(root: Path, rel: str, filename: str) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
+    ap.add_argument("--private-root", default=None)
     args = ap.parse_args()
 
-    root = Path(args.private_root).expanduser()
-    configured = "configured (env)" if os.getenv("TRADING_BOT_RESEARCH_ROOT") else "default"
+    env_root = os.getenv("TRADING_BOT_RESEARCH_ROOT")
+    if args.private_root:
+        root = Path(args.private_root).expanduser()
+        configured = "configured (--private-root)"
+    elif env_root:
+        root = Path(env_root).expanduser()
+        configured = "configured (env)"
+    else:
+        root = DEFAULT_PRIVATE_ROOT
+        configured = "default"
     exists = "exists" if root.exists() else "NOT created yet"
 
     state = load_dashboard_state(root)

@@ -73,6 +73,7 @@ class ExperimentSpec:
     filters: dict[str, list[str]] = field(default_factory=dict)
     regime_params: dict[str, Any] = field(default_factory=dict)
     event_context: dict[str, Any] = field(default_factory=dict)
+    plan_meta: dict[str, Any] = field(default_factory=dict)
     timeframe: str = "1d"
     backend: str = "cpu"
 
@@ -93,6 +94,7 @@ class ExperimentSpec:
             filters={str(k): [str(x) for x in v] for k, v in (data.get("filters") or {}).items()},
             regime_params=dict(data.get("regime_params") or {}),
             event_context=dict(data.get("event_context") or {}),
+            plan_meta=dict(data.get("plan_meta") or {}),
             timeframe=str(data.get("timeframe") or "1d"),
             backend=str(data.get("backend") or "cpu"),
         )

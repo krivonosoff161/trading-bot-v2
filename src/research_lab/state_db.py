@@ -593,6 +593,8 @@ def _import_farm_results(
     backend = str(runtime.get("effective_backend") or runtime.get("signal_backend") or "")
     created_at = str((payload or {}).get("created_at") or utc_now())
     top_tf = str((payload or {}).get("timeframe") or "")
+    plan_meta = (payload.get("plan_meta") if isinstance(payload, dict) else {}) or {}
+    planned_group = str(plan_meta.get("group") or "") if isinstance(plan_meta, dict) else ""
     group_map = _group_map()
     conn.execute("DELETE FROM farm_results WHERE run_id = ?", (run_id,))
     for row in rows:
@@ -613,7 +615,7 @@ def _import_farm_results(
                 run_id,
                 str(row.get("run_id") or row.get("candidate_id") or ""),
                 symbol,
-                group_map.get(_norm_symbol(symbol), ""),
+                planned_group or group_map.get(_norm_symbol(symbol), ""),
                 str(_row_metric(row, "data_file_timeframe") or top_tf or ""),
                 family,
                 str(row.get("decision") or "UNKNOWN"),
