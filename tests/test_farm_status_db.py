@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from scripts.strategy_lab.farm_status_report import collect
@@ -103,3 +104,69 @@ def test_status_report_collect(tmp_path):
 def test_status_report_missing_db(tmp_path):
     report = collect(default_db_path(tmp_path / "nope"))
     assert report["exists"] is False
+
+
+def test_status_report_old_db_without_v3_does_not_crash(tmp_path):
+    """A v2-shaped DB (no farm_results/runtime_stats) must be migrated, not crash."""
+    db = default_db_path(tmp_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE runs(run_id TEXT PRIMARY KEY, experiment_id TEXT, created_at TEXT, artifact_label TEXT,
+            candidate_count INTEGER DEFAULT 0, promote_count INTEGER DEFAULT 0, observe_count INTEGER DEFAULT 0,
+            reject_count INTEGER DEFAULT 0, imported_at TEXT);
+        CREATE TABLE candidates(run_id TEXT, candidate_id TEXT, symbol TEXT, family TEXT, decision TEXT,
+            reasons TEXT, metrics_json TEXT, params_json TEXT, validation_status TEXT DEFAULT '',
+            validation_reasons TEXT DEFAULT '', next_action TEXT DEFAULT '', PRIMARY KEY(run_id, candidate_id));
+        CREATE TABLE queue(job_id INTEGER PRIMARY KEY AUTOINCREMENT, spec_path TEXT, status TEXT, priority INTEGER,
+            created_at TEXT, started_at TEXT, finished_at TEXT, attempts INTEGER DEFAULT 0,
+            run_dir_label TEXT, last_error TEXT);
+        INSERT INTO meta VALUES('schema_version','2');
+        INSERT INTO runs VALUES('r1','e1','2026-01-01T00:00:00+00:00','lbl',1,0,0,1,'2026-01-01T00:00:00+00:00');
+        INSERT INTO candidates(run_id,candidate_id,symbol,family,decision,reasons,metrics_json,params_json,validation_status)
+            VALUES('r1','c1','BTC_USDT_SWAP','main_fast_swing_regime','OBSERVE','','{}','{}','FORWARD_PAPER');
+        """
+    )
+    conn.commit()
+    conn.close()
+    report = collect(db)  # init_db inside upgrades to v3; must not crash
+    assert report["exists"] is True
+    assert report["schema_version"] == 3
+    assert report["totals"]["farm_results"] == 0
+    assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
+
+
+def test_ready_for_validation_deduped(tmp_path):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    for run_id in ("run_a", "run_b"):
+        conn.execute(
+            "INSERT INTO runs(run_id, experiment_id, created_at, artifact_label, imported_at) VALUES(?,?,?,?,?)",
+            (run_id, "e", "2026-01-01T00:00:00+00:00", "lbl", "2026-01-01T00:00:00+00:00"))
+        conn.execute(
+            "INSERT INTO farm_results(run_id, candidate_id, symbol, family, decision, validation_status, "
+            "timeframe, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, "c", "BTC_USDT_SWAP", "main_fast_swing_regime", "PROMOTE_FOR_PRESSURE_TEST",
+             "FORWARD_PAPER", "1h", "2026-01-01T00:00:00+00:00"))
+    conn.commit()
+    conn.close()
+    report = collect(default_db_path(tmp_path))
+    btc = [r for r in report["ready_for_validation"]
+           if r["symbol"] == "BTC_USDT_SWAP" and r["family"] == "main_fast_swing_regime"]
+    assert len(btc) == 1  # deduped by (symbol, family, timeframe) across two runs
+
+
+def test_status_report_json_fields_stable(tmp_path):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    import_run_dir(conn, tmp_path, _write_run(tmp_path))
+    conn.commit()
+    conn.close()
+    report = collect(default_db_path(tmp_path))
+    # the dashboard consumes these keys; keep them present
+    for key in ("exists", "schema_version", "totals", "queue", "queue_age", "latest_run",
+                "decisions", "validation", "flow_coverage", "ready_for_validation", "recent_runs"):
+        assert key in report, f"missing report key: {key}"
+    json.dumps(report)  # must be JSON-serializable
