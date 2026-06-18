@@ -121,6 +121,16 @@ def collect(db_path: Path) -> dict:
                 "FROM farm_results GROUP BY asset_group, family, decision ORDER BY asset_group, family")]
             report["by_timeframe"] = _counts(conn, "SELECT timeframe, COUNT(*) FROM farm_results GROUP BY timeframe")
             report["data_quality"] = _counts(conn, "SELECT data_quality, COUNT(*) FROM farm_results GROUP BY data_quality")
+            report["handoff"] = {
+                "validation_exported": int(_scalar(
+                    conn, "SELECT COUNT(*) FROM farm_results WHERE validation_exported = 1")),
+                "hard_status": _counts(
+                    conn, "SELECT hard_status, COUNT(*) FROM farm_results WHERE hard_status <> '' GROUP BY hard_status"),
+                "gpu_signal_rows": int(_scalar(
+                    conn, "SELECT COALESCE(SUM(gpu_signal_supported), 0) FROM farm_results")),
+                "needs_data": _counts(
+                    conn, "SELECT decision, COUNT(*) FROM farm_results WHERE decision LIKE 'NEEDS_%' GROUP BY decision"),
+            }
         if _has_rows(conn, "runtime_stats"):
             report["backend"] = [dict(r) for r in conn.execute(
                 "SELECT effective_backend, signal_backend, simulation_backend, "
@@ -155,6 +165,11 @@ def _print(report: dict) -> None:
         print(f"  data quality: {report['data_quality']}")
     fc = report.get("flow_coverage") or {}
     print(f"  flow coverage: {fc.get('funding') if fc.get('tracked') else 'not tracked yet'}")
+    ho = report.get("handoff")
+    if ho:
+        print(f"  validation handoff: exported={ho['validation_exported']} "
+              f"hard_status={ho['hard_status'] or '(none)'} needs_data={ho['needs_data'] or '(none)'} "
+              f"gpu_signal_rows={ho['gpu_signal_rows']}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "

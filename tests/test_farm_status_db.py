@@ -21,7 +21,7 @@ def test_v3_tables_created_and_idempotent(tmp_path):
     init_db(conn)  # idempotent
     names = _table_names(conn)
     assert {"runs", "candidates", "queue", "farm_results", "runtime_stats"} <= names
-    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 3
+    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 4
     conn.close()
 
 
@@ -131,9 +131,9 @@ def test_status_report_old_db_without_v3_does_not_crash(tmp_path):
     )
     conn.commit()
     conn.close()
-    report = collect(db)  # init_db inside upgrades to v3; must not crash
+    report = collect(db)  # init_db inside upgrades to current schema; must not crash
     assert report["exists"] is True
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
     assert report["totals"]["farm_results"] == 0
     assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
 
