@@ -151,16 +151,61 @@ def _universe_coverage(private_root: Path, db_path: Path) -> dict[str, Any]:
             "symbols_processed": processed, "discovered_not_yet_processed": unprocessed_discovered}
 
 
+def _start_of_utc_day(now: float) -> float:
+    import datetime as dt
+    d = dt.datetime.fromtimestamp(now, dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return d.timestamp()
+
+
+def _lifecycle_section(private_root: Path) -> dict[str, Any]:
+    """The continuous-farm task lifecycle from farm_tasks.sqlite (intake -> validation)."""
+    from src.research_lab.farm_tasks_db import tasks_db_path
+    db_path = tasks_db_path(private_root)
+    if not db_path.exists():
+        return {"available": False}
+    try:
+        conn = _ro_conn(db_path)
+    except sqlite3.Error:
+        return {"available": False}
+    try:
+        import time as _time
+        today = _start_of_utc_day(_time.time())
+        calcs_today = _try_scalar(
+            conn, "SELECT COUNT(*) FROM tasks WHERE task_type='run_sweep' AND state='completed' "
+                  f"AND updated_at>={today}")
+        return {
+            "available": True,
+            "by_state": _try_counts(conn, "SELECT state, COUNT(*) FROM tasks GROUP BY state"),
+            "by_task_type": _try_counts(conn, "SELECT task_type, COUNT(*) FROM tasks GROUP BY task_type"),
+            "blocked_reasons": _try_counts(
+                conn, "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='blocked' GROUP BY machine_reason"),
+            "deferred_reasons": _try_counts(
+                conn, "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='deferred' GROUP BY machine_reason"),
+            "intake_unconsumed": int(_try_scalar(conn, "SELECT COUNT(*) FROM intake_events WHERE consumed=0")),
+            "calcs_completed_today": int(calcs_today),
+            "unique_candidates": int(_try_scalar(conn, "SELECT COUNT(*) FROM unique_candidates")),
+            "validation": _try_counts(
+                conn, "SELECT hard_status, COUNT(*) FROM unique_candidates WHERE hard_status<>'' "
+                      "GROUP BY hard_status"),
+            "export_followups": int(_try_scalar(
+                conn, "SELECT COUNT(*) FROM tasks WHERE task_type='export_validation'")),
+        }
+    finally:
+        conn.close()
+
+
 def build_cockpit(private_root: Path) -> dict[str, Any]:
     """Read-only operator cockpit snapshot for the calculation farm."""
     private_root = Path(private_root).expanduser()
     db_path = default_db_path(private_root)
     return {
-        "schema": "strategy_lab_farm_cockpit.v1",
+        "schema": "strategy_lab_farm_cockpit.v2",
         "loop_state": _loop_state(private_root),
+        "lifecycle": _lifecycle_section(private_root),
         "data_readiness": _data_readiness(private_root),
         "gpu_cpu": _gpu_cpu_section(db_path),
         "results": _results_section(db_path),
         "universe_coverage": _universe_coverage(private_root, db_path),
-        "safety": {"read_only": True, "secrets_exposed": False, "network": False},
+        "safety": {"read_only": True, "secrets_exposed": False, "network": False,
+                   "live_trading": False},
     }
