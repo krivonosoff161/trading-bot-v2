@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
@@ -114,6 +114,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             data_quality TEXT NOT NULL DEFAULT '',
             next_action TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT '',
+            -- schema v4: richer decision-machine tracking
+            max_drawdown_pct REAL NOT NULL DEFAULT 0,
+            gpu_signal_supported INTEGER NOT NULL DEFAULT 0,
+            hard_status TEXT NOT NULL DEFAULT '',
+            validation_exported INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (run_id, candidate_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
         );
@@ -140,6 +145,7 @@ def init_db(conn: sqlite3.Connection) -> None:
         """
     )
     _migrate_candidate_columns(conn)
+    _migrate_farm_results_columns(conn)
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
@@ -153,6 +159,22 @@ def _migrate_candidate_columns(conn: sqlite3.Connection) -> None:
     for column in ("validation_status", "validation_reasons", "next_action"):
         if column not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
+    """Schema v3 -> v4: add decision-machine columns to a pre-existing farm_results."""
+    if not list(conn.execute("PRAGMA table_info(farm_results)")):
+        return  # table created fresh with v4 columns already
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(farm_results)")}
+    additions = {
+        "max_drawdown_pct": "REAL NOT NULL DEFAULT 0",
+        "gpu_signal_supported": "INTEGER NOT NULL DEFAULT 0",
+        "hard_status": "TEXT NOT NULL DEFAULT ''",
+        "validation_exported": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for column, decl in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE farm_results ADD COLUMN {column} {decl}")
 
 
 def import_completed_runs(private_root: Path, db_path: Path | None = None) -> dict[str, int]:
@@ -566,6 +588,7 @@ def _import_farm_results(
     conn: sqlite3.Connection, run_id: str, payload: dict[str, Any], rows: list[dict[str, Any]]
 ) -> None:
     """Richer per-candidate result rows (group/timeframe/backend/data_quality)."""
+    from src.research_lab.gpu_runtime import GPU_SUPPORTED_FAMILIES
     runtime = (payload.get("runtime") if isinstance(payload, dict) else {}) or {}
     backend = str(runtime.get("effective_backend") or runtime.get("signal_backend") or "")
     created_at = str((payload or {}).get("created_at") or utc_now())
@@ -574,6 +597,7 @@ def _import_farm_results(
     conn.execute("DELETE FROM farm_results WHERE run_id = ?", (run_id,))
     for row in rows:
         symbol = str(row.get("symbol") or "")
+        family = str(row.get("family") or "")
         n_trades = _as_int(_row_metric(row, "n_trades"))
         min_trades = _as_int(_row_metric(row, "min_trades"))
         conn.execute(
@@ -581,8 +605,9 @@ def _import_farm_results(
             INSERT INTO farm_results(
                 run_id, candidate_id, symbol, asset_group, timeframe, family, decision,
                 validation_status, backend, n_trades, win_rate, avg_net_pct,
-                test_avg_net_pct, profit_factor, data_file, data_quality, next_action, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                test_avg_net_pct, profit_factor, data_file, data_quality, next_action, created_at,
+                max_drawdown_pct, gpu_signal_supported
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id,
@@ -590,7 +615,7 @@ def _import_farm_results(
                 symbol,
                 group_map.get(_norm_symbol(symbol), ""),
                 str(_row_metric(row, "data_file_timeframe") or top_tf or ""),
-                str(row.get("family") or ""),
+                family,
                 str(row.get("decision") or "UNKNOWN"),
                 str(row.get("validation_status") or ""),
                 backend,
@@ -603,6 +628,8 @@ def _import_farm_results(
                 _data_quality(n_trades, min_trades),
                 str(row.get("next_action") or ""),
                 created_at,
+                _as_float(_row_metric(row, "max_drawdown_pct")),
+                1 if family in GPU_SUPPORTED_FAMILIES else 0,
             ),
         )
 
