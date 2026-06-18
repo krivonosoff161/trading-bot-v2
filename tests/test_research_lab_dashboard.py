@@ -256,6 +256,53 @@ def test_render_html_shows_research_summary():
     assert "deferred" in page
 
 
+def test_render_html_shows_farm_cockpit():
+    state = {
+        "private_root_label": "strategy-lab",
+        "obsidian_vault_label": "strategy-lab/obsidian-vault",
+        "totals": {"run_count": 0, "candidate_count": 0, "decision_counts": {}},
+        "state_db": {"queue_counts": {}},
+        "farm_cockpit": {
+            "loop_state": {"refill_cursor": 7, "refill_backoff_symbols": 1},
+            "data_readiness": {
+                "prepared_files_by_timeframe": {"1h": 3, "15m": 1},
+                "funding_enrich_status": {"enriched": 2},
+                "oi_slot_files": 1,
+            },
+            "gpu_cpu": {
+                "gpu_signal_rows": 4,
+                "backends": [{
+                    "effective_backend": "gpu", "signal_backend": "gpu",
+                    "simulation_backend": "gpu", "gpu_runs": 1, "runs": 1,
+                }],
+            },
+            "results": {
+                "unique_symbols": 2, "exported": 1,
+                "hard_status": {"VALIDATION_EXPORTED": 1},
+                "needs_data": {"NEEDS_OI_DATA": 1},
+                "by_group": {"core_market": 2},
+            },
+            "universe_coverage": {
+                "manual": {"groups": 2, "symbols": 5},
+                "discovered": {
+                    "count": 10, "generated_at": "2026-06-18T00:00:00+00:00",
+                    "group_sizes": {"crypto_major": 3},
+                },
+                "symbols_processed": 2,
+                "discovered_not_yet_processed": 8,
+            },
+        },
+        "llm_cost": {},
+        "latest_run": {},
+        "runs": [],
+    }
+    page = render_html(state)
+    assert "Calculation Farm Cockpit" in page
+    assert "funding enrich: enriched: 2" in page
+    assert "GPU signal-supported result rows: 4" in page
+    assert "core_market: 2" in page
+
+
 def test_render_html_shows_worker_health_and_llm():
     state = {
         "private_root_label": "strategy-lab",

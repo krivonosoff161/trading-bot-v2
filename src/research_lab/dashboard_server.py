@@ -96,6 +96,7 @@ def render_html(state: dict) -> str:
     last_loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
     queue_capacity = state.get("queue_capacity") or {}
+    farm_cockpit = state.get("farm_cockpit") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -160,6 +161,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Research Summary</h2>
     {research_summary_html(latest, next_run, obsidian_notes)}
+  </section>
+
+  <section class="section card">
+    <h2>Calculation Farm Cockpit</h2>
+    {farm_cockpit_html(farm_cockpit)}
   </section>
 
   <section class="section card">
@@ -276,6 +282,74 @@ def queue_table(rows_in: list[dict]) -> str:
         )
     rows.append("</tbody></table>")
     return "\n".join(rows)
+
+
+def farm_cockpit_html(cockpit: dict) -> str:
+    if not cockpit:
+        return '<p class="muted">Calculation farm cockpit not available yet.</p>'
+    loop = cockpit.get("loop_state") or {}
+    data = cockpit.get("data_readiness") or {}
+    gpu = cockpit.get("gpu_cpu") or {}
+    results = cockpit.get("results") or {}
+    universe = cockpit.get("universe_coverage") or {}
+    prepared = data.get("prepared_files_by_timeframe") or {}
+    funding = data.get("funding_enrich_status") or {}
+    prepared_line = " - ".join(f"{esc(tf)}: {esc(n)}" for tf, n in sorted(prepared.items())) or "none"
+    funding_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(funding.items())) or "none"
+    needs_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("needs_data") or {}).items())
+    ) or "none"
+    by_group_line = " - ".join(
+        f"{esc(k or 'unknown')}: {esc(v)}" for k, v in sorted((results.get("by_group") or {}).items())
+    ) or "none"
+    hard_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("hard_status") or {}).items())
+    ) or "none"
+    backend_rows = gpu.get("backends") or []
+    backend_html = backend_table(backend_rows) if backend_rows else '<p class="muted">No runtime backend rows yet.</p>'
+    discovered = universe.get("discovered") or {}
+    manual = universe.get("manual") or {}
+    discovered_sizes = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((discovered.get("group_sizes") or {}).items())
+    ) or "none"
+    return "\n".join([
+        f"<p>loop cursor: {esc(loop.get('refill_cursor', 0))} - "
+        f"backoff symbols: {esc(loop.get('refill_backoff_symbols', 0))}</p>",
+        f"<p>prepared candle files: {prepared_line}</p>",
+        f"<p>funding enrich: {funding_line} - OI slot files: {esc(data.get('oi_slot_files', 0))}</p>",
+        f"<p>farm results: symbols={esc(results.get('unique_symbols', 0))} - "
+        f"exported to hard validation={esc(results.get('exported', 0))} - hard status: {hard_line}</p>",
+        f"<p>needs data: {needs_line}</p>",
+        f"<p>results by plan group: {by_group_line}</p>",
+        f"<p>GPU signal-supported result rows: {esc(gpu.get('gpu_signal_rows', 0))}</p>",
+        backend_html,
+        f"<p>manual universe: {esc(manual.get('groups', 0))} groups / {esc(manual.get('symbols', 0))} symbols</p>",
+        f"<p>OKX discovery: {esc(discovered.get('count', 0))} symbols "
+        f"(generated {esc(discovered.get('generated_at', ''))}) - {discovered_sizes}</p>",
+        f"<p>processed symbols: {esc(universe.get('symbols_processed', 0))} - "
+        f"discovered not yet processed: {esc(universe.get('discovered_not_yet_processed', 0))}</p>",
+    ])
+
+
+def backend_table(rows_in: list[dict]) -> str:
+    rows = [
+        "<table><thead><tr><th>Effective</th><th>Signal</th><th>Simulation</th>"
+        "<th>GPU runs</th><th>Runs</th></tr></thead><tbody>"
+    ]
+    for row in rows_in:
+        rows.append(
+            "<tr>"
+            f"<td>{esc(row.get('effective_backend', ''))}</td>"
+            f"<td>{esc(row.get('signal_backend', ''))}</td>"
+            f"<td>{esc(row.get('simulation_backend', ''))}</td>"
+            f"<td>{esc(row.get('gpu_runs', 0))}</td>"
+            f"<td>{esc(row.get('runs', 0))}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table>")
+    return "\n".join(rows)
+
+
 def candidates_table(candidates: list[dict]) -> str:
     if not candidates:
         return '<p class="muted">No candidates in latest run.</p>'

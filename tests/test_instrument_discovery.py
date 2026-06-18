@@ -38,8 +38,10 @@ RAW = [
 class _FakeInstruments:
     def __init__(self, raw):
         self.raw = raw
+        self.calls = 0
 
     def fetch_instruments(self, inst_type="SWAP"):
+        self.calls += 1
         return self.raw
 
 
@@ -111,3 +113,28 @@ def test_discover_cli_apply_persists_snapshot(tmp_path):
     res2 = discover(fresh, apply=False, now_ms=NOW_MS, provider=_FakeInstruments(RAW))
     assert res2["status"] == "would_discover"
     assert not snapshot_path(fresh).exists()
+
+
+def test_discover_reuses_fresh_snapshot_without_provider_call(tmp_path):
+    first = _FakeInstruments(RAW)
+    res = discover(tmp_path, apply=True, now_ms=NOW_MS, provider=first)
+    assert res["status"] == "discovered"
+    assert first.calls == 1
+
+    second = _FakeInstruments([])
+    cached = discover(tmp_path, apply=True, now_ms=NOW_MS + HOUR, provider=second, ttl_seconds=2 * 3600)
+    assert cached["status"] == "cached"
+    assert cached["cached"] is True
+    assert cached["count"] == 4
+    assert second.calls == 0
+
+    forced = discover(
+        tmp_path,
+        apply=False,
+        now_ms=NOW_MS + HOUR,
+        provider=second,
+        ttl_seconds=2 * 3600,
+        force_refresh=True,
+    )
+    assert forced["status"] == "would_discover"
+    assert second.calls == 1

@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
 from src.research_lab.instrument_discovery import (  # noqa: E402
     build_snapshot,
     diff_snapshots,
+    is_fresh,
     load_snapshot,
     save_snapshot,
 )
@@ -38,8 +39,34 @@ from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  #
 from src.research_lab.providers.okx_instruments import InstrumentsError, OkxPublicInstrumentsProvider  # noqa: E402
 
 
-def discover(private_root: Path, *, apply: bool, now_ms: int, provider=None) -> dict:
+def _summary_from_snapshot(snapshot: dict) -> dict:
+    return {
+        "count": int(snapshot.get("count") or 0),
+        "group_sizes": {g: len(v) for g, v in (snapshot.get("groups") or {}).items()},
+    }
+
+
+def discover(
+    private_root: Path,
+    *,
+    apply: bool,
+    now_ms: int,
+    provider=None,
+    ttl_seconds: int = 6 * 3600,
+    force_refresh: bool = False,
+) -> dict:
     old = load_snapshot(private_root)
+    if old.get("instruments") and not force_refresh and is_fresh(old, now_ms, ttl_seconds):
+        summary = _summary_from_snapshot(old)
+        return {
+            "status": "cached",
+            "cached": True,
+            "generated_at": str(old.get("generated_at") or ""),
+            **summary,
+            "diff": {"new": 0, "delisted": 0, "group_changes": 0},
+            "new_sample": [],
+            "delisted": [],
+        }
     provider = provider or OkxPublicInstrumentsProvider()
     try:
         raw = provider.fetch_instruments("SWAP")
@@ -51,10 +78,11 @@ def discover(private_root: Path, *, apply: bool, now_ms: int, provider=None) -> 
     if apply:
         private_root = resolve_private_root(private_root)
         save_snapshot(private_root, snapshot)
+    summary = _summary_from_snapshot(snapshot)
     return {
         "status": "discovered" if apply else "would_discover",
-        "count": snapshot["count"],
-        "group_sizes": {g: len(v) for g, v in snapshot["groups"].items()},
+        "cached": False,
+        **summary,
         "diff": {"new": len(diff["new_instruments"]), "delisted": len(diff["delisted"]),
                  "group_changes": len(diff["group_changes"])},
         "new_sample": diff["new_instruments"][:10],
@@ -68,8 +96,17 @@ def main() -> None:
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="fetch + classify + diff, write nothing (default)")
     mode.add_argument("--apply", action="store_true", help="persist the snapshot under the private root")
+    ap.add_argument("--ttl-seconds", type=int, default=6 * 3600,
+                    help="reuse a fresh persisted snapshot for this many seconds")
+    ap.add_argument("--force-refresh", action="store_true", help="ignore a fresh snapshot and call OKX")
     args = ap.parse_args()
-    result = discover(Path(args.private_root), apply=bool(args.apply), now_ms=int(time.time() * 1000))
+    result = discover(
+        Path(args.private_root),
+        apply=bool(args.apply),
+        now_ms=int(time.time() * 1000),
+        ttl_seconds=args.ttl_seconds,
+        force_refresh=bool(args.force_refresh),
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
