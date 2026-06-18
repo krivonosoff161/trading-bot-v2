@@ -4,16 +4,23 @@ Updated: 2026-06-11
 
 ## Boundary
 
-The project has two different contours:
+> **Update 2026-06-18 — center shifted to the calculation farm.** The current
+> research center is the **universe-driven calculation farm** (`farm_loop` →
+> `farm_coordinator` → `farm_tasks.sqlite`, paper/research only). The scanner
+> (`src/scout/`) is now one **upstream intake source** that feeds the farm, not the
+> product. Canonical: [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md).
 
-1. **Active contour:** `src/scout/` information-edge scanner.
-2. **Frozen/reference contour:** old WebSocket Main/TA and paper engines.
+The project has three contours:
 
-The scanner is the current product/research direction. Main/TA is not the source
-of trade intent anymore. It may only confirm, invalidate, visualize, or risk-check
-scanner-led candidates.
+1. **Active research core:** the calculation farm (`research_lab` + `scripts/strategy_lab`).
+2. **Upstream intake:** `src/scout/` information-edge scanner (one farm intake source).
+3. **Frozen/reference:** old WebSocket Main/TA and paper engines (confirmation/risk/level
+   context only; their useful strategy logic is already ported into research_lab families).
 
-No current path may place orders from scanner output.
+Neither the scanner nor the farm may place orders. The farm is fully isolated from the
+money path (no `.env`/`AUTO_TRADE`/orders/private endpoints/Telegram), enforced by an AST
+import test over the farm modules.
 
 ## Current Active Flow
 
@@ -172,36 +179,41 @@ Focused checks:
 python -m pytest tests/test_source_onboarding.py tests/test_watch_queue.py tests/test_setup_confirmation.py tests/test_build_watch_queue.py -q
 ```
 
-## Research machine (scanner -> farm -> validation -> feedback -> follow-ups)
+## Research machine — the calculation farm (current core)
 
-The scanner is wired to the Strategy Lab farm and the honest-backtest validator
-as one paper-only research loop. Each stage is bounded and individually safe; no
-stage touches the order engine, `AUTO_TRADE`, or live trading.
+The calculation farm is the continuous, self-deciding research lifecycle. It is
+universe-driven (scanner watches are one optional intake source) and fully paper/research
+only — no stage touches the order engine, `AUTO_TRADE`, or live trading. Canonical doc:
+[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
 
 ```text
-scanner_v0 --buffer        (writes logs/scout/watch_queue.jsonl; run separately, not by the demo)
-resolve_outcomes           (scores mature forward outcomes; run by news_scanner_loop, not the demo)
-  v
-scanner WATCH/GO (logs/scout/watch_queue.jsonl)
-  -> scanner_bridge        (src/research_lab/scanner_bridge.py)
-  -> generate_event_sweeps --from-scanner   (bounded SweepSpec -> queue, missing_data is graceful)
-  -> worker_once           (no-lookahead simulation on local candles)
-  -> candidate registry    (private root)
-  -> validate_candidates_pipeline  (export -> honest-backtest -> verdict -> feedback -> setup card)
-  -> read_feedback         (verdicts -> farm recommendations; read-only)
-  -> apply_feedback_recommendations  (NARROW_PARAMS -> bounded follow-up sweep; others -> notes)
-  -> next research cycle
+intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery)
+  -> data_planner          (per symbol/timeframe: prepare / defer / enrich / block-with-reason)
+  -> farm_coordinator      (brain: state/farm_tasks.sqlite — typed tasks, fingerprint re-arm)
+       prepare_data        (public OKX candles) / enrich_funding / enrich_oi (public OKX)
+  -> run_sweep             (materialized into state/strategy_lab.sqlite compute queue)
+  -> worker_once           (no-lookahead simulation on local candles; cpu/gpu/auto)
+  -> classify_result       (-> unique_candidates, keyed symbol+tf+family+params+fingerprint)
+  -> validation_orchestrator (export -> honest-backtest -> verdict -> STAMP-BACK)  [--run-validation]
+  -> pivot                 (work_available / advanced_lifecycle / discovery_refill /
+                            blocked:no_eligible_tasks — never spins on already_queued)
+  -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
 
-A bounded, visible, paper-only pass of the **farm -> validation -> feedback** half
-(it seeds from the existing watch_queue; the fresh scanner pass + outcome
-resolver are opt-in, default OFF):
+Run it (dry-run writes nothing):
 
 ```bash
-bat\research_machine_demo_visible.bat
-python -m scripts.strategy_lab.run_research_machine_demo --dry-run
-python -m scripts.strategy_lab.run_research_machine_demo --run-scanner-pass --run-outcomes
+python -m scripts.strategy_lab.farm_loop --once --dry-run
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --stop-file STOP
+python -m scripts.strategy_lab.farm_status_report
 ```
+
+**Legacy demo (superseded):** the older flat bridge path
+`scanner_bridge -> generate_event_sweeps --from-scanner -> worker_once ->
+validate_candidates_pipeline` (driven by `run_research_machine_demo.py`) predates the
+coordinator and is kept only as a walkthrough — see
+[docs/farm_ownership_map.md](docs/farm_ownership_map.md).
 
 The scanner only chooses which symbol to research; the news trigger is recorded
 as provenance in the spec's `event_context` and is never used as a price anchor.

@@ -11,12 +11,22 @@ routes them by asset and layer, records decisions, and later measures outcomes.
 
 ## Current Direction
 
-The project has two separate contours:
+> **Update 2026-06-18 — center is the calculation farm.** The current research core is the
+> **universe-driven calculation farm**: a continuous, self-deciding lifecycle
+> (`scripts/strategy_lab/farm_loop.py` → `farm_coordinator` → `state/farm_tasks.sqlite`)
+> that grinds the OKX universe, fetches data (candles + public funding/OI), runs strategy
+> sweeps, classifies, and hands candidates to honest validation — paper/research only.
+> Canonical docs: [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
+> [docs/farm_runbook.md](docs/farm_runbook.md).
+
+The project has three contours:
 
 | Contour | Status | Purpose |
 |---|---|---|
-| `src/scout/` info-edge scanner | active | News/event intake, layer routing, agent review, Telegram cards, forward outcome journal |
-| Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies and reusable utilities; not the current development focus |
+| Calculation farm (`research_lab` + `scripts/strategy_lab`) | **active core** | Continuous research lifecycle: intake → plan → prepare/enrich → sweep → classify → validation. |
+| `src/scout/` info-edge scanner | active (upstream intake) | News/event intake; its `WATCH/GO` rows feed the farm. One intake source, no longer the center. |
+| Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies; useful logic already ported into research_lab families. |
 
 The active scanner is being calibrated. It already writes a useful dataset, and
 the first hygiene pass is in place: `NO_GO` stays in logs by default, while only
@@ -183,13 +193,24 @@ Stop it with `bat\strategy_lab_graceful_stop.bat` or Ctrl+C in the window.
 python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
 ```
 
-One-command local start:
+Continuous calculation farm (current core — paper/research only):
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --dry-run                       # plan only
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
+python -m scripts.strategy_lab.farm_status_report                               # operator picture
+```
+
+See [docs/farm_runbook.md](docs/farm_runbook.md) for loop/validation flags, stop/restart,
+and where artifacts are written.
+
+Legacy one-command local start (still works; the legacy queue loop, not the new lifecycle):
 
 ```bash
 bat\strategy_lab_start.bat
 ```
 
-This is the normal operator entrypoint. By default it syncs the private state
+This is the legacy operator entrypoint. By default it syncs the private state
 DB, queues a bounded `core_market / 1d` research plan, opens the local
 dashboard, and starts the one-worker queue loop. The worker processes one job at
 a time and is throttled by `configs/strategy_lab/resource_policy.yaml`, so the

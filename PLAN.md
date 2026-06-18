@@ -3,7 +3,10 @@
 > **LEGACY / HISTORICAL.** This file is kept as an audit trail for older
 > bot-first, analyzer-first, and strategy-research phases. It is not the current
 > operational plan. For current work, read `CURRENT_STATE.md`, `ROADMAP.md`,
-> `ARCHITECTURE.md`, `SCANNER_SPEC.md`, and `TASK.md`.
+> `ARCHITECTURE.md`, and the calculation-farm docs:
+> `docs/farm_loop_lifecycle.md`, `docs/farm_ownership_map.md`, `docs/farm_runbook.md`
+> (the farm is the current center; the scanner — `SCANNER_SPEC.md`, `TASK.md` — is an
+> upstream intake source).
 
 **Последнее обновление:** 2026-05-28
 

@@ -7,7 +7,27 @@ documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
 
-The active project is an **info-edge scanner** for market events, plus a
+> **Update 2026-06-18 — center shifted.** The current center of `trading-bot-v2` is the
+> **universe-driven calculation farm** (paper/research only): a continuous research
+> lifecycle (`farm_loop` → `farm_coordinator` → `farm_tasks.sqlite`) that grinds the OKX
+> universe, fetches data (candles + public funding/OI), runs strategy sweeps, classifies,
+> and hands candidates to honest validation. The **scanner below is now one upstream
+> intake source**, not the primary product. Canonical:
+> [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
+> [docs/farm_runbook.md](docs/farm_runbook.md).
+>
+> ### Calculation Farm track (current direction)
+> - Done: continuous lifecycle, fingerprint re-arm (no `already_queued` spin), public OI
+>   loader (`NEEDS_OI_DATA` is now a managed data task), auto honest-validation stamp-back,
+>   structured farm logs, bounded storage.
+> - Next: wire `farm_loop` into the default operator path (replacing legacy loops),
+>   microstructure provider (currently honest `NEEDS_MICRO_DATA`), discovery ranking by
+>   movers, GPU kernels for more families.
+
+The scanner track below remains valid but **secondary** (it feeds the farm).
+
+The active scanner sub-system is an **info-edge scanner** for market events, plus a
 paper-only confirmation bridge toward technical analysis. It is not an
 auto-trading bot.
 

@@ -1,5 +1,11 @@
 # Calculation Farm Rebuild — Design Map (2026-06-17)
 
+> **⚠️ HISTORICAL DESIGN MAP (superseded 2026-06-18).** Its DB/coordinator story
+> (`scanner_farm_pipeline.run_cycle` / `scanner_farm_loop.sqlite`) predates the actual
+> coordinator that shipped: `farm_coordinator.run_coordinator_cycle` over
+> `farm_tasks.sqlite`. For the current architecture read
+> [farm_loop_lifecycle.md](farm_loop_lifecycle.md). Kept as the rebuild's design history.
+
 Status: **in progress.** This is the short design map that grounds the rebuild of
 the strategy lab into a self-driving calculation farm. Paper/research only — no
 order path, no `.env`, no `AUTO_TRADE`, no live engine changes. The old Main
