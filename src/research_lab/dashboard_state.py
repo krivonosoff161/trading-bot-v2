@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
+from src.research_lab.farm_cockpit import build_cockpit
 from src.research_lab.data_prepare import read_market_data_prepare_report, read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
@@ -89,6 +90,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "runs": runs,
         "latest_run": runs[0] if runs else None,
         "totals": aggregate_runs(runs),
+        "farm_cockpit": build_cockpit(private_root),
         "llm_cost": load_llm_cost_summary(SCOUT_BUDGET_LOG),
         "safety": {
             "bind_host": "127.0.0.1",
