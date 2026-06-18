@@ -1,11 +1,14 @@
 # Paper Trading Runtime — Design (farm → paper → feedback)
 
-Status: **CONTRACT LAYER IMPLEMENTED; runtime / journal / feedback planned.** The typed
-contract (`src/research_lab/paper_contract.py`: `PaperTradePlan`, `PaperTradeOutcome`,
-`PaperRuntimeState`, `plan_from_setup_card`) is built and tested
-(`tests/test_paper_contract.py`). The lifecycle runtime, the JSONL journal, and the farm
-feedback table (Этапы 4-7) are designed here but not yet implemented. Paper/research only —
-no `.env`, no `AUTO_TRADE`, no orders, no private endpoints, no Telegram.
+Status: **CONTRACT + MINIMAL PAPER LOOP IMPLEMENTED; farm feedback/dashboard planned.**
+The typed contract (`src/research_lab/paper_contract.py`: `PaperTradePlan`,
+`PaperTradeOutcome`, `PaperRuntimeState`, `plan_from_setup_card`) is built and tested.
+The first bounded runtime (`src/research_lab/paper_runtime.py`,
+`scripts/strategy_lab/paper_loop.py`) reads `paper_forward_ready` setup cards, runs a
+no-look-ahead candle pass over local prepared data, and appends
+`paper/paper_trades.jsonl`. The farm feedback table, dashboard/status integration, funding
+accrual, and multi-TP lifecycle are still planned. Paper/research only — no `.env`, no
+`AUTO_TRADE`, no orders, no private endpoints, no Telegram.
 
 Companion to [old_main_audit_2026-06-18.md](old_main_audit_2026-06-18.md). The paper
 runtime is a **forward** executor of *already-validated* setups. It reuses the farm's
@@ -217,14 +220,13 @@ BACK seam reuses `validator.validate_candidate` (lite gate) and `reducer.reduce_
 1. **audit docs + ownership map** — this doc + `old_main_audit_2026-06-18.md` (no code).
 2. **schemas/contracts** — `PaperTradePlan` dataclass + `PaperTradeOutcome` schema +
    `paper_state` label fn (pure, fully unit-tested). No runtime yet.
-3. **paper runtime skeleton** — plan loader (gated reader over `setup_library` PASS cards)
-   + lifecycle state machine over an **injected** candle stream, reusing `finalize_trade`.
-   No live, no network in tests (candles injected). The only real-data source allowed is the
-   keyless public provider (`research_lab.providers.okx_public.OkxPublicMarketDataProvider`
-   via `market_data_provider.get_provider`) — **never** `src.exchange.okx_client`.
-4. **journal** — `paper_trades.jsonl` writer + `paper_outcomes` table (additive migration)
-   + R-multiple + funding accrual.
-5. **farm export to paper** — formalize the OUT reader (PASS SetupCards → `PaperTradePlan`).
+3. **paper runtime skeleton** — implemented as a bounded reader over `setup_library` PASS
+   cards plus local prepared candles. The runtime reuses `finalize_trade`, writes
+   `paper_trades.jsonl`, deduplicates deterministic `trade_id`s, and remains local-only.
+4. **journal / aggregate** — JSONL writer implemented; `paper_outcomes` table, additive
+   migration, and funding accrual are still planned.
+5. **farm export to paper** — minimal OUT reader implemented (PASS SetupCards →
+   `PaperTradePlan`); richer scheduling/backpressure remains planned.
 6. **feedback import** — `paper_outcomes` → `farm_results.paper_status` + `unique_candidates`
    mirror + `paper_state` (BACK seam, mirror `refresh_from_artifacts`); promotion/demotion.
 7. **dashboard/status** — surface `paper_status` in `farm_cockpit` + `farm_status_report`.
