@@ -76,8 +76,20 @@ def _print_cycle(units, result: dict, worker: list[dict], enrich: dict | None = 
         print("  worker: " + ", ".join(str(w.get("status")) for w in worker))
 
 
+def _resolve_universe(args):
+    """Manual universe.yaml, or the OKX-discovered snapshot when --discover-okx-universe."""
+    if not args.discover_okx_universe:
+        return load_universe()
+    from src.research_lab.instrument_discovery import discovered_universe, load_snapshot
+    snap = load_snapshot(Path(args.private_root))
+    if snap.get("instruments"):
+        return discovered_universe(snap)
+    print("no discovery snapshot found - run discover_okx_universe --apply first; using manual universe")
+    return load_universe()
+
+
 def _run_cycle(args, *, apply: bool) -> dict:
-    universe = load_universe()
+    universe = _resolve_universe(args)
     profiles = load_timeframe_profiles()
     policy = load_resource_policy(night_mode=_night_mode(args.night_mode))
     groups = [g.strip() for g in args.groups.split(",") if g.strip()] or None
@@ -156,6 +168,9 @@ def main() -> None:
     ap.add_argument("--max-prepares-per-cycle", type=int, default=6)
     ap.add_argument("--max-worker-jobs-per-cycle", type=int, default=0)
     ap.add_argument("--run-worker", action="store_true", help="drain a few queued farm jobs each cycle")
+    ap.add_argument("--discover-okx-universe", action="store_true",
+                    help="use the OKX-discovered instrument snapshot instead of universe.yaml "
+                         "(run discover_okx_universe --apply first; groups are discovered_<group>)")
     ap.add_argument("--groups", default="", help="comma-separated universe groups (default: all)")
     ap.add_argument("--timeframes", default="", help="comma-separated timeframes (default: 1h,4h,1d,15m)")
     ap.add_argument("--full", action="store_true", help="full per-timeframe caps instead of the smoke subset")
