@@ -58,12 +58,14 @@ def _drain_worker(private_root: Path, max_jobs: int, night_mode: bool) -> list[d
     return out
 
 
-def _print_cycle(units, result: dict, worker: list[dict]) -> None:
+def _print_cycle(units, result: dict, worker: list[dict], enrich: dict | None = None) -> None:
     c = result["counters"]
     print(f"\nunits={c['units']} ({', '.join(u.key() for u in units)})")
     print(f"  queued={c['jobs_queued']} already={c['already_queued']} prepared={c['prepared']} "
           f"would_prepare={c['would_prepare']} would_queue={c['would_queue']} "
           f"prepare_failed={c['prepare_failed']} backoff_skips={c['prepare_skipped_backoff']}")
+    if enrich is not None:
+        print("  flow enrich: " + " ".join(f"{k}={v}" for k, v in enrich.items() if v))
     for d in result["decisions"][:20]:
         tag = d.get("experiment_id") or f"{len(d.get('families', []))}fam"
         print(f"  plan {d.get('group')}/{d.get('timeframe')} -> {d.get('action')} "
@@ -109,13 +111,37 @@ def _run_cycle(args, *, apply: bool) -> dict:
     finally:
         if conn is not None:
             conn.close()
+    enrich = _maybe_enrich(args, units, universe, profiles, private_root, apply)
     worker = _drain_worker(private_root, args.max_worker_jobs_per_cycle, _night_mode(args.night_mode)) \
         if (apply and args.run_worker) else []
     if apply:
         state.cursor = next_cursor
         state.save(state_path)
-    _print_cycle(units, result, worker)
+    _print_cycle(units, result, worker, enrich)
     return result
+
+
+def _maybe_enrich(args, units, universe, profiles, private_root, apply) -> dict | None:
+    """Optional bounded funding enrichment of the cycle's prepared files."""
+    if not args.enrich_funding:
+        return None
+    if apply and args.flow_provider == "null":
+        return None
+    from src.research_lab.flow_enrich import FlowEnrichState, run_flow_enrich
+    provider = None
+    if apply and args.flow_provider == "okx-public-funding":
+        from src.research_lab.providers.okx_flow import OkxPublicFundingProvider
+        provider = OkxPublicFundingProvider()
+    state_path = private_root / "state" / "flow_enrich_state.json"
+    fstate = FlowEnrichState.load(state_path) if apply else FlowEnrichState()
+    result = run_flow_enrich(
+        units, universe=universe, profiles=profiles, private_root=private_root, provider=provider,
+        state=fstate, apply=apply, now_ms=int(time.time() * 1000),
+        max_enrich=args.max_flow_enrich_per_cycle, full=args.full,
+        allow_public_output=args.allow_public_output)
+    if apply:
+        fstate.save(state_path)
+    return result["counters"]
 
 
 def main() -> None:
@@ -138,6 +164,10 @@ def main() -> None:
                     help="market-data provider; synthetic = offline deterministic demo (not real data)")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto",
                     help="compute backend; auto = GPU when available, else honest CPU fallback")
+    ap.add_argument("--enrich-funding", action="store_true",
+                    help="bounded: forward-fill public OKX funding onto prepared files for flow families")
+    ap.add_argument("--max-flow-enrich-per-cycle", type=int, default=4)
+    ap.add_argument("--flow-provider", choices=["okx-public-funding", "null"], default="okx-public-funding")
     ap.add_argument("--data-days", type=int, default=None)
     ap.add_argument("--sleep-seconds", type=int, default=120)
     ap.add_argument("--stop-file", default="")

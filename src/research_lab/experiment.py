@@ -92,6 +92,11 @@ class RunResult:
     regime_summary: dict[str, Any] = field(default_factory=dict)
 
 
+# Optional flow/microstructure fields carried through to the feature layer when the
+# prepared file was enriched (e.g. by enrich_flow_data / the loop's funding enricher).
+_OPTIONAL_CANDLE_FIELDS = ("funding", "oi", "index_px", "obi_top5", "spread_bps", "trade_delta_100")
+
+
 def load_candles(path: Path) -> list[dict[str, float | int | str]]:
     rows = json.loads(path.read_text(encoding="utf-8"))
     out: list[dict[str, float | int | str]] = []
@@ -99,19 +104,25 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
         if not isinstance(row, dict):
             continue
         try:
-            out.append(
-                {
-                    "ts": int(row["ts"]),
-                    "date": str(row.get("date") or ""),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "vol": float(row.get("vol") or 0.0),
-                }
-            )
+            candle: dict[str, float | int | str] = {
+                "ts": int(row["ts"]),
+                "date": str(row.get("date") or ""),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "vol": float(row.get("vol") or 0.0),
+            }
         except (KeyError, TypeError, ValueError):
             continue
+        for flow_field in _OPTIONAL_CANDLE_FIELDS:
+            value = row.get(flow_field)
+            if value is not None:
+                try:
+                    candle[flow_field] = float(value)
+                except (TypeError, ValueError):
+                    pass
+        out.append(candle)
     return sorted(out, key=lambda r: int(r["ts"]))
 
 
