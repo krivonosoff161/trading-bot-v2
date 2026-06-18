@@ -153,7 +153,8 @@ def collect(db_path: Path) -> dict:
 
 def _print(report: dict) -> None:
     if not report.get("exists"):
-        print(f"no farm DB yet at {report.get('db')} - run universe_farm_loop --apply first")
+        print(f"no farm DB yet at {report.get('db')} - run the farm first: "
+              "python -m scripts.strategy_lab.farm_loop --once --apply --run-worker")
         return
     t = report["totals"]
     print(f"FARM STATUS - schema v{report['schema_version']} | runs={t['runs']} candidates={t['candidates']} "
