@@ -8,6 +8,10 @@
 > [../farm_ownership_map.md](../farm_ownership_map.md). Kept for history; the
 > `scanner_farm_pipeline._ensure_local_data` helper it documents is still reused by the
 > coordinator.
+>
+> **Everything below describes LEGACY behavior. All commands here (`scanner_farm_loop`,
+> `scanner_farm_loop.sqlite`) are legacy / off-default — do NOT use them for the current
+> continuous research path; use `python -m scripts.strategy_lab.farm_loop` instead.**
 
 A single automated coordinator that closes the gap between a scanner WATCH/GO and a
 real farm calculation. It is **not** "run for N hours and read logs" — it runs in

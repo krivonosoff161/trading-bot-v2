@@ -55,7 +55,18 @@ sources
   -> setup_confirmation engine
 ```
 
-Important active files:
+Important active files — calculation farm (current core):
+
+- `scripts/strategy_lab/farm_loop.py` - the continuous research-cycle CLI (active core).
+- `src/research_lab/farm_coordinator.py` - the cycle brain (intake→plan→prepare/enrich→sweep→classify→validate→pivot).
+- `src/research_lab/farm_tasks_db.py` - `state/farm_tasks.sqlite` typed-task lifecycle.
+- `src/research_lab/data_planner.py` - decide-before-compute (prepare/defer/enrich/block-with-reason).
+- `src/research_lab/providers/okx_flow.py` - keyless public funding + open-interest loaders.
+- `src/research_lab/validation_orchestrator.py` - export→honest-backtest→stamp-back.
+- `src/research_lab/farm_journal.py` - structured cycle/transition/error logs.
+- `scripts/strategy_lab/farm_status_report.py` - operator picture (run after a cycle).
+
+Important active files — scanner (upstream intake, second level):
 
 - `src/scout/scanner_v0.py` - scanner runtime.
 - `src/scout/news_buffer.py` - SQLite intake buffer.
@@ -122,7 +133,15 @@ Current evidence:
 
 ## Immediate Next Checks
 
-After the scanner has run for 24-48h:
+Farm (current core) — after a bounded cycle:
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, writes nothing
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-oi
+python -m scripts.strategy_lab.farm_status_report                  # tasks by type/state, blocked/deferred, unique candidates
+```
+
+Scanner intake (second level) — after the scanner has run for 24-48h:
 
 ```bash
 python scripts/analysis/source_onboarding_report.py
