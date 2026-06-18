@@ -53,22 +53,26 @@ def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
     if not apply:
         return
     try:
+        from src.research_lab.farm_journal import farm_log_paths
         from src.research_lab.storage_policy import bound_farm_artifacts, maintain
-        maintain(apply=True)
+        maintain(farm_log_paths(private_root), apply=True)  # rotate the farm logs too
         bound_farm_artifacts(private_root, apply=True)
     except Exception as exc:  # noqa: BLE001 - storage hygiene must never break the loop
         print(f"  storage: skipped ({type(exc).__name__})")
 
 
 def _providers(args, apply: bool):
-    provider = flow_provider = None
+    provider = flow_provider = oi_provider = None
     if apply:
         from src.research_lab.market_data_provider import get_provider
         provider = get_provider(args.provider, allow_synthetic=(args.provider == "synthetic"))
         if args.enrich_funding:
             from src.research_lab.providers.okx_flow import OkxPublicFundingProvider
             flow_provider = OkxPublicFundingProvider()
-    return provider, flow_provider
+        if args.enrich_oi:
+            from src.research_lab.providers.okx_flow import OkxPublicOpenInterestProvider
+            oi_provider = OkxPublicOpenInterestProvider()
+    return provider, flow_provider, oi_provider
 
 
 def _print_cycle(out: dict) -> None:
@@ -81,21 +85,38 @@ def _print_cycle(out: dict) -> None:
         print("  states: " + " ".join(f"{k}={v}" for k, v in st["by_state"].items()))
     if st.get("blocked_reasons"):
         print("  blocked: " + " ".join(f"{k}={v}" for k, v in st["blocked_reasons"].items()))
+    if st.get("deferred_reasons"):
+        print("  deferred: " + " ".join(f"{k}={v}" for k, v in st["deferred_reasons"].items()))
+    for e in out.get("errors") or []:
+        print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
+
+
+def _cycle_signature(out: dict) -> tuple:
+    """A change-signature so --loop doesn't reprint identical state every sleep tick."""
+    nz = tuple(sorted(k for k, v in out["counters"].items() if isinstance(v, int) and v))
+    by_state = tuple(sorted(((out.get("status") or {}).get("by_state") or {}).items()))
+    return (out.get("pivot"), nz, by_state, bool(out.get("errors")))
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
-    provider, flow_provider = _providers(args, apply)
+    provider, flow_provider, oi_provider = _providers(args, apply)
     events = _read_intake(args.max_plan_events)
     out = run_coordinator_cycle(
         tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
-        families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider, apply=apply,
+        families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider,
+        oi_provider=oi_provider, apply=apply,
         backend=args.backend, data_days=args.data_days, max_plan_events=args.max_plan_events,
         max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
         allow_public_output=args.allow_public_output, discovery_snapshot=_discovery_snapshot(private_root),
         run_validation=args.run_validation,
     )
-    _print_cycle(out)
+    if apply:
+        from src.research_lab import farm_journal
+        farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out)
+        for e in out.get("errors") or []:
+            farm_journal.log_error(private_root, where=e.get("where", "cycle"),
+                                   error=e.get("error", ""), ts=time.time())
     _maybe_storage_maintain(private_root, apply)
     return out
 
@@ -111,6 +132,7 @@ def main() -> None:
     ap.add_argument("--run-worker", action="store_true", help="drain a few compute jobs each cycle")
     ap.add_argument("--run-validation", action="store_true", help="export + honest-backtest + stamp-back")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
+    ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")
     ap.add_argument("--provider", choices=["okx-public", "synthetic"], default="okx-public")
     ap.add_argument("--max-plan-events", type=int, default=20)
@@ -124,6 +146,9 @@ def main() -> None:
     ap.add_argument("--stop-file", default="")
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
+    verb = ap.add_mutually_exclusive_group()
+    verb.add_argument("--verbose", action="store_true", help="print the full cycle block every tick")
+    verb.add_argument("--quiet", action="store_true", help="print only on change/error (loop heartbeat)")
     args = ap.parse_args()
     apply = bool(args.apply)
 
@@ -136,20 +161,32 @@ def main() -> None:
     if apply:
         private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
         tasks = FarmTasksDB(tasks_db_path(private_root))
+        from src.research_lab.farm_journal import make_transition_sink
+        tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit
     else:
         private_root = Path(args.private_root)
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
 
     try:
         if not args.loop:
-            _run_once(args, tasks, profiles, policy, private_root, apply)
+            out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            if not args.quiet:
+                _print_cycle(out)
             return
+        prev_sig = None
         while True:
             if args.stop_file and Path(args.stop_file).exists():
                 print(f"stop-file present ({args.stop_file}) — exiting loop")
                 break
-            print(f"\n=== farm cycle @ {int(time.time())} ===")
-            _run_once(args, tasks, profiles, policy, private_root, apply)
+            out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            sig = _cycle_signature(out)
+            changed = sig != prev_sig
+            if args.verbose or (changed and not args.quiet) or out.get("errors"):
+                print(f"\n=== farm cycle @ {int(time.time())} ===")
+                _print_cycle(out)
+            else:  # no state change -> one-line heartbeat instead of reprinting the block
+                print(f"  heartbeat @ {int(time.time())} pivot={out['pivot']} active={out['active_tasks']}")
+            prev_sig = sig
             time.sleep(max(1, args.sleep_seconds))
     except KeyboardInterrupt:
         print("\ninterrupted — graceful stop")

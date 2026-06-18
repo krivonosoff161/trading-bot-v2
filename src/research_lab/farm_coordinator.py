@@ -37,7 +37,8 @@ _COUNTER_KEYS = (
     "events_ingested", "events_consumed", "tasks_created", "tasks_deduped",
     "planned_prepare", "planned_run_sweep", "planned_blocked", "planned_deferred",
     "planned_skipped", "prepared_ok", "prepared_deferred", "prepared_blocked",
-    "enriched_ok", "enrich_deferred", "unblocked", "sweeps_materialized",
+    "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
+    "unblocked", "sweeps_materialized",
     "sweeps_deduped", "runs_completed", "runs_failed", "classified",
     "unique_upserted", "exports_created",
 )
@@ -94,8 +95,9 @@ def _create_run_sweep(tasks: FarmTasksDB, dec: dict[str, Any], sym: str, tf: str
                                         family=fam, priority=pri, source_event_id=src, state="blocked",
                                         machine_reason=dec["reason"], now=now)
         _bump_created(counters, "planned_blocked", created)
-        if dec.get("needs_enrich") == "funding":
-            tasks.enqueue_task(task_type="enrich_funding", task_key=f"enrich_funding::{sym}::{tf}",
+        enrich = dec.get("needs_enrich")
+        if enrich in ("funding", "oi"):
+            tasks.enqueue_task(task_type=f"enrich_{enrich}", task_key=f"enrich_{enrich}::{sym}::{tf}",
                                symbol=sym, timeframe=tf, priority=pri, source_event_id=src, now=now)
         return
     fp = dec.get("data_fingerprint") or "nofp"
@@ -131,12 +133,13 @@ def _gate_clear(task: dict[str, Any], data_state_fn: Callable) -> bool:
         return False
     required = set(get_strategy(fam).required_data) if fam else set()
     state = data_state_fn(task["symbol"], task["timeframe"])
+    enrichment = set(state.get("enrichment") or ())
     if "oi" in required:
-        return bool(state.get("oi_available"))
+        return "oi" in enrichment or bool(state.get("oi_available"))
     if "funding" in required:
-        return "funding" in set(state.get("enrichment") or ())
+        return "funding" in enrichment
     if "microstructure" in required:
-        return "obi_top5" in set(state.get("enrichment") or ())
+        return "obi_top5" in enrichment
     return True
 
 
@@ -222,6 +225,32 @@ def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, li
             _bump(counters, "enrich_deferred")
 
 
+def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now) -> None:
+    from src.research_lab.experiment import choose_symbol_file
+    from src.research_lab.flow_enrich import enrich_oi_one
+    for _ in range(limit):
+        task = tasks.claim_next_task(task_types=("enrich_oi",), now=now)
+        if task is None:
+            break
+        if oi_provider is None:
+            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_oi_provider", now=now)
+            _bump(counters, "enrich_oi_deferred")
+            continue
+        glob = market_data_glob(private_root, task["timeframe"])
+        path = choose_symbol_file(glob, task["symbol"], timeframe=task["timeframe"])
+        if not path:
+            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_prepared_file", now=now)
+            _bump(counters, "enrich_oi_deferred")
+            continue
+        status, _n = enrich_oi_one(path, task["symbol"], task["timeframe"], provider=oi_provider, now_ms=now_ms)
+        if status == "enriched":
+            tasks.complete_task(task["task_id"], reason="oi_enriched", now=now)
+            _bump(counters, "enriched_oi_ok")
+        else:
+            tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason=f"oi_{status}", now=now)
+            _bump(counters, "enrich_oi_deferred")
+
+
 def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
                      priority_base, limit, counters, now) -> None:
     from src.research_lab.data_fingerprint import fingerprint_for_symbol
@@ -293,14 +322,15 @@ def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> 
         _bump(counters, "classified")
 
 
-def _drain_worker(private_root, max_jobs: int, night_mode: bool) -> None:
+def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -> None:
     if max_jobs <= 0:
         return
     from scripts.strategy_lab.worker_once import run_worker_once
     for _ in range(max_jobs):
         try:
             status = run_worker_once(private_root, night_mode=night_mode, ignore_cadence=True)
-        except Exception:  # noqa: BLE001 - one bad job must not abort the cycle
+        except Exception as exc:  # noqa: BLE001 - record, then stop draining this cycle
+            errors.append({"where": "worker", "error": f"{type(exc).__name__}: {exc}"})
             break
         if status.get("status") in {"queue_empty", "deferred"}:
             break
@@ -334,7 +364,8 @@ def _with_id(tasks: FarmTasksDB, event: dict, now: float) -> dict:
 def run_coordinator_cycle(
     tasks: FarmTasksDB, *, private_root, profiles, policy,
     intake_events: list[dict] | None = None, families: tuple[str, ...] = DEFAULT_FAMILIES,
-    data_state_fn: Callable | None = None, provider=None, flow_provider=None, apply: bool = False,
+    data_state_fn: Callable | None = None, provider=None, flow_provider=None, oi_provider=None,
+    apply: bool = False,
     now: float | None = None, now_ms: int | None = None, backend: str = "auto",
     data_days: int | None = None, max_plan_events: int = 20, max_prepares: int = 4,
     max_enrich: int = 4, max_sweeps: int = 4, max_classify: int = 8, run_worker: bool = False,
@@ -351,6 +382,7 @@ def run_coordinator_cycle(
         def data_state_fn(s, t):  # noqa: E306 - bound to resolved private_root
             return farm_data_state.data_state(private_root, s, t)
     counters = {k: 0 for k in _COUNTER_KEYS}
+    errors: list[dict] = []
 
     for ev in (intake_events or []):
         _, created = tasks.upsert_intake_event(ev, now=now)
@@ -372,12 +404,14 @@ def run_coordinator_cycle(
                            counters=counters, now=now, data_state_fn=data_state_fn)
             _drain_enrich(tasks, private_root=private_root, flow_provider=flow_provider, now_ms=now_ms,
                           limit=max_enrich, counters=counters, now=now)
+            _drain_enrich_oi(tasks, private_root=private_root, oi_provider=oi_provider, now_ms=now_ms,
+                             limit=max_enrich, counters=counters, now=now)
             _drain_run_sweep(tasks, conn=conn, private_root=private_root, profiles=profiles, policy=policy,
                              backend=backend, priority_base=priority_base, limit=max_sweeps,
                              counters=counters, now=now)
             _sync_completions(tasks, conn=conn, counters=counters, now=now)
             if run_worker:
-                _drain_worker(private_root, max_worker_jobs, night_mode)
+                _drain_worker(private_root, max_worker_jobs, night_mode, errors)
                 _sync_completions(tasks, conn=conn, counters=counters, now=now)
             _classify_due(tasks, private_root=private_root, limit=max_classify, counters=counters, now=now)
     finally:
@@ -389,13 +423,14 @@ def run_coordinator_cycle(
         counters["validation"] = run_due_validations(tasks, private_root, apply=True,
                                                       limit=max_validations, now=now)
 
-    did_work = any(counters[k] for k in ("prepared_ok", "enriched_ok", "sweeps_materialized",
-                                         "runs_completed", "classified", "unblocked"))
+    did_work = any(counters[k] for k in ("prepared_ok", "enriched_ok", "enriched_oi_ok",
+                                         "sweeps_materialized", "runs_completed", "classified",
+                                         "unblocked"))
     pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
                           snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,
                           max_discovery=max_discovery, counters=counters)
     return {"counters": counters, "pivot": pivot, "active_tasks": _count_active(tasks),
-            "status": tasks.status_counts()}
+            "status": tasks.status_counts(), "errors": errors}
 
 
 def main() -> None:  # pragma: no cover - thin CLI shim lives in scripts/
