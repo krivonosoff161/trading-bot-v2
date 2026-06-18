@@ -78,9 +78,127 @@ def momentum_breakout_signals(
     return signals
 
 
+def range_volume_breakout_signals(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    vols: list[float],
+    *,
+    lookback: int,
+    max_range_pct: float,
+    min_accumulation: float,
+    min_vol_ratio: float,
+    vol_period: int,
+    xp,
+) -> list[dict[str, Any]]:
+    """Vectorized equivalent of strategies.signals_range_volume_breakout.
+
+    Mirrors the scalar gates exactly, including the round(.,4) applied to range_pct,
+    accumulation and vol_ratio (so the gate booleans match the feature helpers).
+    Decision on bar d, entry at d+1.
+    """
+    n = len(closes)
+    lookback, vol_period = int(lookback), int(vol_period)
+    start = max(2 * lookback, vol_period)
+    if lookback <= 0 or n <= start + 1:
+        return []
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    v = xp.asarray(vols, dtype=xp.float64)
+
+    d = xp.arange(start, n - 1)
+    cur_win = d[:, None] - lookback + xp.arange(lookback)[None, :]
+    prev_win = d[:, None] - 2 * lookback + xp.arange(lookback)[None, :]
+    vol_win = d[:, None] - vol_period + xp.arange(vol_period)[None, :]
+    win_high = h[cur_win].max(axis=1)
+    win_low = low_arr[cur_win].min(axis=1)
+    window_vol = v[cur_win].sum(axis=1)
+    prior_vol = v[prev_win].sum(axis=1)
+    vol_base = v[vol_win].sum(axis=1) / vol_period
+    c_d = c[d]
+
+    safe_low = xp.where(win_low > 0, win_low, 1.0)
+    range_pct = xp.round((win_high / safe_low - 1.0) * 100.0, 4)
+    sideways_ok = (win_low > 0) & (range_pct <= max_range_pct)
+    safe_prior = xp.where(prior_vol > 0, prior_vol, 1.0)
+    accumulation = xp.round(window_vol / safe_prior, 4)
+    accum_ok = (prior_vol > 0) & (accumulation >= min_accumulation)
+    safe_base = xp.where(vol_base > 0, vol_base, 1.0)
+    vol_ratio = xp.round(v[d] / safe_base, 4)
+    vr_ok = (vol_base > 0) & (vol_ratio >= min_vol_ratio)
+
+    all_ok = sideways_ok & accum_ok & vr_ok
+    long_mask = all_ok & (c_d > win_high)
+    short_mask = all_ok & (c_d < win_low)
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "range_accum_breakout_up", "range_accum_breakout_down",
+    )
+
+
+def pump_dump_scalp_signals(
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    vols: list[float],
+    *,
+    min_body_pct: float,
+    vol_mult: float,
+    vol_period: int,
+    min_close_pos: float,
+    xp,
+) -> list[dict[str, Any]]:
+    """Vectorized equivalent of strategies.signals_pump_dump_scalp (no rounding in the
+    scalar gates -> the only float-order-sensitive term is the volume baseline)."""
+    n = len(closes)
+    vol_period = int(vol_period)
+    if vol_period <= 0 or n <= vol_period + 1:
+        return []
+    o = xp.asarray(opens, dtype=xp.float64)
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    v = xp.asarray(vols, dtype=xp.float64)
+
+    d = xp.arange(vol_period, n - 1)
+    vol_win = d[:, None] - vol_period + xp.arange(vol_period)[None, :]
+    base = v[vol_win].sum(axis=1) / vol_period
+    o_d, c_d, h_d, l_d = o[d], c[d], h[d], low_arr[d]
+
+    safe_o = xp.where(o_d > 0, o_d, 1.0)
+    body_pct = (c_d / safe_o - 1.0) * 100.0
+    safe_base = xp.where(base > 0, base, 1.0)
+    vol_ratio = v[d] / safe_base
+    rng = h_d - l_d
+    close_pos = xp.where(rng > 0, (c_d - l_d) / xp.where(rng > 0, rng, 1.0), 0.5)
+    valid = (o_d > 0) & (base > 0) & (vol_ratio >= vol_mult)
+    long_mask = valid & (body_pct >= min_body_pct) & (close_pos >= min_close_pos)
+    short_mask = valid & (~long_mask) & (body_pct <= -min_body_pct) & (close_pos <= (1.0 - min_close_pos))
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "pump_volume_shock_up", "dump_volume_shock_down",
+    )
+
+
+def _breakout_signals(decision_h, long_h, short_h, up_reason: str, down_reason: str) -> list[dict[str, Any]]:
+    """Build host-side {idx,side,reason} dicts from decision bars + long/short masks."""
+    signals: list[dict[str, Any]] = []
+    for i in range(len(decision_h)):
+        d = int(decision_h[i])
+        if bool(long_h[i]):
+            signals.append({"idx": d + 1, "side": "long", "reason": up_reason})
+        elif bool(short_h[i]):
+            signals.append({"idx": d + 1, "side": "short", "reason": down_reason})
+    return signals
+
+
 # Dispatch table: family -> vectorized kernel. Extend the support matrix here.
 KERNELS = {
     "momentum_breakout": momentum_breakout_signals,
+    "range_volume_breakout": range_volume_breakout_signals,
+    "pump_dump_scalp": pump_dump_scalp_signals,
 }
 
 
@@ -96,17 +214,37 @@ def generate_signals_vectorized(
     xp,
 ) -> list[dict[str, Any]]:
     """Run the vectorized kernel for a supported family. Raises if unsupported."""
-    kernel = KERNELS.get(family)
-    if kernel is None:
+    if family not in KERNELS:
         raise KeyError(f"no vectorized kernel for family '{family}'")
     highs = [float(c["high"]) for c in candles]
     lows = [float(c["low"]) for c in candles]
     closes = [float(c["close"]) for c in candles]
     if family == "momentum_breakout":
-        return kernel(
+        return momentum_breakout_signals(
             highs, lows, closes,
             lookback=int(params.get("lookback", 20)),
             threshold_pct=float(params.get("threshold_pct", 0.0)),
+            xp=xp,
+        )
+    vols = [float(c.get("vol") or 0.0) for c in candles]
+    if family == "range_volume_breakout":
+        return range_volume_breakout_signals(
+            highs, lows, closes, vols,
+            lookback=int(params.get("range_lookback", 20)),
+            max_range_pct=float(params.get("max_range_pct", 12.0)),
+            min_accumulation=float(params.get("min_accumulation", 1.0)),
+            min_vol_ratio=float(params.get("min_vol_ratio", 1.5)),
+            vol_period=int(params.get("vol_period", 20)),
+            xp=xp,
+        )
+    if family == "pump_dump_scalp":
+        opens = [float(c["open"]) for c in candles]
+        return pump_dump_scalp_signals(
+            opens, highs, lows, closes, vols,
+            min_body_pct=float(params.get("min_body_pct", 3.0)),
+            vol_mult=float(params.get("vol_mult", 3.0)),
+            vol_period=int(params.get("vol_period", 20)),
+            min_close_pos=float(params.get("min_close_pos", 0.6)),
             xp=xp,
         )
     raise KeyError(f"no vectorized dispatch for family '{family}'")  # pragma: no cover
