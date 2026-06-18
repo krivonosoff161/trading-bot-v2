@@ -54,6 +54,40 @@ def test_no_transition_hook_is_noop(tmp_path):
     assert not J.transitions_path(tmp_path).exists()  # nothing written without a sink
 
 
+def test_storage_maintain_rotates_farm_logs(tmp_path, monkeypatch):
+    # _maybe_storage_maintain must rotate the farm log files (maintain called WITH their paths)
+    from scripts.strategy_lab import farm_loop
+    from src.research_lab import storage_policy
+    calls = {}
+
+    def fake_maintain(paths=None, *, apply=False):
+        calls["paths"] = list(paths or [])
+        calls["apply"] = apply
+        return {}
+
+    def fake_bound(private_root, *, apply=False, **_kw):
+        calls["bound_apply"] = apply
+        return {}
+
+    monkeypatch.setattr(storage_policy, "maintain", fake_maintain)
+    monkeypatch.setattr(storage_policy, "bound_farm_artifacts", fake_bound)
+    farm_loop._maybe_storage_maintain(tmp_path, apply=True)
+    assert calls["apply"] is True and calls["bound_apply"] is True
+    assert set(calls["paths"]) == set(J.farm_log_paths(tmp_path))  # rotation wired to farm logs
+
+
+def test_storage_maintain_noop_in_dry_run(tmp_path, monkeypatch):
+    from scripts.strategy_lab import farm_loop
+    from src.research_lab import storage_policy
+
+    def boom(*_a, **_k):
+        raise AssertionError("storage maintenance must not run in dry-run")
+
+    monkeypatch.setattr(storage_policy, "maintain", boom)
+    monkeypatch.setattr(storage_policy, "bound_farm_artifacts", boom)
+    farm_loop._maybe_storage_maintain(tmp_path, apply=False)  # no exception == no call
+
+
 def test_log_error_and_paths(tmp_path):
     J.log_error(tmp_path, where="worker", error="RuntimeError: boom", ts=9.0, job_id=7)
     rows = _read_jsonl(J.errors_path(tmp_path))
