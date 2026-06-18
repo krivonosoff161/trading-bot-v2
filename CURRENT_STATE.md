@@ -1,29 +1,45 @@
 # Current State
 
-Updated: 2026-06-11
+Updated: 2026-06-18
 
 ## Short Version
 
-`trading-bot-v2` is currently a paper-only information-edge scanner with a
-new read-only bridge toward technical confirmation.
+`trading-bot-v2`'s current center is the **universe-driven calculation farm**
+(paper/research only). The farm runs a continuous, self-deciding research lifecycle —
+`farm_loop` → `farm_coordinator` over `farm_tasks.sqlite` — that grinds the OKX universe,
+fetches missing data (candles + public funding/OI), runs strategy sweeps, classifies
+results, and hands promising candidates to honest validation. See
+[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md) and
+[docs/farm_runbook.md](docs/farm_runbook.md).
 
-The active system is still `src/scout/`. It collects market/news events, routes
-them by asset and layer, uses cheap/chief LLM roles for structured review, writes
-append-only records, and resolves outcomes later.
+The **scanner (`src/scout/`) is now one upstream intake source**, not the project center:
+its `WATCH/GO` rows feed the farm via `intake_adapter` (read from the watch file). It still
+collects/routes/reviews market+news events and resolves outcomes, but the farm — not the
+scanner — is the main engine, and the farm is universe-driven, not news-driven.
 
-The old WebSocket Main/TA engines are not the primary signal source anymore.
-They are frozen/reference code and may only be reused as a confirmation, risk,
-level, or visualization layer behind scanner-led event candidates.
+The old WebSocket Main/TA engines remain frozen/reference (confirmation/risk/level context
+only); their useful strategy logic is already ported into research_lab families
+(see [docs/farm_ownership_map.md](docs/farm_ownership_map.md)).
 
 ## Active Runtime
 
-Primary scanner path:
+Primary farm path (current center):
+
+```text
+farm_loop --apply --run-worker [--enrich-funding --enrich-oi --run-validation]
+  -> farm_coordinator.run_coordinator_cycle   (brain: state/farm_tasks.sqlite)
+  -> materializes run_sweep -> state/strategy_lab.sqlite (compute queue) -> worker
+  -> classify -> unique_candidates -> honest validation -> stamp-back
+  -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
+```
+
+Upstream scanner intake source (feeds the farm, no longer the center):
 
 ```text
 scanner.bat
   -> src/scout/scanner_v0.py --buffer --limit N
   -> data/scout/news_buffer.sqlite
-  -> logs/scout/*.jsonl
+  -> logs/scout/watch_queue.jsonl   (consumed by farm intake_adapter)
 ```
 
 Current event-to-confirmation path:
