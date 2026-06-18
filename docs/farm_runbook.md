@@ -8,13 +8,36 @@ paper/research only — public OKX data, no `.env`, no `AUTO_TRADE`, no orders, 
 
 ## What is active now
 
-- **Core loop:** `python -m scripts.strategy_lab.farm_loop` (brain = `farm_tasks.sqlite`).
+- **Canonical core (the command to run):** `python -m scripts.strategy_lab.farm_loop`
+  (brain = `state/farm_tasks.sqlite`). This is the current continuous research cycle.
+- **One-click `.bat` wiring:** **NOT canonical yet.** `bat\strategy_lab_start.bat` and the
+  other one-click bats still drive the *legacy* loops (`universe_farm_loop` /
+  `research_loop`), **not** `farm_loop`. Until a `farm_loop` bat is wired, the canonical
+  path is the explicit `python -m scripts.strategy_lab.farm_loop …` command above — treat
+  the legacy bats as manual diagnostics / off-default.
 - **Compute executor:** `worker_once` / `worker_loop` drain `strategy_lab.sqlite` (the
   brain materializes `run_sweep` jobs into it; `--run-worker` drains a few per cycle).
 - **Operator picture:** `farm_status_report` (terminal) and the cockpit dashboard.
-- **Legacy loops** (`universe_farm_loop`, `scanner_farm_loop`, `research_loop`, …) still
-  exist with assigned roles — see [farm_ownership_map.md](farm_ownership_map.md). The new
-  `farm_loop` is the intended core; legacy loops are not yet removed.
+- **Legacy loops** (`universe_farm_loop`, `scanner_farm_loop`, `research_loop`,
+  `strategy_lab_start.bat`) = legacy / off-default / manual diagnostics — see
+  [farm_ownership_map.md](farm_ownership_map.md). Not removed; not the current path.
+
+## Prerequisite: OKX universe discovery snapshot
+
+The farm's universe-discovery refill pivot reads a cached OKX instrument snapshot. Build /
+refresh it (keyless, public, paper-only):
+
+```
+python -m scripts.strategy_lab.discover_okx_universe --apply
+# writes <private_root>/discovery/okx_instruments_snapshot.json (live USDT perps, classified)
+```
+
+Behavior without a snapshot: `farm_loop` still runs — it plans from scanner watch intake
+and any already-prepared symbols — but the **`discovery_refill` pivot is unavailable**, so
+when fresh intake is empty the loop reports `pivot=blocked:no_eligible_tasks` (it does
+**not** invent work). Run `discover_okx_universe --apply` first if you want the farm to
+grind the broad universe when scanner intake is quiet. The snapshot has a TTL (default 6h);
+re-run to refresh.
 
 ## Daily operation
 
