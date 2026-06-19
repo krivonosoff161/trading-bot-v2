@@ -69,6 +69,9 @@ def _results_section(db_path: Path) -> dict[str, Any]:
             "exported": int(_try_scalar(conn, "SELECT COUNT(*) FROM farm_results WHERE validation_exported=1")),
             "hard_status": _try_counts(
                 conn, "SELECT hard_status, COUNT(*) FROM farm_results WHERE hard_status<>'' GROUP BY hard_status"),
+            "paper_status": _try_counts(
+                conn, "SELECT paper_status, COUNT(*) FROM farm_results WHERE paper_status<>'' GROUP BY paper_status"),
+            "paper_outcomes": int(_try_scalar(conn, "SELECT COUNT(*) FROM paper_outcomes")),
             "unique_symbols": int(_try_scalar(conn, "SELECT COUNT(DISTINCT symbol) FROM farm_results")),
             "by_group": _try_counts(conn, "SELECT asset_group, COUNT(*) FROM farm_results GROUP BY asset_group"),
         }
@@ -187,6 +190,9 @@ def _lifecycle_section(private_root: Path) -> dict[str, Any]:
             "validation": _try_counts(
                 conn, "SELECT hard_status, COUNT(*) FROM unique_candidates WHERE hard_status<>'' "
                       "GROUP BY hard_status"),
+            "paper_status": _try_counts(
+                conn, "SELECT paper_status, COUNT(*) FROM unique_candidates WHERE paper_status<>'' "
+                      "GROUP BY paper_status"),
             "export_followups": int(_try_scalar(
                 conn, "SELECT COUNT(*) FROM tasks WHERE task_type='export_validation'")),
         }

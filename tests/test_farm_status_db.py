@@ -20,8 +20,8 @@ def test_v3_tables_created_and_idempotent(tmp_path):
     init_db(conn)
     init_db(conn)  # idempotent
     names = _table_names(conn)
-    assert {"runs", "candidates", "queue", "farm_results", "runtime_stats"} <= names
-    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 4
+    assert {"runs", "candidates", "queue", "farm_results", "runtime_stats", "paper_outcomes"} <= names
+    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 5
     conn.close()
 
 
@@ -96,6 +96,7 @@ def test_status_report_collect(tmp_path):
     report = collect(default_db_path(tmp_path))
     assert report["exists"] is True
     assert report["totals"]["farm_results"] == 2
+    assert report["handoff"]["paper_outcomes"] == 0
     assert "FORWARD_PAPER" in report["validation"]
     assert report["by_timeframe"].get("1h") == 2
     ready = {r["symbol"] for r in report["ready_for_validation"]}
@@ -134,7 +135,7 @@ def test_status_report_old_db_without_v3_does_not_crash(tmp_path):
     conn.close()
     report = collect(db)  # init_db inside upgrades to current schema; must not crash
     assert report["exists"] is True
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert report["totals"]["farm_results"] == 0
     assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
 
@@ -168,6 +169,8 @@ def test_status_report_json_fields_stable(tmp_path):
     report = collect(default_db_path(tmp_path))
     # the dashboard consumes these keys; keep them present
     for key in ("exists", "schema_version", "totals", "queue", "queue_age", "latest_run",
-                "decisions", "validation", "flow_coverage", "ready_for_validation", "recent_runs"):
+                "decisions", "validation", "flow_coverage", "ready_for_validation", "recent_runs",
+                "handoff"):
         assert key in report, f"missing report key: {key}"
+    assert "paper_outcomes" in report["handoff"]
     json.dumps(report)  # must be JSON-serializable
