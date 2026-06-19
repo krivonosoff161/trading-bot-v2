@@ -3,6 +3,7 @@
 import json
 
 from src.research_lab.llm_proposals import (
+    build_proposal_prompt,
     chief_review_candidates,
     evaluate_llm_loop_gates,
     load_llm_loop_config,
@@ -139,3 +140,20 @@ def test_summary_stores_no_key_values():
     assert "alibaba" in blob  # provider NAME is fine
     for forbidden in ("secret", "api_key", "apikey", "passphrase", "token", "bearer"):
         assert forbidden not in blob
+
+
+def test_llm_prompt_makes_calculator_advisory_not_controller():
+    universe, profiles, _policy = _ctx()
+    system, user = build_proposal_prompt(
+        "latest status: hard_status=NEEDS_MORE_DATA",
+        universe=universe,
+        profiles=profiles,
+        max_candidates=3,
+    )
+    low = (system + "\n" + user).lower()
+    assert "not the controller of the farm" in low
+    assert "deterministic code validates" in low
+    assert "never start or stop processes" in low
+    assert "paper_forward_ready can only be assigned by hard validation" in low
+    assert "exactly one top-level key: proposals" in low
+    assert "live-trading" in low

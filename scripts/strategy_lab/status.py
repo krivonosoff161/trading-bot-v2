@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.dashboard_state import load_dashboard_state  # noqa: E402
+from src.research_lab.paper_readiness import summarize_paper_readiness  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 
 
@@ -121,6 +122,16 @@ def main() -> None:
         f"cards: {_count_files(root, 'setup_library/cards')}, "
         f"reports: {_count_files(root, 'setup_library/reports', '*.md')}, "
         f"index rows: {_count_jsonl_rows(root, 'setup_library', 'setup_index.jsonl')}"
+    )
+    paper_ready = summarize_paper_readiness(root, check_local_data=False)
+    blockers = paper_ready.get("blocked_reasons") or {}
+    blocker_text = " ".join(f"{k}={v}" for k, v in list(blockers.items())[:4]) or "none"
+    print(
+        "Paper ready  : "
+        f"checked={paper_ready.get('checked_cards', 0)}, "
+        f"ready={paper_ready.get('paper_forward_ready', 0)}, "
+        f"plan_ready={paper_ready.get('plan_ready', 0)}; "
+        f"blocked={blocker_text}"
     )
     lifecycle = farm_cockpit.get("lifecycle") or {}
     results = farm_cockpit.get("results") or {}

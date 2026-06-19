@@ -25,7 +25,7 @@ untouched.
 | `scripts/strategy_lab/worker_loop.py` | **keep — off default path** | Standalone 24/7 compute daemon. Not a lifecycle duplicate; the brain bounds its own worker draining per cycle. |
 | `scripts/strategy_lab/scanner_farm_loop.py` → `scanner_farm_pipeline.run_cycle` | **ARCHIVE-LEGACY (true duplicate)** | Same watch-intake→sweep-queue arc, flat (no brain/defer/block/classify/validate) — the exact path that produced `already_queued` saturation. **Keep the module** `scanner_farm_pipeline._ensure_local_data` (reused by `farm_coordinator`); retire the *loop* + `scanner_farm_loop.sqlite`. |
 | `scripts/strategy_lab/universe_farm_loop.py` → `universe_refill_runner.run_refill_cycle` | **ARCHIVE-LEGACY** | Universe grind to keep the GPU busy — absorbed by the brain's `discovery_refill` pivot. Different mechanism (cursor rotation vs discovery snapshot), same outcome. |
-| `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **keep — distinct lane** | LLM-proposal/registry-driven research; an axis the brain does **not** yet cover. Currently the operator default (overnight `.bat` files). Archive once the brain absorbs proposal intake. |
+| `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **keep — distinct advisory lane** | LLM-proposal/registry-driven research; the weak model is a JSON-only hypothesis advisor, not the farm controller. It must not queue outside deterministic validation, promote paper/live status, touch configs, or start processes. Archive/merge once the brain absorbs proposal intake. |
 | `scripts/strategy_lab/generate_event_sweeps.py` | **keep — off default path** | Price-event sweep generator is unique (no replacement). Its `--from-scanner` lane is the legacy bridge, superseded by the brain's intake. |
 | `scripts/strategy_lab/autopilot_once.py` | **keep — off default path** | Cheap deterministic registry→spec→queue filler; superseded by the brain's follow-up logic once stable. |
 | `scripts/strategy_lab/run_research_machine_demo.py` | **keep — legacy demo** | The previous end-to-end walkthrough of the bridge path; superseded operationally by `farm_loop`. |
@@ -80,3 +80,7 @@ other sweep. Tracked in [../BACKLOG.md](../BACKLOG.md) under "Manual research in
 `farm_loop` is not yet referenced by any `.bat`/config — it lives on `feature/calc-farm`.
 The legacy loops remain the live operator path until that switch is made deliberately
 (a follow-up step, not part of this layer).
+
+`farm_loop --run-paper` is now the canonical bridge from validated setup cards to paper
+outcomes. The separate `paper_loop` remains useful as a focused diagnostic, but the normal
+cycle is farm → validation → setup library → paper inside `farm_loop`.

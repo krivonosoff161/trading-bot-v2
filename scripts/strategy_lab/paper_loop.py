@@ -30,6 +30,21 @@ def _print_result(out: dict) -> None:
             f"{k}={v}" for k, v in c.items() if isinstance(v, int) and (v or k == "cards")
         )
     )
+    readiness = out.get("readiness") or {}
+    if readiness:
+        print(
+            "  readiness: "
+            f"checked={readiness.get('checked_cards', 0)} "
+            f"paper_ready={readiness.get('paper_forward_ready', 0)} "
+            f"plan_ready={readiness.get('plan_ready', 0)} "
+            f"local_data_ready={readiness.get('local_data_ready', 0)}"
+        )
+        hard = readiness.get("by_hard_status") or {}
+        if hard:
+            print("  hard_status: " + " ".join(f"{k}={v}" for k, v in hard.items()))
+        blockers = readiness.get("blocked_reasons") or {}
+        if blockers:
+            print("  blocked: " + " ".join(f"{k}={v}" for k, v in list(blockers.items())[:6]))
     for row in out.get("results", [])[:20]:
         parts = [str(row.get("setup_id")), str(row.get("status"))]
         if row.get("trade_id"):

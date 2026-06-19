@@ -8,7 +8,7 @@ tasks -> never spin on already_queued (it pivots to discovery / deferred work or
 
     python -m scripts.strategy_lab.farm_loop --once --dry-run
     python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding
-    python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --sleep-seconds 180
+    python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --sleep-seconds 180
 
 Safety: paper/research only. Public OKX market data only. Never touches .env, AUTO_TRADE,
 order execution, private exchange endpoints, or Telegram credentials.
@@ -87,6 +87,23 @@ def _print_cycle(out: dict) -> None:
         print("  blocked: " + " ".join(f"{k}={v}" for k, v in st["blocked_reasons"].items()))
     if st.get("deferred_reasons"):
         print("  deferred: " + " ".join(f"{k}={v}" for k, v in st["deferred_reasons"].items()))
+    paper = out.get("paper") or {}
+    if paper:
+        pc = paper.get("counters") or {}
+        readiness = paper.get("readiness") or {}
+        shown = " ".join(f"{k}={v}" for k, v in pc.items() if isinstance(v, int) and (v or k == "cards"))
+        print("  paper: " + (shown or "(no paper work)"))
+        if readiness:
+            print(
+                "  paper_ready: "
+                f"checked={readiness.get('checked_cards', 0)} "
+                f"ready={readiness.get('paper_forward_ready', 0)} "
+                f"plan_ready={readiness.get('plan_ready', 0)} "
+                f"local_data_ready={readiness.get('local_data_ready', 0)}"
+            )
+            blockers = readiness.get("blocked_reasons") or {}
+            if blockers:
+                print("  paper_blocked: " + " ".join(f"{k}={v}" for k, v in list(blockers.items())[:6]))
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -95,7 +112,10 @@ def _cycle_signature(out: dict) -> tuple:
     """A change-signature so --loop doesn't reprint identical state every sleep tick."""
     nz = tuple(sorted(k for k, v in out["counters"].items() if isinstance(v, int) and v))
     by_state = tuple(sorted(((out.get("status") or {}).get("by_state") or {}).items()))
-    return (out.get("pivot"), nz, by_state, bool(out.get("errors")))
+    paper = out.get("paper") or {}
+    paper_counters = tuple(sorted((paper.get("counters") or {}).items()))
+    paper_ready = tuple(sorted((paper.get("readiness") or {}).get("blocked_reasons", {}).items()))
+    return (out.get("pivot"), nz, by_state, paper_counters, paper_ready, bool(out.get("errors")))
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
@@ -111,6 +131,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         allow_public_output=args.allow_public_output, discovery_snapshot=_discovery_snapshot(private_root),
         run_validation=args.run_validation,
     )
+    if args.run_paper:
+        from src.research_lab.paper_runtime import run_paper_cycle
+        paper = run_paper_cycle(private_root, apply=apply, limit=args.max_paper_cards)
+        out["paper"] = {
+            "counters": paper.get("counters", {}),
+            "readiness": paper.get("readiness", {}),
+            "results": (paper.get("results") or [])[:10],
+        }
     if apply:
         from src.research_lab import farm_journal
         farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out)
@@ -131,6 +159,7 @@ def main() -> None:
     run.add_argument("--loop", action="store_true", help="run until stop-file / Ctrl+C")
     ap.add_argument("--run-worker", action="store_true", help="drain a few compute jobs each cycle")
     ap.add_argument("--run-validation", action="store_true", help="export + honest-backtest + stamp-back")
+    ap.add_argument("--run-paper", action="store_true", help="simulate paper outcomes from validated setup cards")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")
@@ -140,6 +169,7 @@ def main() -> None:
     ap.add_argument("--max-enrich", type=int, default=4)
     ap.add_argument("--max-sweeps", type=int, default=4)
     ap.add_argument("--max-worker-jobs", type=int, default=4)
+    ap.add_argument("--max-paper-cards", type=int, default=20)
     ap.add_argument("--data-days", type=int, default=None)
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--sleep-seconds", type=int, default=180)

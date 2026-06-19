@@ -196,6 +196,7 @@ NEW_MODULES = [
     "src/research_lab/farm_journal.py", "src/research_lab/providers/okx_flow.py",
     "src/research_lab/paper_contract.py",
     "src/research_lab/paper_journal.py", "src/research_lab/paper_runtime.py",
+    "src/research_lab/paper_readiness.py",
     "scripts/strategy_lab/paper_loop.py",
 ]
 # Module paths the research farm must NEVER import (the live/money/secrets/Telegram path).
