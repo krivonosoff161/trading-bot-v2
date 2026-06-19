@@ -110,11 +110,18 @@ class FarmTasksDB:
                 n_trades INTEGER NOT NULL DEFAULT 0,
                 avg_net_pct REAL NOT NULL DEFAULT 0,
                 candidate_id TEXT, run_dir_label TEXT,
-                task_id INTEGER, updated_at REAL NOT NULL
+                task_id INTEGER, paper_status TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
             );
             """
         )
+        self._migrate_unique_candidate_columns()
         self._conn.commit()
+
+    def _migrate_unique_candidate_columns(self) -> None:
+        existing = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(unique_candidates)")}
+        if "paper_status" not in existing:
+            self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN paper_status TEXT NOT NULL DEFAULT ''")
 
     # ── intake events ───────────────────────────────────────────────────────
     def upsert_intake_event(self, event: dict[str, Any], *, now: float | None = None) -> tuple[str, bool]:
@@ -346,19 +353,20 @@ class FarmTasksDB:
         self._conn.execute(
             """INSERT INTO unique_candidates(uc_key, symbol, timeframe, family, params_hash,
                  data_fingerprint, decision, validation_status, hard_status, n_trades,
-                 avg_net_pct, candidate_id, run_dir_label, task_id, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 avg_net_pct, candidate_id, run_dir_label, task_id, paper_status, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(uc_key) DO UPDATE SET
                  decision=excluded.decision, validation_status=excluded.validation_status,
                  hard_status=excluded.hard_status, n_trades=excluded.n_trades,
                  avg_net_pct=excluded.avg_net_pct, candidate_id=excluded.candidate_id,
                  run_dir_label=excluded.run_dir_label, task_id=excluded.task_id,
+                 paper_status=COALESCE(NULLIF(excluded.paper_status, ''), unique_candidates.paper_status),
                  updated_at=excluded.updated_at""",
             (cand["uc_key"], cand.get("symbol"), cand.get("timeframe"), cand.get("family"),
              cand.get("params_hash"), cand.get("data_fingerprint"), cand.get("decision"),
              cand.get("validation_status"), cand.get("hard_status"), int(cand.get("n_trades") or 0),
              float(cand.get("avg_net_pct") or 0), cand.get("candidate_id"),
-             cand.get("run_dir_label"), cand.get("task_id"), now),
+             cand.get("run_dir_label"), cand.get("task_id"), cand.get("paper_status") or "", now),
         )
         self._conn.commit()
 
@@ -368,6 +376,22 @@ class FarmTasksDB:
         cur = self._conn.execute(
             "UPDATE unique_candidates SET hard_status=?, updated_at=? WHERE candidate_id=?",
             (hard_status, now, str(candidate_id)))
+        self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    def set_unique_hard_status(self, uc_key: str, hard_status: str, *, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        cur = self._conn.execute(
+            "UPDATE unique_candidates SET hard_status=?, updated_at=? WHERE uc_key=?",
+            (hard_status, now, str(uc_key)))
+        self._conn.commit()
+        return int(cur.rowcount or 0)
+
+    def set_unique_paper_status(self, uc_key: str, paper_status: str, *, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        cur = self._conn.execute(
+            "UPDATE unique_candidates SET paper_status=?, updated_at=? WHERE uc_key=?",
+            (paper_status, now, str(uc_key)))
         self._conn.commit()
         return int(cur.rowcount or 0)
 

@@ -312,10 +312,10 @@ def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> 
             _bump(counters, "unique_upserted")
             if uc["validation_status"] in VALIDATION_ELIGIBLE:
                 _, created = tasks.enqueue_task(
-                    task_type="export_validation", task_key=f'export::{uc["candidate_id"]}',
+                    task_type="export_validation", task_key=f'export::{uc["uc_key"]}',
                     symbol=uc["symbol"], timeframe=uc["timeframe"], family=uc["family"],
                     params_hash=uc["params_hash"], data_fingerprint=uc["data_fingerprint"],
-                    payload={"candidate_id": uc["candidate_id"]}, now=now)
+                    payload={"candidate_id": uc["candidate_id"], "uc_key": uc["uc_key"]}, now=now)
                 if created:
                     _bump(counters, "exports_created")
         tasks.complete_task(task["task_id"], reason="classified", now=now)
