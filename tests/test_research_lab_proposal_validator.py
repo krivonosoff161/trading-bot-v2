@@ -22,7 +22,7 @@ def _proposal(**over):
         "requested_timeframe": "15m",
         "setup_family": "momentum_breakout",
         "symbols": ["SOL_USDT_SWAP"],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5}]},
+        "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
         "max_variants": 6,
     }
     base.update(over)
@@ -41,7 +41,7 @@ def test_valid_proposal_passes():
 
 
 def test_oversized_variants_rejected():
-    grid = [{"lookback": i} for i in range(40)]
+    grid = [{"lookback": i + 2, "hold_bars": 5, "stop_pct": 8, "take_pct": 16} for i in range(40)]
     out = _validate(_proposal(parameter_grid={"momentum_breakout": grid}, max_variants=40))
     assert out.status == REJECTED
     assert "too_many_variants" in out.reason_codes

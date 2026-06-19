@@ -55,7 +55,8 @@ def test_validate_candidates_accepts_valid_rejects_invalid():
     universe, profiles, policy = _ctx()
     items = [
         {"hypothesis": "neighbor re-test", "setup_family": "momentum_breakout", "requested_timeframe": "1d",
-         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 20}]}},
+         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {
+             "momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]}},
         {"hypothesis": "bad", "setup_family": "nope_family", "requested_timeframe": "1d",
          "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"nope_family": [{"x": 1}]}},
         {"garbage": "no required fields"},
@@ -77,7 +78,7 @@ def test_validate_normalizes_model_aliases_into_proposal():
         "strategy": "momentum_breakout",
         "timeframe": "1d",
         "symbols": "BTC_USDT_SWAP",
-        "params": {"lookback": 20, "hold_bars": 5},
+        "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
         "rationale": "test breakout timing",
         "expected_failure_mode": "late entry",
     }]
@@ -103,7 +104,8 @@ def test_unsafe_wording_candidate_rejected_not_executed():
     universe, profiles, policy = _ctx()
     items = [{"hypothesis": "guaranteed profit, live trade now", "setup_family": "momentum_breakout",
               "requested_timeframe": "1d", "symbols": ["BTC_USDT_SWAP"],
-              "parameter_grid": {"momentum_breakout": [{"lookback": 20}]}}]
+              "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5,
+                                                        "stop_pct": 8, "take_pct": 16}]}}]
     batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
                                     resource_policy=policy, created_at=_AT)
     assert not batch.validated and batch.rejected  # unsafe wording -> rejected
@@ -113,7 +115,8 @@ def test_candidate_cap_applied():
     universe, profiles, policy = _ctx()
     items = [
         {"hypothesis": f"re-test {i}", "setup_family": "momentum_breakout", "requested_timeframe": "1d",
-         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 10 + i}]}}
+         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {
+             "momentum_breakout": [{"lookback": 10 + i, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]}}
         for i in range(6)
     ]
     batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
@@ -125,7 +128,8 @@ def test_chief_review_capped():
     universe, profiles, policy = _ctx()
     items = [
         {"hypothesis": f"re-test {i}", "setup_family": "momentum_breakout", "requested_timeframe": "1d",
-         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 10 + i}]}}
+         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {
+             "momentum_breakout": [{"lookback": 10 + i, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]}}
         for i in range(5)
     ]
     batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
@@ -140,6 +144,23 @@ def test_summary_stores_no_key_values():
     assert "alibaba" in blob  # provider NAME is fine
     for forbidden in ("secret", "api_key", "apikey", "passphrase", "token", "bearer"):
         assert forbidden not in blob
+
+
+def test_contract_failures_disable_llm_for_current_run():
+    universe, profiles, policy = _ctx()
+    items = [
+        {"garbage": "no required fields"},
+        {"hypothesis": "bad family", "setup_family": "nope", "requested_timeframe": "1d",
+         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"nope": [{"x": 1}]}},
+        {"hypothesis": "bad rr", "setup_family": "momentum_breakout", "requested_timeframe": "1d",
+         "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {
+             "momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 4}]}},
+    ]
+    batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
+                                    resource_policy=policy, created_at=_AT)
+    summary = batch.to_summary()
+    assert summary["contract_failures"] >= 3
+    assert summary["disable_for_run"] is True
 
 
 def test_llm_prompt_makes_calculator_advisory_not_controller():

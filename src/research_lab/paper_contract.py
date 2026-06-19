@@ -23,6 +23,7 @@ from typing import Any
 
 from src.research_lab.data_fingerprint import compute_fingerprint, params_hash
 from src.research_lab.hard_validation_contract import SetupCard
+from src.research_lab.param_schemas import validate_params
 
 PAPER_CONTRACT_VERSION = "paper.v1"
 
@@ -275,6 +276,12 @@ def plan_from_setup_card(
             f"hard={card.hard_status!r}"
         )
     params = dict(card.params or {})
+    param_result = validate_params(card.strategy_id, params, require_executable=True)
+    if not param_result.ok:
+        raise PaperPlanError(
+            "SetupCard params do not satisfy the executable paper parameter schema: "
+            + ", ".join(param_result.errors)
+        )
     direction = _resolve_direction(params)
     stop_pct = _require_param_pct(params, "stop_pct")
     take_pct = _require_param_pct(params, "take_pct")

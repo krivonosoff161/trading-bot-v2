@@ -32,6 +32,7 @@ KNOWN_PROVIDERS = ("alibaba", "qwen", "openai-compatible", "ollama")
 DEFAULT_MAX_CANDIDATES = 8
 DEFAULT_MAX_REVIEWS = 3
 _HARD_ITEM_CAP = 200
+DEFAULT_CONTRACT_FAILURE_THRESHOLD = 3
 
 _DENY_KEYS = {
     "code", "shell", "exec", "eval", "command", "cmd", "script",
@@ -50,6 +51,11 @@ _REJECT_MAP = {
     "output_boundary_violation": "unsafe_field",
     "missing_hypothesis": "missing_rationale",
     "not_compilable": "malformed_json",
+}
+_CONTRACT_FAILURE_REASONS = {
+    "malformed_json", "json_parse_error", "wrong_top_level_shape",
+    "missing_proposals_array", "unsafe_field", "unknown_strategy_family",
+    "unknown_timeframe", "variants_too_large", "missing_rationale",
 }
 
 NullProposalSender = NullReviewSender
@@ -295,9 +301,21 @@ class LLMProposalBatch:
             out[item["reason"]] = out.get(item["reason"], 0) + 1
         return out
 
+    def contract_failures(self) -> int:
+        return sum(1 for item in self.rejected if item["reason"] in _CONTRACT_FAILURE_REASONS)
+
+    def should_disable_for_run(self, *, threshold: int = DEFAULT_CONTRACT_FAILURE_THRESHOLD) -> bool:
+        return self.contract_failures() >= max(1, int(threshold))
+
     def to_summary(self) -> dict[str, Any]:
-        return {"validated": len(self.validated), "rejected": len(self.rejected),
-                "reject_reasons": self.reject_reasons()}
+        failures = self.contract_failures()
+        return {
+            "validated": len(self.validated),
+            "rejected": len(self.rejected),
+            "reject_reasons": self.reject_reasons(),
+            "contract_failures": failures,
+            "disable_for_run": failures >= DEFAULT_CONTRACT_FAILURE_THRESHOLD,
+        }
 
 
 def _has_unsafe_field(item: dict[str, Any]) -> bool:

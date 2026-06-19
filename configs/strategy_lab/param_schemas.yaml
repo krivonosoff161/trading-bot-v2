@@ -1,0 +1,45 @@
+version: 1
+owner: strategy_registry
+description: >
+  Parameter validation policy layered over src.research_lab.strategy_registry.
+  This file is not a second strategy catalog: allowed parameter keys and defaults
+  are read from the registry. The policy below only defines units, executable
+  paper gates, and conservative generic ranges.
+
+units:
+  stop_pct: percent_points
+  take_pct: percent_points
+  threshold_pct: percent_points
+  move_pct: percent_points
+  max_range_pct: percent_points
+
+executable:
+  required_keys:
+    - hold_bars
+    - stop_pct
+    - take_pct
+  min_reward_risk: 2.0
+
+ranges:
+  hold_bars:
+    type: int
+    min: 1
+    max: 240
+  stop_pct:
+    type: number
+    min: 0.1
+    max: 50.0
+  take_pct:
+    type: number
+    min: 0.2
+    max: 200.0
+
+fallback_ranges:
+  int:
+    min: 0
+    max_mult: 4
+    min_max: 10
+  number:
+    min: 0.0
+    max_mult: 4
+    min_max: 1.0

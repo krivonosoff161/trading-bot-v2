@@ -146,6 +146,11 @@ def collect(db_path: Path) -> dict:
             report["lifecycle"] = _lifecycle_section(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - report must never crash on the optional new DB
             report["lifecycle"] = {"available": False}
+        try:
+            from src.research_lab.setup_lifecycle import summarize_setup_lifecycle
+            report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["setup_lifecycle"] = {"available": False}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -193,6 +198,12 @@ def _print(report: dict) -> None:
               f"gpu_signal_rows={ho['gpu_signal_rows']}")
         print(f"  paper handoff: outcomes={ho.get('paper_outcomes', 0)} "
               f"paper_status={ho.get('paper_status') or '(none)'}")
+    sl = report.get("setup_lifecycle") or {}
+    if sl.get("available"):
+        print(f"  setup lifecycle: total={sl.get('total', 0)} states={sl.get('by_state') or '(none)'}")
+        print(f"    paper groups: positive={sl.get('positive_setups', 0)} "
+              f"negative={sl.get('negative_setups', 0)} mixed={sl.get('mixed_or_flat', 0)} "
+              f"no_sample={sl.get('no_paper_sample', 0)}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "

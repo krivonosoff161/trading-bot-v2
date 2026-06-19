@@ -18,6 +18,7 @@ from typing import Any
 
 from src.research_lab.scanner_farm_pipeline import event_spec_dir
 from src.research_lab.state_db import ensure_experiment_queued
+from src.research_lab.param_schemas import executable_exit_params
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_compile import compile_sweep
 from src.research_lab.sweep_spec import SweepSpec
@@ -52,7 +53,7 @@ def _default_grids(defaults: dict[str, Any]) -> tuple[dict, dict]:
 
 def build_sweep_spec(symbol: str, timeframe: str, family: str, *, fingerprint: str | None,
                      backend: str = "auto", max_variants: int = MAX_VARIANTS) -> SweepSpec:
-    defaults = dict(get_strategy(family).parameter_defaults)
+    defaults = executable_exit_params(family, get_strategy(family).parameter_defaults)
     setup_grid, exit_grid = _default_grids(defaults)
     fp_tag = (fingerprint or "nofp")[:10]
     return SweepSpec(

@@ -129,7 +129,8 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
         allow_public_output=args.allow_public_output, discovery_snapshot=_discovery_snapshot(private_root),
-        run_validation=args.run_validation,
+        run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
+        max_followups=getattr(args, "max_followups", 10),
     )
     if args.run_paper:
         from src.research_lab.paper_runtime import run_paper_cycle
@@ -170,6 +171,8 @@ def main() -> None:
     ap.add_argument("--max-sweeps", type=int, default=4)
     ap.add_argument("--max-worker-jobs", type=int, default=4)
     ap.add_argument("--max-paper-cards", type=int, default=20)
+    ap.add_argument("--max-followups", type=int, default=10)
+    ap.add_argument("--no-followups", action="store_true", help="disable automatic bounded feedback follow-ups")
     ap.add_argument("--data-days", type=int, default=None)
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--sleep-seconds", type=int, default=180)

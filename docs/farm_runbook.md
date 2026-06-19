@@ -59,6 +59,10 @@ python -m scripts.strategy_lab.farm_status_report
 python -m scripts.strategy_lab.farm_status_report --json
 ```
 
+`farm_loop` runs bounded feedback follow-ups by default. Use `--max-followups N` to cap
+the number handled per cycle, or `--no-followups` only for diagnostics. A follow-up does
+not bypass the worker: it becomes a typed lifecycle task first, then a normal sweep job.
+
 ## Paper Gate
 
 `--run-paper` is gated by hard validation. Paper simulation reads only setup cards with:
@@ -67,11 +71,17 @@ python -m scripts.strategy_lab.farm_status_report --json
 - `hard_status == PAPER_FORWARD_READY`
 - `paper_forward_ready == true`
 - executable params: `hold_bars`, `stop_pct`, `take_pct`
+- percent-point units (`8` means 8%, not 0.08%)
+- reward/risk at least 1:2 (`take_pct >= 2 * stop_pct`)
 
 If validation produces no `PAPER_FORWARD_READY` cards, the paper step writes nothing and
 prints readiness blockers. Current blockers such as `FAILED_COSTS` and `NEEDS_MORE_DATA`
 mean the pipeline worked and refused to fake a paper setup. Do not manually promote these
 statuses.
+
+Positive and negative paper outcomes are both retained. Negative paper results are not
+deleted or treated as "nothing"; status/reporting groups them as research evidence for
+follow-up analysis.
 
 ## Data And Artifacts
 
@@ -91,6 +101,8 @@ explicitly passed.
 - `hard_validation/{requests,verdicts,reports}/` - honest validation artifacts.
 - `setup_library/{cards,reports,setup_index.jsonl}` - validated setup cards.
 - `paper/paper_trades.jsonl` - paper trade journal.
+- `state/derived/setup_lifecycle.json` - optional rebuildable snapshot of setup lifecycle
+  groups; canonical data remains in the DBs and artifacts above.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.
 - `logs/farm_full_cycle_loop.log` - console log from the visible wrapper.
 

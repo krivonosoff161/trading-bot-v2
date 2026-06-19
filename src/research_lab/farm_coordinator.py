@@ -19,18 +19,24 @@ Paper/research only: no order path, no .env, no AUTO_TRADE, no Telegram.
 """
 from __future__ import annotations
 
+import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
+from src.research_lab import feedback_reader as fr
 from src.research_lab import farm_data_state
 from src.research_lab.data_planner import plan_symbol
 from src.research_lab.farm_classifier import VALIDATION_ELIGIBLE, classify_run
 from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.farm_tasks_db import FarmTasksDB
+from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.strategy_registry import get_strategy
+from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
+from src.research_lab.validation_feedback import load_feedback_queue
 
 DEFAULT_FAMILIES = ("momentum_breakout", "mean_reversion_fade", "bb_volume_fade")
 _COUNTER_KEYS = (
@@ -40,7 +46,9 @@ _COUNTER_KEYS = (
     "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
     "unblocked", "sweeps_materialized",
     "sweeps_deduped", "runs_completed", "runs_failed", "classified",
-    "unique_upserted", "exports_created",
+    "unique_upserted", "exports_created", "followups_scheduled",
+    "followups_deduped", "followup_notes", "followup_sweeps_planned",
+    "followup_invalid",
 )
 
 
@@ -148,6 +156,139 @@ def _unblock(tasks: FarmTasksDB, data_state_fn: Callable, counters: dict[str, in
         if _gate_clear(task, data_state_fn):
             tasks.requeue_task(task["task_id"], reason="gate_cleared", now=now)
             _bump(counters, "unblocked")
+
+
+_REC_PRIORITY = {"high": 40, "normal": 70, "low": 100}
+
+
+def _load_setup_cards(private_root: Path) -> list[dict[str, Any]]:
+    cards_dir = Path(private_root) / "setup_library" / "cards"
+    if not cards_dir.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for path in sorted(cards_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+
+def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in tasks.latest_unique_candidates(limit=5000):
+        cid = str(row.get("candidate_id") or "")
+        if not cid:
+            continue
+        try:
+            params = json.loads(row.get("params_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            params = {}
+        out[cid] = {
+            "params": params if isinstance(params, dict) else {},
+            "validation_status": str(row.get("validation_status") or ""),
+        }
+    return out
+
+
+def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
+                            now: float, limit: int) -> None:
+    recs = fr.build_recommendations(load_feedback_queue(private_root), _load_setup_cards(private_root))
+    for rec in recs[: max(0, int(limit))]:
+        cid = rec.candidate_ids[0] if rec.candidate_ids else ""
+        key = f"followup_schedule::{cid or rec.symbol}::{rec.strategy_id}::{rec.action}::{rec.hard_status}"
+        _, created = tasks.enqueue_task(
+            task_type="schedule_followup", task_key=key,
+            priority=_REC_PRIORITY.get(rec.priority, 80), symbol=rec.symbol,
+            timeframe=rec.timeframe, family=rec.strategy_id, source_event_id=cid,
+            payload={"recommendation": rec.to_dict(), "followup_depth": 0}, now=now,
+        )
+        _bump(counters, "followups_scheduled" if created else "followups_deduped")
+
+
+def _rec_from_payload(payload: dict[str, Any]) -> fr.Recommendation | None:
+    data = payload.get("recommendation") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return fr.Recommendation(
+        action=str(data.get("action") or ""),
+        strategy_id=str(data.get("strategy_id") or ""),
+        symbol=str(data.get("symbol") or ""),
+        timeframe=str(data.get("timeframe") or ""),
+        reason=str(data.get("reason") or ""),
+        hard_status=str(data.get("hard_status") or ""),
+        priority=str(data.get("priority") or "normal"),
+        candidate_ids=[str(x) for x in data.get("candidate_ids") or []],
+        reason_codes=[str(x) for x in data.get("reason_codes") or []],
+    )
+
+
+def _sweep_payload(spec: SweepSpec) -> dict[str, Any]:
+    data = asdict(spec)
+    data["related_symbols"] = list(spec.related_symbols)
+    return data
+
+
+def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
+    return SweepSpec(
+        sweep_id=str(data["sweep_id"]),
+        anchor_symbol=str(data["anchor_symbol"]),
+        related_symbols=tuple(data.get("related_symbols") or ()),
+        timeframe=str(data["timeframe"]),
+        setup_family=str(data["setup_family"]),
+        setup_grid=dict(data.get("setup_grid") or {}),
+        entry_grid=dict(data.get("entry_grid") or {}),
+        exit_grid=dict(data.get("exit_grid") or {}),
+        filter_grid=dict(data.get("filter_grid") or {}),
+        max_variants=int(data.get("max_variants") or 1),
+        backend=str(data.get("backend") or "cpu"),
+        resource_class=str(data.get("resource_class") or "normal"),
+        private_output_policy=str(data.get("private_output_policy") or "private_only"),
+    )
+
+
+def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
+                     counters: dict[str, int], now: float) -> None:
+    contexts = _candidate_context_by_id(tasks)
+    for _ in range(limit):
+        task = tasks.claim_next_task(task_types=("schedule_followup",), now=now)
+        if task is None:
+            break
+        try:
+            payload = json.loads(task.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        rec = _rec_from_payload(payload)
+        if rec is None:
+            tasks.skip_task(task["task_id"], "malformed_followup_payload", now=now)
+            _bump(counters, "followup_invalid")
+            continue
+        cid = rec.candidate_ids[0] if rec.candidate_ids else ""
+        plan = plan_followup(rec, contexts.get(cid), max_variants=8)
+        if not plan.queued or plan.sweep is None:
+            tasks.complete_task(task["task_id"], reason=plan.not_queued_reason or "note", now=now)
+            _bump(counters, "followup_notes")
+            continue
+        check = validate_sweep_spec(plan.sweep, timeframe_profiles=profiles, resource_policy=policy)
+        if not check.ok:
+            tasks.skip_task(task["task_id"], "invalid_followup_spec:" + "|".join(check.errors), now=now)
+            _bump(counters, "followup_invalid")
+            continue
+        run_payload = {
+            "origin": "feedback_followup", "action": plan.action,
+            "source_candidate_id": plan.candidate_id, "hard_status": rec.hard_status,
+            "sweep_spec": _sweep_payload(plan.sweep),
+        }
+        _, created = tasks.enqueue_task(
+            task_type="run_sweep", task_key=f"run_sweep::followup::{plan.sweep.sweep_id}",
+            priority=int(task.get("priority") or 70), symbol=plan.symbol,
+            timeframe=plan.timeframe, family=plan.strategy_id,
+            source_event_id=plan.candidate_id, payload=run_payload, now=now,
+        )
+        tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
+        _bump(counters, "followup_sweeps_planned" if created else "followups_deduped")
 
 
 # ── execution (apply only) ────────────────────────────────────────────────────
@@ -259,9 +400,16 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
         if task is None:
             break
         sym, tf, fam = task["symbol"], task["timeframe"], task["family"]
+        try:
+            payload = json.loads(task.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
         glob = market_data_glob(private_root, tf)
         fp = fingerprint_for_symbol(glob, sym, tf) or task.get("data_fingerprint") or "nofp"
-        spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend)
+        if isinstance(payload.get("sweep_spec"), dict):
+            spec = _sweep_from_payload(payload["sweep_spec"])
+        else:
+            spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend)
         exp_id, job_id, created = queue_sweep(conn, spec, private_root=private_root, profiles=profiles,
                                               policy=policy, data_glob=glob, fingerprint=fp,
                                               priority=priority_base + int(task.get("priority") or 100))
@@ -372,6 +520,7 @@ def run_coordinator_cycle(
     max_worker_jobs: int = 4, night_mode: bool = False, priority_base: int = 100,
     allow_public_output: bool = False, discovery_snapshot=None, max_discovery: int = 20,
     run_validation: bool = False, max_validations: int = 10,
+    run_followups: bool = True, max_followups: int = 10,
 ) -> dict[str, Any]:
     """Advance the research lifecycle by one cycle. Returns counters + pivot + status."""
     now = time.time() if now is None else now
@@ -414,6 +563,11 @@ def run_coordinator_cycle(
                 _drain_worker(private_root, max_worker_jobs, night_mode, errors)
                 _sync_completions(tasks, conn=conn, counters=counters, now=now)
             _classify_due(tasks, private_root=private_root, limit=max_classify, counters=counters, now=now)
+            if run_followups:
+                _schedule_due_followups(tasks, private_root=private_root, counters=counters,
+                                        now=now, limit=max_followups)
+                _drain_followups(tasks, profiles=profiles, policy=policy, limit=max_followups,
+                                 counters=counters, now=now)
     finally:
         if conn is not None:
             conn.close()
@@ -422,10 +576,14 @@ def run_coordinator_cycle(
         from src.research_lab.validation_orchestrator import run_due_validations
         counters["validation"] = run_due_validations(tasks, private_root, apply=True,
                                                       limit=max_validations, now=now)
+        if run_followups:
+            _schedule_due_followups(tasks, private_root=private_root, counters=counters,
+                                    now=now, limit=max_followups)
 
     did_work = any(counters[k] for k in ("prepared_ok", "enriched_ok", "enriched_oi_ok",
                                          "sweeps_materialized", "runs_completed", "classified",
-                                         "unblocked"))
+                                         "unblocked", "followup_sweeps_planned",
+                                         "followups_scheduled"))
     pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
                           snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,
                           max_discovery=max_discovery, counters=counters)

@@ -90,7 +90,9 @@ def _synthetic_candidates(universe) -> list[dict]:
     syms = sorted(universe.all_symbols())[:2] or ["BTC_USDT_SWAP"]
     return [{
         "setup_family": "momentum_breakout", "requested_timeframe": "1d", "symbols": [s],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5}]},
+        "parameter_grid": {
+            "momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]
+        },
         "hypothesis": f"synthetic offline test for momentum_breakout on {s}",
         "expected_failure_mode": "late entry / whipsaw in ranges",
     } for s in syms]
