@@ -78,7 +78,11 @@ instead of dedup-blocking forever. Data-gated families use a fingerprint-indepen
    (in-process) → **stamp verdicts back** into `farm_results` *and* `unique_candidates`
    → write `setup_library` cards. `PAPER_FORWARD_READY` cards are the only inputs the
    paper runtime can read. No manual file carry.
-8. **pivot** — `work_available` (more queued/deferred-ready) / `advanced_lifecycle` /
+8. **paper** (optional, apply + `--run-paper`) — read only `PAPER_FORWARD_READY`
+   setup cards, build `PaperTradePlan`, simulate against local prepared candles, and
+   append `paper_outcomes`. If no card is ready, the cycle prints paper-readiness
+   blockers instead of silently reporting `cards=0`.
+9. **pivot** — `work_available` (more queued/deferred-ready) / `advanced_lifecycle` /
    `discovery_refill` (pull uncovered discovered symbols) / `blocked:no_eligible_tasks`.
 
 ## OI / funding / microstructure data
@@ -116,8 +120,8 @@ python -m scripts.strategy_lab.farm_loop --once --dry-run
 # one real cycle (prepare/enrich/queue/compute/classify):
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
 
-# full loop incl. honest validation:
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation \
+# full loop incl. honest validation + paper simulation:
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper \
     --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP
 
 # operator picture:
@@ -132,7 +136,7 @@ sqlite DBs, so restart is safe and idempotent. See [farm_runbook.md](farm_runboo
 - Microstructure has no public provider → permanent `NEEDS_MICRO_DATA` block (by design).
 - OI history is keyless but ~100 points/call (paginated); treat OI as optional context.
 - Paper runtime is gated by hard validation. If `setup_library/cards` has no
-  `paper_forward_ready=true` cards, `paper_loop` correctly reports `cards=0` and does
-  not simulate forward trades.
+  `paper_forward_ready=true` cards, `paper_loop` / `farm_loop --run-paper` reports the
+  hard-status and plan/data blockers and does not simulate forward trades.
 - `farm_loop` is not yet wired into any `.bat`; the legacy loops remain the live operator
   path until the switch is made deliberately (see [farm_ownership_map.md](farm_ownership_map.md)).

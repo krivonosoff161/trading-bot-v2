@@ -53,14 +53,24 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-fu
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation \
     --enrich-funding --enrich-oi
 
-# 4. Continuous (quiet heartbeat; full block only on change/error):
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation \
+# 4. Full research + paper cycle:
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper \
+    --enrich-funding --enrich-oi
+
+# 5. Continuous (quiet heartbeat; full block only on change/error):
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper \
     --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP --quiet
 
-# 5. Read state (never tail raw logs for status):
+# 6. Read state (never tail raw logs for status):
 python -m scripts.strategy_lab.farm_status_report
 python -m scripts.strategy_lab.farm_status_report --json
 ```
+
+`--run-paper` is still gated by hard validation. If validation produces no
+`PAPER_FORWARD_READY` setup cards, the paper step writes nothing and prints a readiness
+breakdown (`hard_status:NEEDS_MORE_DATA`, invalid plan, missing local candles, etc.).
+That is the correct failure mode: paper simulation starts only after the validator has
+created a runnable setup card.
 
 ## Stop / restart
 
@@ -88,7 +98,7 @@ outside the public repo). Apply mode refuses to write inside the public repo unl
 - `setup_library/{cards,reports,setup_index.jsonl}` — setup cards written automatically
   by the validation step; only `paper_forward_ready=true` cards enter paper runtime.
 - `paper/paper_trades.jsonl` and `state/strategy_lab.sqlite::paper_outcomes` — paper
-  outcomes from `paper_loop`.
+  outcomes from `paper_loop` or `farm_loop --run-paper`.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` — structured farm logs (rotated).
 
 ## Storage hygiene (bounded)

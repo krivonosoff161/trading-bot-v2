@@ -13,6 +13,7 @@ from src.research_lab.paper_runtime import (
     load_ready_setup_cards,
     run_paper_cycle,
 )
+from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.setup_library import write_setup_library
 
 
@@ -69,6 +70,22 @@ def test_load_ready_setup_cards_filters_ready(tmp_path):
     write_setup_library(tmp_path, [_card(), _card(setup_id="setup-c2", paper_forward_ready=False)], dry_run=False)
     cards = load_ready_setup_cards(tmp_path)
     assert [c.setup_id for c in cards] == ["setup-c1"]
+
+
+def test_paper_readiness_explains_non_ready_cards(tmp_path):
+    write_setup_library(
+        tmp_path,
+        [
+            _card(),
+            _card(setup_id="setup-c2", hard_status="NEEDS_MORE_DATA", paper_forward_ready=False),
+        ],
+        dry_run=False,
+    )
+    readiness = summarize_paper_readiness(tmp_path)
+    assert readiness["checked_cards"] == 2
+    assert readiness["paper_forward_ready"] == 1
+    assert readiness["by_hard_status"]["NEEDS_MORE_DATA"] == 1
+    assert readiness["blocked_reasons"]["hard_status:NEEDS_MORE_DATA"] == 1
 
 
 def test_execute_plan_once_closes_take_with_injected_no_lookahead_signal(monkeypatch):
@@ -128,6 +145,7 @@ def test_run_paper_cycle_writes_once_and_deduplicates(monkeypatch, tmp_path):
     first = run_paper_cycle(tmp_path, apply=True)
     second = run_paper_cycle(tmp_path, apply=True)
     assert first["counters"]["written"] == 1
+    assert first["readiness"]["paper_forward_ready"] == 1
     assert second["counters"]["already_recorded"] == 1
     rows = read_paper_outcomes(tmp_path)
     assert len(rows) == 1

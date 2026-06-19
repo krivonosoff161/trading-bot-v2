@@ -29,6 +29,7 @@ from src.research_lab.paper_contract import (
     plan_from_setup_card,
 )
 from src.research_lab.paper_journal import append_paper_outcome, load_seen_trade_ids
+from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.paths import market_data_glob
 
 
@@ -204,6 +205,7 @@ def run_paper_cycle(
 ) -> dict[str, Any]:
     """Run one bounded paper cycle. Writes outcomes only when apply=True."""
     private_root = Path(private_root)
+    readiness = summarize_paper_readiness(private_root)
     seen = load_seen_trade_ids(private_root)
     counters = {
         "cards": 0,
@@ -256,4 +258,4 @@ def run_paper_cycle(
             "net_pct": row.get("net_pct"),
             "r_multiple": row.get("r_multiple"),
         })
-    return {"apply": apply, "counters": counters, "results": results}
+    return {"apply": apply, "counters": counters, "readiness": readiness, "results": results}

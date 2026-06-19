@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -86,6 +87,56 @@ def test_storage_maintain_noop_in_dry_run(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_policy, "maintain", boom)
     monkeypatch.setattr(storage_policy, "bound_farm_artifacts", boom)
     farm_loop._maybe_storage_maintain(tmp_path, apply=False)  # no exception == no call
+
+
+def test_farm_loop_can_run_paper_step_in_dry_run(tmp_path, monkeypatch):
+    from scripts.strategy_lab import farm_loop
+
+    monkeypatch.setattr(farm_loop, "_read_intake", lambda _limit: [])
+    monkeypatch.setattr(farm_loop, "_discovery_snapshot", lambda _root: None)
+
+    def fake_cycle(*_args, **_kwargs):
+        return {
+            "counters": {},
+            "pivot": "blocked:no_eligible_tasks",
+            "active_tasks": 0,
+            "status": {"by_state": {}, "blocked_reasons": {}, "deferred_reasons": {}},
+            "errors": [],
+        }
+
+    def fake_paper(private_root, *, apply=False, limit=20):
+        return {
+            "counters": {"cards": 0, "written": 0},
+            "readiness": {"checked_cards": 1, "paper_forward_ready": 0,
+                          "blocked_reasons": {"hard_status:NEEDS_MORE_DATA": 1}},
+            "results": [],
+        }
+
+    monkeypatch.setattr(farm_loop, "run_coordinator_cycle", fake_cycle)
+    monkeypatch.setattr("src.research_lab.paper_runtime.run_paper_cycle", fake_paper)
+    tasks = FarmTasksDB(":memory:")
+    args = SimpleNamespace(
+        backend="cpu",
+        data_days=None,
+        max_plan_events=1,
+        max_prepares=1,
+        max_enrich=1,
+        max_sweeps=1,
+        run_worker=False,
+        max_worker_jobs=1,
+        night_mode=False,
+        allow_public_output=False,
+        run_validation=False,
+        provider="synthetic",
+        enrich_funding=False,
+        enrich_oi=False,
+        run_paper=True,
+        max_paper_cards=5,
+    )
+    out = farm_loop._run_once(args, tasks, profiles={}, policy={}, private_root=tmp_path, apply=False)
+    tasks.close()
+    assert out["paper"]["counters"]["cards"] == 0
+    assert out["paper"]["readiness"]["blocked_reasons"]["hard_status:NEEDS_MORE_DATA"] == 1
 
 
 def test_log_error_and_paths(tmp_path):
