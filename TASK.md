@@ -1,19 +1,77 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-06-11
+Updated: 2026-06-19
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
 
 ## Current State
 
-Scanner is running after recall, stabilization, source-onboarding, and
-watch-queue bridge fixes.
+Current center: the calculation farm, not the scanner.
+
+Canonical flow:
+
+```text
+farm_loop
+  -> farm_coordinator over state/farm_tasks.sqlite
+  -> data prepare / funding / OI
+  -> run_sweep compute queue in state/strategy_lab.sqlite
+  -> classify into unique_candidates
+  -> hard validation from unique_candidates
+  -> stamp-back into farm_results + unique_candidates
+  -> setup_library cards
+  -> paper_loop only for paper_forward_ready cards
+  -> paper_trades.jsonl + paper_outcomes
+```
 
 This file is local handoff context, not the canonical architecture. For current
-truth read `CURRENT_STATE.md`, `ARCHITECTURE.md`,
-`docs/scanner_ta_confirmation_contract.md`, and
-`docs/main_research_verdict_index.md`.
+truth read `CURRENT_STATE.md`, `ARCHITECTURE.md`, `README.md`,
+`docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`,
+`docs/farm_ownership_map.md`, and `docs/paper_runtime_design.md`.
+
+The scanner is still active as an upstream intake source, but it is not the
+operational center. Old `universe_farm_loop` / `scanner_farm_loop` paths are
+legacy unless a task explicitly asks to inspect them.
+
+## Active Safety Boundary
+
+- Do not touch `.env`, `AUTO_TRADE`, live order execution, private exchange
+  endpoints, Telegram credentials, or the old main trading engine.
+- New farm/paper modules must stay paper/research only and pass the existing
+  AST boundary test.
+- Public OKX market data, public funding/OI, local prepared candles, and local
+  private-root artifacts are allowed.
+
+## Current Runtime Focus
+
+1. Keep `farm_loop` as the brain and `farm_tasks.sqlite.unique_candidates` as the
+   canonical source for validation handoff.
+2. Keep hard-validation identity fingerprint-level, not raw `candidate_id`.
+3. Keep `setup_library` as the only feed into `paper_loop`.
+4. Record paper outcomes both as JSONL and in `strategy_lab.sqlite::paper_outcomes`.
+5. Use status tools (`farm_status_report`, `status`, `morning_report`) to show
+   hard validation and paper handoff state.
+
+## Useful Commands
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --dry-run
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --enrich-funding --enrich-oi
+python -m scripts.strategy_lab.farm_status_report
+python -m scripts.strategy_lab.paper_loop --once --dry-run
+python -m scripts.strategy_lab.status
+```
+
+## Next Design Work
+
+- richer paper promotion/demotion criteria;
+- one-click operator switch from legacy loops to `farm_loop`;
+- discovery ranking by movers;
+- more GPU kernels for strategy families;
+- microstructure provider when a real public/keyless or explicitly approved data
+  source exists.
+
+## Historical Scanner Handoff Below
 
 Committed baseline before this handoff:
 

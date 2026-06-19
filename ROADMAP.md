@@ -1,11 +1,20 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-06-11
+Updated: 2026-06-19
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
+
+> **Update 2026-06-19 - canonical farm/paper loop.** The current center of
+> `trading-bot-v2` is `farm_loop` over `farm_tasks.sqlite`, paper/research only:
+> OKX universe intake -> data planning -> prepare/enrich -> sweeps -> classification
+> into `unique_candidates` -> hard validation -> stamp-back -> `setup_library` cards
+> -> gated `paper_loop` outcomes. The scanner is upstream intake, not the center.
+> Current next work: richer paper promotion/demotion metrics, one-click operator
+> switch from legacy loops to `farm_loop`, discovery ranking by movers, more GPU
+> kernels, and a future microstructure provider.
 
 > **Update 2026-06-18 — center shifted.** The current center of `trading-bot-v2` is the
 > **universe-driven calculation farm** (paper/research only): a continuous research
@@ -110,10 +119,13 @@ Done:
 - fingerprint-based re-arm — no `already_queued` spin; defer/block carry machine reasons;
 - public keyless OI loader → `NEEDS_OI_DATA` is a managed data task that auto-unblocks
   `run_sweep` (microstructure stays an honest `NEEDS_MICRO_DATA`, no public provider);
-- auto honest-validation stamp-back; structured farm logs; bounded storage.
+- hard-validation export from `unique_candidates`, fingerprint-level stamp-back,
+  automatic `setup_library` cards, minimal paper outcome feedback, structured farm
+  logs, bounded storage.
 
 Next:
 
+- richer paper promotion/demotion metrics;
 - wire `farm_loop` into the default operator one-click path (replace the legacy
   `strategy_lab_start.bat` / `universe_farm_loop` / `scanner_farm_loop`);
 - discovery ranking by movers; GPU kernels for more families;

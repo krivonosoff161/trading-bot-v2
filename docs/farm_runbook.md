@@ -1,6 +1,6 @@
 # Farm Runbook — what is active now & how to operate it
 
-Status: **ACTIVE** · Last updated: 2026-06-18
+Status: **ACTIVE** · Last updated: 2026-06-19
 
 The short answer to "what runs the calculation farm now": **`farm_loop`** (the continuous
 lifecycle, see [farm_loop_lifecycle.md](farm_loop_lifecycle.md)). Everything is
@@ -48,7 +48,8 @@ python -m scripts.strategy_lab.farm_loop --once --dry-run
 # 2. Run one real cycle (fetch missing candles, enrich, queue+compute, classify):
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
 
-# 3. Add honest validation (export -> honest-backtest -> stamp-back, in-process):
+# 3. Add honest validation (unique_candidates -> export -> honest-backtest
+#    -> stamp-back -> setup_library, in-process):
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation \
     --enrich-funding --enrich-oi
 
@@ -82,7 +83,12 @@ outside the public repo). Apply mode refuses to write inside the public repo unl
 - `state/farm_tasks.sqlite` — task lifecycle, intake events, unique candidates.
 - `state/strategy_lab.sqlite` — compute queue, runs, candidates, farm_results.
 - `plans/event_specs/*.json` — materialized sweep specs (bounded: newest 500 kept).
-- `hard_validation/{requests,verdicts,reports}/` — validation artifacts.
+- `hard_validation/{requests,verdicts,reports}/` — validation artifacts exported from
+  `farm_tasks.sqlite.unique_candidates` (legacy registry is fallback only).
+- `setup_library/{cards,reports,setup_index.jsonl}` — setup cards written automatically
+  by the validation step; only `paper_forward_ready=true` cards enter paper runtime.
+- `paper/paper_trades.jsonl` and `state/strategy_lab.sqlite::paper_outcomes` — paper
+  outcomes from `paper_loop`.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` — structured farm logs (rotated).
 
 ## Storage hygiene (bounded)

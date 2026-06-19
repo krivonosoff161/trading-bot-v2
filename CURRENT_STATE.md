@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-06-18
+Updated: 2026-06-19
 
 ## Short Version
 
@@ -8,7 +8,8 @@ Updated: 2026-06-18
 (paper/research only). The farm runs a continuous, self-deciding research lifecycle —
 `farm_loop` → `farm_coordinator` over `farm_tasks.sqlite` — that grinds the OKX universe,
 fetches missing data (candles + public funding/OI), runs strategy sweeps, classifies
-results, and hands promising candidates to honest validation. See
+results, hands promising candidates to honest validation, writes setup cards, and can feed
+the gated paper runtime from `paper_forward_ready` cards. See
 [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md) and
 [docs/farm_runbook.md](docs/farm_runbook.md).
 
@@ -29,7 +30,8 @@ Primary farm path (current center):
 farm_loop --apply --run-worker [--enrich-funding --enrich-oi --run-validation]
   -> farm_coordinator.run_coordinator_cycle   (brain: state/farm_tasks.sqlite)
   -> materializes run_sweep -> state/strategy_lab.sqlite (compute queue) -> worker
-  -> classify -> unique_candidates -> honest validation -> stamp-back
+  -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
+  -> paper_loop (only paper_forward_ready cards) -> paper outcomes
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
 
@@ -63,6 +65,8 @@ Important active files — calculation farm (current core):
 - `src/research_lab/data_planner.py` - decide-before-compute (prepare/defer/enrich/block-with-reason).
 - `src/research_lab/providers/okx_flow.py` - keyless public funding + open-interest loaders.
 - `src/research_lab/validation_orchestrator.py` - export→honest-backtest→stamp-back.
+- `src/research_lab/setup_library.py` - hard-validated setup card writer.
+- `scripts/strategy_lab/paper_loop.py` - gated paper runtime over ready setup cards.
 - `src/research_lab/farm_journal.py` - structured cycle/transition/error logs.
 - `scripts/strategy_lab/farm_status_report.py` - operator picture (run after a cycle).
 

@@ -1,10 +1,10 @@
 # Architecture
 
-Updated: 2026-06-11
+Updated: 2026-06-19
 
 ## Boundary
 
-> **Update 2026-06-18 — center shifted to the calculation farm.** The current
+> **Update 2026-06-19 — center shifted to the calculation farm.** The current
 > research center is the **universe-driven calculation farm** (`farm_loop` →
 > `farm_coordinator` → `farm_tasks.sqlite`, paper/research only). The scanner
 > (`src/scout/`) is now one **upstream intake source** that feeds the farm, not the
@@ -35,7 +35,9 @@ intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery snapshot)
   -> run_sweep               (materialized into state/strategy_lab.sqlite compute queue)
   -> worker_once             (no-lookahead simulation; cpu/gpu/auto)
   -> classify_result         (-> unique_candidates)
-  -> validation_orchestrator (export -> honest-backtest -> STAMP-BACK)   [--run-validation]
+  -> validation_orchestrator (unique_candidates -> export -> honest-backtest -> STAMP-BACK
+                              -> setup_library)   [--run-validation]
+  -> paper_loop              (only paper_forward_ready setup cards -> paper outcomes)
   -> pivot (work_available / advanced_lifecycle / discovery_refill / blocked:no_eligible_tasks)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```

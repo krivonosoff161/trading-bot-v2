@@ -4,8 +4,9 @@ Research project for market-data and news-driven trading infrastructure around O
 crypto futures. The current active work is not live auto-trading. The active core is the
 **universe-driven calculation farm** (`python -m scripts.strategy_lab.farm_loop`): a
 paper-only, self-deciding research lifecycle that grinds the OKX universe, fetches data
-(candles + public funding/OI), runs strategy sweeps, classifies, and hands candidates to
-honest validation. The `info-edge scanner` (`src/scout/`) is now an **upstream intake
+(candles + public funding/OI), runs strategy sweeps, classifies, hands candidates to
+honest validation, writes setup cards, and can feed the gated paper runtime. The
+`info-edge scanner` (`src/scout/`) is now an **upstream intake
 source** that feeds the farm, not the center.
 
 > **Status:** research / paper / demo only. No profitability is claimed. This is
@@ -14,11 +15,12 @@ source** that feeds the farm, not the center.
 
 ## Current Direction
 
-> **Update 2026-06-18 — center is the calculation farm.** The current research core is the
+> **Update 2026-06-19 — center is the calculation farm.** The current research core is the
 > **universe-driven calculation farm**: a continuous, self-deciding lifecycle
 > (`scripts/strategy_lab/farm_loop.py` → `farm_coordinator` → `state/farm_tasks.sqlite`)
 > that grinds the OKX universe, fetches data (candles + public funding/OI), runs strategy
-> sweeps, classifies, and hands candidates to honest validation — paper/research only.
+> sweeps, classifies, hands candidates to honest validation, writes setup cards, and feeds
+> `paper_loop` only from `paper_forward_ready` cards — paper/research only.
 > Canonical docs: [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
 > [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
 > [docs/farm_runbook.md](docs/farm_runbook.md).
@@ -28,6 +30,7 @@ The project has three contours:
 | Contour | Status | Purpose |
 |---|---|---|
 | Calculation farm (`research_lab` + `scripts/strategy_lab`) | **active core** | Continuous research lifecycle: intake → plan → prepare/enrich → sweep → classify → validation. |
+| Paper runtime (`paper_loop`) | active gated follower | Reads only hard-validated setup cards; writes paper journal/outcome aggregates. |
 | `src/scout/` info-edge scanner | active (upstream intake) | News/event intake; its `WATCH/GO` rows feed the farm. One intake source, no longer the center. |
 | Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies; useful logic already ported into research_lab families. |
 
