@@ -1,142 +1,128 @@
-# Farm Loop — Continuous Research Lifecycle (canonical)
+# Farm Loop - Continuous Research Lifecycle
 
-Status: **ACTIVE** · Last updated: 2026-06-19 · Branch: `feature/calc-farm`
+Status: **ACTIVE**. Last updated: 2026-06-19. Branch: `feature/calc-farm`.
 
-This is the authoritative description of the calculation farm's continuous research
-cycle. It supersedes the older `universe_farm_loop` / `scanner_farm_loop` operator
-docs (see [farm_ownership_map.md](farm_ownership_map.md)). Paper/research only — no
-`.env`, no `AUTO_TRADE`, no order execution, no private exchange endpoints, no Telegram.
+This is the canonical calculation-farm lifecycle. It supersedes the older
+`universe_farm_loop` and `scanner_farm_loop` operator paths. Everything here is
+paper/research only: no `.env`, no `AUTO_TRADE`, no order execution, no private exchange
+endpoints, no Telegram.
 
-## What it is
+## What It Is
 
-`scripts/strategy_lab/farm_loop.py` drives `research_lab.farm_coordinator.run_coordinator_cycle`,
-a self-deciding cycle that, every pass, picks the next meaningful step for every symbol
-and records it as a typed lifecycle task with a machine-readable reason. It **never spins
-on `already_queued`**: when fresh work is saturated it pivots to deferred-eligible work,
-universe discovery, or reports `blocked:no_eligible_tasks`.
+`scripts/strategy_lab/farm_loop.py` drives
+`research_lab.farm_coordinator.run_coordinator_cycle`. Each pass picks the next
+meaningful step for each symbol/timeframe/family and records it as a typed lifecycle task
+with a machine-readable reason. It does not spin forever on `already_queued`; saturated
+work pivots to deferred-ready work, universe discovery, or `blocked:no_eligible_tasks`.
 
-## Two databases (brain vs compute)
+## Two Databases
 
 | DB | Module | Role |
 |----|--------|------|
-| `state/farm_tasks.sqlite` — **BRAIN** | `farm_tasks_db.py` | Typed-task lifecycle: decides *what / when*. |
-| `state/strategy_lab.sqlite` — **COMPUTE QUEUE** | `state_db.py` | The proven sweep queue the worker drains. |
+| `state/farm_tasks.sqlite` | `farm_tasks_db.py` | Brain: typed lifecycle, scheduling, reasons, fingerprints. |
+| `state/strategy_lab.sqlite` | `state_db.py` | Compute queue: the worker executes materialized sweep jobs. |
 
-A `run_sweep` brain-task **materializes** into the compute queue via
-`ensure_experiment_queued` and links back through `materialized_queue_job_id`. The brain
-is the only thing that decides; the queue only executes. (The legacy `scanner_farm_loop`
-wrote the compute queue directly with no brain — that flat path was the source of the
-`already_queued` saturation this layer removes.)
+The brain decides what should happen. The compute queue only executes bounded jobs. A
+`run_sweep` brain task materializes into `strategy_lab.sqlite` and links back through
+`materialized_queue_job_id`.
 
-## Task types & states
+## Task Types And States
 
-Task types: `intake_event` · `resolve_instrument` · `prepare_data` · `enrich_funding` ·
-`enrich_oi` · `run_sweep` · `classify_result` · `export_validation` ·
-`run_or_refresh_validation` · `schedule_followup`.
+Task types: `intake_event`, `resolve_instrument`, `prepare_data`, `enrich_funding`,
+`enrich_oi`, `run_sweep`, `classify_result`, `export_validation`,
+`run_or_refresh_validation`, `schedule_followup`.
 
-States: `queued` · `running` · `deferred` · `blocked` · `completed` · `skipped` · `failed`.
-Every non-running state carries a `machine_reason` (e.g. `data_missing`, `too_short`,
-`NEEDS_OI_DATA`, `NEEDS_FLOW_DATA`, `NEEDS_MICRO_DATA`, `prepare_backoff:*`, `data_ready`,
-`gate_cleared`, `compute_completed`, `compute_deduped`).
+States: `queued`, `running`, `deferred`, `blocked`, `completed`, `skipped`, `failed`.
+Every non-running state carries a `machine_reason`: examples are `data_missing`,
+`too_short`, `NEEDS_OI_DATA`, `NEEDS_FLOW_DATA`, `NEEDS_MICRO_DATA`, `data_ready`,
+`gate_cleared`, `compute_completed`, `compute_deduped`.
 
-### Re-arm (why it does not saturate)
+## Re-Arm Rule
 
-`run_sweep` `task_key = run_sweep::SYMBOL::TF::FAMILY::<data_fingerprint>`. `enqueue_task`
-returns *not-created* when an **active** task with that key exists, or when an identical
-task **completed within the TTL** (`DEFAULT_TTL_SECONDS = 12h`). It re-arms (new task) only
-when the **data fingerprint changes** (fresh candles / enrichment) or the TTL elapses. The
-spec filename also embeds the fingerprint, so the compute layer recomputes on fresh data
-instead of dedup-blocking forever. Data-gated families use a fingerprint-independent
-`...::gate` key so they hold exactly one blocked slot until the gate clears.
+`run_sweep` task keys include symbol, timeframe, family, and `data_fingerprint`.
+Identical active tasks are deduped. Identical recently completed tasks are not recreated
+until TTL expires. Fresh candles or enrichment change the fingerprint, so the farm can
+recompute on new data without being blocked forever by old completed work.
 
-## The cycle (one pass of `run_coordinator_cycle`)
+Data-gated families use one fingerprint-independent gate task until the missing gate
+clears, for example `NEEDS_OI_DATA`.
 
-1. **intake** — ingest intake events (scanner watches via `intake_adapter.watches_to_intake`,
-   read from the watch *file*, never the scanner module; plus OKX discovery on the pivot).
-   Dedup by `symbol+source+reason+time-window`.
-2. **plan** — `data_planner.plan_symbol` decides per (symbol, eligible timeframe):
-   missing → `prepare_data`; `too_short`/fresh-listing → **defer to a concrete time**;
-   data ready → `run_sweep`; OI/funding family without its field → **block** with
-   `NEEDS_OI_DATA` / `NEEDS_FLOW_DATA` and request an `enrich_oi` / `enrich_funding` task;
-   microstructure → block `NEEDS_MICRO_DATA` (no public provider — see Limitations).
-   Timeframes are asset-class-driven (`readiness_profiles.yaml`).
-3. **unblock** — a blocked `run_sweep` flips back to `queued` when its gate clears
-   (`oi`/`funding` field present on candles, or an OI slot file).
-4. **execute** (apply only) — drain a bounded number of `prepare_data` (fetch candles;
-   on success re-plan the symbol into `run_sweep` *same cycle*), `enrich_funding`,
-   `enrich_oi`, then materialize `run_sweep` tasks into the compute queue.
-5. **sync** — a finished compute job completes its `run_sweep` task and spawns
-   `classify_result`.
-6. **classify** — read the run's `metrics.json` → upsert `unique_candidates`
-   (keyed `symbol::tf::family::params_hash::data_fingerprint`) → spawn `export_validation`
-   for FORWARD_PAPER / REGIME_SPECIFIC. The export task is keyed by the full `uc_key`,
-   not raw `candidate_id`, because one raw id can reappear under different timeframes
-   or data fingerprints.
-7. **validation** (apply + `--run-validation`) — `validation_orchestrator.run_due_validations`:
-   export requests from `farm_tasks.sqlite.unique_candidates` (canonical; legacy
-   `candidate-registry` is fallback for old tools only) → honest-backtest bridge
-   (in-process) → **stamp verdicts back** into `farm_results` *and* `unique_candidates`
-   → write `setup_library` cards. `PAPER_FORWARD_READY` cards are the only inputs the
-   paper runtime can read. No manual file carry.
-8. **paper** (optional, apply + `--run-paper`) — read only `PAPER_FORWARD_READY`
-   setup cards, build `PaperTradePlan`, simulate against local prepared candles, and
-   append `paper_outcomes`. If no card is ready, the cycle prints paper-readiness
-   blockers instead of silently reporting `cards=0`.
-9. **pivot** — `work_available` (more queued/deferred-ready) / `advanced_lifecycle` /
-   `discovery_refill` (pull uncovered discovered symbols) / `blocked:no_eligible_tasks`.
+## Cycle
 
-## OI / funding / microstructure data
+1. **Intake:** scanner `watch_queue.jsonl` is read as a file through `intake_adapter`;
+   the scanner module itself is not imported. OKX discovery can refill the universe.
+2. **Plan:** `data_planner` decides prepare/defer/enrich/block/run_sweep per symbol and
+   timeframe. Missing data becomes `prepare_data`; too-short fresh listings defer to a
+   concrete time; OI/funding families request enrichment; microstructure remains blocked
+   as `NEEDS_MICRO_DATA`.
+3. **Unblock:** blocked sweeps return to `queued` when their data gate clears.
+4. **Execute:** in apply mode, bounded prepare/enrich/sweep work runs. Successful prepare
+   can re-plan into a sweep in the same cycle.
+5. **Worker:** `--run-worker` drains a bounded number of compute jobs from
+   `strategy_lab.sqlite`.
+6. **Classify:** completed runs are read from `metrics.json`, written to
+   `unique_candidates`, and exported for validation when eligible.
+7. **Validation:** `--run-validation` exports candidates, runs the honest-backtest bridge
+   in-process, stamps verdicts back into `farm_results` and `unique_candidates`, and
+   writes `setup_library` cards. The handoff uses bounded stored trade records in
+   `metrics.json`; legacy aggregate-only artifacts are rebuilt from local candles when
+   possible, never guessed from averages.
+8. **Paper:** `--run-paper` reads only `PAPER_FORWARD_READY` setup cards, builds
+   `PaperTradePlan`, simulates against local prepared candles, writes
+   `paper/paper_trades.jsonl`, and upserts `paper_outcomes`. A setup card is paper-ready
+   only if hard validation passed and executable params include `hold_bars`, `stop_pct`,
+   and `take_pct`.
+9. **Pivot:** the cycle reports `work_available`, `advanced_lifecycle`,
+   `discovery_refill`, or `blocked:no_eligible_tasks`.
 
-- **funding** — keyless public `funding-rate-history` (`OkxPublicFundingProvider`),
-  forward-filled onto candles (`merge_funding`). Enabled with `--enrich-funding`.
-- **open interest** — keyless public per-instId `open-interest-history`
-  (`OkxPublicOpenInterestProvider`, paginates backward via the `end` cursor),
-  forward-filled as the `oi` field (`merge_oi`). Enabled with `--enrich-oi`. A merged
-  `oi` field clears `NEEDS_OI_DATA` automatically through the unblock step. A manually
-  recorded `oi_slot` file remains a fallback.
-- **microstructure** — **no keyless public provider** for `obi_top5`/`trade_delta_100`/
-  `spread_bps`. These families stay `blocked: NEEDS_MICRO_DATA` (honest dead-end, visible
-  in the dashboard `blocked_reasons`). See [BACKLOG.md] for the future task.
+## Data Gates
 
-## Logs (see farm_journal.py)
+- **Funding:** keyless public OKX funding-rate history, enabled by `--enrich-funding`.
+- **Open interest:** keyless public OKX open-interest history, enabled by `--enrich-oi`.
+  A merged `oi` field clears `NEEDS_OI_DATA`.
+- **Microstructure:** no keyless public provider for `obi_top5`, `trade_delta_100`, or
+  `spread_bps`; these families honestly remain `NEEDS_MICRO_DATA`.
 
-Structured append-only JSONL under `<private_root>/logs/farm/`, rotated by
-`storage_policy.maintain`:
-- `cycle_log.jsonl` — one row per cycle (pivot, counters, by_state, blocked/deferred reasons);
-- `task_transitions.jsonl` — one row per state change (the audit trail; via the
-  `FarmTasksDB.on_transition` hook);
-- `errors.jsonl` — worker / cycle errors needing human attention.
+## Logs
 
-`--loop` prints a full block only on change/error, else a one-line heartbeat (`--verbose`
-forces full, `--quiet` suppresses). Operators read structured state via
-`farm_status_report` / the cockpit, not raw logs.
+Structured logs live under `<private_root>/logs/farm/` and are rotated:
+
+- `cycle_log.jsonl` - one row per cycle.
+- `task_transitions.jsonl` - one row per state change.
+- `errors.jsonl` - worker/cycle errors.
+
+Operators should use `status` and `farm_status_report`; raw logs are audit material, not
+the normal dashboard.
 
 ## Commands
 
-```
-# plan only, writes nothing (in-memory task DB):
+```bash
+# Plan only, writes nothing.
 python -m scripts.strategy_lab.farm_loop --once --dry-run
 
-# one real cycle (prepare/enrich/queue/compute/classify):
+# One compute cycle.
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
 
-# full loop incl. honest validation + paper simulation:
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper \
-    --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP
+# One full compute + validation + paper cycle.
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi
 
-# operator picture:
+# Continuous full cycle.
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP
+
+# Visible operator wrapper.
+bat\strategy_lab_farm_full_cycle_loop.bat
+bat\strategy_lab_farm_full_cycle_stop.bat
+
+# Status.
+python -m scripts.strategy_lab.status
 python -m scripts.strategy_lab.farm_status_report
 ```
 
-Stop a `--loop` run by creating the `--stop-file` or Ctrl+C. State persists in the two
-sqlite DBs, so restart is safe and idempotent. See [farm_runbook.md](farm_runbook.md).
+## Honest Limits
 
-## Limitations / honest gaps
-
-- Microstructure has no public provider → permanent `NEEDS_MICRO_DATA` block (by design).
-- OI history is keyless but ~100 points/call (paginated); treat OI as optional context.
-- Paper runtime is gated by hard validation. If `setup_library/cards` has no
-  `paper_forward_ready=true` cards, `paper_loop` / `farm_loop --run-paper` reports the
-  hard-status and plan/data blockers and does not simulate forward trades.
-- `farm_loop` is not yet wired into any `.bat`; the legacy loops remain the live operator
-  path until the switch is made deliberately (see [farm_ownership_map.md](farm_ownership_map.md)).
+- `FAILED_COSTS` and `NEEDS_MORE_DATA` are not runtime failures. They mean validation
+  refused to create a paper setup.
+- Paper simulation does nothing until a setup card is actually `PAPER_FORWARD_READY`.
+- Microstructure is blocked until a provider exists.
+- Older `scanner_farm_loop`, `universe_farm_loop`, and `research_loop` remain available
+  for diagnostics/history, but they are not the current farm core.

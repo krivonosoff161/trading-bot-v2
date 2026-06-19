@@ -19,6 +19,13 @@ from typing import Any
 from src.research_lab.candidate_registry import load_entries
 from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.data_inventory import normalize_timeframe, timeframe_from_filename
+from src.research_lab.experiment import (
+    annotate_signals_with_regime,
+    filter_signals,
+    generate_signals,
+    load_candles,
+    simulate_trades,
+)
 from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.hard_validation_contract import (
     CandidateForValidation,
@@ -144,6 +151,10 @@ def _entry_from_unique_candidate(row: dict[str, Any]) -> dict[str, Any]:
     run_dir_label = str(row.get("run_dir_label") or "")
     run_id = Path(run_dir_label.replace("\\", "/")).name if run_dir_label else ""
     validation_id = validation_id_for_unique_candidate(row)
+    try:
+        params = json.loads(row.get("params_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        params = {}
     metrics_summary = {
         "n_trades": int(row.get("n_trades") or 0),
         "avg_net_pct": float(row.get("avg_net_pct") or 0.0),
@@ -163,7 +174,7 @@ def _entry_from_unique_candidate(row: dict[str, Any]) -> dict[str, Any]:
         "strategy_id": str(row.get("family") or ""),
         "params_hash": str(row.get("params_hash") or ""),
         "data_fingerprint": str(row.get("data_fingerprint") or ""),
-        "params": {},
+        "params": params if isinstance(params, dict) else {},
         "metrics_summary": metrics_summary,
         "decision": str(row.get("decision") or ""),
         "validation_status": str(row.get("validation_status") or ""),
@@ -247,7 +258,7 @@ def _build_candidate(
         normalized_symbol=str(entry.get("symbol", "").replace("-", "_")),
         timeframe=_recover_timeframe(metrics, entry),
         strategy_id=str(entry.get("strategy_id") or ""),
-        params=dict(entry.get("params") or {}),
+        params=dict(entry.get("params") or metrics.pop("_params", {}) or {}),
         filters=filters,
         fees_bps=fees_bps,
         slippage_bps=slippage_bps,
@@ -335,8 +346,12 @@ def _load_experiment_metrics(
             )
             if exact_scope and (exact_id or exact_hash):
                 out = dict(r.get("metrics") or {})
-                out["_trades"] = list(r.get("_trades") or r.get("trades") or [])
                 out.update(context)
+                out["_params"] = _params_from_result(r)
+                trades = list(r.get("_trades") or r.get("trades") or [])
+                if not trades and int(out.get("n_trades") or 0) > 0:
+                    trades = _rebuild_trades_from_result(private_root, r, out, context)
+                out["_trades"] = trades
                 out["source_candidate_id"] = row_id
                 out["uc_key"] = str(entry.get("uc_key") or "")
                 if entry.get("data_fingerprint"):
@@ -344,15 +359,61 @@ def _load_experiment_metrics(
                 return out
         if results and not entry.get("uc_key"):
             first = dict(results[0].get("metrics") or {})
-            first["_trades"] = list(
-                results[0].get("_trades")
-                or results[0].get("trades")
-                or []
-            )
             first.update(context)
+            first["_params"] = _params_from_result(results[0])
+            trades = list(results[0].get("_trades") or results[0].get("trades") or [])
+            if not trades and int(first.get("n_trades") or 0) > 0:
+                trades = _rebuild_trades_from_result(private_root, results[0], first, context)
+            first["_trades"] = trades
             return first
 
     return dict(entry.get("metrics_summary") or {})
+
+
+def _params_from_result(row: dict[str, Any]) -> dict[str, Any]:
+    return dict(row.get("params") or {})
+
+
+def _rebuild_trades_from_result(
+    private_root: Path,
+    row: dict[str, Any],
+    metrics: dict[str, Any],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Backward-compatible trade-series recovery for old run artifacts.
+
+    Early farm artifacts stored aggregate metrics but not the per-trade series that
+    hard validation needs. Rebuild the same deterministic CPU simulation from the
+    recorded params, family, filters and candle file label instead of degrading those
+    old candidates to NEEDS_MORE_DATA forever.
+    """
+    label = str(metrics.get("data_file_label") or "")
+    if not label:
+        return []
+    tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
+    candidates = []
+    if tf:
+        candidates.append(Path(private_root) / "market_data" / tf / label)
+    candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
+        return []
+    try:
+        candles = load_candles(path)
+        family = str(row.get("family") or "")
+        params = dict(row.get("params") or {})
+        signals = generate_signals(candles, family, params)
+        signals = annotate_signals_with_regime(candles, signals, {})
+        signals = filter_signals(signals, dict(context.get("_filters") or {}))
+        return simulate_trades(
+            candles,
+            signals,
+            params,
+            fees_bps=float(context.get("_fees_bps") or 7.0),
+            slippage_bps=float(context.get("_slippage_bps") or 3.0),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 def _build_equity_curve(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -12,9 +12,9 @@ documents are preserved as history, but they no longer define the active work.
 > OKX universe intake -> data planning -> prepare/enrich -> sweeps -> classification
 > into `unique_candidates` -> hard validation -> stamp-back -> `setup_library` cards
 > -> gated `paper_loop` outcomes. The scanner is upstream intake, not the center.
-> Current next work: richer paper promotion/demotion metrics, one-click operator
-> switch from legacy loops to `farm_loop`, discovery ranking by movers, more GPU
-> kernels, and a future microstructure provider.
+> Visible full-cycle wrapper: `bat\strategy_lab_farm_full_cycle_loop.bat`.
+> Current next work: richer paper promotion/demotion metrics, discovery ranking by
+> movers, more GPU kernels, and a future microstructure provider.
 
 > **Update 2026-06-18 — center shifted.** The current center of `trading-bot-v2` is the
 > **universe-driven calculation farm** (paper/research only): a continuous research
@@ -30,8 +30,7 @@ documents are preserved as history, but they no longer define the active work.
 > - Done: continuous lifecycle, fingerprint re-arm (no `already_queued` spin), public OI
 >   loader (`NEEDS_OI_DATA` is now a managed data task), auto honest-validation stamp-back,
 >   structured farm logs, bounded storage.
-> - Next: wire `farm_loop` into the default operator path (replacing legacy loops),
->   microstructure provider (currently honest `NEEDS_MICRO_DATA`), discovery ranking by
+> - Next: microstructure provider (currently honest `NEEDS_MICRO_DATA`), discovery ranking by
 >   movers, GPU kernels for more families.
 
 The scanner track below remains valid but **secondary** (it feeds the farm).
@@ -126,8 +125,6 @@ Done:
 Next:
 
 - richer paper promotion/demotion metrics;
-- wire `farm_loop` into the default operator one-click path (replace the legacy
-  `strategy_lab_start.bat` / `universe_farm_loop` / `scanner_farm_loop`);
 - discovery ranking by movers; GPU kernels for more families;
 - manual-hypothesis intake channel (trader notes → structured spec → dry-run → farm task);
 - microstructure data source (currently deferred).
