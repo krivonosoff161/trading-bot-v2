@@ -153,7 +153,8 @@ def test_llm_step_ollama_does_not_require_daily_cap(tmp_path, monkeypatch):
             text = (
                 '{"proposals":[{"setup_family":"momentum_breakout",'
                 '"requested_timeframe":"1d","symbols":["BTC_USDT_SWAP"],'
-                '"parameter_grid":{"momentum_breakout":[{"lookback":20,"hold_bars":5}]},'
+                    '"parameter_grid":{"momentum_breakout":[{"lookback":20,"hold_bars":5,'
+                    '"stop_pct":8,"take_pct":16}]},'
                 '"hypothesis":"bounded local calculator test",'
                 '"expected_validation":"reject if fragile","risk_flags":[],"max_variants":1}]}'
             )

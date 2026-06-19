@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 
 from src.research_lab.experiment import ExperimentSpec
 from src.research_lab.paths import PROJECT_ROOT
+from src.research_lab.param_schemas import validate_parameter_grid
 from src.research_lab.proposal_schema import REJECTED, VALIDATED, Proposal
 from src.research_lab.resource_policy import ResourcePolicy
 from src.research_lab.runtime_policy import effective_variant_cap
@@ -74,6 +75,14 @@ def validate_proposal(
         reasons.append("missing_hypothesis")
     if proposal.setup_family not in REGISTRY:
         reasons.append("unknown_family")
+    else:
+        grid = proposal.parameter_grid.get(proposal.setup_family) or []
+        param_result = validate_parameter_grid(
+            proposal.setup_family,
+            list(grid),
+            require_executable=True,
+        )
+        reasons.extend(param_result.errors)
 
     unknown = [s for s in proposal.symbols if s.upper() not in set(universe.all_symbols())]
     if not proposal.symbols or unknown:

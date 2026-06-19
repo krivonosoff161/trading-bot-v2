@@ -88,17 +88,17 @@ def test_prepare_chains_to_run_sweep_in_one_cycle(tmp_path):
 def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
     from src.research_lab.validation_orchestrator import run_due_validations
-    uc_key = "X::1h::trend::ph::fp"
+    uc_key = "X::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
     tasks.upsert_unique_candidate({
-        "uc_key": uc_key, "symbol": "X", "timeframe": "1h", "family": "trend",
+        "uc_key": uc_key, "symbol": "X", "timeframe": "1h", "family": "momentum_breakout",
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "", "candidate_id": "c1",
         "params": {"direction": "long", "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
     }, now=1.0)
     tasks.enqueue_task(task_type="export_validation", task_key=f"export::{uc_key}", symbol="X",
-                       timeframe="1h", family="trend",
+                       timeframe="1h", family="momentum_breakout",
                        payload={"candidate_id": "c1", "uc_key": uc_key}, now=1.0)
     # a verdict already on disk -> the stamp-back must mirror it into unique_candidates
     vdir = tmp_path / "hard_validation" / "verdicts"
@@ -113,9 +113,9 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
             "candidate_id": validation_id,
             "symbol": "X",
             "timeframe": "1h",
-            "strategy_id": "trend",
+            "strategy_id": "momentum_breakout",
             "lite_status": "FORWARD_PAPER",
-            "params": {"direction": "long", "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
+            "params": {"direction": "long", "lookback": 20, "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
             "data_window": {"fingerprint": "fp", "n_bars": 10, "start_ts": 1, "end_ts": 10},
             "metrics": {"uc_key": uc_key},
         }), encoding="utf-8")
@@ -126,7 +126,7 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "source_run_id": "run",
         "symbol": "X",
         "timeframe": "1h",
-        "strategy_id": "trend",
+        "strategy_id": "momentum_breakout",
         "verdict": {
             "candidate_id": validation_id,
             "hard_status": "PAPER_FORWARD_READY",
@@ -198,6 +198,7 @@ NEW_MODULES = [
     "src/research_lab/paper_contract.py",
     "src/research_lab/paper_journal.py", "src/research_lab/paper_runtime.py",
     "src/research_lab/paper_readiness.py",
+    "src/research_lab/param_schemas.py", "src/research_lab/setup_lifecycle.py",
     "scripts/strategy_lab/paper_loop.py",
 ]
 # Module paths the research farm must NEVER import (the live/money/secrets/Telegram path).

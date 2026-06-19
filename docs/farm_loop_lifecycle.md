@@ -67,13 +67,32 @@ clears, for example `NEEDS_OI_DATA`.
    writes `setup_library` cards. The handoff uses bounded stored trade records in
    `metrics.json`; legacy aggregate-only artifacts are rebuilt from local candles when
    possible, never guessed from averages.
-8. **Paper:** `--run-paper` reads only `PAPER_FORWARD_READY` setup cards, builds
+8. **Follow-up:** hard-validation feedback is converted into bounded
+   `schedule_followup` tasks. Queueable actions (`NARROW_PARAMS`, `WIDEN_PARAMS`,
+   `REGIME_SWEEP`) become ordinary typed `run_sweep` tasks and then use the same
+   worker path as every other calculation. Follow-ups are capped, deduped, TTL-bound,
+   and can be disabled with `--no-followups`.
+9. **Paper:** `--run-paper` reads only `PAPER_FORWARD_READY` setup cards, builds
    `PaperTradePlan`, simulates against local prepared candles, writes
    `paper/paper_trades.jsonl`, and upserts `paper_outcomes`. A setup card is paper-ready
    only if hard validation passed and executable params include `hold_bars`, `stop_pct`,
-   and `take_pct`.
-9. **Pivot:** the cycle reports `work_available`, `advanced_lifecycle`,
+   `take_pct`, with percent-point units and at least 1:2 reward/risk.
+10. **Derived setup lifecycle:** status/reporting rebuild positive, negative, mixed, and
+   no-sample setup groups from canonical artifacts. These groups are research evidence,
+   not promotion/deletion rules.
+11. **Pivot:** the cycle reports `work_available`, `advanced_lifecycle`,
    `discovery_refill`, or `blocked:no_eligible_tasks`.
+
+## Parameter Authority
+
+`strategy_registry.py` remains the source of truth for strategy IDs, defaults,
+timeframes, and required data. `configs/strategy_lab/param_schemas.yaml` is only a
+validator overlay: it rejects unknown keys, invalid types/ranges, bad percent units, and
+paper/LLM proposals whose `take_pct` is less than `2 * stop_pct`.
+
+Internally generated farm sweeps may normalize old registry defaults into executable
+1:2 exits before calculation. External/LLM proposals are not silently normalized; they are
+rejected with explicit reason codes.
 
 ## Data Gates
 

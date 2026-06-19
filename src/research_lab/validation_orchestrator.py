@@ -19,10 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.farm_tasks_db import FarmTasksDB
+from src.research_lab.hard_validation_contract import HardValidationReport
 from src.research_lab.hard_validation_export import export_requests, validation_id_for_unique_candidate
 from src.research_lab.honest_backtest_bridge import bridge_available, run_validation_batch
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_handoff import refresh_from_artifacts
+from src.research_lab.validation_feedback import generate_feedback, write_feedback
 
 
 def _verdict_map(private_root: Path) -> dict[str, str]:
@@ -131,7 +133,7 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
                         limit: int = 10, now: float | None = None) -> dict[str, Any]:
     """Execute export + validation + stamp-back for queued export_validation tasks."""
     counters = {"export_tasks": 0, "exported": 0, "validated": 0, "stamped_db": 0,
-                "stamped_unique": 0, "setup_cards": 0,
+                "stamped_unique": 0, "setup_cards": 0, "feedback_written": 0,
                 "bridge_ok": all(bridge_available().values())}
     export_tasks: list[dict] = []
     while len(export_tasks) < limit:
@@ -178,6 +180,17 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
     reqs = _request_map(private_root)
     counters["stamped_db"] += _stamp_farm_results_from_contexts(Path(private_root), verdicts)
     counters["setup_cards"] = _write_setup_cards(Path(private_root), current_ids)
+    reports_dir = Path(private_root) / "hard_validation" / "reports"
+    for cid in current_ids:
+        report_data = _read_json(reports_dir / f"{cid}.json")
+        if not report_data:
+            continue
+        try:
+            feedback = generate_feedback(HardValidationReport.from_dict(report_data))
+        except (KeyError, TypeError, ValueError):
+            feedback = None
+        if feedback is not None and write_feedback(Path(private_root), feedback, dry_run=False):
+            counters["feedback_written"] += 1
     for cid, hard_status in verdicts.items():
         if hard_status:
             req = reqs.get(cid) or {}

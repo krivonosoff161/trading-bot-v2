@@ -26,8 +26,10 @@ farm permission to touch the old money path.
 | `scripts/strategy_lab/scanner_farm_loop.py` | **ARCHIVE-LEGACY** | Flat scanner-watch -> sweep queue path; superseded by the brain. |
 | `scripts/strategy_lab/universe_farm_loop.py` | **ARCHIVE-LEGACY** | Cursor-based universe grind; absorbed by `discovery_refill`. |
 | `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **ADVISORY LANE** | LLM proposal/review lane. The model is a JSON-only hypothesis advisor, not the farm controller. |
+| `src/research_lab/feedback_followup.py` | **CORE PLANNER** | Deterministic bounded follow-up planner; consumed by `farm_loop` via `schedule_followup`. |
 | `scripts/strategy_lab/generate_event_sweeps.py` | **KEEP / OFF DEFAULT** | Price-event sweep generator; `--from-scanner` is legacy bridge. |
-| `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic when stable. |
+| `scripts/strategy_lab/apply_feedback_recommendations.py` | **KEEP / MANUAL DIAGNOSTIC** | Manual follow-up bridge; canonical automation now goes through `farm_loop`. |
+| `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic. |
 | `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
 | `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
 
@@ -87,3 +89,8 @@ The weak/local LLM calculator is advisory only:
 - cannot touch `.env`, order paths, Telegram, or old main engine.
 
 Code and validators decide what enters the farm.
+
+LLM proposals pass through the same parameter authority as human/CLI proposals:
+unknown keys, wrong ranges, missing executable exits, or reward/risk below 1:2 are
+rejected. Repeated contract failures are counted and should disable the model for the
+current run rather than letting it steer the farm.

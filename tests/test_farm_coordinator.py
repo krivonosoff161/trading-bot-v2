@@ -120,3 +120,43 @@ def test_run_sweep_rearm_on_new_fingerprint(tmp_path):
     keys = {t["task_key"] for t in tasks.tasks_in_state("queued", task_type="run_sweep")}
     assert any("fp2" in k for k in keys) and len(keys) > len(first)
     tasks.close()
+
+
+def test_feedback_followup_becomes_typed_run_sweep_task(tmp_path):
+    from src.research_lab.validation_feedback import generate_feedback, write_feedback
+    from src.research_lab.hard_validation_contract import HardValidationReport
+
+    tasks = FarmTasksDB(":memory:")
+    tasks.upsert_unique_candidate({
+        "uc_key": "BTC::1h::momentum_breakout::ph::fp",
+        "symbol": "BTC", "timeframe": "1h", "family": "momentum_breakout",
+        "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
+        "validation_status": "FORWARD_PAPER", "hard_status": "FAILED_FRAGILITY",
+        "candidate_id": "c-follow",
+        "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
+    }, now=1.0)
+    report = HardValidationReport(
+        candidate_id="c-follow", source_run_id="run", symbol="BTC", timeframe="1h",
+        strategy_id="momentum_breakout",
+        verdict={
+            "candidate_id": "c-follow", "hard_status": "FAILED_FRAGILITY",
+            "checks": [], "failed_checks": ["robustness"], "reason_codes": [],
+        },
+        checks_summary={},
+    )
+    fb = generate_feedback(report)
+    assert fb is not None
+    write_feedback(tmp_path, fb, dry_run=False)
+
+    out = run_coordinator_cycle(
+        tasks, private_root=tmp_path, profiles=PROFILES, policy=POLICY,
+        intake_events=[], data_state_fn=_usable_state(), apply=True, now=1000.0,
+        run_worker=False, run_validation=False, run_followups=True, max_followups=5,
+    )
+    assert out["counters"]["followups_scheduled"] == 1
+    assert out["counters"]["followup_sweeps_planned"] == 1
+    queued = tasks.tasks_in_state("queued", task_type="run_sweep")
+    assert len(queued) == 1
+    assert queued[0]["task_key"].startswith("run_sweep::followup::")
+    assert '"origin": "feedback_followup"' in queued[0]["payload_json"]
+    tasks.close()

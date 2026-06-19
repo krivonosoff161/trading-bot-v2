@@ -21,6 +21,7 @@ from src.research_lab.hard_validation_contract import (
     SetupLibraryEntry,
     write_json,
 )
+from src.research_lab.param_schemas import executable_params_ready
 
 LIBRARY_DIR = "setup_library"
 INDEX_FILE = "setup_index.jsonl"
@@ -51,7 +52,10 @@ def build_setup_card(
         risk_flags=(candidate or {}).get("risk_flags", []),
         entry_exit_summary=_entry_exit_summary(verdict),
         regime_tags=_extract_regime_tags(candidate),
-        paper_forward_ready=(hard_status == "PAPER_FORWARD_READY" and _paper_params_ready(params)),
+        paper_forward_ready=(
+            hard_status == "PAPER_FORWARD_READY"
+            and _paper_params_ready(report.get("strategy_id", ""), params)
+        ),
         main_engine_ready=False,
         created_at=report.get("created_at", ""),
         updated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -165,17 +169,11 @@ def _entry_exit_summary(verdict: dict[str, Any]) -> str:
     return f"Failed checks: {', '.join(failed)}."
 
 
-def _paper_params_ready(params: dict[str, Any]) -> bool:
+def _paper_params_ready(strategy_id: str, params: dict[str, Any]) -> bool:
     """Minimum executable paper contract for the current setup-card bridge."""
-    if not isinstance(params, dict) or not params:
+    if not strategy_id:
         return False
-    for key in ("hold_bars", "stop_pct", "take_pct"):
-        try:
-            if float(params.get(key)) <= 0:
-                return False
-        except (TypeError, ValueError):
-            return False
-    return True
+    return executable_params_ready(str(strategy_id), params)
 
 
 def _extract_regime_tags(candidate: dict[str, Any] | None) -> list[str]:

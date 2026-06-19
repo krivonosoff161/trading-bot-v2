@@ -34,6 +34,8 @@ Raw scanner/watch/news/intake rows have no path into paper runtime.
 - `lite_status == "FORWARD_PAPER"`
 - `hard_status == "PAPER_FORWARD_READY"`
 - executable params: `hold_bars`, `stop_pct`, `take_pct`
+- percent-point units: `8` means 8%, not 0.08%
+- reward/risk at least 1:2: `take_pct >= 2 * stop_pct`
 
 The plan is order-free. It carries identity/provenance, symbol/timeframe/family, params,
 entry/stop/take/hold rules, costs, validation verdict, and risk metadata. It does not
@@ -81,6 +83,9 @@ Paper feedback is additive:
 - `paper_outcomes` stores aggregate outcome rows.
 - `farm_results.paper_status` and `unique_candidates.paper_status` mirror state where
   the join metadata is available.
+- `setup_lifecycle` rebuilds positive, negative, mixed, and no-sample research groups
+  from the append-only journal and validation provenance. Negative outcomes are kept for
+  analysis instead of being discarded.
 
 Paper confirmation is still paper-only. It does not promote live trading.
 
