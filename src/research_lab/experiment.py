@@ -109,6 +109,7 @@ class RunResult:
     metrics: dict[str, Any]
     decision: str
     reasons: list[str]
+    trades: list[dict[str, Any]] = field(default_factory=list)
     validation_status: str = ""
     validation_reasons: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
@@ -531,6 +532,7 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
             results.append(RunResult(
                 run_id=stable_run_id(symbol, family, {}), symbol=symbol, family=family,
                 params={}, metrics=zero, decision=needs, reasons=["missing_required_data"],
+                trades=[],
                 validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
                 next_action="provide the required OI/funding/microstructure data, then re-run",
                 regime_summary={}))
@@ -538,7 +540,9 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         gpu_family = use_gpu and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
             cpu_fallback_families.add(family)
-        for params in spec.parameter_grid.get(family, []):
+        strategy_defaults = dict(get_strategy(family).parameter_defaults)
+        for raw_params in spec.parameter_grid.get(family, []):
+            params = {**strategy_defaults, **dict(raw_params or {})}
             if gpu_family:
                 signals = gpu_kernels.generate_signals_vectorized(candles, family, params, xp=xp)
                 accelerated_signal_runs += 1
@@ -587,6 +591,7 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
                     metrics=metrics,
                     decision=decision,
                     reasons=reasons,
+                    trades=trades,
                     validation_status=validation.status,
                     validation_reasons=validation.reasons,
                     risk_flags=validation.risk_flags,

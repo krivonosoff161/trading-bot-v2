@@ -28,8 +28,10 @@
   pump/impulse event-detectors + MFE/MAE + pair-risk + continuation/geometry; main
   `compute_signal` — только изолированные: regime labels, lag/freshness, DRIFT both-side,
   style geometry, late-entry filters. Все — через farm dry-run→validation.
-- **Wire farm_loop в one-click `.bat`** (заменить legacy `strategy_lab_start`/`universe_farm_loop`/
-  `scanner_farm_loop` в дефолтном операторском пути) — сознательное переключение.
+- **DONE 2026-06-19: visible farm_loop `.bat` path.** Canonical operator wrapper:
+  `bat\strategy_lab_farm_full_cycle_loop.bat`; stop wrapper:
+  `bat\strategy_lab_farm_full_cycle_stop.bat`. Legacy `strategy_lab_start` /
+  `universe_farm_loop` / `scanner_farm_loop` stay diagnostic/off-default.
 - **Microstructure data source** (obi_top5/trade_delta/spread_bps) — сейчас честный
   `NEEDS_MICRO_DATA` (нет keyless публичного провайдера). DEFERRED до источника.
 - **Discovery ranking by movers** (сейчас классификация, не volume-movers) + GPU-кернелы

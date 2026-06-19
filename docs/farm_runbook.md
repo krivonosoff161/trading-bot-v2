@@ -1,116 +1,122 @@
-# Farm Runbook — what is active now & how to operate it
+# Farm Runbook - Active Operator Path
 
-Status: **ACTIVE** · Last updated: 2026-06-19
+Status: **ACTIVE**. Last updated: 2026-06-19.
 
-The short answer to "what runs the calculation farm now": **`farm_loop`** (the continuous
-lifecycle, see [farm_loop_lifecycle.md](farm_loop_lifecycle.md)). Everything is
-paper/research only — public OKX data, no `.env`, no `AUTO_TRADE`, no orders, no Telegram.
+The calculation farm is now driven by `farm_loop`. The system is paper/research only:
+public OKX market data, no `.env`, no `AUTO_TRADE`, no orders, no private account
+endpoints, no Telegram.
 
-## What is active now
+## Active Path
 
-- **Canonical core (the command to run):** `python -m scripts.strategy_lab.farm_loop`
-  (brain = `state/farm_tasks.sqlite`). This is the current continuous research cycle.
-- **One-click `.bat` wiring:** **NOT canonical yet.** `bat\strategy_lab_start.bat` and the
-  other one-click bats still drive the *legacy* loops (`universe_farm_loop` /
-  `research_loop`), **not** `farm_loop`. Until a `farm_loop` bat is wired, the canonical
-  path is the explicit `python -m scripts.strategy_lab.farm_loop …` command above — treat
-  the legacy bats as manual diagnostics / off-default.
-- **Compute executor:** `worker_once` / `worker_loop` drain `strategy_lab.sqlite` (the
-  brain materializes `run_sweep` jobs into it; `--run-worker` drains a few per cycle).
-- **Operator picture:** `farm_status_report` (terminal) and the cockpit dashboard.
-- **Legacy loops** (`universe_farm_loop`, `scanner_farm_loop`, `research_loop`,
-  `strategy_lab_start.bat`) = legacy / off-default / manual diagnostics — see
-  [farm_ownership_map.md](farm_ownership_map.md). Not removed; not the current path.
+- **Core:** `python -m scripts.strategy_lab.farm_loop`
+  (brain DB: `state/farm_tasks.sqlite`).
+- **Visible one-click wrapper:** `bat\strategy_lab_farm_full_cycle_loop.bat`.
+- **Clean stop wrapper:** `bat\strategy_lab_farm_full_cycle_stop.bat`.
+- **Compute executor:** `worker_once` / `worker_loop` drain `state/strategy_lab.sqlite`.
+  In the normal loop, `--run-worker` drains a bounded number of jobs per cycle.
+- **Operator status:** `python -m scripts.strategy_lab.status` and
+  `python -m scripts.strategy_lab.farm_status_report`.
+- **Legacy/off-default:** `scanner_farm_loop`, `universe_farm_loop`, `research_loop`,
+  `strategy_lab_start.bat`. Keep them for diagnostics/history; do not build new operator
+  work on top of them.
 
-## Prerequisite: OKX universe discovery snapshot
+## Prerequisite: OKX Universe Snapshot
 
-The farm's universe-discovery refill pivot reads a cached OKX instrument snapshot. Build /
-refresh it (keyless, public, paper-only):
+Build or refresh the keyless OKX instrument snapshot:
 
-```
+```bash
 python -m scripts.strategy_lab.discover_okx_universe --apply
-# writes <private_root>/discovery/okx_instruments_snapshot.json (live USDT perps, classified)
 ```
 
-Behavior without a snapshot: `farm_loop` still runs — it plans from scanner watch intake
-and any already-prepared symbols — but the **`discovery_refill` pivot is unavailable**, so
-when fresh intake is empty the loop reports `pivot=blocked:no_eligible_tasks` (it does
-**not** invent work). Run `discover_okx_universe --apply` first if you want the farm to
-grind the broad universe when scanner intake is quiet. The snapshot has a TTL (default 6h);
-re-run to refresh.
+Without the snapshot, `farm_loop` can still consume scanner/watch intake and existing
+prepared data, but broad `discovery_refill` has nothing to pull from. The loop will report
+`blocked:no_eligible_tasks` instead of inventing work.
 
-## Daily operation
+## Commands
 
-```
-# 1. See what the farm WOULD do (writes nothing; in-memory task DB):
+```bash
+# Plan only, writes nothing.
 python -m scripts.strategy_lab.farm_loop --once --dry-run
 
-# 2. Run one real cycle (fetch missing candles, enrich, queue+compute, classify):
+# One real cycle: prepare/enrich/queue/compute/classify.
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
 
-# 3. Add honest validation (unique_candidates -> export -> honest-backtest
-#    -> stamp-back -> setup_library, in-process):
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation \
-    --enrich-funding --enrich-oi
+# One full cycle: compute -> honest validation -> paper readiness/paper outcomes.
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi
 
-# 4. Full research + paper cycle:
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper \
-    --enrich-funding --enrich-oi
+# Continuous full cycle.
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP --quiet
 
-# 5. Continuous (quiet heartbeat; full block only on change/error):
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper \
-    --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP --quiet
+# Visible operator wrapper for the same continuous full cycle.
+bat\strategy_lab_farm_full_cycle_loop.bat
 
-# 6. Read state (never tail raw logs for status):
+# Clean stop for the wrapper above.
+bat\strategy_lab_farm_full_cycle_stop.bat
+
+# Status, no raw log tailing needed.
+python -m scripts.strategy_lab.status
 python -m scripts.strategy_lab.farm_status_report
 python -m scripts.strategy_lab.farm_status_report --json
 ```
 
-`--run-paper` is still gated by hard validation. If validation produces no
-`PAPER_FORWARD_READY` setup cards, the paper step writes nothing and prints a readiness
-breakdown (`hard_status:NEEDS_MORE_DATA`, invalid plan, missing local candles, etc.).
-That is the correct failure mode: paper simulation starts only after the validator has
-created a runnable setup card.
+## Paper Gate
 
-## Stop / restart
+`--run-paper` is gated by hard validation. Paper simulation reads only setup cards with:
 
-- **Stop a loop:** create the file named by `--stop-file` (e.g. `STOP`) — the loop exits
-  cleanly after the current cycle — or press Ctrl+C.
-- **Restart:** just run the command again. State lives in `state/farm_tasks.sqlite`
-  (brain) and `state/strategy_lab.sqlite` (compute queue); both are persistent and
-  idempotent, so a restart resumes without reprocessing or double-queuing.
-- **Worker stuck:** `worker_once` auto-reaps stale `running` jobs; for manual recovery
+- `lite_status == FORWARD_PAPER`
+- `hard_status == PAPER_FORWARD_READY`
+- `paper_forward_ready == true`
+- executable params: `hold_bars`, `stop_pct`, `take_pct`
+
+If validation produces no `PAPER_FORWARD_READY` cards, the paper step writes nothing and
+prints readiness blockers. Current blockers such as `FAILED_COSTS` and `NEEDS_MORE_DATA`
+mean the pipeline worked and refused to fake a paper setup. Do not manually promote these
+statuses.
+
+## Data And Artifacts
+
+`<private_root>` is `TRADING_BOT_RESEARCH_ROOT`, defaulting to:
+
+```text
+%USERPROFILE%\github_projects\trading-bot-research\strategy-lab
+```
+
+Apply mode refuses to write inside the public repo unless `--allow-public-output` is
+explicitly passed.
+
+- `market_data/<tf>/*.json` - prepared candles with optional funding/OI fields.
+- `state/farm_tasks.sqlite` - lifecycle brain: task type/state/reason/fingerprint.
+- `state/strategy_lab.sqlite` - compute queue, runs, candidates, farm/paper results.
+- `plans/event_specs/*.json` - materialized sweep specs, bounded by storage policy.
+- `hard_validation/{requests,verdicts,reports}/` - honest validation artifacts.
+- `setup_library/{cards,reports,setup_index.jsonl}` - validated setup cards.
+- `paper/paper_trades.jsonl` - paper trade journal.
+- `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.
+- `logs/farm_full_cycle_loop.log` - console log from the visible wrapper.
+
+## Stop / Restart
+
+The loop is restart-safe. State persists in `farm_tasks.sqlite` and `strategy_lab.sqlite`;
+deduplication uses task keys, fingerprints, and TTLs.
+
+- Stop the canonical wrapper: `bat\strategy_lab_farm_full_cycle_stop.bat`.
+- Stop a raw CLI loop: create the file passed via `--stop-file`, or press Ctrl+C.
+- Restart: run the same command again.
+- Worker recovery: `worker_once` reaps stale jobs; manual fallback is
   `python -m scripts.strategy_lab.requeue_stale_jobs`.
 
-## Where things are written (private root)
+## Storage Hygiene
 
-`<private_root>` = `TRADING_BOT_RESEARCH_ROOT` (default `~/github_projects/trading-bot-research/strategy-lab`,
-outside the public repo). Apply mode refuses to write inside the public repo unless
-`--allow-public-output`.
+Every apply cycle runs storage maintenance:
 
-- `market_data/<tf>/*.json` — prepared candles (+ `funding`/`oi` enrichment fields).
-- `market_data/oi/<SYMBOL>_oi.{json,csv}` — optional manual OI slot (fallback).
-- `state/farm_tasks.sqlite` — task lifecycle, intake events, unique candidates.
-- `state/strategy_lab.sqlite` — compute queue, runs, candidates, farm_results.
-- `plans/event_specs/*.json` — materialized sweep specs (bounded: newest 500 kept).
-- `hard_validation/{requests,verdicts,reports}/` — validation artifacts exported from
-  `farm_tasks.sqlite.unique_candidates` (legacy registry is fallback only).
-- `setup_library/{cards,reports,setup_index.jsonl}` — setup cards written automatically
-  by the validation step; only `paper_forward_ready=true` cards enter paper runtime.
-- `paper/paper_trades.jsonl` and `state/strategy_lab.sqlite::paper_outcomes` — paper
-  outcomes from `paper_loop` or `farm_loop --run-paper`.
-- `logs/farm/{cycle_log,task_transitions,errors}.jsonl` — structured farm logs (rotated).
+- farm logs are rotated;
+- event specs are capped;
+- terminal lifecycle rows and unique candidates are bounded;
+- market data stays under the configured private root, so point
+  `TRADING_BOT_RESEARCH_ROOT` at the HDD if the SSD must stay clear.
 
-## Storage hygiene (bounded)
+## Safety Boundary
 
-Each apply cycle runs `storage_policy.maintain` (rotates the farm logs) +
-`bound_farm_artifacts` (caps `event_specs` to 500, prunes terminal tasks + unique
-candidates to 5000). Market data lives on the configured private root (point
-`TRADING_BOT_RESEARCH_ROOT` at the HDD to keep the SSD clear).
-
-## Safety boundary (always)
-
-No `.env`, no `AUTO_TRADE`, no order execution, no private exchange/account endpoints, no
-Telegram. Public OKX market data only. The boundary is enforced by an AST import test over
-the farm modules. See [farm_notification_layer.md](farm_notification_layer.md) for the
-*future* (design-only) notification layer.
+The farm and paper runtime do not import the money path. Boundary tests cover the new
+modules. Forbidden without explicit approval: `.env`, `AUTO_TRADE`, order execution,
+private exchange/account endpoints, Telegram credentials, old main engine as executor.

@@ -59,6 +59,13 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert (out_dir / "llm_review_pack.json").exists()
     assert (out_dir / "llm_review_prompt.md").exists()
     assert "Strategy Lab Run" in (out_dir / "summary.md").read_text(encoding="utf-8")
+    payload = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert "trades" in payload["results"][0]
+    assert payload["results"][0]["trades_stored"] == len(payload["results"][0]["trades"])
+    assert payload["results"][0]["params"]["stop_pct"] > 0
+    assert payload["results"][0]["params"]["take_pct"] > 0
+    review_pack = json.loads((out_dir / "llm_review_pack.json").read_text(encoding="utf-8"))
+    assert "trades" not in review_pack["top_results"][0]
     vault = tmp_path / "private" / "obsidian-vault"
     assert (vault / "Runs").exists()
     assert list((vault / "Candidates").glob("*.md"))

@@ -34,13 +34,14 @@ def build_setup_card(
     verdict = report.get("verdict") or {}
     hard_status = verdict.get("hard_status", "UNKNOWN")
     candidate_id = report.get("candidate_id", "")
+    params = (candidate or {}).get("params", {})
     return SetupCard(
         setup_id=f"setup-{candidate_id}",
         candidate_id=candidate_id,
         symbol=report.get("symbol", ""),
         timeframe=report.get("timeframe", ""),
         strategy_id=report.get("strategy_id", ""),
-        params=(candidate or {}).get("params", {}),
+        params=params,
         filters=(candidate or {}).get("filters", {}),
         data_window=(candidate or {}).get("data_window", {}),
         lite_status=(candidate or {}).get("lite_status", ""),
@@ -50,7 +51,7 @@ def build_setup_card(
         risk_flags=(candidate or {}).get("risk_flags", []),
         entry_exit_summary=_entry_exit_summary(verdict),
         regime_tags=_extract_regime_tags(candidate),
-        paper_forward_ready=(hard_status == "PAPER_FORWARD_READY"),
+        paper_forward_ready=(hard_status == "PAPER_FORWARD_READY" and _paper_params_ready(params)),
         main_engine_ready=False,
         created_at=report.get("created_at", ""),
         updated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -162,6 +163,19 @@ def _entry_exit_summary(verdict: dict[str, Any]) -> str:
     if not failed:
         return "All checks passed — paper forward ready."
     return f"Failed checks: {', '.join(failed)}."
+
+
+def _paper_params_ready(params: dict[str, Any]) -> bool:
+    """Minimum executable paper contract for the current setup-card bridge."""
+    if not isinstance(params, dict) or not params:
+        return False
+    for key in ("hold_bars", "stop_pct", "take_pct"):
+        try:
+            if float(params.get(key)) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _extract_regime_tags(candidate: dict[str, Any] | None) -> list[str]:

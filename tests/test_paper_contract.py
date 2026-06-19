@@ -78,6 +78,13 @@ def test_pass_card_builds_a_plan_with_expected_fields():
     assert plan.params_hash and plan.data_fingerprint
 
 
+def test_missing_direction_defaults_to_both_sides():
+    plan = plan_from_setup_card(
+        _pass_card(params={"stop_pct": 1.5, "take_pct": 3.0, "hold_bars": 5})
+    )
+    assert plan.direction == "both"
+
+
 # data_window completeness (fingerprint provenance).
 
 def test_empty_data_window_rejected():
@@ -149,7 +156,6 @@ def test_raw_intake_cannot_construct_a_plan(raw):
 @pytest.mark.parametrize(
     "bad_params",
     [
-        {"stop_pct": 1.5, "take_pct": 3.0, "hold_bars": 5},          # no direction
         {"direction": "long", "take_pct": 3.0, "hold_bars": 5},      # no stop_pct
         {"direction": "long", "stop_pct": 1.5, "hold_bars": 5},      # no take_pct
         {"direction": "long", "stop_pct": 1.5, "take_pct": 3.0},     # no hold_bars

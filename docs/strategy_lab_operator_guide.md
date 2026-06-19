@@ -128,7 +128,9 @@ trades, or write to the public repo.
 
 | Need | Command |
 |---|---|
-| Start dashboard + worker | `bat\strategy_lab_start.bat` |
+| Start canonical farm/validation/paper loop | `bat\strategy_lab_farm_full_cycle_loop.bat` |
+| Stop canonical farm loop cleanly | `bat\strategy_lab_farm_full_cycle_stop.bat` |
+| Start legacy dashboard + standalone worker | `bat\strategy_lab_start.bat` |
 | See everything at a glance | `bat\strategy_lab_status.bat` |
 | Export LLM review pack (no API) | `bat\strategy_lab_export_pack.bat` |
 | Preview next proposals (dry-run) | `bat\strategy_lab_proposals_dry_run.bat` |
@@ -154,8 +156,9 @@ trades, or write to the public repo.
 | Stop old dashboard/worker windows | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
-verdicts, candidates, proposals and the private-root location; then
-`strategy_lab_start.bat` if the worker is not running.
+verdicts, candidates, proposals and the private-root location. Start
+`strategy_lab_farm_full_cycle_loop.bat` when you want the canonical continuous
+farm -> validation -> paper loop.
 
 **During the day:** `strategy_lab_proposals_dry_run.bat` to preview follow-ups,
 then apply explicitly only when you agree:

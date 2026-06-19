@@ -87,7 +87,7 @@ def _candidate_signals_no_lookahead(
                 continue
             if idx != end - 1:
                 continue
-            if str(sig.get("side") or "").lower() != plan.direction:
+            if plan.direction != "both" and str(sig.get("side") or "").lower() != plan.direction:
                 continue
             found[idx] = dict(sig)
     return [found[i] for i in sorted(found)]
@@ -177,6 +177,7 @@ def execute_plan_once(plan: PaperTradePlan, candles: list[dict[str, Any]]) -> Pa
             plan,
             trade_id=trade_id,
             state=_state_for_outcome(str(trade.get("outcome") or "")),
+            direction=str(trade.get("side") or plan.direction),
             reason=str(trade.get("reason") or trade.get("outcome") or ""),
             outcome=str(trade.get("outcome") or ""),
             opened_at=str(trade.get("entry_ts") or ""),

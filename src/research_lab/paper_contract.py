@@ -30,7 +30,7 @@ PAPER_CONTRACT_VERSION = "paper.v1"
 REQUIRED_LITE_STATUS = "FORWARD_PAPER"
 REQUIRED_HARD_STATUS = "PAPER_FORWARD_READY"
 
-_VALID_DIRECTIONS = {"long", "short"}
+_VALID_DIRECTIONS = {"long", "short", "both"}
 _DEFAULT_FEES_BPS = 7.0
 _DEFAULT_SLIPPAGE_BPS = 3.0
 _DEFAULT_FUNDING_HANDLING = "accrue_public"
@@ -151,7 +151,7 @@ class PaperTradePlan:
         _require_str("family", self.family)
         _require_str("entry_rule", self.entry_rule)
         if self.direction not in _VALID_DIRECTIONS:
-            raise PaperPlanError(f"direction must be long|short, got {self.direction!r}")
+            raise PaperPlanError(f"direction must be long|short|both, got {self.direction!r}")
         if not isinstance(self.params, dict) or not self.params:
             raise PaperPlanError("params must be a non-empty dict")
         _require_pct_rule("stop_loss", self.stop_loss)
@@ -197,10 +197,10 @@ class PaperTradePlan:
 # Builder: the ONLY path into a PaperTradePlan.
 
 def _resolve_direction(params: dict[str, Any]) -> str:
-    raw = str(params.get("direction") or params.get("side") or "").lower()
+    raw = str(params.get("direction") or params.get("side") or "both").lower()
     if raw not in _VALID_DIRECTIONS:
         raise PaperPlanError(
-            f"SetupCard params must carry a direction/side (long|short); got {raw!r}"
+            f"SetupCard params must carry a direction/side (long|short|both); got {raw!r}"
         )
     return raw
 
@@ -359,7 +359,7 @@ class PaperTradeOutcome:
         _require_str("data_fingerprint", self.data_fingerprint)
         _require_str("params_hash", self.params_hash)
         if self.direction and self.direction not in _VALID_DIRECTIONS:
-            raise PaperPlanError(f"direction must be long|short, got {self.direction!r}")
+            raise PaperPlanError(f"direction must be long|short|both, got {self.direction!r}")
         if self.state not in _STATE_VALUES:
             raise PaperPlanError(
                 f"state must be one of {sorted(_STATE_VALUES)}, got {self.state!r}"

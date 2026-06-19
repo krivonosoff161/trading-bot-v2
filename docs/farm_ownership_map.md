@@ -1,86 +1,89 @@
-# Farm Ownership Map — who owns what (loops, engines, duplicates)
+# Farm Ownership Map
 
-Status: **ACTIVE** · Last updated: 2026-06-18
+Status: **ACTIVE**. Last updated: 2026-06-19.
 
-Purpose: after the continuous lifecycle (`farm_loop` + `farm_tasks.sqlite`) became the
-calculation farm's core, this map records the role of every calculation/scheduler/worker
-loop so we do not keep parallel duplicators with no defined role. Nothing is deleted in
-this layer; roles are assigned and legacy loops are labelled. Main trading engine is
-untouched.
+Purpose: after `farm_loop` + `farm_tasks.sqlite` became the calculation farm's core,
+this map records which loops are active, diagnostic, or legacy. Nothing here gives the
+farm permission to touch the old money path.
 
 ## Databases
 
 | DB | Role |
 |----|------|
-| `state/farm_tasks.sqlite` | **BRAIN** — typed-task lifecycle (NEW; the only writer). |
-| `state/strategy_lab.sqlite` | **COMPUTE QUEUE** — the proven sweep queue the worker drains. |
-| `state/scanner_farm_loop.sqlite` | legacy checkpoint for the superseded scanner_farm_loop. |
+| `state/farm_tasks.sqlite` | **Brain**: typed lifecycle, scheduling, reasons, fingerprints. |
+| `state/strategy_lab.sqlite` | **Compute queue**: proven sweep queue drained by the worker. |
+| `state/scanner_farm_loop.sqlite` | Legacy checkpoint for the superseded scanner-farm loop. |
 
-## Ownership matrix
+## Ownership Matrix
 
-| Loop / entrypoint | Role | Notes |
+| Entry point | Role | Notes |
 |---|---|---|
-| `scripts/strategy_lab/farm_loop.py` → `farm_coordinator.run_coordinator_cycle` | **CORE** | The continuous self-deciding lifecycle. The reference. |
-| `scripts/strategy_lab/worker_once.py` (`run_worker_once`) | **CORE — must not delete** | The single-job compute executor; called by the brain itself and by every legacy loop and the dashboard. |
-| `scripts/strategy_lab/worker_loop.py` | **keep — off default path** | Standalone 24/7 compute daemon. Not a lifecycle duplicate; the brain bounds its own worker draining per cycle. |
-| `scripts/strategy_lab/scanner_farm_loop.py` → `scanner_farm_pipeline.run_cycle` | **ARCHIVE-LEGACY (true duplicate)** | Same watch-intake→sweep-queue arc, flat (no brain/defer/block/classify/validate) — the exact path that produced `already_queued` saturation. **Keep the module** `scanner_farm_pipeline._ensure_local_data` (reused by `farm_coordinator`); retire the *loop* + `scanner_farm_loop.sqlite`. |
-| `scripts/strategy_lab/universe_farm_loop.py` → `universe_refill_runner.run_refill_cycle` | **ARCHIVE-LEGACY** | Universe grind to keep the GPU busy — absorbed by the brain's `discovery_refill` pivot. Different mechanism (cursor rotation vs discovery snapshot), same outcome. |
-| `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **keep — distinct advisory lane** | LLM-proposal/registry-driven research; the weak model is a JSON-only hypothesis advisor, not the farm controller. It must not queue outside deterministic validation, promote paper/live status, touch configs, or start processes. Archive/merge once the brain absorbs proposal intake. |
-| `scripts/strategy_lab/generate_event_sweeps.py` | **keep — off default path** | Price-event sweep generator is unique (no replacement). Its `--from-scanner` lane is the legacy bridge, superseded by the brain's intake. |
-| `scripts/strategy_lab/autopilot_once.py` | **keep — off default path** | Cheap deterministic registry→spec→queue filler; superseded by the brain's follow-up logic once stable. |
-| `scripts/strategy_lab/run_research_machine_demo.py` | **keep — legacy demo** | The previous end-to-end walkthrough of the bridge path; superseded operationally by `farm_loop`. |
-| `scripts/strategy_lab/requeue_stale_jobs.py` | **keep — maintenance** | Manual stale-job recovery (worker_once also auto-reaps). |
-| `scripts/strategy_lab/sync_state_db.py` | **keep — must not delete** | Backfill/repair: import completed run dirs when a worker crashed before import. |
+| `scripts/strategy_lab/farm_loop.py` | **CORE** | Current continuous self-deciding lifecycle. |
+| `bat\strategy_lab_farm_full_cycle_loop.bat` | **CORE WRAPPER** | Visible operator path: farm -> worker -> validation -> paper. |
+| `bat\strategy_lab_farm_full_cycle_stop.bat` | **CORE WRAPPER** | Clean stop-file for the wrapper above. |
+| `scripts/strategy_lab/worker_once.py` | **CORE EXECUTOR** | Single-job compute executor. Must not delete. |
+| `scripts/strategy_lab/worker_loop.py` | **KEEP / OFF DEFAULT** | Standalone compute daemon; not a lifecycle brain. |
+| `scripts/strategy_lab/scanner_farm_loop.py` | **ARCHIVE-LEGACY** | Flat scanner-watch -> sweep queue path; superseded by the brain. |
+| `scripts/strategy_lab/universe_farm_loop.py` | **ARCHIVE-LEGACY** | Cursor-based universe grind; absorbed by `discovery_refill`. |
+| `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **ADVISORY LANE** | LLM proposal/review lane. The model is a JSON-only hypothesis advisor, not the farm controller. |
+| `scripts/strategy_lab/generate_event_sweeps.py` | **KEEP / OFF DEFAULT** | Price-event sweep generator; `--from-scanner` is legacy bridge. |
+| `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic when stable. |
+| `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
+| `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
 
-## Main engine / legacy strategy logic — what is closed vs what is still open
+## Main Engine Boundary
 
-**The distinction that matters:** the old live/paper *runners* are closed **as trading
-engines** — they must not be imported, run, or wired into any order / main / Telegram
-path. But their **reusable logic, data, and hypotheses are NOT exhausted** — they can be
-extracted into `research_lab` as research hypotheses (lab-native, causal, no live import)
-and must pass the farm's normal dry-run → validation path before becoming a candidate.
+The old live/paper runners are closed as trading engines. They must not be imported, run,
+or wired into farm/paper/operator paths. Useful math can be copied or re-derived inside
+`research_lab`, then tested through the farm.
 
-A baseline port already exists for the headline patterns (so the farm is not empty):
+Forbidden as farm imports:
 
-| Pattern | Baseline ported | Still-open hypotheses to extract (research, not engine) |
+- `main.py`
+- `scripts/auto_execute.py`
+- `scripts/run_latest_analysis.py`
+- `src/exchange/okx_client.py`
+- `src/data/*_engine.py`
+- Telegram modules / credentials
+- `.env` / config money path
+
+This is enforced by the farm boundary tests.
+
+## Strategy Logic: Closed Engine, Open Hypothesis
+
+| Pattern | Baseline in lab | Still-open research hypotheses |
 |---|---|---|
-| BB / volume fade | `strategies/bb_fade.py` (`bb_volume_fade`) | `not_thrust` (no ATR-thrust), `slope_fading`, entry-quality filters from the live 5m fade. |
-| FVG | `strategies/fvg_family.py` + `features/fvg.py` | lab-native seed only — **not exhausted**; gap-quality, mitigation depth, displacement variants open. |
-| Fractal / swing | `strategies/fractal_family.py` + `features/structure.py` | lab-native seed only — **not exhausted**; sweep/retest geometry, multi-pivot structure open. |
-| Pump / dump / impulse | `strategies/pump_dump.py` (continuation detector) | **Closed as live engines** (`strategy_pump_reversal_postmortem.md`, `strategy_impulse_postmortem.md` — fee-blocked / forward NO-GO). Still-open as research: event detectors, MFE/MAE logs, pair-risk containment, continuation/geometry hypotheses. |
-| Scalp / main `compute_signal` | `strategies/regime_family.py` (`main_fast_swing_regime`, single-TF) | Extract only **isolated hypotheses**: regime labels, lag/freshness, DRIFT both-side behavior, style-specific geometry, late-entry filters. Never import the multi-TF live engine. |
+| BB / volume fade | `strategies/bb_fade.py` | `not_thrust`, `slope_fading`, entry-quality filters. |
+| FVG | `strategies/fvg_family.py`, `features/fvg.py` | Gap quality, mitigation depth, displacement variants. |
+| Fractal / swing | `strategies/fractal_family.py`, `features/structure.py` | Sweep/retest geometry, multi-pivot structure. |
+| Pump / impulse | `strategies/pump_dump.py` | Event detectors, MFE/MAE, pair-risk, continuation geometry. |
+| Main `compute_signal` | `strategies/regime_family.py` | Regime labels, lag/freshness, DRIFT both-side behavior, late-entry filters. |
 
-So "ported" means *a baseline seed exists*, **not** "this idea is finished." New
-hypotheses from these patterns are welcome — as farm research tasks, never as live imports.
+"Ported" means a baseline seed exists, not that the idea is exhausted.
 
-**Hard rule:** the live trading engine (`src/data/*_engine.py`, `main.py`,
-`src/exchange/okx_client.py`) is the money path and is **not** imported by the farm —
-enforced by `tests/test_farm_loop_integration.py::test_new_modules_have_no_live_trading_coupling`.
-Reuse = copy a pure function / re-derive the math in the lab, never import the runner.
+## Manual Research Intake
 
-## Manual research intake (trader ideas are first-class, not lost)
+Trader notes, screenshots, and manual calculations are first-class hypothesis sources,
+but they never promote directly to candidates/main.
 
-Trader notes / screenshots / manual calculations are a valid hypothesis source. The
-pipeline (deterministic gate before any promotion):
-
-```
-trader note / screenshot / manual calc
-  -> structured hypothesis card / spec (symbol, timeframe, family/feature, rule, rationale)
-  -> dry-run validation (farm_loop --dry-run / a scoped sweep)
-  -> farm research task ONLY after deterministic validation
-  -> normal lifecycle: classify -> honest validation -> candidate
+```text
+manual note / screenshot / calc
+  -> structured hypothesis card / spec
+  -> dry-run validation
+  -> farm research task
+  -> classify -> honest validation -> setup card
+  -> paper only if PAPER_FORWARD_READY
 ```
 
-No manual idea is promoted directly to a candidate or to main/live. It enters as a
-research hypothesis and earns its place through the same dry-run → validation path as any
-other sweep. Tracked in [../BACKLOG.md](../BACKLOG.md) under "Manual research intake".
+## LLM Calculator Boundary
 
-## Wiring note
+The weak/local LLM calculator is advisory only:
 
-`farm_loop` is not yet referenced by any `.bat`/config — it lives on `feature/calc-farm`.
-The legacy loops remain the live operator path until that switch is made deliberately
-(a follow-up step, not part of this layer).
+- may review aggregate packs and propose draft hypotheses;
+- must return bounded JSON;
+- cannot start/stop processes;
+- cannot enqueue outside deterministic validation gates;
+- cannot promote paper/live status;
+- cannot touch `.env`, order paths, Telegram, or old main engine.
 
-`farm_loop --run-paper` is now the canonical bridge from validated setup cards to paper
-outcomes. The separate `paper_loop` remains useful as a focused diagnostic, but the normal
-cycle is farm → validation → setup library → paper inside `farm_loop`.
+Code and validators decide what enters the farm.

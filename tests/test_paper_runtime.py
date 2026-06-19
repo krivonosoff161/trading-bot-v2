@@ -98,6 +98,7 @@ def test_execute_plan_once_closes_take_with_injected_no_lookahead_signal(monkeyp
     result = execute_plan_once(plan, _candles_for_take())
     assert result.status == "completed"
     assert result.outcome is not None
+    assert result.outcome.direction == "long"
     assert result.outcome.state == PaperRuntimeState.CLOSED_TP.value
     assert result.outcome.outcome == "take"
     assert result.outcome.net_pct > 0
@@ -132,6 +133,20 @@ def test_execute_plan_once_does_not_use_future_signal(monkeypatch):
     result = execute_plan_once(plan, _candles_for_take())
     assert result.status == "skipped"
     assert result.reason == "no_signal"
+
+
+def test_execute_plan_once_accepts_both_side_plan(monkeypatch):
+    plan = plan_from_setup_card(
+        _card(params={"stop_pct": 2.0, "take_pct": 4.0, "hold_bars": 3})
+    )
+
+    def fake_generate(visible, family, params):
+        return [{"idx": 1, "side": "long", "reason": "unit"}] if len(visible) >= 2 else []
+
+    monkeypatch.setattr("src.research_lab.paper_runtime.generate_signals", fake_generate)
+    result = execute_plan_once(plan, _candles_for_take())
+    assert result.status == "completed"
+    assert result.outcome is not None
 
 
 def test_run_paper_cycle_writes_once_and_deduplicates(monkeypatch, tmp_path):

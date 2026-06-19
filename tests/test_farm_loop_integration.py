@@ -95,6 +95,7 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "uc_key": uc_key, "symbol": "X", "timeframe": "1h", "family": "trend",
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "", "candidate_id": "c1",
+        "params": {"direction": "long", "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
     }, now=1.0)
     tasks.enqueue_task(task_type="export_validation", task_key=f"export::{uc_key}", symbol="X",
                        timeframe="1h", family="trend",

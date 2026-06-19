@@ -198,6 +198,57 @@ class TestBuildCandidate:
             assert c.metrics["source_candidate_id"] == "raw-1"
             assert c.metrics["data_fingerprint"] == "fp"
 
+    def test_build_candidate_rebuilds_trades_for_legacy_aggregate_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            data_dir = private / "market_data" / "1h"
+            data_dir.mkdir(parents=True)
+            label = "ABC_USDT_SWAP_legacy_1h.json"
+            rows = []
+            for i in range(80):
+                price = 100.0 + i * 1.0
+                rows.append({
+                    "ts": 1_700_000_000_000 + i * 3_600_000,
+                    "open": price,
+                    "high": price + 0.2,
+                    "low": price - 0.2,
+                    "close": price + 0.4,
+                    "vol": 1000.0,
+                })
+            (data_dir / label).write_text(json.dumps(rows), encoding="utf-8")
+            run_dir = private / "experiments" / "completed" / "legacy_run"
+            run_dir.mkdir(parents=True)
+            metrics = {
+                "filters": {},
+                "fees_bps": 7.0,
+                "slippage_bps": 3.0,
+                "timeframe": "1h",
+                "results": [{
+                    "run_id": "raw-legacy",
+                    "symbol": "ABC_USDT_SWAP",
+                    "family": "momentum_breakout",
+                    "params": {"lookback": 5, "hold_bars": 2, "stop_pct": 2, "take_pct": 4},
+                    "metrics": {
+                        "n_trades": 10,
+                        "data_file_label": label,
+                        "data_file_timeframe": "1h",
+                    },
+                }],
+            }
+            (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+            entry = _make_entry(
+                candidate_id="fv-legacy",
+                symbol="ABC_USDT_SWAP",
+                strategy_id="momentum_breakout",
+                artifact_label="legacy_run",
+            )
+            entry["params"] = {}
+            c = _build_candidate(entry, private)
+            assert c is not None
+            assert c.params["stop_pct"] == 2
+            assert len(c.trades) >= 3
+            assert c.data_window["n_bars"] == len(c.trades)
+
 
 class TestEquityCurve:
     def test_empty_trades(self) -> None:

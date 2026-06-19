@@ -27,7 +27,8 @@ only); their useful strategy logic is already ported into research_lab families
 Primary farm path (current center):
 
 ```text
-farm_loop --apply --run-worker [--enrich-funding --enrich-oi --run-validation]
+bat\strategy_lab_farm_full_cycle_loop.bat
+  (or farm_loop --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi)
   -> farm_coordinator.run_coordinator_cycle   (brain: state/farm_tasks.sqlite)
   -> materializes run_sweep -> state/strategy_lab.sqlite (compute queue) -> worker
   -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
@@ -69,6 +70,8 @@ Important active files — calculation farm (current core):
 - `scripts/strategy_lab/paper_loop.py` - gated paper runtime over ready setup cards.
 - `src/research_lab/farm_journal.py` - structured cycle/transition/error logs.
 - `scripts/strategy_lab/farm_status_report.py` - operator picture (run after a cycle).
+- `bat/strategy_lab_farm_full_cycle_loop.bat` - visible full-cycle operator wrapper.
+- `bat/strategy_lab_farm_full_cycle_stop.bat` - clean stop-file wrapper for that loop.
 
 Important active files — scanner (upstream intake, second level):
 
@@ -141,7 +144,8 @@ Farm (current core) — after a bounded cycle:
 
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, writes nothing
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-oi
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-oi
+bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper loop
 python -m scripts.strategy_lab.farm_status_report                  # tasks by type/state, blocked/deferred, unique candidates
 ```
 

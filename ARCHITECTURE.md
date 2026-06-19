@@ -226,7 +226,9 @@ Run it (dry-run writes nothing):
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --dry-run
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --stop-file STOP
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --stop-file STOP
+bat\strategy_lab_farm_full_cycle_loop.bat
+bat\strategy_lab_farm_full_cycle_stop.bat
 python -m scripts.strategy_lab.farm_status_report
 ```
 

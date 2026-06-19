@@ -34,13 +34,16 @@ def _safe(symbol: str) -> str:
 
 def _default_grids(defaults: dict[str, Any]) -> tuple[dict, dict]:
     """A tiny bounded grid from the family defaults (one size knob + hold)."""
-    setup: dict[str, list[Any]] = {}
+    exit_keys = {"hold_bars", "stop_pct", "take_pct"}
+    setup: dict[str, list[Any]] = {k: [v] for k, v in defaults.items() if k not in exit_keys}
     for key in _SIZE_KEYS:
         if key in defaults:
             base = int(defaults[key])
             setup[key] = sorted({max(2, base // 2), base})
             break
-    exit_grid: dict[str, list[Any]] = {}
+    exit_grid: dict[str, list[Any]] = {
+        k: [defaults[k]] for k in ("stop_pct", "take_pct") if k in defaults
+    }
     if "hold_bars" in defaults:
         base = int(defaults["hold_bars"])
         exit_grid["hold_bars"] = sorted({base, max(2, base // 2)})

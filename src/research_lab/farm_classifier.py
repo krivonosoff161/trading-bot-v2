@@ -57,6 +57,7 @@ def classify_run(
             "n_trades": int(metrics.get("n_trades") or 0),
             "avg_net_pct": float(metrics.get("avg_net_pct") or 0.0),
             "candidate_id": str(row.get("run_id") or row.get("candidate_id") or ""),
+            "params": dict(row.get("params") or {}),
             "run_dir_label": run_dir_label, "task_id": task_id,
         })
     return out
