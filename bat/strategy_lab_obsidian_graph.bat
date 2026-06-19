@@ -8,22 +8,23 @@ echo ============================================
 echo  Strategy Lab - Obsidian Graph
 echo ============================================
 echo.
-echo  Builds private candidate notes and opens the vault folder.
-echo  In Obsidian: Open folder as vault, then Graph View.
+echo  Builds private candidate notes plus the lightweight browser graph.
+echo  Opens graph-viewer\index.html in the default browser.
 echo.
 
 python -X utf8 -m scripts.strategy_lab.build_obsidian_graph
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto done
 
-set "VAULT=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\obsidian"
-echo.
-echo Opening vault folder:
-echo %VAULT%
-start "" explorer "%VAULT%"
+python -X utf8 -m scripts.strategy_lab.build_graph_viewer
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" goto done
 
-rem Best-effort: if Obsidian protocol is registered, open the folder as a vault.
-start "" "obsidian://open?path=%VAULT%"
+set "VIEWER=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\graph-viewer\index.html"
+echo.
+echo Opening browser graph:
+echo %VIEWER%
+start "" "%VIEWER%"
 
 :done
 echo.
