@@ -1,14 +1,16 @@
 # Paper Trading Runtime — Design (farm → paper → feedback)
 
-Status: **CONTRACT + MINIMAL PAPER LOOP IMPLEMENTED; farm feedback/dashboard planned.**
+Status: **CONTRACT + MINIMAL PAPER LOOP + AGGREGATE FEEDBACK IMPLEMENTED; richer runtime planned.**
 The typed contract (`src/research_lab/paper_contract.py`: `PaperTradePlan`,
 `PaperTradeOutcome`, `PaperRuntimeState`, `plan_from_setup_card`) is built and tested.
 The first bounded runtime (`src/research_lab/paper_runtime.py`,
 `scripts/strategy_lab/paper_loop.py`) reads `paper_forward_ready` setup cards, runs a
 no-look-ahead candle pass over local prepared data, and appends
-`paper/paper_trades.jsonl`. The farm feedback table, dashboard/status integration, funding
-accrual, and multi-TP lifecycle are still planned. Paper/research only — no `.env`, no
-`AUTO_TRADE`, no orders, no private endpoints, no Telegram.
+`paper/paper_trades.jsonl`. It also upserts `state/strategy_lab.sqlite::paper_outcomes`
+and stamps `paper_status` best-effort into farm state so status/dashboard can show whether
+the paper layer actually recorded outcomes. Funding accrual and multi-TP lifecycle are
+still planned. Paper/research only — no `.env`, no `AUTO_TRADE`, no orders, no private
+endpoints, no Telegram.
 
 Companion to [old_main_audit_2026-06-18.md](old_main_audit_2026-06-18.md). The paper
 runtime is a **forward** executor of *already-validated* setups. It reuses the farm's
@@ -30,7 +32,7 @@ Built ONLY from a SetupCard whose `paper_forward_ready == True`. No order fields
 class PaperTradePlan:
     # identity / join keys
     setup_id: str               # "setup-<candidate_id>"
-    candidate_id: str           # == run_id == stable_run_id(symbol,family,params); joins farm_results/unique_candidates/registry
+    candidate_id: str           # hard-validation id; raw farm id/uc_key stay in request metadata for stamp-back
     params_hash: str            # data_fingerprint.params_hash(params)
     data_fingerprint: str       # the data version the setup was validated on
     # what to trade
@@ -120,7 +122,7 @@ Path: `<private_root>/paper/paper_trades.jsonl`.
   "schema": "PaperTradeOutcome.v1",
   "trade_id": "...",                 // unique per paper trade
   "setup_id": "setup-<candidate_id>",
-  "candidate_id": "...",             // join to farm_results/unique_candidates/registry
+  "candidate_id": "...",             // hard-validation id; joins back via request metadata
   "symbol": "BTC-USDT-SWAP", "timeframe": "1h", "family": "momentum_breakout",
   "direction": "long",
   "planned_at": "...", "armed_at": "...", "opened_at": "...", "closed_at": "...",
@@ -152,11 +154,11 @@ Path: `<private_root>/paper/paper_trades.jsonl`.
 Mirror the existing hard-validation handoff (`validation_handoff.refresh_from_artifacts`),
 do not overload `farm_results` (its row is per-backtest, not per-forward-trade).
 
-1. **New aggregate table** `paper_outcomes` in `strategy_lab.sqlite` (additive migration,
-   same mechanism as `state_db._migrate_*`):
+1. **Aggregate table implemented:** `paper_outcomes` in `strategy_lab.sqlite` (additive
+   schema v5 migration):
    ```
    paper_outcomes(
-     candidate_id TEXT PRIMARY KEY,    -- joins farm_results/unique_candidates/registry
+     candidate_id TEXT PRIMARY KEY,    -- hard-validation id; source uc_key is in request metadata
      setup_id, symbol, timeframe, family TEXT,
      paper_started_at, last_update TEXT,
      n_paper_trades INTEGER, win_rate REAL,
@@ -165,9 +167,9 @@ do not overload `farm_results` (its row is per-backtest, not per-forward-trade).
      paper_status TEXT                 -- PAPER_LIVE | PAPER_CONFIRMED | PAPER_DIVERGED | PAPER_STOPPED
    )
    ```
-2. **One additive column** `paper_status TEXT DEFAULT ''` on `farm_results` (so cockpit /
-   `farm_status_report` show forward status next to backtest + hard verdict), and a mirror
-   onto `unique_candidates`.
+2. **Implemented:** `paper_status TEXT DEFAULT ''` on `farm_results`, plus a mirror onto
+   `farm_tasks.sqlite.unique_candidates` when the setup card came from lifecycle validation
+   request metadata.
 3. **One derived label** `paper_state(validation_status, hard_status, paper_status)`
    mirroring `validation_state` — extends the decision-machine chain lite → hard → paper.
 
@@ -223,13 +225,15 @@ BACK seam reuses `validator.validate_candidate` (lite gate) and `reducer.reduce_
 3. **paper runtime skeleton** — implemented as a bounded reader over `setup_library` PASS
    cards plus local prepared candles. The runtime reuses `finalize_trade`, writes
    `paper_trades.jsonl`, deduplicates deterministic `trade_id`s, and remains local-only.
-4. **journal / aggregate** — JSONL writer implemented; `paper_outcomes` table, additive
-   migration, and funding accrual are still planned.
+4. **journal / aggregate** — JSONL writer, `paper_outcomes` table, additive migration,
+   and `paper_status` stamp-back are implemented. Funding accrual is still planned.
 5. **farm export to paper** — minimal OUT reader implemented (PASS SetupCards →
    `PaperTradePlan`); richer scheduling/backpressure remains planned.
-6. **feedback import** — `paper_outcomes` → `farm_results.paper_status` + `unique_candidates`
-   mirror + `paper_state` (BACK seam, mirror `refresh_from_artifacts`); promotion/demotion.
-7. **dashboard/status** — surface `paper_status` in `farm_cockpit` + `farm_status_report`.
+6. **feedback import** — basic `paper_outcomes` → `farm_results.paper_status` +
+   `unique_candidates.paper_status` mirror is implemented; promotion/demotion labels remain
+   planned.
+7. **dashboard/status** — `paper_status` and `paper_outcomes` are surfaced in
+   `farm_cockpit`, `farm_status_report`, `status`, and `morning_report`.
 8. **Telegram notification design later** — already deferred (`farm_notification_layer.md`).
 
 Each PR ships with its tests; `pytest -q` / `ruff` / `git diff --check` / the boundary test

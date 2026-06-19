@@ -2,8 +2,9 @@
 
 > **LEGACY / HISTORICAL.** This document records the earlier analyzer-first pivot.
 > It is preserved for context, but it is not the active project direction as of
-> 2026-06-10. Current work is the `src/scout/` info-edge scanner; see
-> `CURRENT_STATE.md` and `ROADMAP.md`.
+> 2026-06-19. Current work is the calculation farm (`farm_loop`) with hard
+> validation and gated paper runtime; see `CURRENT_STATE.md`, `ROADMAP.md`,
+> `ARCHITECTURE.md`, `docs/farm_loop_lifecycle.md`, and `docs/farm_runbook.md`.
 
 ## Зачем этот файл
 

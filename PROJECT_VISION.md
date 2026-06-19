@@ -4,7 +4,8 @@
 > old bot-first plan. It is not the current project direction and must not be
 > used as a promise of profitability, funding, real-money execution, or product
 > scope. For current work, read `CURRENT_STATE.md`, `README.md`, `ROADMAP.md`,
-> `ARCHITECTURE.md`, `SCANNER_SPEC.md`, and `TASK.md`.
+> `ARCHITECTURE.md`, `docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`,
+> `docs/paper_runtime_design.md`, and `TASK.md`.
 
 ## Цель
 

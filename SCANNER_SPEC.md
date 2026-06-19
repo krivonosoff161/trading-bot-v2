@@ -1,5 +1,10 @@
 # SCANNER — specification and as-built notes
 
+> Current status note, 2026-06-19: the scanner is an upstream intake source for
+> the calculation farm, not the active project center. For the canonical runtime
+> read `docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`, `CURRENT_STATE.md`,
+> and `ARCHITECTURE.md`.
+
 > Current status note, 2026-06-11: the active scanner is built, collecting paper
 > data, and now has source onboarding plus a paper-only TA confirmation bridge.
 > Treat older V0 design blocks below as history where they conflict with the

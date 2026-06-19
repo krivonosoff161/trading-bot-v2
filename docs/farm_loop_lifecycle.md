@@ -1,6 +1,6 @@
 # Farm Loop — Continuous Research Lifecycle (canonical)
 
-Status: **ACTIVE** · Last updated: 2026-06-18 · Branch: `feature/calc-farm`
+Status: **ACTIVE** · Last updated: 2026-06-19 · Branch: `feature/calc-farm`
 
 This is the authoritative description of the calculation farm's continuous research
 cycle. It supersedes the older `universe_farm_loop` / `scanner_farm_loop` operator
@@ -69,10 +69,15 @@ instead of dedup-blocking forever. Data-gated families use a fingerprint-indepen
    `classify_result`.
 6. **classify** — read the run's `metrics.json` → upsert `unique_candidates`
    (keyed `symbol::tf::family::params_hash::data_fingerprint`) → spawn `export_validation`
-   for FORWARD_PAPER / REGIME_SPECIFIC.
+   for FORWARD_PAPER / REGIME_SPECIFIC. The export task is keyed by the full `uc_key`,
+   not raw `candidate_id`, because one raw id can reappear under different timeframes
+   or data fingerprints.
 7. **validation** (apply + `--run-validation`) — `validation_orchestrator.run_due_validations`:
-   export requests → honest-backtest bridge (in-process) → **stamp verdicts back** into
-   `farm_results` *and* `unique_candidates`. No manual file carry.
+   export requests from `farm_tasks.sqlite.unique_candidates` (canonical; legacy
+   `candidate-registry` is fallback for old tools only) → honest-backtest bridge
+   (in-process) → **stamp verdicts back** into `farm_results` *and* `unique_candidates`
+   → write `setup_library` cards. `PAPER_FORWARD_READY` cards are the only inputs the
+   paper runtime can read. No manual file carry.
 8. **pivot** — `work_available` (more queued/deferred-ready) / `advanced_lifecycle` /
    `discovery_refill` (pull uncovered discovered symbols) / `blocked:no_eligible_tasks`.
 
@@ -126,5 +131,8 @@ sqlite DBs, so restart is safe and idempotent. See [farm_runbook.md](farm_runboo
 
 - Microstructure has no public provider → permanent `NEEDS_MICRO_DATA` block (by design).
 - OI history is keyless but ~100 points/call (paginated); treat OI as optional context.
+- Paper runtime is gated by hard validation. If `setup_library/cards` has no
+  `paper_forward_ready=true` cards, `paper_loop` correctly reports `cards=0` and does
+  not simulate forward trades.
 - `farm_loop` is not yet wired into any `.bat`; the legacy loops remain the live operator
   path until the switch is made deliberately (see [farm_ownership_map.md](farm_ownership_map.md)).
