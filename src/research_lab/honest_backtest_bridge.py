@@ -115,12 +115,18 @@ def run_validation_batch(
     *,
     dry_run: bool = True,
     limit: int = 50,
+    candidate_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run validation on all request files in a directory."""
     if not requests_dir.exists():
         return {"total": 0, "validated": 0, "errors": 0}
 
-    request_files = sorted(requests_dir.glob("*.json"))[:limit]
+    if candidate_ids:
+        wanted = [str(cid) for cid in candidate_ids if str(cid)]
+        request_files = [requests_dir / f"{cid}.json" for cid in wanted]
+        request_files = [p for p in request_files if p.exists()]
+    else:
+        request_files = sorted(requests_dir.glob("*.json"))[:limit]
     results = []
     for rf in request_files:
         try:

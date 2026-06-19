@@ -85,24 +85,68 @@ def test_prepare_chains_to_run_sweep_in_one_cycle(tmp_path):
     tasks.close()
 
 
-def test_validation_orchestrator_auto_stampback(tmp_path):
+def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
+    from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
     from src.research_lab.validation_orchestrator import run_due_validations
+    uc_key = "X::1h::trend::ph::fp"
+    validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
     tasks.upsert_unique_candidate({
-        "uc_key": "X::1h::trend::ph::fp", "symbol": "X", "timeframe": "1h", "family": "trend",
+        "uc_key": uc_key, "symbol": "X", "timeframe": "1h", "family": "trend",
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "", "candidate_id": "c1",
     }, now=1.0)
-    tasks.enqueue_task(task_type="export_validation", task_key="export::c1", symbol="X",
-                       timeframe="1h", family="trend", payload={"candidate_id": "c1"}, now=1.0)
+    tasks.enqueue_task(task_type="export_validation", task_key=f"export::{uc_key}", symbol="X",
+                       timeframe="1h", family="trend",
+                       payload={"candidate_id": "c1", "uc_key": uc_key}, now=1.0)
     # a verdict already on disk -> the stamp-back must mirror it into unique_candidates
     vdir = tmp_path / "hard_validation" / "verdicts"
     vdir.mkdir(parents=True)
-    (vdir / "c1.json").write_text(json.dumps({"candidate_id": "c1",
-                                              "hard_status": "PAPER_FORWARD_READY"}), encoding="utf-8")
+    (vdir / f"{validation_id}.json").write_text(
+        json.dumps({"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}),
+        encoding="utf-8")
+    rdir = tmp_path / "hard_validation" / "requests"
+    rdir.mkdir(parents=True)
+    (rdir / f"{validation_id}.json").write_text(
+        json.dumps({
+            "candidate_id": validation_id,
+            "symbol": "X",
+            "timeframe": "1h",
+            "strategy_id": "trend",
+            "lite_status": "FORWARD_PAPER",
+            "params": {"direction": "long", "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
+            "data_window": {"fingerprint": "fp", "n_bars": 10, "start_ts": 1, "end_ts": 10},
+            "metrics": {"uc_key": uc_key},
+        }), encoding="utf-8")
+    reports = tmp_path / "hard_validation" / "reports"
+    reports.mkdir(parents=True)
+    (reports / f"{validation_id}.json").write_text(json.dumps({
+        "candidate_id": validation_id,
+        "source_run_id": "run",
+        "symbol": "X",
+        "timeframe": "1h",
+        "strategy_id": "trend",
+        "verdict": {
+            "candidate_id": validation_id,
+            "hard_status": "PAPER_FORWARD_READY",
+            "checks": [],
+            "failed_checks": [],
+            "reason_codes": [],
+        },
+        "checks_summary": {"total": 0, "passed": 0, "failed": 0},
+    }), encoding="utf-8")
+
+    def fake_validation_batch(*args, **kwargs):
+        return {"total": 1, "validated": 1, "errors": 0,
+                "results": [{"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}]}
+
+    monkeypatch.setattr("src.research_lab.validation_orchestrator.run_validation_batch", fake_validation_batch)
     out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
     assert out["export_tasks"] == 1 and out["stamped_unique"] == 1
+    assert out["setup_cards"] == 1
     assert tasks.latest_unique_candidates()[0]["hard_status"] == "PAPER_FORWARD_READY"
+    card = tmp_path / "setup_library" / "cards" / f"setup-{validation_id}.json"
+    assert json.loads(card.read_text(encoding="utf-8"))["paper_forward_ready"] is True
     assert not tasks.tasks_in_state("queued", task_type="export_validation")  # task completed
     tasks.close()
 
