@@ -132,3 +132,14 @@ def test_run_paper_cycle_writes_once_and_deduplicates(monkeypatch, tmp_path):
     rows = read_paper_outcomes(tmp_path)
     assert len(rows) == 1
     assert rows[0]["setup_id"] == "setup-c1"
+
+    from src.research_lab.state_db import connect, default_db_path, init_db
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    try:
+        db_rows = [dict(r) for r in conn.execute("SELECT * FROM paper_outcomes")]
+    finally:
+        conn.close()
+    assert len(db_rows) == 1
+    assert db_rows[0]["candidate_id"] == "c1"
+    assert db_rows[0]["state"] == PaperRuntimeState.CLOSED_TP.value

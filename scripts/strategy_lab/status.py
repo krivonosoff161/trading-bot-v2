@@ -88,6 +88,7 @@ def main() -> None:
     session = state.get("last_session") or {}
     loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
+    farm_cockpit = state.get("farm_cockpit") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -121,6 +122,23 @@ def main() -> None:
         f"reports: {_count_files(root, 'setup_library/reports', '*.md')}, "
         f"index rows: {_count_jsonl_rows(root, 'setup_library', 'setup_index.jsonl')}"
     )
+    lifecycle = farm_cockpit.get("lifecycle") or {}
+    results = farm_cockpit.get("results") or {}
+    if lifecycle.get("available"):
+        print(
+            "Farm core    : "
+            f"tasks {_fmt_counts(lifecycle.get('by_state'))}; "
+            f"unique={lifecycle.get('unique_candidates', 0)}; "
+            f"hard={_fmt_counts(lifecycle.get('validation'))}; "
+            f"paper={_fmt_counts(lifecycle.get('paper_status'))}"
+        )
+        print(
+            "Paper loop   : "
+            f"outcomes={results.get('paper_outcomes', 0)}; "
+            f"farm paper={_fmt_counts(results.get('paper_status'))}"
+        )
+    else:
+        print("Farm core    : not initialized (run farm_loop --once --dry-run/apply)")
     if cycle.get("available"):
         print(f"Research cyc : last {cycle.get('mode')} (proposals queued: {cycle.get('proposals_queued', 0)}, "
               f"data missing: {cycle.get('data_missing', 0)}, worker done: {cycle.get('worker_completed', 0)}, "

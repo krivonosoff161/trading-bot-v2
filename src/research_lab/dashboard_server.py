@@ -305,6 +305,16 @@ def farm_cockpit_html(cockpit: dict) -> str:
     hard_line = " - ".join(
         f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("hard_status") or {}).items())
     ) or "none"
+    paper_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("paper_status") or {}).items())
+    ) or "none"
+    lifecycle = cockpit.get("lifecycle") or {}
+    lc_validation = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((lifecycle.get("validation") or {}).items())
+    ) or "none"
+    lc_paper = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((lifecycle.get("paper_status") or {}).items())
+    ) or "none"
     backend_rows = gpu.get("backends") or []
     backend_html = backend_table(backend_rows) if backend_rows else '<p class="muted">No runtime backend rows yet.</p>'
     discovered = universe.get("discovered") or {}
@@ -319,6 +329,9 @@ def farm_cockpit_html(cockpit: dict) -> str:
         f"<p>funding enrich: {funding_line} - OI slot files: {esc(data.get('oi_slot_files', 0))}</p>",
         f"<p>farm results: symbols={esc(results.get('unique_symbols', 0))} - "
         f"exported to hard validation={esc(results.get('exported', 0))} - hard status: {hard_line}</p>",
+        f"<p>lifecycle unique: {esc(lifecycle.get('unique_candidates', 0))} - "
+        f"hard status: {lc_validation} - paper status: {lc_paper}</p>",
+        f"<p>paper outcomes: {esc(results.get('paper_outcomes', 0))} - farm paper status: {paper_line}</p>",
         f"<p>needs data: {needs_line}</p>",
         f"<p>results by plan group: {by_group_line}</p>",
         f"<p>GPU signal-supported result rows: {esc(gpu.get('gpu_signal_rows', 0))}</p>",

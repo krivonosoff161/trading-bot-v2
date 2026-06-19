@@ -42,8 +42,14 @@ def test_schema_v4_migration_adds_columns(tmp_path):
     conn = connect(db)
     init_db(conn)  # migrate v3 -> v4
     cols = _cols(conn, "farm_results")
-    assert {"max_drawdown_pct", "gpu_signal_supported", "hard_status", "validation_exported"} <= cols
-    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 4
+    assert {
+        "max_drawdown_pct", "gpu_signal_supported", "hard_status",
+        "validation_exported", "paper_status",
+    } <= cols
+    assert "paper_outcomes" in {
+        str(r["name"]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 5
     conn.close()
 
 

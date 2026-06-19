@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -119,6 +119,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             gpu_signal_supported INTEGER NOT NULL DEFAULT 0,
             hard_status TEXT NOT NULL DEFAULT '',
             validation_exported INTEGER NOT NULL DEFAULT 0,
+            paper_status TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (run_id, candidate_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
         );
@@ -142,6 +143,30 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT '',
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS paper_outcomes (
+            trade_id TEXT PRIMARY KEY,
+            setup_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            family TEXT NOT NULL,
+            direction TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            outcome TEXT NOT NULL DEFAULT '',
+            opened_at TEXT NOT NULL DEFAULT '',
+            closed_at TEXT NOT NULL DEFAULT '',
+            net_pct REAL NOT NULL DEFAULT 0,
+            r_multiple REAL NOT NULL DEFAULT 0,
+            data_fingerprint TEXT NOT NULL DEFAULT '',
+            params_hash TEXT NOT NULL DEFAULT '',
+            recorded_at TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_paper_outcomes_candidate
+            ON paper_outcomes(candidate_id, recorded_at);
         """
     )
     _migrate_candidate_columns(conn)
@@ -171,6 +196,7 @@ def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
         "gpu_signal_supported": "INTEGER NOT NULL DEFAULT 0",
         "hard_status": "TEXT NOT NULL DEFAULT ''",
         "validation_exported": "INTEGER NOT NULL DEFAULT 0",
+        "paper_status": "TEXT NOT NULL DEFAULT ''",
     }
     for column, decl in additions.items():
         if column not in existing:

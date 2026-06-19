@@ -126,6 +126,9 @@ def collect(db_path: Path) -> dict:
                     conn, "SELECT COUNT(*) FROM farm_results WHERE validation_exported = 1")),
                 "hard_status": _counts(
                     conn, "SELECT hard_status, COUNT(*) FROM farm_results WHERE hard_status <> '' GROUP BY hard_status"),
+                "paper_status": _counts(
+                    conn, "SELECT paper_status, COUNT(*) FROM farm_results WHERE paper_status <> '' GROUP BY paper_status"),
+                "paper_outcomes": int(_scalar(conn, "SELECT COUNT(*) FROM paper_outcomes")),
                 "gpu_signal_rows": int(_scalar(
                     conn, "SELECT COALESCE(SUM(gpu_signal_supported), 0) FROM farm_results")),
                 "needs_data": _counts(
@@ -188,6 +191,8 @@ def _print(report: dict) -> None:
         print(f"  validation handoff: exported={ho['validation_exported']} "
               f"hard_status={ho['hard_status'] or '(none)'} needs_data={ho['needs_data'] or '(none)'} "
               f"gpu_signal_rows={ho['gpu_signal_rows']}")
+        print(f"  paper handoff: outcomes={ho.get('paper_outcomes', 0)} "
+              f"paper_status={ho.get('paper_status') or '(none)'}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "
