@@ -1,6 +1,18 @@
 # Current State
 
-Updated: 2026-06-19
+Updated: 2026-06-20
+
+> **Update 2026-06-20 — Phase 0+1 hardening/search-quality done; disciplinary gate = (B) sub-cost.**
+> Phase 0 (reproducible fail-loud validation, off-by-default stage visibility, discovery
+> freshness, dashboard observability, honest OI gate, recursive money-path guard, legacy-loop
+> abort) and Phase 1 (real per-family stop/take/hold grids + tiers, multiple-testing
+> correction, revived REGIME_SWEEP follow-ups, GPU benchmark = CPU wins → no new kernels) are
+> merged on `feature/calc-farm` (full suite 1329 passed). A bounded full-loop gate-run on real
+> public OKX data produced **0 fresh `PAPER_FORWARD_READY` of 84 validations; `FAILED_COSTS`
+> 76–83%** → verdict **(B): the current search space is sub-cost / fragile**. P2 (Stage 6b
+> rejected-mining, Stage 8 true forward paper) stays closed; the next move is a constraint
+> change (data/regime/class/execution), not more pipeline. See
+> [docs/gate_verdict_phase1_2026-06-20.md](docs/gate_verdict_phase1_2026-06-20.md).
 
 ## Short Version
 
