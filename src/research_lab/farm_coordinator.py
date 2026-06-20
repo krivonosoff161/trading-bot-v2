@@ -162,6 +162,8 @@ def _unblock(tasks: FarmTasksDB, data_state_fn: Callable, counters: dict[str, in
 
 
 _REC_PRIORITY = {"high": 40, "normal": 70, "low": 100}
+# Max generations of failure-driven follow-up sweeps before stopping (no infinite re-grind).
+MAX_FOLLOWUP_DEPTH = 2
 
 
 def _load_setup_cards(private_root: Path) -> list[dict[str, Any]]:
@@ -192,6 +194,9 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
         out[cid] = {
             "params": params if isinstance(params, dict) else {},
             "validation_status": str(row.get("validation_status") or ""),
+            # carry the stored dominant regime bucket so REGIME_SWEEP follow-ups can
+            # actually build a filter (Phase 1.3) instead of no-oping on missing_regime_filter.
+            "regime_summary": {"dominant_bucket": str(row.get("regime_bucket") or "")},
         }
     return out
 
@@ -249,6 +254,7 @@ def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
         backend=str(data.get("backend") or "cpu"),
         resource_class=str(data.get("resource_class") or "normal"),
         private_output_policy=str(data.get("private_output_policy") or "private_only"),
+        variant_tier=str(data.get("variant_tier") or "smoke"),
     )
 
 
@@ -268,6 +274,11 @@ def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
             tasks.skip_task(task["task_id"], "malformed_followup_payload", now=now)
             _bump(counters, "followup_invalid")
             continue
+        depth = int(payload.get("followup_depth") or 0)
+        if depth >= MAX_FOLLOWUP_DEPTH:
+            tasks.complete_task(task["task_id"], reason="followup_depth_capped", now=now)
+            _bump(counters, "followup_notes")
+            continue
         cid = rec.candidate_ids[0] if rec.candidate_ids else ""
         plan = plan_followup(rec, contexts.get(cid), max_variants=8)
         if not plan.queued or plan.sweep is None:
@@ -282,7 +293,7 @@ def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
         run_payload = {
             "origin": "feedback_followup", "action": plan.action,
             "source_candidate_id": plan.candidate_id, "hard_status": rec.hard_status,
-            "sweep_spec": _sweep_payload(plan.sweep),
+            "sweep_spec": _sweep_payload(plan.sweep), "followup_depth": depth + 1,
         }
         _, created = tasks.enqueue_task(
             task_type="run_sweep", task_key=f"run_sweep::followup::{plan.sweep.sweep_id}",

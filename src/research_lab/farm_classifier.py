@@ -47,6 +47,7 @@ def classify_run(
         family = str(row.get("family") or "")
         ph = params_hash(row.get("params") or {})
         metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+        regime = row.get("regime_summary") if isinstance(row.get("regime_summary"), dict) else {}
         out.append({
             "uc_key": f"{symbol}::{timeframe}::{family}::{ph}::{fp}",
             "symbol": symbol, "timeframe": timeframe, "family": family,
@@ -58,6 +59,7 @@ def classify_run(
             "avg_net_pct": float(metrics.get("avg_net_pct") or 0.0),
             "candidate_id": str(row.get("run_id") or row.get("candidate_id") or ""),
             "params": dict(row.get("params") or {}),
+            "regime_bucket": str(regime.get("dominant_bucket") or ""),
             "run_dir_label": run_dir_label, "task_id": task_id,
         })
     return out
