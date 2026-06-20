@@ -245,6 +245,25 @@ def _extract_returns(candidate: CandidateForValidation) -> list[float]:
     return returns
 
 
+def _n_trials(candidate: CandidateForValidation) -> int:
+    """Number of parameter variants the candidate was selected from (>=1).
+
+    This is the multiple-testing trial count used to deflate significance: picking the
+    best of N variants inflates apparent significance, so a deeper sweep is penalized.
+    """
+    m = candidate.metrics or {}
+    runtime = m.get("runtime") if isinstance(m.get("runtime"), dict) else {}
+    for value in (runtime.get("n_variants_evaluated"), m.get("n_variants_evaluated"),
+                  m.get("variant_count"), m.get("n_trials")):
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n >= 1:
+            return n
+    return 1
+
+
 def _run_all_checks(
     candidate: CandidateForValidation,
     returns: list[float],
@@ -252,7 +271,7 @@ def _run_all_checks(
     checks = []
     checks.append(_check_costs(candidate, returns))
     checks.append(_check_splits(returns))
-    checks.append(_check_significance(returns))
+    checks.append(_check_significance(returns, n_trials=_n_trials(candidate)))
     checks.append(_check_robustness(returns))
     checks.append(_check_overfit(candidate, returns))
     checks.append(_check_forward_readiness(candidate))
@@ -319,24 +338,34 @@ def _check_splits(returns: list[float]) -> dict[str, Any]:
     }
 
 
-def _check_significance(returns: list[float]) -> dict[str, Any]:
+def _check_significance(returns: list[float], n_trials: int = 1) -> dict[str, Any]:
     arr = _np.asarray(returns, dtype=float)
     boot = bootstrap_ci(arr, n_boot=1000, seed=42)
     perm = permutation_test(arr, n_perm=1000, seed=42)
+    p_raw = float(perm["p_value"])
+    n = max(1, int(n_trials))
+    # Sidak family-wise adjustment for selecting the best of n variants: a deeper sweep
+    # needs a stronger raw p to stay significant.
+    p_adj = 1.0 - (1.0 - p_raw) ** n if n > 1 else p_raw
+    p_adj = min(1.0, max(0.0, p_adj))
     ci_above_zero = boot[1] > 0
-    p_ok = perm["p_value"] < 0.10
-    passed = ci_above_zero or p_ok
+    # Stricter than before: require BOTH a positive bootstrap lower bound AND an
+    # adjusted-significant permutation p (was an OR with a loose p<0.10).
+    passed = bool(ci_above_zero and p_adj < 0.05)
     return {
         "check_name": "significance",
         "passed": passed,
         "details": {
             "bootstrap_ci": [boot[1], boot[2]],
-            "permutation_p": perm["p_value"],
+            "permutation_p": p_raw,
+            "permutation_p_adjusted": p_adj,
+            "n_trials": n,
             "point_estimate": boot[0],
         },
         "message": (
             f"Bootstrap CI [{boot[1]:.4f}, {boot[2]:.4f}], "
-            f"permutation p={perm['p_value']:.4f}"
+            f"permutation p={p_raw:.4f} (adj {p_adj:.4f} over {n} trials); "
+            "pass needs CI>0 AND adj-p<0.05"
         ),
     }
 

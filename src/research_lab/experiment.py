@@ -602,11 +602,11 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
             if spec.max_runs and len(results) >= spec.max_runs:
                 _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                                        accelerated_simulation_runs, cpu_fallback_families,
-                                       sim_fallback_reasons)
+                                       sim_fallback_reasons, n_variants=len(results))
                 return results
     _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                            accelerated_simulation_runs, cpu_fallback_families,
-                           sim_fallback_reasons)
+                           sim_fallback_reasons, n_variants=len(results))
     return results
 
 
@@ -617,9 +617,13 @@ def _finalize_runtime_meta(
     accelerated_simulation_runs: int,
     cpu_fallback_families: set[str],
     sim_fallback_reasons: set[str],
+    n_variants: int = 0,
 ) -> None:
     if runtime_meta is None:
         return
+    # How many parameter variants were evaluated in this sweep — the multiple-testing
+    # trial count the validator uses to deflate significance (Phase 1.2).
+    runtime_meta["n_variants_evaluated"] = int(n_variants)
     runtime_meta["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
     # accelerated_runs kept as the signal-run count for backward compatibility.
     runtime_meta["accelerated_runs"] = accelerated_signal_runs
