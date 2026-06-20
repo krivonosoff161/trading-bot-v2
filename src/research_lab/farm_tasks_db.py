@@ -441,7 +441,7 @@ class FarmTasksDB:
         """Lean read of every candidate (the read-through gate aggregates per fingerprint/cell)."""
         rows = self._conn.execute(
             "SELECT symbol, timeframe, family, params_hash, data_fingerprint, decision, "
-            "validation_status, hard_status, n_trades, avg_net_pct, regime_bucket "
+            "validation_status, hard_status, n_trades, avg_net_pct, regime_bucket, updated_at "
             "FROM unique_candidates").fetchall()
         return [dict(r) for r in rows]
 

@@ -19,11 +19,15 @@ from src.research_lab.setup_outcome_memory import (  # noqa: E402
     build_memory_index,
     confirmed_bad_setups,
     derive_outcome_class,
+    gate_distribution,
+    knowledge_base_counts,
     lookup,
     memory_prompt_digest,
     positive_setups,
+    prior_for_cell,
     proposal_verdict,
     rejected_research,
+    revisit_policy,
     summarize_memory,
     tactical_setups,
 )
@@ -84,6 +88,65 @@ class TestOutcomeClass:
         for sub, cls in table.items():
             assert derive_outcome_class("LITE_REJECTED", sub, False) == cls
             assert cls in OUTCOME_CLASSES
+
+
+class TestRevisitPolicy:
+    def _bad_cell_index(self):
+        # one known-bad cell with a tried fingerprint/params and a timestamp
+        rows = [_cand("X_USDT_SWAP", "4h", "mean_reversion_fade", "fpOLD", n_trades=20, avg=-0.4)]
+        rows[0]["params_hash"] = "phOLD"
+        rows[0]["updated_at"] = 1_000_000_000_000  # ms
+        return build_gate_index(rows)
+
+    def test_blocks_blind_recompute_of_identical(self):
+        prior = prior_for_cell(self._bad_cell_index(), symbol="X_USDT_SWAP", timeframe="4h",
+                               family="mean_reversion_fade")
+        allowed, triggers = revisit_policy(prior, {"data_fingerprint": "fpOLD", "params_hash": "phOLD"})
+        assert allowed is False and triggers == []
+
+    def test_new_data_or_params_or_exit_allows(self):
+        prior = prior_for_cell(self._bad_cell_index(), symbol="X_USDT_SWAP", timeframe="4h",
+                               family="mean_reversion_fade")
+        ok_fp, t1 = revisit_policy(prior, {"data_fingerprint": "fpNEW", "params_hash": "phOLD"})
+        ok_ph, t2 = revisit_policy(prior, {"data_fingerprint": "fpOLD", "params_hash": "phNEW"})
+        assert ok_fp and "new_data_fingerprint" in t1
+        assert ok_ph and "new_params_or_exit" in t2
+
+    def test_ttl_and_manual_go(self):
+        prior = prior_for_cell(self._bad_cell_index(), symbol="X_USDT_SWAP", timeframe="4h",
+                               family="mean_reversion_fade")
+        # same identity, but TTL elapsed (now far beyond newest_ts)
+        ok_ttl, t = revisit_policy(prior, {"data_fingerprint": "fpOLD", "params_hash": "phOLD"},
+                                   ttl_days=30, now_ts=1_000_000_000_000 + 31 * 86_400_000)
+        assert ok_ttl and "ttl_expired" in t
+        ok_go, t2 = revisit_policy(prior, {"data_fingerprint": "fpOLD", "params_hash": "phOLD",
+                                           "manual_go": True})
+        assert ok_go and "manual_go" in t2
+
+    def test_oi_funding_context_trigger(self):
+        prior = prior_for_cell(self._bad_cell_index(), symbol="X_USDT_SWAP", timeframe="4h",
+                               family="mean_reversion_fade")
+        ok, t = revisit_policy({**prior, "had_oi_funding_context": False},
+                               {"data_fingerprint": "fpOLD", "params_hash": "phOLD",
+                                "oi_funding_context": True})
+        assert ok and "new_oi_funding_context" in t
+
+
+class TestKnowledgeBaseCounts:
+    def test_gate_distribution_and_six_counts(self):
+        idx = build_gate_index([
+            _cand("A_USDT_SWAP", "1h", "momentum_breakout", "fp1", n_trades=20, avg=-0.5),  # known_bad
+            _cand("B_USDT_SWAP", "4h", "mean_reversion_fade", "fp2", n_trades=15, avg=0.4,
+                  lite="FORWARD_PAPER", decision="OBSERVE"),  # eligible -> revisit
+        ])
+        dist = gate_distribution(idx)
+        assert dist["skip_known_bad"] >= 1 and dist["revisit"] >= 1
+        counts = knowledge_base_counts([], idx, survived_shadow=2, tactical_probe=7)
+        assert counts["known_bad"] == dist["skip_known_bad"]
+        assert counts["revisit"] == dist["revisit"]
+        assert counts["survived_shadow"] == 2 and counts["tactical_probe"] == 7
+        assert set(counts) == {"known_bad", "revisit", "survived_shadow", "tactical_probe",
+                               "rejected_recyclable", "rejected_confirmed_bad"}
 
 
 class TestGate:
