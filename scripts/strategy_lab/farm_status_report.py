@@ -38,8 +38,17 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _label(value) -> str:
+    # Distinguish a real NULL (UNKNOWN) from a literal empty status (legacy unscored rows).
+    if value is None:
+        return "UNKNOWN"
+    if value == "":
+        return "LEGACY_UNSCORED"
+    return str(value)
+
+
 def _counts(conn: sqlite3.Connection, sql: str) -> dict[str, int]:
-    return {str(r[0] or "UNKNOWN"): int(r[1]) for r in conn.execute(sql)}
+    return {_label(r[0]): int(r[1]) for r in conn.execute(sql)}
 
 
 def _scalar(conn: sqlite3.Connection, sql: str, default=0):
@@ -141,6 +150,14 @@ def collect(db_path: Path) -> dict:
                 "GROUP_CONCAT(DISTINCT fallback_reason) fallbacks "
                 "FROM runtime_stats GROUP BY effective_backend, signal_backend, simulation_backend")]
         report["ready_for_validation"] = _ready_for_validation(conn)
+        # Real totals behind the capped preview (the LIMIT 40 list masked the backlog).
+        if _has_rows(conn, "farm_results"):
+            report["ready_total_groups"] = int(_scalar(conn,
+                "SELECT COUNT(*) FROM (SELECT 1 FROM farm_results WHERE validation_status IN "
+                "('FORWARD_PAPER','REGIME_SPECIFIC') GROUP BY symbol, family, timeframe)"))
+            report["unvalidated_count"] = int(_scalar(conn,
+                "SELECT COUNT(*) FROM farm_results WHERE validation_status IN "
+                "('FORWARD_PAPER','REGIME_SPECIFIC') AND (hard_status IS NULL OR hard_status='')"))
         try:  # the continuous-farm lifecycle (farm_tasks.sqlite), if the new loop has run
             from src.research_lab.farm_cockpit import _lifecycle_section
             report["lifecycle"] = _lifecycle_section(db_path.parent.parent)
@@ -157,6 +174,13 @@ def collect(db_path: Path) -> dict:
             report["last_cycle"] = cycles[-1] if cycles else None
         except Exception:  # noqa: BLE001 - optional log read must not break status
             report["last_cycle"] = None
+        try:  # completion verdict + two-DB reconciliation (read-only, T2)
+            from src.research_lab.farm_reconcile import completion_verdict, reconcile_dbs
+            report["completion"] = completion_verdict(db_path.parent.parent)
+            report["reconcile"] = reconcile_dbs(db_path.parent.parent)
+        except Exception:  # noqa: BLE001 - optional reconcile must not break status
+            report["completion"] = {"available": False}
+            report["reconcile"] = {"available": False}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -219,9 +243,24 @@ def _print(report: dict) -> None:
               f"gpu_signal_rows={ho['gpu_signal_rows']}")
         print(f"  paper handoff: outcomes={ho.get('paper_outcomes', 0)} "
               f"paper_status={ho.get('paper_status') or '(none)'}")
+    comp = report.get("completion") or {}
+    if comp.get("available"):
+        rs = comp.get("reasons") or {}
+        line = f"  COMPLETION: {comp.get('state')}"
+        if comp.get("state") != "DRAINED":
+            line += (f" - eligible_now={rs.get('eligible_now', 0)} running={rs.get('running', 0)} "
+                     f"deferred_future={rs.get('deferred_future', 0)} blocked={sum((rs.get('blocked') or {}).values())}"
+                     " (loop stopped with claimable work; run farm_loop --apply --run-worker to drain)")
+        print(line)
+    rc = report.get("reconcile") or {}
+    for name, info in (rc.get("orphans") or {}).items():
+        print(f"  reconcile orphan: {name}={info.get('count')} owner={info.get('owner')} "
+              f"{'-> ' + info.get('relabel') if info.get('relabel') else ''}")
     sl = report.get("setup_lifecycle") or {}
     if sl.get("available"):
         print(f"  setup lifecycle: total={sl.get('total', 0)} states={sl.get('by_state') or '(none)'}")
+        if sl.get("by_tactical"):
+            print(f"    tactical shelf (research-only, never tradeable): {sl['by_tactical']}")
         print(f"    paper groups: positive={sl.get('positive_setups', 0)} "
               f"negative={sl.get('negative_setups', 0)} mixed={sl.get('mixed_or_flat', 0)} "
               f"no_sample={sl.get('no_paper_sample', 0)}")
@@ -236,7 +275,11 @@ def _print(report: dict) -> None:
             print(f"    {r['asset_group'] or '-':16s} {r['family']:32s} {r['decision']:24s} "
                   f"n={r['n']} avg_net={r['avg_net']}")
     ready = report.get("ready_for_validation") or []
-    print(f"  ready for hard validation (deduped): {len(ready)}")
+    total_groups = report.get("ready_total_groups")
+    unval = report.get("unvalidated_count")
+    extra = (f" | total eligible groups={total_groups} unvalidated_rows={unval}"
+             if total_groups is not None else "")
+    print(f"  ready for hard validation (deduped preview): {len(ready)}{extra}")
     for r in ready[:12]:
         print(f"    {r['symbol']} {r['family']} {r.get('timeframe') or ''} -> {r['validation_status']}")
     if not ready:
