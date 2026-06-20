@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.experiment import ExperimentSpec
 from src.research_lab.paths import PROJECT_ROOT
 from src.research_lab.param_schemas import validate_parameter_grid
 from src.research_lab.proposal_schema import REJECTED, VALIDATED, Proposal
 from src.research_lab.resource_policy import ResourcePolicy
 from src.research_lab.runtime_policy import effective_variant_cap
+from src.research_lab.setup_outcome_memory import GateIndex, proposal_verdict
 from src.research_lab.strategy_registry import REGISTRY
 from src.research_lab.timeframes import TimeframeProfiles
 from src.research_lab.universe import Universe
@@ -69,6 +71,7 @@ def validate_proposal(
     universe: Universe,
     timeframe_profiles: TimeframeProfiles,
     resource_policy: ResourcePolicy,
+    memory_index: GateIndex | None = None,
 ) -> ProposalOutcome:
     reasons: list[str] = []
     if not proposal.hypothesis.strip():
@@ -91,6 +94,7 @@ def validate_proposal(
     _timeframe_reasons(proposal, timeframe_profiles, reasons)
     _resource_reasons(proposal, resource_policy, reasons)
     _wording_and_boundary_reasons(proposal, reasons)
+    _memory_reasons(proposal, memory_index, reasons)
 
     try:
         compile_proposal(proposal, policy=resource_policy)
@@ -108,14 +112,38 @@ def validate_and_mark(
     universe: Universe,
     timeframe_profiles: TimeframeProfiles,
     resource_policy: ResourcePolicy,
+    memory_index: GateIndex | None = None,
 ) -> Proposal:
     """Validate and return a copy with status set to VALIDATED or REJECTED."""
     outcome = validate_proposal(
-        proposal, universe=universe, timeframe_profiles=timeframe_profiles, resource_policy=resource_policy
+        proposal, universe=universe, timeframe_profiles=timeframe_profiles,
+        resource_policy=resource_policy, memory_index=memory_index,
     )
     if outcome.status == VALIDATED:
         return replace(proposal, status=VALIDATED, rejection_reason="")
     return replace(proposal, status=REJECTED, rejection_reason=",".join(outcome.reason_codes))
+
+
+def _memory_reasons(proposal: Proposal, memory_index: GateIndex | None, reasons: list[str]) -> None:
+    """Reject only when EVERY symbol x variant the proposal would run is already known-bad in the
+    Setup Outcome Memory (nothing fresh to learn). A single fresh variant keeps the proposal alive."""
+    if memory_index is None or proposal.setup_family not in REGISTRY:
+        return
+    grid = proposal.parameter_grid.get(proposal.setup_family) or []
+    if not proposal.symbols or not grid:
+        return
+    checked = 0
+    known_bad = 0
+    for sym in proposal.symbols:
+        for variant in grid:
+            checked += 1
+            verdict = proposal_verdict(memory_index, symbol=str(sym).replace("-", "_").upper(),
+                                       timeframe=proposal.requested_timeframe, family=proposal.setup_family,
+                                       params_hash=params_hash(variant))
+            if verdict.action == "known_bad":
+                known_bad += 1
+    if checked and known_bad == checked:
+        reasons.append("known_bad_in_memory")
 
 
 def _timeframe_reasons(proposal: Proposal, profiles: TimeframeProfiles, reasons: list[str]) -> None:

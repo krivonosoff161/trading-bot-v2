@@ -51,6 +51,7 @@ _REJECT_MAP = {
     "output_boundary_violation": "unsafe_field",
     "missing_hypothesis": "missing_rationale",
     "not_compilable": "malformed_json",
+    "known_bad_in_memory": "known_bad_in_memory",
 }
 _CONTRACT_FAILURE_REASONS = {
     "malformed_json", "json_parse_error", "wrong_top_level_shape",
@@ -147,6 +148,7 @@ def build_proposal_prompt(
     universe: Universe,
     profiles: TimeframeProfiles,
     max_candidates: int,
+    memory_digest: str = "",
 ) -> tuple[str, str]:
     families = ", ".join(strategy_ids())
     tfs = ", ".join(allowed_timeframes(profiles))
@@ -188,6 +190,7 @@ def build_proposal_prompt(
         "Telegram, main-engine, paper-promotion, or live-trading fields. Keep each proposal "
         "small: one to two symbols and one to four grid variants."
     )
+    memory_block = (f"\n{memory_digest}\n" if memory_digest else "")
     user = (
         f"Known families: {families}\n"
         f"Allowed timeframes: {tfs}\n"
@@ -197,8 +200,11 @@ def build_proposal_prompt(
         "assigned by hard validation, never by you.\n"
         "Prefer proposals that explain a current failure mode: too few trades, late entry, "
         "fragility, poor MFE/MAE, regime mismatch, missing OI/funding context, or repeated "
-        "validator rejection.\n\n"
-        f"Exact response shape example:\n{json.dumps(example, ensure_ascii=False, sort_keys=True)}\n\n"
+        "validator rejection.\n"
+        "Do NOT re-propose a setup the outcome memory marks confirmed_bad — propose a DIFFERENT "
+        "angle (exit model, timeframe horizon, regime, OI context) instead.\n"
+        f"{memory_block}"
+        f"\nExact response shape example:\n{json.dumps(example, ensure_ascii=False, sort_keys=True)}\n\n"
         f"Recent lab state to react to:\n{summary}\n"
     )
     return system, user
@@ -372,6 +378,7 @@ def validate_llm_candidates(
     resource_policy: ResourcePolicy,
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    memory_index=None,
 ) -> LLMProposalBatch:
     validated: list[Proposal] = []
     rejected: list[dict[str, str]] = []
@@ -398,7 +405,8 @@ def validate_llm_candidates(
             continue
         seen_ids.add(proposal.proposal_id)
         marked = validate_and_mark(
-            proposal, universe=universe, timeframe_profiles=timeframe_profiles, resource_policy=resource_policy,
+            proposal, universe=universe, timeframe_profiles=timeframe_profiles,
+            resource_policy=resource_policy, memory_index=memory_index,
         )
         if marked.status == VALIDATED:
             if len(validated) < max(0, int(max_candidates)):
@@ -421,9 +429,11 @@ def generate_proposals_via_llm(
     resource_policy: ResourcePolicy,
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    memory_index=None,
+    memory_digest: str = "",
 ):
     system, user = build_proposal_prompt(summary, universe=universe, profiles=timeframe_profiles,
-                                         max_candidates=max_candidates)
+                                         max_candidates=max_candidates, memory_digest=memory_digest)
     text, usage = provider.generate(system, user)
     try:
         items = parse_llm_proposals(text)
@@ -435,6 +445,7 @@ def generate_proposals_via_llm(
     batch = validate_llm_candidates(
         items, universe=universe, timeframe_profiles=timeframe_profiles,
         resource_policy=resource_policy, created_at=created_at, max_candidates=max_candidates,
+        memory_index=memory_index,
     )
     return batch, usage
 
