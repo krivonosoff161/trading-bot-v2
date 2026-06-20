@@ -185,6 +185,12 @@ def collect(db_path: Path) -> dict:
             report["exit_phase2"] = data.get("summary") or summarize_exit_phase2([])
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["exit_phase2"] = {}
+        try:  # OI-family research summary (separate oi_* namespace; 1h/4h only)
+            oi_f = db_path.parent.parent / "state" / "derived" / "oi_family_research.json"
+            report["oi_family"] = (json.loads(oi_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if oi_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["oi_family"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -300,6 +306,10 @@ def _print(report: dict) -> None:
     if ep.get("evaluated"):
         print(f"  exit phase-2 (mean_rev, research-only): evaluated={ep['evaluated']} by_class={ep.get('by_class')} "
               f"needs_forward_only={ep.get('needs_forward_only', 0)} (recovered != edge; never auto paper-ready)")
+    oif = report.get("oi_family") or {}
+    if oif.get("evaluated"):
+        print(f"  oi families (1h/4h only, separate oi_* class): evaluated={oif['evaluated']} "
+              f"by_class={oif.get('by_class')} honest_passed={oif.get('honest_passed', 0)} (OI availability != edge)")
         if om.get("paper_ready_without_hard_pass"):
             print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
                   "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")
