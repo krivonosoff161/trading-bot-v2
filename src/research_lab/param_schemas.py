@@ -167,6 +167,30 @@ def executable_params_ready(strategy_id: str, params: dict[str, Any]) -> bool:
     return validate_params(strategy_id, params, require_executable=True).ok
 
 
+def validate_horizon(
+    timeframe: str, params: dict[str, Any], *, policy: dict[str, Any] | None = None
+) -> list[str]:
+    """Reject a hold_bars outside the per-timeframe holding-horizon band (wrong_horizon).
+
+    The band lives in the ``horizon`` section of the param policy (1 bar = the timeframe),
+    keeping a setup's hold sane for its scale. No band for a timeframe => no constraint.
+    """
+    policy = policy or load_param_policy()
+    band = (policy.get("horizon") or {}).get(str(timeframe))
+    if not isinstance(band, dict):
+        return []
+    hold = _num(params.get("hold_bars"))
+    if hold is None:
+        return []
+    errors: list[str] = []
+    lo, hi = band.get("min_hold_bars"), band.get("max_hold_bars")
+    if lo is not None and hold < float(lo):
+        errors.append(f"hold_bars:horizon_below_{lo}_for_{timeframe}")
+    if hi is not None and hold > float(hi):
+        errors.append(f"hold_bars:horizon_above_{hi}_for_{timeframe}")
+    return errors
+
+
 def executable_exit_params(
     strategy_id: str,
     params: dict[str, Any] | None = None,

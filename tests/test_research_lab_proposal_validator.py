@@ -102,6 +102,43 @@ def test_no_memory_index_is_backward_compatible():
     assert out.status == VALIDATED
 
 
+def test_hold_too_long_for_timeframe_rejected():
+    # a 15m setup held 300 bars (~75h) is past the 192-bar (~48h) horizon band
+    grid = [{"lookback": 20, "hold_bars": 300, "stop_pct": 8, "take_pct": 16}]
+    out = _validate(_proposal(requested_timeframe="15m", parameter_grid={"momentum_breakout": grid}))
+    assert out.status == REJECTED and "wrong_horizon" in out.reason_codes
+
+
+def test_sane_hold_for_timeframe_passes_horizon():
+    out = _validate(_proposal(requested_timeframe="15m"))  # hold_bars=5, well within band
+    assert "wrong_horizon" not in out.reason_codes
+
+
+def test_llm_proposal_cannot_carry_paper_forward_ready():
+    # governance: a Proposal has no paper-promotion field; any such key is silently ignored.
+    p = _proposal()
+    assert not hasattr(p, "paper_forward_ready")
+    p2 = coerce_proposal({**_proposal_payload(), "paper_forward_ready": True, "status": "VALIDATED"})
+    assert not hasattr(p2, "paper_forward_ready")
+
+
+def test_llm_cannot_invent_created_by():
+    import pytest
+    with pytest.raises(ValueError):
+        coerce_proposal({**_proposal_payload(), "created_by": "auto_promoter"})
+
+
+def _proposal_payload():
+    return {
+        "created_by": "llm_review",
+        "hypothesis": "probe parameter neighbors",
+        "requested_timeframe": "15m",
+        "setup_family": "momentum_breakout",
+        "symbols": ["SOL_USDT_SWAP"],
+        "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
+    }
+
+
 def test_disallowed_timeframe_rejected():
     out = _validate(_proposal(requested_timeframe="3h"))
     assert "disallowed_timeframe" in out.reason_codes

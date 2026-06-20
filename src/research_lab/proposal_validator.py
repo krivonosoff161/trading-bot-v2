@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.experiment import ExperimentSpec
 from src.research_lab.paths import PROJECT_ROOT
-from src.research_lab.param_schemas import validate_parameter_grid
+from src.research_lab.param_schemas import validate_horizon, validate_parameter_grid
 from src.research_lab.proposal_schema import REJECTED, VALIDATED, Proposal
 from src.research_lab.resource_policy import ResourcePolicy
 from src.research_lab.runtime_policy import effective_variant_cap
@@ -94,6 +94,7 @@ def validate_proposal(
     _timeframe_reasons(proposal, timeframe_profiles, reasons)
     _resource_reasons(proposal, resource_policy, reasons)
     _wording_and_boundary_reasons(proposal, reasons)
+    _horizon_reasons(proposal, reasons)
     _memory_reasons(proposal, memory_index, reasons)
 
     try:
@@ -122,6 +123,16 @@ def validate_and_mark(
     if outcome.status == VALIDATED:
         return replace(proposal, status=VALIDATED, rejection_reason="")
     return replace(proposal, status=REJECTED, rejection_reason=",".join(outcome.reason_codes))
+
+
+def _horizon_reasons(proposal: Proposal, reasons: list[str]) -> None:
+    """Reject a grid variant whose hold_bars is outside the timeframe's holding-horizon band."""
+    if proposal.setup_family not in REGISTRY:
+        return
+    for variant in proposal.parameter_grid.get(proposal.setup_family) or []:
+        if validate_horizon(proposal.requested_timeframe, variant):
+            reasons.append("wrong_horizon")
+            return
 
 
 def _memory_reasons(proposal: Proposal, memory_index: GateIndex | None, reasons: list[str]) -> None:
