@@ -110,13 +110,29 @@ def _enrich_one(path: Path, key: str, symbol: str, *, provider, state, now_ms, t
     return budget - 1
 
 
-def enrich_oi_one(path: Path, symbol: str, timeframe: str, *, provider, now_ms: int) -> tuple[str, int]:
+DEFAULT_OI_MIN_COVERAGE = 0.5
+
+
+def enrich_oi_one(
+    path: Path, symbol: str, timeframe: str, *, provider, now_ms: int,
+    min_coverage: float = DEFAULT_OI_MIN_COVERAGE,
+) -> tuple[str, int]:
     """Fetch public OI history and forward-fill an ``oi`` field onto a candle file.
 
     Mirrors funding enrichment but for open interest (public, keyless). Returns
-    (status, points): enriched | no_candles | no_points | fetch_failed. OI is optional
-    context — a fetch failure is reported, never raised, so the loop proceeds.
+    (status, points):
+
+      * ``enriched``            — OI merged with at least ``min_coverage`` of candles covered;
+      * ``no_candles``          — the candle file is empty/too short;
+      * ``fetch_failed``        — provider/network error (never raised);
+      * ``no_points``           — provider returned no OI for this instrument;
+      * ``not_enough_coverage`` — OI points exist but cover < ``min_coverage`` of the window.
+
+    Critically, OI is written onto the file ONLY when coverage is sufficient, so a sweep
+    is never marked OI-ready with near-zero merged coverage. OI is optional context — a
+    fetch failure is reported, never raised, so the loop proceeds.
     """
+    from src.research_lab.flow_merge import coverage as _coverage
     from src.research_lab.flow_merge import merge_oi
     rows = _read_rows(path)
     if not rows:
@@ -127,7 +143,13 @@ def enrich_oi_one(path: Path, symbol: str, timeframe: str, *, provider, now_ms: 
         return "fetch_failed", 0
     if not points:
         return "no_points", 0
-    path.write_text(json.dumps(merge_oi(rows, points), ensure_ascii=False), encoding="utf-8")
+    merged = merge_oi(rows, points)
+    covered_frac = _coverage(merged, "oi")["coverage_pct"] / 100.0
+    if covered_frac < min_coverage:
+        # Do NOT write a barely-covered OI field: keep the sweep honestly blocked
+        # rather than marking it OI-ready with near-zero merged coverage.
+        return "not_enough_coverage", len(points)
+    path.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
     return "enriched", len(points)
 
 

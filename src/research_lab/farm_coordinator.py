@@ -143,7 +143,10 @@ def _gate_clear(task: dict[str, Any], data_state_fn: Callable) -> bool:
     state = data_state_fn(task["symbol"], task["timeframe"])
     enrichment = set(state.get("enrichment") or ())
     if "oi" in required:
-        return "oi" in enrichment or bool(state.get("oi_available"))
+        # Honest gate: only an actually-merged ``oi`` field clears the block. The mere
+        # existence of an oi-slot file (state['oi_available']) must NOT unblock a sweep,
+        # or it would run "OI-ready" with zero merged coverage (Phase 0.5).
+        return "oi" in enrichment
     if "funding" in required:
         return "funding" in enrichment
     if "microstructure" in required:
@@ -366,6 +369,15 @@ def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, li
             _bump(counters, "enrich_deferred")
 
 
+# Operator-facing machine reasons for a deferred enrich_oi task (Phase 0.5).
+_OI_DEFER_REASON = {
+    "no_candles": "oi_window_too_short",
+    "fetch_failed": "oi_provider_failed",
+    "no_points": "oi_not_available_for_instrument",
+    "not_enough_coverage": "oi_loaded_not_enough_points",
+}
+
+
 def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now) -> None:
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import enrich_oi_one
@@ -385,10 +397,11 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
             continue
         status, _n = enrich_oi_one(path, task["symbol"], task["timeframe"], provider=oi_provider, now_ms=now_ms)
         if status == "enriched":
-            tasks.complete_task(task["task_id"], reason="oi_enriched", now=now)
+            tasks.complete_task(task["task_id"], reason="oi_loaded", now=now)
             _bump(counters, "enriched_oi_ok")
         else:
-            tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason=f"oi_{status}", now=now)
+            reason = _OI_DEFER_REASON.get(status, f"oi_{status}")
+            tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason=reason, now=now)
             _bump(counters, "enrich_oi_deferred")
 
 

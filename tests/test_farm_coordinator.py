@@ -72,10 +72,11 @@ def test_oi_family_blocks_then_unblocks_when_slot_appears(tmp_path):
                           data_state_fn=_usable_state(oi=False), apply=False, now=1000.0)
     blocked = tasks.tasks_in_state("blocked", task_type="run_sweep")
     assert blocked and all(b["machine_reason"] == "NEEDS_OI_DATA" for b in blocked)
-    # OI slot appears -> next cycle unblocks the SAME tasks (no duplicates)
+    # OI actually MERGED onto candles (enrichment has "oi") -> unblock. A mere oi-slot
+    # file (oi_available) must NOT unblock anymore (0.5 honest gate).
     out = run_coordinator_cycle(tasks, private_root=tmp_path, profiles=PROFILES, policy=POLICY,
                                 intake_events=[], families=("oi_price_quadrant",),
-                                data_state_fn=_usable_state(oi=True), apply=False, now=2000.0)
+                                data_state_fn=_usable_state(enrichment=("oi",)), apply=False, now=2000.0)
     assert out["counters"]["unblocked"] == len(blocked)
     assert not tasks.tasks_in_state("blocked", task_type="run_sweep")
     assert len(tasks.tasks_in_state("queued", task_type="run_sweep")) == len(blocked)
