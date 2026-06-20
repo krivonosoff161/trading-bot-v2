@@ -102,6 +102,7 @@ def render_html(state: dict) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30">
   <title>Strategy Research Lab</title>
   <style>
     :root {{ color-scheme: dark; --bg:#0f1115; --panel:#171b22; --line:#2a313c; --text:#e8edf2; --muted:#9ba7b4; --accent:#62b6ff; --ok:#4dd18b; --warn:#f0c05a; --bad:#ff7575; }}
@@ -322,7 +323,37 @@ def farm_cockpit_html(cockpit: dict) -> str:
     discovered_sizes = " - ".join(
         f"{esc(k)}: {esc(v)}" for k, v in sorted((discovered.get("group_sizes") or {}).items())
     ) or "none"
+    activity = cockpit.get("farm_activity") or {}
+    pnl = cockpit.get("paper_pnl") or {}
+    if activity.get("available"):
+        hb = "ALIVE" if activity.get("heartbeat_ok") else "STALE/IDLE"
+        skipped = ", ".join(activity.get("skipped_stages") or []) or "none"
+        disc = activity.get("discovery") or {}
+        errs = activity.get("recent_errors") or []
+        err_html = ("".join(
+            f"<li>{esc(e.get('where'))}: {esc(e.get('error'))}</li>" for e in errs)
+            if errs else "<li class='muted'>none</li>")
+        activity_html = (
+            f"<p><b>farm heartbeat: {hb}</b> - last cycle {esc(activity.get('last_cycle_age_seconds'))}s ago "
+            f"(pivot={esc(activity.get('last_pivot'))}, mode={esc(activity.get('last_mode'))})</p>"
+            f"<p>skipped active stages: {esc(skipped)} - discovery: {esc(disc.get('status', 'unknown'))} "
+            f"(age={esc(disc.get('age_seconds'))}s)</p>"
+            f"<p>recent errors ({esc(activity.get('error_count', 0))}):</p><ul>{err_html}</ul>"
+        )
+    else:
+        activity_html = '<p class="muted">farm activity log not available yet (run the loop in apply mode).</p>'
+    if pnl.get("available"):
+        pnl_html = (
+            f"<p><b>paper P&amp;L (research, not profit):</b> trades={esc(pnl.get('n_trades'))} - "
+            f"win_rate={esc(pnl.get('win_rate'))} - avg_net={esc(pnl.get('avg_net_pct'))}% - "
+            f"net_sum={esc(pnl.get('net_sum_pct'))}% - avg_R={esc(pnl.get('avg_r_multiple'))} "
+            f"({esc(pnl.get('wins'))}W/{esc(pnl.get('losses'))}L)</p>"
+        )
+    else:
+        pnl_html = '<p class="muted">no paper outcomes recorded yet.</p>'
     return "\n".join([
+        activity_html,
+        pnl_html,
         f"<p>loop cursor: {esc(loop.get('refill_cursor', 0))} - "
         f"backoff symbols: {esc(loop.get('refill_backoff_symbols', 0))}</p>",
         f"<p>prepared candle files: {prepared_line}</p>",
