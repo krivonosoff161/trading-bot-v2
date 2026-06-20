@@ -23,8 +23,8 @@ farm permission to touch the old money path.
 | `bat\strategy_lab_farm_full_cycle_stop.bat` | **CORE WRAPPER** | Clean stop-file for the wrapper above. |
 | `scripts/strategy_lab/worker_once.py` | **CORE EXECUTOR** | Single-job compute executor. Must not delete. |
 | `scripts/strategy_lab/worker_loop.py` | **KEEP / OFF DEFAULT** | Standalone compute daemon; not a lifecycle brain. |
-| `scripts/strategy_lab/scanner_farm_loop.py` | **ARCHIVE-LEGACY** | Flat scanner-watch -> sweep queue path; superseded by the brain. |
-| `scripts/strategy_lab/universe_farm_loop.py` | **ARCHIVE-LEGACY** | Cursor-based universe grind; absorbed by `discovery_refill`. |
+| `scripts/strategy_lab/scanner_farm_loop.py` | **ARCHIVE-LEGACY** | Flat scanner-watch -> sweep queue path; superseded by the brain. `main()` aborts unless `--i-understand-legacy` (0.7), so it cannot accidentally double-queue alongside `farm_loop`. |
+| `scripts/strategy_lab/universe_farm_loop.py` | **ARCHIVE-LEGACY** | Cursor-based universe grind; absorbed by `discovery_refill`. `main()` aborts unless `--i-understand-legacy` (0.7). |
 | `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **ADVISORY LANE** | LLM proposal/review lane. The model is a JSON-only hypothesis advisor, not the farm controller. |
 | `src/research_lab/feedback_followup.py` | **CORE PLANNER** | Deterministic bounded follow-up planner; consumed by `farm_loop` via `schedule_followup`. |
 | `scripts/strategy_lab/generate_event_sweeps.py` | **KEEP / OFF DEFAULT** | Price-event sweep generator; `--from-scanner` is legacy bridge. |

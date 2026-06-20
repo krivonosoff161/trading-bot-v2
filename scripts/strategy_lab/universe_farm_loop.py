@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""First-class universe-driven farm loop — grind the universe, do not wait for news.
+"""ARCHIVE-LEGACY universe-driven farm loop — superseded by farm_loop (the brain).
+
+> DEPRECATED: this loop writes directly into the shared strategy_lab.sqlite compute
+> queue, bypassing the farm_tasks.sqlite lifecycle brain. Running it alongside the
+> current farm_loop risks double-queueing. Use scripts.strategy_lab.farm_loop instead.
+> To run this legacy loop anyway, pass --i-understand-legacy.
 
 Each cycle rotates through (group x timeframe x families) work units, prepares any
 missing candles (bounded, with per-symbol backoff), queues the multi-family research
@@ -156,8 +161,26 @@ def _maybe_enrich(args, units, universe, profiles, private_root, apply) -> dict 
     return result["counters"]
 
 
+_LEGACY_MSG = (
+    "universe_farm_loop is ARCHIVE-LEGACY: it writes into the shared strategy_lab.sqlite "
+    "compute queue, bypassing the farm_tasks.sqlite brain, and can double-queue if run "
+    "alongside the current farm_loop. Use the current core instead:\n"
+    "  python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper\n"
+    "  (or bat\\strategy_lab_farm_full_cycle_loop.bat)\n"
+    "To run this legacy loop anyway, pass --i-understand-legacy."
+)
+
+
+def _legacy_abort_unless_acknowledged(args) -> None:
+    if not getattr(args, "i_understand_legacy", False):
+        print("ABORT: " + _LEGACY_MSG)
+        raise SystemExit(2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--i-understand-legacy", action="store_true",
+                    help="acknowledge this is an archived loop and run it anyway")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="plan only; write nothing (default)")
     mode.add_argument("--apply", action="store_true", help="prepare data + queue plans + write state")
@@ -189,6 +212,7 @@ def main() -> None:
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
     args = ap.parse_args()
+    _legacy_abort_unless_acknowledged(args)
     apply = bool(args.apply)
 
     print(f"universe_farm_loop mode={'APPLY' if apply else 'DRY-RUN'} "

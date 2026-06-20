@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Continuous scanner -> market-data -> farm coordinator loop.
+"""ARCHIVE-LEGACY scanner -> market-data -> farm loop — superseded by farm_loop.
+
+> DEPRECATED: this flat bridge writes into the shared compute queue and keeps its own
+> state/scanner_farm_loop.sqlite checkpoint, bypassing the farm_tasks.sqlite brain. The
+> current core reads scanner watches as a file via intake_adapter. Use
+> scripts.strategy_lab.farm_loop instead. To run this legacy loop anyway, pass
+> --i-understand-legacy.
 
 Closes the gap between a scanner WATCH/GO and a real farm calculation: each cycle
 reads fresh enriched watches, auto-materializes the candles eligible rows need,
@@ -130,8 +136,25 @@ def _should_stop(stop_file: str) -> bool:
     return bool(stop_file) and Path(stop_file).exists()
 
 
+_LEGACY_MSG = (
+    "scanner_farm_loop is ARCHIVE-LEGACY: it writes into the shared compute queue and a "
+    "separate checkpoint, bypassing the farm_tasks.sqlite brain. Use the current core:\n"
+    "  python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper\n"
+    "  (or bat\\strategy_lab_farm_full_cycle_loop.bat)\n"
+    "To run this legacy loop anyway, pass --i-understand-legacy."
+)
+
+
+def _legacy_abort_unless_acknowledged(args) -> None:
+    if not getattr(args, "i_understand_legacy", False):
+        print("ABORT: " + _LEGACY_MSG)
+        raise SystemExit(2)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--i-understand-legacy", action="store_true",
+                    help="acknowledge this is an archived loop and run it anyway")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="plan only; write nothing (default)")
     mode.add_argument("--apply", action="store_true", help="prepare data + queue sweeps + write state")
@@ -155,6 +178,7 @@ def main() -> None:
     ap.add_argument("--state-path", default="")
     ap.add_argument("--allow-public-output", action="store_true")
     args = ap.parse_args()
+    _legacy_abort_unless_acknowledged(args)
     apply = bool(args.apply)
 
     print(f"scanner_farm_loop mode={'APPLY' if apply else 'DRY-RUN'} "
