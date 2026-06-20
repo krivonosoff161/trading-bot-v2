@@ -45,6 +45,7 @@ _COUNTER_KEYS = (
     "planned_prepare", "planned_run_sweep", "planned_blocked", "planned_deferred",
     "planned_skipped", "prepared_ok", "prepared_deferred", "prepared_blocked",
     "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
+    "oi_marked_unmeasured",
     "unblocked", "sweeps_materialized",
     "sweeps_deduped", "sweeps_skipped_memory", "sweeps_deprioritized",
     "runs_completed", "runs_failed", "classified",
@@ -406,11 +407,26 @@ _OI_DEFER_REASON = {
     "no_points": "oi_not_available_for_instrument",
     "not_enough_coverage": "oi_loaded_not_enough_points",
 }
+# Structural OI failures (no series / retention < window / thin coverage). After OI_MAX_ATTEMPTS
+# of these we stop re-polling forever and mark the OI sweep oi_unmeasured (honest, not eternal).
+_OI_STRUCTURAL = {"no_candles", "no_points", "not_enough_coverage"}
+
+
+def _mark_oi_unmeasured_sweeps(tasks: FarmTasksDB, symbol: str, timeframe: str, now: float) -> int:
+    """Free OI sweeps blocked on NEEDS_OI_DATA for (symbol, tf): terminal oi_unmeasured, not pending."""
+    freed = 0
+    for t in tasks.tasks_in_state("blocked", task_type="run_sweep"):
+        if (t.get("symbol") == symbol and t.get("timeframe") == timeframe
+                and t.get("machine_reason") == "NEEDS_OI_DATA"):
+            tasks.skip_task(t["task_id"], reason="oi_unmeasured", now=now)
+            freed += 1
+    return freed
 
 
 def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now) -> None:
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import enrich_oi_one
+    from src.research_lab.oi_status import OI_MAX_ATTEMPTS
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("enrich_oi",), now=now)
         if task is None:
@@ -429,6 +445,11 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
         if status == "enriched":
             tasks.complete_task(task["task_id"], reason="oi_loaded", now=now)
             _bump(counters, "enriched_oi_ok")
+        elif status in _OI_STRUCTURAL and int(task.get("attempts") or 0) >= OI_MAX_ATTEMPTS:
+            # Honest terminal state: stop re-polling structurally-absent OI and free the sweep.
+            tasks.skip_task(task["task_id"], reason="oi_unmeasured", now=now)
+            _mark_oi_unmeasured_sweeps(tasks, task["symbol"], task["timeframe"], now)
+            _bump(counters, "oi_marked_unmeasured")
         else:
             reason = _OI_DEFER_REASON.get(status, f"oi_{status}")
             tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason=reason, now=now)
