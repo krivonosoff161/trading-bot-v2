@@ -20,7 +20,9 @@ from src.research_lab.setup_outcome_memory import (  # noqa: E402
     confirmed_bad_setups,
     derive_outcome_class,
     lookup,
+    memory_prompt_digest,
     positive_setups,
+    proposal_verdict,
     rejected_research,
     summarize_memory,
     tactical_setups,
@@ -122,6 +124,55 @@ class TestGate:
         idx = build_gate_index(rows)
         v = lookup(idx, symbol="X", timeframe="1h", family="momentum_breakout", data_fingerprint="NEW")
         assert v.action == "revisit"
+
+
+class TestProposalGate:
+    def test_exact_params_confirmed_bad_is_known_bad(self):
+        idx = build_gate_index([_cand("X", "1h", "momentum_breakout", "fp1",
+                                       n_trades=20, avg=-0.5)])
+        # by_params keys on params_hash; reuse the candidate's params_hash by reading the index
+        ph = next(iter(idx.by_params)).split("|")[-1]
+        v = proposal_verdict(idx, symbol="X", timeframe="1h", family="momentum_breakout", params_hash=ph)
+        assert v.action == "known_bad" and v.matched == "params"
+
+    def test_dead_cell_with_power_is_known_bad(self):
+        rows = [_cand("X", "1h", "momentum_breakout", f"fp{i}", n_trades=20, avg=-0.3) for i in range(6)]
+        idx = build_gate_index(rows)
+        v = proposal_verdict(idx, symbol="X", timeframe="1h", family="momentum_breakout", params_hash="NEW")
+        assert v.action == "known_bad" and v.matched == "cell"
+
+    def test_eligible_cell_is_revisit(self):
+        idx = build_gate_index([_cand("X", "1h", "momentum_breakout", "fpE", n_trades=12, avg=0.4,
+                                       lite="FORWARD_PAPER", decision="OBSERVE")])
+        v = proposal_verdict(idx, symbol="X", timeframe="1h", family="momentum_breakout", params_hash="NEW")
+        assert v.action == "revisit"
+
+    def test_unseen_is_fresh(self):
+        idx = build_gate_index([_cand("X", "1h", "momentum_breakout", "fp1", n_trades=20, avg=-0.3)])
+        v = proposal_verdict(idx, symbol="OTHER", timeframe="4h", family="bb_volume_fade", params_hash="z")
+        assert v.action == "fresh"
+
+    def test_thin_cell_without_power_is_not_known_bad(self):
+        # 6 rejects but all thin (n<10) -> no power -> not confidently dead -> allow (fresh)
+        rows = [_cand("X", "1h", "momentum_breakout", f"fp{i}", n_trades=2, avg=-0.3) for i in range(6)]
+        idx = build_gate_index(rows)
+        v = proposal_verdict(idx, symbol="X", timeframe="1h", family="momentum_breakout", params_hash="NEW")
+        assert v.action == "fresh"
+
+
+class TestDigest:
+    def test_digest_has_labels(self):
+        recs = [{"outcome_class": "CONFIRMED_BAD", "family": "momentum_breakout", "paper_forward_ready": False,
+                 "hard_status": ""},
+                {"outcome_class": "WRONG_EXIT", "family": "mean_reversion_fade", "paper_forward_ready": False,
+                 "hard_status": ""}]
+        text = memory_prompt_digest(recs)
+        assert "OUTCOME MEMORY DIGEST" in text
+        assert "confirmed_bad=1" in text and "wrong_exit=1" in text
+        assert "do NOT re-propose" in text
+
+    def test_empty_digest(self):
+        assert "empty" in memory_prompt_digest([])
 
 
 class TestViews:

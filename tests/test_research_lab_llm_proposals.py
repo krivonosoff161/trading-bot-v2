@@ -67,6 +67,33 @@ def test_validate_candidates_accepts_valid_rejects_invalid():
     assert len(batch.rejected) == 2
 
 
+def test_memory_index_rejects_known_bad_candidate():
+    from src.research_lab.data_fingerprint import params_hash
+    from src.research_lab.setup_outcome_memory import build_gate_index
+    universe, profiles, policy = _ctx()
+    params = {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    idx = build_gate_index([{"symbol": "BTC_USDT_SWAP", "timeframe": "1d", "family": "momentum_breakout",
+                             "params_hash": params_hash(params), "data_fingerprint": "fp",
+                             "decision": "REJECT", "validation_status": "REJECT", "hard_status": "",
+                             "n_trades": 20, "avg_net_pct": -0.5}])
+    items = [{"hypothesis": "re-test a known-bad setup", "setup_family": "momentum_breakout",
+              "requested_timeframe": "1d", "symbols": ["BTC_USDT_SWAP"],
+              "parameter_grid": {"momentum_breakout": [params]}}]
+    batch = validate_llm_candidates(items, universe=universe, timeframe_profiles=profiles,
+                                    resource_policy=policy, created_at=_AT, memory_index=idx)
+    assert len(batch.validated) == 0
+    assert batch.reject_reasons().get("known_bad_in_memory") == 1
+
+
+def test_prompt_includes_memory_digest_when_present():
+    universe, profiles, policy = _ctx()
+    digest = "OUTCOME MEMORY DIGEST (test): confirmed_bad=99"
+    _system, user = build_proposal_prompt("lab state", universe=universe, profiles=profiles,
+                                          max_candidates=4, memory_digest=digest)
+    assert digest in user
+    assert "Do NOT re-propose a setup the outcome memory marks confirmed_bad" in user
+
+
 def test_parse_accepts_common_wrappers_and_think_prefix():
     text = '<think>draft</think>\n{"candidates": [{"strategy": "momentum_breakout"}]} trailing'
     assert parse_llm_proposals(text) == [{"strategy": "momentum_breakout"}]

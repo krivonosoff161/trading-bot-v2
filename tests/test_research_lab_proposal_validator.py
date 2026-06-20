@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.proposal_schema import REJECTED, VALIDATED, coerce_proposal
 from src.research_lab.proposal_validator import (
     compile_proposal,
@@ -7,6 +8,7 @@ from src.research_lab.proposal_validator import (
     validate_proposal,
 )
 from src.research_lab.resource_policy import load_resource_policy
+from src.research_lab.setup_outcome_memory import build_gate_index
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
 
@@ -64,6 +66,40 @@ def test_unknown_symbol_and_family_rejected():
     assert "unknown_symbol" in out.reason_codes
     out2 = _validate(_proposal(setup_family="not_a_family"))
     assert "unknown_family" in out2.reason_codes
+
+
+def _bad_cand(symbol, tf, family, params, **over):
+    base = {"symbol": symbol, "timeframe": tf, "family": family, "params_hash": params_hash(params),
+            "data_fingerprint": "fp", "decision": "REJECT", "validation_status": "REJECT",
+            "hard_status": "", "n_trades": 20, "avg_net_pct": -0.5}
+    base.update(over)
+    return base
+
+
+def test_known_bad_in_memory_rejects_when_all_variants_dead():
+    # the exact params for the proposal's only (symbol, tf, family) variant are confirmed-bad
+    params = {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    idx = build_gate_index([_bad_cand("SOL_USDT_SWAP", "15m", "momentum_breakout", params)])
+    u, tp, rp = _ctx()
+    out = validate_proposal(_proposal(), universe=u, timeframe_profiles=tp, resource_policy=rp,
+                            memory_index=idx)
+    assert out.status == REJECTED and "known_bad_in_memory" in out.reason_codes
+
+
+def test_one_fresh_variant_keeps_proposal_alive():
+    # one dead variant + one fresh variant -> not all-dead -> allowed (fresh worth testing)
+    dead = {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    fresh = {"lookback": 30, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}
+    idx = build_gate_index([_bad_cand("SOL_USDT_SWAP", "15m", "momentum_breakout", dead)])
+    u, tp, rp = _ctx()
+    out = validate_proposal(_proposal(parameter_grid={"momentum_breakout": [dead, fresh]}),
+                            universe=u, timeframe_profiles=tp, resource_policy=rp, memory_index=idx)
+    assert out.status == VALIDATED and "known_bad_in_memory" not in out.reason_codes
+
+
+def test_no_memory_index_is_backward_compatible():
+    out = _validate(_proposal())  # memory_index=None default
+    assert out.status == VALIDATED
 
 
 def test_disallowed_timeframe_rejected():

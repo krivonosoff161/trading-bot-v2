@@ -84,8 +84,9 @@ def _okx_inst(symbol: str) -> str:
 # ── read-through gate (cheap hot path: unique_candidates columns only) ──────────────────
 @dataclass
 class GateIndex:
-    by_sweep: dict[str, dict[str, Any]] = field(default_factory=dict)  # sym|tf|fam|fingerprint
-    by_cell: dict[str, dict[str, Any]] = field(default_factory=dict)   # sym|tf|fam
+    by_sweep: dict[str, dict[str, Any]] = field(default_factory=dict)   # sym|tf|fam|fingerprint
+    by_cell: dict[str, dict[str, Any]] = field(default_factory=dict)    # sym|tf|fam
+    by_params: dict[str, dict[str, Any]] = field(default_factory=dict)  # sym|tf|fam|params_hash
 
 
 @dataclass
@@ -112,14 +113,17 @@ def _flags(row: dict[str, Any]) -> tuple[bool, bool, bool]:
 
 
 def build_gate_index(candidates: list[dict[str, Any]]) -> GateIndex:
-    """Aggregate prior outcomes per exact sweep (sym|tf|fam|fingerprint) and per family cell."""
+    """Aggregate prior outcomes per exact sweep (fingerprint), per param set, and per family cell."""
     idx = GateIndex()
     for row in candidates:
         sym, tf = str(row.get("symbol") or ""), str(row.get("timeframe") or "")
         fam, fp = str(row.get("family") or ""), str(row.get("data_fingerprint") or "")
+        ph = str(row.get("params_hash") or "")
         eligible, confirmed_bad, rejected = _flags(row)
         n = int(row.get("n_trades") or 0)
-        for key, store in ((f"{sym}|{tf}|{fam}|{fp}", idx.by_sweep), (f"{sym}|{tf}|{fam}", idx.by_cell)):
+        for key, store in ((f"{sym}|{tf}|{fam}|{fp}", idx.by_sweep),
+                           (f"{sym}|{tf}|{fam}|{ph}", idx.by_params),
+                           (f"{sym}|{tf}|{fam}", idx.by_cell)):
             agg = store.setdefault(
                 key, {"n": 0, "n_eligible": 0, "n_confirmed_bad": 0, "n_rejected": 0, "max_n_trades": 0})
             agg["n"] += 1
@@ -155,6 +159,58 @@ def lookup(index: GateIndex, *, symbol: str, timeframe: str, family: str,
             return MemoryVerdict("deprioritize", "cell_historically_all_rejected", "cell",
                                  0, cell["n_confirmed_bad"], cell["max_n_trades"])
     return MemoryVerdict("fresh", "unseen_or_inconclusive")
+
+
+@dataclass
+class ProposalMemoryVerdict:
+    action: str   # known_bad | revisit | fresh
+    reason: str
+    matched: str = "none"  # params | cell | none
+
+
+def proposal_verdict(index: GateIndex, *, symbol: str, timeframe: str, family: str,
+                     params_hash: str) -> ProposalMemoryVerdict:
+    """Memory check for a PROPOSAL (no data fingerprint yet): is this exact param set, or the
+    whole family cell, already proven dead? Conservative — rejects only confident known-bad so a
+    genuinely new variant in an under-explored cell is still allowed."""
+    exact = index.by_params.get(f"{symbol}|{timeframe}|{family}|{params_hash}")
+    if exact and exact["n"] > 0 and exact["n_eligible"] == 0 and exact["n_confirmed_bad"] > 0:
+        return ProposalMemoryVerdict("known_bad", "params_confirmed_bad", "params")
+    cell = index.by_cell.get(f"{symbol}|{timeframe}|{family}")
+    if cell and cell["n"] > 0:
+        if cell["n_eligible"] > 0:
+            return ProposalMemoryVerdict("revisit", "cell_has_eligible_prior", "cell")
+        # Whole cell proven dead WITH power -> re-proposing here wastes compute.
+        if (cell["n"] >= DEPRIORITIZE_MIN and cell["n_rejected"] / cell["n"] >= DEPRIORITIZE_BAD_SHARE
+                and cell["max_n_trades"] >= POWER_FLOOR):
+            return ProposalMemoryVerdict("known_bad", "cell_confirmed_dead_with_power", "cell")
+    return ProposalMemoryVerdict("fresh", "unseen_or_inconclusive")
+
+
+def memory_prompt_digest(records: list[dict[str, Any]], *, max_families: int = 6) -> str:
+    """Compact, deterministic outcome-memory digest to feed the advisory LLM so it proposes
+    AGAINST known failures instead of blind. Counts/labels only — no profitability claim."""
+    if not records:
+        return "OUTCOME MEMORY: empty (no prior results)."
+    s = summarize_memory(records)
+    dead_by_fam: dict[str, int] = {}
+    for r in records:
+        if r["outcome_class"] in ("CONFIRMED_BAD", "WRONG_EXIT"):
+            dead_by_fam[r["family"]] = dead_by_fam.get(r["family"], 0) + 1
+    top_dead = ", ".join(f"{k}({v})" for k, v in
+                         sorted(dead_by_fam.items(), key=lambda kv: -kv[1])[:max_families]) or "none"
+    cls = s["by_outcome_class"]
+    return (
+        f"OUTCOME MEMORY DIGEST ({s['total']} setups tested; research-only, no edge claim):\n"
+        f"- DEAD, do NOT re-propose same params: confirmed_bad={cls.get('CONFIRMED_BAD', 0)}, "
+        f"wrong_exit={cls.get('WRONG_EXIT', 0)} (exit problem, not signal). Dead-heaviest families: {top_dead}.\n"
+        f"- Underpowered (need a DIFFERENT angle, not a re-run): tactical_1_2={cls.get('TACTICAL_1_2_TRADE', 0)}, "
+        f"thin_but_promising={cls.get('THIN_BUT_PROMISING', 0)}, needs_data={s['needs_data']}.\n"
+        f"- Honest re-validation: {s.get('revalidated', 0)} re-tested, {s.get('revalidation_survivors', 0)} "
+        f"survived (noise floor, NOT edge). Only mean_reversion_fade showed exit-recoverable signal.\n"
+        f"- Propose hypotheses that AVOID confirmed_bad params and target a NEW failure mode "
+        f"(exit model, timeframe horizon, regime, OI/funding context)."
+    )
 
 
 # ── rich read-model (joins per-trade path facts + recovered exits) ──────────────────────

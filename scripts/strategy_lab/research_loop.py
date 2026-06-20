@@ -71,6 +71,30 @@ def _build_summary(private_root: Path) -> str:
             f"by_validation={reg.get('by_validation_status', {})}, proposals_by_status={props}")
 
 
+def _memory_for_llm(private_root: Path):
+    """(gate_index, digest) from the Setup Outcome Memory: a cheap index so the validator can
+    reject known_bad proposals, and a digest so the advisory LLM proposes against real failures.
+    Best-effort: any failure degrades to (None, "") and the loop proceeds unchanged."""
+    index = None
+    digest = ""
+    try:
+        from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+        from src.research_lab.setup_outcome_memory import build_gate_index
+        db = FarmTasksDB(tasks_db_path(private_root))
+        try:
+            index = build_gate_index(db.unique_candidates_for_gate())
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - memory is advisory; never break the loop on it
+        index = None
+    try:
+        from src.research_lab.setup_outcome_memory import build_memory_index, memory_prompt_digest
+        digest = memory_prompt_digest(build_memory_index(private_root))
+    except Exception:  # noqa: BLE001 - digest is best-effort context only
+        digest = ""
+    return index, digest
+
+
 def _active_queue_count(private_root: Path) -> int:
     db_path = default_db_path(private_root)
     if not db_path.exists():
@@ -182,11 +206,13 @@ def _llm_step(args, private_root, universe, profiles, policy) -> dict:
         if not gate.allowed:
             return {"status": f"blocked:{gate.reason}"}
     created_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    mem_index, mem_digest = _memory_for_llm(private_root)
     try:
         batch, usage = generate_proposals_via_llm(
             provider, summary=_build_summary(private_root), universe=universe,
             timeframe_profiles=profiles, resource_policy=policy, created_at=created_at,
             max_candidates=max(1, args.max_candidates),
+            memory_index=mem_index, memory_digest=mem_digest,
         )
     except LLMProviderError as exc:
         return _provider_error_payload(exc, provider)
