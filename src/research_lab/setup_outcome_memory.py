@@ -112,8 +112,19 @@ def _flags(row: dict[str, Any]) -> tuple[bool, bool, bool]:
     return eligible, confirmed_bad, rejected
 
 
+def _as_ms(value: Any) -> int:
+    """updated_at as int ms (tolerant of None / float / numeric string)."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_gate_index(candidates: list[dict[str, Any]]) -> GateIndex:
-    """Aggregate prior outcomes per exact sweep (fingerprint), per param set, and per family cell."""
+    """Aggregate prior outcomes per exact sweep (fingerprint), per param set, and per family cell.
+
+    The by_cell aggregate also remembers WHAT was tried (fingerprints / params_hashes) and WHEN
+    (newest_ts) so the revisit policy can decide whether a known-bad cell may be recomputed."""
     idx = GateIndex()
     for row in candidates:
         sym, tf = str(row.get("symbol") or ""), str(row.get("timeframe") or "")
@@ -121,6 +132,7 @@ def build_gate_index(candidates: list[dict[str, Any]]) -> GateIndex:
         ph = str(row.get("params_hash") or "")
         eligible, confirmed_bad, rejected = _flags(row)
         n = int(row.get("n_trades") or 0)
+        ts = _as_ms(row.get("updated_at"))
         for key, store in ((f"{sym}|{tf}|{fam}|{fp}", idx.by_sweep),
                            (f"{sym}|{tf}|{fam}|{ph}", idx.by_params),
                            (f"{sym}|{tf}|{fam}", idx.by_cell)):
@@ -131,6 +143,10 @@ def build_gate_index(candidates: list[dict[str, Any]]) -> GateIndex:
             agg["n_confirmed_bad"] += int(confirmed_bad)
             agg["n_rejected"] += int(rejected)
             agg["max_n_trades"] = max(agg["max_n_trades"], n)
+        cell = idx.by_cell[f"{sym}|{tf}|{fam}"]
+        cell.setdefault("fingerprints", set()).add(fp)
+        cell.setdefault("params_hashes", set()).add(ph)
+        cell["newest_ts"] = max(int(cell.get("newest_ts") or 0), ts)
     return idx
 
 
@@ -185,6 +201,79 @@ def proposal_verdict(index: GateIndex, *, symbol: str, timeframe: str, family: s
                 and cell["max_n_trades"] >= POWER_FLOOR):
             return ProposalMemoryVerdict("known_bad", "cell_confirmed_dead_with_power", "cell")
     return ProposalMemoryVerdict("fresh", "unseen_or_inconclusive")
+
+
+# ── revisit policy (rule: do NOT re-compute a known-bad blindly) ────────────────────────
+REVISIT_TRIGGERS = (
+    "new_data_fingerprint", "new_params_or_exit", "new_timeframe_horizon",
+    "new_oi_funding_context", "ttl_expired", "manual_go",
+)
+DEFAULT_REVISIT_TTL_DAYS = 30
+_MS_PER_DAY = 86_400_000
+
+
+def prior_for_cell(index: GateIndex, *, symbol: str, timeframe: str, family: str) -> dict[str, Any]:
+    """The 'what was already tried here' record for the revisit policy (empty if cell unseen)."""
+    cell = index.by_cell.get(f"{symbol}|{timeframe}|{family}")
+    if not cell:
+        return {}
+    return {"fingerprints": set(cell.get("fingerprints") or set()),
+            "params_hashes": set(cell.get("params_hashes") or set()),
+            "newest_ts": int(cell.get("newest_ts") or 0),
+            "n_eligible": int(cell.get("n_eligible") or 0)}
+
+
+def revisit_policy(prior: dict[str, Any], candidate: dict[str, Any], *,
+                   ttl_days: int = DEFAULT_REVISIT_TTL_DAYS, now_ts: int | None = None) -> tuple[bool, list[str]]:
+    """Decide whether a KNOWN-BAD cell may be recomputed for this candidate.
+
+    Rule (owner): a known-bad is NOT re-swept blindly. A revisit is allowed ONLY if the candidate
+    brings something genuinely new — a new data fingerprint, new params/exit, new timeframe-horizon,
+    or new OI/funding context — OR a time/human trigger fires (TTL expired / manual GO). Pure and
+    deterministic: ``now_ts`` is passed in, never read from the clock here.
+    """
+    triggers: list[str] = []
+    if candidate.get("data_fingerprint") and candidate["data_fingerprint"] not in (prior.get("fingerprints") or set()):
+        triggers.append("new_data_fingerprint")
+    if candidate.get("params_hash") and candidate["params_hash"] not in (prior.get("params_hashes") or set()):
+        triggers.append("new_params_or_exit")
+    if candidate.get("horizon") is not None and candidate.get("horizon") not in (prior.get("horizons") or set()):
+        triggers.append("new_timeframe_horizon")
+    if candidate.get("oi_funding_context") and not prior.get("had_oi_funding_context"):
+        triggers.append("new_oi_funding_context")
+    newest = int(prior.get("newest_ts") or 0)
+    if now_ts is not None and newest > 0 and (int(now_ts) - newest) >= int(ttl_days) * _MS_PER_DAY:
+        triggers.append("ttl_expired")
+    if candidate.get("manual_go"):
+        triggers.append("manual_go")
+    return (bool(triggers), triggers)
+
+
+def gate_distribution(index: GateIndex) -> dict[str, int]:
+    """Tally the read-through gate's verdict over every known exact sweep (what memory would do)."""
+    out: dict[str, int] = {"skip_known_bad": 0, "revisit": 0, "deprioritize": 0, "fresh": 0}
+    for key in index.by_sweep:
+        try:
+            sym, tf, fam, fp = key.split("|", 3)
+        except ValueError:
+            continue
+        action = lookup(index, symbol=sym, timeframe=tf, family=fam, data_fingerprint=fp).action
+        out[action] = out.get(action, 0) + 1
+    return out
+
+
+def knowledge_base_counts(records: list[dict[str, Any]], index: GateIndex, *,
+                          survived_shadow: int = 0, tactical_probe: int = 0) -> dict[str, int]:
+    """The owner's six knowledge-base counts in one place (research-only; none grants paper access)."""
+    gate = gate_distribution(index)
+    return {
+        "known_bad": gate.get("skip_known_bad", 0),
+        "revisit": gate.get("revisit", 0),
+        "survived_shadow": int(survived_shadow),
+        "tactical_probe": int(tactical_probe),
+        "rejected_recyclable": len(rejected_research(records)),
+        "rejected_confirmed_bad": len(confirmed_bad_setups(records)),
+    }
 
 
 def memory_prompt_digest(records: list[dict[str, Any]], *, max_families: int = 6) -> str:

@@ -209,6 +209,21 @@ def collect(db_path: Path) -> dict:
                 if od_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["oi_diagnostic_15m"] = {}
+        try:  # the owner's six knowledge-base counts in one line (gate + survived + tactical + recyclable)
+            from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+            from src.research_lab.setup_outcome_memory import (
+                build_gate_index, build_memory_index, knowledge_base_counts)
+            db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
+            try:
+                gate_idx = build_gate_index(db.unique_candidates_for_gate())
+            finally:
+                db.close()
+            report["knowledge_base"] = knowledge_base_counts(
+                build_memory_index(db_path.parent.parent), gate_idx,
+                survived_shadow=len((report.get("shadow_oos") or {}).get("survived") or []),
+                tactical_probe=int((report.get("tactical_probe") or {}).get("thin_positive") or 0))
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["knowledge_base"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -345,6 +360,11 @@ def _print(report: dict) -> None:
     if od.get("evaluated"):
         print(f"  oi 15m DIAGNOSTIC (delta_coarse, never edge): evaluated={od['evaluated']} "
               f"by_class={od.get('by_class')}")
+    kb = report.get("knowledge_base") or {}
+    if kb:
+        print(f"  KNOWLEDGE BASE (research-only): known_bad={kb.get('known_bad')} revisit={kb.get('revisit')} "
+              f"survived_shadow={kb.get('survived_shadow')} tactical_probe={kb.get('tactical_probe')} "
+              f"recyclable={kb.get('rejected_recyclable')} confirmed_bad={kb.get('rejected_confirmed_bad')}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "
