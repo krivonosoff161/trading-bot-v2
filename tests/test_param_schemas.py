@@ -3,6 +3,7 @@
 
 from src.research_lab.param_schemas import (
     executable_exit_params,
+    validate_horizon,
     validate_parameter_grid,
     validate_params,
 )
@@ -59,3 +60,14 @@ def test_internal_farm_defaults_can_be_made_executable_without_changing_registry
     assert params["stop_pct"] == 10
     assert params["take_pct"] == 20
     assert validate_params("mean_reversion_fade", params, require_executable=True).ok
+
+
+def test_horizon_band_per_timeframe():
+    # 15m allows up to 192 bars (~48h); 193 is too long for the scale.
+    assert validate_horizon("15m", {"hold_bars": 192}) == []
+    assert validate_horizon("15m", {"hold_bars": 193}) == ["hold_bars:horizon_above_192_for_15m"]
+    # 1d allows up to 30 bars (~30 days); 60 is weeks-too-long.
+    assert validate_horizon("1d", {"hold_bars": 30}) == []
+    assert validate_horizon("1d", {"hold_bars": 60}) == ["hold_bars:horizon_above_30_for_1d"]
+    # no band for a timeframe => no horizon constraint
+    assert validate_horizon("3h", {"hold_bars": 999}) == []

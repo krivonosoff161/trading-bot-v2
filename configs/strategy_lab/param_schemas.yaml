@@ -34,6 +34,15 @@ ranges:
     min: 0.2
     max: 200.0
 
+# Per-timeframe holding-horizon bounds on hold_bars (1 bar = the timeframe). Keeps a
+# proposal's hold sane for its scale: 15m = minutes-to-~2 days, 1h = hours-to-days,
+# 4h = days, 1d = days-to-weeks. A hold outside the band is rejected (wrong_horizon).
+horizon:
+  "15m": {min_hold_bars: 1, max_hold_bars: 192}   # up to ~48h
+  "1h":  {min_hold_bars: 1, max_hold_bars: 168}   # up to ~7 days
+  "4h":  {min_hold_bars: 1, max_hold_bars: 60}    # up to ~10 days
+  "1d":  {min_hold_bars: 1, max_hold_bars: 30}    # up to ~30 days
+
 fallback_ranges:
   int:
     min: 0

@@ -52,6 +52,7 @@ _REJECT_MAP = {
     "missing_hypothesis": "missing_rationale",
     "not_compilable": "malformed_json",
     "known_bad_in_memory": "known_bad_in_memory",
+    "wrong_horizon": "wrong_horizon",
 }
 _CONTRACT_FAILURE_REASONS = {
     "malformed_json", "json_parse_error", "wrong_top_level_shape",
