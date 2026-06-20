@@ -15,7 +15,9 @@ validation — never a proven edge.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import Mapping
 
 from src.research_lab.data_prepare import MarketDataPrepareItem, timeframe_ms
 from src.research_lab.research_plan import compatible_families
@@ -78,12 +80,33 @@ OHLCV_FAMILIES: tuple[str, ...] = (
 )
 
 
-def families_for_group(group: str, timeframe: str) -> tuple[str, ...]:
-    """Preferred families for a group, filtered to those valid on the timeframe."""
+# OI / flow families are research-only and UNPROVEN (noise floor in the OI-family research and the
+# Stage-1 shadow OOS: OI availability != edge). They are NOT planned by the continuous universe loop
+# unless explicitly opted in via STRATEGY_LAB_INCLUDE_OI_FAMILIES — an opt-in research group, never default.
+OI_OPTIN_FAMILIES: tuple[str, ...] = (
+    "oi_price_quadrant", "oi_price_quadrant_continuation", "oi_price_quadrant_trap_fade",
+    "oi_funding_squeeze",
+)
+ENV_INCLUDE_OI = "STRATEGY_LAB_INCLUDE_OI_FAMILIES"
+
+
+def oi_optin_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    env = environ if environ is not None else os.environ
+    return str(env.get(ENV_INCLUDE_OI, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def families_for_group(group: str, timeframe: str, *, include_oi: bool | None = None) -> tuple[str, ...]:
+    """Preferred families for a group, filtered to those valid on the timeframe.
+
+    OI/flow families are excluded by default (unproven; opt-in via STRATEGY_LAB_INCLUDE_OI_FAMILIES)."""
+    if include_oi is None:
+        include_oi = oi_optin_enabled()
     if group.startswith("discovered_"):
         wanted: tuple[str, ...] = OHLCV_FAMILIES
     else:
         wanted = GROUP_FAMILIES.get(group, FARM_FAMILIES)
+    if not include_oi:
+        wanted = tuple(f for f in wanted if f not in OI_OPTIN_FAMILIES)
     return tuple(compatible_families(timeframe, wanted))
 
 
@@ -92,11 +115,13 @@ def build_worklist(
     *,
     groups: list[str] | None = None,
     timeframes: list[str] | None = None,
+    include_oi: bool | None = None,
 ) -> list[RefillUnit]:
     """Round-robin (timeframe-major, group-minor) units with timeframe-valid families.
 
     Empty-after-filtering units are dropped. Ordering interleaves groups so a few
-    units per cycle keep coverage fair across the whole universe over time.
+    units per cycle keep coverage fair across the whole universe over time. OI/flow families
+    are excluded unless ``include_oi`` (or STRATEGY_LAB_INCLUDE_OI_FAMILIES) opts them in.
     """
     groups = groups if groups is not None else list(universe.groups)
     timeframes = timeframes if timeframes is not None else ["1h", "4h", "1d", "15m"]
@@ -105,7 +130,7 @@ def build_worklist(
         for group in groups:
             if not universe.symbols_in(group):
                 continue
-            fams = families_for_group(group, timeframe)
+            fams = families_for_group(group, timeframe, include_oi=include_oi)
             if fams:
                 units.append(RefillUnit(group=group, timeframe=timeframe, families=fams))
     return units

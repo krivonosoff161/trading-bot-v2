@@ -265,6 +265,30 @@ def _paper_pnl_section(private_root: Path) -> dict[str, Any]:
     }
 
 
+def _research_outcomes_section(private_root: Path) -> dict[str, Any]:
+    """Compact view of the research-only outcome buckets (shadow OOS, tactical probe, OI families /
+    diagnostic, exit phase-2, shadow-forward). Every value is derived and never paper-ready."""
+    derived = Path(private_root) / "state" / "derived"
+
+    def _summary(name: str) -> dict[str, Any]:
+        return _read_json(derived / name).get("summary") or {}
+
+    shadow_oos = _summary("shadow_oos.json")
+    tactical = _read_json(derived / "tactical_probe.json").get("probe") or {}
+    return {
+        "shadow_oos": {"evaluated": shadow_oos.get("evaluated"), "by_class": shadow_oos.get("by_class"),
+                       "survived": len(shadow_oos.get("survived") or [])},
+        "tactical_probe": {"thin_total": tactical.get("thin_total"),
+                           "thin_positive": tactical.get("thin_positive"),
+                           "probe_families": tactical.get("probe_families"),
+                           "verdict": tactical.get("meat_grinder_verdict")},
+        "exit_phase2": _summary("exit_phase2.json"),
+        "oi_family": _summary("oi_family_research.json"),
+        "oi_diagnostic_15m": _summary("oi_diagnostic_15m.json"),
+        "note": "research-only; nothing here is paper-ready or edge",
+    }
+
+
 def build_cockpit(private_root: Path) -> dict[str, Any]:
     """Read-only operator cockpit snapshot for the calculation farm."""
     private_root = Path(private_root).expanduser()
@@ -278,6 +302,7 @@ def build_cockpit(private_root: Path) -> dict[str, Any]:
         "data_readiness": _data_readiness(private_root),
         "gpu_cpu": _gpu_cpu_section(db_path),
         "results": _results_section(db_path),
+        "research_outcomes": _research_outcomes_section(private_root),
         "universe_coverage": _universe_coverage(private_root, db_path),
         "safety": {"read_only": True, "secrets_exposed": False, "network": False,
                    "live_trading": False},
