@@ -263,6 +263,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     run_dirs = _uc_run_dirs(private_root)
     backfill = _backfill_by_uc(private_root)
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
+    shadow = _derived_by_uc(private_root, "shadow_forward.json")
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
@@ -297,6 +298,8 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             # Phase-D honest re-validation verdict (research-only): does NOT change
             # paper_forward_ready or outcome_class — a survivor needs a human GO, never auto-promotion.
             "revalidation_status": (revalidation.get(uc) or {}).get("revalidation_status"),
+            # Shadow-forward watch status (research-only forward observation; never paper-ready).
+            "shadow_status": (shadow.get(uc) or {}).get("status"),
         })
     return records
 

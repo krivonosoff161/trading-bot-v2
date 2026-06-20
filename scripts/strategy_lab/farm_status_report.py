@@ -173,6 +173,11 @@ def collect(db_path: Path) -> dict:
             report["outcome_memory"] = summarize_memory(build_memory_index(db_path.parent.parent))
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["outcome_memory"] = {"available": False}
+        try:  # shadow-forward watch lane (research-only; survivors observed on new bars, never traded)
+            from src.research_lab.shadow_forward import summarize_shadow
+            report["shadow_forward"] = summarize_shadow(db_path.parent.parent)
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["shadow_forward"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -280,6 +285,10 @@ def _print(report: dict) -> None:
         if om.get("revalidated"):
             print(f"    re-validated={om['revalidated']} survivors={om.get('revalidation_survivors', 0)} "
                   "(survivor = research-only, needs human GO + OOS, never auto paper-ready)")
+    sh = report.get("shadow_forward") or {}
+    if sh.get("shadow_candidates"):
+        print(f"  shadow-forward watch: candidates={sh['shadow_candidates']} by_family={sh.get('by_family')} "
+              f"(forward-only, no execution; all_research_only={sh.get('all_research_only')})")
         if om.get("paper_ready_without_hard_pass"):
             print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
                   "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")
