@@ -114,6 +114,15 @@ def test_sane_hold_for_timeframe_passes_horizon():
     assert "wrong_horizon" not in out.reason_codes
 
 
+def test_reward_risk_below_2r_rejected_through_proposal():
+    # governance: the executable schema gate enforces RR>=2 at the PROPOSAL boundary, not just
+    # at the param level. take_pct=10 with stop_pct=8 is 1.25R (< 2R) -> rejected.
+    grid = [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 10}]
+    out = _validate(_proposal(parameter_grid={"momentum_breakout": grid}))
+    assert out.status == REJECTED
+    assert any("reward_risk_below_2r" in code for code in out.reason_codes)
+
+
 def test_llm_proposal_cannot_carry_paper_forward_ready():
     # governance: a Proposal has no paper-promotion field; any such key is silently ignored.
     p = _proposal()
