@@ -200,6 +200,71 @@ def _lifecycle_section(private_root: Path) -> dict[str, Any]:
         conn.close()
 
 
+def _farm_activity_section(private_root: Path) -> dict[str, Any]:
+    """Recent cycle history, heartbeat, skipped stages, discovery freshness and errors.
+
+    Surfaces the structured farm logs (cycle_log/errors) that were previously written
+    but read by nothing, so an operator can see the loop is alive and what it skipped.
+    """
+    from src.research_lab.farm_journal import (
+        read_recent_cycles,
+        read_recent_errors,
+        skipped_stages,
+    )
+    cycles = read_recent_cycles(private_root, limit=10)
+    errors = read_recent_errors(private_root, limit=10)
+    if not cycles:
+        return {"available": False, "recent_errors": errors[-5:], "error_count": len(errors)}
+    import time as _time
+    last = cycles[-1]
+    age = int(_time.time() - float(last.get("ts") or 0))
+    return {
+        "available": True,
+        "last_cycle_age_seconds": age,
+        "heartbeat_ok": age < 3600,  # a cycle within the last hour = alive
+        "last_pivot": last.get("pivot"),
+        "last_mode": last.get("mode"),
+        "skipped_stages": skipped_stages(last),
+        "discovery": last.get("discovery") or {},
+        "recent_cycles": [
+            {"ts": c.get("ts"), "pivot": c.get("pivot"),
+             "counters": c.get("counters"), "active_tasks": c.get("active_tasks")}
+            for c in cycles[-8:]
+        ],
+        "recent_errors": [
+            {"ts": e.get("ts"), "where": e.get("where"), "error": (e.get("error") or "")[:160]}
+            for e in errors[-5:]
+        ],
+        "error_count": len(errors),
+    }
+
+
+def _paper_pnl_section(private_root: Path) -> dict[str, Any]:
+    """Aggregate paper P&L/win-rate from the append-only paper journal (read-only).
+
+    Research evidence only - net_pct is a backtest-window outcome, not a profit claim.
+    """
+    from src.research_lab.paper_journal import read_paper_outcomes
+    rows = read_paper_outcomes(private_root)
+    closed = [r for r in rows if r.get("net_pct") is not None]
+    n = len(closed)
+    if not n:
+        return {"available": False, "n_trades": 0}
+    nets = [float(r.get("net_pct") or 0.0) for r in closed]
+    rs = [float(r.get("r_multiple") or 0.0) for r in closed]
+    wins = sum(1 for x in nets if x > 0)
+    return {
+        "available": True,
+        "n_trades": n,
+        "wins": wins,
+        "losses": n - wins,
+        "win_rate": round(wins / n, 4),
+        "avg_net_pct": round(sum(nets) / n, 4),
+        "net_sum_pct": round(sum(nets), 4),
+        "avg_r_multiple": round(sum(rs) / n, 4),
+    }
+
+
 def build_cockpit(private_root: Path) -> dict[str, Any]:
     """Read-only operator cockpit snapshot for the calculation farm."""
     private_root = Path(private_root).expanduser()
@@ -207,7 +272,9 @@ def build_cockpit(private_root: Path) -> dict[str, Any]:
     return {
         "schema": "strategy_lab_farm_cockpit.v2",
         "loop_state": _loop_state(private_root),
+        "farm_activity": _farm_activity_section(private_root),
         "lifecycle": _lifecycle_section(private_root),
+        "paper_pnl": _paper_pnl_section(private_root),
         "data_readiness": _data_readiness(private_root),
         "gpu_cpu": _gpu_cpu_section(db_path),
         "results": _results_section(db_path),
