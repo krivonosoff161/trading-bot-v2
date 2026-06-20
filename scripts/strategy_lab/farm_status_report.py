@@ -191,6 +191,12 @@ def collect(db_path: Path) -> dict:
                 if oi_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["oi_family"] = {}
+        try:  # bounded OOS / shadow-forward verdict on survivors (held-out-tail pseudo-OOS, research-only)
+            oos_f = db_path.parent.parent / "state" / "derived" / "shadow_oos.json"
+            report["shadow_oos"] = (json.loads(oos_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if oos_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["shadow_oos"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -313,6 +319,11 @@ def _print(report: dict) -> None:
         if om.get("paper_ready_without_hard_pass"):
             print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
                   "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")
+    so = report.get("shadow_oos") or {}
+    if so.get("evaluated"):
+        print(f"  shadow OOS (held-out-tail, research-only): evaluated={so['evaluated']} "
+              f"by_class={so.get('by_class')} survived={len(so.get('survived') or [])} "
+              "(pseudo-OOS, not new bars; shadow_survived != edge)")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "
