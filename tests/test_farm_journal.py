@@ -93,7 +93,8 @@ def test_farm_loop_can_run_paper_step_in_dry_run(tmp_path, monkeypatch):
     from scripts.strategy_lab import farm_loop
 
     monkeypatch.setattr(farm_loop, "_read_intake", lambda _limit: [])
-    monkeypatch.setattr(farm_loop, "_discovery_snapshot", lambda _root: None)
+    monkeypatch.setattr(farm_loop, "_discovery",
+                        lambda _args, _root, _apply: (None, {"status": "missing"}))
 
     def fake_cycle(*_args, **_kwargs):
         return {
