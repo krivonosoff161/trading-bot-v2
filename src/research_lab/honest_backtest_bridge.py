@@ -43,6 +43,7 @@ for _path_text in (_HB_ENV, str(_HB_VENDOR)):
         sys.path.insert(0, str(_path))
 
 try:
+    import backtest_sanity as _bs
     from backtest_sanity import (
         apply_costs,
         bootstrap_ci,
@@ -54,18 +55,70 @@ try:
     )
 
     _HAS_BACKTEST_SANITY = True
+    _BACKTEST_SANITY_PATH = getattr(_bs, "__file__", "")
 except ImportError:
     _HAS_BACKTEST_SANITY = False
+    _BACKTEST_SANITY_PATH = ""
 
 
 REPORTS_DIR = "hard_validation/reports"
 VERDICTS_DIR = "hard_validation/verdicts"
 
 
+class BridgeUnavailableError(RuntimeError):
+    """honest-backtest is not importable and degraded validation is not allowed.
+
+    Raised so that a missing/broken statistical engine fails LOUD instead of
+    masquerading as an ordinary ``NEEDS_MORE_DATA`` verdict. The vendored copy
+    lives at ``vendor/honest-backtest/src`` (see ``vendor/honest-backtest/VENDOR.md``).
+    """
+
+
+def _allow_degraded() -> bool:
+    """True only when the operator explicitly opts into degraded validation."""
+    value = os.environ.get("STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _missing_components() -> list[str]:
+    missing = []
+    if not _HAS_NUMPY:
+        missing.append("numpy")
+    if not _HAS_BACKTEST_SANITY:
+        missing.append("backtest-sanity")
+    return missing
+
+
+def ensure_bridge_available(*, strict: bool | None = None) -> None:
+    """Fail loud when the honest-backtest engine is unavailable.
+
+    By default (``strict=None``) this raises ``BridgeUnavailableError`` unless
+    ``STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION`` is set, so a clean checkout without
+    numpy/backtest_sanity cannot silently turn every candidate into NEEDS_MORE_DATA.
+    """
+    if _HAS_NUMPY and _HAS_BACKTEST_SANITY:
+        return
+    if strict is None:
+        strict = not _allow_degraded()
+    if strict:
+        missing = ", ".join(_missing_components())
+        raise BridgeUnavailableError(
+            f"honest-backtest bridge unavailable: missing {missing}. "
+            "Expected vendored copy at vendor/honest-backtest/src "
+            "(see vendor/honest-backtest/VENDOR.md); or pip install numpy. "
+            "Set STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION=1 to allow a degraded "
+            "NEEDS_MORE_DATA fallback instead of failing."
+        )
+
+
 def bridge_available() -> dict[str, Any]:
     return {
         "numpy": _HAS_NUMPY,
         "backtest_sanity": _HAS_BACKTEST_SANITY,
+        "available": _HAS_NUMPY and _HAS_BACKTEST_SANITY,
+        "degraded_allowed": _allow_degraded(),
+        "source": _BACKTEST_SANITY_PATH,
+        "vendored": "vendor" in _BACKTEST_SANITY_PATH.replace("\\", "/").lower(),
     }
 
 
@@ -79,6 +132,7 @@ def run_validation(
 
     Returns a summary dict with the verdict and report paths.
     """
+    ensure_bridge_available()
     if not _HAS_NUMPY or not _HAS_BACKTEST_SANITY:
         result = _bridge_unavailable(candidate)
         if not dry_run:
@@ -118,6 +172,7 @@ def run_validation_batch(
     candidate_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run validation on all request files in a directory."""
+    ensure_bridge_available()
     if not requests_dir.exists():
         return {"total": 0, "validated": 0, "errors": 0}
 
