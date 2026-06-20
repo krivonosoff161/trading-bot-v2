@@ -238,3 +238,71 @@ def test_new_modules_have_no_live_trading_coupling():
         code = text.replace(str(doc), "", 1) if doc else text
         for token in FORBIDDEN_TOKENS:
             assert token not in code, f"{rel} must not use {token}"
+
+
+# ── recursive deny-by-default guard (0.6) — whole farm/scanner surface, not an allowlist ─
+RECURSIVE_FARM_FORBIDDEN = (
+    "src.exchange", "scripts.auto_execute", "src.utils.telegram",
+    "src.scout.scanner_v0", "src.config", "main",
+)
+# The scanner intake surface may legitimately use Telegram (it sends cards), but must
+# never reach the order/account/live-money path.
+RECURSIVE_SCOUT_FORBIDDEN = ("src.exchange.okx_client", "scripts.auto_execute", "main")
+# Call-shaped tokens (with paren/quote) so safety prose like "never AUTO_TRADE" never hits.
+CALL_TOKENS = (
+    "place_market_order(", "place_order(", "execute_signal(", "set_leverage(",
+    'environ["AUTO_TRADE', "environ['AUTO_TRADE",
+    'getenv("AUTO_TRADE', "getenv('AUTO_TRADE",
+)
+
+
+def _py_files(*rel_dirs: str):
+    files: list[Path] = []
+    for rel in rel_dirs:
+        files += sorted((_ROOT / rel).rglob("*.py"))
+    return [f for f in files if "__pycache__" not in str(f)]
+
+
+def _is_money_path(mod: str, forbidden: tuple) -> bool:
+    if any(mod == b or mod.startswith(b + ".") for b in forbidden):
+        return True
+    return mod.startswith("src.data.") and mod.endswith("_engine")
+
+
+def _strip_module_docstring(text: str) -> str:
+    import ast
+    body = ast.parse(text).body
+    doc = body[0].value.value if (body and isinstance(body[0], ast.Expr)
+                                  and isinstance(getattr(body[0], "value", None), ast.Constant)) else ""
+    return text.replace(str(doc), "", 1) if doc else text
+
+
+def _assert_surface_clean(files, forbidden) -> None:
+    import ast
+    for f in files:
+        if not f.exists():
+            continue
+        text = f.read_text(encoding="utf-8")
+        for mod in _imported_modules(ast.parse(text)):
+            assert not _is_money_path(mod, forbidden), f"{f} imports money-path {mod}"
+        code = _strip_module_docstring(text)
+        for token in CALL_TOKENS:
+            assert token not in code, f"{f} uses forbidden call token {token}"
+
+
+def test_farm_surface_recursive_no_money_path():
+    """Deny-by-default: NO file in the farm research surface may reach the money path.
+
+    Unlike the NEW_MODULES allowlist above, this scans the entire src/research_lab tree
+    plus the farm entry scripts, so a newly added farm module is auto-guarded.
+    """
+    farm_scripts = ["farm_loop.py", "paper_loop.py", "worker_once.py", "farm_status_report.py",
+                    "discover_okx_universe.py", "enrich_oi_data.py", "enrich_flow_data.py"]
+    files = _py_files("src/research_lab")
+    files += [_ROOT / "scripts" / "strategy_lab" / s for s in farm_scripts]
+    _assert_surface_clean(files, RECURSIVE_FARM_FORBIDDEN)
+
+
+def test_scout_surface_recursive_no_money_path():
+    """The scanner intake surface may use Telegram (cards) but never the order/money path."""
+    _assert_surface_clean(_py_files("src/scout"), RECURSIVE_SCOUT_FORBIDDEN)
