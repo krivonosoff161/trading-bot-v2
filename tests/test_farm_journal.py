@@ -133,6 +133,7 @@ def test_farm_loop_can_run_paper_step_in_dry_run(tmp_path, monkeypatch):
         enrich_oi=False,
         run_paper=True,
         max_paper_cards=5,
+        sweep_tier="normal",
     )
     out = farm_loop._run_once(args, tasks, profiles={}, policy={}, private_root=tmp_path, apply=False)
     tasks.close()
