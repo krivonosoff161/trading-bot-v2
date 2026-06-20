@@ -112,6 +112,7 @@ class FarmTasksDB:
                 candidate_id TEXT, run_dir_label TEXT,
                 params_json TEXT NOT NULL DEFAULT '{}',
                 task_id INTEGER, paper_status TEXT NOT NULL DEFAULT '',
+                regime_bucket TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
             """
@@ -125,6 +126,8 @@ class FarmTasksDB:
             self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN paper_status TEXT NOT NULL DEFAULT ''")
         if "params_json" not in existing:
             self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'")
+        if "regime_bucket" not in existing:
+            self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN regime_bucket TEXT NOT NULL DEFAULT ''")
 
     # ── intake events ───────────────────────────────────────────────────────
     def upsert_intake_event(self, event: dict[str, Any], *, now: float | None = None) -> tuple[str, bool]:
@@ -356,8 +359,9 @@ class FarmTasksDB:
         self._conn.execute(
             """INSERT INTO unique_candidates(uc_key, symbol, timeframe, family, params_hash,
                  data_fingerprint, decision, validation_status, hard_status, n_trades,
-                 avg_net_pct, candidate_id, run_dir_label, params_json, task_id, paper_status, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 avg_net_pct, candidate_id, run_dir_label, params_json, task_id, paper_status,
+                 regime_bucket, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(uc_key) DO UPDATE SET
                  decision=excluded.decision, validation_status=excluded.validation_status,
                  hard_status=excluded.hard_status, n_trades=excluded.n_trades,
@@ -365,13 +369,15 @@ class FarmTasksDB:
                  run_dir_label=excluded.run_dir_label, task_id=excluded.task_id,
                  params_json=excluded.params_json,
                  paper_status=COALESCE(NULLIF(excluded.paper_status, ''), unique_candidates.paper_status),
+                 regime_bucket=COALESCE(NULLIF(excluded.regime_bucket, ''), unique_candidates.regime_bucket),
                  updated_at=excluded.updated_at""",
             (cand["uc_key"], cand.get("symbol"), cand.get("timeframe"), cand.get("family"),
              cand.get("params_hash"), cand.get("data_fingerprint"), cand.get("decision"),
              cand.get("validation_status"), cand.get("hard_status"), int(cand.get("n_trades") or 0),
              float(cand.get("avg_net_pct") or 0), cand.get("candidate_id"),
              cand.get("run_dir_label"), json.dumps(cand.get("params") or {}),
-             cand.get("task_id"), cand.get("paper_status") or "", now),
+             cand.get("task_id"), cand.get("paper_status") or "",
+             str(cand.get("regime_bucket") or ""), now),
         )
         self._conn.commit()
 
