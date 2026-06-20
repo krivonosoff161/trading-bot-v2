@@ -169,6 +169,17 @@ def _recovered_cells(private_root: Path) -> set[str]:
     return {f"{c.get('symbol')}|{c.get('timeframe')}|{c.get('family')}" for c in cands if isinstance(c, dict)}
 
 
+def _backfill_by_uc(private_root: Path) -> dict[str, dict[str, Any]]:
+    """Per-uc trade-path metrics from the bounded backfill snapshot (empty if not run)."""
+    path = Path(private_root) / "state" / "derived" / "trade_path_backfill.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    by_uc = data.get("by_uc_key") if isinstance(data, dict) else None
+    return by_uc if isinstance(by_uc, dict) else {}
+
+
 def _uc_run_dirs(private_root: Path) -> dict[str, str]:
     path = tasks_db_path(private_root)
     if not path.exists():
@@ -189,6 +200,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     subreason = {r["uc_key"]: r for r in characterize_rejects(private_root)}
     recovered_cells = _recovered_cells(private_root)
     run_dirs = _uc_run_dirs(private_root)
+    backfill = _backfill_by_uc(private_root)
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
@@ -198,6 +210,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
         recovered = sub_reason == "wrong_exit" and cell in recovered_cells
         outcome = derive_outcome_class(lc["derived_lifecycle_state"], sub_reason, recovered,
                                        lc["hard_status"])
+        bf = backfill.get(uc, {})
         records.append({
             "uc_key": uc, "symbol": lc["symbol"], "okx_inst": _okx_inst(lc["symbol"]),
             "timeframe": lc["timeframe"], "family": lc["family"],
@@ -214,6 +227,11 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             "outcome_class": outcome, "lifecycle_state": lc["derived_lifecycle_state"],
             "paper_forward_ready": bool(lc["paper_forward_ready"]),
             "paper_outcome_count": lc["paper_outcome_count"], "artifact_ref": run_dirs.get(uc, ""),
+            # Trade-path metrics from the bounded backfill (None until backfill is run for this uc).
+            "time_to_mfe": bf.get("avg_time_to_mfe"), "time_to_mae": bf.get("avg_time_to_mae"),
+            "tp_before_sl_share": bf.get("tp_before_sl_share"),
+            "adverse_first_rate": bf.get("adverse_first_rate"),
+            "path_quality": bf.get("path_quality"),
         })
     return records
 

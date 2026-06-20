@@ -172,6 +172,25 @@ class TestBuildMemoryIndex:
         assert r["paper_forward_ready"] is False
         assert summarize_memory(recs)["paper_ready_without_hard_pass"] == 0
 
+    def test_attaches_backfill_path_metrics_when_present(self, tmp_path):
+        import json
+        db = FarmTasksDB(tasks_db_path(tmp_path))
+        uc = "X::1h::momentum_breakout::ph::fp"
+        db.upsert_unique_candidate({
+            "uc_key": uc, "symbol": "X", "timeframe": "1h", "family": "momentum_breakout",
+            "params_hash": "ph", "data_fingerprint": "fp", "decision": "REJECT",
+            "validation_status": "REJECT", "hard_status": "", "n_trades": 6, "avg_net_pct": -0.1,
+            "candidate_id": "c1", "params": {}}, now=1.0)
+        db.close()
+        deriv = tmp_path / "state" / "derived"
+        deriv.mkdir(parents=True, exist_ok=True)
+        (deriv / "trade_path_backfill.json").write_text(json.dumps({
+            "by_uc_key": {uc: {"avg_time_to_mfe": 4.0, "avg_time_to_mae": 2.0,
+                               "tp_before_sl_share": 0.1, "adverse_first_rate": 0.5,
+                               "path_quality": {"gave_back": 5}}}}), encoding="utf-8")
+        r = build_memory_index(tmp_path)[0]
+        assert r["time_to_mfe"] == 4.0 and r["path_quality"] == {"gave_back": 5}
+
 
 class TestCoordinatorGateUsedNextCycle:
     """Acceptance: a confirmed-bad prior makes the NEXT planning cycle skip the re-sweep."""

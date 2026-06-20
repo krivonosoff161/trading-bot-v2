@@ -293,8 +293,10 @@ def finalize_trade(
     direction = 1 if side == "long" else -1
     ret_pct = direction * (exit_price / entry - 1) * 100
     net_pct = ret_pct - cost_pct * 100
-    mfe_pct, mae_pct = _trade_excursions(candles, idx, actual_exit_idx, entry, side)
+    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(candles, idx, actual_exit_idx, entry, side)
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
+    bars_held = int(actual_exit_idx - idx)
+    adverse_first = mae_off < mfe_off
     return {
         "entry_ts": candles[idx]["ts"],
         "exit_ts": candles[actual_exit_idx]["ts"],
@@ -308,7 +310,53 @@ def finalize_trade(
         "mfe_pct": round(mfe_pct, 4),
         "mae_pct": round(mae_pct, 4),
         "capture_of_mfe": capture,
+        # Trade-path instrumentation (descriptive; computed over the ALREADY-decided hold
+        # window, so it never changes the exit decision and adds no look-ahead).
+        "bars_held": bars_held,
+        "time_to_mfe": int(mfe_off),
+        "time_to_mae": int(mae_off),
+        "tp_before_sl": True if outcome == "take" else (False if outcome == "stop" else None),
+        "bars_to_tp": bars_held if outcome == "take" else None,
+        "bars_to_sl": bars_held if outcome == "stop" else None,
+        "adverse_before_favorable": bool(adverse_first),
+        "path_quality": _path_quality(mfe_pct, capture, adverse_first),
     }
+
+
+def _path_quality(mfe_pct: float, capture: float, adverse_before_favorable: bool) -> str:
+    """One-word path label for the outcome-memory drill (wrong_exit = 'gave_back')."""
+    if mfe_pct <= 0:
+        return "no_move"
+    if capture >= 0.7:
+        return "clean_capture"
+    if capture < 0.3:
+        return "gave_back"          # the move happened but the exit gave it back (wrong_exit)
+    return "heat_first" if adverse_before_favorable else "partial"
+
+
+def _trade_path(
+    candles: list[dict[str, Any]],
+    entry_idx: int,
+    exit_idx: int,
+    entry: float,
+    side: str,
+) -> tuple[float, float, int, int]:
+    """MFE/MAE magnitude (pct of entry) AND the bar offset where each occurred, over the
+    realized hold window [entry_idx, exit_idx]. Descriptive only — no look-ahead beyond the
+    already-decided exit. Returns (mfe_pct, mae_pct, mfe_bar_offset, mae_bar_offset)."""
+    hi = lo = None
+    hi_off = lo_off = 0
+    for off, j in enumerate(range(entry_idx, exit_idx + 1)):
+        h, low = float(candles[j]["high"]), float(candles[j]["low"])
+        if hi is None or h > hi:
+            hi, hi_off = h, off
+        if lo is None or low < lo:
+            lo, lo_off = low, off
+    if side == "long":
+        favorable, adverse, fav_off, adv_off = (hi - entry) / entry * 100, (entry - lo) / entry * 100, hi_off, lo_off
+    else:
+        favorable, adverse, fav_off, adv_off = (entry - lo) / entry * 100, (hi - entry) / entry * 100, lo_off, hi_off
+    return max(0.0, favorable), max(0.0, adverse), fav_off, adv_off
 
 
 def _trade_excursions(
@@ -318,14 +366,9 @@ def _trade_excursions(
     entry: float,
     side: str,
 ) -> tuple[float, float]:
-    """Max favorable / adverse excursion (pct of entry) over the realized hold window."""
-    hi = max(float(candles[j]["high"]) for j in range(entry_idx, exit_idx + 1))
-    lo = min(float(candles[j]["low"]) for j in range(entry_idx, exit_idx + 1))
-    if side == "long":
-        favorable, adverse = (hi - entry) / entry * 100, (entry - lo) / entry * 100
-    else:
-        favorable, adverse = (entry - lo) / entry * 100, (hi - entry) / entry * 100
-    return max(0.0, favorable), max(0.0, adverse)
+    """Backward-compatible (mfe, mae) magnitudes; ``_trade_path`` is the timed version."""
+    mfe, mae, _fav, _adv = _trade_path(candles, entry_idx, exit_idx, entry, side)
+    return mfe, mae
 
 
 def _entry_timing_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
