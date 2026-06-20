@@ -437,6 +437,14 @@ class FarmTasksDB:
         self._conn.commit()
         return excess
 
+    def unique_candidates_for_gate(self) -> list[dict[str, Any]]:
+        """Lean read of every candidate (the read-through gate aggregates per fingerprint/cell)."""
+        rows = self._conn.execute(
+            "SELECT symbol, timeframe, family, params_hash, data_fingerprint, decision, "
+            "validation_status, hard_status, n_trades, avg_net_pct, regime_bucket "
+            "FROM unique_candidates").fetchall()
+        return [dict(r) for r in rows]
+
     def latest_unique_candidates(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Freshest result per (symbol, timeframe, family, params_hash) — no dups."""
         rows = self._conn.execute(

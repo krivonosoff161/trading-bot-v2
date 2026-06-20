@@ -168,6 +168,11 @@ def collect(db_path: Path) -> dict:
             report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["setup_lifecycle"] = {"available": False}
+        try:  # Setup Outcome Memory: rejected-as-knowledge sub-views (derived, research-only)
+            from src.research_lab.setup_outcome_memory import build_memory_index, summarize_memory
+            report["outcome_memory"] = summarize_memory(build_memory_index(db_path.parent.parent))
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["outcome_memory"] = {"available": False}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -264,6 +269,17 @@ def _print(report: dict) -> None:
         print(f"    paper groups: positive={sl.get('positive_setups', 0)} "
               f"negative={sl.get('negative_setups', 0)} mixed={sl.get('mixed_or_flat', 0)} "
               f"no_sample={sl.get('no_paper_sample', 0)}")
+    om = report.get("outcome_memory") or {}
+    if om.get("total"):
+        print(f"  outcome memory (rejected-as-knowledge, research-only): total={om['total']} "
+              f"by_class={om.get('by_outcome_class') or '(none)'}")
+        print(f"    sub-DBs: positive={om.get('positive', 0)} recovered={om.get('recovered', 0)} "
+              f"statistical={om.get('statistical_candidates', 0)} tactical={om.get('tactical', 0)} "
+              f"rejected_research={om.get('rejected_research', 0)} confirmed_bad={om.get('confirmed_bad', 0)} "
+              f"needs_data={om.get('needs_data', 0)}")
+        if om.get("paper_ready_without_hard_pass"):
+            print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
+                  "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "

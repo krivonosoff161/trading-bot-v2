@@ -34,6 +34,7 @@ from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
 from src.research_lab.paths import market_data_glob, resolve_private_root
+from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.validation_feedback import load_feedback_queue
@@ -45,7 +46,8 @@ _COUNTER_KEYS = (
     "planned_skipped", "prepared_ok", "prepared_deferred", "prepared_blocked",
     "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
     "unblocked", "sweeps_materialized",
-    "sweeps_deduped", "runs_completed", "runs_failed", "classified",
+    "sweeps_deduped", "sweeps_skipped_memory", "sweeps_deprioritized",
+    "runs_completed", "runs_failed", "classified",
     "unique_upserted", "exports_created", "followups_scheduled",
     "followups_deduped", "followup_notes", "followup_sweeps_planned",
     "followup_invalid",
@@ -67,7 +69,8 @@ def _bump_created(counters: dict[str, int], planned_key: str, created: bool) -> 
 
 # ── planning ─────────────────────────────────────────────────────────────────
 def _create_from_decision(tasks: FarmTasksDB, dec: dict[str, Any], event: dict[str, Any],
-                          families: tuple[str, ...], counters: dict[str, int], now: float) -> None:
+                          families: tuple[str, ...], counters: dict[str, int], now: float,
+                          gate_index: GateIndex | None = None) -> None:
     sym, tf = _norm(dec["symbol"]), str(dec.get("timeframe") or "")
     action = dec["action"]
     src = event.get("event_id")
@@ -91,11 +94,12 @@ def _create_from_decision(tasks: FarmTasksDB, dec: dict[str, Any], event: dict[s
         _bump_created(counters, "planned_deferred", created)
         return
     if action == "run_sweep":
-        _create_run_sweep(tasks, dec, sym, tf, pri, src, counters, now)
+        _create_run_sweep(tasks, dec, sym, tf, pri, src, counters, now, gate_index)
 
 
 def _create_run_sweep(tasks: FarmTasksDB, dec: dict[str, Any], sym: str, tf: str, pri: int,
-                      src: str | None, counters: dict[str, int], now: float) -> None:
+                      src: str | None, counters: dict[str, int], now: float,
+                      gate_index: GateIndex | None = None) -> None:
     fam = dec["family"]
     if dec.get("block"):
         key = f"run_sweep::{sym}::{tf}::{fam}::gate"
@@ -109,21 +113,34 @@ def _create_run_sweep(tasks: FarmTasksDB, dec: dict[str, Any], sym: str, tf: str
                                symbol=sym, timeframe=tf, priority=pri, source_event_id=src, now=now)
         return
     fp = dec.get("data_fingerprint") or "nofp"
+    machine_reason = "data_ready"
+    # Read-through Setup Outcome Memory BEFORE spending compute: identical data already
+    # proven dead is skipped; a historically all-rejected family cell is down-ranked.
+    if gate_index is not None:
+        verdict = lookup(gate_index, symbol=sym, timeframe=tf, family=fam, data_fingerprint=fp)
+        if verdict.action == "skip_known_bad":
+            _bump(counters, "sweeps_skipped_memory")
+            return
+        if verdict.action == "deprioritize":
+            pri += 50
+            machine_reason = "data_ready:memory_deprioritized"
+            _bump(counters, "sweeps_deprioritized")
     key = f"run_sweep::{sym}::{tf}::{fam}::{fp}"
     _, created = tasks.enqueue_task(task_type="run_sweep", task_key=key, symbol=sym, timeframe=tf,
                                     family=fam, params_hash=None, data_fingerprint=fp, priority=pri,
-                                    source_event_id=src, machine_reason="data_ready", now=now)
+                                    source_event_id=src, machine_reason=machine_reason, now=now)
     _bump_created(counters, "planned_run_sweep", created)
 
 
 def _plan_events(tasks: FarmTasksDB, events: list[dict[str, Any]], families: tuple[str, ...],
-                 data_state_fn: Callable, counters: dict[str, int], now: float) -> int:
+                 data_state_fn: Callable, counters: dict[str, int], now: float,
+                 gate_index: GateIndex | None = None) -> int:
     created_before = _count_active(tasks)
     for ev in events:
         decs = plan_symbol(ev["symbol"], ev.get("asset_class"), families,
                            data_state=lambda s, t: data_state_fn(s, t), now=now)
         for dec in decs:
-            _create_from_decision(tasks, dec, ev, families, counters, now)
+            _create_from_decision(tasks, dec, ev, families, counters, now, gate_index)
         tasks.mark_event_consumed(ev["event_id"])
         _bump(counters, "events_consumed")
     return _count_active(tasks) - created_before
@@ -306,7 +323,8 @@ def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
 
 
 # ── execution (apply only) ────────────────────────────────────────────────────
-def _replan_after_prepare(tasks: FarmTasksDB, task: dict, *, data_state_fn, counters, now) -> None:
+def _replan_after_prepare(tasks: FarmTasksDB, task: dict, *, data_state_fn, counters, now,
+                          gate_index=None) -> None:
     """Data just landed for this symbol -> plan its run_sweep/enrich tasks now (chain prepare->sweep)."""
     import json
     payload = json.loads(task.get("payload_json") or "{}")
@@ -316,11 +334,11 @@ def _replan_after_prepare(tasks: FarmTasksDB, task: dict, *, data_state_fn, coun
     for dec in plan_symbol(task["symbol"], payload.get("asset_class"), families,
                            data_state=lambda s, t: data_state_fn(s, t), now=now):
         if dec["action"] in ("run_sweep",):  # only the now-unlocked compute step
-            _create_from_decision(tasks, dec, synth, families, counters, now)
+            _create_from_decision(tasks, dec, synth, families, counters, now, gate_index)
 
 
 def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_days,
-                   allow_public, limit, counters, now, data_state_fn) -> None:
+                   allow_public, limit, counters, now, data_state_fn, gate_index=None) -> None:
     from src.research_lab.data_planner import _defer_until
     from src.research_lab.scanner_farm_pipeline import _ensure_local_data
     for _ in range(limit):
@@ -337,7 +355,8 @@ def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_d
         if status in ("usable", "prepared"):
             tasks.complete_task(task["task_id"], reason=status, now=now)
             _bump(counters, "prepared_ok")
-            _replan_after_prepare(tasks, task, data_state_fn=data_state_fn, counters=counters, now=now)
+            _replan_after_prepare(tasks, task, data_state_fn=data_state_fn, counters=counters,
+                                  now=now, gate_index=gate_index)
         elif status in ("too_short", "fresh_listing_pending"):
             tasks.defer_task(task["task_id"], until=_defer_until(now, task["timeframe"], rows),
                              reason=status, now=now)
@@ -510,7 +529,8 @@ def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -
 
 # ── pivot ─────────────────────────────────────────────────────────────────────
 def _decide_pivot(tasks: FarmTasksDB, *, new_tasks: int, did_work: bool, now: float,
-                  snapshot, families, data_state_fn, max_discovery: int, counters: dict) -> str:
+                  snapshot, families, data_state_fn, max_discovery: int, counters: dict,
+                  gate_index=None) -> str:
     """Never spin on already_queued: report work, or actively pull discovery, or say blocked."""
     if tasks.eligible_count(now) > 0:
         return "work_available"
@@ -521,7 +541,7 @@ def _decide_pivot(tasks: FarmTasksDB, *, new_tasks: int, did_work: bool, now: fl
             str(c["symbol"]).upper() for c in tasks.latest_unique_candidates(limit=2000)}
         events = discovery_intake_events(snapshot, covered=covered, now=now, limit=max_discovery)
         created = _plan_events(tasks, [_with_id(tasks, e, now) for e in events], families,
-                               data_state_fn, counters, now)
+                               data_state_fn, counters, now, gate_index)
         if created > 0:
             return "discovery_refill"
     return "blocked:no_eligible_tasks"
@@ -545,6 +565,7 @@ def run_coordinator_cycle(
     allow_public_output: bool = False, discovery_snapshot=None, max_discovery: int = 20,
     run_validation: bool = False, max_validations: int = 10,
     run_followups: bool = True, max_followups: int = 10, sweep_tier: str = "normal",
+    use_outcome_memory: bool = True,
 ) -> dict[str, Any]:
     """Advance the research lifecycle by one cycle. Returns counters + pivot + status."""
     now = time.time() if now is None else now
@@ -557,12 +578,16 @@ def run_coordinator_cycle(
     counters = {k: 0 for k in _COUNTER_KEYS}
     errors: list[dict] = []
 
+    # Read-through Setup Outcome Memory (built once per cycle from the brain; read-only): a
+    # repeated signal consults prior outcomes before a fresh sweep is keyed. Off => fresh always.
+    gate_index = build_gate_index(tasks.unique_candidates_for_gate()) if use_outcome_memory else None
+
     for ev in (intake_events or []):
         _, created = tasks.upsert_intake_event(ev, now=now)
         if created:
             _bump(counters, "events_ingested")
     fresh = tasks.unconsumed_events(limit=max_plan_events)
-    new_tasks = _plan_events(tasks, fresh, families, data_state_fn, counters, now)
+    new_tasks = _plan_events(tasks, fresh, families, data_state_fn, counters, now, gate_index)
     _unblock(tasks, data_state_fn, counters, now)
 
     conn = None
@@ -574,7 +599,7 @@ def run_coordinator_cycle(
         if apply:
             _drain_prepare(tasks, private_root=private_root, provider=provider, now_ms=now_ms,
                            data_days=data_days, allow_public=allow_public_output, limit=max_prepares,
-                           counters=counters, now=now, data_state_fn=data_state_fn)
+                           counters=counters, now=now, data_state_fn=data_state_fn, gate_index=gate_index)
             _drain_enrich(tasks, private_root=private_root, flow_provider=flow_provider, now_ms=now_ms,
                           limit=max_enrich, counters=counters, now=now)
             _drain_enrich_oi(tasks, private_root=private_root, oi_provider=oi_provider, now_ms=now_ms,
@@ -610,7 +635,7 @@ def run_coordinator_cycle(
                                          "followups_scheduled"))
     pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
                           snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,
-                          max_discovery=max_discovery, counters=counters)
+                          max_discovery=max_discovery, counters=counters, gate_index=gate_index)
     return {"counters": counters, "pivot": pivot, "active_tasks": _count_active(tasks),
             "status": tasks.status_counts(), "errors": errors}
 
