@@ -43,6 +43,44 @@ def _read_intake(limit: int) -> list[dict]:
         return []
 
 
+def _stage_status(args, apply: bool) -> dict:
+    """Which closing-the-loop stages are active this run, and why a stage is skipped.
+
+    worker/validation/paper are 'critical': with any of them OFF in apply mode the loop
+    only QUEUES work but never computes/validates/papers it — the silent partial-loop
+    foot-gun. enrich_* are non-critical (they only widen which families have data).
+    """
+    def st(enabled, flag: str, critical: bool) -> dict:
+        return {
+            "enabled": bool(enabled),
+            "skipped_reason": None if enabled else f"flag {flag} off",
+            "critical": critical,
+        }
+    return {
+        "worker": st(args.run_worker, "--run-worker", True),
+        "validation": st(args.run_validation, "--run-validation", True),
+        "paper": st(args.run_paper, "--run-paper", True),
+        "enrich_funding": st(args.enrich_funding, "--enrich-funding", False),
+        "enrich_oi": st(args.enrich_oi, "--enrich-oi", False),
+    }
+
+
+def _print_stages(stages: dict, apply: bool) -> None:
+    line = " ".join(f"{name}={'ON' if s['enabled'] else 'OFF'}" for name, s in stages.items())
+    print(f"stages: {line}")
+    if apply:
+        off_critical = [name for name, s in stages.items() if s["critical"] and not s["enabled"]]
+        if off_critical:
+            flags = {"worker": "--run-worker", "validation": "--run-validation", "paper": "--run-paper"}
+            need = " ".join(flags[n] for n in off_critical if n in flags)
+            print(
+                "WARNING: apply run with critical stage(s) OFF: " + ", ".join(off_critical)
+                + " — the loop will QUEUE work but not " + "/".join(off_critical) + " it. "
+                + f"Add {need} to close the loop "
+                + "(or use bat\\strategy_lab_farm_full_cycle_loop.bat)."
+            )
+
+
 def _discovery_snapshot(private_root: Path):
     from src.research_lab.instrument_discovery import load_snapshot
     snap = load_snapshot(private_root)
@@ -140,9 +178,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             "readiness": paper.get("readiness", {}),
             "results": (paper.get("results") or [])[:10],
         }
+    stages = _stage_status(args, apply)
+    out["stages"] = stages
     if apply:
         from src.research_lab import farm_journal
-        farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out)
+        farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out, stages=stages)
         for e in out.get("errors") or []:
             farm_journal.log_error(private_root, where=e.get("where", "cycle"),
                                    error=e.get("error", ""), ts=time.time())
@@ -188,6 +228,7 @@ def main() -> None:
     print(f"farm_loop mode={'APPLY' if apply else 'DRY-RUN'} run={'loop' if args.loop else 'once'} "
           f"private_root={args.private_root}")
     print("safety: paper-only; public OKX market data only; no orders / .env / AUTO_TRADE / private endpoints")
+    _print_stages(_stage_status(args, apply), apply)
 
     profiles = load_timeframe_profiles()
     policy = load_resource_policy(night_mode=args.night_mode)
