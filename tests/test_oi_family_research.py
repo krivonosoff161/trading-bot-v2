@@ -11,10 +11,12 @@ if str(_ROOT) not in sys.path:
 
 from src.research_lab.oi_family_research import (  # noqa: E402
     DENSE_TFS,
+    DIAG_TF,
     OI_FAMILIES,
     _required_data_present,
     plan_oi_family_research,
     run_oi_family_one,
+    summarize_oi_diagnostic_15m,
     summarize_oi_family,
 )
 
@@ -51,6 +53,20 @@ class TestSummary:
         assert s["skipped"]["oi_data_absent"] == 1
         assert s["honest_passed"] == 0
         assert all(k.startswith("oi_") for k in s["by_class"])  # separate namespace
+
+
+class TestDiagnostic15m:
+    def test_diag_tf_is_15m_and_summary_labels_diagnostic(self):
+        assert DIAG_TF == "15m"
+        rows = [
+            {"outcome_class": "oi_diag_failed_costs", "diagnostic": True, "paper_forward_ready": False},
+            {"outcome_class": "oi_diag_regime_only", "diagnostic": True, "paper_forward_ready": False},
+            {"skipped": "no_signals"},
+        ]
+        s = summarize_oi_diagnostic_15m(rows)
+        assert s["timeframe"] == "15m" and s["evaluated"] == 2
+        assert all(k.startswith("oi_diag_") for k in s["by_class"])  # diagnostic namespace
+        assert "DIAGNOSTIC" in s["note"] and "never edge" in s["note"]
 
 
 class TestRunOne:

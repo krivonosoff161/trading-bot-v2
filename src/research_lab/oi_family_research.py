@@ -107,6 +107,38 @@ def run_oi_family_research(private_root: Path, *, limit: int | None = 12) -> lis
     return rows
 
 
+DIAG_TF = "15m"  # delta_coarse per the OI resolution audit -> diagnostic ONLY, never an OI edge
+
+
+def run_oi_family_diagnostic_15m(private_root: Path, *, limit: int | None = 12) -> list[dict[str, Any]]:
+    """Run the OI families on 15m (delta_coarse) as a DIAGNOSTIC bucket only — separate ``oi_diag_*``
+    namespace, never an OI edge. Answers 'does the signal even fire on coarse OI, and how does it
+    compare to dense 1h/4h' without ever promoting a 15m result."""
+    rows: list[dict[str, Any]] = []
+    for symbol in _oi_enriched_symbols(Path(private_root), DIAG_TF, limit=limit):
+        for family in OI_FAMILIES:
+            if family not in REGISTRY:
+                continue
+            res = run_oi_family_one(private_root, family=family, symbol=symbol, timeframe=DIAG_TF)
+            if "outcome_class" in res:  # re-namespace as diagnostic; strip any honest-pass meaning
+                res["outcome_class"] = "oi_diag_" + str(res.get("hard_status") or "").lower()
+                res["diagnostic"] = True
+                res["paper_forward_ready"] = False
+            rows.append(res)
+    return rows
+
+
+def summarize_oi_diagnostic_15m(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_class: dict[str, int] = {}
+    for r in rows:
+        if "outcome_class" in r:
+            by_class[r["outcome_class"]] = by_class.get(r["outcome_class"], 0) + 1
+    return {"timeframe": DIAG_TF, "evaluated": sum(1 for r in rows if "outcome_class" in r),
+            "by_class": dict(sorted(by_class.items(), key=lambda kv: -kv[1])),
+            "note": "15m OI is delta_coarse (OI resolution audit) - DIAGNOSTIC bucket only, never edge, "
+                    "never paper-ready; not comparable to dense 1h/4h as an OI signal"}
+
+
 def summarize_oi_family(rows: list[dict[str, Any]]) -> dict[str, Any]:
     scored = [r for r in rows if "outcome_class" in r]
     by_class: dict[str, int] = {}
@@ -134,6 +166,18 @@ def write_oi_family_snapshot(private_root: Path, rows: list[dict[str, Any]]) -> 
     return path
 
 
+def write_oi_diagnostic_snapshot(private_root: Path, rows: list[dict[str, Any]]) -> Path:
+    out_dir = Path(private_root) / "state" / "derived"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "oi_diagnostic_15m.json"
+    payload = {"schema": "oi_diagnostic_15m.v1",
+               "disclaimer": "15m OI is delta_coarse - DIAGNOSTIC bucket only, never edge, never "
+                             "paper-ready. Separate oi_diag_* namespace; not comparable to dense 1h/4h.",
+               "summary": summarize_oi_diagnostic_15m(rows), "rows": rows}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def main() -> None:
     import argparse
     import os
@@ -146,11 +190,18 @@ def main() -> None:
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--limit", type=int, default=12)
+    ap.add_argument("--diag-15m", action="store_true", help="run the 15m delta_coarse DIAGNOSTIC bucket")
     ap.add_argument("--snapshot", action="store_true")
     args = ap.parse_args()
     if args.plan:
         print(json.dumps(plan_oi_family_research(Path(args.private_root), limit=args.limit),
                          ensure_ascii=False, indent=2))
+        return
+    if args.diag_15m:
+        rows = run_oi_family_diagnostic_15m(Path(args.private_root), limit=args.limit)
+        print(json.dumps(summarize_oi_diagnostic_15m(rows), ensure_ascii=False, indent=2))
+        if args.snapshot:
+            print("snapshot:", write_oi_diagnostic_snapshot(Path(args.private_root), rows))
         return
     rows = run_oi_family_research(Path(args.private_root), limit=args.limit)
     print(json.dumps(summarize_oi_family(rows), ensure_ascii=False, indent=2))

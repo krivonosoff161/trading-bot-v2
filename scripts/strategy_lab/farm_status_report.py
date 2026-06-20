@@ -197,6 +197,18 @@ def collect(db_path: Path) -> dict:
                 if oos_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["shadow_oos"] = {}
+        try:  # tactical-probe characterization of sub-power net-positive setups (research-only, not edge)
+            tp_f = db_path.parent.parent / "state" / "derived" / "tactical_probe.json"
+            report["tactical_probe"] = (json.loads(tp_f.read_text(encoding="utf-8")).get("probe") or {}) \
+                if tp_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["tactical_probe"] = {}
+        try:  # 15m OI delta_coarse diagnostic bucket (never edge)
+            od_f = db_path.parent.parent / "state" / "derived" / "oi_diagnostic_15m.json"
+            report["oi_diagnostic_15m"] = (json.loads(od_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if od_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["oi_diagnostic_15m"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -324,6 +336,15 @@ def _print(report: dict) -> None:
         print(f"  shadow OOS (held-out-tail, research-only): evaluated={so['evaluated']} "
               f"by_class={so.get('by_class')} survived={len(so.get('survived') or [])} "
               "(pseudo-OOS, not new bars; shadow_survived != edge)")
+    tp = report.get("tactical_probe") or {}
+    if tp.get("thin_total"):
+        print(f"  tactical probe (n<{tp.get('power_floor')}, research-only): thin={tp['thin_total']} "
+              f"pos={tp.get('thin_positive')} rate={tp.get('overall_positive_rate')} "
+              f"probe_families={tp.get('probe_families')} (thin_positive_skew != edge)")
+    od = report.get("oi_diagnostic_15m") or {}
+    if od.get("evaluated"):
+        print(f"  oi 15m DIAGNOSTIC (delta_coarse, never edge): evaluated={od['evaluated']} "
+              f"by_class={od.get('by_class')}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "
