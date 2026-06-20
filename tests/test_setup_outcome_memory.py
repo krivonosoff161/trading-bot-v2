@@ -191,6 +191,28 @@ class TestBuildMemoryIndex:
         r = build_memory_index(tmp_path)[0]
         assert r["time_to_mfe"] == 4.0 and r["path_quality"] == {"gave_back": 5}
 
+    def test_revalidation_attaches_but_never_promotes(self, tmp_path):
+        import json
+        db = FarmTasksDB(tasks_db_path(tmp_path))
+        uc = "X::4h::mean_reversion_fade::ph::fp"
+        db.upsert_unique_candidate({
+            "uc_key": uc, "symbol": "X", "timeframe": "4h", "family": "mean_reversion_fade",
+            "params_hash": "ph", "data_fingerprint": "fp", "decision": "REJECT",
+            "validation_status": "REJECT", "hard_status": "", "n_trades": 6, "avg_net_pct": -0.1,
+            "candidate_id": "c1", "params": {}}, now=1.0)
+        db.close()
+        deriv = tmp_path / "state" / "derived"
+        deriv.mkdir(parents=True, exist_ok=True)
+        # a re-validation survivor must attach its status but NOT flip paper_forward_ready/outcome_class
+        (deriv / "recyclable_revalidation.json").write_text(json.dumps({
+            "by_uc_key": {uc: {"revalidation_status": "PAPER_FORWARD_READY", "bucket": "exit_recovered"}}}),
+            encoding="utf-8")
+        r = build_memory_index(tmp_path)[0]
+        assert r["revalidation_status"] == "PAPER_FORWARD_READY"
+        assert r["paper_forward_ready"] is False            # NOT auto-promoted
+        assert r["outcome_class"] != "POSITIVE_VALIDATED"   # canonical class unchanged
+        assert summarize_memory([r])["paper_ready_without_hard_pass"] == 0
+
 
 class TestCoordinatorGateUsedNextCycle:
     """Acceptance: a confirmed-bad prior makes the NEXT planning cycle skip the re-sweep."""

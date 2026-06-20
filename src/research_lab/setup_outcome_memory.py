@@ -169,15 +169,20 @@ def _recovered_cells(private_root: Path) -> set[str]:
     return {f"{c.get('symbol')}|{c.get('timeframe')}|{c.get('family')}" for c in cands if isinstance(c, dict)}
 
 
-def _backfill_by_uc(private_root: Path) -> dict[str, dict[str, Any]]:
-    """Per-uc trade-path metrics from the bounded backfill snapshot (empty if not run)."""
-    path = Path(private_root) / "state" / "derived" / "trade_path_backfill.json"
+def _derived_by_uc(private_root: Path, filename: str) -> dict[str, dict[str, Any]]:
+    """Read a derived snapshot's by_uc_key map (empty if the snapshot has not been produced)."""
+    path = Path(private_root) / "state" / "derived" / filename
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     by_uc = data.get("by_uc_key") if isinstance(data, dict) else None
     return by_uc if isinstance(by_uc, dict) else {}
+
+
+def _backfill_by_uc(private_root: Path) -> dict[str, dict[str, Any]]:
+    """Per-uc trade-path metrics from the bounded backfill snapshot (empty if not run)."""
+    return _derived_by_uc(private_root, "trade_path_backfill.json")
 
 
 def _uc_run_dirs(private_root: Path) -> dict[str, str]:
@@ -201,6 +206,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     recovered_cells = _recovered_cells(private_root)
     run_dirs = _uc_run_dirs(private_root)
     backfill = _backfill_by_uc(private_root)
+    revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
@@ -232,6 +238,9 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             "tp_before_sl_share": bf.get("tp_before_sl_share"),
             "adverse_first_rate": bf.get("adverse_first_rate"),
             "path_quality": bf.get("path_quality"),
+            # Phase-D honest re-validation verdict (research-only): does NOT change
+            # paper_forward_ready or outcome_class — a survivor needs a human GO, never auto-promotion.
+            "revalidation_status": (revalidation.get(uc) or {}).get("revalidation_status"),
         })
     return records
 
@@ -284,6 +293,9 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
         "rejected_research": len(rejected_research(records)),
         "confirmed_bad": len(confirmed_bad_setups(records)),
         "needs_data": len(needs_data_setups(records)),
+        "revalidated": sum(1 for r in records if r.get("revalidation_status")),
+        "revalidation_survivors": sum(
+            1 for r in records if r.get("revalidation_status") == "PAPER_FORWARD_READY"),
         # Invariant guard: paper-forward-ready is allowed ONLY behind a hard PAPER_FORWARD_READY
         # verdict. A non-zero count means a research/tactical label leaked paper access — a bug.
         "paper_ready_without_hard_pass": sum(
