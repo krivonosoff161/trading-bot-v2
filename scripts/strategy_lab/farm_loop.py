@@ -205,7 +205,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
         allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
         run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
-        max_followups=getattr(args, "max_followups", 10),
+        max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
     )
     out["discovery"] = discovery_info
     if args.run_paper:
@@ -243,6 +243,8 @@ def main() -> None:
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")
+    ap.add_argument("--sweep-tier", choices=["smoke", "normal", "deep"], default="normal",
+                    help="parameter-search depth: smoke=profile cap; normal=x2; deep=x4 (abs-capped)")
     ap.add_argument("--provider", choices=["okx-public", "synthetic"], default="okx-public")
     ap.add_argument("--max-plan-events", type=int, default=20)
     ap.add_argument("--max-prepares", type=int, default=4)

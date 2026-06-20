@@ -41,6 +41,7 @@ class SweepSpec:
     backend: str = "cpu"
     resource_class: str = "normal"
     private_output_policy: str = "private_only"
+    variant_tier: str = "smoke"  # smoke=profile cap as-is; normal=x2; deep=x4 (abs-capped)
 
     def symbol_scope(self) -> int:
         return 1 + len(self.related_symbols)
@@ -121,10 +122,23 @@ def ensure_valid(
     return result
 
 
+# A sweep tier widens the per-setup variant budget on top of the timeframe profile, so
+# the farm can actually search the parameter space — bounded by an absolute desktop cap.
+TIER_MULT = {"smoke": 1, "normal": 2, "deep": 4}
+ABS_VARIANT_CAP = 64
+
+
+def _tiered_cap(spec: SweepSpec, profile_cap: int) -> int:
+    mult = TIER_MULT.get(str(getattr(spec, "variant_tier", "smoke")), 1)
+    return min(int(profile_cap) * mult, ABS_VARIANT_CAP)
+
+
 def _check_variants(spec: SweepSpec, profile_cap: int, errors: list[str], notes: list[str]) -> int:
-    effective = min(max(1, int(spec.max_variants)), int(profile_cap))
-    if spec.max_variants > profile_cap:
-        notes.append(f"max_variants clipped from {spec.max_variants} to {effective} by timeframe profile")
+    cap = _tiered_cap(spec, profile_cap)
+    effective = min(max(1, int(spec.max_variants)), cap)
+    if spec.max_variants > cap:
+        notes.append(f"max_variants clipped from {spec.max_variants} to {effective} "
+                     f"(tier={getattr(spec, 'variant_tier', 'smoke')}, profile_cap={profile_cap})")
     grid = spec.variant_count()
     if grid > effective:
         errors.append(f"variant grid ({grid}) exceeds max_variants ({effective})")

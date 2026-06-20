@@ -406,7 +406,7 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
 
 
 def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
-                     priority_base, limit, counters, now) -> None:
+                     priority_base, limit, counters, now, sweep_tier="normal") -> None:
     from src.research_lab.data_fingerprint import fingerprint_for_symbol
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("run_sweep",), now=now)
@@ -422,7 +422,7 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
         if isinstance(payload.get("sweep_spec"), dict):
             spec = _sweep_from_payload(payload["sweep_spec"])
         else:
-            spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend)
+            spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier=sweep_tier)
         exp_id, job_id, created = queue_sweep(conn, spec, private_root=private_root, profiles=profiles,
                                               policy=policy, data_glob=glob, fingerprint=fp,
                                               priority=priority_base + int(task.get("priority") or 100))
@@ -533,7 +533,7 @@ def run_coordinator_cycle(
     max_worker_jobs: int = 4, night_mode: bool = False, priority_base: int = 100,
     allow_public_output: bool = False, discovery_snapshot=None, max_discovery: int = 20,
     run_validation: bool = False, max_validations: int = 10,
-    run_followups: bool = True, max_followups: int = 10,
+    run_followups: bool = True, max_followups: int = 10, sweep_tier: str = "normal",
 ) -> dict[str, Any]:
     """Advance the research lifecycle by one cycle. Returns counters + pivot + status."""
     now = time.time() if now is None else now
@@ -570,7 +570,7 @@ def run_coordinator_cycle(
                              limit=max_enrich, counters=counters, now=now)
             _drain_run_sweep(tasks, conn=conn, private_root=private_root, profiles=profiles, policy=policy,
                              backend=backend, priority_base=priority_base, limit=max_sweeps,
-                             counters=counters, now=now)
+                             counters=counters, now=now, sweep_tier=sweep_tier)
             _sync_completions(tasks, conn=conn, counters=counters, now=now)
             if run_worker:
                 _drain_worker(private_root, max_worker_jobs, night_mode, errors)
