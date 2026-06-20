@@ -264,6 +264,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     backfill = _backfill_by_uc(private_root)
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
+    exit2 = _derived_by_uc(private_root, "exit_phase2.json")
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
@@ -300,6 +301,8 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             "revalidation_status": (revalidation.get(uc) or {}).get("revalidation_status"),
             # Shadow-forward watch status (research-only forward observation; never paper-ready).
             "shadow_status": (shadow.get(uc) or {}).get("status"),
+            # Exit Phase-2 dynamic-exit class (research-only; recovered != edge, never paper-ready).
+            "exit_phase2_class": (exit2.get(uc) or {}).get("outcome_class"),
         })
     return records
 

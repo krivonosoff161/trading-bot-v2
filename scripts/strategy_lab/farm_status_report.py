@@ -178,6 +178,13 @@ def collect(db_path: Path) -> dict:
             report["shadow_forward"] = summarize_shadow(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["shadow_forward"] = {}
+        try:  # Exit Phase-2 dynamic-exit re-sim summary (research-only)
+            from src.research_lab.exit_phase2 import summarize_exit_phase2
+            deriv = db_path.parent.parent / "state" / "derived" / "exit_phase2.json"
+            data = json.loads(deriv.read_text(encoding="utf-8")) if deriv.exists() else {}
+            report["exit_phase2"] = data.get("summary") or summarize_exit_phase2([])
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["exit_phase2"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -289,6 +296,10 @@ def _print(report: dict) -> None:
     if sh.get("shadow_candidates"):
         print(f"  shadow-forward watch: candidates={sh['shadow_candidates']} by_family={sh.get('by_family')} "
               f"(forward-only, no execution; all_research_only={sh.get('all_research_only')})")
+    ep = report.get("exit_phase2") or {}
+    if ep.get("evaluated"):
+        print(f"  exit phase-2 (mean_rev, research-only): evaluated={ep['evaluated']} by_class={ep.get('by_class')} "
+              f"needs_forward_only={ep.get('needs_forward_only', 0)} (recovered != edge; never auto paper-ready)")
         if om.get("paper_ready_without_hard_pass"):
             print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
                   "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")

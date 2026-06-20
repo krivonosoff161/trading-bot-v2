@@ -17,6 +17,7 @@ from src.research_lab.shadow_forward import (  # noqa: E402
     SHADOW_STATUS,
     ShadowCandidate,
     record_observation,
+    register_exit_phase2_forward,
     register_revalidation_survivors,
     summarize_shadow,
 )
@@ -74,6 +75,19 @@ class TestRegister:
         register_revalidation_survivors(tmp_path)
         register_revalidation_survivors(tmp_path)
         assert summarize_shadow(tmp_path)["shadow_candidates"] == 1
+
+    def test_register_exit_phase2_only_needs_forward_only(self, tmp_path):
+        uc = _seed(tmp_path)
+        deriv = tmp_path / "state" / "derived"
+        (deriv / "exit_phase2.json").write_text(json.dumps({"by_uc_key": {
+            uc: {"symbol": "CBRS_USDT_SWAP", "timeframe": "4h", "family": "mean_reversion_fade",
+                 "best_mode": "trailing_tight", "outcome_class": "needs_forward_only"},
+            "OTHER::4h::mean_reversion_fade::p::f": {"symbol": "OTHER", "timeframe": "4h",
+                 "family": "mean_reversion_fade", "best_mode": "early_tp",
+                 "outcome_class": "exit_recovered_candidate"}}}), encoding="utf-8")
+        regd = register_exit_phase2_forward(tmp_path)
+        assert len(regd) == 1 and regd[0].source == "exit_phase2_forward_only"  # only needs_forward_only
+        assert summarize_shadow(tmp_path)["all_research_only"] is True
 
 
 class TestObservation:
