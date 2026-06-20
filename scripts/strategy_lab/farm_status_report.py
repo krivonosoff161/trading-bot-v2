@@ -151,6 +151,12 @@ def collect(db_path: Path) -> dict:
             report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["setup_lifecycle"] = {"available": False}
+        try:  # last cycle row — surfaces skipped active stages (0.2)
+            from src.research_lab import farm_journal
+            cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
+            report["last_cycle"] = cycles[-1] if cycles else None
+        except Exception:  # noqa: BLE001 - optional log read must not break status
+            report["last_cycle"] = None
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -191,6 +197,17 @@ def _print(report: dict) -> None:
               f"calcs_today={lc.get('calcs_completed_today', 0)} "
               f"unique_candidates={lc.get('unique_candidates', 0)} "
               f"validation={lc.get('validation') or '(none)'}")
+    last = report.get("last_cycle")
+    if last:
+        import time as _time
+
+        from src.research_lab.farm_journal import skipped_stages
+        age = int(_time.time() - float(last.get("ts") or 0))
+        print(f"  last cycle: mode={last.get('mode')} pivot={last.get('pivot')} age={age}s ago")
+        skipped = skipped_stages(last)
+        if skipped:
+            print(f"  WARNING missing active stages last cycle: {', '.join(skipped)} "
+                  "(loop queued work but did not run them)")
     ho = report.get("handoff")
     if ho:
         print(f"  validation handoff: exported={ho['validation_exported']} "

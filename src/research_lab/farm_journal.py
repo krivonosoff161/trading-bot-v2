@@ -49,17 +49,73 @@ def _append(path: Path, row: dict[str, Any]) -> None:
         fh.write(json.dumps({"schema": SCHEMA, **row}, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def log_cycle(private_root: Path, *, ts: float, mode: str, result: dict[str, Any]) -> None:
-    """Persist one cycle summary (the dict returned by run_coordinator_cycle)."""
+def log_cycle(
+    private_root: Path,
+    *,
+    ts: float,
+    mode: str,
+    result: dict[str, Any],
+    stages: dict[str, Any] | None = None,
+) -> None:
+    """Persist one cycle summary (the dict returned by run_coordinator_cycle).
+
+    ``stages`` records which closing-the-loop stages (worker/validation/paper/enrich)
+    were active and, when skipped, why — so an operator can later see that the loop only
+    queued work but never computed/validated it.
+    """
     counters = {k: v for k, v in (result.get("counters") or {}).items()
                 if isinstance(v, int) and v}
     status = result.get("status") or {}
-    _append(cycle_log_path(private_root), {
+    row: dict[str, Any] = {
         "ts": round(float(ts), 3), "mode": mode, "pivot": result.get("pivot"),
         "active_tasks": result.get("active_tasks"), "counters": counters,
         "by_state": status.get("by_state"), "blocked_reasons": status.get("blocked_reasons"),
         "deferred_reasons": status.get("deferred_reasons"),
-    })
+    }
+    if stages is not None:
+        row["stages"] = stages
+    paper = result.get("paper") or {}
+    paper_counters = {k: v for k, v in (paper.get("counters") or {}).items()
+                      if isinstance(v, int) and v}
+    if paper_counters:
+        row["paper_counters"] = paper_counters
+    readiness = paper.get("readiness") or {}
+    if readiness:
+        row["paper_ready"] = readiness.get("paper_forward_ready")
+    _append(cycle_log_path(private_root), row)
+
+
+def _read_tail(path: Path, limit: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except (ValueError, TypeError):
+                continue
+    return rows[-limit:] if limit and limit > 0 else rows
+
+
+def read_recent_cycles(private_root: Path, limit: int = 20) -> list[dict[str, Any]]:
+    """Most recent cycle rows (oldest-first) — for status/dashboard, not raw tailing."""
+    return _read_tail(cycle_log_path(private_root), limit)
+
+
+def read_recent_errors(private_root: Path, limit: int = 20) -> list[dict[str, Any]]:
+    """Most recent error rows (oldest-first)."""
+    return _read_tail(errors_path(private_root), limit)
+
+
+def skipped_stages(cycle_row: dict[str, Any]) -> list[str]:
+    """Names of critical stages that were OFF in a cycle row (empty if none/unknown)."""
+    stages = cycle_row.get("stages") or {}
+    return [name for name, s in stages.items()
+            if isinstance(s, dict) and s.get("critical") and not s.get("enabled")]
 
 
 def make_transition_sink(private_root: Path):
