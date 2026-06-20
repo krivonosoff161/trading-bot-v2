@@ -21,6 +21,58 @@ HARD_FAILED = {
     "FAILED_OOS", "FAILED_DATA_QUALITY", "REGIME_ONLY",
 }
 
+# Coarse tactical shelf derived ONLY from unique_candidates columns (the per-candidate
+# fast view over the whole DB; the deep MFE/MAE drill lives in trade_path_diagnostics).
+# CLOSED vocabulary, research-only — NONE of these ever equals PAPER_FORWARD_READY or
+# grants paper/trade access. NOT_TACTICAL / '' means "no tactical claim".
+TACTICAL_STATUSES = (
+    "NEEDS_OI_CONTEXT", "NEEDS_MICRO_DATA", "TACTICAL_REGIME_ONLY", "TACTICAL_COST_SENSITIVE",
+    "TACTICAL_THIN_WINDOW", "TACTICAL_UNDERDATA", "REJECTED_CONFIRMED_BAD", "NOT_TACTICAL",
+)
+POWER_FLOOR = 10  # validator _check_splits has no power below n=10
+
+
+def _oi_micro_families() -> dict[str, str]:
+    """family -> 'oi'|'micro' for families that declare those data needs (reuse registry)."""
+    from src.research_lab.strategy_registry import REGISTRY, get_strategy
+    out: dict[str, str] = {}
+    for fam in REGISTRY:
+        req = set(get_strategy(fam).required_data)
+        if "oi" in req:
+            out[fam] = "oi"
+        elif "microstructure" in req:
+            out[fam] = "micro"
+    return out
+
+
+def derive_tactical_status(row: dict[str, Any], hard_status: str, oi_micro: dict[str, str]) -> str:
+    """Coarse research-only tactical shelf from unique_candidates columns. Never promotable."""
+    family = str(row.get("family") or "")
+    decision = str(row.get("decision") or "")
+    lite = str(row.get("validation_status") or "")
+    n = int(row.get("n_trades") or 0)
+    avg = float(row.get("avg_net_pct") or 0.0)
+    regime = str(row.get("regime_bucket") or "")
+    rejected = decision == "REJECT" or lite == "REJECT" or hard_status in HARD_FAILED
+    if not rejected:
+        return ""  # only characterize the rejected/failed population
+    kind = oi_micro.get(family)
+    if kind == "oi":
+        return "NEEDS_OI_CONTEXT"
+    if kind == "micro":
+        return "NEEDS_MICRO_DATA"
+    if hard_status == "REGIME_ONLY" or (lite == "REGIME_SPECIFIC" and regime):
+        return "TACTICAL_REGIME_ONLY"
+    if hard_status == "FAILED_COSTS":
+        return "TACTICAL_COST_SENSITIVE"
+    if 1 <= n <= 2 and avg > 0:
+        return "TACTICAL_THIN_WINDOW"
+    if n == 0 or hard_status == "NEEDS_MORE_DATA" or (1 <= n <= 2 and avg <= 0):
+        return "TACTICAL_UNDERDATA"
+    if n >= POWER_FLOOR and avg <= 0:
+        return "REJECTED_CONFIRMED_BAD"
+    return "NOT_TACTICAL"
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
@@ -143,6 +195,7 @@ def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
     verdicts = _verdicts(private_root)
     cards = _cards(private_root)
     paper = _paper_by_uc(private_root, candidate_to_uc)
+    oi_micro = _oi_micro_families()
     rows: list[dict[str, Any]] = []
     for row in _load_unique_candidates(private_root):
         validation_id = _candidate_validation_id(row, uc_to_validation)
@@ -151,6 +204,7 @@ def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
         exported = validation_id in reqs
         p = paper.get(str(row.get("uc_key") or ""), {})
         state = _derive_state(row, hard_status, card, p)
+        tactical = derive_tactical_status(row, hard_status, oi_micro)
         rows.append({
             "uc_key": str(row.get("uc_key") or ""),
             "validation_candidate_id": validation_id,
@@ -173,6 +227,10 @@ def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
             "paper_loss_count": int(p.get("losses") or 0),
             "latest_paper_state": str(p.get("latest_state") or ""),
             "derived_lifecycle_state": state,
+            "n_trades": int(row.get("n_trades") or 0),
+            "avg_net_pct": round(float(row.get("avg_net_pct") or 0.0), 6),
+            "regime_bucket": str(row.get("regime_bucket") or ""),
+            "tactical_status": tactical,
         })
     return rows
 
@@ -181,16 +239,21 @@ def summarize_setup_lifecycle(private_root: Path) -> dict[str, Any]:
     rows = derive_setup_lifecycle(private_root)
     by_state: dict[str, int] = {}
     by_hard: dict[str, int] = {}
+    by_tactical: dict[str, int] = {}
     for row in rows:
         by_state[row["derived_lifecycle_state"]] = by_state.get(row["derived_lifecycle_state"], 0) + 1
         hard = row["hard_status"]
         if hard:
             by_hard[hard] = by_hard.get(hard, 0) + 1
+        tac = row.get("tactical_status") or ""
+        if tac:
+            by_tactical[tac] = by_tactical.get(tac, 0) + 1
     return {
         "available": True,
         "total": len(rows),
         "by_state": by_state,
         "hard_status": by_hard,
+        "by_tactical": dict(sorted(by_tactical.items(), key=lambda kv: -kv[1])),
         "positive_setups": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_POSITIVE_OBSERVED"),
         "negative_setups": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_NEGATIVE_OBSERVED"),
         "mixed_or_flat": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_MIXED_OR_FLAT"),
