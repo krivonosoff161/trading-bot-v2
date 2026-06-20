@@ -120,6 +120,21 @@ def is_fresh(snapshot: dict[str, Any], now_ms: int, ttl_seconds: int) -> bool:
     return (now_ms - int(gen.timestamp() * 1000)) < ttl_seconds * 1000
 
 
+def snapshot_age_seconds(snapshot: dict[str, Any], now_ms: int) -> int | None:
+    """Age of the snapshot in seconds (None if no/invalid generated_at)."""
+    import datetime as dt
+    stamp = str(snapshot.get("generated_at") or "")
+    if not stamp:
+        return None
+    try:
+        gen = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if gen.tzinfo is None:
+        gen = gen.replace(tzinfo=dt.timezone.utc)
+    return int((now_ms - int(gen.timestamp() * 1000)) / 1000)
+
+
 def diff_snapshots(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
     """new_instruments / delisted / group_changes between two snapshots."""
     old_inst = old.get("instruments") or {}

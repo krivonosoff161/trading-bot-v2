@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Continuous research-farm loop — the self-deciding intake -> compute -> validation cycle.
+"""Continuous research-farm loop - the self-deciding intake -> compute -> validation cycle.
 
 Each cycle: read scanner WATCH/GO watches (+ optional OKX-discovery refill) -> normalize
 to intake events -> plan/prepare/enrich/run_sweep/classify/validate as typed lifecycle
@@ -34,7 +34,7 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
 
 def _read_intake(limit: int) -> list[dict]:
-    """Read open scanner watches (file only — never imports the scanner module)."""
+    """Read open scanner watches (file only - never imports the scanner module)."""
     try:
         from src.scout.watch_queue import open_watches
         return watches_to_intake(open_watches())[:limit]
@@ -47,7 +47,7 @@ def _stage_status(args, apply: bool) -> dict:
     """Which closing-the-loop stages are active this run, and why a stage is skipped.
 
     worker/validation/paper are 'critical': with any of them OFF in apply mode the loop
-    only QUEUES work but never computes/validates/papers it — the silent partial-loop
+    only QUEUES work but never computes/validates/papers it - the silent partial-loop
     foot-gun. enrich_* are non-critical (they only widen which families have data).
     """
     def st(enabled, flag: str, critical: bool) -> dict:
@@ -75,16 +75,52 @@ def _print_stages(stages: dict, apply: bool) -> None:
             need = " ".join(flags[n] for n in off_critical if n in flags)
             print(
                 "WARNING: apply run with critical stage(s) OFF: " + ", ".join(off_critical)
-                + " — the loop will QUEUE work but not " + "/".join(off_critical) + " it. "
+                + " - the loop will QUEUE work but not " + "/".join(off_critical) + " it. "
                 + f"Add {need} to close the loop "
                 + "(or use bat\\strategy_lab_farm_full_cycle_loop.bat)."
             )
 
 
-def _discovery_snapshot(private_root: Path):
-    from src.research_lab.instrument_discovery import load_snapshot
-    snap = load_snapshot(private_root)
-    return snap if snap.get("instruments") else None
+def _discovery(args, private_root: Path, apply: bool):
+    """Load the discovery snapshot, auto-refreshing a stale/missing one when allowed.
+
+    A stale snapshot must never silently degrade the farm to blocked:no_eligible: in
+    apply mode (unless --no-discovery-refresh) we refresh through the TTL-throttled
+    discover() (network only when actually stale); otherwise we warn loudly with the
+    command hint and run on whatever snapshot exists.
+    Returns (snapshot_or_None, info_dict).
+    """
+    from src.research_lab import instrument_discovery as idisc
+    ttl = args.discovery_ttl_seconds
+    now_ms = int(time.time() * 1000)
+    refreshed = False
+    if apply and not args.no_discovery_refresh:
+        try:
+            from scripts.strategy_lab.discover_okx_universe import discover
+            res = discover(private_root, apply=True, now_ms=now_ms, ttl_seconds=ttl)
+            refreshed = res.get("status") == "discovered"
+            if res.get("status") == "fetch_failed":
+                print(f"  discovery: refresh failed ({res.get('reason')}) - using existing snapshot")
+            elif refreshed:
+                print(f"  discovery: refreshed snapshot (count={res.get('count')}, "
+                      f"new={res.get('diff', {}).get('new')})")
+        except Exception as exc:  # noqa: BLE001 - discovery refresh must never crash the farm
+            print(f"  discovery: refresh skipped ({type(exc).__name__})")
+    snap = idisc.load_snapshot(private_root)
+    if not snap.get("instruments"):
+        print("  WARNING discovery snapshot MISSING - run: "
+              "python -m scripts.strategy_lab.discover_okx_universe --apply")
+        return None, {"status": "missing", "age_seconds": None, "count": 0}
+    age = idisc.snapshot_age_seconds(snap, now_ms)
+    fresh = idisc.is_fresh(snap, now_ms, ttl)
+    if not fresh and not refreshed:
+        print(f"  WARNING discovery snapshot STALE (age={age}s > ttl={ttl}s) - run: "
+              "python -m scripts.strategy_lab.discover_okx_universe --apply "
+              "(or remove --no-discovery-refresh in apply mode)")
+        status = "stale_no_refresh"
+    else:
+        status = "refreshed" if refreshed else "fresh"
+    return snap, {"status": status, "age_seconds": age, "count": int(snap.get("count") or 0)}
 
 
 def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
@@ -159,6 +195,7 @@ def _cycle_signature(out: dict) -> tuple:
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
     provider, flow_provider, oi_provider = _providers(args, apply)
     events = _read_intake(args.max_plan_events)
+    snapshot, discovery_info = _discovery(args, private_root, apply)
     out = run_coordinator_cycle(
         tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
         families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider,
@@ -166,10 +203,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         backend=args.backend, data_days=args.data_days, max_plan_events=args.max_plan_events,
         max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
-        allow_public_output=args.allow_public_output, discovery_snapshot=_discovery_snapshot(private_root),
+        allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
         run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
         max_followups=getattr(args, "max_followups", 10),
     )
+    out["discovery"] = discovery_info
     if args.run_paper:
         from src.research_lab.paper_runtime import run_paper_cycle
         paper = run_paper_cycle(private_root, apply=apply, limit=args.max_paper_cards)
@@ -182,7 +220,8 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
     out["stages"] = stages
     if apply:
         from src.research_lab import farm_journal
-        farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out, stages=stages)
+        farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out,
+                               stages=stages, discovery=discovery_info)
         for e in out.get("errors") or []:
             farm_journal.log_error(private_root, where=e.get("where", "cycle"),
                                    error=e.get("error", ""), ts=time.time())
@@ -214,6 +253,10 @@ def main() -> None:
     ap.add_argument("--max-followups", type=int, default=10)
     ap.add_argument("--no-followups", action="store_true", help="disable automatic bounded feedback follow-ups")
     ap.add_argument("--data-days", type=int, default=None)
+    ap.add_argument("--discovery-ttl-seconds", type=int, default=6 * 3600,
+                    help="treat the discovery snapshot as fresh for this many seconds; refresh when older")
+    ap.add_argument("--no-discovery-refresh", action="store_true",
+                    help="never auto-refresh the discovery snapshot in apply mode (warn loudly if stale)")
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--sleep-seconds", type=int, default=180)
     ap.add_argument("--stop-file", default="")
@@ -249,7 +292,7 @@ def main() -> None:
         prev_sig = None
         while True:
             if args.stop_file and Path(args.stop_file).exists():
-                print(f"stop-file present ({args.stop_file}) — exiting loop")
+                print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
             sig = _cycle_signature(out)
@@ -264,7 +307,7 @@ def main() -> None:
             prev_sig = sig
             time.sleep(max(1, args.sleep_seconds))
     except KeyboardInterrupt:
-        print("\ninterrupted — graceful stop")
+        print("\ninterrupted - graceful stop")
     finally:
         tasks.close()
 

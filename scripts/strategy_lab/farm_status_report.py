@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Read-only farm status report — what the calculation farm computed and what's next.
+"""Read-only farm status report - what the calculation farm computed and what's next.
 
 Reads strategy_lab.sqlite (runs / candidates / farm_results / runtime_stats) and
 prints a clear operator summary: how much was computed, which assets/groups/timeframes,
@@ -151,7 +151,7 @@ def collect(db_path: Path) -> dict:
             report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["setup_lifecycle"] = {"available": False}
-        try:  # last cycle row — surfaces skipped active stages (0.2)
+        try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
             report["last_cycle"] = cycles[-1] if cycles else None
@@ -208,6 +208,10 @@ def _print(report: dict) -> None:
         if skipped:
             print(f"  WARNING missing active stages last cycle: {', '.join(skipped)} "
                   "(loop queued work but did not run them)")
+        disc = last.get("discovery") or {}
+        if disc.get("status") in {"stale_no_refresh", "missing"}:
+            print(f"  WARNING discovery universe {disc.get('status')} "
+                  f"(age={disc.get('age_seconds')}s) - refresh via discover_okx_universe --apply")
     ho = report.get("handoff")
     if ho:
         print(f"  validation handoff: exported={ho['validation_exported']} "

@@ -56,12 +56,15 @@ def log_cycle(
     mode: str,
     result: dict[str, Any],
     stages: dict[str, Any] | None = None,
+    discovery: dict[str, Any] | None = None,
 ) -> None:
     """Persist one cycle summary (the dict returned by run_coordinator_cycle).
 
     ``stages`` records which closing-the-loop stages (worker/validation/paper/enrich)
     were active and, when skipped, why — so an operator can later see that the loop only
-    queued work but never computed/validated it.
+    queued work but never computed/validated it. ``discovery`` records the universe
+    snapshot freshness (fresh/refreshed/stale_no_refresh/missing) so a stale universe is
+    visible instead of silently degrading to blocked:no_eligible.
     """
     counters = {k: v for k, v in (result.get("counters") or {}).items()
                 if isinstance(v, int) and v}
@@ -74,6 +77,8 @@ def log_cycle(
     }
     if stages is not None:
         row["stages"] = stages
+    if discovery is not None:
+        row["discovery"] = discovery
     paper = result.get("paper") or {}
     paper_counters = {k: v for k, v in (paper.get("counters") or {}).items()
                       if isinstance(v, int) and v}
