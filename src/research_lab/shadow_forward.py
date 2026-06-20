@@ -118,6 +118,30 @@ def register_revalidation_survivors(private_root: Path) -> list[ShadowCandidate]
     return out
 
 
+def register_exit_phase2_forward(private_root: Path) -> list[ShadowCandidate]:
+    """Register Exit Phase-2 needs_forward_only candidates (improved + passed a deflated honest
+    check) as shadow_forward_candidate — forward watch only, never paper-ready."""
+    private_root = Path(private_root)
+    try:
+        data = json.loads((Path(private_root) / "state" / "derived" / "exit_phase2.json").read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = (data.get("by_uc_key") or {}) if isinstance(data, dict) else {}
+    registry = _load_registry(private_root)
+    out: list[ShadowCandidate] = []
+    for uc, row in rows.items():
+        if not isinstance(row, dict) or row.get("outcome_class") != "needs_forward_only":
+            continue
+        cand = ShadowCandidate(uc_key=str(uc), symbol=str(row.get("symbol") or ""),
+                               timeframe=str(row.get("timeframe") or ""), family=str(row.get("family") or ""),
+                               recovered_exit=str(row.get("best_mode") or "baseline"),
+                               params=_params_for_uc(private_root, str(uc)), source="exit_phase2_forward_only")
+        registry[str(uc)] = cand.to_dict()
+        out.append(cand)
+    _write_registry(private_root, registry)
+    return out
+
+
 def _write_registry(private_root: Path, registry: dict[str, dict[str, Any]]) -> Path:
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
