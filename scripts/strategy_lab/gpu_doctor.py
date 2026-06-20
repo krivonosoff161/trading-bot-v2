@@ -26,6 +26,17 @@ from src.research_lab.gpu_runtime import (  # noqa: E402
     doctor,
     resolve_backend,
 )
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
+
+
+def _load_benchmark() -> dict:
+    path = Path(DEFAULT_PRIVATE_ROOT) / "state" / "gpu_benchmark.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def main() -> None:
@@ -66,6 +77,12 @@ def main() -> None:
     print()
     print(f"  GPU-accelerated families: {', '.join(GPU_SUPPORTED_FAMILIES)}")
     print("  (other families run on the CPU scalar path; trade simulation is CPU-only)")
+    bench = _load_benchmark()
+    if bench.get("recommendations"):
+        print()
+        print("  Benchmark (gpu_benchmark.py) backend recommendation:")
+        for rec in bench["recommendations"]:
+            print(f"    {rec.get('stage'):11} -> {rec.get('recommend')}  ({rec.get('reason')})")
     if not cap["gpu_available"]:
         print()
         print("  Recovery: install a GPU compute backend, e.g.")
