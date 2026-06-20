@@ -58,6 +58,16 @@ def test_families_for_group_timeframe_filtered():
     assert "pump_dump_scalp" not in families_for_group("meme_flow", "1d")
 
 
+def test_oi_families_are_optin_default_off():
+    from src.research_lab.universe_refill import OI_OPTIN_FAMILIES
+    # default (no opt-in): the continuous loop does NOT plan unproven OI/flow families
+    off = families_for_group("core_market", "1h", include_oi=False)
+    assert not any(f in OI_OPTIN_FAMILIES for f in off)
+    # explicit opt-in research group brings them back
+    on = families_for_group("core_market", "1h", include_oi=True)
+    assert any(f in OI_OPTIN_FAMILIES for f in on)
+
+
 def test_runner_prepares_plans_and_queues(tmp_path):
     uni = load_universe()
     profiles = load_timeframe_profiles()
