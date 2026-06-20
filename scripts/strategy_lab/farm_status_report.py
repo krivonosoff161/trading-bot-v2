@@ -277,6 +277,9 @@ def _print(report: dict) -> None:
               f"statistical={om.get('statistical_candidates', 0)} tactical={om.get('tactical', 0)} "
               f"rejected_research={om.get('rejected_research', 0)} confirmed_bad={om.get('confirmed_bad', 0)} "
               f"needs_data={om.get('needs_data', 0)}")
+        if om.get("revalidated"):
+            print(f"    re-validated={om['revalidated']} survivors={om.get('revalidation_survivors', 0)} "
+                  "(survivor = research-only, needs human GO + OOS, never auto paper-ready)")
         if om.get("paper_ready_without_hard_pass"):
             print(f"    WARNING invariant breach: {om['paper_ready_without_hard_pass']} rows "
                   "paper_forward_ready WITHOUT a hard PAPER_FORWARD_READY verdict")
