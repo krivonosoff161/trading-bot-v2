@@ -122,13 +122,17 @@ def status(private_root: Path) -> dict[str, Any]:
 def record(private_root: Path, symbols: list[str], *, duration_s: float = 10.0,
            interval_s: float = DEFAULT_INTERVAL_S, depth: int = DEFAULT_DEPTH,
            max_disk_mb: float = DEFAULT_MAX_DISK_MB, http_get: HttpGet | None = None,
-           date_utc: str = "live") -> dict[str, Any]:
-    """Bounded forward collection: poll public book+trades for top-N symbols until duration or stop-file."""
+           date_utc: str = "live", heartbeat_s: float = 30.0) -> dict[str, Any]:
+    """Bounded forward collection: poll public book+trades for top-N symbols until duration or stop-file.
+    Emits a visible heartbeat every heartbeat_s seconds (to the window and the on-disk recorder log)."""
     from src.research_lab.stop_intent import is_stop_requested
     private_root = Path(private_root)
     getter = http_get or _default_http_get
     start = time.monotonic()
     polls = errors = written = 0
+    last_hb = start
+    _emit(private_root, {"event": "start", "symbols": symbols, "duration_s": duration_s,
+                         "interval_s": interval_s, "depth": depth})
     while time.monotonic() - start < duration_s:
         if is_stop_requested(private_root):
             break
@@ -142,9 +146,31 @@ def record(private_root: Path, symbols: list[str], *, duration_s: float = 10.0,
                 errors += 1
         polls += 1
         prune_disk(private_root, max_disk_mb=max_disk_mb)
+        now = time.monotonic()
+        if now - last_hb >= heartbeat_s:  # visible heartbeat in the window + on disk
+            last_hb = now
+            _emit(private_root, {"event": "heartbeat", "elapsed_s": round(now - start, 1),
+                                 "polls": polls, "written": written, "errors": errors,
+                                 "remaining_s": round(max(0.0, duration_s - (now - start)), 1)})
         time.sleep(max(0.0, interval_s))
-    return {"polls": polls, "written": written, "errors": errors, "stopped_early": is_stop_requested(private_root),
-            "status": status(private_root)}
+    stopped = is_stop_requested(private_root)
+    out = {"polls": polls, "written": written, "errors": errors, "stopped_early": stopped,
+           "status": status(private_root)}
+    _emit(private_root, {"event": "done", **{k: out[k] for k in ("polls", "written", "errors", "stopped_early")}})
+    return out
+
+
+def _emit(private_root: Path, msg: dict[str, Any]) -> None:
+    """Print a heartbeat/progress line to the window AND append it to the on-disk recorder log."""
+    line = json.dumps({"ts": _now_ms(), **msg}, ensure_ascii=False)
+    print(line, flush=True)
+    try:
+        log_dir = Path(private_root) / "microstructure"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "recorder_log.jsonl").open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def main() -> None:
@@ -162,6 +188,7 @@ def main() -> None:
     ap.add_argument("--interval-seconds", type=float, default=DEFAULT_INTERVAL_S)
     ap.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
     ap.add_argument("--max-disk-mb", type=float, default=DEFAULT_MAX_DISK_MB)
+    ap.add_argument("--heartbeat-seconds", type=float, default=30.0)
     ap.add_argument("--status", action="store_true", help="print data-readiness only (no collection)")
     args = ap.parse_args()
     if args.status:
@@ -169,7 +196,8 @@ def main() -> None:
         return
     syms = [s.strip() for s in args.symbols.split(",") if s.strip()]
     out = record(Path(args.private_root), syms, duration_s=args.duration_seconds,
-                 interval_s=args.interval_seconds, depth=args.depth, max_disk_mb=args.max_disk_mb)
+                 interval_s=args.interval_seconds, depth=args.depth, max_disk_mb=args.max_disk_mb,
+                 heartbeat_s=args.heartbeat_seconds)
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
