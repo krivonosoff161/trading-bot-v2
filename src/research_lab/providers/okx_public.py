@@ -38,6 +38,7 @@ _USER_AGENT = "strategy-lab-research/1.0 (+public-market-data)"
 # Timeframe -> OKX bar parameter + interval in milliseconds
 _SUPPORTED_TIMEFRAMES: dict[str, tuple[str, int]] = {
     "1m": ("1m", MINUTE_MS),
+    "5m": ("5m", 5 * MINUTE_MS),
     "15m": ("15m", 15 * MINUTE_MS),
     "1h": ("1H", 60 * MINUTE_MS),
     "4h": ("4H", 4 * 60 * MINUTE_MS),
