@@ -90,6 +90,30 @@ class TestOutcomeClass:
             assert cls in OUTCOME_CLASSES
 
 
+class TestTacticalLibraryDimensions:
+    def test_cost_class_ladder(self):
+        from src.research_lab.setup_outcome_memory import cost_class
+        assert cost_class(0.5) == "cost_ok"
+        assert cost_class(-0.05) == "cost_bound_maker_unlock"   # taker-dead, maker would flip (+0.08)
+        assert cost_class(-0.09) == "cost_marginal"             # only zero-cost positive
+        assert cost_class(-0.5) == "cost_dead"
+
+    def test_tactical_class_one_shot_vs_statistical(self):
+        from src.research_lab.setup_outcome_memory import tactical_class
+        assert tactical_class(3, 1.0, "") == "one_shot_candidate"      # thin & positive
+        assert tactical_class(20, 1.0, "PAPER_FORWARD_READY") == "statistical_edge_candidate"
+        assert tactical_class(20, -1.0, "") == ""                      # powered & negative -> not tactical
+        assert tactical_class(3, -1.0, "") == ""                       # thin & negative -> not one-shot
+
+    def test_next_action_routes_rejected_lifecycle(self):
+        from src.research_lab.setup_outcome_memory import next_action
+        assert next_action("CONFIRMED_BAD", "cost_dead", "") == "known_bad_freeze"
+        assert next_action("WRONG_EXIT", "cost_ok", "") == "exit_grid_phase2"
+        assert next_action("UNCHARACTERIZED", "cost_bound_maker_unlock", "") == "maker_cost_sensitivity_research"
+        assert next_action("THIN_BUT_PROMISING", "cost_ok", "one_shot_candidate") == "shadow_forward_watch"
+        assert next_action("NEEDS_OI_DATA", "cost_dead", "") == "await_new_data"
+
+
 class TestRevisitPolicy:
     def _bad_cell_index(self):
         # one known-bad cell with a tried fingerprint/params and a timestamp

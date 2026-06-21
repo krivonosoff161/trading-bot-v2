@@ -60,6 +60,51 @@ _POSITIVE_STATES = {"HARD_PASSED", "PAPER_PLAN_READY", "PAPER_POSITIVE_OBSERVED"
 DEPRIORITIZE_MIN = 5
 DEPRIORITIZE_BAD_SHARE = 0.8
 
+# Cost lenses (percent points per round-trip trade): the stored net already carries TAKER, so
+# gross = net + TAKER and a maker fill would net = net + (TAKER - MAKER). The mining showed taker cost
+# is the dominant killer; cost_class records WHERE a setup sits relative to that, never as edge.
+_TAKER_PP = 0.10
+_MAKER_PP = 0.02
+
+
+def cost_class(net_pct: float) -> str:
+    """Where a setup sits on the cost ladder (research label, not edge)."""
+    net = float(net_pct or 0.0)
+    if net > 0:
+        return "cost_ok"                       # net-positive even under taker
+    if net + (_TAKER_PP - _MAKER_PP) > 0:
+        return "cost_bound_maker_unlock"        # taker-dead but a maker fill would flip it (hypothesis)
+    if net + _TAKER_PP > 0:
+        return "cost_marginal"                  # only zero-cost positive
+    return "cost_dead"
+
+
+def tactical_class(n_trades: int, net_pct: float, hard_status: str) -> str:
+    """One-shot vs statistical separation (research label; one-shot is NEVER edge)."""
+    if str(hard_status or "") == "PAPER_FORWARD_READY":
+        return "statistical_edge_candidate"
+    if 1 <= int(n_trades or 0) < POWER_FLOOR and float(net_pct or 0.0) > 0:
+        return "one_shot_candidate"
+    return ""
+
+
+# Machine-reason follow-up for the rejected-research pipeline: every rejected/thin setup gets an
+# explainable next step (none of which is promotion).
+def next_action(outcome_class: str, cost_cls: str, tactical_cls: str) -> str:
+    if outcome_class == "CONFIRMED_BAD":
+        return "known_bad_freeze"
+    if outcome_class == "WRONG_EXIT":
+        return "exit_grid_phase2"
+    if outcome_class in ("NEEDS_OI_DATA", "INSUFFICIENT_DATA"):
+        return "await_new_data"
+    if cost_cls == "cost_bound_maker_unlock":
+        return "maker_cost_sensitivity_research"     # not a fake-pass: a maker-fill model is needed
+    if tactical_cls == "one_shot_candidate":
+        return "shadow_forward_watch"
+    if outcome_class == "POSITIVE_VALIDATED":
+        return "hard_passed_await_human_go"
+    return "characterize_or_park"
+
 
 def derive_outcome_class(lifecycle_state: str, subreason: str, recovered: bool,
                          hard_status: str = "") -> str:
@@ -364,12 +409,17 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
         outcome = derive_outcome_class(lc["derived_lifecycle_state"], sub_reason, recovered,
                                        lc["hard_status"])
         bf = backfill.get(uc, {})
+        cost_cls = cost_class(lc["avg_net_pct"])
+        tactical_cls = tactical_class(lc["n_trades"], lc["avg_net_pct"], lc["hard_status"])
         records.append({
             "uc_key": uc, "symbol": lc["symbol"], "okx_inst": _okx_inst(lc["symbol"]),
             "timeframe": lc["timeframe"], "family": lc["family"],
             "params_hash": lc["params_hash"], "data_fingerprint": lc["data_fingerprint"],
             "regime_bucket": lc["regime_bucket"], "n_trades": lc["n_trades"],
             "baseline_net": lc["avg_net_pct"],
+            # Tactical Setup Library dimensions (research labels; none is edge or paper-ready):
+            "cost_class": cost_cls, "tactical_class": tactical_cls,
+            "next_action": next_action(outcome, cost_cls, tactical_cls),
             "avg_mfe_pct": float(sub.get("avg_mfe_pct") or 0.0),
             "avg_mae_pct": float(sub.get("avg_mae_pct") or 0.0),
             "avg_capture_ratio": float(sub.get("avg_capture_ratio") or 0.0),
@@ -430,6 +480,15 @@ def needs_data_setups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _of_class(records, {"INSUFFICIENT_DATA", "NEEDS_OI_DATA"})
 
 
+def _tally_field(records: list[dict[str, Any]], field_name: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for r in records:
+        v = str(r.get(field_name) or "")
+        if v:
+            out[v] = out.get(v, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_class: dict[str, int] = {}
     for r in records:
@@ -437,6 +496,12 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total": len(records),
         "by_outcome_class": dict(sorted(by_class.items(), key=lambda kv: -kv[1])),
+        # Tactical Setup Library dimensions (research-only): cost ladder + one-shot/statistical + follow-up
+        "by_cost_class": _tally_field(records, "cost_class"),
+        "by_tactical_class": _tally_field(records, "tactical_class"),
+        "by_next_action": _tally_field(records, "next_action"),
+        "one_shot_candidates": sum(1 for r in records if r.get("tactical_class") == "one_shot_candidate"),
+        "cost_bound_maker_unlock": sum(1 for r in records if r.get("cost_class") == "cost_bound_maker_unlock"),
         "positive": len(positive_setups(records)),
         "recovered": len(recovered_setups(records)),
         "statistical_candidates": len(statistical_candidates(records)),
