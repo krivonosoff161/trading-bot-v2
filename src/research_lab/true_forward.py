@@ -76,6 +76,16 @@ def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CAN
         out.append(ForwardWatch(str(uc), str(row.get("symbol") or ""), str(row.get("timeframe") or ""),
                                 str(row.get("family") or ""), str(row.get("recovered_exit") or "baseline"),
                                 dict(row.get("params") or {}), "shadow_forward"))
+    # tactical-track LEADS (thin positive + good capture) — the gems the statistical validator drops
+    for r in (_read_json(derived / "tactical_track.json").get("rows") or []):
+        uc = str(r.get("uc_key") or "")
+        if not uc or uc in seen or r.get("tactical_status") != "TACTICAL_LEAD":
+            continue
+        seen.add(uc)
+        out.append(ForwardWatch(uc, str(r.get("symbol") or ""), str(r.get("timeframe") or ""),
+                                str(r.get("family") or ""), "baseline", {}, "tactical_lead"))
+        if len(out) >= max_candidates:
+            return out[:max_candidates]
     mem = _read_json(derived / "setup_outcome_memory.json").get("records") or []
     for r in mem:
         uc = str(r.get("uc_key") or "")
