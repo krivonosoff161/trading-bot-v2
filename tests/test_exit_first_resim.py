@@ -51,6 +51,19 @@ class TestSummarize:
         assert s["top_recovered"][0]["delta"] == 2.0  # sorted by delta desc
 
 
+class TestSkipReasons:
+    def test_no_params_skip_is_recorded(self, monkeypatch):
+        # a wrong-exit candidate whose params are absent in the brain -> recorded as no_params, not silent
+        recs = [{"uc_key": "u1", "symbol": "A", "timeframe": "1h", "family": "momentum_breakout",
+                 "avg_mfe_pct": 2.0, "avg_capture_ratio": 0.1}]
+        monkeypatch.setattr(EF, "build_memory_index", lambda _root: recs)
+        monkeypatch.setattr(EF, "_params_for_uc", lambda _root, _uc: {})  # no stored params
+        rep = EF.run(Path("."), limit=10, validate=False)
+        assert rep["evaluated"] == 0
+        assert rep["summary"]["skipped"]["no_params"] == 1
+        assert rep["summary"]["coverage"] == 0.0
+
+
 class TestNoExecutionPath:
     def test_no_forbidden_imports_and_never_paper_ready(self):
         src = (_ROOT / "src" / "research_lab" / "exit_first_resim.py").read_text(encoding="utf-8")

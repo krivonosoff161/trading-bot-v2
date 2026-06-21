@@ -50,13 +50,22 @@ def run(private_root: Path, *, families: tuple[str, ...] | None = None, limit: i
         validate: bool = True) -> dict[str, Any]:
     private_root = Path(private_root)
     rows: list[dict[str, Any]] = []
-    for c in wrong_exit_pool(private_root, families=families, limit=limit):
+    skipped: dict[str, int] = {"no_params": 0, "no_candles": 0, "no_signals": 0, "no_result": 0}
+    pool = wrong_exit_pool(private_root, families=families, limit=limit)
+    for c in pool:
         params = _params_for_uc(private_root, c["uc_key"])
         if not params:
+            skipped["no_params"] += 1   # candidate's params not in the brain (legacy/old run path)
             continue
         res = recover_with_phase2(private_root, symbol=c["symbol"], timeframe=c["timeframe"],
                                   family=c["family"], params=params, validate=validate)
-        if not res or "outcome_class" not in res:
+        if not res:
+            skipped["no_result"] += 1
+            continue
+        if "outcome_class" not in res:
+            # recover returns {"skipped": "no_candles"|"no_signals"} when it cannot reproduce the trades
+            skipped[str(res.get("skipped") or "no_signals")] = \
+                skipped.get(str(res.get("skipped") or "no_signals"), 0) + 1
             continue
         rows.append({"uc_key": c["uc_key"], "symbol": c["symbol"], "timeframe": c["timeframe"],
                      "family": c["family"], "mfe": c["mfe"], "capture": c["capture"],
@@ -64,8 +73,11 @@ def run(private_root: Path, *, families: tuple[str, ...] | None = None, limit: i
                      "best_net": res["best_net"], "delta": round(res["best_net"] - res["baseline_net"], 4),
                      "n_trades": res["n_trades"], "outcome_class": res["outcome_class"],
                      "paper_forward_ready": False})
-    return {"pool": len(wrong_exit_pool(private_root, families=families, limit=limit)),
-            "evaluated": len(rows), "summary": _summarize(rows), "rows": rows}
+    summary = _summarize(rows)
+    summary["skipped"] = {k: v for k, v in skipped.items() if v}
+    summary["skipped_total"] = len(pool) - len(rows)
+    summary["coverage"] = round(len(rows) / len(pool), 3) if pool else 0.0
+    return {"pool": len(pool), "evaluated": len(rows), "summary": summary, "rows": rows}
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
