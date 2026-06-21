@@ -275,9 +275,13 @@ def _research_outcomes_section(private_root: Path) -> dict[str, Any]:
 
     shadow_oos = _summary("shadow_oos.json")
     tactical = _read_json(derived / "tactical_probe.json").get("probe") or {}
+    cost_mode = _read_json(derived / "cost_mode_analysis.json").get("report") or {}
     return {
         "shadow_oos": {"evaluated": shadow_oos.get("evaluated"), "by_class": shadow_oos.get("by_class"),
                        "survived": len(shadow_oos.get("survived") or [])},
+        "true_forward": _summary("true_forward.json"),
+        "cost_mode": {"funnel": cost_mode.get("funnel"), "cost_sensitivity": cost_mode.get("cost_sensitivity"),
+                      "cost_bound_families": cost_mode.get("cost_bound_families")},
         "tactical_probe": {"thin_total": tactical.get("thin_total"),
                            "thin_positive": tactical.get("thin_positive"),
                            "probe_families": tactical.get("probe_families"),
