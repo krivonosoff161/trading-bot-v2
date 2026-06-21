@@ -91,9 +91,32 @@ self-guards against the small-sample mirages that produced fake leads twice.
 6. In parallel (cheap): test cross-sectional RV + fresh-listing vol-decay; re-activate the LLM loop as a
    second hypothesis generator behind the schema/RR/horizon/known-bad guards.
 
-## Bottom line
-Two real leads (meme fast-fade; funding carry), both research-only and both with a clear, decisive
-unmodeled gate (forward + slippage). A long list of avenues closed with numbers (which is the real value).
-The machine now generates hypotheses, tests them on broad samples, kills its own mirages, and writes
-everything to a knowledge base. Nothing is paper-ready; the honest path forward is true-forward + slippage,
-not another in-sample sweep.
+## 8. AUDIT CLOSED — the gates were run, and the leads DIED honestly (later same day)
+The audit items above were not left as TODOs — they were executed rigorously (`fade_validation.py`,
+`cross_sectional_probe.py`), and the result is decisive:
+
+| gate | range_fade x3 / tp_sl / 5m | nbar_fade n4 / first_green / 15m |
+|---|---|---|
+| slippage (slip ∝ spike size) | **breaks even at 0.02** → realistic net **−0.006** | survives to 0.05; realistic net +0.010 |
+| walk-forward (5 blocks) | **2/5 positive** (blocks 3-4 ≈ −0.14) | 3/5 positive (blocks 2-3 negative) |
+| loss tail @ realistic slip | win 0.53, avg_win +0.45 / avg_loss −0.52, maxDD −9.3 | win 0.72 but avg_loss −0.70 vs +0.29 (2.4×), **maxDD −30.6** |
+| significance + Šidák deflation | t −0.13, **p_adj 1.0** | t 0.44, **p_adj 1.0** |
+| **verdict** | **dies_under_realistic_slippage** | **not_significant_after_deflation** |
+
+**The meme fade is NOT an edge.** The +0.11 was a flat-cost / single-window / no-deflation artifact. The
+fat loss tail I worried about (88% win hiding big losers) is real (avg loss 2.4× avg win on the 15m cell).
+
+**New directionless avenue tested — cross-sectional relative-value (`cross_sectional_probe.py`):**
+- momentum (long winners / short losers, 4h, market-neutral): spread **+0.26% net/rebalance, win 0.57,
+  t 0.82** → `weak_or_zero` (positive, economically sensible, but underpowered on 79 rebalances).
+- reversal: −0.46%, t −1.45 → `negative` (confirms momentum is the right sign).
+This is the **least-dead** remaining idea — market-neutral, sensible sign, positive tilt — but not
+significant yet. Honest next step is MORE history, not belief.
+
+## Bottom line (final)
+After running every gate the morning report flagged: **both fade leads die honestly** (slippage / tail /
+deflation), funding carry stays modest-and-fragile, and the only survivor is a **weak, not-yet-significant
+cross-sectional momentum tilt**. That is the real output of an honest day: not a green strategy, but a
+shrunk search space — three more avenues closed with numbers, and one weak lead that needs data, not faith.
+Nothing paper-ready. The discipline held: every apparent edge was killed by its own validation, which is
+exactly what keeps this project alive.
