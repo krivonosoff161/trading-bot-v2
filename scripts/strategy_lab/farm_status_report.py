@@ -197,6 +197,12 @@ def collect(db_path: Path) -> dict:
                 if oos_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["shadow_oos"] = {}
+        try:  # true-forward collector (new bars, not held-out tail) — pending until data-prepare fetches
+            tf_f = db_path.parent.parent / "state" / "derived" / "true_forward.json"
+            report["true_forward"] = (json.loads(tf_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if tf_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["true_forward"] = {}
         try:  # tactical-probe characterization of sub-power net-positive setups (research-only, not edge)
             tp_f = db_path.parent.parent / "state" / "derived" / "tactical_probe.json"
             report["tactical_probe"] = (json.loads(tp_f.read_text(encoding="utf-8")).get("probe") or {}) \
@@ -356,6 +362,11 @@ def _print(report: dict) -> None:
         print(f"  shadow OOS (held-out-tail, research-only): evaluated={so['evaluated']} "
               f"by_class={so.get('by_class')} survived={len(so.get('survived') or [])} "
               "(pseudo-OOS, not new bars; shadow_survived != edge)")
+    tf = report.get("true_forward") or {}
+    if tf.get("watched"):
+        print(f"  true-forward (new bars, research-only): watched={tf['watched']} "
+              f"by_status={tf.get('by_status')} matured={tf.get('matured', 0)} "
+              "(pending until data-prepare fetches newer candles; matured != edge)")
     tp = report.get("tactical_probe") or {}
     if tp.get("thin_total"):
         print(f"  tactical probe (n<{tp.get('power_floor')}, research-only): thin={tp['thin_total']} "
