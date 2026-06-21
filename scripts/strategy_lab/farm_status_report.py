@@ -215,6 +215,11 @@ def collect(db_path: Path) -> dict:
                 if od_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["oi_diagnostic_15m"] = {}
+        try:  # latest bounded discovery cycle (live universe -> validate -> tactical -> exit -> memory)
+            dc_f = db_path.parent.parent / "state" / "derived" / "discovery_cycle.json"
+            report["discovery_cycle"] = json.loads(dc_f.read_text(encoding="utf-8")) if dc_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["discovery_cycle"] = {}
         try:  # tactical track (parallel verdict lane; NO_EVENT != bad; leads = forward-watch, never paper-ready)
             tt_f = db_path.parent.parent / "state" / "derived" / "tactical_track.json"
             report["tactical_track"] = (json.loads(tt_f.read_text(encoding="utf-8")).get("summary") or {}) \
@@ -388,6 +393,12 @@ def _print(report: dict) -> None:
     if od.get("evaluated"):
         print(f"  oi 15m DIAGNOSTIC (delta_coarse, never edge): evaluated={od['evaluated']} "
               f"by_class={od.get('by_class')}")
+    dc = report.get("discovery_cycle") or {}
+    if dc.get("steps"):
+        oks = sum(1 for s in dc["steps"] if s.get("status") == "ok")
+        worked = (dc.get("what_worked_failed") or {}).get("worked") or []
+        print(f"  discovery cycle (latest, research-only): steps_ok={oks}/{len(dc['steps'])} "
+              f"held_oos={len(worked)} {worked[:1]}")
     tt = report.get("tactical_track") or {}
     if tt.get("total"):
         print(f"  tactical track (parallel lane, never paper-ready): leads={tt.get('tactical_leads')} "
