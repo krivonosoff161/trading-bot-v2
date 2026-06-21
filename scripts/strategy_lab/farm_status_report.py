@@ -215,6 +215,12 @@ def collect(db_path: Path) -> dict:
                 if od_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["oi_diagnostic_15m"] = {}
+        try:  # tactical track (parallel verdict lane; NO_EVENT != bad; leads = forward-watch, never paper-ready)
+            tt_f = db_path.parent.parent / "state" / "derived" / "tactical_track.json"
+            report["tactical_track"] = (json.loads(tt_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if tt_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["tactical_track"] = {}
         try:  # Theme 40 microstructure lane (separate research-only lane; tape replay + orderbook recorder)
             mm_f = db_path.parent.parent / "state" / "derived" / "micro_memory.json"
             report["microstructure"] = (json.loads(mm_f.read_text(encoding="utf-8")).get("summary") or {}) \
@@ -382,6 +388,12 @@ def _print(report: dict) -> None:
     if od.get("evaluated"):
         print(f"  oi 15m DIAGNOSTIC (delta_coarse, never edge): evaluated={od['evaluated']} "
               f"by_class={od.get('by_class')}")
+    tt = report.get("tactical_track") or {}
+    if tt.get("total"):
+        print(f"  tactical track (parallel lane, never paper-ready): leads={tt.get('tactical_leads')} "
+              f"underpowered_pos={tt.get('underpowered_positive')} exit_problem={tt.get('exit_problem')} "
+              f"no_event={tt.get('no_event')} known_bad={tt.get('known_bad')} "
+              f"forward_watch={tt.get('forward_watch')} (NO_EVENT != bad; paper_ready_leak={tt.get('paper_ready_leak')})")
     mic = report.get("microstructure") or {}
     if mic:
         tape = mic.get("tape_sub_lane") or {}
