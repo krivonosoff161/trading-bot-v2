@@ -44,15 +44,19 @@ class TestSummary:
         s = FC._summarize({}, [{"net": 0.01}] * 5)
         assert s["verdict"] == "underpowered"
 
-    def test_beats_cost_candidate(self):
+    def test_liquid_candidate_requires_liquid_pool(self):
         eps = [{"net": 0.003} for _ in range(FC.MIN_EPISODES + 5)]
         per = {"X": {"annualized_carry_pct": 50.0, "episode_net_positive_share": 0.9}}
-        s = FC._summarize(per, eps)
-        assert s["verdict"] == "carry_beats_cost_candidate" and s["episode_net_positive_share"] >= 0.55
+        # positive overall but NO liquid episodes -> only illiquid, not a real candidate
+        assert FC._summarize(per, eps, [])["verdict"] == "carry_only_in_illiquid"
+        # positive AND liquid pool passes -> the candidate verdict
+        s = FC._summarize(per, eps, eps)
+        assert s["verdict"] == "carry_beats_cost_liquid_candidate"
+        assert s["liquid_pool"]["net_positive_share"] >= 0.55
 
     def test_below_cost(self):
         eps = [{"net": -0.001} for _ in range(FC.MIN_EPISODES + 5)]
-        assert FC._summarize({"X": {"annualized_carry_pct": 1.0}}, eps)["verdict"] == "carry_below_cost"
+        assert FC._summarize({"X": {"annualized_carry_pct": 1.0}}, eps, [])["verdict"] == "carry_below_cost"
 
 
 class TestNoExecutionPath:
