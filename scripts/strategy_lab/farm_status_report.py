@@ -331,6 +331,11 @@ def _print(report: dict) -> None:
         if om.get("revalidated"):
             print(f"    re-validated={om['revalidated']} survivors={om.get('revalidation_survivors', 0)} "
                   "(survivor = research-only, needs human GO + OOS, never auto paper-ready)")
+        if om.get("by_cost_class"):
+            print(f"    tactical library: cost={om.get('by_cost_class')} "
+                  f"one_shot={om.get('one_shot_candidates', 0)} "
+                  f"maker_unlock={om.get('cost_bound_maker_unlock', 0)} (maker = hypothesis, not edge)")
+            print(f"    next_action queue: {om.get('by_next_action')}")
     sh = report.get("shadow_forward") or {}
     if sh.get("shadow_candidates"):
         print(f"  shadow-forward watch: candidates={sh['shadow_candidates']} by_family={sh.get('by_family')} "
