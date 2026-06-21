@@ -129,12 +129,20 @@ def summarize_micro(private_root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         tape = {}
     tape_summary = tape.get("summary") or {}
+    try:
+        ob_replay = (json.loads((derived / "micro_orderbook_replay.json").read_text(encoding="utf-8"))
+                     .get("summary") or {})
+    except (OSError, json.JSONDecodeError):
+        ob_replay = {}
     events = scan_recordings(private_root)
     return {
         "tape_sub_lane": {"events": tape.get("events"), "overall_bucket": tape_summary.get("overall_bucket"),
                           "by_side": {k: {"bucket": v.get("bucket"), "median_net_pct": v.get("median_net_pct")}
                                       for k, v in (tape_summary.get("by_side") or {}).items()}},
-        "orderbook_sub_lane": {**_orderbook_bucket(events), "recorder": recorder_status(private_root)},
+        "orderbook_sub_lane": {**_orderbook_bucket(events), "recorder": recorder_status(private_root),
+                               "followthrough_replay": {"events": ob_replay.get("events_scored"),
+                                                        "overall_bucket": ob_replay.get("overall_bucket"),
+                                                        "horizon_curve": ob_replay.get("horizon_curve_all")}},
         "buckets_vocabulary": list(MICRO_BUCKETS),
         "note": "research-only microstructure lane; tape-pressure has no follow-through (real data); "
                 "orderbook walls pending forward collection; nothing is edge or paper-ready",
