@@ -50,19 +50,21 @@ class TestGridAndVerdict:
         assert "exhaustion_fade" in fams and "momentum_breakout" in fams
         assert {"baseline", "trailing_tight", "early_tp", "hold_long"} & exits
 
-    def test_verdict(self):
-        assert HS._verdict(2.5, 1.6, 0.58) == "holds_oos_candidate"
-        assert HS._verdict(1.0, -0.3, 0.5) == "in_sample_only"
-        assert HS._verdict(-1.0, -0.5, 0.3) == "weak_or_negative"
+    def test_verdict_requires_broad_sample(self):
+        # positive but only on a few symbols -> small_sample_positive, NOT a candidate (mirage guard)
+        assert HS._verdict(2.5, 1.6, 0.58, n=12) == "small_sample_positive"
+        assert HS._verdict(2.5, 1.6, 0.58, n=20) == "holds_oos_candidate"
+        assert HS._verdict(1.0, -0.3, 0.5, n=20) == "in_sample_only"
+        assert HS._verdict(-1.0, -0.5, 0.3, n=20) == "weak_or_negative"
 
     def test_rank_drops_underpowered_and_sorts(self):
-        acc = {"a": {"label": "x", "family": "f", "timeframe": "4h", "exit": "early_tp", "symbols": 6,
-                     "is": [2.0] * 6, "oos": [1.5] * 6, "oos_pos": 5},
+        acc = {"a": {"label": "x", "family": "f", "timeframe": "4h", "exit": "early_tp", "symbols": 16,
+                     "is": [2.0] * 16, "oos": [1.5] * 16, "oos_pos": 13},
                "b": {"label": "y", "family": "g", "timeframe": "4h", "exit": "early_tp", "symbols": 2,
                      "is": [9.0, 9.0], "oos": [9.0, 9.0], "oos_pos": 2}}
         ranked = HS._rank(acc)
         assert len(ranked) == 1 and ranked[0]["label"] == "x"   # underpowered (n=2) dropped
-        assert ranked[0]["verdict"] == "holds_oos_candidate"
+        assert ranked[0]["verdict"] == "holds_oos_candidate"    # n=16 >= MIN_HOLD_SYMBOLS
 
 
 class TestRegistered:

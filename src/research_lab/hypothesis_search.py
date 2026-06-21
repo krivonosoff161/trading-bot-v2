@@ -26,6 +26,10 @@ FEES_BPS = 7.0
 SLIP_BPS = 3.0
 OOS_FRAC = 0.35
 MIN_TRADES = 4
+# A held-out-tail positive on a FEW movers is a selection artifact (mover payoffs are bimodal: each
+# symbol roughly either trends to the take or reverses to the stop, ~coin-flip which). Require a broad
+# symbol base before calling a cell a candidate, or small samples manufacture mirages.
+MIN_HOLD_SYMBOLS = 15
 
 
 def _grid() -> list[dict[str, Any]]:
@@ -125,13 +129,14 @@ def _rank(acc: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         out.append({"label": cell["label"], "family": cell["family"], "timeframe": cell["timeframe"],
                     "exit": cell["exit"], "symbols": n, "is_median": round(is_med, 3),
                     "oos_median": round(oos_med, 3), "oos_positive_share": round(share, 3),
-                    "verdict": _verdict(is_med, oos_med, share), "paper_forward_ready": False})
+                    "verdict": _verdict(is_med, oos_med, share, n), "paper_forward_ready": False})
     return sorted(out, key=lambda c: -c["oos_median"])
 
 
-def _verdict(is_med: float, oos_med: float, share: float) -> str:
+def _verdict(is_med: float, oos_med: float, share: float, n: int) -> str:
     if oos_med > 0 and share >= 0.55 and is_med > 0:
-        return "holds_oos_candidate"
+        # only a candidate if confirmed on a BROAD symbol base; few-symbol positives are mirages
+        return "holds_oos_candidate" if n >= MIN_HOLD_SYMBOLS else "small_sample_positive"
     if is_med > 0 and oos_med <= 0:
         return "in_sample_only"
     return "weak_or_negative"
