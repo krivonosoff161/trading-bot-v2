@@ -215,6 +215,12 @@ def collect(db_path: Path) -> dict:
                 if od_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["oi_diagnostic_15m"] = {}
+        try:  # Theme 40 microstructure lane (separate research-only lane; tape replay + orderbook recorder)
+            mm_f = db_path.parent.parent / "state" / "derived" / "micro_memory.json"
+            report["microstructure"] = (json.loads(mm_f.read_text(encoding="utf-8")).get("summary") or {}) \
+                if mm_f.exists() else {}
+        except Exception:  # noqa: BLE001 - optional derived view must not break status
+            report["microstructure"] = {}
         try:  # the owner's six knowledge-base counts in one line (gate + survived + tactical + recyclable)
             from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
             from src.research_lab.setup_outcome_memory import (
@@ -376,6 +382,14 @@ def _print(report: dict) -> None:
     if od.get("evaluated"):
         print(f"  oi 15m DIAGNOSTIC (delta_coarse, never edge): evaluated={od['evaluated']} "
               f"by_class={od.get('by_class')}")
+    mic = report.get("microstructure") or {}
+    if mic:
+        tape = mic.get("tape_sub_lane") or {}
+        ob = mic.get("orderbook_sub_lane") or {}
+        rec = ob.get("recorder") or {}
+        print(f"  micro lane (Theme 40, research-only): tape={tape.get('events')}ev "
+              f"bucket={tape.get('overall_bucket')} | orderbook events={ob.get('events')} "
+              f"recorder={rec.get('readiness')} (tape-pressure no follow-through; walls pending data)")
     kb = report.get("knowledge_base") or {}
     if kb:
         print(f"  KNOWLEDGE BASE (research-only): known_bad={kb.get('known_bad')} revisit={kb.get('revisit')} "
