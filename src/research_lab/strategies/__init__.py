@@ -29,6 +29,7 @@ from src.research_lab.strategies.range_family import (
     signals_volatility_squeeze_breakout_v2,
 )
 from src.research_lab.strategies.regime_family import signals_main_fast_swing_regime
+from src.research_lab.strategies.sfp import signals_sfp_liquidity_sweep
 from src.research_lab.strategies.trend import (
     signals_moving_average_reclaim,
     signals_trend_pullback,
@@ -58,6 +59,7 @@ __all__ = [
     "signals_pump_dump_scalp",
     "signals_range_breakout",
     "signals_range_volume_breakout",
+    "signals_sfp_liquidity_sweep",
     "signals_rsi_reversal",
     "signals_trend_pullback",
     "signals_volatility_squeeze_breakout",
