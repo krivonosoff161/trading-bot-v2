@@ -178,6 +178,16 @@ _DEFS: list[StrategyDef] = [
         risk_notes="Misses runaway moves that never retest; pivot lookback sets confirmation lag.",
     ),
     StrategyDef(
+        "exhaustion_fade", "Exhaustion Fade", "mean_reversion",
+        "Fade a parabolic run's exhaustion: a +run_pct move over K bars with a climax bar tends to snap "
+        "back (short); mirror on a -run_pct capitulation (long). Conditional MR, aimed at live movers.",
+        s.signals_exhaustion_fade,
+        parameter_defaults={"run_lookback": 6, "run_pct": 15.0, "vol_climax_mult": 1.5,
+                            "hold_bars": 6, "stop_pct": 6, "take_pct": 12},
+        risk_notes="Fading strength is dangerous in a real trend; the climax filter + run threshold are "
+                   "the guard. Few signals on calm symbols by design.",
+    ),
+    StrategyDef(
         "sfp_liquidity_sweep", "SFP / Liquidity Sweep", "structure",
         "Stop-run reversal: price pierces a prior swing extreme (sweeps the liquidity beyond it) then "
         "closes back inside the range (failed breakout). Sweep above -> short; sweep below -> long. "

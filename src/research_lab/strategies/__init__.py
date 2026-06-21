@@ -2,6 +2,7 @@
 """Deterministic, stdlib-only strategy signal generators for the lab."""
 
 from src.research_lab.strategies.bb_fade import signals_bb_volume_fade
+from src.research_lab.strategies.exhaustion_fade import signals_exhaustion_fade
 from src.research_lab.strategies.breakout import (
     signals_breakout_retest,
     signals_donchian_breakout,
@@ -44,6 +45,7 @@ __all__ = [
     "signals_bb_volume_fade",
     "signals_breakout_retest",
     "signals_donchian_breakout",
+    "signals_exhaustion_fade",
     "signals_fractal_swing_break_retest",
     "signals_fvg_reclaim_reject",
     "signals_impulse_continuation",
