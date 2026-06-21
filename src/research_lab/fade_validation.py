@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from statistics import mean, median, pstdev
+from statistics import mean, pstdev
 from typing import Any
 
 from src.research_lab.strategies._helpers import sma
