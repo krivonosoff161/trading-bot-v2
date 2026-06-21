@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from statistics import mean, median
+from statistics import mean
 from typing import Any
 
 from src.research_lab.strategies._helpers import sma, vols
@@ -115,7 +115,11 @@ def _hypotheses(tf: str) -> list[dict[str, Any]]:
     return [
         {"label": "burst_momentum|k3", "fn": lambda c: burst_momentum(c, 3, 1.8), **exit_p},
         {"label": "micro_breakout|n20", "fn": lambda c: micro_breakout(c, 20), **exit_p},
+        # vol_expansion_fade across thresholds: the edge should STRENGTHEN with the threshold (bigger
+        # overshoots revert more), not be a knife-edge at one value -> a built-in robustness check.
+        {"label": "vol_expansion_fade|x2.5", "fn": lambda c: vol_expansion_fade(c, 2.5), **exit_p},
         {"label": "vol_expansion_fade|x3", "fn": lambda c: vol_expansion_fade(c, 3.0), **exit_p},
+        {"label": "vol_expansion_fade|x4", "fn": lambda c: vol_expansion_fade(c, 4.0), **exit_p},
     ]
 
 
