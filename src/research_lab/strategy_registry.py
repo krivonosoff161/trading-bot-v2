@@ -178,6 +178,17 @@ _DEFS: list[StrategyDef] = [
         risk_notes="Misses runaway moves that never retest; pivot lookback sets confirmation lag.",
     ),
     StrategyDef(
+        "sfp_liquidity_sweep", "SFP / Liquidity Sweep", "structure",
+        "Stop-run reversal: price pierces a prior swing extreme (sweeps the liquidity beyond it) then "
+        "closes back inside the range (failed breakout). Sweep above -> short; sweep below -> long. "
+        "Optional volume confirmation on the sweep bar.",
+        s.signals_sfp_liquidity_sweep,
+        parameter_defaults={"lookback": 20, "vol_mult": 0.0, "reclaim_buf_pct": 0.0,
+                            "hold_bars": 8, "stop_pct": 5, "take_pct": 10},
+        risk_notes="Reversal idea: a real breakout (no reclaim) produces no signal by design; thin on "
+                   "quiet ranges. Best where liquidity sits beyond obvious swings (movers).",
+    ),
+    StrategyDef(
         "oi_funding_squeeze", "OI + Funding Squeeze", "flow",
         "Crowded funding + building open interest -> fade the crowded side (squeeze hypothesis). "
         "Needs OI/funding data; otherwise emits nothing (NEEDS_DATA).",
