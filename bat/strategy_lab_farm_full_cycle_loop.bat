@@ -3,6 +3,7 @@ setlocal
 chcp 65001 >nul 2>&1
 cd /d "%~dp0\.."
 set "PYTHONUTF8=1"
+set "PYTHONWARNINGS=ignore:CUDA path could not be detected:UserWarning"
 
 rem Canonical Strategy Lab farm cycle:
 rem scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper runtime
@@ -14,7 +15,7 @@ if "%TRADING_BOT_RESEARCH_ROOT%"=="" (
   set "TRADING_BOT_RESEARCH_ROOT=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 )
 
-if "%STRATEGY_LAB_FARM_SLEEP_SECONDS%"=="" set "STRATEGY_LAB_FARM_SLEEP_SECONDS=180"
+if "%STRATEGY_LAB_FARM_SLEEP_SECONDS%"=="" set "STRATEGY_LAB_FARM_SLEEP_SECONDS=600"
 if "%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%"=="" set "STRATEGY_LAB_FARM_MAX_PLAN_EVENTS=20"
 if "%STRATEGY_LAB_FARM_MAX_PREPARES%"=="" set "STRATEGY_LAB_FARM_MAX_PREPARES=4"
 if "%STRATEGY_LAB_FARM_MAX_ENRICH%"=="" set "STRATEGY_LAB_FARM_MAX_ENRICH=4"
@@ -60,6 +61,7 @@ echo.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Continue';" ^
   "$env:PYTHONUTF8='1';" ^
+  "$env:PYTHONWARNINGS='ignore:CUDA path could not be detected:UserWarning';" ^
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8;" ^
   "$env:TRADING_BOT_RESEARCH_ROOT='%TRADING_BOT_RESEARCH_ROOT%';" ^
   "$cmd = @('-X','utf8','-u','-m','scripts.strategy_lab.farm_loop','%STRATEGY_LAB_FARM_RUN_ARG%','%STRATEGY_LAB_FARM_MODE_ARG%','--run-worker','--run-validation','--run-paper','--run-paper-signals','--enrich-funding','--enrich-oi','--backend','%STRATEGY_LAB_FARM_BACKEND%','--provider','%STRATEGY_LAB_FARM_PROVIDER%','--max-plan-events','%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%','--max-prepares','%STRATEGY_LAB_FARM_MAX_PREPARES%','--max-enrich','%STRATEGY_LAB_FARM_MAX_ENRICH%','--max-sweeps','%STRATEGY_LAB_FARM_MAX_SWEEPS%','--max-worker-jobs','%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%','--max-paper-cards','%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%','--data-days','%STRATEGY_LAB_FARM_DATA_DAYS%','--sleep-seconds','%STRATEGY_LAB_FARM_SLEEP_SECONDS%','--stop-file','%STOP_FILE%','--private-root','%TRADING_BOT_RESEARCH_ROOT%','--night-mode','%STRATEGY_LAB_FARM_QUIET_ARG%') | Where-Object { $_ -ne '' };" ^
