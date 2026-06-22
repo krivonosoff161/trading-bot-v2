@@ -274,6 +274,11 @@ def collect(db_path: Path) -> dict:
             report["tail_diagnostics"] = summarize_tails(blocked, deferred, uni, needs_oi)
         except Exception:  # noqa: BLE001 - optional decode must not break status
             report["tail_diagnostics"] = {}
+        try:  # operational paper-watch lane snapshot (read-only surface)
+            ps_path = db_path.parent.parent / "state" / "derived" / "paper_signals.json"
+            report["paper_signals"] = json.loads(ps_path.read_text(encoding="utf-8")) if ps_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["paper_signals"] = {}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -357,6 +362,10 @@ def _print(report: dict) -> None:
     if td.get("needs_oi", {}).get("count"):
         oi = td["needs_oi"]
         print(f"  tail needs_oi: {oi['reason']} (n={oi['count']}) -> {oi['next_action']}")
+    ps = report.get("paper_signals") or {}
+    if ps.get("total"):
+        print(f"  paper signals (operational watch lane, research-only NOT orders): total={ps['total']} "
+              f"by_status={ps.get('by_status') or '(none)'}")
     sl = report.get("setup_lifecycle") or {}
     if sl.get("available"):
         print(f"  setup lifecycle: total={sl.get('total', 0)} states={sl.get('by_state') or '(none)'}")
