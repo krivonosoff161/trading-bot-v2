@@ -75,10 +75,49 @@ def _load_movers(private_root: Path) -> list[dict]:
     except Exception:  # noqa: BLE001
         return []
     rows: list[dict] = []
-    for grp in (data.get("detail") or {}).values():
-        rows.extend(grp or [])
+    for grp, lst in (data.get("detail") or {}).items():
+        for r in lst or []:
+            rows.append({**r, "_bucket": r.get("group") or grp})
     rows.sort(key=lambda r: -(r.get("score") or 0))
     return rows
+
+
+def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
+                known_bad: set[tuple[str, str]]) -> list[dict]:
+    """Search Layer: re-rank the live-mover universe with OUTCOME MEMORY, not raw score alone. A symbol
+    with a symbol-wide confirmed-bad record is penalised hard; a symbol with prior good_signal is
+    nudged up. Each row carries a _priority and a human _reason (why it ranks where it does)."""
+    bad_syms = {k[0] for k in known_bad if k[1] == "*"}
+    good: dict[str, int] = {}
+    for m in memory:
+        if m.get("diagnosis") == "good_signal" or m.get("result") == "take":
+            good[str(m.get("symbol"))] = good.get(str(m.get("symbol")), 0) + 1
+    out = []
+    for mv in movers:
+        sym = str(mv.get("symbol") or (mv.get("inst_id") or "").replace("-", "_"))
+        base = float(mv.get("score") or 0.0)
+        penalty = 5.0 if sym in bad_syms else 0.0
+        bonus = min(2.0, 0.5 * good.get(sym, 0))
+        pr = base - penalty + bonus
+        out.append({**mv, "_priority": round(pr, 3),
+                    "_reason": f"bucket={mv.get('_bucket')} score={base:.1f} good+{bonus:.1f} "
+                               f"knownbad-{penalty:.0f} move%={mv.get('move_pct')} vol=${(mv.get('vol_usd') or 0) / 1e6:.0f}M"})
+    out.sort(key=lambda r: -r["_priority"])
+    return out
+
+
+def write_selection_snapshot(private_root: Path, ranked: list[dict], top_n: int = 20) -> Path:
+    out = Path(private_root) / "state" / "derived" / "paper_selection.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    buckets: dict[str, int] = {}
+    for r in ranked:
+        buckets[str(r.get("_bucket"))] = buckets.get(str(r.get("_bucket")), 0) + 1
+    payload = {"schema": "paper_selection.v1", "total": len(ranked), "by_bucket": buckets,
+               "top": [{"symbol": r.get("symbol"), "bucket": r.get("_bucket"),
+                        "priority": r.get("_priority"), "reason": r.get("_reason")} for r in ranked[:top_n]],
+               "disclaimer": "search-layer ranking of the live-mover universe; research-only"}
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return out
 
 
 def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"), max_new=5,
@@ -132,8 +171,10 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         elif apply:
             store.update_signal(private_root, s)
 
-    # (2) generate new, deduplicated
-    movers = _load_movers(private_root)
+    # (2) generate new, deduplicated -- over the MEMORY-RANKED live-mover universe (search layer)
+    movers = rank_movers(_load_movers(private_root), mem, known_bad)
+    if apply:
+        write_selection_snapshot(private_root, movers)
     gate_counts: dict[str, int] = {}
     new_sigs = []
     for mv in movers:
