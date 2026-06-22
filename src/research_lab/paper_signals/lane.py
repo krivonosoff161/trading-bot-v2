@@ -54,10 +54,18 @@ def _round(x: float, ref: float) -> float:
 
 
 # ── geometry: candles -> a continuation watch signal (deterministic, no look-ahead) ──
+def fingerprint(candles: list[dict[str, Any]], k: int = 20) -> str:
+    """Stable hash of the decision window (last k ts+close). New bars -> new fingerprint."""
+    import hashlib
+    tail = candles[-k:]
+    raw = ";".join(f"{int(c.get('ts') or 0)}:{c.get('close')}" for c in tail)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def build_signal(symbol: str, inst_id: str, timeframe: str, candles: list[dict[str, Any]],
                  *, source: str, mover: dict[str, Any] | None = None, now: float,
                  boundary_ts: int, validator_ctx: dict | None = None,
-                 memory_ctx: dict | None = None) -> tuple[PaperActionSignal | None, str]:
+                 memory_ctx: dict | None = None, mode: str = "live") -> tuple[PaperActionSignal | None, str]:
     """Return (signal, "ok") or (None, gate_reason). Continuation: trade WITH the trend, enter on a
     shallow pullback into the zone, stop beyond recent structure, TP at 1R/2R."""
     if len(candles) < ATR_N + TREND_LOOKBACK + 2:
@@ -104,16 +112,19 @@ def build_signal(symbol: str, inst_id: str, timeframe: str, candles: list[dict[s
               f"{TREND_LOOKBACK} bars; not known-bad in memory")
     invalidation = (f"close beyond {stop} (structure), OR no entry-fill within {ARM_WINDOW_BARS} bars "
                     f"(expired_no_entry), OR no follow-through (no tp1) within {hold_bars} bars")
+    family = "momentum_continuation"
+    fp = fingerprint(candles)
     sig = PaperActionSignal(
-        signal_id=f"{symbol}_{timeframe}_{int(now)}",
+        signal_id=f"{symbol}_{timeframe}_{family}_{fp}",
         source=source, symbol=symbol, okx_inst_id=inst_id, timeframe=timeframe, side=side,
-        setup_family="momentum_continuation",
+        setup_family=family,
         entry_zone=[entry_lo, entry_hi], stop_loss=stop, invalidation_rule=invalidation,
         take_profit_plan=tps, max_hold_bars=hold_bars, max_hold_minutes=hold_bars * tf_min,
         reason_now=reason, risk_notes="continuation can fail into reversal; paper-only watch",
         validator_context=validator_ctx or {}, outcome_memory_context=memory_ctx or {},
         status="armed", created_at=now, expires_at=now + ARM_WINDOW_BARS * tf_min * 60,
-        ref_price=price, risk_pct=risk_pct, boundary_ts=boundary_ts)
+        ref_price=price, risk_pct=risk_pct, boundary_ts=boundary_ts,
+        data_fingerprint=fp, dedup_key=f"{symbol}|{timeframe}|{family}", mode=mode)
     ok, problems = validate_signal(sig)
     if not ok:
         return None, "failed_validate:" + ";".join(problems)

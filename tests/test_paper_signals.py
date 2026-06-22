@@ -143,6 +143,60 @@ class TestReview:
         assert s.review["diagnosis"] == "good_signal" and s.status == "reviewed"
 
 
+class _FakeProvider:
+    """Deterministic synthetic candles so the cycle is testable without network."""
+    def __init__(self, prices):
+        self._p = prices
+
+    def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+        base = 900_000
+        return [{"ts": i * base, "open": p, "high": p * 1.01, "low": p * 0.99, "close": p}
+                for i, p in enumerate(self._p)]
+
+
+def _seed_universe(root: Path):
+    d = root / "discovery"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "live_universe.json").write_text(
+        '{"detail": {"g": [{"inst_id": "AAA-USDT-SWAP", "symbol": "AAA_USDT_SWAP", '
+        '"score": 9, "spread_bps": 2, "vol_usd": 50000000, "move_pct": 10}]}}', encoding="utf-8")
+
+
+class TestCycle:
+    def test_dry_writes_nothing(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_universe(tmp_path)
+        prov = _FakeProvider([100 + i * 0.5 for i in range(80)])
+        cycle.run_cycle(tmp_path, mode="replay", timeframes=("15m",), provider=prov, apply=False, now=1e6)
+        assert not (tmp_path / "state" / "derived" / "paper_signals.jsonl").exists()
+
+    def test_apply_then_dedup_no_duplicate(self, tmp_path):
+        from src.research_lab.paper_signals import cycle, store
+        _seed_universe(tmp_path)
+        prov = _FakeProvider([100 + i * 0.5 for i in range(80)])
+        cycle.run_cycle(tmp_path, mode="live", timeframes=("15m",), provider=prov, apply=True, now=1e6)
+        n1 = len(store.load_signals(tmp_path))
+        cycle.run_cycle(tmp_path, mode="live", timeframes=("15m",), provider=prov, apply=True, now=1e6 + 10)
+        keys = [s.dedup_key for s in store.load_signals(tmp_path)]
+        assert len(keys) == len(set(keys)) and len(keys) == n1
+
+    def test_memory_roundtrip_and_learn_known_bad(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        for _ in range(3):
+            s = PaperActionSignal(signal_id="i", source="farm", symbol="Z", okx_inst_id="Z-USDT-SWAP",
+                                  timeframe="15m", side="long", setup_family="momentum_continuation",
+                                  entry_zone=[1, 2], stop_loss=0.5, invalidation_rule="x",
+                                  take_profit_plan=[{"label": "tp1", "price": 3}], max_hold_bars=10,
+                                  max_hold_minutes=150, reason_now="x", dedup_key="Z|15m|momentum_continuation")
+            s.outcome = {"result": "stop", "net_pct": -1.0}
+            s.review = {"diagnosis": "valid_loss", "net_r": -1.0}
+            cycle.record_memory(tmp_path, s)
+        mem = cycle.load_memory(tmp_path)
+        assert len(mem) == 3
+        assert ("Z", "15m", "momentum_continuation") in cycle.learn_known_bad(mem, min_n=3)
+
+
 class TestNoLiveBoundary:
     def test_no_forbidden_imports_in_lane(self):
         pkg = _ROOT / "src" / "research_lab" / "paper_signals"

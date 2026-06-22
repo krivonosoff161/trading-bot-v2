@@ -42,6 +42,9 @@ class PaperActionSignal:
     ref_price: float = 0.0            # price at creation (for entry-zone framing)
     risk_pct: float = 0.0             # entry->stop distance as % of price (1R, for sizing/diagnosis)
     boundary_ts: int = 0              # last bar ts at creation; outcome is measured on bars after this
+    data_fingerprint: str = ""        # hash of the decision window -> new bars => new fingerprint
+    dedup_key: str = ""               # symbol|tf|family -> identity across re-runs (no duplicate spam)
+    mode: str = "live"                # "live" (boundary=now, forward) | "replay" (historical-tail diagnostic)
     outcome: dict[str, Any] = field(default_factory=dict)
     review: dict[str, Any] = field(default_factory=dict)
 
