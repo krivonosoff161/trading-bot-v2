@@ -228,8 +228,9 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     if apply:
         for sig, candles in new_sigs:
             store.append_signal(private_root, sig)
+            sig.chart_context_ref = str(lane.write_review_artifact(private_root, sig, candles))
+            store.update_signal(private_root, sig)   # persist the chart ref (armed cards get a chart too)
             if sig.status in TERMINAL:
-                lane.write_review_artifact(private_root, sig, candles)
                 record_memory(private_root, sig)
         store.write_state_snapshot(private_root)
 
