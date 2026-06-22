@@ -306,11 +306,24 @@ def main() -> None:
         tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit
         # A single-process loop has no live worker at boot, so any 'running' task is stale from a
         # previous stop. Requeue it once so the next cycle re-drains it instead of masking it as work.
+        # Single-process guard: reconcile_orphan_running assumes no other live loop. A fresh lock
+        # (younger than 2 cycles) means a second loop is active -> abort rather than corrupt state.
+        lock_path = private_root / "state" / "farm_loop.lock"
+        if args.loop and lock_path.exists():
+            age = time.time() - lock_path.stat().st_mtime
+            if age < 2 * max(60, args.sleep_seconds):
+                print(f"ABORT: another farm_loop appears active (lock {lock_path}, age {age:.0f}s); "
+                      f"stop it or delete the lock to override.")
+                return
+        if args.loop:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_text(str(os.getpid()), encoding="utf-8")
         n_orphan = tasks.reconcile_orphan_running()
         if n_orphan:
             print(f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop")
     else:
         private_root = Path(args.private_root)
+        lock_path = None
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
 
     try:
@@ -334,11 +347,18 @@ def main() -> None:
             elif not args.quiet:
                 print(f"  heartbeat @ {int(time.time())} pivot={out['pivot']} active={out['active_tasks']}")
             prev_sig = sig
+            if apply and lock_path is not None:
+                lock_path.write_text(str(os.getpid()), encoding="utf-8")  # keep the lock fresh
             time.sleep(max(1, args.sleep_seconds))
     except KeyboardInterrupt:
         print("\ninterrupted - graceful stop")
     finally:
         tasks.close()
+        if apply and args.loop and lock_path is not None:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
