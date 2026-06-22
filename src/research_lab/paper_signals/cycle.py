@@ -95,7 +95,9 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     recent_terminal = {(s.dedup_key, s.data_fingerprint) for s in existing if s.status in TERMINAL}
     last_seen = {s.dedup_key: s.created_at for s in existing}
     known_bad = lane.load_known_bad(private_root)
-    learned_bad = learn_known_bad(load_memory(private_root))
+    mem = load_memory(private_root)
+    learned_bad = learn_known_bad(mem)
+    fam_order = families_arg or family_priority(mem)
 
     observed, closed = 0, 0
     # (1) re-observe active signals on fresh bars
@@ -151,7 +153,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 gate_counts[wo] = gate_counts.get(wo, 0) + 1
                 continue
             for sig, fam in families.generate(symbol, inst, tf, decide, mover=mv, now=now,
-                                              boundary_ts=boundary_ts, mode=mode, families=families_arg):
+                                              boundary_ts=boundary_ts, mode=mode, families=fam_order):
                 if len(new_sigs) >= max_new:
                     break
                 if sig.dedup_key in by_key_active:
@@ -225,6 +227,44 @@ def learn_known_bad(memory: list[dict[str, Any]], *, min_n: int = 3) -> set[tupl
         if len(tags) >= min_n and all(t == "bad" for t in tags):
             out.add(key)
     return out
+
+
+def family_priority(memory: list[dict[str, Any]], *, default=None) -> list[str]:
+    """Order families by their good-signal rate in memory (learning influences the NEXT cycle's order).
+    Unseen families keep default order after the proven ones. Deterministic; never mints a signal."""
+    default = default or list(families.FAMILIES)
+    score = {f: [0, 0] for f in default}
+    for m in memory:
+        f = m.get("family")
+        if f in score:
+            score[f][1] += 1
+            if m.get("diagnosis") == "good_signal" or m.get("result") == "take":
+                score[f][0] += 1
+
+    def rate(f):
+        return (score[f][0] / score[f][1]) if score[f][1] else -1.0
+    return sorted(default, key=lambda f: -rate(f))
+
+
+# Allowed keys for an LLM REVIEWER's advice: annotation only. It can never carry signal geometry
+# (entry/stop/side/take/order) — deterministic code remains the sole authority that mints a signal.
+_ADVICE_ALLOWED = {"diagnosis_note", "confidence", "suggested_family_priority", "rationale"}
+_ADVICE_FORBIDDEN = {"entry_zone", "stop_loss", "take_profit_plan", "side", "signal_id", "order", "size"}
+
+
+def validate_advice(advice: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Schema gate for LLM advisory: reject anything that tries to mint/alter a signal. Advisory is
+    metadata only; the deterministic lane is the authority. Returns (ok, problems)."""
+    problems = []
+    for k in advice:
+        if k in _ADVICE_FORBIDDEN:
+            problems.append(f"advice may not set signal field {k!r}")
+        elif k not in _ADVICE_ALLOWED:
+            problems.append(f"unknown advice field {k!r}")
+    conf = advice.get("confidence")
+    if conf is not None and not (isinstance(conf, (int, float)) and 0 <= conf <= 1):
+        problems.append("confidence must be in [0,1]")
+    return (not problems), problems
 
 
 def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_file: str = "",

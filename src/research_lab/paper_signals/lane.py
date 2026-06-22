@@ -171,12 +171,16 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
     opened = sig.status == "opened_paper"
     entry_px = float(sig.outcome.get("entry") or 0.0)
     open_i = int(sig.outcome.get("open_index") or 0)
-    mfe = mae = 0.0
+    mfe = mae = fav_wait = 0.0
     for i, c in enumerate(new):
         h, lov, cl = float(c["high"]), float(c["low"]), float(c["close"])
         if not opened:
+            # favourable move WHILE unfilled => price ran away from the pullback entry (missed_pullback)
+            fav_wait = max(fav_wait, ((h - hi) / hi if long_ else (lo - lov) / lo) * 100)
             if i >= ARM_WINDOW_BARS:
-                sig.status, sig.outcome = "expired", {"result": "expired_no_entry", "bars_waited": i}
+                sig.status = "expired"
+                sig.outcome = {"result": "expired_no_entry", "bars_waited": i,
+                               "ran_away": fav_wait >= (sig.risk_pct or 99)}
                 return sig
             # limit-pullback fill: long fills on a dip to the low edge, short on a pop to the high edge
             filled = lov <= lo if long_ else h >= hi
@@ -221,17 +225,31 @@ def review(sig: PaperActionSignal) -> PaperActionSignal:
     mae = float(o.get("mae_pct") or 0.0)
     capture = round(net / mfe, 3) if mfe > 0 else 0.0
     r1 = sig.risk_pct or 1e-9                 # 1R in % — diagnose on R-multiples, not absolute %
-    mfe_r = mfe / r1
-    if res == "expired_no_entry":
-        diag = "expired_no_entry"
+    mfe_r, mae_r = mfe / r1, mae / r1
+    if res in ("no_data",):
+        diag = "data_issue"
+    elif res == "expired_no_entry":
+        diag = "missed_pullback" if o.get("ran_away") else "expired_no_entry"
     elif res in ("pending", "pending_arm", "pending_open"):
         diag = "pending"
     elif res == "take":
         diag = "good_signal"
     elif res == "stop":
-        diag = "valid_loss" if mfe_r < 0.5 else "bad_exit_gave_back"   # gave back >0.5R of favourable move
+        if mfe_r < 0.2:
+            diag = "wrong_direction"               # went straight to the stop, no favourable move
+        elif mfe_r < 0.5:
+            diag = "valid_loss"
+        elif mae_r < 1.1 and mfe_r >= 1.0:
+            diag = "stop_too_tight"                # barely past the stop after a >=1R favourable move
+        else:
+            diag = "bad_exit_gave_back"            # gave back >0.5R of a favourable move
     elif res == "timeout":
-        diag = "no_followthrough" if mfe_r < 1.0 else "bad_exit_gave_back"
+        if mfe_r >= 1.5:
+            diag = "target_too_far"                # ran far but the TP was set out of reach
+        elif mfe_r < 0.5:
+            diag = "no_follow_through"
+        else:
+            diag = "bad_exit_gave_back"
     else:
         diag = "uncharacterized"
     sig.review = {"diagnosis": diag, "net_pct": round(net, 3), "net_r": round(net / r1, 2),

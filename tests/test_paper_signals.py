@@ -150,8 +150,9 @@ class _FakeProvider:
 
     def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
         base = 900_000
-        return [{"ts": i * base, "open": p, "high": p * 1.01, "low": p * 0.99, "close": p}
-                for i, p in enumerate(self._p)]
+        n = len(self._p)  # anchor the last bar at end_ts so the data reads as FRESH
+        return [{"ts": int(end_ts) - (n - 1 - i) * base, "open": p, "high": p * 1.01,
+                 "low": p * 0.99, "close": p} for i, p in enumerate(self._p)]
 
 
 def _seed_universe(root: Path):
@@ -226,6 +227,66 @@ class TestFamilies:
         from src.research_lab.paper_signals import families
         assert len(families.FAMILIES) >= 3
         assert {"continuation", "reversal_fade", "liquidity_sweep_reclaim"} <= set(families.FAMILIES)
+
+
+class TestLearning:
+    def _seed_bad_memory(self, root, sym, tf, fam, n=3):
+        from src.research_lab.paper_signals import cycle
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        for _ in range(n):
+            s = PaperActionSignal(signal_id="i", source="farm", symbol=sym, okx_inst_id=f"{sym}-X",
+                                  timeframe=tf, side="long", setup_family=fam, entry_zone=[1, 2],
+                                  stop_loss=0.5, invalidation_rule="x",
+                                  take_profit_plan=[{"label": "tp1", "price": 3}], max_hold_bars=10,
+                                  max_hold_minutes=150, reason_now="x", dedup_key=f"{sym}|{tf}|{fam}")
+            s.outcome = {"result": "stop", "net_pct": -1.0}
+            s.review = {"diagnosis": "valid_loss", "net_r": -1.0}
+            cycle.record_memory(root, s)
+
+    def test_known_bad_not_regenerated(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_universe(tmp_path)
+        self._seed_bad_memory(tmp_path, "AAA_USDT_SWAP", "15m", "continuation", n=3)
+        prov = _FakeProvider([100 + i * 0.5 for i in range(80)])
+        rep = cycle.run_cycle(tmp_path, mode="live", timeframes=("15m",), provider=prov, apply=True, now=1e6)
+        assert rep["gate_counts"].get("learned_known_bad", 0) >= 1
+        from src.research_lab.paper_signals import store
+        fams = {s.setup_family for s in store.load_signals(tmp_path) if s.symbol == "AAA_USDT_SWAP"}
+        assert "continuation" not in fams  # the learned-bad family was skipped
+
+    def test_family_priority_orders_by_good_rate(self):
+        from src.research_lab.paper_signals import cycle
+        mem = ([{"family": "reversal_fade", "diagnosis": "good_signal"}] * 3 +
+               [{"family": "continuation", "diagnosis": "valid_loss"}] * 3)
+        order = cycle.family_priority(mem)
+        assert order.index("reversal_fade") < order.index("continuation")
+
+    def test_advice_gate_blocks_signal_minting(self):
+        from src.research_lab.paper_signals import cycle
+        assert cycle.validate_advice({"diagnosis_note": "looks late", "confidence": 0.7})[0]
+        assert not cycle.validate_advice({"entry_zone": [1, 2]})[0]   # LLM cannot mint geometry
+        assert not cycle.validate_advice({"side": "long"})[0]
+        assert not cycle.validate_advice({"confidence": 5})[0]
+
+
+class TestRicherDiagnosis:
+    def _sig(self, risk_pct=2.0):
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        return PaperActionSignal(signal_id="i", source="farm", symbol="Z", okx_inst_id="Z-X",
+                                 timeframe="15m", side="long", setup_family="continuation",
+                                 entry_zone=[99, 100], stop_loss=98, invalidation_rule="x",
+                                 take_profit_plan=[{"label": "tp1", "price": 104}], max_hold_bars=10,
+                                 max_hold_minutes=150, reason_now="x", risk_pct=risk_pct)
+
+    def test_wrong_direction(self):
+        s = self._sig()
+        s.outcome = {"result": "stop", "mfe_pct": 0.1, "mae_pct": 2.0}
+        assert lane.review(s).review["diagnosis"] == "wrong_direction"
+
+    def test_target_too_far(self):
+        s = self._sig()
+        s.outcome = {"result": "timeout", "mfe_pct": 4.0, "mae_pct": 1.0}  # 2R favourable, never hit TP
+        assert lane.review(s).review["diagnosis"] == "target_too_far"
 
 
 class TestNoLiveBoundary:
