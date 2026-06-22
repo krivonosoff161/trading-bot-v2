@@ -298,6 +298,27 @@ class TestPartialBreakevenExit:
         assert s.outcome["result"] == "stop" and s.outcome["net_pct"] < 0
 
 
+class TestSearchRanking:
+    def test_memory_reranks_universe(self):
+        from src.research_lab.paper_signals import cycle
+        movers = [{"symbol": "BAD_USDT_SWAP", "inst_id": "BAD-USDT-SWAP", "score": 10, "_bucket": "meme"},
+                  {"symbol": "GOOD_USDT_SWAP", "inst_id": "GOOD-USDT-SWAP", "score": 9, "_bucket": "majors"}]
+        memory = [{"symbol": "GOOD_USDT_SWAP", "diagnosis": "good_signal"}] * 3
+        known_bad = {("BAD_USDT_SWAP", "*")}
+        ranked = cycle.rank_movers(movers, memory, known_bad)
+        # despite lower raw score, GOOD outranks BAD (penalty 5 vs bonus +1.5)
+        assert ranked[0]["symbol"] == "GOOD_USDT_SWAP"
+        assert "knownbad-5" in ranked[1]["_reason"]
+
+    def test_selection_snapshot_written(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        ranked = cycle.rank_movers([{"symbol": "A_USDT_SWAP", "score": 5, "_bucket": "majors"}], [], set())
+        p = cycle.write_selection_snapshot(tmp_path, ranked)
+        import json
+        d = json.loads(p.read_text(encoding="utf-8"))
+        assert d["total"] == 1 and d["top"][0]["symbol"] == "A_USDT_SWAP" and "majors" in d["by_bucket"]
+
+
 class TestAgeOut:
     def _armed(self, expires_at=100.0):
         from src.research_lab.paper_signals.contract import PaperActionSignal

@@ -24,7 +24,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.research_lab.paper_signals import cycle, store  # noqa: E402
+from src.research_lab.paper_signals import cycle, lane, store  # noqa: E402
 from src.research_lab.paper_signals.contract import render_card  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 
@@ -74,12 +74,20 @@ def main() -> None:
     ap.add_argument("--sleep-seconds", type=int, default=0)
     ap.add_argument("--stop-file", default="")
     ap.add_argument("--status", action="store_true", help="print current paper-signal status and exit")
+    ap.add_argument("--select", action="store_true", help="print the memory-ranked top-N universe with reasons and exit")
     ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+chat already in env")
     args = ap.parse_args()
     root = Path(args.private_root)
     tfs = tuple(args.timeframes.split(","))
     if args.status:
         _print_status(root)
+        return
+    if args.select:
+        ranked = cycle.rank_movers(cycle._load_movers(root), cycle.load_memory(root),
+                                   lane.load_known_bad(root))
+        print(f"search layer: {len(ranked)} candidates (memory-ranked). top {min(20, len(ranked))}:")
+        for r in ranked[:20]:
+            print(f"  {r.get('symbol'):20s} pr={r.get('_priority'):>7} | {r.get('_reason')}")
         return
     if args.loop > 1:
         reports = cycle.run_loop(root, cycles=args.loop, sleep_seconds=args.sleep_seconds,
