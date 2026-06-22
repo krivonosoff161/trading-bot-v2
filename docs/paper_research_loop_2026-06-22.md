@@ -59,9 +59,10 @@ Every terminal AND every armed card now writes `paper_reviews/<id>.md` (ASCII pa
 python -X utf8 -m scripts.strategy_lab.paper_signals_run --select          # memory-ranked universe + reasons
   ... --mode live                                                          # dry-run (writes nothing)
   ... --mode live --apply                                                  # seat armed cards + charts + snapshot
-  ... --mode live --loop 8 --sleep-seconds 600 --stop-file <root>\state\STOP_PAPER.txt
-  ... --mode replay --loop 4                                               # diagnostic to seed memory
+  ... --mode live --apply --loop 8 --sleep-seconds 600 --stop-file <root>\state\STOP_PAPER.txt
+  ... --mode replay --apply --loop 4                                       # diagnostic to seed memory
   ... --status                                                             # cards + diagnosis counts
+  ... --ab-report                                                          # write state/derived/paper_exit_ab_comparison.json
   ... --apply --notify                                                     # Telegram (only if token+chat in env)
 python -X utf8 -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation \
     --run-paper --run-paper-signals --enrich-funding --enrich-oi --stop-file <root>\state\STOP_FARM_FULL_CYCLE.txt
