@@ -260,6 +260,20 @@ def collect(db_path: Path) -> dict:
         except Exception:  # noqa: BLE001 - optional reconcile must not break status
             report["completion"] = {"available": False}
             report["reconcile"] = {"available": False}
+        try:  # decode blocked/deferred tails into structural reasons (read-only)
+            from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+            from src.research_lab.tail_diagnostics import load_universe_symbols, summarize_tails
+            db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
+            try:
+                blocked = db.tasks_in_state("blocked")
+                deferred = db.tasks_in_state("deferred")
+            finally:
+                db.close()
+            uni = load_universe_symbols(db_path.parent.parent)
+            needs_oi = int((report.get("decisions") or {}).get("NEEDS_OI_DATA") or 0)
+            report["tail_diagnostics"] = summarize_tails(blocked, deferred, uni, needs_oi)
+        except Exception:  # noqa: BLE001 - optional decode must not break status
+            report["tail_diagnostics"] = {}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -335,6 +349,14 @@ def _print(report: dict) -> None:
     for name, info in (rc.get("orphans") or {}).items():
         print(f"  reconcile orphan: {name}={info.get('count')} owner={info.get('owner')} "
               f"{'-> ' + info.get('relabel') if info.get('relabel') else ''}")
+    td = report.get("tail_diagnostics") or {}
+    for kind in ("provider_error", "too_short"):
+        for reason, syms in (td.get(kind) or {}).items():
+            preview = ", ".join(syms[:6]) + (f" +{len(syms) - 6}" if len(syms) > 6 else "")
+            print(f"  tail {kind}: {reason} -> [{preview}]")
+    if td.get("needs_oi", {}).get("count"):
+        oi = td["needs_oi"]
+        print(f"  tail needs_oi: {oi['reason']} (n={oi['count']}) -> {oi['next_action']}")
     sl = report.get("setup_lifecycle") or {}
     if sl.get("available"):
         print(f"  setup lifecycle: total={sl.get('total', 0)} states={sl.get('by_state') or '(none)'}")
