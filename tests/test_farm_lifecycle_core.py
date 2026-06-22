@@ -87,6 +87,22 @@ def test_claim_respects_priority_and_deferral():
     db.close()
 
 
+def test_reconcile_orphan_running_requeues_stale():
+    db = FarmTasksDB(":memory:")
+    now = 1000.0
+    a, _ = db.enqueue_task(task_type="run_sweep", task_key="a", now=now)
+    b, _ = db.enqueue_task(task_type="run_sweep", task_key="b", now=now)
+    db.claim_next_task(now=now)  # one -> running (stale after a stop)
+    db.claim_next_task(now=now)  # two -> running
+    assert len(db.tasks_in_state("running")) == 2
+    n = db.reconcile_orphan_running(now=now + 5)
+    assert n == 2
+    assert db.tasks_in_state("running") == []
+    assert {t["task_key"] for t in db.tasks_in_state("queued")} == {"a", "b"}
+    assert db.reconcile_orphan_running(now=now + 6) == 0  # idempotent: nothing running now
+    db.close()
+
+
 def test_depends_on_gates_claim():
     db = FarmTasksDB(":memory:")
     now = 1000.0

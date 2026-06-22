@@ -339,6 +339,19 @@ class FarmTasksDB:
     def requeue_task(self, task_id: int, *, reason: str = "unblocked", now: float | None = None) -> None:
         self._set_state(task_id, "queued", reason=reason, now=now, deferred_until=None)
 
+    def reconcile_orphan_running(self, *, reason: str = "orphan_running_requeued",
+                                 now: float | None = None) -> int:
+        """Requeue tasks stuck in 'running' left by a previous process stop. Safe ONLY when no worker
+        is active (e.g. at loop startup): the single-process loop has no live worker at boot, so any
+        'running' task is stale (materialized into the compute queue but never finished). Returns the
+        count requeued so the next cycle re-drains them instead of masking them as active work. The
+        worker's compute-memory dedup skips anything already computed, so this never double-counts."""
+        now = time.time() if now is None else now
+        rows = self._conn.execute("SELECT task_id FROM tasks WHERE state='running'").fetchall()
+        for r in rows:
+            self.requeue_task(int(r["task_id"]), reason=reason, now=now)
+        return len(rows)
+
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (int(task_id),)).fetchone()
         return dict(row) if row is not None else None
