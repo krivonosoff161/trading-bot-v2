@@ -148,7 +148,7 @@ def gate_candidate(mover: dict[str, Any], candles: list[dict[str, Any]], *, now_
     if float(mover.get("vol_usd") or 0) < MIN_VOL_USD:
         return "volume_too_thin"
     sym = str(mover.get("symbol") or inst.replace("-", "_"))
-    if (sym, family) in known_bad:
+    if (sym, family) in known_bad or (sym, "*") in known_bad:   # exact family OR symbol-wide confirmed-bad
         return "known_bad_in_memory"
     return "ok"
 
@@ -165,54 +165,68 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
         return sig
     long_ = sig.side == "long"
     lo, hi = sig.entry_zone
-    stop = sig.stop_loss
     tp_final = sig.take_profit_plan[-1]["price"]
     tp1 = sig.take_profit_plan[0]["price"]
+    do_partial = sig.exit_mode == "partial_be" and len(sig.take_profit_plan) > 1
     opened = sig.status == "opened_paper"
-    entry_px = float(sig.outcome.get("entry") or 0.0)
-    open_i = int(sig.outcome.get("open_index") or 0)
-    mfe = mae = fav_wait = 0.0
+    o = sig.outcome or {}
+    entry_px = float(o.get("entry") or 0.0)
+    open_i = int(o.get("open_index") or 0)
+    eff_stop = float(o.get("eff_stop") or sig.stop_loss)     # stop moves to breakeven after the partial
+    partial_done = bool(o.get("partial_done"))
+    banked = float(o.get("banked_pct") or 0.0)               # realized leg-1 net% (half size)
+    mfe = float(o.get("mfe_pct") or 0.0)
+    mae = float(o.get("mae_pct") or 0.0)
+    fav_wait = 0.0
+
+    def _leg(px):
+        return (px - entry_px if long_ else entry_px - px) / entry_px * 100
+
     for i, c in enumerate(new):
         h, lov, cl = float(c["high"]), float(c["low"]), float(c["close"])
         if not opened:
-            # favourable move WHILE unfilled => price ran away from the pullback entry (missed_pullback)
             fav_wait = max(fav_wait, ((h - hi) / hi if long_ else (lo - lov) / lo) * 100)
             if i >= ARM_WINDOW_BARS:
                 sig.status = "expired"
                 sig.outcome = {"result": "expired_no_entry", "bars_waited": i,
                                "ran_away": fav_wait >= (sig.risk_pct or 99)}
                 return sig
-            # limit-pullback fill: long fills on a dip to the low edge, short on a pop to the high edge
-            filled = lov <= lo if long_ else h >= hi
+            filled = lov <= lo if long_ else h >= hi   # limit-pullback fill
             if filled:
                 opened, entry_px, open_i = True, (lo if long_ else hi), i
+                eff_stop = sig.stop_loss
                 sig.status = "opened_paper"
             continue
-        move = (h - entry_px if long_ else entry_px - lov) / entry_px * 100
-        adverse = (entry_px - lov if long_ else h - entry_px) / entry_px * 100
-        mfe, mae = max(mfe, move), max(mae, adverse)
-        hit_sl = lov <= stop if long_ else h >= stop
-        hit_tp = h >= tp_final if long_ else lov <= tp_final
+        mfe = max(mfe, (h - entry_px if long_ else entry_px - lov) / entry_px * 100)
+        mae = max(mae, (entry_px - lov if long_ else h - entry_px) / entry_px * 100)
         bars_held = i - open_i
-        if hit_sl:
-            return _close(sig, "closed_paper", "stop", stop, entry_px, mfe, mae, bars_held, tp1, long_)
-        if hit_tp:
-            return _close(sig, "closed_paper", "take", tp_final, entry_px, mfe, mae, bars_held, tp1, long_)
+        hit_sl = lov <= eff_stop if long_ else h >= eff_stop
+        if hit_sl:                                   # stop (or breakeven stop after a partial)
+            kind = "partial_be" if partial_done else "stop"
+            return _close(sig, kind, eff_stop, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
+        # bank half at tp1 and trail the stop to breakeven (the bad_exit_gave_back remedy)
+        if do_partial and not partial_done and ((h >= tp1) if long_ else (lov <= tp1)):
+            banked, partial_done, eff_stop = 0.5 * _leg(tp1), True, entry_px
+        if (h >= tp_final) if long_ else (lov <= tp_final):
+            return _close(sig, "take", tp_final, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
         if bars_held >= sig.max_hold_bars:
-            return _close(sig, "closed_paper", "timeout", cl, entry_px, mfe, mae, bars_held, tp1, long_)
-    # still open or still waiting after the available bars
-    sig.outcome = {"result": "pending_open" if opened else "pending_arm",
-                   "entry": entry_px, "open_index": open_i, "mfe_pct": round(mfe, 3),
-                   "mae_pct": round(mae, 3), "new_bars": len(new)}
+            return _close(sig, "timeout", cl, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
+    sig.outcome = {"result": "pending_open" if opened else "pending_arm", "entry": entry_px,
+                   "open_index": open_i, "eff_stop": eff_stop, "partial_done": partial_done,
+                   "banked_pct": round(banked, 4), "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3),
+                   "new_bars": len(new)}
     return sig
 
 
-def _close(sig, status, kind, exit_px, entry_px, mfe, mae, bars_held, tp1, long_):
-    net = (exit_px - entry_px if long_ else entry_px - exit_px) / entry_px * 100
-    sig.status = status
+def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_held, long_):
+    leg2 = (exit_px - entry_px if long_ else entry_px - exit_px) / entry_px * 100
+    # remaining size is 0.5 after a partial, else full
+    net = banked + 0.5 * leg2 if partial_done else leg2
+    sig.status = "closed_paper"
     sig.outcome = {"result": kind, "entry": round(entry_px, 8), "exit": round(exit_px, 8),
-                   "net_pct": round(net, 3), "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3),
-                   "bars_held": bars_held, "reached_tp1": bool((exit_px >= tp1) == long_ or kind == "take")}
+                   "net_pct": round(net, 3), "banked_pct": round(banked, 4), "partial_done": partial_done,
+                   "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3), "bars_held": bars_held,
+                   "reached_tp1": bool(partial_done or kind == "take")}
     return sig
 
 
@@ -234,6 +248,9 @@ def review(sig: PaperActionSignal) -> PaperActionSignal:
         diag = "pending"
     elif res == "take":
         diag = "good_signal"
+    elif res == "partial_be":
+        # banked half at tp1 then exited the rest at breakeven — the give-back remedy worked
+        diag = "partial_breakeven_save" if net >= 0 else "valid_loss"
     elif res == "stop":
         if mfe_r < 0.2:
             diag = "wrong_direction"               # went straight to the stop, no favourable move
@@ -321,6 +338,9 @@ def load_known_bad(private_root: Path) -> set[tuple[str, str]]:
         return set()
     bad = set()
     for r in recs:
-        if r.get("outcome_class") in ("REJECTED_CONFIRMED_BAD",) or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD":
-            bad.add((str(r.get("symbol")), "momentum_continuation"))
+        if r.get("outcome_class") == "REJECTED_CONFIRMED_BAD" or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD":
+            sym = str(r.get("symbol"))
+            fam = str(r.get("family") or "*")
+            bad.add((sym, fam))      # block this exact (symbol, family) ...
+            bad.add((sym, "*"))      # ... and the symbol wholesale (cross-family confirmed-bad)
     return bad

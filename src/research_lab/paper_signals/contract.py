@@ -45,6 +45,7 @@ class PaperActionSignal:
     data_fingerprint: str = ""        # hash of the decision window -> new bars => new fingerprint
     dedup_key: str = ""               # symbol|tf|family -> identity across re-runs (no duplicate spam)
     mode: str = "live"                # "live" (boundary=now, forward) | "replay" (historical-tail diagnostic)
+    exit_mode: str = "partial_be"     # "partial_be" (bank 0.5 at tp1 + move stop to breakeven) | "fixed"
     outcome: dict[str, Any] = field(default_factory=dict)
     review: dict[str, Any] = field(default_factory=dict)
 
