@@ -269,6 +269,52 @@ class TestLearning:
         assert not cycle.validate_advice({"confidence": 5})[0]
 
 
+class TestPartialBreakevenExit:
+    def _sig(self, exit_mode):
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        return PaperActionSignal(signal_id="i", source="farm", symbol="Z", okx_inst_id="Z-USDT-SWAP",
+                                 timeframe="15m", side="long", setup_family="continuation",
+                                 entry_zone=[99.0, 100.0], stop_loss=97.0, invalidation_rule="x",
+                                 take_profit_plan=[{"label": "tp1", "price": 101.0, "size_frac": 0.5},
+                                                   {"label": "tp2", "price": 103.0, "size_frac": 0.5}],
+                                 max_hold_bars=10, max_hold_minutes=150, reason_now="x", risk_pct=2.0,
+                                 status="armed", boundary_ts=0, exit_mode=exit_mode)
+
+    def _candles(self):  # dip fills @99, spike hits tp1@101, reverts through breakeven@99
+        return [{"ts": 1, "open": 100, "high": 100.2, "low": 98.5, "close": 99},
+                {"ts": 2, "open": 99, "high": 101.5, "low": 99.0, "close": 101},
+                {"ts": 3, "open": 101, "high": 101.0, "low": 98.9, "close": 99}]
+
+    def test_partial_be_banks_half_and_exits_at_breakeven(self):
+        s = lane.review(lane.observe(self._sig("partial_be"), self._candles()))
+        assert s.outcome["result"] == "partial_be"
+        assert s.outcome["net_pct"] > 0          # banked half at tp1, remainder out at breakeven
+        assert s.review["diagnosis"] == "partial_breakeven_save"
+
+    def test_fixed_mode_gives_back_to_full_stop_loss(self):
+        # same path, fixed exit -> tp1 is decorative, reverts and would ride to the real stop (loss)
+        candles = self._candles() + [{"ts": 4, "open": 99, "high": 99, "low": 96.5, "close": 97}]
+        s = lane.review(lane.observe(self._sig("fixed"), candles))
+        assert s.outcome["result"] == "stop" and s.outcome["net_pct"] < 0
+
+
+class TestKnownBadGate:
+    def test_symbol_wide_and_family_block(self, tmp_path):
+        import json
+        d = tmp_path / "state" / "derived"
+        d.mkdir(parents=True)
+        (d / "setup_outcome_memory.json").write_text(json.dumps({"records": [
+            {"symbol": "BAD_USDT_SWAP", "family": "reversal_fade", "outcome_class": "REJECTED_CONFIRMED_BAD"}]}),
+            encoding="utf-8")
+        kb = lane.load_known_bad(tmp_path)
+        assert ("BAD_USDT_SWAP", "reversal_fade") in kb and ("BAD_USDT_SWAP", "*") in kb
+        # a DIFFERENT family on the same symbol is blocked by the symbol-wide entry
+        g = lane.gate_candidate({"inst_id": "BAD-USDT-SWAP", "symbol": "BAD_USDT_SWAP", "spread_bps": 1,
+                                 "vol_usd": 9e7, "_tf": "15m"},
+                                _series([1.0] * 60), now_ms=0, known_bad=kb, family="continuation")
+        assert g == "known_bad_in_memory"
+
+
 class TestRicherDiagnosis:
     def _sig(self, risk_pct=2.0):
         from src.research_lab.paper_signals.contract import PaperActionSignal
