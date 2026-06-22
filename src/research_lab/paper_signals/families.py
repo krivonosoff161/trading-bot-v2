@@ -181,6 +181,41 @@ FAMILIES = {
     "early_tp_tactical": build_early_tp,
 }
 
+# Structural metadata so the farm/calculator can read families as DATA (not from a prompt). Each entry:
+# when applicable, timeframes, entry/stop/TP logic, invalidation, required data, class, failure modes.
+FAMILY_META = {
+    "continuation": {
+        "class": "statistical_candidate", "when": "trending, NOT exhausted (<3 ATR run)",
+        "timeframes": ["15m", "1h", "4h"], "entry": "shallow 0.5-ATR pullback limit in trend direction",
+        "stop": "structure swing or ATR-bounded (1.2 ATR), tighter of the two", "tp": "1R/2R partial+BE",
+        "invalidation": "close beyond stop / no fill in arm window / no tp1 in max_hold",
+        "required_data": ["candles"], "failure_modes": ["entry_after_exhaustion", "no_follow_through"]},
+    "pullback_continuation": {
+        "class": "statistical_candidate", "when": "trend with a >=0.4-ATR pullback already printed",
+        "timeframes": ["15m", "1h", "4h"], "entry": "0.3-ATR dip limit", "stop": "recent swing extreme",
+        "tp": "2R/3.5R partial+BE", "invalidation": "close beyond stop / no fill / no tp1",
+        "required_data": ["candles"], "failure_modes": ["missed_pullback", "wrong_direction"]},
+    "reversal_fade": {
+        "class": "tactical", "when": "EXHAUSTED (>=3 ATR run); fade the thrust",
+        "timeframes": ["15m", "1h"], "entry": "fade at extreme", "stop": "beyond the swing extreme",
+        "tp": "1R/1.5R (tactical, tighter)", "invalidation": "trend resumes / no fill",
+        "required_data": ["candles"], "failure_modes": ["trend_continues", "bad_exit_gave_back"]},
+    "liquidity_sweep_reclaim": {
+        "class": "statistical_candidate", "when": "sweep of prior swing then reclaim (close back inside)",
+        "timeframes": ["15m", "1h", "4h"], "entry": "in reclaim direction", "stop": "beyond the sweep wick",
+        "tp": "2R/3R partial+BE", "invalidation": "no reclaim / close beyond sweep",
+        "required_data": ["candles"], "failure_modes": ["false_reclaim", "no_follow_through"]},
+    "early_tp_tactical": {
+        "class": "tactical", "when": "trend, not exhausted; fast scalp", "timeframes": ["15m", "1h"],
+        "entry": "0.3-ATR limit", "stop": "0.8 ATR", "tp": "1R single (fast, fixed)",
+        "invalidation": "stop / no fill / timeout (short hold)", "required_data": ["candles"],
+        "failure_modes": ["stop_too_tight", "wrong_direction"]},
+    "watch_only": {
+        "class": "no_trade", "when": "flat ATR or choppy (|trend|<0.5 ATR)", "timeframes": ["any"],
+        "entry": "none", "stop": "none", "tp": "none", "invalidation": "n/a",
+        "required_data": ["candles"], "failure_modes": ["n/a"]},
+}
+
 
 def watch_only_reason(candles: list[dict[str, Any]]) -> str | None:
     """Return a no-trade reason when the tape is too quiet/choppy to act (the watch-only family)."""
