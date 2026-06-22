@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.paper_signals import lane, store
+from src.research_lab.paper_signals import families, lane, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 
 REGEN_TTL_SECONDS = 3600        # do not regenerate the same dedup_key within this window
@@ -82,7 +82,8 @@ def _load_movers(private_root: Path) -> list[dict]:
 
 
 def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"), max_new=5,
-              apply: bool = False, provider=None, now: float | None = None) -> dict[str, Any]:
+              apply: bool = False, provider=None, now: float | None = None,
+              families_arg=None) -> dict[str, Any]:
     private_root = Path(private_root)
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
@@ -145,29 +146,31 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             else:
                 decide = candles
             boundary_ts = int(decide[-1]["ts"])
-            family = "momentum_continuation"
-            dedup_key = f"{symbol}|{tf}|{family}"
-            if dedup_key in by_key_active:
-                gate_counts["dedup_active"] = gate_counts.get("dedup_active", 0) + 1
+            wo = families.watch_only_reason(decide)
+            if wo:
+                gate_counts[wo] = gate_counts.get(wo, 0) + 1
                 continue
-            if (symbol, tf, family) in learned_bad:
-                gate_counts["learned_known_bad"] = gate_counts.get("learned_known_bad", 0) + 1
-                continue
-            if now - last_seen.get(dedup_key, 0) < REGEN_TTL_SECONDS:
-                gate_counts["regen_ttl"] = gate_counts.get("regen_ttl", 0) + 1
-                continue
-            sig, why = lane.build_signal(symbol, inst, tf, decide, source="farm", mover=mv,
-                                         now=now, boundary_ts=boundary_ts, mode=mode)
-            gate_counts[f"geom:{why}"] = gate_counts.get(f"geom:{why}", 0) + 1
-            if sig is None:
-                continue
-            if (sig.dedup_key, sig.data_fingerprint) in recent_terminal:
-                gate_counts["dedup_same_data"] = gate_counts.get("dedup_same_data", 0) + 1
-                continue
-            if mode == "replay":
-                sig = lane.review(lane.observe(sig, candles))
-            new_sigs.append((sig, candles))
-            by_key_active.add(sig.dedup_key)
+            for sig, fam in families.generate(symbol, inst, tf, decide, mover=mv, now=now,
+                                              boundary_ts=boundary_ts, mode=mode, families=families_arg):
+                if len(new_sigs) >= max_new:
+                    break
+                if sig.dedup_key in by_key_active:
+                    gate_counts["dedup_active"] = gate_counts.get("dedup_active", 0) + 1
+                    continue
+                if (symbol, tf, sig.setup_family) in learned_bad:
+                    gate_counts["learned_known_bad"] = gate_counts.get("learned_known_bad", 0) + 1
+                    continue
+                if now - last_seen.get(sig.dedup_key, 0) < REGEN_TTL_SECONDS:
+                    gate_counts["regen_ttl"] = gate_counts.get("regen_ttl", 0) + 1
+                    continue
+                if (sig.dedup_key, sig.data_fingerprint) in recent_terminal:
+                    gate_counts["dedup_same_data"] = gate_counts.get("dedup_same_data", 0) + 1
+                    continue
+                gate_counts[f"family:{fam}"] = gate_counts.get(f"family:{fam}", 0) + 1
+                if mode == "replay":
+                    sig = lane.review(lane.observe(sig, candles))
+                new_sigs.append((sig, candles))
+                by_key_active.add(sig.dedup_key)
 
     if apply:
         for sig, candles in new_sigs:

@@ -197,6 +197,37 @@ class TestCycle:
         assert ("Z", "15m", "momentum_continuation") in cycle.learn_known_bad(mem, min_n=3)
 
 
+class TestFamilies:
+    def test_continuation_rejects_exhausted(self):
+        from src.research_lab.paper_signals import families
+        # a clean strong run -> extended -> continuation must refuse to chase
+        candles = _series([100 + i * 2.0 for i in range(40)])
+        sig, why = families.build_continuation("X", "X-USDT-SWAP", "15m", candles, mover={},
+                                               now=1.0, boundary_ts=0, mode="live")
+        assert sig is None and why == "entry_after_move_exhausted"
+
+    def test_fade_requires_extension(self):
+        from src.research_lab.paper_signals import families
+        candles = _series([100 + (0.1 if i % 2 else -0.1) for i in range(40)])  # calm/choppy
+        sig, why = families.build_fade("X", "X-USDT-SWAP", "15m", candles, mover={}, now=1.0,
+                                       boundary_ts=0, mode="live")
+        assert sig is None and why == "not_extended_no_fade"
+
+    def test_nontactical_enforces_rr2(self):
+        from src.research_lab.paper_signals import families
+        candles = _series([100 + i * 0.3 for i in range(40)])  # mild uptrend, not extended
+        sig, why = families.build_continuation("X", "X-USDT-SWAP", "15m", candles, mover={},
+                                               now=1.0, boundary_ts=0, mode="live")
+        if sig is not None:
+            risk = sig.entry_zone[1] - sig.stop_loss
+            assert (sig.take_profit_plan[0]["price"] - sig.entry_zone[1]) >= 2 * risk - 1e-6
+
+    def test_at_least_three_families_available(self):
+        from src.research_lab.paper_signals import families
+        assert len(families.FAMILIES) >= 3
+        assert {"continuation", "reversal_fade", "liquidity_sweep_reclaim"} <= set(families.FAMILIES)
+
+
 class TestNoLiveBoundary:
     def test_no_forbidden_imports_in_lane(self):
         pkg = _ROOT / "src" / "research_lab" / "paper_signals"
