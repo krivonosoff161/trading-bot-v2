@@ -216,6 +216,17 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             "readiness": paper.get("readiness", {}),
             "results": (paper.get("results") or [])[:10],
         }
+    if apply:
+        # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
+        # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
+        # research lane can never break the cycle. matured != edge; nothing paper-ready.
+        try:
+            from src.research_lab import true_forward
+            true_forward.register(private_root, max_candidates=20)
+            tf_res = true_forward.collect_once(private_root, max_candidates=20)
+            out["true_forward"] = tf_res.get("summary", {})
+        except Exception as exc:  # noqa: BLE001 - research lane must never break the cycle
+            out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:
@@ -282,6 +293,11 @@ def main() -> None:
         tasks = FarmTasksDB(tasks_db_path(private_root))
         from src.research_lab.farm_journal import make_transition_sink
         tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit
+        # A single-process loop has no live worker at boot, so any 'running' task is stale from a
+        # previous stop. Requeue it once so the next cycle re-drains it instead of masking it as work.
+        n_orphan = tasks.reconcile_orphan_running()
+        if n_orphan:
+            print(f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop")
     else:
         private_root = Path(args.private_root)
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
