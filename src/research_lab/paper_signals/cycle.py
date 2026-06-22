@@ -214,14 +214,17 @@ def learn_known_bad(memory: list[dict[str, Any]], *, min_n: int = 3) -> set[tupl
     """A (symbol, tf, family) becomes 'learned bad' after >= min_n terminal outcomes that are ALL
     losing/no-entry (stop / expired / no_follow_through). Deterministic; feeds the next cycle's gate."""
     agg: dict[tuple[str, str, str], list[str]] = {}
-    bad_results = {"stop", "expired_no_entry"}
-    bad_diag = {"entry_after_exhaustion", "no_follow_through", "wrong_direction", "late_entry"}
+    # Only genuine SETUP/direction failures count as "bad" — these are diagnoses review() actually emits.
+    # bad_exit_gave_back is an EXIT problem (fixed by execution geometry, not a dead setup); missed_pullback
+    # is a missed WIN (price ran the right way) — neither marks the setup known-bad.
+    bad_diag = {"wrong_direction", "no_follow_through", "valid_loss"}
     for m in memory:
         key = (m.get("symbol"), m.get("timeframe"), m.get("family"))
         if None in key:
             continue
-        ok = (m.get("result") in bad_results) or (m.get("diagnosis") in bad_diag)
-        agg.setdefault(key, []).append("bad" if ok else "good")
+        is_bad = (m.get("diagnosis") in bad_diag) or (
+            m.get("result") == "stop" and m.get("diagnosis") not in ("stop_too_tight", "bad_exit_gave_back"))
+        agg.setdefault(key, []).append("bad" if is_bad else "good")
     out = set()
     for key, tags in agg.items():
         if len(tags) >= min_n and all(t == "bad" for t in tags):
