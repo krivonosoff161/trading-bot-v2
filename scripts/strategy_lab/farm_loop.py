@@ -227,6 +227,15 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             out["true_forward"] = tf_res.get("summary", {})
         except Exception as exc:  # noqa: BLE001 - research lane must never break the cycle
             out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
+        if getattr(args, "run_paper_signals", False):
+            # Operational paper-watch lane: one bounded cycle (observe armed -> close -> remember ->
+            # generate new). Crash-isolated; paper/research-only, never an order.
+            try:
+                from src.research_lab.paper_signals import cycle as paper_cycle
+                out["paper_signals"] = paper_cycle.run_cycle(
+                    private_root, mode="live", timeframes=("15m", "1h"), max_new=5, apply=True)
+            except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
+                out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:
@@ -251,6 +260,8 @@ def main() -> None:
     ap.add_argument("--run-worker", action="store_true", help="drain a few compute jobs each cycle")
     ap.add_argument("--run-validation", action="store_true", help="export + honest-backtest + stamp-back")
     ap.add_argument("--run-paper", action="store_true", help="simulate paper outcomes from validated setup cards")
+    ap.add_argument("--run-paper-signals", action="store_true",
+                    help="run one bounded operational paper-watch cycle (observe+generate; research-only)")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")

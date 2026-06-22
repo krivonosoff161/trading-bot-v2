@@ -230,6 +230,24 @@ def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_he
     return sig
 
 
+def age_out(sig: PaperActionSignal, now: float, *, max_no_data: int = 4) -> bool:
+    """Wall-clock / no-data age-out so an armed card cannot strand forever (bottleneck #5). An armed or
+    opened signal past expires_at, or one whose symbol has returned no candles too many times, becomes
+    terminal (expired_no_entry with a reason). Returns True if it just aged out."""
+    if sig.status not in ("armed", "opened_paper"):
+        return False
+    o = sig.outcome or {}
+    if sig.expires_at and now > sig.expires_at:
+        sig.status = "expired"
+        sig.outcome = {**o, "result": "expired_no_entry", "reason": "stale_past_expiry"}
+        return True
+    if int(o.get("no_data_count") or 0) >= max_no_data:
+        sig.status = "expired"
+        sig.outcome = {**o, "result": "expired_no_entry", "reason": "no_data_repeated"}
+        return True
+    return False
+
+
 # ── review: deterministic metrics + diagnosis (the visual-review backbone) ──
 def review(sig: PaperActionSignal) -> PaperActionSignal:
     o = sig.outcome or {}
