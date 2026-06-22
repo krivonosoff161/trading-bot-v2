@@ -100,18 +100,28 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     fam_order = families_arg or family_priority(mem)
 
     observed, closed = 0, 0
-    # (1) re-observe active signals on fresh bars
+    # (1) re-observe active signals on fresh bars (+ wall-clock / no-data age-out so none strand)
     for s in existing:
         if s.status not in ("armed", "opened_paper"):
             continue
         candles = _fetch(provider, s.symbol, s.timeframe, now_ms)
         if not candles:
-            s.outcome = {"result": "no_data", "new_bars": 0}
+            s.outcome = {**(s.outcome or {}), "result": "no_data",
+                         "no_data_count": int((s.outcome or {}).get("no_data_count") or 0) + 1}
+            aged = lane.age_out(s, now)
+            if aged:
+                s = lane.review(s)
+                closed += 1
             if apply:
                 store.update_signal(private_root, s)
+                if aged:
+                    record_memory(private_root, s)
             continue
         before = s.status
-        s = lane.review(lane.observe(s, candles))
+        s = lane.observe(s, candles)
+        if s.status not in TERMINAL:
+            lane.age_out(s, now)         # not filled and past expiry -> expire instead of stranding
+        s = lane.review(s)
         observed += 1
         if s.status != before and s.status in TERMINAL:
             closed += 1

@@ -298,6 +298,30 @@ class TestPartialBreakevenExit:
         assert s.outcome["result"] == "stop" and s.outcome["net_pct"] < 0
 
 
+class TestAgeOut:
+    def _armed(self, expires_at=100.0):
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        return PaperActionSignal(signal_id="i", source="farm", symbol="Z", okx_inst_id="Z-USDT-SWAP",
+                                 timeframe="15m", side="long", setup_family="continuation",
+                                 entry_zone=[99, 100], stop_loss=97, invalidation_rule="x",
+                                 take_profit_plan=[{"label": "tp1", "price": 102}], max_hold_bars=10,
+                                 max_hold_minutes=150, reason_now="x", status="armed", expires_at=expires_at)
+
+    def test_armed_past_expiry_expires(self):
+        s = self._armed(expires_at=100.0)
+        assert lane.age_out(s, now=200.0) is True
+        assert s.status == "expired" and s.outcome["reason"] == "stale_past_expiry"
+
+    def test_repeated_no_data_expires(self):
+        s = self._armed(expires_at=1e12)
+        s.outcome = {"no_data_count": 4}
+        assert lane.age_out(s, now=1.0) is True
+        assert s.outcome["reason"] == "no_data_repeated"
+
+    def test_fresh_armed_survives(self):
+        assert lane.age_out(self._armed(expires_at=1e12), now=1.0) is False
+
+
 class TestKnownBadGate:
     def test_symbol_wide_and_family_block(self, tmp_path):
         import json
