@@ -228,6 +228,17 @@ class TestFamilies:
         assert len(families.FAMILIES) >= 3
         assert {"continuation", "reversal_fade", "liquidity_sweep_reclaim"} <= set(families.FAMILIES)
 
+    def test_family_meta_is_structural_and_complete(self):
+        from src.research_lab.paper_signals import families
+        assert len(families.FAMILY_META) >= 6   # 5 builders + watch_only described structurally
+        req = {"class", "when", "timeframes", "entry", "stop", "tp", "invalidation",
+               "required_data", "failure_modes"}
+        for name, meta in families.FAMILY_META.items():
+            assert req <= set(meta), f"{name} missing meta keys"
+        # every executable family has metadata; classes cover statistical/tactical/no_trade
+        assert set(families.FAMILIES) <= set(families.FAMILY_META)
+        assert {"statistical_candidate", "tactical", "no_trade"} <= {m["class"] for m in families.FAMILY_META.values()}
+
 
 class TestLearning:
     def _seed_bad_memory(self, root, sym, tf, fam, n=3):
