@@ -24,7 +24,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.research_lab.paper_signals import cycle, lane, store  # noqa: E402
+from src.research_lab.paper_signals import ab_report, cycle, lane, store  # noqa: E402
 from src.research_lab.paper_signals.contract import render_card  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 
@@ -75,6 +75,8 @@ def main() -> None:
     ap.add_argument("--stop-file", default="")
     ap.add_argument("--status", action="store_true", help="print current paper-signal status and exit")
     ap.add_argument("--select", action="store_true", help="print the memory-ranked top-N universe with reasons and exit")
+    ap.add_argument("--ab-report", action="store_true",
+                    help="write/read paper exit-mode A/B comparison artifact and exit")
     ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+chat already in env")
     args = ap.parse_args()
     root = Path(args.private_root)
@@ -89,10 +91,19 @@ def main() -> None:
         for r in ranked[:20]:
             print(f"  {r.get('symbol'):20s} pr={r.get('_priority'):>7} | {r.get('_reason')}")
         return
+    if args.ab_report:
+        path = ab_report.write_exit_mode_comparison(root)
+        report = ab_report.build_exit_mode_comparison(root)
+        print(f"ab_report={path}")
+        print(f"matched_pairs={report['matched_pairs']} verdict={report['verdict']} "
+              f"delta_sum_net_pct={report['delta_sum_net_pct']}")
+        return
     if args.loop > 1:
+        if not args.apply:
+            ap.error("--loop writes paper-signal state; pass --apply explicitly or use one-cycle dry-run")
         reports = cycle.run_loop(root, cycles=args.loop, sleep_seconds=args.sleep_seconds,
                                  stop_file=args.stop_file, mode=args.mode, timeframes=tfs,
-                                 max_new=args.max_signals)
+                                 max_new=args.max_signals, apply=True)
         for i, r in enumerate(reports):
             print(f"cycle {i}: observed={r.get('observed')} closed={r.get('closed')} "
                   f"generated={r.get('generated')} state={r.get('state')} gates={r.get('gate_counts')}")

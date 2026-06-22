@@ -322,15 +322,40 @@ def validate_advice(advice: dict[str, Any]) -> tuple[bool, list[str]]:
     return (not problems), problems
 
 
+def _active_lock(lock_path: Path, sleep_seconds: int) -> bool:
+    if not lock_path.exists():
+        return False
+    age = time.time() - lock_path.stat().st_mtime
+    return age < 2 * max(60, sleep_seconds)
+
+
 def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_file: str = "",
-             mode: str = "live", timeframes=("15m", "1h"), max_new=5, provider=None) -> list[dict]:
+             mode: str = "live", timeframes=("15m", "1h"), max_new=5, provider=None,
+             apply: bool = True, lock_file: str | Path | None = None) -> list[dict]:
+    private_root = Path(private_root)
+    lock_path = Path(lock_file) if lock_file else private_root / "state" / "paper_signals_loop.lock"
+    if _active_lock(lock_path, sleep_seconds):
+        age = time.time() - lock_path.stat().st_mtime
+        raise RuntimeError(
+            f"another paper_signals loop appears active (lock {lock_path}, age {age:.0f}s); "
+            "stop it or delete the stale lock to override"
+        )
     reports = []
-    for i in range(max(1, cycles)):
-        if stop_file and Path(stop_file).exists():
-            reports.append({"stopped": True, "at_cycle": i})
-            break
-        reports.append(run_cycle(private_root, mode=mode, timeframes=timeframes, max_new=max_new,
-                                 apply=True, provider=provider))
-        if sleep_seconds and i < cycles - 1:
-            time.sleep(max(1, sleep_seconds))
-    return reports
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(str(time.time()), encoding="utf-8")
+        for i in range(max(1, cycles)):
+            if stop_file and Path(stop_file).exists():
+                reports.append({"stopped": True, "at_cycle": i})
+                break
+            reports.append(run_cycle(private_root, mode=mode, timeframes=timeframes, max_new=max_new,
+                                     apply=apply, provider=provider))
+            lock_path.write_text(str(time.time()), encoding="utf-8")
+            if sleep_seconds and i < cycles - 1:
+                time.sleep(max(1, sleep_seconds))
+        return reports
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass

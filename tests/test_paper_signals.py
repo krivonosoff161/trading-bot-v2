@@ -309,6 +309,37 @@ class TestPartialBreakevenExit:
         assert s.outcome["result"] == "stop" and s.outcome["net_pct"] < 0
 
 
+class TestExitAbReport:
+    def _closed(self, exit_mode, net):
+        s = _good_long()
+        s.signal_id = f"X_15m_{exit_mode}"
+        s.setup_family = "continuation"
+        s.dedup_key = "X|15m|continuation"
+        s.data_fingerprint = "abc"
+        s.boundary_ts = 123
+        s.exit_mode = exit_mode
+        s.status = "reviewed"
+        s.outcome = {"result": "timeout", "net_pct": net}
+        s.review = {"diagnosis": "bad_exit_gave_back", "net_r": net}
+        return s
+
+    def test_ab_report_matches_same_decision_window(self, tmp_path):
+        from src.research_lab.paper_signals import ab_report
+        store.append_signal(tmp_path, self._closed("fixed", -1.0))
+        store.append_signal(tmp_path, self._closed("partial_be", 0.25))
+        rep = ab_report.build_exit_mode_comparison(tmp_path)
+        assert rep["matched_pairs"] == 1
+        assert rep["verdict"] == "challenger_better"
+        assert rep["delta_sum_net_pct"] == 1.25
+
+    def test_ab_report_is_honest_when_no_pairs(self, tmp_path):
+        from src.research_lab.paper_signals import ab_report
+        store.append_signal(tmp_path, self._closed("partial_be", 0.25))
+        rep = ab_report.build_exit_mode_comparison(tmp_path)
+        assert rep["matched_pairs"] == 0
+        assert rep["verdict"] == "insufficient_pairs"
+
+
 class TestSearchRanking:
     def test_memory_reranks_universe(self):
         from src.research_lab.paper_signals import cycle
@@ -328,6 +359,26 @@ class TestSearchRanking:
         import json
         d = json.loads(p.read_text(encoding="utf-8"))
         assert d["total"] == 1 and d["top"][0]["symbol"] == "A_USDT_SWAP" and "majors" in d["by_bucket"]
+
+
+class TestPaperLoopSafety:
+    def test_run_loop_rejects_active_lock(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        lock = tmp_path / "state" / "paper_signals_loop.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_text("active", encoding="utf-8")
+        try:
+            cycle.run_loop(tmp_path, cycles=1, lock_file=lock, provider=_FakeProvider([100] * 80))
+            assert False, "active lock should abort"
+        except RuntimeError as exc:
+            assert "another paper_signals loop appears active" in str(exc)
+
+    def test_run_loop_removes_lock_after_success(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_universe(tmp_path)
+        lock = tmp_path / "state" / "paper_signals_loop.lock"
+        cycle.run_loop(tmp_path, cycles=1, lock_file=lock, provider=_FakeProvider([100 + i * 0.5 for i in range(80)]))
+        assert not lock.exists()
 
 
 class TestAgeOut:
