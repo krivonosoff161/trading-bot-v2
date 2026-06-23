@@ -109,6 +109,11 @@ docs/статисика.csv
 .claude/
 .internal/
 
+# Local agent app state / instructions (machine-specific, not source)
+.codex/
+.agents/
+AGENTS.md
+
 # Personal / non-source binaries (untracked 20.05 — kept locally, not shipped)
 обучение/
 docs/*.png
