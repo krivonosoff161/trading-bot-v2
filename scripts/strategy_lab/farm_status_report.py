@@ -279,6 +279,23 @@ def collect(db_path: Path) -> dict:
             report["paper_signals"] = json.loads(ps_path.read_text(encoding="utf-8")) if ps_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["paper_signals"] = {}
+        try:  # PFR bridge: how many canonical records survive quality + risk gates
+            from src.research_lab.paper_signals import pfr_bridge
+            from src.research_lab.paper_signals.lane import MAX_RISK_PCT
+            pfr_recs = pfr_bridge.load_pfr_records(db_path)
+            pfr_passed, pfr_rej = pfr_bridge.apply_quality_policy(pfr_recs)
+            report["pfr_bridge"] = {
+                "records_loaded": len(pfr_recs),
+                "passed_quality": len(pfr_passed),
+                "rejected_quality": len(pfr_rej),
+                "unique_setups": len({(r["symbol"], r["timeframe"], r["family"]) for r in pfr_passed}),
+                "risk_too_wide": sum(
+                    1 for r in pfr_passed
+                    if float(r["params"].get("stop_pct") or 0) > MAX_RISK_PCT
+                ),
+            }
+        except Exception:  # noqa: BLE001 - optional bridge audit must not break status
+            report["pfr_bridge"] = {}
         report["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT run_id, candidate_count, promote_count, observe_count, reject_count "
             "FROM runs ORDER BY run_id DESC LIMIT 8")]
@@ -366,6 +383,18 @@ def _print(report: dict) -> None:
     if ps.get("total"):
         print(f"  paper signals (operational watch lane, research-only NOT orders): total={ps['total']} "
               f"by_status={ps.get('by_status') or '(none)'}")
+    pfr_snap = report.get("pfr_bridge") or {}
+    if pfr_snap.get("records_loaded") is not None:
+        print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "
+              f"passed_quality={pfr_snap.get('passed_quality', 0)} "
+              f"rejected_quality={pfr_snap.get('rejected_quality', 0)} "
+              f"unique_setups={pfr_snap.get('unique_setups', 0)}")
+        if pfr_snap.get("risk_too_wide"):
+            print(f"    geometry gate: stop_pct>MAX_RISK_PCT rejected_approx={pfr_snap['risk_too_wide']} "
+                  f"(exact gate runs at signal-time)")
+        print("    activation: farm_loop --run-paper-signals --pfr-db-path <path>  "
+              "OR  paper_signals_run --pfr-db-path <path>")
+        print("    NOTE: PFR = farm backtest validated; forward observation only, NOT edge, NOT order")
     sl = report.get("setup_lifecycle") or {}
     if sl.get("available"):
         print(f"  setup lifecycle: total={sl.get('total', 0)} states={sl.get('by_state') or '(none)'}")

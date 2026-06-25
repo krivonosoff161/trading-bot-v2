@@ -178,6 +178,11 @@ def _print_cycle(out: dict) -> None:
             blockers = readiness.get("blocked_reasons") or {}
             if blockers:
                 print("  paper_blocked: " + " ".join(f"{k}={v}" for k, v in list(blockers.items())[:6]))
+    ps_op = out.get("paper_signals") or {}
+    if ps_op:
+        pfr_c = {k: v for k, v in (ps_op.get("pfr_counts") or {}).items() if isinstance(v, int) and v}
+        if pfr_c:
+            print("  pfr_lane: " + " ".join(f"{k}={v}" for k, v in pfr_c.items()))
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -232,8 +237,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             # generate new). Crash-isolated; paper/research-only, never an order.
             try:
                 from src.research_lab.paper_signals import cycle as paper_cycle
+                _pfr_db = Path(getattr(args, "pfr_db_path", "") or "")
+                _pfr_db = _pfr_db if _pfr_db.as_posix() not in ("", ".") else None
                 out["paper_signals"] = paper_cycle.run_cycle(
-                    private_root, mode="live", timeframes=("15m", "1h"), max_new=5, apply=True)
+                    private_root, mode="live", timeframes=("15m", "1h"), max_new=5, apply=True,
+                    pfr_db_path=_pfr_db)
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
@@ -262,6 +270,9 @@ def main() -> None:
     ap.add_argument("--run-paper", action="store_true", help="simulate paper outcomes from validated setup cards")
     ap.add_argument("--run-paper-signals", action="store_true",
                     help="run one bounded operational paper-watch cycle (observe+generate; research-only)")
+    ap.add_argument("--pfr-db-path", default="",
+                    help="path to strategy_lab.sqlite for PFR forward-watch lane "
+                         "(requires --run-paper-signals; OFF by default — must be explicit)")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")

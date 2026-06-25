@@ -1,5 +1,12 @@
 # Paper Lane + PFR Bridge — Implementation Notes (2026-06-25)
 
+> **Audit update (2026-06-25, after DB schema check):**
+> - **JOIN fixed**: `load_pfr_records()` now JOINs on `fr.run_id = c.run_id AND fr.candidate_id = c.candidate_id` (candidates PK is composite). Before: 147 inflated rows. After: 53 canonical records.
+> - **Detection centralised**: `strategies/detectors.py` → single-bar helpers used by both batch generators and PFR bridge. Equivalence verified by `TestDetectorHelpers`.
+> - **Bounded scan**: `generate_pfr_signals()` accepts `max_pfr_scan=30` — stops inspecting records after N to keep cycles bounded.
+> - **farm_loop wired**: `--pfr-db-path` now works in `farm_loop.py --run-paper-signals` as well as `paper_signals_run.py`.
+> - All paper/forward observation. NOT edge. NOT order. NOT production-ready.
+
 ## What was built
 
 ### PASS A — Simple BE stop at 0.5R (`lane.py`)
@@ -50,6 +57,16 @@ New module: `src/research_lab/paper_signals/pfr_bridge.py`
 | `build_pfr_mean_reversion_fade(row, candles, *, ...)` | Builds signal from validated params. Same detection as `signals_mean_reversion_fade()`. |
 | `generate_pfr_signals(records, *, ...)` | Top-level generation with 3 dedup layers. |
 
+**JOIN correctness (fixed 2026-06-25):**
+`candidates` has PK `(run_id, candidate_id)`. The old JOIN on `candidate_id` only produced 147 rows from 53 PFR farm_results (1 PFR row × ~2.8 candidates rows per candidate_id). Fixed to `ON fr.run_id = c.run_id AND fr.candidate_id = c.candidate_id` → 53 canonical rows, no inflation.
+
+**Detection (centralised 2026-06-25):**
+Both `build_pfr_*` builders now call `src/research_lab/strategies/detectors.py`:
+- `detect_momentum_breakout(candles, decision_idx, *, lookback, threshold_pct)` → `{side, reason, ref_level} | None`
+- `detect_mean_reversion_fade(candles, decision_idx, *, lookback, move_pct)` → `{side, reason, move, base} | None`
+
+The batch generators (`strategies/breakout.py`, `strategies/mean_reversion.py`) also call these in their loops — equivalence guaranteed by `TestDetectorHelpers.test_detector_agrees_with_batch_generator_*`.
+
 **Param validation:**
 - Required params are checked before any computation
 - If ANY required param is `None`, returns `(None, "missing_params:...")` — never invents a default
@@ -99,7 +116,7 @@ PFR lane runs AFTER mover-based generation:
 - Only fires if `pfr_db_path` is not None
 - Respects the shared `max_new` cap (PFR signals count toward it)
 - Shares the `by_key_active` dedup set with movers
-- Reports counts in `report["pfr_counts"]`: `pfr_records_read`, `pfr_passed_quality`, `pfr_rejected_quality`, `pfr_generated`, etc.
+- Reports counts in `report["pfr_counts"]`: `pfr_records_loaded`, `pfr_passed_quality`, `pfr_rejected_quality`, `pfr_unique_setups`, `pfr_generated`, etc.
 - `run_loop()` also extended to pass `pfr_db_path` through
 
 ---
@@ -127,7 +144,14 @@ All code in `src/research_lab/paper_signals/` is scanned by `TestNoLiveBoundary`
 | File | Change |
 |---|---|
 | `src/research_lab/paper_signals/lane.py` | PASS A: BE at 0.5R, `simple_be` result, `breakeven_save` diagnosis |
-| `src/research_lab/paper_signals/pfr_bridge.py` | NEW: PFR bridge module |
-| `src/research_lab/paper_signals/cycle.py` | PASS C: `pfr_db_path` param, PFR generation section, `pfr_counts` in report |
-| `tests/test_pfr_bridge.py` | NEW: PASS D tests (8 categories) |
-| `docs/paper_lane_pfr_bridge_2026-06-25.md` | NEW: this file |
+| `src/research_lab/paper_signals/pfr_bridge.py` | PASS B: PFR bridge; PASS 1: JOIN fix; PASS 2: use detectors; PASS 4: max_pfr_scan |
+| `src/research_lab/paper_signals/contract.py` | Added `"pfr_farm"` to SOURCES |
+| `src/research_lab/paper_signals/cycle.py` | PASS C: `pfr_db_path`; PASS 1: renamed `pfr_records_loaded`, added `pfr_unique_setups` |
+| `src/research_lab/strategies/detectors.py` | NEW (PASS 2): `detect_momentum_breakout`, `detect_mean_reversion_fade` single-bar helpers |
+| `src/research_lab/strategies/breakout.py` | PASS 2: `signals_momentum_breakout` uses `detect_momentum_breakout` |
+| `src/research_lab/strategies/mean_reversion.py` | PASS 2: `signals_mean_reversion_fade` uses `detect_mean_reversion_fade` |
+| `scripts/strategy_lab/farm_loop.py` | PASS 3: `--pfr-db-path` arg + pass to `run_cycle()` + print `pfr_counts` |
+| `scripts/strategy_lab/farm_status_report.py` | PASS 5: PFR bridge section in `collect()` and `_print()` |
+| `scripts/strategy_lab/paper_signals_run.py` | `--pfr-db-path` CLI arg (added in earlier session) |
+| `tests/test_pfr_bridge.py` | PASS D+: tests for all 10 categories (41 total) |
+| `docs/paper_lane_pfr_bridge_2026-06-25.md` | This file: audit updates |
