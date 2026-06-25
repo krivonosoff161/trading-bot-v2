@@ -174,6 +174,7 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
     open_i = int(o.get("open_index") or 0)
     eff_stop = float(o.get("eff_stop") or sig.stop_loss)     # stop moves to breakeven after the partial
     partial_done = bool(o.get("partial_done"))
+    be_done = bool(o.get("be_done"))                          # simple BE at 0.5R already activated
     banked = float(o.get("banked_pct") or 0.0)               # realized leg-1 net% (half size)
     mfe = float(o.get("mfe_pct") or 0.0)
     mae = float(o.get("mae_pct") or 0.0)
@@ -201,9 +202,24 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
         mae = max(mae, (entry_px - lov if long_ else h - entry_px) / entry_px * 100)
         bars_held = i - open_i
         hit_sl = lov <= eff_stop if long_ else h >= eff_stop
-        if hit_sl:                                   # stop (or breakeven stop after a partial)
-            kind = "partial_be" if partial_done else "stop"
+        if hit_sl:
+            # same-bar ambiguity is handled conservatively: if this bar also triggered the
+            # original stop, we honour the stop; be_done only applies from the NEXT bar onward
+            # (the simple-BE block below runs AFTER this check)
+            kind = ("simple_be" if (be_done and not partial_done)
+                    else "partial_be" if partial_done
+                    else "stop")
             return _close(sig, kind, eff_stop, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
+        # simple BE at 0.5R — only in partial_be exit mode (consistent with do_partial gating).
+        # Placed AFTER the stop check so a same-bar low/high that also hits the original stop
+        # is never retroactively saved; BE applies from NEXT bar only.
+        if not be_done and sig.exit_mode == "partial_be":
+            risk_dist = abs(entry_px - sig.stop_loss)
+            if risk_dist > 0:
+                be_px = (entry_px + 0.5 * risk_dist) if long_ else (entry_px - 0.5 * risk_dist)
+                if (h >= be_px) if long_ else (lov <= be_px):
+                    eff_stop = entry_px
+                    be_done = True
         # bank half at tp1 and trail the stop to breakeven (the bad_exit_gave_back remedy)
         if do_partial and not partial_done and ((h >= tp1) if long_ else (lov <= tp1)):
             banked, partial_done, eff_stop = 0.5 * _leg(tp1), True, entry_px
@@ -213,6 +229,7 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
             return _close(sig, "timeout", cl, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
     sig.outcome = {"result": "pending_open" if opened else "pending_arm", "entry": entry_px,
                    "open_index": open_i, "eff_stop": eff_stop, "partial_done": partial_done,
+                   "be_done": be_done,
                    "banked_pct": round(banked, 4), "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3),
                    "new_bars": len(new)}
     return sig
@@ -266,6 +283,9 @@ def review(sig: PaperActionSignal) -> PaperActionSignal:
         diag = "pending"
     elif res == "take":
         diag = "good_signal"
+    elif res == "simple_be":
+        # 0.5R was reached then price returned to entry; net ~= 0 (small negative with real costs)
+        diag = "breakeven_save"
     elif res == "partial_be":
         # banked half at tp1 then exited the rest at breakeven — the give-back remedy worked
         diag = "partial_breakeven_save" if net >= 0 else "valid_loss"

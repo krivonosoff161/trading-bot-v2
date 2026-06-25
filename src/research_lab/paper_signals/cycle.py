@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.paper_signals import families, lane, store
+from src.research_lab.paper_signals import families, lane, pfr_bridge, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 
 REGEN_TTL_SECONDS = 3600        # do not regenerate the same dedup_key within this window
@@ -122,7 +122,8 @@ def write_selection_snapshot(private_root: Path, ranked: list[dict], top_n: int 
 
 def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"), max_new=5,
               apply: bool = False, provider=None, now: float | None = None,
-              families_arg=None) -> dict[str, Any]:
+              families_arg=None, pfr_db_path: Path | None = None,
+              pfr_quality_policy: dict | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
@@ -225,6 +226,46 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 new_sigs.append((sig, candles))
                 by_key_active.add(sig.dedup_key)
 
+    # (3) PFR lane — bounded separate source, runs after movers so dedup is shared
+    pfr_counts: dict[str, int] = {}
+    if pfr_db_path is not None and len(new_sigs) < max_new:
+        all_pfr = pfr_bridge.load_pfr_records(pfr_db_path)
+        passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
+            all_pfr, policy=pfr_quality_policy
+        )
+        pfr_counts["pfr_records_read"] = len(all_pfr)
+        pfr_counts["pfr_passed_quality"] = len(passed_pfr)
+        pfr_counts["pfr_rejected_quality"] = len(rejected_pfr)
+
+        # Collect setup_ids already active so we don't generate a duplicate for the same setup
+        active_setup_ids: set[str] = set()
+        for s in existing:
+            if s.status in ACTIVE:
+                sid = (s.validator_context or {}).get("setup_id") or ""
+                if sid:
+                    active_setup_ids.add(sid)
+        for s, _ in new_sigs:
+            sid = (s.validator_context or {}).get("setup_id") or ""
+            if sid:
+                active_setup_ids.add(sid)
+
+        pfr_sigs = pfr_bridge.generate_pfr_signals(
+            passed_pfr,
+            provider=provider,
+            now=now,
+            mode=mode,
+            active_dedup=by_key_active,          # shared mutable set — movers dedup carries over
+            active_setup_ids=active_setup_ids,
+            recent_fingerprints=recent_terminal,
+            max_pfr=max(0, max_new - len(new_sigs)),
+            timeframes=timeframes,
+            status_counts=pfr_counts,
+        )
+        new_sigs.extend(pfr_sigs)
+        # gate_counts merged for single report surface
+        for k, v in pfr_counts.items():
+            gate_counts[k] = gate_counts.get(k, 0) + v
+
     if apply:
         for sig, candles in new_sigs:
             store.append_signal(private_root, sig)
@@ -236,6 +277,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     report = {"mode": mode, "apply": apply, "observed": observed, "closed": closed,
               "generated": len(new_sigs), "gate_counts": gate_counts,
+              "pfr_counts": pfr_counts,
               "state": store.current_state_view(private_root)["by_status"] if apply else {},
               "new_cards": [s.signal_id for s, _ in new_sigs]}
     if apply:
@@ -331,7 +373,8 @@ def _active_lock(lock_path: Path, sleep_seconds: int) -> bool:
 
 def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_file: str = "",
              mode: str = "live", timeframes=("15m", "1h"), max_new=5, provider=None,
-             apply: bool = True, lock_file: str | Path | None = None) -> list[dict]:
+             apply: bool = True, lock_file: str | Path | None = None,
+             pfr_db_path: Path | None = None, pfr_quality_policy: dict | None = None) -> list[dict]:
     private_root = Path(private_root)
     lock_path = Path(lock_file) if lock_file else private_root / "state" / "paper_signals_loop.lock"
     if _active_lock(lock_path, sleep_seconds):
@@ -349,7 +392,9 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
                 reports.append({"stopped": True, "at_cycle": i})
                 break
             reports.append(run_cycle(private_root, mode=mode, timeframes=timeframes, max_new=max_new,
-                                     apply=apply, provider=provider))
+                                     apply=apply, provider=provider,
+                                     pfr_db_path=pfr_db_path,
+                                     pfr_quality_policy=pfr_quality_policy))
             lock_path.write_text(str(time.time()), encoding="utf-8")
             if sleep_seconds and i < cycles - 1:
                 time.sleep(max(1, sleep_seconds))
