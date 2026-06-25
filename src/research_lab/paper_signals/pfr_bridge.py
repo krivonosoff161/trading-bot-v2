@@ -18,6 +18,10 @@ from src.research_lab.paper_signals.lane import (
     ARM_WINDOW_BARS, MAX_RISK_PCT, TF_MINUTES,
     _atr, _round, fingerprint,
 )
+from src.research_lab.strategies.detectors import (
+    detect_mean_reversion_fade as _detect_mrf,
+    detect_momentum_breakout as _detect_mbr,
+)
 
 # Required params that MUST be present in candidates.params_json for a family to build a signal.
 # If any are missing the bridge emits a blocker reason rather than inventing a default.
@@ -72,7 +76,7 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
                    fr.paper_status,
                    c.params_json
             FROM farm_results fr
-            LEFT JOIN candidates c ON fr.candidate_id = c.candidate_id
+            LEFT JOIN candidates c ON fr.run_id = c.run_id AND fr.candidate_id = c.candidate_id
             WHERE fr.hard_status = 'PAPER_FORWARD_READY'
               AND c.params_json IS NOT NULL
             ORDER BY fr.avg_net_pct DESC NULLS LAST
@@ -170,25 +174,16 @@ def build_pfr_momentum_breakout(
     if len(candles) < lookback + 2:
         return None, "insufficient_bars"
 
-    # Exclude current bar from reference window (no look-ahead — same as farm generator)
-    ref = candles[-(lookback + 1):-1]
-    if len(ref) < lookback:
-        return None, "insufficient_bars"
-
-    n_high = max(float(c["high"]) for c in ref)
-    n_low = min(float(c["low"]) for c in ref)
     price = float(candles[-1]["close"])
     if price <= 0:
         return None, "bad_price"
 
-    thresh = threshold_pct / 100
-    broke_high = price > n_high * (1 + thresh)
-    broke_low = price < n_low * (1 - thresh)
-
-    if not broke_high and not broke_low:
+    det = _detect_mbr(candles, len(candles) - 1, lookback=lookback, threshold_pct=threshold_pct)
+    if det is None:
         return None, "no_breakout"
 
-    side = "long" if broke_high else "short"
+    side = det["side"]
+    ref_level = det["ref_level"]
     symbol = str(row["symbol"])
     inst = symbol.replace("_", "-")
     tf = str(row["timeframe"])
@@ -197,7 +192,7 @@ def build_pfr_momentum_breakout(
 
     if side == "long":
         entry_hi = _round(price, price)
-        entry_lo = _round(max(n_high, price - zone_half), price)
+        entry_lo = _round(max(ref_level, price - zone_half), price)
         if entry_lo >= entry_hi:
             entry_lo = _round(price * 0.997, price)
         stop = _round(entry_lo * (1 - stop_pct / 100), price)
@@ -205,7 +200,7 @@ def build_pfr_momentum_breakout(
         risk = entry_lo - stop
     else:
         entry_lo = _round(price, price)
-        entry_hi = _round(min(n_low, price + zone_half), price)
+        entry_hi = _round(min(ref_level, price + zone_half), price)
         if entry_lo >= entry_hi:
             entry_hi = _round(price * 1.003, price)
         stop = _round(entry_hi * (1 + stop_pct / 100), price)
@@ -220,7 +215,6 @@ def build_pfr_momentum_breakout(
 
     tf_min = TF_MINUTES.get(tf, 15)
     fp = fingerprint(candles)
-    ref_level = n_high if side == "long" else n_low
     level_label = "high" if side == "long" else "low"
     sig = PaperActionSignal(
         signal_id=f"{symbol}_{tf}_momentum_breakout_{fp}",
@@ -311,18 +305,16 @@ def build_pfr_mean_reversion_fade(
     if len(candles) < lookback + 2:
         return None, "insufficient_bars"
 
-    base = float(candles[-lookback - 1]["close"])
     price = float(candles[-1]["close"])
-    if base <= 0 or price <= 0:
+    if price <= 0:
         return None, "bad_price"
 
-    move = (price / base - 1) * 100
-    if move >= move_pct:
-        side = "short"     # fade the up move
-    elif move <= -move_pct:
-        side = "long"      # fade the down move
-    else:
-        return None, f"no_fade_signal:move={move:.2f}pct_threshold={move_pct}"
+    det = _detect_mrf(candles, len(candles) - 1, lookback=lookback, move_pct=move_pct)
+    if det is None:
+        return None, f"no_fade_signal:move_pct_threshold={move_pct}"
+
+    side = det["side"]
+    move = det["move"]
 
     symbol = str(row["symbol"])
     inst = symbol.replace("_", "-")
@@ -434,6 +426,7 @@ def generate_pfr_signals(
     max_pfr: int = 3,
     timeframes: tuple[str, ...] | list[str] = ("15m", "1h"),
     status_counts: dict[str, int] | None = None,
+    max_pfr_scan: int = 30,
 ) -> list[tuple[PaperActionSignal, list[dict]]]:
     """Generate paper-watch signals from PFR records using live candles.
 
@@ -442,14 +435,21 @@ def generate_pfr_signals(
       2. setup_id (same validated setup already active)
       3. (dedup_key, data_fingerprint) — same data, no new bar, skip
 
+    max_pfr_scan: stop inspecting records after this many to keep cycles bounded.
     Returns list of (signal, candles).  status_counts is mutated with per-reason counts
     so the cycle report can show PFR channel stats without silent truncation.
     """
     sc: dict[str, int] = status_counts if status_counts is not None else {}
     tf_set = set(timeframes)
     generated: list[tuple[PaperActionSignal, list[dict]]] = []
+    pfr_scanned = 0
 
     for row in records:
+        if pfr_scanned >= max_pfr_scan:
+            sc["pfr_scan_limit_reached"] = sc.get("pfr_scan_limit_reached", 0) + 1
+            continue
+        pfr_scanned += 1
+
         if len(generated) >= max_pfr:
             sc["pfr_cap_reached"] = sc.get("pfr_cap_reached", 0) + 1
             continue
@@ -481,6 +481,9 @@ def generate_pfr_signals(
         # Fetch live candles via provider
         try:
             candles = provider.fetch_ohlcv(inst, tf, 0, int(now * 1000))
+        except TimeoutError:
+            sc["pfr_fetch_timeout"] = sc.get("pfr_fetch_timeout", 0) + 1
+            continue
         except Exception:  # noqa: BLE001 - network must not crash a cycle
             sc["pfr_candle_fetch_error"] = sc.get("pfr_candle_fetch_error", 0) + 1
             continue

@@ -233,9 +233,12 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
             all_pfr, policy=pfr_quality_policy
         )
-        pfr_counts["pfr_records_read"] = len(all_pfr)
+        pfr_counts["pfr_records_loaded"] = len(all_pfr)
         pfr_counts["pfr_passed_quality"] = len(passed_pfr)
         pfr_counts["pfr_rejected_quality"] = len(rejected_pfr)
+        pfr_counts["pfr_unique_setups"] = len(
+            {(r["symbol"], r["timeframe"], r["family"]) for r in passed_pfr}
+        )
 
         # Collect setup_ids already active so we don't generate a duplicate for the same setup
         active_setup_ids: set[str] = set()

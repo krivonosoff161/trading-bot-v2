@@ -28,12 +28,22 @@ if str(_ROOT) not in sys.path:
 
 from src.research_lab.paper_signals import lane, pfr_bridge  # noqa: E402
 from src.research_lab.paper_signals.contract import PaperActionSignal  # noqa: E402
+from src.research_lab.strategies.detectors import (  # noqa: E402
+    detect_mean_reversion_fade,
+    detect_momentum_breakout,
+)
+from src.research_lab.strategies.breakout import signals_momentum_breakout  # noqa: E402
+from src.research_lab.strategies.mean_reversion import signals_mean_reversion_fade  # noqa: E402
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_db(path: Path, rows: list[dict]) -> None:
-    """Minimal strategy_lab.sqlite for PFR tests."""
+    """Minimal strategy_lab.sqlite for PFR tests.
+
+    candidates table uses composite PK (run_id, candidate_id) — same as the real DB.
+    The JOIN in pfr_bridge.load_pfr_records must use both columns to avoid inflation.
+    """
     conn = sqlite3.connect(str(path))
     c = conn.cursor()
     c.execute("""CREATE TABLE farm_results (
@@ -42,7 +52,11 @@ def _make_db(path: Path, rows: list[dict]) -> None:
         hard_status TEXT, paper_status TEXT
     )""")
     c.execute("""CREATE TABLE candidates (
-        candidate_id TEXT PRIMARY KEY, family TEXT, params_json TEXT
+        run_id TEXT NOT NULL,
+        candidate_id TEXT NOT NULL,
+        family TEXT,
+        params_json TEXT,
+        PRIMARY KEY (run_id, candidate_id)
     )""")
     for r in rows:
         c.execute(
@@ -53,8 +67,8 @@ def _make_db(path: Path, rows: list[dict]) -> None:
              r.get("paper_status", "")),
         )
         c.execute(
-            "INSERT OR REPLACE INTO candidates VALUES (?,?,?)",
-            (r["candidate_id"], r["family"], json.dumps(r.get("params", {}))),
+            "INSERT OR REPLACE INTO candidates VALUES (?,?,?,?)",
+            ("R1", r["candidate_id"], r["family"], json.dumps(r.get("params", {}))),
         )
     conn.commit()
     conn.close()
@@ -135,10 +149,12 @@ class TestPFRBridgeLoad:
         c.execute("CREATE TABLE farm_results (run_id TEXT, candidate_id TEXT, symbol TEXT, "
                   "family TEXT, timeframe TEXT, avg_net_pct REAL, win_rate REAL, n_trades INTEGER, "
                   "max_drawdown_pct REAL, hard_status TEXT, paper_status TEXT)")
-        c.execute("CREATE TABLE candidates (candidate_id TEXT PRIMARY KEY, family TEXT, params_json TEXT)")
-        c.execute("INSERT INTO farm_results VALUES ('R1','C1','X','mean_reversion_fade','1h',1.0,0.6,20,10.0,'PAPER_FORWARD_READY','')")
-        # candidates row with NULL params_json — LEFT JOIN returns NULL
-        # (do NOT insert so the LEFT JOIN gives NULL)
+        c.execute("CREATE TABLE candidates ("
+                  "run_id TEXT NOT NULL, candidate_id TEXT NOT NULL, family TEXT, params_json TEXT, "
+                  "PRIMARY KEY (run_id, candidate_id))")
+        c.execute("INSERT INTO farm_results VALUES "
+                  "('R1','C1','X','mean_reversion_fade','1h',1.0,0.6,20,10.0,'PAPER_FORWARD_READY','')")
+        # No candidates row with run_id='R1' — LEFT JOIN gives NULL params_json
         conn.commit()
         conn.close()
         recs = pfr_bridge.load_pfr_records(db)
@@ -397,7 +413,7 @@ class TestPFRCycleIntegration:
         )
         sigs = store.load_signals(tmp_path)
         pfr_sigs = [s for s in sigs if s.source == "pfr_farm"]
-        assert rep["pfr_counts"].get("pfr_records_read", 0) >= 1
+        assert rep["pfr_counts"].get("pfr_records_loaded", 0) >= 1
         assert len(pfr_sigs) >= 1
         # Identity fields must be preserved in validator_context
         s = pfr_sigs[0]
@@ -530,6 +546,130 @@ class TestBEStop:
             f"partial_done=True should give partial_be, got {s.outcome['result']}"
         assert s.outcome["net_pct"] > 0  # banked half at tp1
         assert s.review["diagnosis"] == "partial_breakeven_save"
+
+
+# ── Category 9: JOIN correctness ─────────────────────────────────────────────
+
+class TestPFRJoinCorrectness:
+    def test_join_inflation_fix(self, tmp_path):
+        """Same candidate_id in 3 different run_ids in candidates — bridge returns ONLY the
+        farm_results-matching run, not 3 inflated copies."""
+        db = tmp_path / "sl.sqlite"
+        conn = sqlite3.connect(str(db))
+        c = conn.cursor()
+        c.execute("CREATE TABLE farm_results (run_id TEXT, candidate_id TEXT, symbol TEXT, "
+                  "family TEXT, timeframe TEXT, avg_net_pct REAL, win_rate REAL, n_trades INTEGER, "
+                  "max_drawdown_pct REAL, hard_status TEXT, paper_status TEXT)")
+        c.execute("CREATE TABLE candidates ("
+                  "run_id TEXT NOT NULL, candidate_id TEXT NOT NULL, family TEXT, params_json TEXT, "
+                  "PRIMARY KEY (run_id, candidate_id))")
+        # farm_results has ONE PFR row — tied to run_id='R_PFR'
+        c.execute("INSERT INTO farm_results VALUES "
+                  "('R_PFR','C1','SYM_USDT_SWAP','mean_reversion_fade','1h',"
+                  "2.0,0.6,25,15.0,'PAPER_FORWARD_READY','')")
+        # candidates has the SAME candidate_id in 3 different run_ids
+        params_json = json.dumps(_MRF_PARAMS)
+        for rid in ("R_PFR", "R_OTHER1", "R_OTHER2"):
+            c.execute("INSERT OR REPLACE INTO candidates VALUES (?,?,?,?)",
+                      (rid, "C1", "mean_reversion_fade", params_json))
+        conn.commit()
+        conn.close()
+
+        recs = pfr_bridge.load_pfr_records(db)
+        assert len(recs) == 1, (
+            f"JOIN must use run_id — expected 1 record, got {len(recs)} "
+            "(JOIN inflation bug: candidate_id-only JOIN returns 3 copies)")
+        assert recs[0]["candidate_id"] == "C1"
+        assert recs[0]["symbol"] == "SYM_USDT_SWAP"
+
+    def test_pfr_records_loaded_counter_reflects_true_count(self, tmp_path):
+        """pfr_counts['pfr_records_loaded'] must equal actual rows loaded (post-JOIN-fix)."""
+        from src.research_lab.paper_signals import cycle
+        db = tmp_path / "sl.sqlite"
+        _make_db(db, [_MRF_ROW_DICT, _MBR_ROW_DICT])
+        _seed_universe(tmp_path)
+        prov = FakeProvider(_mrf_candles_short())
+        rep = cycle.run_cycle(tmp_path, mode="live", timeframes=("1h", "4h"),
+                              provider=prov, apply=False, now=1e6, pfr_db_path=db)
+        assert rep["pfr_counts"].get("pfr_records_loaded") == 2
+
+
+# ── Category 10: detector helpers ────────────────────────────────────────────
+
+class TestDetectorHelpers:
+    def test_mbr_long_on_breakout(self):
+        candles = _mbr_candles_long()
+        det = detect_momentum_breakout(candles, len(candles) - 1, lookback=10)
+        assert det is not None and det["side"] == "long"
+        assert det["reason"] == "breakout_high"
+        assert isinstance(det["ref_level"], float) and det["ref_level"] > 0
+
+    def test_mbr_no_signal_flat(self):
+        candles = _flat_candles()
+        det = detect_momentum_breakout(candles, len(candles) - 1, lookback=10)
+        assert det is None
+
+    def test_mrf_short_on_up_move(self):
+        candles = _mrf_candles_short()
+        det = detect_mean_reversion_fade(candles, len(candles) - 1, lookback=5, move_pct=8.0)
+        assert det is not None and det["side"] == "short"
+        assert det["reason"] == "fade_up_move"
+        assert det["move"] >= 8.0
+
+    def test_mrf_no_signal_flat(self):
+        candles = _flat_candles()
+        det = detect_mean_reversion_fade(candles, len(candles) - 1, lookback=5, move_pct=8.0)
+        assert det is None
+
+    def test_detector_agrees_with_batch_generator_mbr(self):
+        """detect_momentum_breakout on the decision bar must agree with signals_momentum_breakout."""
+        candles = _mbr_candles_long()
+        params = _MBR_PARAMS
+        # Batch generates signal: decision at idx, entry at idx+1.
+        # Check decision bar = len(candles)-2 (so entry = last bar = len-1).
+        batch = signals_momentum_breakout(candles, params)
+        if not batch:
+            return  # candles don't trigger batch; skip equivalence check
+        last_sig = batch[-1]
+        decision_idx = last_sig["idx"] - 1  # batch stores entry_idx = decision_idx + 1
+        det = detect_momentum_breakout(candles, decision_idx, lookback=int(params["lookback"]),
+                                       threshold_pct=float(params.get("threshold_pct", 0)))
+        assert det is not None, "Detector must agree with batch on the same decision bar"
+        assert det["side"] == last_sig["side"]
+        assert det["reason"] == last_sig["reason"]
+
+    def test_detector_agrees_with_batch_generator_mrf(self):
+        """detect_mean_reversion_fade on the decision bar must agree with signals_mean_reversion_fade."""
+        candles = _mrf_candles_short()
+        params = _MRF_PARAMS
+        batch = signals_mean_reversion_fade(candles, params)
+        if not batch:
+            return
+        last_sig = batch[-1]
+        decision_idx = last_sig["idx"] - 1
+        det = detect_mean_reversion_fade(candles, decision_idx, lookback=int(params["lookback"]),
+                                          move_pct=float(params["move_pct"]))
+        assert det is not None, "Detector must agree with batch on the same decision bar"
+        assert det["side"] == last_sig["side"]
+        assert det["reason"] == last_sig["reason"]
+
+    def test_detector_no_lookahead(self):
+        """Appending a future bar must not affect detection on an earlier decision bar."""
+        candles_base = _mbr_candles_long(n=20)
+        future_bar = {"ts": 999, "high": 9999.0, "low": 9999.0, "close": 9999.0, "open": 9999.0}
+        candles_ext = candles_base + [future_bar]
+        idx = len(candles_base) - 1
+        det_base = detect_momentum_breakout(candles_base, idx, lookback=10)
+        det_ext = detect_momentum_breakout(candles_ext, idx, lookback=10)
+        assert det_base == det_ext, (
+            f"Future bar must not affect detection at idx={idx}: {det_base} vs {det_ext}")
+
+    def test_detector_insufficient_bars_returns_none(self):
+        candles = _flat_candles(n=5)
+        det = detect_momentum_breakout(candles, 3, lookback=10)
+        assert det is None
+        det2 = detect_mean_reversion_fade(candles, 3, lookback=10, move_pct=5.0)
+        assert det2 is None
 
     def test_pending_state_saves_be_done(self):
         # After BE triggers and observe() ends without close, pending dict must have be_done=True

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.research_lab.strategies._helpers import Candle, window_high, window_low
+from src.research_lab.strategies.detectors import detect_momentum_breakout
 
 
 def signals_momentum_breakout(candles: list[Candle], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -17,15 +18,9 @@ def signals_momentum_breakout(candles: list[Candle], params: dict[str, Any]) -> 
     threshold_pct = float(params.get("threshold_pct", 0.0))
     signals = []
     for idx in range(lookback, len(candles) - 1):
-        high = window_high(candles, idx, lookback)
-        low = window_low(candles, idx, lookback)
-        close = float(candles[idx]["close"])
-        if high is None or low is None:
-            continue
-        if close > high * (1 + threshold_pct / 100):
-            signals.append({"idx": idx + 1, "side": "long", "reason": "breakout_high"})
-        elif close < low * (1 - threshold_pct / 100):
-            signals.append({"idx": idx + 1, "side": "short", "reason": "breakout_low"})
+        det = detect_momentum_breakout(candles, idx, lookback=lookback, threshold_pct=threshold_pct)
+        if det:
+            signals.append({"idx": idx + 1, "side": det["side"], "reason": det["reason"]})
     return signals
 
 
