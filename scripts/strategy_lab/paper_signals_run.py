@@ -78,9 +78,12 @@ def main() -> None:
     ap.add_argument("--ab-report", action="store_true",
                     help="write/read paper exit-mode A/B comparison artifact and exit")
     ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+chat already in env")
+    ap.add_argument("--pfr-db-path", default="",
+                    help="path to strategy_lab.sqlite — activates PFR lane (PAPER_FORWARD_READY records)")
     args = ap.parse_args()
     root = Path(args.private_root)
     tfs = tuple(args.timeframes.split(","))
+    pfr_db = Path(args.pfr_db_path) if args.pfr_db_path else None
     if args.status:
         _print_status(root)
         return
@@ -103,14 +106,16 @@ def main() -> None:
             ap.error("--loop writes paper-signal state; pass --apply explicitly or use one-cycle dry-run")
         reports = cycle.run_loop(root, cycles=args.loop, sleep_seconds=args.sleep_seconds,
                                  stop_file=args.stop_file, mode=args.mode, timeframes=tfs,
-                                 max_new=args.max_signals, apply=True)
+                                 max_new=args.max_signals, apply=True, pfr_db_path=pfr_db)
         for i, r in enumerate(reports):
             print(f"cycle {i}: observed={r.get('observed')} closed={r.get('closed')} "
                   f"generated={r.get('generated')} state={r.get('state')} gates={r.get('gate_counts')}")
     else:
-        r = cycle.run_cycle(root, mode=args.mode, timeframes=tfs, max_new=args.max_signals, apply=args.apply)
+        r = cycle.run_cycle(root, mode=args.mode, timeframes=tfs, max_new=args.max_signals,
+                            apply=args.apply, pfr_db_path=pfr_db)
         print(f"mode={args.mode} apply={args.apply} observed={r['observed']} closed={r['closed']} "
-              f"generated={r['generated']}\ngate_counts={r['gate_counts']}")
+              f"generated={r['generated']}\ngate_counts={r['gate_counts']}"
+              + (f"\npfr_counts={r['pfr_counts']}" if r.get("pfr_counts") else ""))
         if r["generated"] < 3 and args.apply:
             print("\n--- GATE-BY-GATE (why < 3 new signals) ---")
             for g, n in sorted(r["gate_counts"].items(), key=lambda kv: -kv[1]):
