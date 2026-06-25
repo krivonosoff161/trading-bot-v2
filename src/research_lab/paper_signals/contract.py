@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SOURCES = ("farm", "scanner", "main", "manual", "tactical")
+SOURCES = ("farm", "pfr_farm", "scanner", "main", "manual", "tactical")
 SIDES = ("long", "short")
 STATUSES = ("candidate", "armed", "invalidated", "opened_paper", "closed_paper", "expired", "reviewed")
 
