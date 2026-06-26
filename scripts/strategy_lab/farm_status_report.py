@@ -289,6 +289,11 @@ def collect(db_path: Path) -> dict:
             report["main_paper_consumer"] = json.loads(mc_path.read_text(encoding="utf-8")) if mc_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_consumer"] = {}
+        try:  # offline Telegram-card preview for paper-watch instructions (never sends)
+            pt_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_preview.json"
+            report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["paper_telegram_preview"] = {}
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
@@ -406,6 +411,12 @@ def _print(report: dict) -> None:
               f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
               f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')} "
               "(paper-watch audit; no order path)")
+    pt = report.get("paper_telegram_preview") or {}
+    if pt.get("rendered") is not None:
+        print("  paper Telegram preview: "
+              f"rendered={pt.get('rendered', 0)} invalid={pt.get('invalid', 0)} "
+              f"sends_network={pt.get('sends_network')} "
+              "(offline cards; no Telegram API call)")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "

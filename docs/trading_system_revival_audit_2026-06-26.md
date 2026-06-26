@@ -37,6 +37,7 @@ state/strategy_lab.sqlite PFR records
   -> visual paper-signal reviews and status snapshots
   -> state/derived/main_paper_instructions.json/jsonl
   -> state/derived/main_paper_consumed.json/jsonl
+  -> state/derived/paper_telegram_preview.json/jsonl
   -> future reviewed runtime adapter (not live executor)
 ```
 
@@ -50,6 +51,7 @@ state/strategy_lab.sqlite PFR records
 | `pfr_bridge.py` | Farm validation -> paper-watch bridge | 2 | Active only with explicit `--pfr-db-path`; now wired into the visible wrapper. |
 | `main_paper_bridge.py` | Paper-watch -> main-readable instruction view | 3 | Rebuildable artifact with `execution_allowed=false`; no old main runtime import. |
 | `main_paper_consumer.py` | Main-readable instruction -> paper-watch audit | 3 | Validates `SignalContract` payloads and rejects bad instructions; still no executor. |
+| `paper_telegram_preview.py` | Paper-watch audit -> operator card preview | 3 | Builds offline Telegram-card previews; never sends, never reads tokens/chat IDs. |
 | `ws_main_screener.py` | Separate scanner/Telegram runtime surface | 4 | Does not consume farm/PFR outputs today. Do not treat it as the farm executor. |
 | Telegram | Notification surface | 5 | Env-gated; not part of the decision path. |
 | Excel journal | Reporting/training artifact | 5 | Rebuild is safe by default; private fills require explicit opt-in. |
@@ -147,6 +149,23 @@ the accepted/rejected counts.
 This is still not old-main execution. It is the safe consumer/audit layer needed before
 designing a runtime adapter.
 
+### F7 - Paper Telegram needed a dry-run preview before any send path
+
+The project had Telegram send utilities and `paper_signals_run --notify`, but no
+artifact proving what the operator-facing paper card would look like before enabling a
+paper channel. Sending directly from active paper signals would mix content validation
+with delivery and make formatting/length failures show up too late.
+
+Fix: `src.research_lab.paper_telegram_preview` now reads accepted
+`main_paper_consumed` rows, renders offline Telegram-card previews, escapes text for
+HTML mode, enforces the `research-only, not an order` and `execution_allowed=false`
+boundary, checks Telegram's 4096-character message limit, and writes
+`state/derived/paper_telegram_preview.jsonl` plus `.json`. It does not import Telegram
+senders, does not read `TELEGRAM_BOT_TOKEN` or chat IDs, and sends no network request.
+
+`farm_loop --run-paper-signals` rebuilds this preview after the consumer audit, and
+`farm_status_report` / `operational_health` surface the preview counts.
+
 ## Operator Commands
 
 Preflight:
@@ -173,6 +192,12 @@ Validate that view into the paper-only main consumer audit:
 
 ```bash
 python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Build offline paper Telegram previews:
+
+```bash
+python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 Export terminal paper-watch outcomes into training-friendly rows:
@@ -209,7 +234,8 @@ These are intentionally not done in this pass:
    the old main scanner/runtime still does not execute it. The paper-only consumer audit
    exists and validates the contract boundary first.
 2. Telegram paper channel: audit text, chart rendering, and notification routing before
-   enabling paper-signal alerts.
+   enabling paper-signal alerts. The offline text preview now exists; real delivery is
+   still opt-in and should stay separate.
 3. Journal modernization: the paper-signal training export now exists; next work is to
    surface it in the Excel/dashboard layer and keep private account fills opt-in.
 4. Dead-code retirement: archive/delete only after import and command references are
@@ -253,12 +279,15 @@ Important observed counts:
 - `paper_signals.reviewed = 598`
 - `main_bridge.status = not_connected` before first bridge export; then
   `instruction_view_ready_not_consumed`
-- `main_paper_bridge.instructions = 44` on the bounded farm-loop smoke after bridge export
-- `main_paper_consumer.accepted = 44`, `rejected = 0` after consumer audit
+- `main_paper_bridge.instructions = 54` on the current private snapshot after bridge export
+- `main_paper_consumer.accepted = 54`, `rejected = 0` after consumer audit
+- `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false` after
+  preview build
 - `main_bridge.orders_enabled_by_bridge = false`
 - `readiness.main_runtime_consumer = planned`
 - `readiness.main_instruction_view_available = pass` after bridge export
 - `readiness.main_paper_consumer_available = pass` after consumer audit
+- `readiness.paper_telegram_preview_available = pass` after preview build
 - `paper_signal_training_export.rows = terminal paper-watch outcomes` after export
 
 Targeted tests:
