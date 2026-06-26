@@ -74,3 +74,63 @@ class TestCycleLogStages:
 
     def test_skipped_stages_empty_when_no_stage_data(self) -> None:
         assert farm_journal.skipped_stages({"pivot": "x"}) == []
+
+    def test_smoke_caps_skip_forward_and_new_paper_generation(self, tmp_path, monkeypatch) -> None:
+        from src.research_lab.paper_signals import cycle as paper_cycle
+
+        seen: dict[str, int] = {}
+
+        def fake_cycle(*_args, **kwargs):
+            seen["max_new"] = kwargs["max_new"]
+            seen["max_pfr_scan"] = kwargs["max_pfr_scan"]
+            seen["max_observe"] = kwargs["max_observe"]
+            return {"generated": 0, "pfr_counts": {}, "state": {}, "gate_counts": {}}
+
+        monkeypatch.setattr(farm_loop, "_providers", lambda *_a, **_k: (None, None, None))
+        monkeypatch.setattr(farm_loop, "_read_intake", lambda *_a, **_k: [])
+        monkeypatch.setattr(farm_loop, "_discovery", lambda *_a, **_k: (None, {"status": "smoke"}))
+        monkeypatch.setattr(farm_loop, "_maybe_storage_maintain", lambda *_a, **_k: None)
+        monkeypatch.setattr(farm_loop, "run_coordinator_cycle", lambda *_a, **_k: {
+            "pivot": "smoke",
+            "active_tasks": 0,
+            "counters": {},
+            "status": {},
+            "errors": [],
+        })
+        monkeypatch.setattr(paper_cycle, "run_cycle", fake_cycle)
+
+        args = Namespace(
+            max_plan_events=0,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=0,
+            run_worker=False,
+            max_worker_jobs=0,
+            night_mode=False,
+            allow_public_output=False,
+            run_validation=False,
+            no_followups=True,
+            max_followups=0,
+            sweep_tier="smoke",
+            run_paper=False,
+            max_paper_cards=0,
+            true_forward_max_candidates=0,
+            run_paper_signals=True,
+            pfr_db_path="",
+            paper_signals_fetch_timeout=1.0,
+            paper_signals_max_new=0,
+            paper_signals_max_pfr_scan=0,
+            paper_signals_max_observe=0,
+            provider="synthetic",
+            backend="cpu",
+            data_days=None,
+            enrich_funding=False,
+            enrich_oi=False,
+            discovery_ttl_seconds=3600,
+            no_discovery_refresh=True,
+        )
+
+        out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
+
+        assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
+        assert seen == {"max_new": 0, "max_pfr_scan": 0, "max_observe": 0}

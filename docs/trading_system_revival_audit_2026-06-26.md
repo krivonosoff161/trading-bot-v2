@@ -200,6 +200,16 @@ Build offline paper Telegram previews:
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
+Fast wiring smoke for farm -> paper-watch -> main instruction -> paper Telegram preview:
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+This is intentionally not a full farm run. The warning about worker/validation/paper being
+off is expected; the smoke exists to prove the derived paper surfaces quickly before a long
+visible loop.
+
 Export terminal paper-watch outcomes into training-friendly rows:
 
 ```bash
@@ -283,6 +293,8 @@ Important observed counts:
 - `main_paper_consumer.accepted = 54`, `rejected = 0` after consumer audit
 - `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false` after
   preview build
+- fast wiring smoke completed in about 2 seconds with `main_paper_bridge.instructions = 54`,
+  `main_paper_consumer.accepted = 54`, `paper_telegram_preview.rendered = 20`, and no send path
 - `main_bridge.orders_enabled_by_bridge = false`
 - `readiness.main_runtime_consumer = planned`
 - `readiness.main_instruction_view_available = pass` after bridge export

@@ -88,6 +88,11 @@ python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%
 # not call Telegram and does not read chat IDs or tokens.
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
+# Fast wiring smoke for the farm -> paper-watch -> main instruction -> Telegram preview chain.
+# This intentionally disables worker/validation/paper execution and caps forward/paper generation at 0;
+# the stage warning is expected. Use this to verify surfaces quickly before a long loop.
+python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
 # Continuous full cycle.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
 
