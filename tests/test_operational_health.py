@@ -36,3 +36,16 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["main_bridge"]["status"] == "not_connected"
     assert report["main_bridge"]["paper_sources_ready"] is True
     assert Path(report["pfr"]["db"]["path"]) == pfr
+
+
+def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch):
+    view = tmp_path / "state" / "derived" / "main_paper_instructions.json"
+    view.parent.mkdir(parents=True)
+    view.write_text("{}", encoding="utf-8")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["main_bridge"]["instruction_view_exists"] is True
+    assert report["main_bridge"]["status"] == "instruction_view_ready_not_consumed"
+    assert report["main_bridge"]["orders_enabled_by_bridge"] is False

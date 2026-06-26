@@ -8,8 +8,9 @@ Updated: 2026-06-26
 > secrets; `paper_signals_run` and `farm_loop --run-paper-signals` have public fetch
 > timeouts plus PFR/observe caps for fast smoke checks; the visible full-cycle wrapper
 > now passes the PFR DB path explicitly, so farm/PFR/paper-watch runs as one operator
-> loop; journal rebuilds skip private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1`
-> is explicitly set. Verified state:
+> loop; active paper-watch signals are exported into a main-readable paper instruction
+> view with `execution_allowed=false`; journal rebuilds skip private OKX fills unless
+> `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
@@ -57,6 +58,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> materializes run_sweep -> state/strategy_lab.sqlite (compute queue) -> worker
   -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
   -> paper_loop (only paper_forward_ready cards) -> paper outcomes
+  -> paper_signals/PFR watch -> main_paper_instructions (paper-only, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
 

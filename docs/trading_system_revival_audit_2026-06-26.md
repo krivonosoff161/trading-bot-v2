@@ -35,6 +35,8 @@ state/strategy_lab.sqlite PFR records
   -> paper_signals PFR bridge (only when --pfr-db-path is explicit)
   -> state/derived/paper_signals.jsonl
   -> visual paper-signal reviews and status snapshots
+  -> state/derived/main_paper_instructions.json/jsonl
+  -> future main-paper consumer (not live executor)
 ```
 
 ## Priority And Ownership
@@ -45,9 +47,10 @@ state/strategy_lab.sqlite PFR records
 | `paper_runtime.py` / `paper_loop.py` | Gated replay paper runtime | 2 | Reads only `PAPER_FORWARD_READY` setup cards. |
 | `paper_signals/` | Operational forward-watch lane | 2 | Observes generated/PFR paper signals, writes JSONL/snapshots/reviews. |
 | `pfr_bridge.py` | Farm validation -> paper-watch bridge | 2 | Active only with explicit `--pfr-db-path`; now wired into the visible wrapper. |
-| `ws_main_screener.py` | Separate scanner/Telegram runtime surface | 3 | Does not consume farm/PFR outputs today. Do not treat it as the farm executor. |
-| Telegram | Notification surface | 4 | Env-gated; not part of the decision path. |
-| Excel journal | Reporting/training artifact | 4 | Rebuild is safe by default; private fills require explicit opt-in. |
+| `main_paper_bridge.py` | Paper-watch -> main-readable instruction view | 3 | Rebuildable artifact with `execution_allowed=false`; no old main runtime import. |
+| `ws_main_screener.py` | Separate scanner/Telegram runtime surface | 4 | Does not consume farm/PFR outputs today. Do not treat it as the farm executor. |
+| Telegram | Notification surface | 5 | Env-gated; not part of the decision path. |
+| Excel journal | Reporting/training artifact | 5 | Rebuild is safe by default; private fills require explicit opt-in. |
 
 ## Findings
 
@@ -82,9 +85,29 @@ until a separate bridge contract is designed and tested. The current safe priori
 3. only then may a main-engine integration contract be designed.
 
 Fix: `scripts.strategy_lab.operational_health` now reports this explicitly as
-`main_bridge.status = not_connected`, while also showing whether paper/PFR sources and old
-main signal logs exist. This prevents a false operator assumption that the main runtime is
+`main_bridge.status = not_connected` or `instruction_view_ready_not_consumed`, while also
+showing whether paper/PFR sources, the derived main-paper instruction view, and old main
+signal logs exist. This prevents a false operator assumption that the main runtime is
 already consuming farm/PFR outputs.
+
+### F4 - Main-readable paper instruction view was missing
+
+The project had farm/PFR/paper-watch data and an old `SignalContract`, but no safe bridge
+artifact between them. That made the next integration step ambiguous: either the old main
+runtime would have to parse paper-signal internals, or someone would be tempted to import
+the old runtime directly.
+
+Fix: `src.research_lab.main_paper_bridge` now rebuilds
+`state/derived/main_paper_instructions.jsonl` and
+`state/derived/main_paper_instructions.json` from active paper-watch signals. Each item
+contains a `SignalContract`-shaped payload and hard invariants:
+
+- `paper_only = true`
+- `execution_allowed = false`
+- active source statuses only: `armed`, `opened_paper`
+- no Telegram, `.env`, exchange, or order imports
+
+`farm_loop --run-paper-signals` exports this view after each paper-signal cycle.
 
 ## Operator Commands
 
@@ -100,6 +123,12 @@ Bounded full-cycle smoke:
 
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Rebuild only the main-readable paper instruction view:
+
+```bash
+python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 Visible continuous run:
@@ -126,8 +155,8 @@ python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\
 
 These are intentionally not done in this pass:
 
-1. Main-engine bridge contract: define how a farm/PFR/paper setup becomes a main-engine
-   paper instruction without importing the old live/order path.
+1. Main runtime consumer: the rebuildable `main_paper_instructions` view exists, but
+   the old main scanner/runtime still does not consume it.
 2. Telegram paper channel: audit text, chart rendering, and notification routing before
    enabling paper-signal alerts.
 3. Journal modernization: map paper-signal/PFR outcomes into a training-friendly schema
@@ -171,11 +200,14 @@ Important observed counts:
 - `paper_signals.armed = 27`
 - `paper_signals.opened_paper = 12`
 - `paper_signals.reviewed = 598`
-- `main_bridge.status = not_connected`
+- `main_bridge.status = not_connected` before first bridge export; then
+  `instruction_view_ready_not_consumed`
+- `main_paper_bridge.instructions = 44` on the bounded farm-loop smoke after bridge export
 - `main_bridge.orders_enabled_by_bridge = false`
 
 Targeted tests:
 
 - `tests/test_pfr_bridge.py tests/test_paper_signals.py tests/test_operational_health.py tests/test_build_journal_safety.py`: 87 passed.
 - `tests/test_farm_loop_integration.py tests/test_paper_runtime.py tests/test_paper_contract.py`: 65 passed, 1 pre-existing CUDA warning.
+- `tests/test_main_paper_bridge.py tests/test_operational_health.py`: 8 passed.
 - `git diff --check`: clean.

@@ -69,6 +69,9 @@ python -m scripts.strategy_lab.paper_signals_run --mode live --max-signals 1 --m
 # One bounded full-cycle smoke with paper-signal/PFR lane enabled.
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
+# Rebuild the main-readable paper instruction view from active paper signals.
+python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
 # Continuous full cycle.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
 
@@ -122,6 +125,9 @@ follow-up analysis.
   checks;
 - public data fetch timeout is controlled by `--paper-signals-fetch-timeout`;
 - no signal can enable live order execution.
+- after each `farm_loop --run-paper-signals` cycle,
+  `src.research_lab.main_paper_bridge` rebuilds a main-readable paper instruction
+  view with `paper_only=true` and `execution_allowed=false`.
 
 For the standalone CLI, the matching flags are:
 
@@ -176,6 +182,10 @@ explicitly passed.
 - `hard_validation/{requests,verdicts,reports}/` - honest validation artifacts.
 - `setup_library/{cards,reports,setup_index.jsonl}` - validated setup cards.
 - `paper/paper_trades.jsonl` - paper trade journal.
+- `state/derived/main_paper_instructions.jsonl` and
+  `state/derived/main_paper_instructions.json` - rebuildable main-readable paper
+  instruction view derived from active paper-watch signals; every row is
+  `paper_only=true` and `execution_allowed=false`.
 - `state/derived/setup_lifecycle.json` - optional rebuildable snapshot of setup lifecycle
   groups; canonical data remains in the DBs and artifacts above.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.

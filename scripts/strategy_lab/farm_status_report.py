@@ -279,6 +279,11 @@ def collect(db_path: Path) -> dict:
             report["paper_signals"] = json.loads(ps_path.read_text(encoding="utf-8")) if ps_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["paper_signals"] = {}
+        try:  # main-readable paper instruction view (derived, never orders)
+            mp_path = db_path.parent.parent / "state" / "derived" / "main_paper_instructions.json"
+            report["main_paper_bridge"] = json.loads(mp_path.read_text(encoding="utf-8")) if mp_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_paper_bridge"] = {}
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
@@ -383,6 +388,12 @@ def _print(report: dict) -> None:
     if ps.get("total"):
         print(f"  paper signals (operational watch lane, research-only NOT orders): total={ps['total']} "
               f"by_status={ps.get('by_status') or '(none)'}")
+    mp = report.get("main_paper_bridge") or {}
+    if mp.get("instructions") is not None:
+        print("  main paper bridge: "
+              f"instructions={mp.get('instructions', 0)} "
+              f"paper_only={mp.get('paper_only')} execution_allowed={mp.get('execution_allowed')} "
+              "(derived view; main runtime not live-consuming)")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "

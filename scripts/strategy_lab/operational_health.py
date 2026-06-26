@@ -46,6 +46,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     pfr_db = pfr_db_path or (private_root / "state" / "strategy_lab.sqlite")
     paper_signal_snapshot = private_root / "state" / "derived" / "paper_signals.json"
     paper_signal_log = private_root / "state" / "derived" / "paper_signals.jsonl"
+    main_paper_instruction_snapshot = private_root / "state" / "derived" / "main_paper_instructions.json"
+    main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     return {
         "mode": "paper_research_only",
@@ -77,19 +79,22 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_impulse_training": _exists(ROOT / "logs" / "main_impulse" / "main_impulse_training.jsonl"),
             "paper_signals": _exists(paper_signal_log),
             "paper_signal_snapshot": _exists(paper_signal_snapshot),
+            "main_paper_instructions": _exists(main_paper_instruction_log),
+            "main_paper_instruction_snapshot": _exists(main_paper_instruction_snapshot),
             "main_signals": _exists(main_signal_log),
         },
         "pfr": {
             "db": _exists(pfr_db),
         },
         "main_bridge": {
-            "status": "not_connected",
+            "status": "instruction_view_ready_not_consumed" if main_paper_instruction_snapshot.exists() else "not_connected",
             "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
+            "instruction_view_exists": main_paper_instruction_snapshot.exists() or main_paper_instruction_log.exists(),
             "main_signal_log_exists": main_signal_log.exists(),
             "orders_enabled_by_bridge": False,
             "note": (
-                "Main WS/Telegram runtime does not consume farm/PFR/paper-signal outputs yet; "
-                "a separate paper-only bridge contract is required before integration."
+                "A main-readable paper instruction view may exist, but the Main WS/Telegram "
+                "runtime does not consume it yet. No execution is enabled."
             ),
         },
     }
@@ -118,6 +123,7 @@ def _print_human(report: dict[str, Any]) -> None:
     print(
         "main_bridge: "
         f"status={bridge['status']} paper_sources_ready={bridge['paper_sources_ready']} "
+        f"instruction_view={bridge['instruction_view_exists']} "
         f"main_signal_log={bridge['main_signal_log_exists']} orders_enabled={bridge['orders_enabled_by_bridge']}"
     )
     print("journals:")
