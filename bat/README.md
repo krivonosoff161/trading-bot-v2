@@ -6,7 +6,8 @@ the repository root (`cd /d %~dp0\..`).
 ## Current Canonical Strategy Lab Path
 
 - `strategy_lab_farm_full_cycle_loop.bat` - visible continuous farm cycle:
-  scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper.
+  scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper
+  runtime plus PFR-backed paper-signal watch lane.
 - `strategy_lab_farm_full_cycle_stop.bat` - writes the stop-file for the loop above.
 - `strategy_lab_status.bat` - read-only operator status.
 
