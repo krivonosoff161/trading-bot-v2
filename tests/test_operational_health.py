@@ -19,6 +19,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
+    assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
@@ -44,6 +45,7 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["readiness"]["paper_signal_store_available"]["status"] == "pass"
     assert report["readiness"]["main_instruction_view_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
+    assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert Path(report["pfr"]["db"]["path"]) == pfr
 
@@ -74,6 +76,18 @@ def test_operational_health_reports_main_paper_consumer_view(tmp_path, monkeypat
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "pass"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
+
+
+def test_operational_health_reports_paper_telegram_preview(tmp_path, monkeypatch):
+    preview = tmp_path / "state" / "derived" / "paper_telegram_preview.json"
+    preview.parent.mkdir(parents=True)
+    preview.write_text("{}", encoding="utf-8")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["journals"]["paper_telegram_preview_snapshot"]["exists"] is True
+    assert report["readiness"]["paper_telegram_preview_available"]["status"] == "pass"
 
 
 def test_operational_health_blocks_enabled_unconfigured_lab_llm(tmp_path, monkeypatch):

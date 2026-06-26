@@ -11,9 +11,11 @@ Updated: 2026-06-26
 > loop; active paper-watch signals are exported into a main-readable paper instruction
 > view with `execution_allowed=false`; that view is then validated into a paper-only
 > main consumer audit artifact (`state/derived/main_paper_consumed.jsonl`) before any
-> future runtime adapter; terminal paper-watch outcomes can be exported to
-> `state/derived/paper_signal_training.jsonl`; journal rebuilds skip private OKX fills
-> unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
+> future runtime adapter; accepted instructions are also rendered into offline Telegram
+> preview cards (`state/derived/paper_telegram_preview.jsonl`) with no send/network path;
+> terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;
+> journal rebuilds skip private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is
+> explicitly set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
@@ -62,6 +64,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
   -> paper_loop (only paper_forward_ready cards) -> paper outcomes
   -> paper_signals/PFR watch -> main_paper_instructions -> main_paper_consumed
+     -> paper_telegram_preview
      (paper-only contract audit, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```

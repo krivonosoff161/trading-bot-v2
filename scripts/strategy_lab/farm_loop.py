@@ -198,6 +198,13 @@ def _print_cycle(out: dict) -> None:
             f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
             f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')}"
         )
+    tp = out.get("paper_telegram_preview") or {}
+    if tp:
+        print(
+            "  paper_telegram_preview: "
+            f"rendered={tp.get('rendered', 0)} invalid={tp.get('invalid', 0)} "
+            f"sends_network={tp.get('sends_network')}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -210,7 +217,11 @@ def _cycle_signature(out: dict) -> tuple:
     paper_counters = tuple(sorted((paper.get("counters") or {}).items()))
     paper_ready = tuple(sorted((paper.get("readiness") or {}).get("blocked_reasons", {}).items()))
     main_consumer = tuple(sorted((out.get("main_paper_consumer") or {}).items()))
-    return (out.get("pivot"), nz, by_state, paper_counters, paper_ready, main_consumer, bool(out.get("errors")))
+    telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
+    return (
+        out.get("pivot"), nz, by_state, paper_counters, paper_ready,
+        main_consumer, telegram_preview, bool(out.get("errors")),
+    )
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
@@ -274,6 +285,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
                 except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
+                try:
+                    from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
+                    out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
+                except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
+                    out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)

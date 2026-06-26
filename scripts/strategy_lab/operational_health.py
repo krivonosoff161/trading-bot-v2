@@ -117,6 +117,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if telegram["paper"]["configured"] else "Paper Telegram channel is not configured; paper loop still works.",
             action="Set PAPER_CHAT_ID after paper-alert text/chart review." if not telegram["paper"]["configured"] else "",
         ),
+        "paper_telegram_preview_available": _gate(
+            "pass" if journals["paper_telegram_preview_snapshot"]["exists"] else "warn",
+            "Paper Telegram preview artifact exists and can be reviewed before sending."
+            if journals["paper_telegram_preview_snapshot"]["exists"]
+            else "Paper Telegram preview artifact is not built yet.",
+            action="Run python -m scripts.strategy_lab.paper_telegram_preview."
+            if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
+        ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
             "Scanner LLM provider has a configured key."
@@ -175,6 +183,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
     main_paper_consumed_snapshot = private_root / "state" / "derived" / "main_paper_consumed.json"
     main_paper_consumed_log = private_root / "state" / "derived" / "main_paper_consumed.jsonl"
+    paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
+    paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     report = {
         "mode": "paper_research_only",
@@ -212,6 +222,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_paper_instruction_snapshot": _exists(main_paper_instruction_snapshot),
             "main_paper_consumed": _exists(main_paper_consumed_log),
             "main_paper_consumed_snapshot": _exists(main_paper_consumed_snapshot),
+            "paper_telegram_preview": _exists(paper_telegram_preview_log),
+            "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "main_signals": _exists(main_signal_log),
         },
         "pfr": {
