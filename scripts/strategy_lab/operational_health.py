@@ -2,8 +2,9 @@
 
 Read-only status for paper/research operations: Telegram delivery config,
 scanner LLM config, Strategy Lab advisory LLM config, journal/training files,
-and PFR database presence. It never prints secrets and never calls providers
-unless the existing llm_health_report is called separately with --probe-live.
+PFR database presence, and main-engine bridge readiness. It never prints secrets
+and never calls providers unless the existing llm_health_report is called
+separately with --probe-live.
 """
 
 from __future__ import annotations
@@ -42,6 +43,10 @@ def _exists(path: Path) -> dict[str, Any]:
 def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None) -> dict[str, Any]:
     private_root = private_root or DEFAULT_PRIVATE_ROOT
     provider = load_provider(os.environ)
+    pfr_db = pfr_db_path or (private_root / "state" / "strategy_lab.sqlite")
+    paper_signal_snapshot = private_root / "state" / "derived" / "paper_signals.json"
+    paper_signal_log = private_root / "state" / "derived" / "paper_signals.jsonl"
+    main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     return {
         "mode": "paper_research_only",
         "safety": {
@@ -70,11 +75,22 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
             "impulse_training": _exists(ROOT / "logs" / "impulse_pump" / "impulse_pump_training.jsonl"),
             "main_impulse_training": _exists(ROOT / "logs" / "main_impulse" / "main_impulse_training.jsonl"),
-            "paper_signals": _exists(private_root / "state" / "derived" / "paper_signals.jsonl"),
-            "paper_signal_snapshot": _exists(private_root / "state" / "derived" / "paper_signals.json"),
+            "paper_signals": _exists(paper_signal_log),
+            "paper_signal_snapshot": _exists(paper_signal_snapshot),
+            "main_signals": _exists(main_signal_log),
         },
         "pfr": {
-            "db": _exists(pfr_db_path or (private_root / "state" / "strategy_lab.sqlite")),
+            "db": _exists(pfr_db),
+        },
+        "main_bridge": {
+            "status": "not_connected",
+            "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
+            "main_signal_log_exists": main_signal_log.exists(),
+            "orders_enabled_by_bridge": False,
+            "note": (
+                "Main WS/Telegram runtime does not consume farm/PFR/paper-signal outputs yet; "
+                "a separate paper-only bridge contract is required before integration."
+            ),
         },
     }
 
@@ -98,6 +114,12 @@ def _print_human(report: dict[str, Any]) -> None:
     lab = report["strategy_lab_llm"]
     print(f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}")
     print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
+    bridge = report["main_bridge"]
+    print(
+        "main_bridge: "
+        f"status={bridge['status']} paper_sources_ready={bridge['paper_sources_ready']} "
+        f"main_signal_log={bridge['main_signal_log_exists']} orders_enabled={bridge['orders_enabled_by_bridge']}"
+    )
     print("journals:")
     for name, item in report["journals"].items():
         print(f"  {name}: exists={item['exists']} bytes={item['size_bytes']} path={item['path']}")
