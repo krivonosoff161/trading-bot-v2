@@ -48,9 +48,19 @@ class MainPaperRuntimeQueueItem:
     side: str
     setup_family: str
     entry: float
+    entry_zone: list[float]
     stop: float
     take_profit_plan: list[dict[str, Any]]
     max_hold_min: int
+    max_hold_bars: int
+    boundary_ts: int
+    created_at: float
+    expires_at: float
+    risk_pct: float
+    data_fingerprint: str
+    dedup_key: str
+    source_mode: str
+    exit_mode: str
     priority: int
     priority_reasons: list[str] = field(default_factory=list)
     runtime_action: str = "watch_paper"
@@ -74,8 +84,20 @@ class MainPaperRuntimeQueueItem:
             raise ValueError("entry and stop must be positive")
         if self.entry == self.stop:
             raise ValueError("entry and stop must differ")
+        if len(self.entry_zone) != 2 or any(float(v) <= 0 for v in self.entry_zone):
+            raise ValueError("entry_zone must contain two positive prices")
+        if float(self.entry_zone[0]) > float(self.entry_zone[1]):
+            raise ValueError("entry_zone must be ordered low-to-high")
         if self.max_hold_min <= 0:
             raise ValueError("max_hold_min must be positive")
+        if self.max_hold_bars <= 0:
+            raise ValueError("max_hold_bars must be positive")
+        if self.boundary_ts <= 0:
+            raise ValueError("boundary_ts must be positive")
+        if not self.data_fingerprint:
+            raise ValueError("data_fingerprint required")
+        if not self.dedup_key:
+            raise ValueError("dedup_key required")
         if not self.take_profit_plan:
             raise ValueError("take_profit_plan must be non-empty")
 
@@ -167,9 +189,19 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         side=str(row.get("side") or contract.get("side") or ""),
         setup_family=str(row.get("setup_family") or ""),
         entry=float(contract.get("entry")),
+        entry_zone=[float(v) for v in list(meta.get("entry_zone") or [])[:2]],
         stop=float(contract.get("stop")),
         take_profit_plan=take_profit_plan,
         max_hold_min=int(contract.get("max_hold_min")),
+        max_hold_bars=int(meta.get("max_hold_bars") or 0),
+        boundary_ts=int(meta.get("boundary_ts") or 0),
+        created_at=float(meta.get("created_at") or 0.0),
+        expires_at=float(meta.get("expires_at") or 0.0),
+        risk_pct=float(meta.get("risk_pct") or 0.0),
+        data_fingerprint=str(meta.get("data_fingerprint") or contract.get("snapshot_id") or ""),
+        dedup_key=str(meta.get("dedup_key") or ""),
+        source_mode=str(meta.get("mode") or ""),
+        exit_mode=str(meta.get("exit_mode") or exit_params.get("exit_mode") or ""),
         priority=priority,
         priority_reasons=priority_reasons,
     )

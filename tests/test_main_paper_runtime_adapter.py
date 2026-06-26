@@ -64,6 +64,16 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     ]
     assert rows[0]["setup_family"] == "early_tp_tactical"
     assert rows[0]["runtime_action"] == "watch_paper"
+    assert rows[0]["entry_zone"] == [100.0, 101.0]
+    assert rows[0]["boundary_ts"] == 1
+    assert rows[0]["created_at"] == 1_800_000_000.0
+    assert rows[0]["expires_at"] == 1_800_003_600.0
+    assert rows[0]["max_hold_bars"] == 10
+    assert rows[0]["risk_pct"] == 5.0
+    assert rows[0]["data_fingerprint"] == "fp-fast"
+    assert rows[0]["dedup_key"] == "BTC|15m|early_tp_tactical|fast"
+    assert rows[0]["source_mode"] == "live"
+    assert rows[0]["exit_mode"] == "partial_be"
     assert all(row["paper_only"] is True for row in rows)
     assert all(row["execution_allowed"] is False for row in rows)
 
@@ -98,9 +108,19 @@ def test_runtime_queue_record_rejects_execution_enabled():
             side="long",
             setup_family="early_tp_tactical",
             entry=100.0,
+            entry_zone=[100.0, 101.0],
             stop=95.0,
             take_profit_plan=[{"label": "tp", "price": 110.0}],
             max_hold_min=60,
+            max_hold_bars=10,
+            boundary_ts=1,
+            created_at=1.0,
+            expires_at=2.0,
+            risk_pct=5.0,
+            data_fingerprint="fp",
+            dedup_key="BTC|1h|early_tp_tactical",
+            source_mode="live",
+            exit_mode="partial_be",
             priority=0,
             execution_allowed=True,
         )
