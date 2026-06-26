@@ -28,6 +28,11 @@ Expected safe state:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,
   journals, and the explicit `main_runtime_consumer = planned` boundary.
+- `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
+  main handoff. It should show a non-empty chain such as
+  `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 preview=K invalid_preview=0`.
+  If this gate is `warn`, rebuild the bounded paper chain before trusting the operator
+  picture.
 
 Treat a `planned` main-runtime consumer as a safety boundary, not as a launch failure.
 The visible farm loop can produce and consume paper instructions into an audit view today;
@@ -92,6 +97,9 @@ python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFI
 # This intentionally disables worker/validation/paper execution and caps forward/paper generation at 0;
 # the stage warning is expected. Use this to verify surfaces quickly before a long loop.
 python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Verify the rebuilt chain as counts, not just files.
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Continuous full cycle.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet

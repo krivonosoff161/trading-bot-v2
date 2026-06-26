@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from scripts.strategy_lab import operational_health as H
@@ -19,6 +20,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
+    assert report["readiness"]["paper_chain_counts"]["status"] == "warn"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert "secret-token" not in rendered
@@ -103,6 +105,36 @@ def test_operational_health_reports_paper_telegram_preview(tmp_path, monkeypatch
 
     assert report["journals"]["paper_telegram_preview_snapshot"]["exists"] is True
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "pass"
+
+
+def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "main_paper_instructions.json").write_text(
+        json.dumps({"instructions": 2, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_consumed.json").write_text(
+        json.dumps({"instructions_read": 2, "accepted": 2, "rejected": 0, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_runtime_queue.json").write_text(
+        json.dumps({"rows_read": 2, "queued": 2, "invalid": 0, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
+    (derived / "paper_telegram_preview.json").write_text(
+        json.dumps({"records_read": 2, "rendered": 2, "invalid": 0, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["paper_chain"]["instructions"]["instructions"] == 2
+    assert report["paper_chain"]["consumer"]["accepted"] == 2
+    assert report["paper_chain"]["runtime_queue"]["queued"] == 2
+    assert report["paper_chain"]["telegram_preview"]["rendered"] == 2
+    assert report["readiness"]["paper_chain_counts"]["status"] == "pass"
 
 
 def test_operational_health_blocks_enabled_unconfigured_lab_llm(tmp_path, monkeypatch):

@@ -19,7 +19,9 @@ Updated: 2026-06-26
 > terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;
 > `scripts/build_journal.py` now surfaces that export in a `Paper Watch` sheet while
 > still skipping private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly
-> set. Verified state:
+> set. `operational_health` now reports paper-chain counts, not only file presence
+> (`instructions -> accepted/rejected -> runtime queue -> Telegram preview`), so the
+> operator can see exactly where a chain breaks. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
