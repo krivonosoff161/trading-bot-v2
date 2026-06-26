@@ -183,6 +183,13 @@ def _print_cycle(out: dict) -> None:
         pfr_c = {k: v for k, v in (ps_op.get("pfr_counts") or {}).items() if isinstance(v, int) and v}
         if pfr_c:
             print("  pfr_lane: " + " ".join(f"{k}={v}" for k, v in pfr_c.items()))
+    mb = out.get("main_paper_bridge") or {}
+    if mb:
+        print(
+            "  main_paper_bridge: "
+            f"instructions={mb.get('instructions', 0)} "
+            f"paper_only={mb.get('paper_only')} execution_allowed={mb.get('execution_allowed')}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -248,6 +255,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     pfr_db_path=_pfr_db, provider=paper_provider,
                     max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
                     max_observe=getattr(args, "paper_signals_max_observe", None))
+                try:
+                    from src.research_lab.main_paper_bridge import export_main_paper_instructions
+                    out["main_paper_bridge"] = export_main_paper_instructions(private_root)
+                except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
+                    out.setdefault("errors", []).append({"where": "main_paper_bridge", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
