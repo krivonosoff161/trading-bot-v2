@@ -30,14 +30,17 @@ Expected safe state:
   journals, and the explicit `main_runtime_consumer = planned` boundary.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
-  `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 preview=K invalid_preview=0`.
+  `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
   If this gate is `warn`, rebuild the bounded paper chain before trusting the operator
   picture.
+- `paper_runtime_observed` shows whether the main-paper observer actually read the
+  runtime queue without invalid rows or provider errors. This is the paper lifecycle
+  check after the queue, still not an order executor.
 
 Treat a `planned` main-runtime consumer as a safety boundary, not as a launch failure.
-The visible farm loop can produce and consume paper instructions into an audit view today;
-the old main process must not be treated as their executor until a separate runtime adapter
-is designed and tested.
+The visible farm loop can produce paper instructions, consume them into an audit view, and
+observe the runtime queue on public candles today. The old live `main.py` process must not
+be treated as their executor.
 
 ## Active Path
 
@@ -92,6 +95,10 @@ python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%
 # Build offline Telegram-card previews from accepted paper instructions. This does
 # not call Telegram and does not read chat IDs or tokens.
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Observe the main-compatible paper runtime queue on public candles. This writes
+# a paper-only lifecycle status; it never imports the old live main engine.
+python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
 
 # Fast wiring smoke for the farm -> paper-watch -> main instruction -> Telegram preview chain.
 # This intentionally disables worker/validation/paper execution and caps forward/paper generation at 0;
@@ -164,7 +171,10 @@ follow-up analysis.
   main-compatible `watch_paper` queue from accepted rows only. The queue preserves the
   lifecycle context needed by a paper runner (`entry_zone`, `boundary_ts`, `expires_at`,
   `max_hold_bars`, `risk_pct`, `data_fingerprint`, `dedup_key`, and `exit_mode`). This is
-  the paper handoff point for a future runtime adapter, not the old live main executor.
+  the handoff point for paper observation, not the old live main executor.
+- `src.research_lab.main_paper_runtime` observes that queue on public OKX candles and writes
+  `state/derived/main_paper_runtime_observation.jsonl` plus `.json`. It can mark items as
+  pending, no-data, reviewed, invalid, or provider-error, but it has no execution authority.
 - after the consumer audit, `src.research_lab.paper_telegram_preview` builds offline
   Telegram-card previews and validates message length, HTML escaping, and execution
   disclaimers without sending anything.
@@ -191,6 +201,7 @@ Derived main-paper surfaces can also be rebuilt one by one:
 python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 python -m scripts.strategy_lab.main_paper_runtime_adapter --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
@@ -260,6 +271,10 @@ explicitly passed.
   and `execution_allowed=false`. Rows are self-contained enough for paper observation:
   they include the original entry zone, boundary timestamp, expiry, hold bars, risk,
   fingerprint, dedup key, source mode, and exit mode.
+- `state/derived/main_paper_runtime_observation.jsonl` and
+  `state/derived/main_paper_runtime_observation.json` - paper-only observation status
+  over the runtime queue. This is the main-paper lifecycle surface for pending/reviewed
+  cards and provider/data errors; every row remains `execution_allowed=false`.
 - `state/derived/paper_telegram_preview.jsonl` and
   `state/derived/paper_telegram_preview.json` - offline Telegram-card previews for
   accepted paper instructions; `sends_network=false`, no token/chat values, no API call.

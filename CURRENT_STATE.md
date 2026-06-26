@@ -15,14 +15,16 @@ Updated: 2026-06-26
 > paper runtime queue (`state/derived/main_paper_runtime_queue.jsonl`) with
 > `runtime_action=watch_paper`, `execution_allowed=false`, and full paper-observation
 > context (`entry_zone`, `boundary_ts`, expiry, hold bars, risk, fingerprint, dedup key,
-> source mode, exit mode); then they are rendered into
+> source mode, exit mode); the queue is observed by `scripts.strategy_lab.main_paper_runtime`
+> into `state/derived/main_paper_runtime_observation.jsonl` using public candles only;
+> then instructions are rendered into
 > offline Telegram preview cards (`state/derived/paper_telegram_preview.jsonl`) with no
 > send/network path;
 > terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;
 > `scripts/build_journal.py` now surfaces that export in a `Paper Watch` sheet while
 > still skipping private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly
 > set. `operational_health` now reports paper-chain counts, not only file presence
-> (`instructions -> accepted/rejected -> runtime queue -> Telegram preview`), so the
+> (`instructions -> accepted/rejected -> runtime queue -> runtime observation -> Telegram preview`), so the
 > operator can see exactly where a chain breaks. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
@@ -73,6 +75,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> paper_loop (only paper_forward_ready cards) -> paper outcomes
   -> paper_signals/PFR watch -> main_paper_instructions -> main_paper_consumed
      -> main_paper_runtime_queue
+     -> main_paper_runtime_observation
      -> paper_telegram_preview
      -> paper_signal_training export -> scripts/journal.xlsx / Paper Watch sheet
      (paper-only contract audit, not consumed by live main)
@@ -82,7 +85,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
 Fast wiring smoke exists for the derived paper chain: `farm_loop --once --apply` with
 `--true-forward-max-candidates 0 --paper-signals-max-new 0 --paper-signals-max-observe 0`.
 It intentionally leaves worker/validation/paper stages off and only proves
-farm -> paper-watch -> main instruction -> runtime queue -> preview wiring.
+farm -> paper-watch -> main instruction -> runtime queue -> runtime observation -> preview wiring.
 
 Upstream scanner intake source (feeds the farm, no longer the center):
 

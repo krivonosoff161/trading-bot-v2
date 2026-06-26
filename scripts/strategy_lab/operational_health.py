@@ -98,6 +98,11 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and chain["runtime_queue"]["invalid"] == 0
         and chain["telegram_preview"]["invalid"] == 0
     )
+    runtime_observation_ready = (
+        chain["runtime_observation"]["rows_read"] > 0
+        and chain["runtime_observation"]["invalid"] == 0
+        and chain["runtime_observation"]["provider_error"] == 0
+    )
 
     return {
         "auto_trade_off": _gate(
@@ -138,6 +143,13 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.main_paper_runtime_adapter."
             if not bridge["runtime_queue_exists"] else "",
         ),
+        "main_paper_runtime_observation_available": _gate(
+            "pass" if bridge["runtime_observation_exists"] else "warn",
+            "Paper-only main runtime observer has produced a status artifact."
+            if bridge["runtime_observation_exists"] else "Paper-only main runtime observer has not run yet.",
+            action="Run python -m scripts.strategy_lab.main_paper_runtime --apply."
+            if not bridge["runtime_observation_exists"] else "",
+        ),
         "paper_chain_counts": _gate(
             "pass" if paper_chain_ready else "warn",
             "Paper chain has non-empty, valid instruction/consumer/runtime/preview counts."
@@ -147,10 +159,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 if not paper_chain_ready else ""
             ),
         ),
+        "paper_runtime_observed": _gate(
+            "pass" if runtime_observation_ready else "warn",
+            "Paper runtime observer read the queue without invalid/provider errors."
+            if runtime_observation_ready else "Paper runtime observer has no clean observation yet.",
+            action="Run python -m scripts.strategy_lab.main_paper_runtime --apply after queue rebuild."
+            if not runtime_observation_ready else "",
+        ),
         "main_runtime_consumer": _gate(
             "planned",
-            "Old main/Telegram runtime still does not execute farm/PFR paper instructions.",
-            action="Keep old main execution disabled; use the paper runtime queue until a reviewed executor exists.",
+            "Old live main/Telegram runtime still does not execute farm/PFR paper instructions.",
+            action="Keep old main execution disabled; use the paper runtime observer for paper-only lifecycle.",
         ),
         "scanner_telegram_surface": _gate(
             "pass" if telegram["scanner"]["configured"] else "warn",
@@ -233,6 +252,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_paper_consumed_log = private_root / "state" / "derived" / "main_paper_consumed.jsonl"
     main_paper_runtime_queue_snapshot = private_root / "state" / "derived" / "main_paper_runtime_queue.json"
     main_paper_runtime_queue_log = private_root / "state" / "derived" / "main_paper_runtime_queue.jsonl"
+    main_paper_runtime_observation_snapshot = private_root / "state" / "derived" / "main_paper_runtime_observation.json"
+    main_paper_runtime_observation_log = private_root / "state" / "derived" / "main_paper_runtime_observation.jsonl"
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
@@ -274,6 +295,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_paper_consumed_snapshot": _exists(main_paper_consumed_snapshot),
             "main_paper_runtime_queue": _exists(main_paper_runtime_queue_log),
             "main_paper_runtime_queue_snapshot": _exists(main_paper_runtime_queue_snapshot),
+            "main_paper_runtime_observation": _exists(main_paper_runtime_observation_log),
+            "main_paper_runtime_observation_snapshot": _exists(main_paper_runtime_observation_snapshot),
             "paper_telegram_preview": _exists(paper_telegram_preview_log),
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "main_signals": _exists(main_signal_log),
@@ -289,6 +312,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "runtime_queue_exists": (
                 main_paper_runtime_queue_snapshot.exists() or main_paper_runtime_queue_log.exists()
             ),
+            "runtime_observation_exists": (
+                main_paper_runtime_observation_snapshot.exists() or main_paper_runtime_observation_log.exists()
+            ),
             "main_signal_log_exists": main_signal_log.exists(),
             "orders_enabled_by_bridge": False,
             "note": (
@@ -300,6 +326,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "instructions": _snapshot_metrics(main_paper_instruction_snapshot, ("instructions",)),
             "consumer": _snapshot_metrics(main_paper_consumed_snapshot, ("instructions_read", "accepted", "rejected")),
             "runtime_queue": _snapshot_metrics(main_paper_runtime_queue_snapshot, ("rows_read", "queued", "invalid")),
+            "runtime_observation": _snapshot_metrics(
+                main_paper_runtime_observation_snapshot,
+                ("rows_read", "observed", "reviewed", "pending", "invalid", "provider_error"),
+            ),
             "telegram_preview": _snapshot_metrics(
                 paper_telegram_preview_snapshot,
                 ("records_read", "rendered", "invalid"),
@@ -334,6 +364,7 @@ def _print_human(report: dict[str, Any]) -> None:
         "main_bridge: "
         f"status={bridge['status']} paper_sources_ready={bridge['paper_sources_ready']} "
         f"instruction_view={bridge['instruction_view_exists']} "
+        f"runtime_observation={bridge['runtime_observation_exists']} "
         f"main_signal_log={bridge['main_signal_log_exists']} orders_enabled={bridge['orders_enabled_by_bridge']}"
     )
     chain = report["paper_chain"]
@@ -342,6 +373,9 @@ def _print_human(report: dict[str, Any]) -> None:
         f"instructions={chain['instructions']['instructions']} "
         f"accepted={chain['consumer']['accepted']} rejected={chain['consumer']['rejected']} "
         f"queued={chain['runtime_queue']['queued']} invalid_queue={chain['runtime_queue']['invalid']} "
+        f"observed={chain['runtime_observation']['observed']} "
+        f"reviewed={chain['runtime_observation']['reviewed']} "
+        f"runtime_errors={chain['runtime_observation']['invalid'] + chain['runtime_observation']['provider_error']} "
         f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
     )
     print("readiness:")
