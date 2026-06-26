@@ -288,7 +288,8 @@ python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --n
 
 This is intentionally not a full farm run. The warning about worker/validation/paper being
 off is expected; the smoke exists to prove the derived paper surfaces quickly before a long
-visible loop.
+visible loop. With `--main-paper-runtime-limit 0`, it does not overwrite the latest real
+`main_paper_runtime_observation` artifact.
 
 Export terminal paper-watch outcomes into training-friendly rows:
 
