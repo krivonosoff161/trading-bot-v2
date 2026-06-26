@@ -84,7 +84,7 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-valid
 python -m scripts.strategy_lab.paper_signals_run --mode live --max-signals 1 --max-observe 0 --max-pfr-scan 2 --public-fetch-timeout 3
 
 # One bounded full-cycle smoke with paper-signal/PFR lane enabled.
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Rebuild the main-readable paper instruction view from active paper signals.
 python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
@@ -103,7 +103,7 @@ python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\
 # Fast wiring smoke for the farm -> paper-watch -> main instruction -> Telegram preview chain.
 # This intentionally disables worker/validation/paper execution and caps forward/paper generation at 0;
 # the stage warning is expected. Use this to verify surfaces quickly before a long loop.
-python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --main-paper-runtime-limit 0 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Verify the rebuilt chain as counts, not just files.
 python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
@@ -160,6 +160,7 @@ follow-up analysis.
 - active signal observation can be capped with `--paper-signals-max-observe` for smoke
   checks;
 - public data fetch timeout is controlled by `--paper-signals-fetch-timeout`;
+- main-paper queue observation is bounded by `--main-paper-runtime-limit`;
 - no signal can enable live order execution.
 - after each `farm_loop --run-paper-signals` cycle,
   `src.research_lab.main_paper_bridge` rebuilds a main-readable paper instruction
@@ -172,10 +173,11 @@ follow-up analysis.
   lifecycle context needed by a paper runner (`entry_zone`, `boundary_ts`, `expires_at`,
   `max_hold_bars`, `risk_pct`, `data_fingerprint`, `dedup_key`, and `exit_mode`). This is
   the handoff point for paper observation, not the old live main executor.
-- `src.research_lab.main_paper_runtime` observes that queue on public OKX candles and writes
+- `src.research_lab.main_paper_runtime` observes that queue on public OKX candles during
+  the same `farm_loop --run-paper-signals` cycle and writes
   `state/derived/main_paper_runtime_observation.jsonl` plus `.json`. It can mark items as
   pending, no-data, reviewed, invalid, or provider-error, but it has no execution authority.
-- after the consumer audit, `src.research_lab.paper_telegram_preview` builds offline
+- after the runtime observation, `src.research_lab.paper_telegram_preview` builds offline
   Telegram-card previews and validates message length, HTML escaping, and execution
   disclaimers without sending anything.
 

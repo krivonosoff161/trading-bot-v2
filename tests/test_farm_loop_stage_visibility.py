@@ -136,3 +136,5 @@ class TestCycleLogStages:
         assert seen == {"max_new": 0, "max_pfr_scan": 0, "max_observe": 0}
         assert out["main_paper_runtime_queue"]["queued"] == 0
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False
+        assert out["main_paper_runtime_observation"]["rows_read"] == 0
+        assert out["main_paper_runtime_observation"]["execution_allowed"] is False

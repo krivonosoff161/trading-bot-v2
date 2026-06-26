@@ -199,7 +199,9 @@ NEW_MODULES = [
     "src/research_lab/paper_journal.py", "src/research_lab/paper_runtime.py",
     "src/research_lab/paper_readiness.py",
     "src/research_lab/param_schemas.py", "src/research_lab/setup_lifecycle.py",
+    "src/research_lab/main_paper_runtime.py",
     "scripts/strategy_lab/paper_loop.py",
+    "scripts/strategy_lab/main_paper_runtime.py",
 ]
 # Module paths the research farm must NEVER import (the live/money/secrets/Telegram path).
 FORBIDDEN_IMPORTS = (

@@ -15,8 +15,9 @@ Updated: 2026-06-26
 > paper runtime queue (`state/derived/main_paper_runtime_queue.jsonl`) with
 > `runtime_action=watch_paper`, `execution_allowed=false`, and full paper-observation
 > context (`entry_zone`, `boundary_ts`, expiry, hold bars, risk, fingerprint, dedup key,
-> source mode, exit mode); the queue is observed by `scripts.strategy_lab.main_paper_runtime`
-> into `state/derived/main_paper_runtime_observation.jsonl` using public candles only;
+> source mode, exit mode); `farm_loop --run-paper-signals` observes that queue through
+> `scripts.strategy_lab.main_paper_runtime` into
+> `state/derived/main_paper_runtime_observation.jsonl` using public candles only;
 > then instructions are rendered into
 > offline Telegram preview cards (`state/derived/paper_telegram_preview.jsonl`) with no
 > send/network path;
