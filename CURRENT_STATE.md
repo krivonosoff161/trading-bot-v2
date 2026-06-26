@@ -6,8 +6,10 @@ Updated: 2026-06-26
 > The farm/PFR/paper-signal path was checked end-to-end in bounded paper/research mode.
 > `operational_health` now reports Telegram/LLM/journal/PFR readiness without exposing
 > secrets; `paper_signals_run` and `farm_loop --run-paper-signals` have public fetch
-> timeouts plus PFR/observe caps for fast smoke checks; journal rebuilds skip private OKX
-> fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
+> timeouts plus PFR/observe caps for fast smoke checks; the visible full-cycle wrapper
+> now passes the PFR DB path explicitly, so farm/PFR/paper-watch runs as one operator
+> loop; journal rebuilds skip private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1`
+> is explicitly set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
@@ -167,7 +169,7 @@ Farm (current core) — after a bounded cycle:
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, writes nothing
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-oi
-bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper loop
+bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper/PFR-watch loop
 python -m scripts.strategy_lab.farm_status_report                  # tasks by type/state, blocked/deferred, unique candidates
 ```
 
