@@ -40,6 +40,28 @@ def _exists(path: Path) -> dict[str, Any]:
     }
 
 
+def _snapshot_metrics(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {"path": str(path), "exists": path.exists(), "items": 0, "read_error": ""}
+    for field in fields:
+        metrics[field] = 0
+    if not path.exists():
+        return metrics
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    if not isinstance(data, dict):
+        metrics["read_error"] = "not_object"
+        return metrics
+    for field in fields:
+        value = data.get(field, 0)
+        metrics[field] = value if isinstance(value, int) else 0
+    items = data.get("items")
+    metrics["items"] = len(items) if isinstance(items, list) else 0
+    return metrics
+
+
 def _gate(status: str, message: str, *, action: str = "") -> dict[str, str]:
     return {"status": status, "message": message, "action": action}
 
@@ -66,6 +88,16 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     journals = report["journals"]
     pfr = report["pfr"]["db"]
     bridge = report["main_bridge"]
+    chain = report["paper_chain"]
+    paper_chain_ready = (
+        chain["instructions"]["instructions"] > 0
+        and chain["consumer"]["accepted"] > 0
+        and chain["runtime_queue"]["queued"] > 0
+        and chain["telegram_preview"]["rendered"] > 0
+        and chain["consumer"]["rejected"] == 0
+        and chain["runtime_queue"]["invalid"] == 0
+        and chain["telegram_preview"]["invalid"] == 0
+    )
 
     return {
         "auto_trade_off": _gate(
@@ -105,6 +137,15 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if bridge["runtime_queue_exists"] else "Paper-only main runtime queue is not built yet.",
             action="Run python -m scripts.strategy_lab.main_paper_runtime_adapter."
             if not bridge["runtime_queue_exists"] else "",
+        ),
+        "paper_chain_counts": _gate(
+            "pass" if paper_chain_ready else "warn",
+            "Paper chain has non-empty, valid instruction/consumer/runtime/preview counts."
+            if paper_chain_ready else "Paper chain is incomplete, empty, or has rejected/invalid rows.",
+            action=(
+                "Run a bounded farm_loop --run-paper-signals smoke, then rebuild bridge/consumer/runtime/preview."
+                if not paper_chain_ready else ""
+            ),
         ),
         "main_runtime_consumer": _gate(
             "planned",
@@ -255,6 +296,15 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 "runtime does not consume it yet. No execution is enabled."
             ),
         },
+        "paper_chain": {
+            "instructions": _snapshot_metrics(main_paper_instruction_snapshot, ("instructions",)),
+            "consumer": _snapshot_metrics(main_paper_consumed_snapshot, ("instructions_read", "accepted", "rejected")),
+            "runtime_queue": _snapshot_metrics(main_paper_runtime_queue_snapshot, ("rows_read", "queued", "invalid")),
+            "telegram_preview": _snapshot_metrics(
+                paper_telegram_preview_snapshot,
+                ("records_read", "rendered", "invalid"),
+            ),
+        },
     }
     report["readiness"] = _build_readiness(report)
     return report
@@ -285,6 +335,14 @@ def _print_human(report: dict[str, Any]) -> None:
         f"status={bridge['status']} paper_sources_ready={bridge['paper_sources_ready']} "
         f"instruction_view={bridge['instruction_view_exists']} "
         f"main_signal_log={bridge['main_signal_log_exists']} orders_enabled={bridge['orders_enabled_by_bridge']}"
+    )
+    chain = report["paper_chain"]
+    print(
+        "paper_chain_counts: "
+        f"instructions={chain['instructions']['instructions']} "
+        f"accepted={chain['consumer']['accepted']} rejected={chain['consumer']['rejected']} "
+        f"queued={chain['runtime_queue']['queued']} invalid_queue={chain['runtime_queue']['invalid']} "
+        f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
     )
     print("readiness:")
     for name, gate in report["readiness"].items():
