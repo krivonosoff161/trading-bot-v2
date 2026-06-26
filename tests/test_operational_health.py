@@ -15,6 +15,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
 
     assert report["telegram"]["paper"]["configured"] is True
     assert report["scanner_llm"]["alibaba_key_set"] is True
+    assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
@@ -32,4 +33,6 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
 
     assert report["pfr"]["db"]["exists"] is True
     assert report["journals"]["paper_signals"]["exists"] is True
+    assert report["main_bridge"]["status"] == "not_connected"
+    assert report["main_bridge"]["paper_sources_ready"] is True
     assert Path(report["pfr"]["db"]["path"]) == pfr

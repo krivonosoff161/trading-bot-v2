@@ -81,6 +81,11 @@ until a separate bridge contract is designed and tested. The current safe priori
 2. journals and reviews preserve outcomes;
 3. only then may a main-engine integration contract be designed.
 
+Fix: `scripts.strategy_lab.operational_health` now reports this explicitly as
+`main_bridge.status = not_connected`, while also showing whether paper/PFR sources and old
+main signal logs exist. This prevents a false operator assumption that the main runtime is
+already consuming farm/PFR outputs.
+
 ## Operator Commands
 
 Preflight:
@@ -166,6 +171,8 @@ Important observed counts:
 - `paper_signals.armed = 27`
 - `paper_signals.opened_paper = 12`
 - `paper_signals.reviewed = 598`
+- `main_bridge.status = not_connected`
+- `main_bridge.orders_enabled_by_bridge = false`
 
 Targeted tests:
 
