@@ -190,6 +190,14 @@ def _print_cycle(out: dict) -> None:
             f"instructions={mb.get('instructions', 0)} "
             f"paper_only={mb.get('paper_only')} execution_allowed={mb.get('execution_allowed')}"
         )
+    mc = out.get("main_paper_consumer") or {}
+    if mc:
+        print(
+            "  main_paper_consumer: "
+            f"read={mc.get('instructions_read', 0)} "
+            f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
+            f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -201,7 +209,8 @@ def _cycle_signature(out: dict) -> tuple:
     paper = out.get("paper") or {}
     paper_counters = tuple(sorted((paper.get("counters") or {}).items()))
     paper_ready = tuple(sorted((paper.get("readiness") or {}).get("blocked_reasons", {}).items()))
-    return (out.get("pivot"), nz, by_state, paper_counters, paper_ready, bool(out.get("errors")))
+    main_consumer = tuple(sorted((out.get("main_paper_consumer") or {}).items()))
+    return (out.get("pivot"), nz, by_state, paper_counters, paper_ready, main_consumer, bool(out.get("errors")))
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
@@ -260,6 +269,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["main_paper_bridge"] = export_main_paper_instructions(private_root)
                 except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_bridge", "error": str(exc)})
+                try:
+                    from src.research_lab.main_paper_consumer import consume_main_paper_instructions
+                    out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
+                except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
+                    out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)

@@ -36,7 +36,8 @@ state/strategy_lab.sqlite PFR records
   -> state/derived/paper_signals.jsonl
   -> visual paper-signal reviews and status snapshots
   -> state/derived/main_paper_instructions.json/jsonl
-  -> future main-paper consumer (not live executor)
+  -> state/derived/main_paper_consumed.json/jsonl
+  -> future reviewed runtime adapter (not live executor)
 ```
 
 ## Priority And Ownership
@@ -48,6 +49,7 @@ state/strategy_lab.sqlite PFR records
 | `paper_signals/` | Operational forward-watch lane | 2 | Observes generated/PFR paper signals, writes JSONL/snapshots/reviews. |
 | `pfr_bridge.py` | Farm validation -> paper-watch bridge | 2 | Active only with explicit `--pfr-db-path`; now wired into the visible wrapper. |
 | `main_paper_bridge.py` | Paper-watch -> main-readable instruction view | 3 | Rebuildable artifact with `execution_allowed=false`; no old main runtime import. |
+| `main_paper_consumer.py` | Main-readable instruction -> paper-watch audit | 3 | Validates `SignalContract` payloads and rejects bad instructions; still no executor. |
 | `ws_main_screener.py` | Separate scanner/Telegram runtime surface | 4 | Does not consume farm/PFR outputs today. Do not treat it as the farm executor. |
 | Telegram | Notification surface | 5 | Env-gated; not part of the decision path. |
 | Excel journal | Reporting/training artifact | 5 | Rebuild is safe by default; private fills require explicit opt-in. |
@@ -127,6 +129,24 @@ Fix: `src.research_lab.paper_signals.training_export` now builds
 paper-watch rows. The export is derived, private-root only, `paper_only=true`, and
 does not call exchanges, Telegram, LLM providers, account endpoints, or order code.
 
+### F6 - Main-readable instructions needed a tested consumer boundary
+
+After F4, the farm could export `main_paper_instructions`, but there was still no tested
+downstream check proving that those rows are valid `SignalContract` payloads before a
+future main adapter reads them. Leaving only a bridge artifact would make the next step
+ambiguous and could hide malformed instructions until runtime.
+
+Fix: `src.research_lab.main_paper_consumer` now reads the bridge snapshot/JSONL,
+reconstructs the shared `SignalContract`, checks `paper_only=true`,
+`execution_allowed=false`, active source status, pair/side consistency, and writes
+`state/derived/main_paper_consumed.jsonl` plus `.json`. Bad rows are kept as
+`rejected_contract` with explicit problems. `farm_loop --run-paper-signals` runs this
+consumer after the bridge export, and `farm_status_report`/`operational_health` surface
+the accepted/rejected counts.
+
+This is still not old-main execution. It is the safe consumer/audit layer needed before
+designing a runtime adapter.
+
 ## Operator Commands
 
 Preflight:
@@ -147,6 +167,12 @@ Rebuild only the main-readable paper instruction view:
 
 ```bash
 python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Validate that view into the paper-only main consumer audit:
+
+```bash
+python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 Export terminal paper-watch outcomes into training-friendly rows:
@@ -180,7 +206,8 @@ python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\
 These are intentionally not done in this pass:
 
 1. Main runtime consumer: the rebuildable `main_paper_instructions` view exists, but
-   the old main scanner/runtime still does not consume it.
+   the old main scanner/runtime still does not execute it. The paper-only consumer audit
+   exists and validates the contract boundary first.
 2. Telegram paper channel: audit text, chart rendering, and notification routing before
    enabling paper-signal alerts.
 3. Journal modernization: the paper-signal training export now exists; next work is to
@@ -227,9 +254,11 @@ Important observed counts:
 - `main_bridge.status = not_connected` before first bridge export; then
   `instruction_view_ready_not_consumed`
 - `main_paper_bridge.instructions = 44` on the bounded farm-loop smoke after bridge export
+- `main_paper_consumer.accepted = 44`, `rejected = 0` after consumer audit
 - `main_bridge.orders_enabled_by_bridge = false`
 - `readiness.main_runtime_consumer = planned`
 - `readiness.main_instruction_view_available = pass` after bridge export
+- `readiness.main_paper_consumer_available = pass` after consumer audit
 - `paper_signal_training_export.rows = terminal paper-watch outcomes` after export
 
 Targeted tests:
