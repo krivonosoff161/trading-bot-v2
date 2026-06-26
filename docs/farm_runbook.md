@@ -161,8 +161,10 @@ follow-up analysis.
   `SignalContract` payload and writes a paper-watch audit view; rejected instructions
   are visible as contract rejects, not silently forwarded.
 - after the consumer audit, `src.research_lab.main_paper_runtime_adapter` rebuilds a
-  main-compatible `watch_paper` queue from accepted rows only. This is the paper handoff
-  point for a future runtime adapter, not the old live main executor.
+  main-compatible `watch_paper` queue from accepted rows only. The queue preserves the
+  lifecycle context needed by a paper runner (`entry_zone`, `boundary_ts`, `expires_at`,
+  `max_hold_bars`, `risk_pct`, `data_fingerprint`, `dedup_key`, and `exit_mode`). This is
+  the paper handoff point for a future runtime adapter, not the old live main executor.
 - after the consumer audit, `src.research_lab.paper_telegram_preview` builds offline
   Telegram-card previews and validates message length, HTML escaping, and execution
   disclaimers without sending anything.
@@ -255,7 +257,9 @@ explicitly passed.
 - `state/derived/main_paper_runtime_queue.jsonl` and
   `state/derived/main_paper_runtime_queue.json` - main-compatible paper watch queue
   derived from accepted consumer rows only; every row has `runtime_action=watch_paper`
-  and `execution_allowed=false`.
+  and `execution_allowed=false`. Rows are self-contained enough for paper observation:
+  they include the original entry zone, boundary timestamp, expiry, hold bars, risk,
+  fingerprint, dedup key, source mode, and exit mode.
 - `state/derived/paper_telegram_preview.jsonl` and
   `state/derived/paper_telegram_preview.json` - offline Telegram-card previews for
   accepted paper instructions; `sends_network=false`, no token/chat values, no API call.

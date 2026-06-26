@@ -183,6 +183,9 @@ main-compatible paper watch items with:
 - `paper_only = true`;
 - `execution_allowed = false`;
 - concrete entry/stop/take/max-hold fields from the shared `SignalContract`;
+- full paper-observation context (`entry_zone`, `boundary_ts`, `expires_at`,
+  `max_hold_bars`, `risk_pct`, `data_fingerprint`, `dedup_key`, `source_mode`, and
+  `exit_mode`) so the next runtime does not need to parse internal paper-signal records;
 - deterministic priority from family, timeframe, and risk.
 
 This is the handoff point for a future main-paper runtime. It is not a live executor and

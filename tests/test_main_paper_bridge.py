@@ -55,6 +55,15 @@ def test_instruction_from_signal_reuses_signal_contract_shape():
     assert item.signal_contract["side"] == "long"
     assert item.signal_contract["exit_rule"]["type"] == "scaled"
     assert item.signal_contract["metadata"]["execution_allowed"] is False
+    assert item.signal_contract["metadata"]["entry_zone"] == [100.0, 101.0]
+    assert item.signal_contract["metadata"]["boundary_ts"] == 1
+    assert item.signal_contract["metadata"]["created_at"] == 1_800_000_000.0
+    assert item.signal_contract["metadata"]["expires_at"] == 1_800_003_600.0
+    assert item.signal_contract["metadata"]["max_hold_bars"] == 10
+    assert item.signal_contract["metadata"]["data_fingerprint"] == "abc123"
+    assert item.signal_contract["metadata"]["dedup_key"] == "BTC|1h|early"
+    assert item.signal_contract["metadata"]["mode"] == "live"
+    assert item.signal_contract["metadata"]["exit_mode"] == "partial_be"
 
 
 def test_instruction_from_signal_ignores_terminal_reviews():

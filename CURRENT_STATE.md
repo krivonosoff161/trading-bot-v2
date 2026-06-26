@@ -13,7 +13,9 @@ Updated: 2026-06-26
 > main consumer audit artifact (`state/derived/main_paper_consumed.jsonl`) before any
 > future executor; accepted instructions are also materialized into a main-compatible
 > paper runtime queue (`state/derived/main_paper_runtime_queue.jsonl`) with
-> `runtime_action=watch_paper` and `execution_allowed=false`; then they are rendered into
+> `runtime_action=watch_paper`, `execution_allowed=false`, and full paper-observation
+> context (`entry_zone`, `boundary_ts`, expiry, hold bars, risk, fingerprint, dedup key,
+> source mode, exit mode); then they are rendered into
 > offline Telegram preview cards (`state/derived/paper_telegram_preview.jsonl`) with no
 > send/network path;
 > terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;

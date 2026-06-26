@@ -100,6 +100,10 @@ Observed: journal rebuilt; private OKX fills skipped by default.
 - The derived main-paper handoff is currently internally consistent:
   active paper instructions are accepted by the consumer audit, bounded into the runtime
   queue, and rendered as offline Telegram previews without invalid rows.
+- The main-paper runtime queue is now self-contained for paper observation: it preserves
+  entry zone, boundary timestamp, expiry, hold bars, risk percent, fingerprint, dedup key,
+  source mode, and exit mode from the original paper signal contract. It still does not
+  execute orders.
 - True-forward lane is wired but currently depends on new bars maturing.
 - Telegram is available as surface-only routing; it is not a decision authority.
 - Alibaba/scanner routing is configured, while Strategy Lab LLM governance remains disabled
