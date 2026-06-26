@@ -17,8 +17,9 @@ Updated: 2026-06-26
 > offline Telegram preview cards (`state/derived/paper_telegram_preview.jsonl`) with no
 > send/network path;
 > terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;
-> journal rebuilds skip private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is
-> explicitly set. Verified state:
+> `scripts/build_journal.py` now surfaces that export in a `Paper Watch` sheet while
+> still skipping private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly
+> set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
@@ -69,6 +70,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> paper_signals/PFR watch -> main_paper_instructions -> main_paper_consumed
      -> main_paper_runtime_queue
      -> paper_telegram_preview
+     -> paper_signal_training export -> scripts/journal.xlsx / Paper Watch sheet
      (paper-only contract audit, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
