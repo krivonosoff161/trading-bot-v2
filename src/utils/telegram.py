@@ -11,20 +11,42 @@ from pathlib import Path
 import aiohttp
 from loguru import logger
 
-_BOT_TOKEN: str       = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
-_CHAT_IDS:  list[str] = [
-    cid.strip() for cid in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if cid.strip()
-]
+def _clean_env(value: str | None) -> str:
+    return (value or "").strip().strip("'\"")
+
+
+def bot_token() -> str:
+    """Return the current bot token without caching it at import time."""
+    return _clean_env(os.getenv("TELEGRAM_BOT_TOKEN"))
+
+
+def chat_ids(env_name: str = "TELEGRAM_CHAT_ID") -> list[str]:
+    """Return configured chat IDs from the current environment."""
+    return [cid.strip() for cid in _clean_env(os.getenv(env_name)).split(",") if cid.strip()]
+
+
+def telegram_status(*, chat_env: str = "TELEGRAM_CHAT_ID") -> dict[str, object]:
+    """Public-safe Telegram config status. Never exposes token or chat IDs."""
+    ids = chat_ids(chat_env)
+    token_set = bool(bot_token())
+    return {
+        "token_set": token_set,
+        "chat_env": chat_env,
+        "chat_ids_count": len(ids),
+        "configured": bool(token_set and ids),
+    }
 
 
 async def send_message(text: str) -> None:
     """Send a Telegram message to all configured chat IDs. No-op if not configured."""
-    if not _BOT_TOKEN or not _CHAT_IDS:
+    token = bot_token()
+    ids = chat_ids()
+    if not token or not ids:
         return
-    url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         async with aiohttp.ClientSession() as session:
-            for chat_id in _CHAT_IDS:
+            for chat_id in ids:
                 resp = await session.post(
                     url,
                     json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
@@ -47,10 +69,11 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
     returns ``ok: true`` without sequential message_id, that indicates a
     server-side silent drop (anti-spam shadow ban).
     """
-    if not _BOT_TOKEN:
+    token = bot_token()
+    if not token:
         return None
     import asyncio
-    url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
 
     async with aiohttp.ClientSession() as session:
@@ -85,9 +108,10 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
 async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
                         parse_mode: str | None = None) -> None:
     """Send a photo file to a specific chat_id. parse_mode optional (e.g. 'HTML')."""
-    if not _BOT_TOKEN:
+    token = bot_token()
+    if not token:
         return
-    url = f"https://api.telegram.org/bot{_BOT_TOKEN}/sendPhoto"
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
     try:
         async with aiohttp.ClientSession() as session:
             data = aiohttp.FormData()

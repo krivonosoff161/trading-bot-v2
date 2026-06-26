@@ -111,6 +111,7 @@ docs/статисика.csv
 
 # Local agent app state / instructions (machine-specific, not source)
 .codex/
+.codex-remote-attachments/
 .agents/
 AGENTS.md
 

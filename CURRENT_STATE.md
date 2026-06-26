@@ -1,6 +1,16 @@
 # Current State
 
-Updated: 2026-06-20
+Updated: 2026-06-26
+
+> **Update 2026-06-26 - paper-trading operational preflight.**
+> The farm/PFR/paper-signal path was checked end-to-end in bounded paper/research mode.
+> `operational_health` now reports Telegram/LLM/journal/PFR readiness without exposing
+> secrets; `paper_signals_run` and `farm_loop --run-paper-signals` have public fetch
+> timeouts plus PFR/observe caps for fast smoke checks; journal rebuilds skip private OKX
+> fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
+> Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
+> configured, PFR DB present, bounded smoke completed without live/money paths. See
+> [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).
 
 > **Update 2026-06-20 — Phase 0+1 hardening/search-quality done; disciplinary gate = (B) sub-cost.**
 > Phase 0 (reproducible fail-loud validation, off-by-default stage visibility, discovery

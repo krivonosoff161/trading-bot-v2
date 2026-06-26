@@ -123,7 +123,9 @@ def write_selection_snapshot(private_root: Path, ranked: list[dict], top_n: int 
 def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"), max_new=5,
               apply: bool = False, provider=None, now: float | None = None,
               families_arg=None, pfr_db_path: Path | None = None,
-              pfr_quality_policy: dict | None = None) -> dict[str, Any]:
+              pfr_quality_policy: dict | None = None,
+              max_pfr_scan: int = 30,
+              max_observe: int | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
@@ -140,10 +142,16 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     fam_order = families_arg or family_priority(mem)
 
     observed, closed = 0, 0
+    gate_counts: dict[str, int] = {}
+    active_seen = 0
     # (1) re-observe active signals on fresh bars (+ wall-clock / no-data age-out so none strand)
     for s in existing:
         if s.status not in ("armed", "opened_paper"):
             continue
+        if max_observe is not None and active_seen >= max_observe:
+            gate_counts["observe_scan_limit_reached"] = gate_counts.get("observe_scan_limit_reached", 0) + 1
+            break
+        active_seen += 1
         candles = _fetch(provider, s.symbol, s.timeframe, now_ms)
         if not candles:
             s.outcome = {**(s.outcome or {}), "result": "no_data",
@@ -176,7 +184,6 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     movers = rank_movers(_load_movers(private_root), mem, known_bad)
     if apply:
         write_selection_snapshot(private_root, movers)
-    gate_counts: dict[str, int] = {}
     new_sigs = []
     for mv in movers:
         if len(new_sigs) >= max_new:
@@ -263,6 +270,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             max_pfr=max(0, max_new - len(new_sigs)),
             timeframes=timeframes,
             status_counts=pfr_counts,
+            max_pfr_scan=max_pfr_scan,
         )
         new_sigs.extend(pfr_sigs)
         # gate_counts merged for single report surface
@@ -377,7 +385,9 @@ def _active_lock(lock_path: Path, sleep_seconds: int) -> bool:
 def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_file: str = "",
              mode: str = "live", timeframes=("15m", "1h"), max_new=5, provider=None,
              apply: bool = True, lock_file: str | Path | None = None,
-             pfr_db_path: Path | None = None, pfr_quality_policy: dict | None = None) -> list[dict]:
+             pfr_db_path: Path | None = None, pfr_quality_policy: dict | None = None,
+             max_pfr_scan: int = 30,
+             max_observe: int | None = None) -> list[dict]:
     private_root = Path(private_root)
     lock_path = Path(lock_file) if lock_file else private_root / "state" / "paper_signals_loop.lock"
     if _active_lock(lock_path, sleep_seconds):
@@ -397,7 +407,9 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
             reports.append(run_cycle(private_root, mode=mode, timeframes=timeframes, max_new=max_new,
                                      apply=apply, provider=provider,
                                      pfr_db_path=pfr_db_path,
-                                     pfr_quality_policy=pfr_quality_policy))
+                                     pfr_quality_policy=pfr_quality_policy,
+                                     max_pfr_scan=max_pfr_scan,
+                                     max_observe=max_observe))
             lock_path.write_text(str(time.time()), encoding="utf-8")
             if sleep_seconds and i < cycles - 1:
                 time.sleep(max(1, sleep_seconds))

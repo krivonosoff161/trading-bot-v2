@@ -237,11 +237,17 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             # generate new). Crash-isolated; paper/research-only, never an order.
             try:
                 from src.research_lab.paper_signals import cycle as paper_cycle
+                from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
                 _pfr_db = Path(getattr(args, "pfr_db_path", "") or "")
                 _pfr_db = _pfr_db if _pfr_db.as_posix() not in ("", ".") else None
+                paper_provider = OkxPublicMarketDataProvider(
+                    timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
+                )
                 out["paper_signals"] = paper_cycle.run_cycle(
                     private_root, mode="live", timeframes=("15m", "1h"), max_new=5, apply=True,
-                    pfr_db_path=_pfr_db)
+                    pfr_db_path=_pfr_db, provider=paper_provider,
+                    max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+                    max_observe=getattr(args, "paper_signals_max_observe", None))
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
@@ -273,6 +279,12 @@ def main() -> None:
     ap.add_argument("--pfr-db-path", default="",
                     help="path to strategy_lab.sqlite for PFR forward-watch lane "
                          "(requires --run-paper-signals; OFF by default — must be explicit)")
+    ap.add_argument("--paper-signals-max-pfr-scan", type=int, default=30,
+                    help="max PFR records inspected by --run-paper-signals per farm cycle")
+    ap.add_argument("--paper-signals-max-observe", type=int, default=None,
+                    help="optional max active paper signals observed by --run-paper-signals; use for smoke checks")
+    ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
+                    help="per-request public OKX timeout used by --run-paper-signals")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")

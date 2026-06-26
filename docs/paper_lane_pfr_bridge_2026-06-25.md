@@ -5,6 +5,10 @@
 > - **Detection centralised**: `strategies/detectors.py` → single-bar helpers used by both batch generators and PFR bridge. Equivalence verified by `TestDetectorHelpers`.
 > - **Bounded scan**: `generate_pfr_signals()` accepts `max_pfr_scan=30` — stops inspecting records after N to keep cycles bounded.
 > - **farm_loop wired**: `--pfr-db-path` now works in `farm_loop.py --run-paper-signals` as well as `paper_signals_run.py`.
+> - **Operational update (2026-06-26)**: standalone and farm-loop CLIs expose
+>   public fetch timeout, PFR scan caps, and active-observation caps for fast
+>   smoke checks. Telegram and journal surfaces remain guarded and outside the
+>   decision path.
 > - All paper/forward observation. NOT edge. NOT order. NOT production-ready.
 
 ## What was built
@@ -119,6 +123,34 @@ PFR lane runs AFTER mover-based generation:
 - Reports counts in `report["pfr_counts"]`: `pfr_records_loaded`, `pfr_passed_quality`, `pfr_rejected_quality`, `pfr_unique_setups`, `pfr_generated`, etc.
 - `run_loop()` also extended to pass `pfr_db_path` through
 
+Operational caps added on 2026-06-26:
+
+| Surface | Flag | Purpose |
+|---|---|---|
+| standalone paper-signal CLI | `--max-pfr-scan N` | Bound PFR record inspection per cycle. |
+| standalone paper-signal CLI | `--max-observe N` | Bound active signal observation for smoke/preflight. Omit for normal forward observation. |
+| standalone paper-signal CLI | `--public-fetch-timeout SEC` | Bound each public OKX candle fetch. |
+| `farm_loop --run-paper-signals` | `--paper-signals-max-pfr-scan N` | Same PFR cap from the farm loop. |
+| `farm_loop --run-paper-signals` | `--paper-signals-max-observe N` | Same active-observation cap from the farm loop. |
+| `farm_loop --run-paper-signals` | `--paper-signals-fetch-timeout SEC` | Same public fetch timeout from the farm loop. |
+
+Verified smoke command:
+
+```bash
+python -m scripts.strategy_lab.paper_signals_run \
+  --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" \
+  --mode live \
+  --max-signals 1 \
+  --max-observe 0 \
+  --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" \
+  --max-pfr-scan 2 \
+  --public-fetch-timeout 3
+```
+
+Observed result on 2026-06-26: the command finished in seconds, observed zero active
+signals by design, generated one bounded live paper signal, and did not touch live/money
+paths.
+
 ---
 
 ## What this is NOT
@@ -152,6 +184,11 @@ All code in `src/research_lab/paper_signals/` is scanned by `TestNoLiveBoundary`
 | `src/research_lab/strategies/mean_reversion.py` | PASS 2: `signals_mean_reversion_fade` uses `detect_mean_reversion_fade` |
 | `scripts/strategy_lab/farm_loop.py` | PASS 3: `--pfr-db-path` arg + pass to `run_cycle()` + print `pfr_counts` |
 | `scripts/strategy_lab/farm_status_report.py` | PASS 5: PFR bridge section in `collect()` and `_print()` |
-| `scripts/strategy_lab/paper_signals_run.py` | `--pfr-db-path` CLI arg (added in earlier session) |
+| `scripts/strategy_lab/paper_signals_run.py` | `--pfr-db-path`, `--max-pfr-scan`, `--max-observe`, `--public-fetch-timeout` CLI flags |
+| `scripts/strategy_lab/operational_health.py` | Read-only operator preflight for Telegram/LLM/journal/PFR readiness without leaking secrets |
+| `scripts/build_journal.py` | Private OKX fill import is opt-in via `JOURNAL_ENABLE_PRIVATE_FILLS=1` |
 | `tests/test_pfr_bridge.py` | PASS D+: tests for all 10 categories (41 total) |
+| `tests/test_operational_health.py` | Secret-safe preflight reporting tests |
+| `tests/test_telegram_utils.py` | Lazy environment loading for Telegram surfaces |
+| `tests/test_build_journal_safety.py` | Journal private-endpoint opt-in safety test |
 | `docs/paper_lane_pfr_bridge_2026-06-25.md` | This file: audit updates |
