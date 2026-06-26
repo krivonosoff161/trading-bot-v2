@@ -252,13 +252,17 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
         # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
         # research lane can never break the cycle. matured != edge; nothing paper-ready.
-        try:
-            from src.research_lab import true_forward
-            true_forward.register(private_root, max_candidates=20)
-            tf_res = true_forward.collect_once(private_root, max_candidates=20)
-            out["true_forward"] = tf_res.get("summary", {})
-        except Exception as exc:  # noqa: BLE001 - research lane must never break the cycle
-            out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
+        tf_limit = int(getattr(args, "true_forward_max_candidates", 20))
+        if tf_limit > 0:
+            try:
+                from src.research_lab import true_forward
+                true_forward.register(private_root, max_candidates=tf_limit)
+                tf_res = true_forward.collect_once(private_root, max_candidates=tf_limit)
+                out["true_forward"] = tf_res.get("summary", {})
+            except Exception as exc:  # noqa: BLE001 - research lane must never break the cycle
+                out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
+        else:
+            out["true_forward"] = {"skipped": "true_forward_max_candidates=0"}
         if getattr(args, "run_paper_signals", False):
             # Operational paper-watch lane: one bounded cycle (observe armed -> close -> remember ->
             # generate new). Crash-isolated; paper/research-only, never an order.
@@ -271,7 +275,8 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
                 )
                 out["paper_signals"] = paper_cycle.run_cycle(
-                    private_root, mode="live", timeframes=("15m", "1h"), max_new=5, apply=True,
+                    private_root, mode="live", timeframes=("15m", "1h"),
+                    max_new=int(getattr(args, "paper_signals_max_new", 5)), apply=True,
                     pfr_db_path=_pfr_db, provider=paper_provider,
                     max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
                     max_observe=getattr(args, "paper_signals_max_observe", None))
@@ -318,6 +323,10 @@ def main() -> None:
     ap.add_argument("--run-paper", action="store_true", help="simulate paper outcomes from validated setup cards")
     ap.add_argument("--run-paper-signals", action="store_true",
                     help="run one bounded operational paper-watch cycle (observe+generate; research-only)")
+    ap.add_argument("--true-forward-max-candidates", type=int, default=20,
+                    help="max true-forward records collected per apply cycle; set 0 for wiring smoke checks")
+    ap.add_argument("--paper-signals-max-new", type=int, default=5,
+                    help="max new paper-watch cards generated per cycle; set 0 for wiring smoke checks")
     ap.add_argument("--pfr-db-path", default="",
                     help="path to strategy_lab.sqlite for PFR forward-watch lane "
                          "(requires --run-paper-signals; OFF by default — must be explicit)")

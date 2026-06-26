@@ -69,6 +69,11 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
 
+Fast wiring smoke exists for the derived paper chain: `farm_loop --once --apply` with
+`--true-forward-max-candidates 0 --paper-signals-max-new 0 --paper-signals-max-observe 0`.
+It intentionally leaves worker/validation/paper stages off and only proves
+farm -> paper-watch -> main instruction -> preview wiring.
+
 Upstream scanner intake source (feeds the farm, no longer the center):
 
 ```text
