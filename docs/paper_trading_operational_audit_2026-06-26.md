@@ -47,7 +47,7 @@ Observed:
 - PFR DB exists
 - paper-signal JSONL/snapshot exist
 - paper chain counts are visible in preflight:
-  `instructions=54 accepted=54 rejected=0 queued=50 invalid_queue=0 preview=20 invalid_preview=0`
+  `instructions=54 accepted=54 rejected=0 queued=50 invalid_queue=0 observed=... reviewed=... preview=20 invalid_preview=0`
 - `scripts/journal.xlsx` exists
 
 Bounded paper-signal smoke:
@@ -104,6 +104,9 @@ Observed: journal rebuilt; private OKX fills skipped by default.
   entry zone, boundary timestamp, expiry, hold bars, risk percent, fingerprint, dedup key,
   source mode, and exit mode from the original paper signal contract. It still does not
   execute orders.
+- `main_paper_runtime` can now observe that queue on public OKX candles and write
+  `main_paper_runtime_observation.json/jsonl` with pending/reviewed/no-data/provider-error
+  status. This is a lifecycle observer, not the old live `main.py` executor.
 - True-forward lane is wired but currently depends on new bars maturing.
 - Telegram is available as surface-only routing; it is not a decision authority.
 - Alibaba/scanner routing is configured, while Strategy Lab LLM governance remains disabled
@@ -114,6 +117,8 @@ Observed: journal rebuilt; private OKX fills skipped by default.
 - `PAPER_CHAT_ID` is not configured, so paper Telegram notifications are not active.
 - Strategy Lab LLM proposal loop is disabled by default; this is intentional until a separate
   governance run is approved.
+- Old `main.py` is still not a farm/PFR executor. The restored path stops at paper-only
+  lifecycle observation and offline/guarded surfaces.
 - Some training-data files are absent when the corresponding main/impulse engines have not
   produced current source logs.
 - `true-forward matured=0` means current forward observations still need fresh bars; this is

@@ -38,8 +38,9 @@ state/strategy_lab.sqlite PFR records
   -> state/derived/main_paper_instructions.json/jsonl
   -> state/derived/main_paper_consumed.json/jsonl
   -> state/derived/main_paper_runtime_queue.json/jsonl
+  -> state/derived/main_paper_runtime_observation.json/jsonl
   -> state/derived/paper_telegram_preview.json/jsonl
-  -> future reviewed runtime adapter (not live executor)
+  -> paper-only lifecycle observation (not live executor)
 ```
 
 ## Priority And Ownership
@@ -53,6 +54,7 @@ state/strategy_lab.sqlite PFR records
 | `main_paper_bridge.py` | Paper-watch -> main-readable instruction view | 3 | Rebuildable artifact with `execution_allowed=false`; no old main runtime import. |
 | `main_paper_consumer.py` | Main-readable instruction -> paper-watch audit | 3 | Validates `SignalContract` payloads and rejects bad instructions; still no executor. |
 | `main_paper_runtime_adapter.py` | Accepted paper audit -> main-compatible paper queue | 3 | Builds a private `watch_paper` queue; still no old main runtime import. |
+| `main_paper_runtime.py` | Paper queue -> lifecycle observation | 3 | Observes queued paper items on public candles and writes reviewed/pending status; no old main runtime import. |
 | `paper_telegram_preview.py` | Paper-watch audit -> operator card preview | 3 | Builds offline Telegram-card previews; never sends, never reads tokens/chat IDs. |
 | `ws_main_screener.py` | Separate scanner/Telegram runtime surface | 4 | Does not consume farm/PFR outputs today. Do not treat it as the farm executor. |
 | Telegram | Notification surface | 5 | Env-gated; not part of the decision path. |
@@ -98,9 +100,9 @@ already consuming farm/PFR outputs.
 
 Follow-up hardening: `operational_health` also emits a `readiness` matrix. The matrix
 separates runnable paper/research gates from optional surfaces and marks
-`main_runtime_consumer = planned` until a tested consumer exists. This is deliberate:
-the system can export main-readable paper instructions today, but the old main runtime
-is still not the executor.
+`main_runtime_consumer = planned` until a tested old-main executor exists. This is
+deliberate: the system can export main-readable paper instructions and observe them in a
+paper-only runtime today, but the old live `main.py` runtime is still not the executor.
 
 ### F4 - Main-readable paper instruction view was missing
 
@@ -188,10 +190,34 @@ main-compatible paper watch items with:
   `exit_mode`) so the next runtime does not need to parse internal paper-signal records;
 - deterministic priority from family, timeframe, and risk.
 
-This is the handoff point for a future main-paper runtime. It is not a live executor and
+This is the handoff point for paper lifecycle observation. It is not a live executor and
 does not import the old main engine, Telegram, exchange clients, `.env`, or order code.
 
-### F9 - Excel journal did not surface the paper-watch lane
+### F9 - Main-paper runtime observation was missing after the queue
+
+After F8 the queue was self-contained, but it still only proved that the handoff existed.
+There was no separate process that read the queue, fetched public candles, and advanced
+paper lifecycle without importing the old live engine.
+
+Fix: `src.research_lab.main_paper_runtime` now consumes
+`state/derived/main_paper_runtime_queue.json/jsonl`, rebuilds deterministic
+`PaperActionSignal` objects, observes them on public OKX candles, applies the existing
+paper-signal lifecycle/review logic, and writes:
+
+- `state/derived/main_paper_runtime_observation.jsonl`;
+- `state/derived/main_paper_runtime_observation.json`.
+
+The script surface is:
+
+```bash
+python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
+```
+
+Boundary: this observer imports no old `main.py`, no `src.exchange`, no Telegram, no
+credential loader, and no order path. It reports pending/reviewed/no-data/provider-error
+states only.
+
+### F10 - Excel journal did not surface the paper-watch lane
 
 The farm/paper system had `paper_signal_training.jsonl`, but `scripts/build_journal.py`
 still rebuilt only the older scanner/main/pump/impulse/manual sheets. That meant the
@@ -245,6 +271,12 @@ Build the main-compatible paper runtime queue:
 python -m scripts.strategy_lab.main_paper_runtime_adapter --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
+Observe that queue on public candles:
+
+```bash
+python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
+```
+
 Fast wiring smoke for farm -> paper-watch -> main instruction -> paper Telegram preview:
 
 ```bash
@@ -285,10 +317,10 @@ python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\
 
 These are intentionally not done in this pass:
 
-1. Main runtime executor: the rebuildable `main_paper_instructions`,
-   `main_paper_consumed`, and `main_paper_runtime_queue` views exist, but the old main
-   scanner/runtime still must not execute them. A future executor must consume the
-   paper queue, not import farm/PFR data into `main.py`.
+1. Main live executor: the rebuildable `main_paper_instructions`, `main_paper_consumed`,
+   `main_paper_runtime_queue`, and `main_paper_runtime_observation` views exist, but the
+   old main scanner/runtime still must not execute them. Any future live/paper executor
+   must be reviewed separately and must not import farm/PFR data into the old `main.py`.
 2. Telegram paper channel: audit text, chart rendering, and notification routing before
    enabling paper-signal alerts. The offline text preview now exists; real delivery is
    still opt-in and should stay separate.
@@ -339,6 +371,8 @@ Important observed counts:
 - `main_paper_bridge.instructions = 54` on the current private snapshot after bridge export
 - `main_paper_consumer.accepted = 54`, `rejected = 0` after consumer audit
 - `main_paper_runtime_queue.queued = accepted paper rows`, `execution_allowed = false`
+- `main_paper_runtime_observation.rows_read > 0` after observer run, with
+  `execution_allowed = false`
 - `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false` after
   preview build
 - fast wiring smoke completed in about 2 seconds with `main_paper_bridge.instructions = 54`,
@@ -349,6 +383,8 @@ Important observed counts:
 - `readiness.main_instruction_view_available = pass` after bridge export
 - `readiness.main_paper_consumer_available = pass` after consumer audit
 - `readiness.main_paper_runtime_queue_available = pass` after queue build
+- `readiness.main_paper_runtime_observation_available = pass` after observer run
+- `readiness.paper_runtime_observed = pass` when the observer has no invalid/provider errors
 - `readiness.paper_telegram_preview_available = pass` after preview build
 - `paper_signal_training_export.rows = terminal paper-watch outcomes` after export
 - `scripts/build_journal.py` rebuilt `scripts/journal.xlsx` with a `Paper Watch` sheet
@@ -359,6 +395,6 @@ Targeted tests:
 
 - `tests/test_pfr_bridge.py tests/test_paper_signals.py tests/test_operational_health.py tests/test_build_journal_safety.py`: 87 passed.
 - `tests/test_farm_loop_integration.py tests/test_paper_runtime.py tests/test_paper_contract.py`: 65 passed, 1 pre-existing CUDA warning.
-- `tests/test_main_paper_bridge.py tests/test_main_paper_runtime_adapter.py tests/test_operational_health.py`: passed.
+- `tests/test_main_paper_bridge.py tests/test_main_paper_runtime_adapter.py tests/test_main_paper_runtime.py tests/test_operational_health.py`: passed.
 - `tests/test_build_journal_safety.py`: passed after the `Paper Watch` sheet addition.
 - `git diff --check`: clean.

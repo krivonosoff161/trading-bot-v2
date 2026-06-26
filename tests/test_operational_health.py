@@ -20,7 +20,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
+    assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
     assert report["readiness"]["paper_chain_counts"]["status"] == "warn"
+    assert report["readiness"]["paper_runtime_observed"]["status"] == "warn"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert "secret-token" not in rendered
@@ -49,6 +51,7 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["readiness"]["main_instruction_view_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
+    assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert Path(report["pfr"]["db"]["path"]) == pfr
@@ -95,6 +98,23 @@ def test_operational_health_reports_main_paper_runtime_queue(tmp_path, monkeypat
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
 
 
+def test_operational_health_reports_main_paper_runtime_observation(tmp_path, monkeypatch):
+    view = tmp_path / "state" / "derived" / "main_paper_runtime_observation.json"
+    view.parent.mkdir(parents=True)
+    view.write_text(
+        json.dumps({"rows_read": 2, "observed": 2, "reviewed": 1, "pending": 1, "invalid": 0, "provider_error": 0}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["main_bridge"]["runtime_observation_exists"] is True
+    assert report["paper_chain"]["runtime_observation"]["observed"] == 2
+    assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "pass"
+    assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"
+
+
 def test_operational_health_reports_paper_telegram_preview(tmp_path, monkeypatch):
     preview = tmp_path / "state" / "derived" / "paper_telegram_preview.json"
     preview.parent.mkdir(parents=True)
@@ -122,6 +142,10 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
         json.dumps({"rows_read": 2, "queued": 2, "invalid": 0, "items": [{}, {}]}),
         encoding="utf-8",
     )
+    (derived / "main_paper_runtime_observation.json").write_text(
+        json.dumps({"rows_read": 2, "observed": 2, "reviewed": 1, "pending": 1, "invalid": 0, "provider_error": 0}),
+        encoding="utf-8",
+    )
     (derived / "paper_telegram_preview.json").write_text(
         json.dumps({"records_read": 2, "rendered": 2, "invalid": 0, "items": [{}, {}]}),
         encoding="utf-8",
@@ -133,8 +157,10 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
     assert report["paper_chain"]["instructions"]["instructions"] == 2
     assert report["paper_chain"]["consumer"]["accepted"] == 2
     assert report["paper_chain"]["runtime_queue"]["queued"] == 2
+    assert report["paper_chain"]["runtime_observation"]["observed"] == 2
     assert report["paper_chain"]["telegram_preview"]["rendered"] == 2
     assert report["readiness"]["paper_chain_counts"]["status"] == "pass"
+    assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"
 
 
 def test_operational_health_blocks_enabled_unconfigured_lab_llm(tmp_path, monkeypatch):
