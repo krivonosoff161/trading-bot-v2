@@ -317,10 +317,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
                 try:
                     from src.research_lab.main_paper_runtime import observe_main_paper_runtime
+                    runtime_limit = int(getattr(args, "main_paper_runtime_limit", 50))
                     out["main_paper_runtime_observation"] = observe_main_paper_runtime(
                         private_root,
-                        limit=int(getattr(args, "main_paper_runtime_limit", 50)),
-                        apply=True,
+                        limit=runtime_limit,
+                        apply=apply and runtime_limit != 0,
                         provider=paper_provider,
                     )
                 except Exception as exc:  # noqa: BLE001 - paper observer must not break the cycle

@@ -7,6 +7,7 @@ so an operator never mistakes a partial loop for a working one.
 """
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 
 from scripts.strategy_lab import farm_loop
@@ -121,6 +122,7 @@ class TestCycleLogStages:
             paper_signals_max_new=0,
             paper_signals_max_pfr_scan=0,
             paper_signals_max_observe=0,
+            main_paper_runtime_limit=0,
             provider="synthetic",
             backend="cpu",
             data_days=None,
@@ -129,6 +131,22 @@ class TestCycleLogStages:
             discovery_ttl_seconds=3600,
             no_discovery_refresh=True,
         )
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True)
+        existing_observation = derived / "main_paper_runtime_observation.json"
+        existing_observation.write_text(
+            json.dumps({
+                "schema": "main_paper_runtime_observation.v1",
+                "rows_read": 5,
+                "observed": 5,
+                "reviewed": 5,
+                "invalid": 0,
+                "provider_error": 0,
+                "execution_allowed": False,
+            }),
+            encoding="utf-8",
+        )
+        before = existing_observation.read_text(encoding="utf-8")
 
         out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
@@ -138,3 +156,4 @@ class TestCycleLogStages:
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False
         assert out["main_paper_runtime_observation"]["rows_read"] == 0
         assert out["main_paper_runtime_observation"]["execution_allowed"] is False
+        assert existing_observation.read_text(encoding="utf-8") == before
