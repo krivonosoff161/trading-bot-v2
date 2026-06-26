@@ -27,6 +27,7 @@ if str(_ROOT) not in sys.path:
 from src.research_lab.paper_signals import ab_report, cycle, lane, store  # noqa: E402
 from src.research_lab.paper_signals.contract import render_card  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
+from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider  # noqa: E402
 
 
 def _notify(cards: list[str]) -> str:
@@ -80,10 +81,17 @@ def main() -> None:
     ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+chat already in env")
     ap.add_argument("--pfr-db-path", default="",
                     help="path to strategy_lab.sqlite — activates PFR lane (PAPER_FORWARD_READY records)")
+    ap.add_argument("--max-pfr-scan", type=int, default=30,
+                    help="max PFR records to inspect per cycle; lower this for fast smoke checks")
+    ap.add_argument("--max-observe", type=int, default=None,
+                    help="optional max active signals to observe per cycle; use small values for smoke tests")
+    ap.add_argument("--public-fetch-timeout", type=float, default=10.0,
+                    help="per-request timeout for public OKX candle fetches")
     args = ap.parse_args()
     root = Path(args.private_root)
     tfs = tuple(args.timeframes.split(","))
     pfr_db = Path(args.pfr_db_path) if args.pfr_db_path else None
+    provider = OkxPublicMarketDataProvider(timeout=args.public_fetch_timeout)
     if args.status:
         _print_status(root)
         return
@@ -106,13 +114,17 @@ def main() -> None:
             ap.error("--loop writes paper-signal state; pass --apply explicitly or use one-cycle dry-run")
         reports = cycle.run_loop(root, cycles=args.loop, sleep_seconds=args.sleep_seconds,
                                  stop_file=args.stop_file, mode=args.mode, timeframes=tfs,
-                                 max_new=args.max_signals, apply=True, pfr_db_path=pfr_db)
+                                 max_new=args.max_signals, apply=True, pfr_db_path=pfr_db,
+                                 provider=provider, max_pfr_scan=args.max_pfr_scan,
+                                 max_observe=args.max_observe)
         for i, r in enumerate(reports):
             print(f"cycle {i}: observed={r.get('observed')} closed={r.get('closed')} "
                   f"generated={r.get('generated')} state={r.get('state')} gates={r.get('gate_counts')}")
     else:
         r = cycle.run_cycle(root, mode=args.mode, timeframes=tfs, max_new=args.max_signals,
-                            apply=args.apply, pfr_db_path=pfr_db)
+                            apply=args.apply, pfr_db_path=pfr_db, provider=provider,
+                            max_pfr_scan=args.max_pfr_scan,
+                            max_observe=args.max_observe)
         print(f"mode={args.mode} apply={args.apply} observed={r['observed']} closed={r['closed']} "
               f"generated={r['generated']}\ngate_counts={r['gate_counts']}"
               + (f"\npfr_counts={r['pfr_counts']}" if r.get("pfr_counts") else ""))

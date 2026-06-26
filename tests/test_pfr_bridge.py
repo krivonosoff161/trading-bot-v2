@@ -448,6 +448,56 @@ class TestPFRCycleIntegration:
         assert len(keys) == len(set(keys))
         assert n2 == n1  # no new PFR signal created for same data
 
+    def test_run_cycle_respects_max_pfr_scan(self, tmp_path):
+        """The farm/operator can cap PFR inspection so a smoke run cannot block on many
+        sequential public candle fetches."""
+        from src.research_lab.paper_signals import cycle, store
+        _seed_universe(tmp_path)
+        db = tmp_path / "sl.sqlite"
+        _make_db(db, [
+            {**_MRF_ROW_DICT, "candidate_id": "C0", "family": "unknown_family",
+             "avg_net_pct": 99.0, "params": {"x": 1}},
+            _MRF_ROW_DICT,
+        ])
+        prov = FakeProvider(_mrf_candles_short())
+        rep = cycle.run_cycle(
+            tmp_path, mode="live", timeframes=("1h",), provider=prov, apply=True,
+            now=1e6, pfr_db_path=db, max_pfr_scan=1,
+        )
+        assert rep["pfr_counts"].get("pfr_scan_limit_reached", 0) >= 1
+        assert rep["pfr_counts"].get("pfr_generated", 0) == 0
+        assert store.load_signals(tmp_path) == []
+
+    def test_run_cycle_respects_max_observe_for_smoke(self, tmp_path):
+        """A smoke run can skip active-card observation instead of fetching every old watch."""
+        from src.research_lab.paper_signals import cycle
+        from src.research_lab.paper_signals.contract import PaperActionSignal
+        from src.research_lab.paper_signals import store
+
+        sig = PaperActionSignal(
+            signal_id="active", source="manual", symbol="T_USDT_SWAP", okx_inst_id="T-USDT-SWAP",
+            timeframe="1h", side="long", setup_family="mean_reversion_fade",
+            entry_zone=[98.0, 100.0], stop_loss=96.0, invalidation_rule="x",
+            take_profit_plan=[{"label": "tp1", "price": 104.0, "size_frac": 1.0}],
+            max_hold_bars=10, max_hold_minutes=600, reason_now="test",
+            status="armed", created_at=0.0, expires_at=1e9,
+            ref_price=100.0, risk_pct=2.0, boundary_ts=0,
+            data_fingerprint="fp", dedup_key="T_USDT_SWAP|1h|mean_reversion_fade",
+        )
+        store.append_signal(tmp_path, sig)
+
+        class NoFetchProvider:
+            def fetch_ohlcv(self, *args, **kwargs):
+                raise AssertionError("max_observe=0 should skip active fetches")
+
+        rep = cycle.run_cycle(
+            tmp_path, mode="live", timeframes=("1h",), provider=NoFetchProvider(),
+            apply=False, now=1e6, pfr_db_path=None, max_new=0, max_observe=0,
+        )
+
+        assert rep["observed"] == 0
+        assert rep["gate_counts"].get("observe_scan_limit_reached") == 1
+
 
 # ── Category 8: BE stop tests (PASS A) ────────────────────────────────────────
 

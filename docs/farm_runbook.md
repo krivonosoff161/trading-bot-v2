@@ -1,10 +1,29 @@
 # Farm Runbook - Active Operator Path
 
-Status: **ACTIVE**. Last updated: 2026-06-19.
+Status: **ACTIVE**. Last updated: 2026-06-26.
 
 The calculation farm is now driven by `farm_loop`. The system is paper/research only:
-public OKX market data, no `.env`, no `AUTO_TRADE`, no orders, no private account
-endpoints, no Telegram.
+public OKX market data, no `AUTO_TRADE`, no orders, no private account endpoints.
+Telegram is a guarded surface only; it is not part of the farm decision path.
+
+## Operator Preflight
+
+Run this before a long paper/farm cycle. It is read-only, loads local environment
+configuration, does not print secrets, and does not call exchange or Telegram providers.
+
+```bash
+python -m scripts.strategy_lab.operational_health \
+  --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" \
+  --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
+```
+
+Expected safe state:
+
+- `mode = paper_research_only`
+- `auto_trade = false`
+- scanner LLM provider/key presence visible, without secret values
+- Telegram channel presence visible, without token/chat values
+- journal, paper-signal, and PFR artifact paths resolved
 
 ## Active Path
 
@@ -44,6 +63,12 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-fu
 # One full cycle: compute -> honest validation -> paper readiness/paper outcomes.
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi
 
+# One bounded paper-signal/PFR smoke. It is intentionally capped for operator checks.
+python -m scripts.strategy_lab.paper_signals_run --mode live --max-signals 1 --max-observe 0 --max-pfr-scan 2 --public-fetch-timeout 3
+
+# One bounded full-cycle smoke with paper-signal lane enabled.
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-prepares 1 --max-enrich-funding 1 --max-enrich-oi 1 --max-sweeps 1 --max-worker-jobs 1 --max-validation 1 --max-paper 1
+
 # Continuous full cycle.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP --quiet
 
@@ -82,6 +107,54 @@ statuses.
 Positive and negative paper outcomes are both retained. Negative paper results are not
 deleted or treated as "nothing"; status/reporting groups them as research evidence for
 follow-up analysis.
+
+## Paper Signals And PFR Bridge
+
+`--run-paper-signals` enables the isolated paper-signal observation lane inside
+`farm_loop`. The lane is still research/paper only:
+
+- generated signals are written as JSONL/snapshots and visual review artifacts;
+- `PFR` records are loaded only when `--pfr-db-path` is provided;
+- PFR scanning is bounded by `--paper-signals-max-pfr-scan`;
+- active signal observation can be capped with `--paper-signals-max-observe` for smoke
+  checks;
+- public data fetch timeout is controlled by `--paper-signals-fetch-timeout`;
+- no signal can enable live order execution.
+
+For the standalone CLI, the matching flags are:
+
+```bash
+python -m scripts.strategy_lab.paper_signals_run \
+  --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" \
+  --mode live \
+  --max-signals 1 \
+  --max-observe 0 \
+  --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" \
+  --max-pfr-scan 2 \
+  --public-fetch-timeout 3
+```
+
+`max-observe=0` is for fast preflight only. Long paper-forward runs should observe active
+signals normally.
+
+## Journal And Training Data
+
+The Excel journal is rebuilt locally:
+
+```bash
+python scripts/build_journal.py
+```
+
+By default, rebuilds do not call private OKX account/fill endpoints. Manual private fills
+are opt-in only:
+
+```bash
+set JOURNAL_ENABLE_PRIVATE_FILLS=1
+python scripts/build_journal.py
+```
+
+Use that opt-in only when explicitly auditing account history. The farm/paper research loop
+does not require it.
 
 ## Data And Artifacts
 
