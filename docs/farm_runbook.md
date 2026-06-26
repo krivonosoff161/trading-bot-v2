@@ -66,13 +66,15 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-valid
 # One bounded paper-signal/PFR smoke. It is intentionally capped for operator checks.
 python -m scripts.strategy_lab.paper_signals_run --mode live --max-signals 1 --max-observe 0 --max-pfr-scan 2 --public-fetch-timeout 3
 
-# One bounded full-cycle smoke with paper-signal lane enabled.
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-prepares 1 --max-enrich-funding 1 --max-enrich-oi 1 --max-sweeps 1 --max-worker-jobs 1 --max-validation 1 --max-paper 1
+# One bounded full-cycle smoke with paper-signal/PFR lane enabled.
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Continuous full cycle.
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --enrich-funding --enrich-oi --sleep-seconds 180 --stop-file STOP --quiet
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
 
-# Visible operator wrapper for the same continuous full cycle.
+# Visible operator wrapper for the same continuous full cycle. The wrapper passes
+# STRATEGY_LAB_PFR_DB_PATH by default, so the PFR bridge is active unless you
+# override that environment variable.
 bat\strategy_lab_farm_full_cycle_loop.bat
 
 # Clean stop for the wrapper above.
