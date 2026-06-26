@@ -192,6 +192,11 @@ The Excel journal is rebuilt locally:
 python scripts/build_journal.py
 ```
 
+The rebuild now includes a `Paper Watch` sheet when the private derived export exists
+at `state/derived/paper_signal_training.jsonl`. The sheet is read-only reporting over
+paper-watch outcomes: family, side, exit mode, result, net %, net R, MFE/MAE, capture,
+diagnosis, and summary counts. It does not call private OKX account/fill endpoints.
+
 Paper-signal outcomes can also be exported into a compact training-friendly JSONL
 without touching private fills:
 

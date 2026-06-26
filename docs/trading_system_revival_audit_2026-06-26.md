@@ -188,6 +188,20 @@ main-compatible paper watch items with:
 This is the handoff point for a future main-paper runtime. It is not a live executor and
 does not import the old main engine, Telegram, exchange clients, `.env`, or order code.
 
+### F9 - Excel journal did not surface the paper-watch lane
+
+The farm/paper system had `paper_signal_training.jsonl`, but `scripts/build_journal.py`
+still rebuilt only the older scanner/main/pump/impulse/manual sheets. That meant the
+operator could run paper-forward work and still not see those outcomes in the familiar
+Excel journal.
+
+Fix: `scripts/build_journal.py` now adds a `Paper Watch` sheet from the private derived
+`state/derived/paper_signal_training.jsonl` export. It shows paper family, side, exit
+mode, status, result, net %, net R, MFE/MAE, capture, diagnosis, risk, and hold horizon,
+plus local summary counts by family/diagnosis/result. The loader is read-only, filters the
+expected `PaperSignalTrainingRow.v1` schema, and does not call OKX account endpoints,
+Telegram, or LLM providers. The generated `scripts/journal.xlsx` remains ignored by git.
+
 ## Operator Commands
 
 Preflight:
@@ -276,7 +290,8 @@ These are intentionally not done in this pass:
    enabling paper-signal alerts. The offline text preview now exists; real delivery is
    still opt-in and should stay separate.
 3. Journal modernization: the paper-signal training export now exists; next work is to
-   surface it in the Excel/dashboard layer and keep private account fills opt-in.
+   extend dashboard/charts over the new `Paper Watch` sheet. The raw paper-watch sheet is
+   now present; private account fills remain opt-in.
 4. Dead-code retirement: archive/delete only after import and command references are
    proven unused by tests and docs.
 
@@ -333,10 +348,14 @@ Important observed counts:
 - `readiness.main_paper_runtime_queue_available = pass` after queue build
 - `readiness.paper_telegram_preview_available = pass` after preview build
 - `paper_signal_training_export.rows = terminal paper-watch outcomes` after export
+- `scripts/build_journal.py` rebuilt `scripts/journal.xlsx` with a `Paper Watch` sheet
+  over the current private export (`609` rows on the checked machine); private OKX fills
+  stayed skipped because `JOURNAL_ENABLE_PRIVATE_FILLS` was not enabled
 
 Targeted tests:
 
 - `tests/test_pfr_bridge.py tests/test_paper_signals.py tests/test_operational_health.py tests/test_build_journal_safety.py`: 87 passed.
 - `tests/test_farm_loop_integration.py tests/test_paper_runtime.py tests/test_paper_contract.py`: 65 passed, 1 pre-existing CUDA warning.
 - `tests/test_main_paper_bridge.py tests/test_main_paper_runtime_adapter.py tests/test_operational_health.py`: passed.
+- `tests/test_build_journal_safety.py`: passed after the `Paper Watch` sheet addition.
 - `git diff --check`: clean.
