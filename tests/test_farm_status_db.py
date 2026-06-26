@@ -92,6 +92,21 @@ def test_status_report_collect(tmp_path):
     import_run_dir(conn, tmp_path, _write_run(tmp_path))
     conn.commit()
     conn.close()
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "main_paper_runtime_observation.json").write_text(
+        json.dumps({
+            "schema": "main_paper_runtime_observation.v1",
+            "rows_read": 2,
+            "observed": 2,
+            "reviewed": 1,
+            "pending": 1,
+            "invalid": 0,
+            "provider_error": 0,
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
 
     report = collect(default_db_path(tmp_path))
     assert report["exists"] is True
@@ -99,6 +114,8 @@ def test_status_report_collect(tmp_path):
     assert report["handoff"]["paper_outcomes"] == 0
     assert "FORWARD_PAPER" in report["validation"]
     assert report["by_timeframe"].get("1h") == 2
+    assert report["main_paper_runtime_observation"]["observed"] == 2
+    assert report["main_paper_runtime_observation"]["execution_allowed"] is False
     ready = {r["symbol"] for r in report["ready_for_validation"]}
     assert "BTC_USDT_SWAP" in ready
 

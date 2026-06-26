@@ -106,7 +106,9 @@ Observed: journal rebuilt; private OKX fills skipped by default.
   execute orders.
 - `main_paper_runtime` can now observe that queue on public OKX candles and write
   `main_paper_runtime_observation.json/jsonl` with pending/reviewed/no-data/provider-error
-  status. This is a lifecycle observer, not the old live `main.py` executor.
+  status. `farm_loop --run-paper-signals` now invokes this observer in the same cycle after
+  the runtime queue is rebuilt and before the offline Telegram preview is rendered. This is
+  a lifecycle observer, not the old live `main.py` executor.
 - True-forward lane is wired but currently depends on new bars maturing.
 - Telegram is available as surface-only routing; it is not a decision authority.
 - Alibaba/scanner routing is configured, while Strategy Lab LLM governance remains disabled

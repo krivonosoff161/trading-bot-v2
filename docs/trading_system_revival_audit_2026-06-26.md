@@ -207,7 +207,9 @@ paper-signal lifecycle/review logic, and writes:
 - `state/derived/main_paper_runtime_observation.jsonl`;
 - `state/derived/main_paper_runtime_observation.json`.
 
-The script surface is:
+The observer is also invoked automatically by `farm_loop --run-paper-signals` after
+`main_paper_runtime_queue` is rebuilt and before the offline Telegram preview is rendered.
+The standalone script surface remains available for rebuilding the observation view:
 
 ```bash
 python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
@@ -244,7 +246,7 @@ python -m scripts.strategy_lab.operational_health \
 Bounded full-cycle smoke:
 
 ```bash
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 Rebuild only the main-readable paper instruction view:
@@ -277,10 +279,11 @@ Observe that queue on public candles:
 python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
 ```
 
-Fast wiring smoke for farm -> paper-watch -> main instruction -> paper Telegram preview:
+Fast wiring smoke for farm -> paper-watch -> main instruction -> runtime observation ->
+paper Telegram preview:
 
 ```bash
-python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --main-paper-runtime-limit 0 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 This is intentionally not a full farm run. The warning about worker/validation/paper being
@@ -371,19 +374,21 @@ Important observed counts:
 - `main_paper_bridge.instructions = 54` on the current private snapshot after bridge export
 - `main_paper_consumer.accepted = 54`, `rejected = 0` after consumer audit
 - `main_paper_runtime_queue.queued = accepted paper rows`, `execution_allowed = false`
-- `main_paper_runtime_observation.rows_read > 0` after observer run, with
+- `main_paper_runtime_observation.rows_read > 0` after the same farm-loop cycle or a
+  standalone observer rebuild, with
   `execution_allowed = false`
 - `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false` after
   preview build
 - fast wiring smoke completed in about 2 seconds with `main_paper_bridge.instructions = 54`,
-  `main_paper_consumer.accepted = 54`, runtime queue built,
+  `main_paper_consumer.accepted = 54`, runtime queue and observation stages built,
   `paper_telegram_preview.rendered = 20`, and no send path
 - `main_bridge.orders_enabled_by_bridge = false`
 - `readiness.main_runtime_consumer = planned`
 - `readiness.main_instruction_view_available = pass` after bridge export
 - `readiness.main_paper_consumer_available = pass` after consumer audit
 - `readiness.main_paper_runtime_queue_available = pass` after queue build
-- `readiness.main_paper_runtime_observation_available = pass` after observer run
+- `readiness.main_paper_runtime_observation_available = pass` after the farm-loop
+  observation stage or standalone observer rebuild
 - `readiness.paper_runtime_observed = pass` when the observer has no invalid/provider errors
 - `readiness.paper_telegram_preview_available = pass` after preview build
 - `paper_signal_training_export.rows = terminal paper-watch outcomes` after export

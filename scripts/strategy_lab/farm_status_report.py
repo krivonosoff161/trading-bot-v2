@@ -294,6 +294,13 @@ def collect(db_path: Path) -> dict:
             report["main_paper_runtime_queue"] = json.loads(rt_path.read_text(encoding="utf-8")) if rt_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_runtime_queue"] = {}
+        try:  # paper-only runtime observation of the main-compatible queue (never orders)
+            rto_path = db_path.parent.parent / "state" / "derived" / "main_paper_runtime_observation.json"
+            report["main_paper_runtime_observation"] = (
+                json.loads(rto_path.read_text(encoding="utf-8")) if rto_path.exists() else {}
+            )
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_paper_runtime_observation"] = {}
         try:  # offline Telegram-card preview for paper-watch instructions (never sends)
             pt_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_preview.json"
             report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
@@ -423,6 +430,14 @@ def _print(report: dict) -> None:
               f"invalid={rtq.get('invalid', 0)} action={rtq.get('runtime_action')} "
               f"execution_allowed={rtq.get('execution_allowed')} "
               "(paper watch queue; old main executor still disabled)")
+    rto = report.get("main_paper_runtime_observation") or {}
+    if rto.get("rows_read") is not None:
+        print("  main paper runtime observation: "
+              f"read={rto.get('rows_read', 0)} observed={rto.get('observed', 0)} "
+              f"reviewed={rto.get('reviewed', 0)} pending={rto.get('pending', 0)} "
+              f"invalid={rto.get('invalid', 0)} provider_error={rto.get('provider_error', 0)} "
+              f"execution_allowed={rto.get('execution_allowed')} "
+              "(paper lifecycle observer; no order path)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "

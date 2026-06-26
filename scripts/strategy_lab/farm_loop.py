@@ -206,6 +206,15 @@ def _print_cycle(out: dict) -> None:
             f"queued={rtq.get('queued', 0)} invalid={rtq.get('invalid', 0)} "
             f"action={rtq.get('runtime_action')} execution_allowed={rtq.get('execution_allowed')}"
         )
+    rto = out.get("main_paper_runtime_observation") or {}
+    if rto:
+        print(
+            "  main_paper_runtime_observation: "
+            f"read={rto.get('rows_read', 0)} observed={rto.get('observed', 0)} "
+            f"reviewed={rto.get('reviewed', 0)} pending={rto.get('pending', 0)} "
+            f"invalid={rto.get('invalid', 0)} provider_error={rto.get('provider_error', 0)} "
+            f"execution_allowed={rto.get('execution_allowed')}"
+        )
     tp = out.get("paper_telegram_preview") or {}
     if tp:
         print(
@@ -226,10 +235,12 @@ def _cycle_signature(out: dict) -> tuple:
     paper_ready = tuple(sorted((paper.get("readiness") or {}).get("blocked_reasons", {}).items()))
     main_consumer = tuple(sorted((out.get("main_paper_consumer") or {}).items()))
     main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
+    main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
-        main_consumer, main_runtime_queue, telegram_preview, bool(out.get("errors")),
+        main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
+        bool(out.get("errors")),
     )
 
 
@@ -305,6 +316,19 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 except Exception as exc:  # noqa: BLE001 - runtime queue must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
                 try:
+                    from src.research_lab.main_paper_runtime import observe_main_paper_runtime
+                    out["main_paper_runtime_observation"] = observe_main_paper_runtime(
+                        private_root,
+                        limit=int(getattr(args, "main_paper_runtime_limit", 50)),
+                        apply=True,
+                        provider=paper_provider,
+                    )
+                except Exception as exc:  # noqa: BLE001 - paper observer must not break the cycle
+                    out.setdefault("errors", []).append({
+                        "where": "main_paper_runtime_observation",
+                        "error": str(exc),
+                    })
+                try:
                     from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
                     out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
                 except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
@@ -350,6 +374,8 @@ def main() -> None:
                     help="optional max active paper signals observed by --run-paper-signals; use for smoke checks")
     ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
                     help="per-request public OKX timeout used by --run-paper-signals")
+    ap.add_argument("--main-paper-runtime-limit", type=int, default=50,
+                    help="max main-paper runtime queue items observed per --run-paper-signals cycle")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")
