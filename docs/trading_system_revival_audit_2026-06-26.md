@@ -90,6 +90,12 @@ showing whether paper/PFR sources, the derived main-paper instruction view, and 
 signal logs exist. This prevents a false operator assumption that the main runtime is
 already consuming farm/PFR outputs.
 
+Follow-up hardening: `operational_health` also emits a `readiness` matrix. The matrix
+separates runnable paper/research gates from optional surfaces and marks
+`main_runtime_consumer = planned` until a tested consumer exists. This is deliberate:
+the system can export main-readable paper instructions today, but the old main runtime
+is still not the executor.
+
 ### F4 - Main-readable paper instruction view was missing
 
 The project had farm/PFR/paper-watch data and an old `SignalContract`, but no safe bridge
@@ -108,6 +114,18 @@ contains a `SignalContract`-shaped payload and hard invariants:
 - no Telegram, `.env`, exchange, or order imports
 
 `farm_loop --run-paper-signals` exports this view after each paper-signal cycle.
+
+### F5 - Paper outcomes existed but had no dedicated training export
+
+Paper-watch outcomes and deterministic reviews were present in
+`state/derived/paper_signals.jsonl`, but a training pipeline would have to parse the
+full signal audit log and infer which rows were terminal. That made later LLM/model
+training ambiguous and easy to couple to the wrong artifact.
+
+Fix: `src.research_lab.paper_signals.training_export` now builds
+`state/derived/paper_signal_training.jsonl` and `.json` from latest terminal
+paper-watch rows. The export is derived, private-root only, `paper_only=true`, and
+does not call exchanges, Telegram, LLM providers, account endpoints, or order code.
 
 ## Operator Commands
 
@@ -129,6 +147,12 @@ Rebuild only the main-readable paper instruction view:
 
 ```bash
 python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Export terminal paper-watch outcomes into training-friendly rows:
+
+```bash
+python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 Visible continuous run:
@@ -159,8 +183,8 @@ These are intentionally not done in this pass:
    the old main scanner/runtime still does not consume it.
 2. Telegram paper channel: audit text, chart rendering, and notification routing before
    enabling paper-signal alerts.
-3. Journal modernization: map paper-signal/PFR outcomes into a training-friendly schema
-   and keep private account fills opt-in.
+3. Journal modernization: the paper-signal training export now exists; next work is to
+   surface it in the Excel/dashboard layer and keep private account fills opt-in.
 4. Dead-code retirement: archive/delete only after import and command references are
    proven unused by tests and docs.
 
@@ -204,6 +228,9 @@ Important observed counts:
   `instruction_view_ready_not_consumed`
 - `main_paper_bridge.instructions = 44` on the bounded farm-loop smoke after bridge export
 - `main_bridge.orders_enabled_by_bridge = false`
+- `readiness.main_runtime_consumer = planned`
+- `readiness.main_instruction_view_available = pass` after bridge export
+- `paper_signal_training_export.rows = terminal paper-watch outcomes` after export
 
 Targeted tests:
 

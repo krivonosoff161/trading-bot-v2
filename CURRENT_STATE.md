@@ -9,8 +9,9 @@ Updated: 2026-06-26
 > timeouts plus PFR/observe caps for fast smoke checks; the visible full-cycle wrapper
 > now passes the PFR DB path explicitly, so farm/PFR/paper-watch runs as one operator
 > loop; active paper-watch signals are exported into a main-readable paper instruction
-> view with `execution_allowed=false`; journal rebuilds skip private OKX fills unless
-> `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
+> view with `execution_allowed=false`; terminal paper-watch outcomes can be exported to
+> `state/derived/paper_signal_training.jsonl`; journal rebuilds skip private OKX fills
+> unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
 > configured, PFR DB present, bounded smoke completed without live/money paths. See
 > [docs/paper_trading_operational_audit_2026-06-26.md](docs/paper_trading_operational_audit_2026-06-26.md).

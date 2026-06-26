@@ -24,6 +24,13 @@ Expected safe state:
 - scanner LLM provider/key presence visible, without secret values
 - Telegram channel presence visible, without token/chat values
 - journal, paper-signal, and PFR artifact paths resolved
+- `readiness` gates show what is runnable, optional, or intentionally planned:
+  PFR source, paper-signal store, main-readable instruction view, Telegram surfaces,
+  LLM policy, journals, and the explicit `main_runtime_consumer = planned` boundary.
+
+Treat a `planned` main-runtime consumer as a safety boundary, not as a launch failure.
+The visible farm loop can produce paper instructions today; the old main process must not
+be treated as their executor until a separate consumer is designed and tested.
 
 ## Active Path
 
@@ -153,6 +160,14 @@ The Excel journal is rebuilt locally:
 python scripts/build_journal.py
 ```
 
+Paper-signal outcomes can also be exported into a compact training-friendly JSONL
+without touching private fills:
+
+```bash
+python -m scripts.strategy_lab.paper_signal_training_export \
+  --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
 By default, rebuilds do not call private OKX account/fill endpoints. Manual private fills
 are opt-in only:
 
@@ -182,6 +197,8 @@ explicitly passed.
 - `hard_validation/{requests,verdicts,reports}/` - honest validation artifacts.
 - `setup_library/{cards,reports,setup_index.jsonl}` - validated setup cards.
 - `paper/paper_trades.jsonl` - paper trade journal.
+- `state/derived/paper_signal_training.jsonl` - derived training-friendly rows from
+  terminal paper-watch outcomes and deterministic reviews.
 - `state/derived/main_paper_instructions.jsonl` and
   `state/derived/main_paper_instructions.json` - rebuildable main-readable paper
   instruction view derived from active paper-watch signals; every row is
