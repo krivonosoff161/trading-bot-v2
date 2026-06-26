@@ -99,10 +99,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.main_paper_consumer."
             if not bridge["consumer_view_exists"] else "",
         ),
+        "main_paper_runtime_queue_available": _gate(
+            "pass" if bridge["runtime_queue_exists"] else "warn",
+            "Paper-only main runtime queue exists."
+            if bridge["runtime_queue_exists"] else "Paper-only main runtime queue is not built yet.",
+            action="Run python -m scripts.strategy_lab.main_paper_runtime_adapter."
+            if not bridge["runtime_queue_exists"] else "",
+        ),
         "main_runtime_consumer": _gate(
             "planned",
-            "Old main/Telegram runtime does not consume farm/PFR paper instructions as an executor.",
-            action="Keep it disabled until a separate reviewed runtime adapter exists.",
+            "Old main/Telegram runtime still does not execute farm/PFR paper instructions.",
+            action="Keep old main execution disabled; use the paper runtime queue until a reviewed executor exists.",
         ),
         "scanner_telegram_surface": _gate(
             "pass" if telegram["scanner"]["configured"] else "warn",
@@ -183,6 +190,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
     main_paper_consumed_snapshot = private_root / "state" / "derived" / "main_paper_consumed.json"
     main_paper_consumed_log = private_root / "state" / "derived" / "main_paper_consumed.jsonl"
+    main_paper_runtime_queue_snapshot = private_root / "state" / "derived" / "main_paper_runtime_queue.json"
+    main_paper_runtime_queue_log = private_root / "state" / "derived" / "main_paper_runtime_queue.jsonl"
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
@@ -222,6 +231,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_paper_instruction_snapshot": _exists(main_paper_instruction_snapshot),
             "main_paper_consumed": _exists(main_paper_consumed_log),
             "main_paper_consumed_snapshot": _exists(main_paper_consumed_snapshot),
+            "main_paper_runtime_queue": _exists(main_paper_runtime_queue_log),
+            "main_paper_runtime_queue_snapshot": _exists(main_paper_runtime_queue_snapshot),
             "paper_telegram_preview": _exists(paper_telegram_preview_log),
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "main_signals": _exists(main_signal_log),
@@ -234,6 +245,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
             "instruction_view_exists": main_paper_instruction_snapshot.exists() or main_paper_instruction_log.exists(),
             "consumer_view_exists": main_paper_consumed_snapshot.exists() or main_paper_consumed_log.exists(),
+            "runtime_queue_exists": (
+                main_paper_runtime_queue_snapshot.exists() or main_paper_runtime_queue_log.exists()
+            ),
             "main_signal_log_exists": main_signal_log.exists(),
             "orders_enabled_by_bridge": False,
             "note": (

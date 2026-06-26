@@ -289,6 +289,11 @@ def collect(db_path: Path) -> dict:
             report["main_paper_consumer"] = json.loads(mc_path.read_text(encoding="utf-8")) if mc_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_consumer"] = {}
+        try:  # main-compatible paper runtime queue (never orders)
+            rt_path = db_path.parent.parent / "state" / "derived" / "main_paper_runtime_queue.json"
+            report["main_paper_runtime_queue"] = json.loads(rt_path.read_text(encoding="utf-8")) if rt_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_paper_runtime_queue"] = {}
         try:  # offline Telegram-card preview for paper-watch instructions (never sends)
             pt_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_preview.json"
             report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
@@ -411,6 +416,13 @@ def _print(report: dict) -> None:
               f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
               f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')} "
               "(paper-watch audit; no order path)")
+    rtq = report.get("main_paper_runtime_queue") or {}
+    if rtq.get("rows_read") is not None:
+        print("  main paper runtime queue: "
+              f"read={rtq.get('rows_read', 0)} queued={rtq.get('queued', 0)} "
+              f"invalid={rtq.get('invalid', 0)} action={rtq.get('runtime_action')} "
+              f"execution_allowed={rtq.get('execution_allowed')} "
+              "(paper watch queue; old main executor still disabled)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "

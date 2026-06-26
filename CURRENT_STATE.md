@@ -11,8 +11,11 @@ Updated: 2026-06-26
 > loop; active paper-watch signals are exported into a main-readable paper instruction
 > view with `execution_allowed=false`; that view is then validated into a paper-only
 > main consumer audit artifact (`state/derived/main_paper_consumed.jsonl`) before any
-> future runtime adapter; accepted instructions are also rendered into offline Telegram
-> preview cards (`state/derived/paper_telegram_preview.jsonl`) with no send/network path;
+> future executor; accepted instructions are also materialized into a main-compatible
+> paper runtime queue (`state/derived/main_paper_runtime_queue.jsonl`) with
+> `runtime_action=watch_paper` and `execution_allowed=false`; then they are rendered into
+> offline Telegram preview cards (`state/derived/paper_telegram_preview.jsonl`) with no
+> send/network path;
 > terminal paper-watch outcomes can be exported to `state/derived/paper_signal_training.jsonl`;
 > journal rebuilds skip private OKX fills unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is
 > explicitly set. Verified state:
@@ -64,6 +67,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
   -> paper_loop (only paper_forward_ready cards) -> paper outcomes
   -> paper_signals/PFR watch -> main_paper_instructions -> main_paper_consumed
+     -> main_paper_runtime_queue
      -> paper_telegram_preview
      (paper-only contract audit, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
@@ -72,7 +76,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
 Fast wiring smoke exists for the derived paper chain: `farm_loop --once --apply` with
 `--true-forward-max-candidates 0 --paper-signals-max-new 0 --paper-signals-max-observe 0`.
 It intentionally leaves worker/validation/paper stages off and only proves
-farm -> paper-watch -> main instruction -> preview wiring.
+farm -> paper-watch -> main instruction -> runtime queue -> preview wiring.
 
 Upstream scanner intake source (feeds the farm, no longer the center):
 
