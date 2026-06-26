@@ -284,6 +284,11 @@ def collect(db_path: Path) -> dict:
             report["main_paper_bridge"] = json.loads(mp_path.read_text(encoding="utf-8")) if mp_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_bridge"] = {}
+        try:  # paper-only consumer audit for main-readable instructions (never orders)
+            mc_path = db_path.parent.parent / "state" / "derived" / "main_paper_consumed.json"
+            report["main_paper_consumer"] = json.loads(mc_path.read_text(encoding="utf-8")) if mc_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_paper_consumer"] = {}
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
@@ -394,6 +399,13 @@ def _print(report: dict) -> None:
               f"instructions={mp.get('instructions', 0)} "
               f"paper_only={mp.get('paper_only')} execution_allowed={mp.get('execution_allowed')} "
               "(derived view; main runtime not live-consuming)")
+    mc = report.get("main_paper_consumer") or {}
+    if mc.get("instructions_read") is not None:
+        print("  main paper consumer: "
+              f"read={mc.get('instructions_read', 0)} "
+              f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
+              f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')} "
+              "(paper-watch audit; no order path)")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "

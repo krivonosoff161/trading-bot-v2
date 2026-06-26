@@ -25,12 +25,14 @@ Expected safe state:
 - Telegram channel presence visible, without token/chat values
 - journal, paper-signal, and PFR artifact paths resolved
 - `readiness` gates show what is runnable, optional, or intentionally planned:
-  PFR source, paper-signal store, main-readable instruction view, Telegram surfaces,
-  LLM policy, journals, and the explicit `main_runtime_consumer = planned` boundary.
+  PFR source, paper-signal store, main-readable instruction view, paper-only main
+  consumer audit, Telegram surfaces, LLM policy, journals, and the explicit
+  `main_runtime_consumer = planned` boundary.
 
 Treat a `planned` main-runtime consumer as a safety boundary, not as a launch failure.
-The visible farm loop can produce paper instructions today; the old main process must not
-be treated as their executor until a separate consumer is designed and tested.
+The visible farm loop can produce and consume paper instructions into an audit view today;
+the old main process must not be treated as their executor until a separate runtime adapter
+is designed and tested.
 
 ## Active Path
 
@@ -78,6 +80,9 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-valid
 
 # Rebuild the main-readable paper instruction view from active paper signals.
 python -m scripts.strategy_lab.main_paper_bridge --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Validate that instruction view into a paper-only main consumer audit artifact.
+python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Continuous full cycle.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
@@ -135,6 +140,9 @@ follow-up analysis.
 - after each `farm_loop --run-paper-signals` cycle,
   `src.research_lab.main_paper_bridge` rebuilds a main-readable paper instruction
   view with `paper_only=true` and `execution_allowed=false`.
+- after the bridge export, `src.research_lab.main_paper_consumer` validates the shared
+  `SignalContract` payload and writes a paper-watch audit view; rejected instructions
+  are visible as contract rejects, not silently forwarded.
 
 For the standalone CLI, the matching flags are:
 
@@ -203,6 +211,10 @@ explicitly passed.
   `state/derived/main_paper_instructions.json` - rebuildable main-readable paper
   instruction view derived from active paper-watch signals; every row is
   `paper_only=true` and `execution_allowed=false`.
+- `state/derived/main_paper_consumed.jsonl` and
+  `state/derived/main_paper_consumed.json` - paper-only consumer audit over the
+  instruction view; every accepted row is contract-validated and still has no execution
+  authority.
 - `state/derived/setup_lifecycle.json` - optional rebuildable snapshot of setup lifecycle
   groups; canonical data remains in the DBs and artifacts above.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.

@@ -92,10 +92,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if bridge["instruction_view_exists"] else "Main-readable paper instruction view is not built yet.",
             action="Run python -m scripts.strategy_lab.main_paper_bridge." if not bridge["instruction_view_exists"] else "",
         ),
+        "main_paper_consumer_available": _gate(
+            "pass" if bridge["consumer_view_exists"] else "warn",
+            "Paper-only main consumer audit view exists."
+            if bridge["consumer_view_exists"] else "Paper-only main consumer audit view is not built yet.",
+            action="Run python -m scripts.strategy_lab.main_paper_consumer."
+            if not bridge["consumer_view_exists"] else "",
+        ),
         "main_runtime_consumer": _gate(
             "planned",
-            "Old main/Telegram runtime does not consume farm/PFR paper instructions yet.",
-            action="Build a separate tested consumer before treating main as a paper executor.",
+            "Old main/Telegram runtime does not consume farm/PFR paper instructions as an executor.",
+            action="Keep it disabled until a separate reviewed runtime adapter exists.",
         ),
         "scanner_telegram_surface": _gate(
             "pass" if telegram["scanner"]["configured"] else "warn",
@@ -166,6 +173,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_signal_training_snapshot = private_root / "state" / "derived" / "paper_signal_training.json"
     main_paper_instruction_snapshot = private_root / "state" / "derived" / "main_paper_instructions.json"
     main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
+    main_paper_consumed_snapshot = private_root / "state" / "derived" / "main_paper_consumed.json"
+    main_paper_consumed_log = private_root / "state" / "derived" / "main_paper_consumed.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     report = {
         "mode": "paper_research_only",
@@ -201,6 +210,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_signal_training_snapshot": _exists(paper_signal_training_snapshot),
             "main_paper_instructions": _exists(main_paper_instruction_log),
             "main_paper_instruction_snapshot": _exists(main_paper_instruction_snapshot),
+            "main_paper_consumed": _exists(main_paper_consumed_log),
+            "main_paper_consumed_snapshot": _exists(main_paper_consumed_snapshot),
             "main_signals": _exists(main_signal_log),
         },
         "pfr": {
@@ -210,6 +221,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "status": "instruction_view_ready_not_consumed" if main_paper_instruction_snapshot.exists() else "not_connected",
             "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
             "instruction_view_exists": main_paper_instruction_snapshot.exists() or main_paper_instruction_log.exists(),
+            "consumer_view_exists": main_paper_consumed_snapshot.exists() or main_paper_consumed_log.exists(),
             "main_signal_log_exists": main_signal_log.exists(),
             "orders_enabled_by_bridge": False,
             "note": (

@@ -9,7 +9,9 @@ Updated: 2026-06-26
 > timeouts plus PFR/observe caps for fast smoke checks; the visible full-cycle wrapper
 > now passes the PFR DB path explicitly, so farm/PFR/paper-watch runs as one operator
 > loop; active paper-watch signals are exported into a main-readable paper instruction
-> view with `execution_allowed=false`; terminal paper-watch outcomes can be exported to
+> view with `execution_allowed=false`; that view is then validated into a paper-only
+> main consumer audit artifact (`state/derived/main_paper_consumed.jsonl`) before any
+> future runtime adapter; terminal paper-watch outcomes can be exported to
 > `state/derived/paper_signal_training.jsonl`; journal rebuilds skip private OKX fills
 > unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is explicitly set. Verified state:
 > Alibaba scanner LLM configured, default/scanner Telegram configured, paper Telegram not
@@ -59,7 +61,8 @@ bat\strategy_lab_farm_full_cycle_loop.bat
   -> materializes run_sweep -> state/strategy_lab.sqlite (compute queue) -> worker
   -> classify -> unique_candidates -> honest validation -> stamp-back -> setup_library
   -> paper_loop (only paper_forward_ready cards) -> paper outcomes
-  -> paper_signals/PFR watch -> main_paper_instructions (paper-only, not consumed by live main)
+  -> paper_signals/PFR watch -> main_paper_instructions -> main_paper_consumed
+     (paper-only contract audit, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
 
