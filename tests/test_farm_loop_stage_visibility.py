@@ -134,3 +134,5 @@ class TestCycleLogStages:
 
         assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
         assert seen == {"max_new": 0, "max_pfr_scan": 0, "max_observe": 0}
+        assert out["main_paper_runtime_queue"]["queued"] == 0
+        assert out["main_paper_runtime_queue"]["execution_allowed"] is False

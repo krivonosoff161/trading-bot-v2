@@ -198,6 +198,14 @@ def _print_cycle(out: dict) -> None:
             f"accepted={mc.get('accepted', 0)} rejected={mc.get('rejected', 0)} "
             f"paper_only={mc.get('paper_only')} execution_allowed={mc.get('execution_allowed')}"
         )
+    rtq = out.get("main_paper_runtime_queue") or {}
+    if rtq:
+        print(
+            "  main_paper_runtime_queue: "
+            f"read={rtq.get('rows_read', 0)} "
+            f"queued={rtq.get('queued', 0)} invalid={rtq.get('invalid', 0)} "
+            f"action={rtq.get('runtime_action')} execution_allowed={rtq.get('execution_allowed')}"
+        )
     tp = out.get("paper_telegram_preview") or {}
     if tp:
         print(
@@ -217,10 +225,11 @@ def _cycle_signature(out: dict) -> tuple:
     paper_counters = tuple(sorted((paper.get("counters") or {}).items()))
     paper_ready = tuple(sorted((paper.get("readiness") or {}).get("blocked_reasons", {}).items()))
     main_consumer = tuple(sorted((out.get("main_paper_consumer") or {}).items()))
+    main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
-        main_consumer, telegram_preview, bool(out.get("errors")),
+        main_consumer, main_runtime_queue, telegram_preview, bool(out.get("errors")),
     )
 
 
@@ -290,6 +299,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
                 except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
+                try:
+                    from src.research_lab.main_paper_runtime_adapter import build_main_paper_runtime_queue
+                    out["main_paper_runtime_queue"] = build_main_paper_runtime_queue(private_root)
+                except Exception as exc:  # noqa: BLE001 - runtime queue must not break the cycle
+                    out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
                 try:
                     from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
                     out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
