@@ -6,6 +6,51 @@ Purpose: make the current trading stack understandable after the farm/PFR/paper 
 This document answers one operational question: what is alive, what is isolated, and
 what still must be audited before the old product runtime can be used again.
 
+## Latest Verified State
+
+Verified with:
+
+```bash
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --fail-on-blocked
+```
+
+Current result:
+
+- `ready_for_visible_paper_research_loop = pass`
+- `operator_next_actions.launch_blocked = false`
+- `operator_next_actions.blocking = []`
+- `operator_next_actions.operator_configuration = [paper_telegram_surface]`
+- `operator_next_actions.intentional_boundaries = [main_runtime_consumer, manual_product_analyzer_boundary]`
+- `operator_next_actions.rebuild_actions = []`
+- `paper_chain_counts = pass`
+- `paper_runtime_observed = pass`
+- `paper_main_runtime_current = pass`
+- `training_data_exports = pass`
+- `paper_signal_training_export = pass`
+- `journal_rebuild_available = pass`
+- `AUTO_TRADE = false`
+- `execution_allowed = false`
+
+Current artifact counts:
+
+| Artifact | Current value | Required invariant |
+|---|---:|---|
+| `paper_signals.jsonl` rows | 5388 | JSONL readable, private-root derived artifact |
+| `paper_signals.by.source` | `farm: 5388` | PFR remains explicit and bounded, not execution authority |
+| `paper_signals.by.status` | `armed: 2989`, `opened_paper: 1747`, `reviewed: 652` | watch lifecycle is populated |
+| `main_paper_instructions` | 10 | active paper rows exported into main-readable instructions |
+| `main_paper_consumed.accepted` | 10 | consumer rejects 0 invalid rows |
+| `main_paper_runtime_queue.queued` | 10 | all queued as `watch_paper` |
+| `main_paper_runtime_observation.observed` | 10 | invalid/provider errors are 0 |
+| `paper_telegram_preview.rendered` | 10 | invalid preview rows are 0 |
+| `paper_telegram_delivery` | 10 dry-run rows | network send remains off |
+| `paper_signal_training.jsonl` rows | 652 | schema-valid, `paper_only=true`, current vs source |
+| `scripts/journal.xlsx` | current vs training export | workbook is an operator surface, not source of truth |
+
+This is the current operator proof that the project is back to a coherent
+paper/research cycle. It is not a claim of trading edge, unattended Telegram delivery,
+or live/demo-money execution readiness.
+
 ## Current Canonical Loop
 
 The working paper/research loop is:
