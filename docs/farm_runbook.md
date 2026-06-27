@@ -2,6 +2,9 @@
 
 Status: **ACTIVE**. Last updated: 2026-06-27.
 
+Current revival audit:
+[`trading_cycle_revival_audit_2026-06-27.md`](trading_cycle_revival_audit_2026-06-27.md).
+
 The calculation farm is now driven by `farm_loop`. The system is paper/research only:
 public OKX market data, no `AUTO_TRADE`, no orders, no private account endpoints.
 Telegram is a guarded surface only; it is not part of the farm decision path.
