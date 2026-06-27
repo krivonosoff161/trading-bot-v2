@@ -35,6 +35,25 @@ Out of scope:
 
 ## Commands Run
 
+Visible Windows wrapper dry-run, capped to avoid compute and network sends:
+
+```bat
+set STRATEGY_LAB_NO_PAUSE=1
+set STRATEGY_LAB_FARM_ONCE=1
+set STRATEGY_LAB_FARM_DRY_RUN=1
+set STRATEGY_LAB_FARM_MAX_PREPARES=0
+set STRATEGY_LAB_FARM_MAX_ENRICH=0
+set STRATEGY_LAB_FARM_MAX_SWEEPS=0
+set STRATEGY_LAB_FARM_MAX_WORKER_JOBS=0
+set STRATEGY_LAB_FARM_MAX_VALIDATIONS=0
+set STRATEGY_LAB_FARM_MAX_PAPER_CARDS=0
+set STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=0
+set STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN=0
+set STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=0
+set STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT=0
+bat\strategy_lab_farm_full_cycle_loop.bat
+```
+
 Fast wiring smoke, capped to avoid compute:
 
 ```bash
@@ -97,13 +116,31 @@ Post-refresh preflight:
 - `ready_for_visible_paper_research_loop=pass`;
 - `product_analyzer_launch_contract=pass`;
 - `scanner_llm_provider=pass`.
+- `operator_next_actions.launch_blocked=false`;
+- `operator_next_actions.blocking=[]`;
+- `operator_next_actions.rebuild_actions=[]`.
 
-Expected remaining warning:
+Visible wrapper dry-run:
 
-- `telegram_analyzer_llm_provider_review=warn` by default because the old Telegram
-  chart analyzer uses the Yandex formatter path unless the text-card opt-in
-  `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` is set. This does not block the canonical
-  farm/PFR/paper loop.
+- wrapper preflight passed with `--fail-on-blocked`;
+- wrapper printed `mode = --dry-run --once`;
+- `pivot=discovery_refill`;
+- `active_tasks=9`;
+- `events_consumed=1`;
+- `tasks_created=9` in dry-run output;
+- process exit code: `0`.
+
+Expected remaining operator items:
+
+- `paper_telegram_surface=warn`: `PAPER_CHAT_ID` is not configured. This is an
+  operator notification setting, not a compute blocker.
+- `main_runtime_consumer=planned`: old live `main.py` remains intentionally isolated;
+  paper lifecycle is handled by `main_paper_runtime`.
+- `manual_product_analyzer_boundary=warn`: manual chart/latest analyzers are product
+  surfaces, not farm/PFR paper runtimes.
+- `telegram_analyzer_llm_provider_review=pass`: text-only analyzer calls are routed
+  through the shared provider path by the reviewed launchers. Premium vision remains
+  a separate future review.
 
 ## Discovery Snapshot
 
