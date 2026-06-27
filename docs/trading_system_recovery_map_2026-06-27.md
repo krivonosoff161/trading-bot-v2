@@ -116,6 +116,12 @@ paper-only instruction view from Strategy Lab artifacts. Priority is:
 4. `main_paper_runtime_adapter` sorts accepted paper rows by family, timeframe, risk,
    symbol, and source signal id before the public-candle observer watches them.
 
+The source lineage is part of the contract. `source=farm` and `source=pfr_farm`
+must survive `main_paper_bridge -> main_paper_consumer -> main_paper_runtime_adapter
+-> main_paper_runtime` unchanged. The runtime queue stores `source` explicitly and
+the observer reports it back in each observation row, so live-mover outcomes and
+validated-PFR outcomes cannot be mixed by a default label.
+
 `operational_health` exposes this as `paper_priority_policy.v1`. The invariant is
 `execution_allowed=false` and `old_main_py_consumer=false`.
 

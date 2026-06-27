@@ -15,13 +15,14 @@ class FakeProvider:
         return [c for c in self.candles if start_ts <= c["ts"] <= end_ts]
 
 
-def _queue_item(runtime_id: str = "runtime_1", *, execution_allowed: bool = False) -> dict:
+def _queue_item(runtime_id: str = "runtime_1", *, execution_allowed: bool = False, source: str = "farm") -> dict:
     return {
         "schema": "MainPaperRuntimeQueueItem.v1",
         "runtime_id": runtime_id,
         "consumer_id": "consumer_1",
         "instruction_id": "instruction_1",
         "source_signal_id": f"sig_{runtime_id}",
+        "source": source,
         "pair": "BTC-USDT-SWAP",
         "okx_inst_id": "BTC-USDT-SWAP",
         "timeframe": "15m",
@@ -83,6 +84,7 @@ def test_main_paper_runtime_observes_and_reviews_terminal_signal(tmp_path):
     assert summary["invalid"] == 0
     assert summary["execution_allowed"] is False
     item = summary["items"][0]
+    assert item["source"] == "farm"
     assert item["signal_status"] == "reviewed"
     assert item["outcome"]["result"] == "take"
     assert item["review"]["diagnosis"] == "good_signal"
@@ -108,6 +110,22 @@ def test_main_paper_runtime_rejects_execution_enabled_queue_item(tmp_path):
     assert summary["invalid"] == 1
     assert summary["items"][0]["status"] == "invalid"
     assert summary["execution_allowed"] is False
+
+
+def test_main_paper_runtime_preserves_pfr_source(tmp_path):
+    _write_queue(tmp_path, [_queue_item(source="pfr_farm")])
+    candles = [
+        {"ts": 1_900_000, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "vol": 1},
+    ]
+
+    summary = observe_main_paper_runtime(
+        tmp_path,
+        provider=FakeProvider(candles),
+        now_ms=2_000_000,
+    )
+
+    assert summary["invalid"] == 0
+    assert summary["items"][0]["source"] == "pfr_farm"
 
 
 def test_main_paper_runtime_has_no_live_order_imports():
