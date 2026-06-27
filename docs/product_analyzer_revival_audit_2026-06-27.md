@@ -50,6 +50,16 @@ Expected product-surface facts:
 - `telegram_analyzer_imports_auto_execute = true`
 - `telegram_analyzer_auto_trade_guarded = true`
 - `telegram_analyzer_requires_auto_execute_opt_in = true`
+- `product_analyzer_launch_contract.schema = product_analyzer_launch_contract.v1`
+- `product_analyzer_launch_contract.manual_telegram_current_for_farm = false`
+- `product_analyzer_launch_contract.telegram_bot_main_starts_scanner_loop = false`
+- `product_analyzer_launch_contract.telegram_bot_main_polls_updates = true`
+- `product_analyzer_launch_contract.manual_chart_send_default = false`
+- `product_analyzer_launch_contract.manual_latest_auto_execute_import_gated = true`
+- `product_analyzer_launch_contract.farm_pfr_runtime_uses_manual_product_stack = false`
+- `product_analyzer_launch_contract.old_main_consumes_paper_queue = false`
+- `product_analyzer_launch_contract.execution_allowed = false`
+- `product_analyzer_launch_contract = pass`
 - `product_analyzer_prompt_integrity = pass`
 - `manual_product_analyzer_boundary = warn`
 
@@ -73,6 +83,23 @@ Expected opt-in facts:
 This opt-in is deliberately narrow: it only changes `generate_client_text`. It does not
 revive Telegram sending, does not touch `start.bat`, does not call `auto_execute`, and
 does not migrate the premium screenshot analyzer.
+
+## Launch Contract
+
+The health report exposes `product_analyzer_launch_contract.v1` so the product/analyzer
+path is not confused with the canonical farm/PFR/paper loop:
+
+| Path | Current role | Contract |
+|---|---|---|
+| `bat/strategy_lab_farm_full_cycle_loop.bat` | Canonical farm/PFR/paper launcher | May run the paper loop; execution remains disabled. |
+| `start.bat` | Manual Telegram analyzer launcher | Starts the polling bot only; `main()` does not start the legacy `_scanner_loop`. |
+| `scripts.analyze_chart` | Manual chart/report generator | Can send only with `--send-telegram`; send is off by default. |
+| `scripts.run_latest_analysis` | Manual wrapper | Can import old `auto_execute` only behind `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE` plus `AUTO_TRADE`. |
+| `src.utils.llm_formatter.generate_client_text` | Text-card LLM formatter | Can opt in to `llm_client` with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. |
+| `generate_premium_analysis` / `generate_edu_text` | Legacy product prompts | Still Yandex-only; not migrated by the text-card opt-in. |
+
+This contract is a blocker check, not a readiness claim for unattended product alerts.
+It only proves the old product surfaces remain isolated from the restored paper loop.
 
 ## Why This Is Still Not The Unified Executor
 
