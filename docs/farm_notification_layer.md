@@ -172,6 +172,11 @@ paper runtime.
 - `llm_surface_boundaries.telegram_chart_formatter_status.schema = llm_formatter_provider.v1`
 - `llm_surface_boundaries.telegram_chart_formatter_configured = true/false`
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
+- `llm_surface_boundaries.telegram_chart_formatter_effective_provider_scope =
+  shared_llm_client_opt_in` when the reviewed product launchers set
+  `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`
+- `llm_surface_boundaries.telegram_chart_formatter_effective_shared_entrypoints =
+  ["generate_client_text", "generate_edu_text"]` under that effective launcher route
 - `llm_surface_boundaries.scanner_formatter_provider_mismatch = true` when scanner
   `LLM_PROVIDER` differs from the legacy chart formatter provider
 - With `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`,

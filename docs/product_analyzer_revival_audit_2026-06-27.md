@@ -36,6 +36,11 @@ Expected product-surface facts:
 - `telegram_chart_formatter_status.model_label` is sanitized and must not expose the
   Yandex folder id or key values
 - `telegram_chart_formatter_uses_llm_provider_env = false`
+- `telegram_chart_formatter_effective_provider_scope = shared_llm_client_opt_in`
+  when `start.bat` / `bat/start_telegram_bot.bat` set
+  `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`
+- `telegram_chart_formatter_effective_shared_entrypoints =
+  ["generate_client_text", "generate_edu_text"]` under that launcher route
 - `scanner_formatter_provider_mismatch = true` when `LLM_PROVIDER=alibaba` but the
   legacy chart formatter still uses the Yandex-only path
 - `legacy_product_text_quality.clean = true` for the old operator/Telegram product

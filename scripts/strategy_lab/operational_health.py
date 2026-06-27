@@ -832,6 +832,14 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         if chart_formatter_effective_shared_router
         else llm_formatter_status["provider"]
     )
+    chart_formatter_effective_scope = (
+        "shared_llm_client_opt_in"
+        if chart_formatter_effective_shared_router
+        else llm_formatter_status["provider_scope"]
+    )
+    chart_formatter_effective_shared_entrypoints = (
+        ["generate_client_text", "generate_edu_text"] if chart_formatter_effective_shared_router else []
+    )
     telegram_bot_main_body = _section_between(telegram_bot, "async def main() -> None:", "def _setup_rotating_log")
     run_latest_entry_block = _section_between(
         run_latest_analysis,
@@ -952,6 +960,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_chart_formatter_launcher_sets_shared_router": product_launcher_sets_shared_router,
             "telegram_chart_formatter_effective_shared_router": chart_formatter_effective_shared_router,
             "telegram_chart_formatter_effective_provider": chart_formatter_effective_provider,
+            "telegram_chart_formatter_effective_provider_scope": chart_formatter_effective_scope,
+            "telegram_chart_formatter_effective_shared_entrypoints": chart_formatter_effective_shared_entrypoints,
             "telegram_chart_formatter_uses_budget_guard": llm_formatter_status["budget_guard"],
             "telegram_chart_formatter_prompt_integrity": _contains_all(llm_formatter, llm_formatter_prompt_markers),
             "telegram_chart_formatter_mojibake_detected": _contains_any(llm_formatter, mojibake_markers),
@@ -965,8 +975,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "strategy_lab_llm_default_enabled": False,
             "note": (
                 "Alibaba/Yandex routing in src.utils.llm_client applies to scanner/advisory calls. "
-                "The legacy Telegram chart analyzer uses the Yandex-only formatter path and needs "
-                "a separate prompt/provider audit before product revival."
+                "Product analyzer text defaults to the legacy formatter in a bare shell, but the "
+                "reviewed product launchers route text-only formatter calls through the shared "
+                "LLM_PROVIDER path. Premium vision still needs a separate prompt/provider audit."
             ),
         },
         "legacy_product_text_quality": _text_quality_metrics(
@@ -1079,7 +1090,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             ),
             "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"]["exists"],
             "scanner_provider_path": "src.utils.llm_client (LLM_PROVIDER: alibaba/yandex)",
-            "chart_formatter_path": "src.utils.llm_formatter (Yandex chart formatter)",
+            "chart_formatter_path": "src.utils.llm_formatter (text shared-router via launcher; vision legacy Yandex)",
             "secrets_printed": False,
             "execution_authority": False,
         },
@@ -1144,7 +1155,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "effective_provider": chart_formatter_effective_provider,
             "premium_vision_yandex_only": "generate_premium_analysis" in llm_formatter_status["yandex_only_entrypoints"],
             "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
-            "edu_qa_shared_router_entrypoint": "generate_edu_text" in llm_formatter_status["shared_router_entrypoints"],
+            "edu_qa_shared_router_entrypoint": "generate_edu_text" in chart_formatter_effective_shared_entrypoints,
             "farm_pfr_runtime_uses_manual_product_stack": False,
             "old_main_consumes_paper_queue": False,
             "telegram_send_default": False,
@@ -1303,6 +1314,7 @@ def _print_human(report: dict[str, Any]) -> None:
         f"telegram_uses_llm_provider={llm_boundaries['telegram_chart_formatter_uses_llm_provider_env']} "
         f"telegram_launcher_shared_router={llm_boundaries['telegram_chart_formatter_launcher_sets_shared_router']} "
         f"telegram_effective_shared_router={llm_boundaries['telegram_chart_formatter_effective_shared_router']} "
+        f"telegram_effective_scope={llm_boundaries['telegram_chart_formatter_effective_provider_scope']} "
         f"provider_mismatch={llm_boundaries['scanner_formatter_provider_mismatch']} "
         f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
         f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
