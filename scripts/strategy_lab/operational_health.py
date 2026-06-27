@@ -964,6 +964,37 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             },
             "execution_allowed": False,
         },
+        "paper_priority_policy": {
+            "schema": "paper_priority_policy.v1",
+            "live_mover_lane": {
+                "order": 1,
+                "source": "paper_signals source=farm",
+                "owner": "src.research_lab.paper_signals.cycle.run_cycle",
+                "rule": "rank live movers by outcome memory, generate first, shared dedup",
+            },
+            "pfr_lane": {
+                "order": 2,
+                "source": "paper_signals source=pfr_farm",
+                "owner": "src.research_lab.paper_signals.pfr_bridge",
+                "requires_explicit_db_path": True,
+                "bounded_scan_default": 30,
+                "rule": "run after live movers; optional reserved slots; shared dedup and setup-id guard",
+            },
+            "main_instruction_view": {
+                "order": 3,
+                "owner": "src.research_lab.main_paper_bridge",
+                "active_statuses": ["armed", "opened_paper"],
+                "rule": "export active paper signals into main-readable instructions",
+            },
+            "runtime_queue": {
+                "order": 4,
+                "owner": "src.research_lab.main_paper_runtime_adapter",
+                "sort_order": ["family", "timeframe", "risk", "symbol", "source_signal_id"],
+                "rule": "accepted paper instructions become watch_paper queue items",
+            },
+            "execution_allowed": False,
+            "old_main_py_consumer": False,
+        },
         "telegram_delivery_flow": {
             "schema": "telegram_delivery_flow.v1",
             "farm_core_sends_telegram": False,
@@ -1187,6 +1218,7 @@ def _print_human(report: dict[str, Any]) -> None:
         f"telegram_send_default={flow['telegram_send_default']}"
     )
     sources = report["paper_source_composition"]
+    priority = report["paper_priority_policy"]
     signal_sources = sources["paper_signals"]["by"].get("source", {})
     signal_families = sources["paper_signals"]["by"].get("setup_family", {})
     queue_families = sources["main_runtime_queue"]["by"].get("setup_family", {})
@@ -1199,6 +1231,15 @@ def _print_human(report: dict[str, Any]) -> None:
         f"queue_families={queue_families} "
         f"pfr_explicit={sources['pfr_activation']['requires_explicit_db_path']} "
         f"execution_allowed={sources['execution_allowed']}"
+    )
+    print(
+        "paper_priority_policy: "
+        f"live_order={priority['live_mover_lane']['order']} "
+        f"pfr_order={priority['pfr_lane']['order']} "
+        f"pfr_requires_db={priority['pfr_lane']['requires_explicit_db_path']} "
+        f"runtime_sort={priority['runtime_queue']['sort_order']} "
+        f"old_main_consumer={priority['old_main_py_consumer']} "
+        f"execution_allowed={priority['execution_allowed']}"
     )
     delivery = report["telegram_delivery_flow"]
     print(

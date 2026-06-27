@@ -330,6 +330,26 @@ def test_operational_health_reports_paper_source_composition(tmp_path, monkeypat
     assert composition["pfr_activation"]["requires_explicit_db_path"] is True
     assert composition["pfr_activation"]["source_name"] == "pfr_farm"
     assert composition["execution_allowed"] is False
+    priority = report["paper_priority_policy"]
+    assert priority["schema"] == "paper_priority_policy.v1"
+    assert priority["live_mover_lane"]["order"] == 1
+    assert priority["live_mover_lane"]["source"] == "paper_signals source=farm"
+    assert "generate first" in priority["live_mover_lane"]["rule"]
+    assert priority["pfr_lane"]["order"] == 2
+    assert priority["pfr_lane"]["source"] == "paper_signals source=pfr_farm"
+    assert priority["pfr_lane"]["requires_explicit_db_path"] is True
+    assert priority["pfr_lane"]["bounded_scan_default"] == 30
+    assert "shared dedup" in priority["pfr_lane"]["rule"]
+    assert priority["main_instruction_view"]["active_statuses"] == ["armed", "opened_paper"]
+    assert priority["runtime_queue"]["sort_order"] == [
+        "family",
+        "timeframe",
+        "risk",
+        "symbol",
+        "source_signal_id",
+    ]
+    assert priority["old_main_py_consumer"] is False
+    assert priority["execution_allowed"] is False
 
 
 def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monkeypatch):
