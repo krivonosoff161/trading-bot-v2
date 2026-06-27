@@ -66,7 +66,7 @@ def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch)
     report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
 
     assert report["main_bridge"]["instruction_view_exists"] is True
-    assert report["main_bridge"]["status"] == "instruction_view_ready_not_consumed"
+    assert report["main_bridge"]["status"] == "instruction_view_ready"
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["main_instruction_view_available"]["status"] == "pass"
 
@@ -80,6 +80,7 @@ def test_operational_health_reports_main_paper_consumer_view(tmp_path, monkeypat
     report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
 
     assert report["main_bridge"]["consumer_view_exists"] is True
+    assert report["main_bridge"]["status"] == "consumer_audit_ready"
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "pass"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
@@ -94,6 +95,7 @@ def test_operational_health_reports_main_paper_runtime_queue(tmp_path, monkeypat
     report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
 
     assert report["main_bridge"]["runtime_queue_exists"] is True
+    assert report["main_bridge"]["status"] == "runtime_queue_ready"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "pass"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
 
@@ -110,6 +112,7 @@ def test_operational_health_reports_main_paper_runtime_observation(tmp_path, mon
     report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
 
     assert report["main_bridge"]["runtime_observation_exists"] is True
+    assert report["main_bridge"]["status"] == "paper_runtime_observed"
     assert report["paper_chain"]["runtime_observation"]["observed"] == 2
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "pass"
     assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"

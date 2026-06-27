@@ -202,6 +202,33 @@ follow-up analysis.
   Telegram-card previews and validates message length, HTML escaping, and execution
   disclaimers without sending anything.
 
+### Main-Paper Authority Map
+
+The current farm-to-main path is deliberately paper-only:
+
+1. `farm_loop --run-paper-signals` owns orchestration.
+2. `paper_signals` and the PFR bridge create/observe paper candidates.
+3. `main_paper_bridge` exports active candidates as main-readable `SignalContract`
+   instructions with `paper_only=true` and `execution_allowed=false`.
+4. `main_paper_consumer` validates those contracts and rejects malformed or non-paper
+   rows.
+5. `main_paper_runtime_adapter` builds the private `watch_paper` queue from accepted
+   rows only.
+6. `main_paper_runtime` observes that queue on public OKX candles and writes reviewed,
+   pending, no-data, or provider-error outcomes.
+7. `paper_telegram_preview` renders offline operator cards; it does not send Telegram
+   messages.
+
+The queue priority is deterministic: `early_tp_tactical` first, then
+`mean_reversion_fade` / `reversal_fade`, then `liquidity_sweep_reclaim`, then
+`momentum_breakout`, then continuation families. Shorter timeframes sort before longer
+ones, low-risk plans receive a small bonus, and risk above 8% receives a heavy penalty.
+
+The old live `main.py` / `ws_main_screener.py` stack is not a farm/PFR executor today.
+It can be audited as a separate scanner/Telegram surface, but it must not be treated as
+the consumer of farm paper instructions until a separate paper-only port is reviewed and
+tested.
+
 For the standalone CLI, the matching flags are:
 
 ```bash

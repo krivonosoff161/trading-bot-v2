@@ -238,6 +238,24 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     }
 
 
+def _main_bridge_status(
+    *,
+    instruction_view_exists: bool,
+    consumer_view_exists: bool,
+    runtime_queue_exists: bool,
+    runtime_observation_exists: bool,
+) -> str:
+    if runtime_observation_exists:
+        return "paper_runtime_observed"
+    if runtime_queue_exists:
+        return "runtime_queue_ready"
+    if consumer_view_exists:
+        return "consumer_audit_ready"
+    if instruction_view_exists:
+        return "instruction_view_ready"
+    return "not_connected"
+
+
 def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None) -> dict[str, Any]:
     private_root = private_root or DEFAULT_PRIVATE_ROOT
     provider = load_provider(os.environ)
@@ -305,7 +323,6 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "db": _exists(pfr_db),
         },
         "main_bridge": {
-            "status": "instruction_view_ready_not_consumed" if main_paper_instruction_snapshot.exists() else "not_connected",
             "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
             "instruction_view_exists": main_paper_instruction_snapshot.exists() or main_paper_instruction_log.exists(),
             "consumer_view_exists": main_paper_consumed_snapshot.exists() or main_paper_consumed_log.exists(),
@@ -336,6 +353,13 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             ),
         },
     }
+    bridge = report["main_bridge"]
+    bridge["status"] = _main_bridge_status(
+        instruction_view_exists=bridge["instruction_view_exists"],
+        consumer_view_exists=bridge["consumer_view_exists"],
+        runtime_queue_exists=bridge["runtime_queue_exists"],
+        runtime_observation_exists=bridge["runtime_observation_exists"],
+    )
     report["readiness"] = _build_readiness(report)
     return report
 
