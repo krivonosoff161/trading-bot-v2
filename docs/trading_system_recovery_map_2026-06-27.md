@@ -40,6 +40,9 @@ bat\strategy_lab_farm_full_cycle_loop.bat
 That wrapper passes `--paper-signals-max-observe` (default 20 via
 `STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE`) so active paper cards mature in bounded
 batches instead of making one visible cycle walk the whole backlog.
+It also passes `--paper-signals-pfr-reserved` (default 2 via
+`STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED`) so live-mover generation cannot starve
+already validated farm/PFR candidates.
 
 The preflight gate is:
 
@@ -95,7 +98,9 @@ When `farm_loop --run-paper-signals` runs, paper signal selection priority is:
 
 1. live mover universe ranked by outcome memory;
 2. active paper-signal store lifecycle and dedup;
-3. bounded PFR DB seeding, only when `--pfr-db-path` is explicit;
+3. bounded PFR DB seeding, only when `--pfr-db-path` is explicit; in the visible
+   wrapper 2 of the new-signal slots are reserved for PFR before live movers can
+   fill the full cycle cap;
 4. main-readable paper instruction export;
 5. contract consumer audit;
 6. runtime queue;
