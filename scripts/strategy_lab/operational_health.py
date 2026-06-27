@@ -1140,12 +1140,17 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             ),
             "main_runtime_queue": _snapshot_field_breakdown(
                 main_paper_runtime_queue_snapshot,
-                ("setup_family", "timeframe", "runtime_action"),
+                ("source", "setup_family", "timeframe", "runtime_action"),
+            ),
+            "main_runtime_observation": _snapshot_field_breakdown(
+                main_paper_runtime_observation_snapshot,
+                ("source", "setup_family", "timeframe", "signal_status"),
             ),
             "priority_contract": [
                 "live mover universe is the default paper-signal search lane",
                 "PFR is inactive unless --pfr-db-path is provided",
                 "pfr_reserved_new only reserves part of max_new; it never enables execution",
+                "source is preserved through bridge, consumer, runtime queue, and observation",
                 "main_paper_runtime_adapter sorts accepted paper rows by family/timeframe/risk priority",
                 "old main.py remains isolated and does not consume the paper queue",
             ],
@@ -1467,14 +1472,18 @@ def _print_human(report: dict[str, Any]) -> None:
     priority = report["paper_priority_policy"]
     signal_sources = sources["paper_signals"]["by"].get("source", {})
     signal_families = sources["paper_signals"]["by"].get("setup_family", {})
+    queue_sources = sources["main_runtime_queue"]["by"].get("source", {})
     queue_families = sources["main_runtime_queue"]["by"].get("setup_family", {})
+    observation_sources = sources["main_runtime_observation"]["by"].get("source", {})
     print(
         "paper_source_composition: "
         f"signals_rows={sources['paper_signals']['rows']} "
         f"signal_sources={signal_sources} "
         f"signal_families={signal_families} "
         f"queue_items={sources['main_runtime_queue']['items']} "
+        f"queue_sources={queue_sources} "
         f"queue_families={queue_families} "
+        f"observation_sources={observation_sources} "
         f"pfr_explicit={sources['pfr_activation']['requires_explicit_db_path']} "
         f"execution_allowed={sources['execution_allowed']}"
     )
