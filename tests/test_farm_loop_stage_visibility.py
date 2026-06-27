@@ -88,17 +88,24 @@ class TestCycleLogStages:
             seen["max_observe"] = kwargs["max_observe"]
             return {"generated": 0, "pfr_counts": {}, "state": {}, "gate_counts": {}}
 
+        coordinator_seen: dict[str, int] = {}
+
+        def fake_coordinator(*_args, **kwargs):
+            coordinator_seen["max_plan_events"] = kwargs["max_plan_events"]
+            coordinator_seen["max_discovery"] = kwargs["max_discovery"]
+            return {
+                "pivot": "smoke",
+                "active_tasks": 0,
+                "counters": {},
+                "status": {},
+                "errors": [],
+            }
+
         monkeypatch.setattr(farm_loop, "_providers", lambda *_a, **_k: (None, None, None))
         monkeypatch.setattr(farm_loop, "_read_intake", lambda *_a, **_k: [])
         monkeypatch.setattr(farm_loop, "_discovery", lambda *_a, **_k: (None, {"status": "smoke"}))
         monkeypatch.setattr(farm_loop, "_maybe_storage_maintain", lambda *_a, **_k: None)
-        monkeypatch.setattr(farm_loop, "run_coordinator_cycle", lambda *_a, **_k: {
-            "pivot": "smoke",
-            "active_tasks": 0,
-            "counters": {},
-            "status": {},
-            "errors": [],
-        })
+        monkeypatch.setattr(farm_loop, "run_coordinator_cycle", fake_coordinator)
         monkeypatch.setattr(paper_cycle, "run_cycle", fake_cycle)
 
         args = Namespace(
@@ -151,6 +158,7 @@ class TestCycleLogStages:
 
         out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
+        assert coordinator_seen == {"max_plan_events": 0, "max_discovery": 0}
         assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
         assert seen == {"max_new": 0, "max_pfr_scan": 0, "max_observe": 0}
         assert out["main_paper_runtime_queue"]["queued"] == 0

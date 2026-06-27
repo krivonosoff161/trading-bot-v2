@@ -265,6 +265,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
         allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
+        max_discovery=args.max_plan_events,
         run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
         max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
     )
