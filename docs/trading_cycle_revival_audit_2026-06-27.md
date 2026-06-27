@@ -115,7 +115,7 @@ bat\strategy_lab_control_room.bat
 Bounded dry-run smoke:
 
 ```bash
-python -X utf8 -m scripts.strategy_lab.farm_loop --once --dry-run --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-pfr-scan 5 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 5 --max-plan-events 5 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 3 --data-days 7 --provider okx-public --backend auto
+python -X utf8 -m scripts.strategy_lab.farm_loop --once --dry-run --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 20 --paper-signals-max-pfr-scan 5 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 5 --max-plan-events 5 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 3 --data-days 7 --provider okx-public --backend auto
 ```
 
 ## Non-Claims

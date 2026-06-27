@@ -20,7 +20,7 @@ farm permission to touch the old money path.
 |---|---|---|
 | `scripts/strategy_lab/farm_loop.py` | **CORE** | Current continuous self-deciding lifecycle. |
 | `bat\strategy_lab_control_room.bat` | **CORE OPERATOR ROOM** | Opens visible farm loop, dashboard, graph viewer, and status windows. Preferred operator start for long paper/research runs. |
-| `bat\strategy_lab_farm_full_cycle_loop.bat` | **CORE WRAPPER** | Visible operator path: farm -> worker -> validation -> paper. |
+| `bat\strategy_lab_farm_full_cycle_loop.bat` | **CORE WRAPPER** | Visible operator path: farm -> worker -> validation -> paper; caps active paper-signal observation by default. |
 | `bat\strategy_lab_farm_full_cycle_stop.bat` | **CORE WRAPPER** | Clean stop-file for the wrapper above. |
 | `scripts/strategy_lab/worker_once.py` | **CORE EXECUTOR** | Single-job compute executor. Must not delete. |
 | `scripts/strategy_lab/worker_loop.py` | **KEEP / OFF DEFAULT** | Standalone compute daemon; not a lifecycle brain. |

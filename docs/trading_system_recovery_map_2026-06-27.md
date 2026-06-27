@@ -37,6 +37,10 @@ The one-window farm loop is:
 bat\strategy_lab_farm_full_cycle_loop.bat
 ```
 
+That wrapper passes `--paper-signals-max-observe` (default 20 via
+`STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE`) so active paper cards mature in bounded
+batches instead of making one visible cycle walk the whole backlog.
+
 The preflight gate is:
 
 ```bash

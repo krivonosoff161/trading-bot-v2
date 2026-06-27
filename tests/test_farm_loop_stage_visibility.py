@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+from pathlib import Path
 
 from scripts.strategy_lab import farm_loop
 from src.research_lab import farm_journal
@@ -157,3 +158,10 @@ class TestCycleLogStages:
         assert out["main_paper_runtime_observation"]["rows_read"] == 0
         assert out["main_paper_runtime_observation"]["execution_allowed"] is False
         assert existing_observation.read_text(encoding="utf-8") == before
+
+    def test_visible_full_cycle_bat_bounds_paper_signal_observation(self) -> None:
+        bat = Path("bat/strategy_lab_farm_full_cycle_loop.bat").read_text(encoding="utf-8")
+
+        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20" in bat
+        assert "paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%" in bat
+        assert "'--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%'" in bat
