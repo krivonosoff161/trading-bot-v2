@@ -164,8 +164,11 @@ be treated as their executor.
   and `planned` gates stay visible, but any readiness gate with `status=blocked`
   stops the visible launch before compute starts.
 - **Detailed operator status:** `python -m scripts.strategy_lab.status` and
-  `python -m scripts.strategy_lab.farm_status_report`. These read broader farm state and
-  can be slower on a large private DB; use them after the fast health gate is clean.
+  `python -m scripts.strategy_lab.farm_status_report --fast`. The fast report is intended
+  for visible monitor windows and keeps the farm -> paper -> main-paper surface visible
+  without rebuilding heavy derived research views. Run
+  `python -m scripts.strategy_lab.farm_status_report` without `--fast` only for manual
+  audit/drilldown; it can be slower on a large private DB.
 - **Legacy/off-default:** `scanner_farm_loop`, `universe_farm_loop`, `research_loop`,
   `strategy_lab_start.bat`. Keep them for diagnostics/history; do not build new operator
   work on top of them.
@@ -290,7 +293,7 @@ bat\strategy_lab_farm_full_cycle_stop.bat
 
 # Status, no raw log tailing needed.
 python -m scripts.strategy_lab.status
-python -m scripts.strategy_lab.farm_status_report
+python -m scripts.strategy_lab.farm_status_report --fast
 python -m scripts.strategy_lab.farm_status_report --json
 ```
 

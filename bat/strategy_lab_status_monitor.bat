@@ -32,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "while (-not (Test-Path '%STOP_FILE%')) {" ^
   "  Clear-Host;" ^
   "  Get-Date;" ^
-  "  python -X utf8 -m scripts.strategy_lab.farm_status_report;" ^
+  "  python -X utf8 -m scripts.strategy_lab.farm_status_report --fast;" ^
   "  Start-Sleep -Seconds %STRATEGY_LAB_STATUS_SLEEP_SECONDS%;" ^
   "};" ^
   "Write-Host 'Stop file detected. Status monitor exiting.'"

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import types
 from pathlib import Path
 
 from scripts.strategy_lab.farm_status_report import collect
@@ -118,6 +120,42 @@ def test_status_report_collect(tmp_path):
     assert report["main_paper_runtime_observation"]["execution_allowed"] is False
     ready = {r["symbol"] for r in report["ready_for_validation"]}
     assert "BTC_USDT_SWAP" in ready
+
+
+def test_status_report_fast_skips_heavy_derived_rebuilds(tmp_path, monkeypatch):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    import_run_dir(conn, tmp_path, _write_run(tmp_path))
+    conn.commit()
+    conn.close()
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("fast status must not rebuild heavy derived research views")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.research_lab.setup_lifecycle",
+        types.SimpleNamespace(summarize_setup_lifecycle=_boom),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "src.research_lab.setup_outcome_memory",
+        types.SimpleNamespace(
+            build_memory_index=_boom,
+            summarize_memory=_boom,
+            build_gate_index=_boom,
+            knowledge_base_counts=_boom,
+        ),
+    )
+
+    report = collect(default_db_path(tmp_path), fast=True)
+
+    assert report["report_mode"] == "fast"
+    assert report["setup_lifecycle"]["skipped"] == "fast_mode"
+    assert report["outcome_memory"]["skipped"] == "fast_mode"
+    assert report["knowledge_base"]["skipped"] == "fast_mode"
+    assert report["handoff"]["paper_outcomes"] == 0
+    assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
 
 
 def test_status_report_missing_db(tmp_path):

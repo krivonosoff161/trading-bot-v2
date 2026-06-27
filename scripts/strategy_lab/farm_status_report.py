@@ -8,10 +8,13 @@ rejected and why, the queue state + age, flow coverage, and which candidates are
 for hard validation (deduped). Migration-safe: it runs init_db so an old DB without the
 v3 tables is upgraded non-destructively instead of crashing.
 
+    python -m scripts.strategy_lab.farm_status_report --fast
     python -m scripts.strategy_lab.farm_status_report
     python -m scripts.strategy_lab.farm_status_report --json
 
 Never writes results, never touches the network, orders, .env, or private endpoints.
+Use --fast for visible operator monitors; the default full report may rebuild derived
+research views from many JSON artifacts and is intended for audit/drilldown.
 """
 from __future__ import annotations
 
@@ -96,7 +99,11 @@ def _ready_for_validation(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def collect(db_path: Path) -> dict:
+def _skipped_fast() -> dict[str, object]:
+    return {"available": False, "skipped": "fast_mode"}
+
+
+def collect(db_path: Path, *, fast: bool = False) -> dict:
     if not db_path.exists():
         return {"exists": False, "db": str(db_path)}
     conn = _connect(db_path)
@@ -105,6 +112,7 @@ def collect(db_path: Path) -> dict:
         unique_table = "farm_results" if _has_rows(conn, "farm_results") else "candidates"
         report: dict = {
             "exists": True,
+            "report_mode": "fast" if fast else "full",
             "schema_version": int(_scalar(conn, "SELECT value FROM meta WHERE key='schema_version'", 0)),
             "totals": {
                 "runs": int(_scalar(conn, "SELECT COUNT(*) FROM runs")),
@@ -163,16 +171,20 @@ def collect(db_path: Path) -> dict:
             report["lifecycle"] = _lifecycle_section(db_path.parent.parent)
         except Exception:  # noqa: BLE001 - report must never crash on the optional new DB
             report["lifecycle"] = {"available": False}
-        try:
-            from src.research_lab.setup_lifecycle import summarize_setup_lifecycle
-            report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
-        except Exception:  # noqa: BLE001 - optional derived view must not break status
-            report["setup_lifecycle"] = {"available": False}
-        try:  # Setup Outcome Memory: rejected-as-knowledge sub-views (derived, research-only)
-            from src.research_lab.setup_outcome_memory import build_memory_index, summarize_memory
-            report["outcome_memory"] = summarize_memory(build_memory_index(db_path.parent.parent))
-        except Exception:  # noqa: BLE001 - optional derived view must not break status
-            report["outcome_memory"] = {"available": False}
+        if fast:
+            report["setup_lifecycle"] = _skipped_fast()
+            report["outcome_memory"] = _skipped_fast()
+        else:
+            try:
+                from src.research_lab.setup_lifecycle import summarize_setup_lifecycle
+                report["setup_lifecycle"] = summarize_setup_lifecycle(db_path.parent.parent)
+            except Exception:  # noqa: BLE001 - optional derived view must not break status
+                report["setup_lifecycle"] = {"available": False}
+            try:  # Setup Outcome Memory: rejected-as-knowledge sub-views (derived, research-only)
+                from src.research_lab.setup_outcome_memory import build_memory_index, summarize_memory
+                report["outcome_memory"] = summarize_memory(build_memory_index(db_path.parent.parent))
+            except Exception:  # noqa: BLE001 - optional derived view must not break status
+                report["outcome_memory"] = {"available": False}
         try:  # shadow-forward watch lane (research-only; survivors observed on new bars, never traded)
             from src.research_lab.shadow_forward import summarize_shadow
             report["shadow_forward"] = summarize_shadow(db_path.parent.parent)
@@ -232,21 +244,24 @@ def collect(db_path: Path) -> dict:
                 if mm_f.exists() else {}
         except Exception:  # noqa: BLE001 - optional derived view must not break status
             report["microstructure"] = {}
-        try:  # the owner's six knowledge-base counts in one line (gate + survived + tactical + recyclable)
-            from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
-            from src.research_lab.setup_outcome_memory import (
-                build_gate_index, build_memory_index, knowledge_base_counts)
-            db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
-            try:
-                gate_idx = build_gate_index(db.unique_candidates_for_gate())
-            finally:
-                db.close()
-            report["knowledge_base"] = knowledge_base_counts(
-                build_memory_index(db_path.parent.parent), gate_idx,
-                survived_shadow=len((report.get("shadow_oos") or {}).get("survived") or []),
-                tactical_probe=int((report.get("tactical_probe") or {}).get("thin_positive") or 0))
-        except Exception:  # noqa: BLE001 - optional derived view must not break status
-            report["knowledge_base"] = {}
+        if fast:
+            report["knowledge_base"] = _skipped_fast()
+        else:
+            try:  # the owner's six knowledge-base counts in one line (gate + survived + tactical + recyclable)
+                from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+                from src.research_lab.setup_outcome_memory import (
+                    build_gate_index, build_memory_index, knowledge_base_counts)
+                db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
+                try:
+                    gate_idx = build_gate_index(db.unique_candidates_for_gate())
+                finally:
+                    db.close()
+                report["knowledge_base"] = knowledge_base_counts(
+                    build_memory_index(db_path.parent.parent), gate_idx,
+                    survived_shadow=len((report.get("shadow_oos") or {}).get("survived") or []),
+                    tactical_probe=int((report.get("tactical_probe") or {}).get("thin_positive") or 0))
+            except Exception:  # noqa: BLE001 - optional derived view must not break status
+                report["knowledge_base"] = {}
         try:  # last cycle row - surfaces skipped active stages (0.2)
             from src.research_lab import farm_journal
             cycles = farm_journal.read_recent_cycles(db_path.parent.parent, limit=1)
@@ -337,7 +352,8 @@ def _print(report: dict) -> None:
               "python -m scripts.strategy_lab.farm_loop --once --apply --run-worker")
         return
     t = report["totals"]
-    print(f"FARM STATUS - schema v{report['schema_version']} | runs={t['runs']} candidates={t['candidates']} "
+    mode = report.get("report_mode") or "full"
+    print(f"FARM STATUS ({mode}) - schema v{report['schema_version']} | runs={t['runs']} candidates={t['candidates']} "
           f"farm_results={t['farm_results']} unique={t['unique_candidates']}")
     lr = report.get("latest_run") or {}
     print(f"  latest run: {lr.get('run_id', '-')} @ {lr.get('created_at', '-')}")
@@ -536,9 +552,12 @@ def _print(report: dict) -> None:
               f"recorder={rec.get('readiness')} (tape-pressure no follow-through; walls pending data)")
     kb = report.get("knowledge_base") or {}
     if kb:
-        print(f"  KNOWLEDGE BASE (research-only): known_bad={kb.get('known_bad')} revisit={kb.get('revisit')} "
-              f"survived_shadow={kb.get('survived_shadow')} tactical_probe={kb.get('tactical_probe')} "
-              f"recyclable={kb.get('rejected_recyclable')} confirmed_bad={kb.get('rejected_confirmed_bad')}")
+        if kb.get("skipped") == "fast_mode":
+            print("  KNOWLEDGE BASE (research-only): skipped in --fast (run without --fast for audit rebuild)")
+        else:
+            print(f"  KNOWLEDGE BASE (research-only): known_bad={kb.get('known_bad')} revisit={kb.get('revisit')} "
+                  f"survived_shadow={kb.get('survived_shadow')} tactical_probe={kb.get('tactical_probe')} "
+                  f"recyclable={kb.get('rejected_recyclable')} confirmed_bad={kb.get('rejected_confirmed_bad')}")
     for b in report.get("backend", []):
         print(f"  backend eff={b['effective_backend'] or '?'} signal={b['signal_backend'] or '?'} "
               f"sim={b['simulation_backend'] or '?'} gpu_runs={b['gpu_runs']}/{b['runs']} "
@@ -565,8 +584,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--json", action="store_true", help="emit the raw report as JSON")
+    ap.add_argument("--fast", action="store_true",
+                    help="skip expensive derived research rebuilds; use for visible operator monitors")
     args = ap.parse_args()
-    report = collect(default_db_path(Path(args.private_root)))
+    report = collect(default_db_path(Path(args.private_root)), fast=args.fast)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
