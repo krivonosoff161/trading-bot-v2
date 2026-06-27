@@ -1084,17 +1084,37 @@ def _print_human(report: dict[str, Any]) -> None:
         print(f"  {name}: exists={item['exists']} bytes={item['size_bytes']} path={item['path']}")
 
 
+def has_blocked_readiness(report: dict[str, Any]) -> bool:
+    """Return True when a readiness gate found a hard launch blocker."""
+    readiness = report.get("readiness")
+    if not isinstance(readiness, dict):
+        return False
+    return any(isinstance(gate, dict) and gate.get("status") == "blocked" for gate in readiness.values())
+
+
+def exit_code_for_report(report: dict[str, Any], *, fail_on_blocked: bool) -> int:
+    if fail_on_blocked and has_blocked_readiness(report):
+        return 2
+    return 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--private-root", type=Path, default=DEFAULT_PRIVATE_ROOT)
     ap.add_argument("--pfr-db-path", type=Path, default=None)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--fail-on-blocked",
+        action="store_true",
+        help="Exit non-zero only when a readiness gate has status=blocked.",
+    )
     args = ap.parse_args()
     report = collect(private_root=args.private_root, pfr_db_path=args.pfr_db_path)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         _print_human(report)
+    raise SystemExit(exit_code_for_report(report, fail_on_blocked=args.fail_on_blocked))
 
 
 if __name__ == "__main__":

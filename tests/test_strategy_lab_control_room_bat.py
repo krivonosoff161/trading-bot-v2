@@ -14,6 +14,7 @@ def test_control_room_starts_visible_strategy_lab_surfaces():
     assert "strategy_lab_status_monitor.bat" in text
     assert "scripts.strategy_lab.operational_health" in text
     assert "--pfr-db-path" in text
+    assert "--fail-on-blocked" in text
     assert text.count('start "Strategy Lab -') >= 4
 
 
@@ -45,4 +46,12 @@ def test_full_cycle_bat_points_to_fast_health_and_detailed_status():
     text = (_read("strategy_lab_farm_full_cycle_loop.bat") + "\n" + _read("strategy_lab_farm_full_cycle_stop.bat"))
 
     assert "scripts.strategy_lab.operational_health" in text
+    assert "--fail-on-blocked" in text
     assert "scripts.strategy_lab.farm_status_report" in text
+
+
+def test_visible_launchers_stop_on_blocked_preflight():
+    text = (_read("strategy_lab_control_room.bat") + "\n" + _read("strategy_lab_farm_full_cycle_loop.bat"))
+
+    assert "Preflight blocked" in text
+    assert "if errorlevel 1" in text

@@ -428,3 +428,18 @@ def test_operational_health_blocks_enabled_unconfigured_lab_llm(tmp_path, monkey
     gate = report["readiness"]["strategy_lab_llm_policy"]
     assert gate["status"] == "blocked"
     assert "provider is not configured" in gate["message"]
+    assert H.has_blocked_readiness(report) is True
+    assert H.exit_code_for_report(report, fail_on_blocked=True) == 2
+    assert H.exit_code_for_report(report, fail_on_blocked=False) == 0
+
+
+def test_operational_health_fail_on_blocked_ignores_warn_and_planned(tmp_path, monkeypatch):
+    monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
+    assert any(gate["status"] == "warn" for gate in report["readiness"].values())
+    assert H.has_blocked_readiness(report) is False
+    assert H.exit_code_for_report(report, fail_on_blocked=True) == 0
