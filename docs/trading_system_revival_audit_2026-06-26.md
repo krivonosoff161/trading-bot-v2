@@ -1,6 +1,6 @@
 # Trading System Revival Audit - Farm/Paper/Main Boundary
 
-Status: **ACTIVE operator audit**. Date: 2026-06-26.
+Status: **ACTIVE operator audit**. Date: 2026-06-26, refreshed 2026-06-27.
 
 This document records the current runtime truth after auditing the farm, PFR bridge,
 paper runtime, paper-signal lane, main scanner, Telegram, journals, and runbooks. It is
@@ -305,6 +305,12 @@ Export terminal paper-watch outcomes into training-friendly rows:
 python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
+Rebuild the Excel journal with UTF-8 output on Windows:
+
+```bash
+python -X utf8 scripts\build_journal.py
+```
+
 Visible continuous run:
 
 ```bash
@@ -414,3 +420,46 @@ Targeted tests:
 - `tests/test_main_paper_bridge.py tests/test_main_paper_runtime_adapter.py tests/test_main_paper_runtime.py tests/test_operational_health.py`: passed.
 - `tests/test_build_journal_safety.py`: passed after the `Paper Watch` sheet addition.
 - `git diff --check`: clean.
+
+## Verification On 2026-06-27
+
+Current commands re-run:
+
+```bash
+python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --json
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
+python -m scripts.strategy_lab.status --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.farm_status_report --json
+python -X utf8 scripts\build_journal.py
+```
+
+Observed current state:
+
+- `operational_health` exits 0 and reports `mode=paper_research_only`,
+  `auto_trade=False`, scanner LLM provider `alibaba`, scanner Telegram configured,
+  paper Telegram not configured.
+- `main_bridge.status = paper_runtime_observed`.
+- Paper chain counts: `instructions=53`, `accepted=53`, `rejected=0`,
+  `queued=50`, `invalid_queue=0`, `observed=5`, `reviewed=5`,
+  `runtime_errors=0`, `preview=20`, `invalid_preview=0`.
+- `main_runtime_consumer = planned`: old live main is intentionally not the executor.
+- `paper_signals.total = 652`, `armed = 41`, `opened_paper = 12`, `reviewed = 599`.
+- `pfr_bridge.records_loaded = 53`, `passed_quality = 43`, `rejected_quality = 10`,
+  `unique_setups = 11`, `risk_too_wide = 26`.
+- `main_paper_bridge.instructions = 53`, `execution_allowed = false`.
+- `main_paper_consumer.accepted = 53`, `rejected = 0`.
+- `main_paper_runtime_queue.queued = 50`, `invalid = 0`, `execution_allowed = false`.
+- `main_paper_runtime_observation.rows_read = 5`, `observed = 5`, `reviewed = 5`,
+  `pending = 0`, `provider_error = 0`, `execution_allowed = false`.
+- `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false`.
+- `paper_signal_training_export.rows = 599`, `terminal_only = true`,
+  `paper_only = true`.
+- `scripts/journal.xlsx` rebuild exits 0; `Paper Watch` exists with 610 rows including
+  the header. Private OKX fills stay skipped unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is
+  explicitly set.
+
+Current conclusion: the full operator chain is alive as a paper/research lifecycle:
+farm/PFR -> paper signals -> main-readable paper instructions -> contract consumer ->
+paper runtime queue -> public-candle observation -> Telegram preview -> training export ->
+Excel journal. The remaining product gap is deliberate: old `main.py` must still not
+execute farm/PFR instructions until a separate executor contract is reviewed and tested.

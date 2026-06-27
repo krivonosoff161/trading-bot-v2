@@ -47,7 +47,7 @@ Observed:
 - PFR DB exists
 - paper-signal JSONL/snapshot exist
 - paper chain counts are visible in preflight:
-  `instructions=54 accepted=54 rejected=0 queued=50 invalid_queue=0 observed=... reviewed=... preview=20 invalid_preview=0`
+  `instructions=53 accepted=53 rejected=0 queued=50 invalid_queue=0 observed=5 reviewed=5 preview=20 invalid_preview=0`
 - `scripts/journal.xlsx` exists
 
 Bounded paper-signal smoke:
@@ -93,7 +93,8 @@ Journal rebuild:
 python -X utf8 scripts\build_journal.py
 ```
 
-Observed: journal rebuilt; private OKX fills skipped by default.
+Observed: journal rebuilt; private OKX fills skipped by default. The workbook contains a
+`Paper Watch` sheet over the private derived paper-signal training export.
 
 ## Current Operational State
 
@@ -117,6 +118,30 @@ Observed: journal rebuilt; private OKX fills skipped by default.
 - Telegram is available as surface-only routing; it is not a decision authority.
 - Alibaba/scanner routing is configured, while Strategy Lab LLM governance remains disabled
   by default.
+
+## Follow-up Verification On 2026-06-27
+
+Latest checked state:
+
+- `operational_health`: `mode=paper_research_only`, `auto_trade=False`,
+  scanner LLM provider `alibaba`, paper Telegram not configured, scanner Telegram
+  configured.
+- Paper chain counts: `instructions=53`, `accepted=53`, `rejected=0`,
+  `queued=50`, `invalid_queue=0`, `observed=5`, `reviewed=5`,
+  `preview=20`, `invalid_preview=0`.
+- Paper signals: `total=652`, `armed=41`, `opened_paper=12`, `reviewed=599`.
+- PFR bridge: `records_loaded=53`, `passed_quality=43`, `rejected_quality=10`,
+  `unique_setups=11`, `risk_too_wide=26`.
+- Training export: `rows=599`, `terminal_only=true`, `paper_only=true`.
+- Excel journal: rebuilt with `python -X utf8 scripts/build_journal.py`; sheet
+  `Paper Watch` exists with 610 rows including the header.
+- Full bounded dry-run profile with `--run-worker --run-validation --run-paper
+  --run-paper-signals --pfr-db-path ...` exited with code 0 and showed
+  `worker=ON validation=ON paper=ON`, `paper_ready.ready=14`, and a non-empty
+  paper/PFR plan.
+
+This confirms the current one-loop paper/research chain is coherent. It does not change
+the live boundary: old `main.py` still is not the executor for farm/PFR instructions.
 
 ## Honest Gaps
 
