@@ -122,6 +122,21 @@ When `farm_loop --run-paper-signals` runs, paper signal selection priority is:
 This means PFR is a validated seed source, not the only source and not a live order
 authority.
 
+`operational_health` exposes the current mix as `paper_source_composition.v1`:
+
+- `paper_signals.by.source` shows whether rows came from the default live/paper lane
+  (`farm`) or optional validated farm seed lane (`pfr_farm`);
+- `paper_signals.by.setup_family` and `.by.timeframe` show what the current paper
+  watch population is actually made of;
+- `main_runtime_queue.by.runtime_action` must remain `watch_paper`;
+- `priority_min` / `priority_max` on the queue show the deterministic adapter priority
+  range after consumer validation;
+- `pfr_activation.requires_explicit_db_path = true`;
+- `execution_allowed = false`.
+
+This is the operator-facing proof that the paper runtime is fed by the intended
+source lanes and that old live `main.py` still has no ownership of the queue.
+
 ## Telegram And LLM
 
 Telegram is split into surfaces:
