@@ -154,6 +154,60 @@ def _contains_any(path: Path, needles: tuple[str, ...]) -> bool:
     return any(needle in text for needle in needles)
 
 
+_LEGACY_TEXT_MOJIBAKE_MARKERS = (
+    "\u0432\u0402",  # mojibake punctuation/dash marker.
+    "\u0432\u045a",
+    "\u0432\u045b",
+    "\u0440\u045f",  # mojibake emoji marker.
+    "\u0420\u045f",
+    "\u0420\u0452",
+    "\u0420\u2019",
+    "\u0420\u0405",
+    "\u00c3",
+    "\u00c2",
+    "\u00e5",
+    "\u00cf",
+)
+
+
+def _text_quality_metrics(paths: tuple[Path, ...]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "schema": "legacy_product_text_quality.v1",
+        "files_scanned": 0,
+        "files_with_markers": 0,
+        "marker_hits": 0,
+        "read_errors": 0,
+        "clean": True,
+        "items": [],
+        "non_claim": (
+            "This checks operator-facing legacy product text only. It does not check "
+            "paper-signal math, farm validation, or the canonical paper/PFR runtime."
+        ),
+    }
+    for path in paths:
+        item: dict[str, Any] = {"path": str(path), "exists": path.exists(), "marker_hits": 0, "read_error": ""}
+        if not path.exists():
+            metrics["items"].append(item)
+            continue
+        metrics["files_scanned"] += 1
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            item["read_error"] = type(exc).__name__
+            metrics["read_errors"] += 1
+            metrics["clean"] = False
+            metrics["items"].append(item)
+            continue
+        hits = sum(text.count(marker) for marker in _LEGACY_TEXT_MOJIBAKE_MARKERS)
+        item["marker_hits"] = hits
+        if hits:
+            metrics["files_with_markers"] += 1
+            metrics["marker_hits"] += hits
+            metrics["clean"] = False
+        metrics["items"].append(item)
+    return metrics
+
+
 def _scanner_llm_ready(scanner: dict[str, Any]) -> bool:
     provider = str(scanner.get("provider") or "").lower()
     if provider == "alibaba":
@@ -181,6 +235,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     surfaces = report["launch_surfaces"]
     telegram_flow = report["telegram_delivery_flow"]
     llm_boundaries = report["llm_surface_boundaries"]
+    legacy_text = report["legacy_product_text_quality"]
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -421,9 +476,20 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             "warn",
             "Manual chart/latest analyzers are product surfaces, not farm/PFR paper runtimes.",
             action=(
-                "Audit provider routing, Telegram text, and the double-gated auto_execute path before "
-                "reviving manual product delivery."
+                "Audit provider routing, clean legacy Telegram/product text, and keep the double-gated "
+                "auto_execute path before reviving manual product delivery."
             ),
+        ),
+        "legacy_product_text_quality": _gate(
+            "pass" if legacy_text["clean"] else "warn",
+            "Legacy product/Telegram operator text has no known mojibake markers."
+            if legacy_text["clean"]
+            else (
+                "Legacy product/Telegram operator text contains mojibake markers; "
+                "farm/PFR is unaffected, but product delivery is not ready."
+            ),
+            action="Clean or migrate legacy product text before using old Telegram/analyze_chart surfaces."
+            if not legacy_text["clean"] else "",
         ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
@@ -670,6 +736,16 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 "a separate prompt/provider audit before product revival."
             ),
         },
+        "legacy_product_text_quality": _text_quality_metrics(
+            (
+                llm_formatter,
+                llm_client,
+                analyze_chart,
+                run_latest_analysis,
+                telegram_bot,
+                ROOT / "scripts" / "auto_execute.py",
+            )
+        ),
         "strategy_lab_llm": {
             "enabled": os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
             "provider_name": getattr(provider, "name", "unknown"),
@@ -873,6 +949,7 @@ def _print_human(report: dict[str, Any]) -> None:
         f"yandex_key={llm['yandex_key_set']}"
     )
     llm_boundaries = report["llm_surface_boundaries"]
+    legacy_text = report["legacy_product_text_quality"]
     print(
         "llm_surface_boundaries: "
         f"scanner_router={llm_boundaries['scanner_provider_router']} "
@@ -884,6 +961,11 @@ def _print_human(report: dict[str, Any]) -> None:
         f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
         f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
         f"analyze_chart_send_default={llm_boundaries['analyze_chart_send_default']}"
+    )
+    print(
+        "legacy_product_text_quality: "
+        f"clean={legacy_text['clean']} files_with_markers={legacy_text['files_with_markers']} "
+        f"marker_hits={legacy_text['marker_hits']} read_errors={legacy_text['read_errors']}"
     )
     lab = report["strategy_lab_llm"]
     print(f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}")

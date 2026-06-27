@@ -141,6 +141,13 @@ chart analyzer is using Alibaba. The analyzer calls `generate_client_text`,
 `generate_premium_analysis`, and `generate_edu_text` in `llm_formatter`, so it needs a
 separate prompt/provider audit before product Telegram delivery is revived.
 
+Text boundary: `product_analyzer_prompt_integrity = pass` covers the core chart prompt,
+not every legacy operator-facing string. `operational_health` also exposes
+`legacy_product_text_quality`; it must remain `pass`. A warning there would mean old
+product/Telegram files contain mojibake markers. That warning would not invalidate the
+farm/PFR paper loop, but it would block treating `start.bat` / `scripts.telegram_bot` as
+a polished product surface.
+
 Manual product boundary: `scripts.analyze_chart` is a report/snapshot/chart generator
 with optional `--send-telegram`; it is off by default. `scripts.run_latest_analysis` is
 interactive and can lazy-import `scripts.auto_execute` after an ENTRY result only when
