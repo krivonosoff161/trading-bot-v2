@@ -64,6 +64,11 @@ Expected product-surface facts:
 - `product_analyzer_launch_contract.farm_pfr_runtime_uses_manual_product_stack = false`
 - `product_analyzer_launch_contract.old_main_consumes_paper_queue = false`
 - `product_analyzer_launch_contract.execution_allowed = false`
+- `product_analyzer_revival_checklist.schema = product_analyzer_revival_checklist.v1`
+- `product_analyzer_revival_checklist.status = review_required`
+- `product_analyzer_revival_checklist.canonical_paper_cycle_allowed = true`
+- `product_analyzer_revival_checklist.manual_product_alerts_allowed = false`
+- `product_analyzer_revival_checklist.live_execution_allowed = false`
 - `product_analyzer_launch_contract = pass`
 - `product_analyzer_prompt_integrity = pass`
 - `manual_product_analyzer_boundary = warn`
@@ -106,6 +111,31 @@ path is not confused with the canonical farm/PFR/paper loop:
 
 This contract is a blocker check, not a readiness claim for unattended product alerts.
 It only proves the old product surfaces remain isolated from the restored paper loop.
+
+## Revival Checklist
+
+`product_analyzer_revival_checklist.v1` is the compact operator-facing summary over
+the product/analyzer fields. It should read as follows:
+
+| Field | Expected | Meaning |
+|---|---:|---|
+| `canonical_paper_cycle_allowed` | `true` | The Strategy Lab farm/PFR/paper launcher can run without the old product analyzer. |
+| `manual_product_alerts_allowed` | `false` | Old manual analyzer/Telegram alerts are still review-required. |
+| `live_execution_allowed` | `false` | No old `main.py`/`auto_execute` reuse is authorized. |
+| `validated.text_cards_use_effective_shared_router` | `true` | Text-only cards are routed through the reviewed shared provider path by env or launcher. |
+| `validated.manual_latest_auto_execute_double_gated` | `true` | The legacy latest-analysis wrapper cannot reach old auto-execute without the extra opt-in. |
+| `validated.farm_pfr_does_not_use_manual_product_stack` | `true` | Farm/PFR paper does not import `start.bat`, `telegram_bot`, or `analyze_chart`. |
+
+The expected `remaining_review` list is deliberately non-empty:
+
+- `premium_vision_provider_and_prompt`;
+- `manual_telegram_card_text_and_chart_payload`;
+- `product_alert_rate_limit_and_dedup`;
+- `executor_contract_before_any_old_main_reuse`.
+
+This is not a launch blocker for the paper/research loop. It is the line that prevents
+the old product Telegram/analyzer stack from being mistaken for the current paper
+runtime.
 
 ## Why This Is Still Not The Unified Executor
 

@@ -117,6 +117,12 @@ Expected safe state:
   This proves `start.bat`, `scripts.analyze_chart`, and
   `scripts.run_latest_analysis` remain manual product surfaces, not the current
   farm/PFR paper runtime.
+- `product_analyzer_revival_checklist` is the compact next-step summary for that
+  same boundary. The expected paper-cycle state is
+  `canonical_paper_cycle_allowed = true`,
+  `manual_product_alerts_allowed = false`, and
+  `live_execution_allowed = false`. Its `remaining_review` list is the product
+  revival work, not a farm/PFR launch blocker.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.

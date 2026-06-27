@@ -199,6 +199,18 @@ The `telegram_delivery_ownership` readiness gate must stay `pass` before long pa
 runs. If it becomes blocked, someone blurred notification ownership and the run should
 stop until the boundary is restored.
 
+`product_analyzer_revival_checklist` is the high-level summary for the old manual
+product analyzer path. For the current paper/research loop it should show:
+
+- `canonical_paper_cycle_allowed = true`;
+- `manual_product_alerts_allowed = false`;
+- `live_execution_allowed = false`;
+- `remaining_review` still includes premium vision, manual Telegram card review,
+  rate-limit/dedup review, and a future executor contract.
+
+That checklist is intentionally not a Telegram enable switch. It confirms that
+farm/PFR can run while the old product/analyzer alert surface stays separated.
+
 ## Future Live Notification Rule
 
 If real paper alerts are enabled, they must remain the separate opt-in sender process or

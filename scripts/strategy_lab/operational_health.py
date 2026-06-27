@@ -829,6 +829,60 @@ def _build_operator_next_actions(readiness: dict[str, dict[str, str]]) -> dict[s
     }
 
 
+def _build_product_analyzer_revival_checklist(report: dict[str, Any]) -> dict[str, Any]:
+    """Derived checklist for reviving the manual product analyzer without blurring runtime ownership."""
+    llm = report["llm_surface_boundaries"]
+    analyzer = report["product_analyzer_boundary"]
+    launch = report["product_analyzer_launch_contract"]
+    text_path_ready = (
+        llm["telegram_chart_formatter_prompt_integrity"] is True
+        and llm["telegram_chart_formatter_mojibake_detected"] is False
+        and llm["telegram_chart_formatter_effective_shared_router"] is True
+        and llm["scanner_formatter_provider_mismatch"] is False
+    )
+    manual_surface_isolated = (
+        analyzer["analyze_chart_send_default"] is False
+        and analyzer["safe_for_farm_pfr_runtime"] is False
+        and launch["manual_latest_auto_execute_import_gated"] is True
+        and launch["farm_pfr_runtime_uses_manual_product_stack"] is False
+        and launch["old_main_consumes_paper_queue"] is False
+        and launch["telegram_send_default"] is False
+        and launch["execution_allowed"] is False
+    )
+    return {
+        "schema": "product_analyzer_revival_checklist.v1",
+        "status": "review_required",
+        "canonical_paper_cycle_allowed": text_path_ready and manual_surface_isolated,
+        "manual_product_alerts_allowed": False,
+        "live_execution_allowed": False,
+        "validated": {
+            "text_prompt_integrity": llm["telegram_chart_formatter_prompt_integrity"],
+            "text_prompt_no_mojibake": not llm["telegram_chart_formatter_mojibake_detected"],
+            "text_cards_use_effective_shared_router": llm["telegram_chart_formatter_effective_shared_router"],
+            "scanner_formatter_provider_aligned": not llm["scanner_formatter_provider_mismatch"],
+            "manual_chart_send_default_off": analyzer["analyze_chart_send_default"] is False,
+            "manual_latest_auto_execute_double_gated": launch["manual_latest_auto_execute_import_gated"],
+            "farm_pfr_does_not_use_manual_product_stack": launch["farm_pfr_runtime_uses_manual_product_stack"] is False,
+            "old_main_does_not_consume_paper_queue": launch["old_main_consumes_paper_queue"] is False,
+        },
+        "remaining_review": [
+            "premium_vision_provider_and_prompt",
+            "manual_telegram_card_text_and_chart_payload",
+            "product_alert_rate_limit_and_dedup",
+            "executor_contract_before_any_old_main_reuse",
+        ],
+        "allowed_next_step": (
+            "Keep using bat/strategy_lab_farm_full_cycle_loop.bat for farm/PFR/paper. "
+            "Review generated paper_telegram_preview cards and use paper_telegram_sender "
+            "dry-run before any explicit PAPER_CHAT_ID send."
+        ),
+        "non_claim": (
+            "This checklist proves isolation and review status only. It does not prove "
+            "trade edge, unattended Telegram readiness, or live execution safety."
+        ),
+    }
+
+
 def _main_bridge_status(
     *,
     instruction_view_exists: bool,
@@ -1347,6 +1401,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         runtime_queue_exists=bridge["runtime_queue_exists"],
         runtime_observation_exists=bridge["runtime_observation_exists"],
     )
+    report["product_analyzer_revival_checklist"] = _build_product_analyzer_revival_checklist(report)
     report["readiness"] = _build_readiness(report)
     report["operator_next_actions"] = _build_operator_next_actions(report["readiness"])
     return report
@@ -1468,6 +1523,15 @@ def _print_human(report: dict[str, Any]) -> None:
         f"launcher_shared_router={launch_contract['launcher_sets_shared_router']} "
         f"effective_shared_router={launch_contract['effective_shared_router']} "
         f"execution_allowed={launch_contract['execution_allowed']}"
+    )
+    revival = report["product_analyzer_revival_checklist"]
+    print(
+        "product_analyzer_revival_checklist: "
+        f"status={revival['status']} "
+        f"canonical_paper_cycle_allowed={revival['canonical_paper_cycle_allowed']} "
+        f"manual_product_alerts_allowed={revival['manual_product_alerts_allowed']} "
+        f"live_execution_allowed={revival['live_execution_allowed']} "
+        f"remaining_review={revival['remaining_review']}"
     )
     main_boundary = report["main_engine_boundary"]
     print(
