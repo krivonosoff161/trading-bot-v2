@@ -125,6 +125,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         telegram_flow["farm_core_sends_telegram"] is False
         and telegram_flow["paper_sends_telegram_by_default"] is False
         and telegram_flow["execution_authority"] is False
+        and telegram_flow["telegram_analyzer_current_for_farm"] is False
         and surfaces["scanner_runtime"]["current"] is True
         and surfaces["legacy_ws_scanner"]["current"] is False
     )
@@ -132,6 +133,13 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         surfaces["control_room"]["exists"]
         and surfaces["farm_full_cycle_loop"]["exists"]
         and surfaces["farm_full_cycle_stop"]["exists"]
+    )
+    legacy_loops = report["legacy_loop_boundaries"]
+    legacy_loops_guarded = (
+        legacy_loops["scanner_farm_loop_current"] is False
+        and legacy_loops["universe_farm_loop_current"] is False
+        and legacy_loops["scanner_farm_loop_has_abort_guard"]
+        and legacy_loops["universe_farm_loop_has_abort_guard"]
     )
     legacy_main_isolated = (
         surfaces["old_main_py"]["exists"]
@@ -147,6 +155,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         safety["auto_trade"]
         or not canonical_surface_ready
         or not legacy_main_isolated
+        or not legacy_loops_guarded
         or not telegram_ownership_ready
         or (lab_llm["enabled"] and not lab_llm["configured"])
     )
@@ -179,6 +188,13 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if legacy_main_isolated else "Old main runtime ownership is ambiguous.",
             action="Do not wire farm/PFR into main.py; use paper runtime observer."
             if not legacy_main_isolated else "",
+        ),
+        "legacy_loop_guards": _gate(
+            "pass" if legacy_loops_guarded else "blocked",
+            "Archived farm loops require explicit legacy acknowledgement; canonical loop is farm_loop."
+            if legacy_loops_guarded else "Archived farm loop guard is missing or ambiguous.",
+            action="Restore ARCHIVE-LEGACY abort guards and use scripts.strategy_lab.farm_loop."
+            if not legacy_loops_guarded else "",
         ),
         "pfr_source_available": _gate(
             "pass" if pfr["exists"] else "warn",
@@ -288,6 +304,11 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Keep Telegram as a surface; do not import it into farm compute or paper execution."
             if not telegram_ownership_ready else "",
         ),
+        "telegram_analyzer_execution_boundary": _gate(
+            "pass",
+            "Legacy Telegram analyzer is explicitly not the farm/PFR launcher; it still has an AUTO_TRADE-gated auto_execute hook.",
+            action="Do not use start.bat as a paper/PFR runtime. Use the control room or farm full-cycle loop.",
+        ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
             "Scanner LLM provider has a configured key."
@@ -357,6 +378,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     old_main = ROOT / "main.py"
+    telegram_bot = ROOT / "scripts" / "telegram_bot.py"
+    auto_execute = ROOT / "scripts" / "auto_execute.py"
+    scanner_farm_loop = ROOT / "scripts" / "strategy_lab" / "scanner_farm_loop.py"
+    universe_farm_loop = ROOT / "scripts" / "strategy_lab" / "universe_farm_loop.py"
     launch_surfaces = {
         "control_room": _surface(
             ROOT / "bat" / "strategy_lab_control_room.bat",
@@ -462,6 +487,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_preview_artifact": "state/derived/paper_telegram_preview.json",
             "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"]["exists"],
             "telegram_analyzer_surface": "start.bat / scripts.telegram_bot",
+            "telegram_analyzer_current_for_farm": False,
+            "telegram_analyzer_imports_auto_execute": _contains(telegram_bot, "scripts.auto_execute"),
+            "telegram_analyzer_auto_trade_guarded": _contains(auto_execute, "AUTO_TRADE"),
             "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"]["exists"],
             "scanner_provider_path": "src.utils.llm_client (LLM_PROVIDER: alibaba/yandex)",
             "chart_formatter_path": "src.utils.llm_formatter (Yandex chart formatter)",
@@ -486,6 +514,20 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 "paper path stops at the paper runtime observer and must not be wired "
                 "into old main.py without a new reviewed executor contract."
             ),
+        },
+        "legacy_loop_boundaries": {
+            "schema": "legacy_loop_boundaries.v1",
+            "scanner_farm_loop_current": False,
+            "scanner_farm_loop_has_abort_guard": (
+                _contains(scanner_farm_loop, "ARCHIVE-LEGACY")
+                and _contains(scanner_farm_loop, "i_understand_legacy")
+            ),
+            "universe_farm_loop_current": False,
+            "universe_farm_loop_has_abort_guard": (
+                _contains(universe_farm_loop, "ARCHIVE-LEGACY")
+                and _contains(universe_farm_loop, "i_understand_legacy")
+            ),
+            "canonical_replacement": "scripts.strategy_lab.farm_loop",
         },
         "journals": {
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
@@ -592,6 +634,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"farm_core_sends={delivery['farm_core_sends_telegram']} "
         f"paper_send_default={delivery['paper_sends_telegram_by_default']} "
         f"scanner_surface={delivery['scanner_surface_sends_to_subscribers']} "
+        f"tg_analyzer_farm={delivery['telegram_analyzer_current_for_farm']} "
+        f"tg_analyzer_auto_execute={delivery['telegram_analyzer_imports_auto_execute']} "
         f"legacy_ws_scanner_okx_client={delivery['legacy_ws_scanner_uses_okx_client']} "
         f"execution_authority={delivery['execution_authority']}"
     )
@@ -604,6 +648,14 @@ def _print_human(report: dict[str, Any]) -> None:
         f"consumes_farm_db={main_boundary['consumes_farm_tasks_db']} "
         f"consumes_paper_queue={main_boundary['consumes_main_paper_queue']} "
         f"safe_paper_executor={main_boundary['safe_to_use_as_paper_executor']}"
+    )
+    legacy_loops = report["legacy_loop_boundaries"]
+    print(
+        "legacy_loop_boundaries: "
+        f"scanner_current={legacy_loops['scanner_farm_loop_current']} "
+        f"scanner_guard={legacy_loops['scanner_farm_loop_has_abort_guard']} "
+        f"universe_current={legacy_loops['universe_farm_loop_current']} "
+        f"universe_guard={legacy_loops['universe_farm_loop_has_abort_guard']}"
     )
     print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
     bridge = report["main_bridge"]

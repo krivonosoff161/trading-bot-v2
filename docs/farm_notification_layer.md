@@ -36,7 +36,7 @@ that state. Notifications are an output edge, never an input to compute or money
 | Obsidian graph/reports | Implemented/partial | Read-only summaries and links. |
 | `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
-| `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher. |
+| `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy `AUTO_TRADE`-gated auto-execute hook exists. |
 | `ws_scanner.py` | Legacy/diagnostic | Imports OKX client; do not use as canonical farm path. |
 
 ## Paper Telegram Preview
@@ -74,6 +74,12 @@ The scanner/analyzer Telegram code remains separate from the farm:
 These paths can notify a human, but they must not enqueue farm tasks, consume PFR paper
 instructions, or execute orders.
 
+Important legacy boundary: `scripts/telegram_bot.py` still contains an
+`AUTO_TRADE`-gated `scripts.auto_execute` hook for the old product flow. Therefore
+`start.bat` must not be used as a Strategy Lab paper/PFR launcher. The current paper
+chain uses `paper_telegram_preview` first; any real Telegram send must be added later
+as a reviewed, opt-in read-only surface over derived paper artifacts.
+
 ## Machine-Checkable Invariant
 
 `python -m scripts.strategy_lab.operational_health` exposes
@@ -82,6 +88,9 @@ instructions, or execute orders.
 - `farm_core_sends_telegram = false`
 - `paper_sends_telegram_by_default = false`
 - `execution_authority = false`
+- `telegram_analyzer_current_for_farm = false`
+- `telegram_analyzer_imports_auto_execute = true`
+- `telegram_analyzer_auto_trade_guarded = true`
 - `scanner_surface_sends_to_subscribers = true` when the scanner surface exists
 - `legacy_ws_scanner_uses_okx_client = true` when the legacy scanner file exists
 

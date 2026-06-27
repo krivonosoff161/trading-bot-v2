@@ -49,7 +49,9 @@ Required operator facts:
 - `AUTO_TRADE = false`
 - `canonical_launch_surface = pass`
 - `legacy_live_runtime_isolated = pass`
+- `legacy_loop_guards = pass`
 - `telegram_delivery_ownership = pass`
+- `telegram_analyzer_execution_boundary = pass`
 - `ready_for_visible_paper_research_loop = pass` before a long unattended run
 
 ## Main Engine Boundary
@@ -105,7 +107,7 @@ Telegram is split into surfaces:
 
 - paper Telegram preview: offline card rendering, no network send by default;
 - scanner/news Telegram: operator context surface;
-- Telegram analyzer bot: separate product/analyzer surface;
+- Telegram analyzer bot: separate product/analyzer surface, not the farm runner;
 - legacy scanner: diagnostic/history only.
 
 LLM is also split:
@@ -115,6 +117,13 @@ LLM is also split:
 - `src.research_lab.llm_provider`: Strategy Lab proposal gate, disabled by default.
 
 None of these paths can promote a setup, bypass validation, or enable execution.
+
+Important legacy boundary: `scripts.telegram_bot` still imports
+`scripts.auto_execute` inside the old scanner loop. `scripts.auto_execute` is guarded by
+`AUTO_TRADE`, but it can set leverage and place OKX orders when that flag is enabled.
+Therefore `start.bat` is execution-adjacent and must not be used as the Strategy Lab
+paper/PFR launcher. The current paper alert path remains `paper_telegram_preview`,
+which writes offline artifacts first.
 
 ## Journal And Training Data
 
@@ -148,7 +157,11 @@ are not the canonical farm/PFR/paper loop:
 - `scripts/strategy_lab/scanner_farm_loop.py`
 - `scripts/strategy_lab/universe_farm_loop.py`
 
-Do not delete them until imports, docs, and tests prove retirement is safe.
+`scanner_farm_loop.py` and `universe_farm_loop.py` are protected by explicit
+`ARCHIVE-LEGACY` abort guards and require `--i-understand-legacy` to run. The
+canonical replacement is `scripts.strategy_lab.farm_loop`.
+
+Do not delete legacy paths until imports, docs, and tests prove retirement is safe.
 
 ## Remaining Recovery Work
 

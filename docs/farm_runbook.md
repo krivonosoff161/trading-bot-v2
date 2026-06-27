@@ -35,7 +35,9 @@ Expected safe state:
 - `telegram_delivery_flow` records notification ownership. It must report
   `farm_core_sends_telegram = false`, `paper_sends_telegram_by_default = false`, and
   `execution_authority = false`. Scanner/Telegram surfaces may exist, but they are not
-  farm/PFR executors.
+  farm/PFR executors. It should also show
+  `telegram_analyzer_current_for_farm = false`; the old Telegram analyzer is
+  execution-adjacent because it still has an `AUTO_TRADE`-gated `auto_execute` hook.
 - `main_engine_boundary` records why old `main.py` is isolated. It should show
   `order_capable = true`, `sets_leverage = true`, `imports_private_okx_client = true`,
   `consumes_main_paper_queue = false`, and `safe_to_use_as_paper_executor = false`.
@@ -43,11 +45,16 @@ Expected safe state:
 - `readiness` gates show what is runnable, optional, or intentionally planned:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,
-  journals, and the explicit `main_runtime_consumer = planned` boundary.
+  journals, archived-loop guards, and the explicit `main_runtime_consumer = planned`
+  boundary.
 - `canonical_launch_surface = pass` and `legacy_live_runtime_isolated = pass` are
   required before treating the operator picture as clean.
+- `legacy_loop_guards = pass` is required; archived `scanner_farm_loop` and
+  `universe_farm_loop` must keep their explicit legacy acknowledgement guard.
 - `telegram_delivery_ownership = pass` is required before treating notifications as
   cleanly separated from farm execution.
+- `telegram_analyzer_execution_boundary = pass` is required before treating
+  `start.bat` as safely isolated from the Strategy Lab paper/PFR cycle.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.

@@ -20,6 +20,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
     assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
+    assert report["readiness"]["legacy_loop_guards"]["status"] == "pass"
     assert report["launch_surfaces"]["control_room"]["current"] is True
     assert report["launch_surfaces"]["farm_full_cycle_loop"]["current"] is True
     assert report["launch_surfaces"]["old_main_py"]["current"] is False
@@ -29,6 +30,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["telegram_delivery_flow"]["farm_core_sends_telegram"] is False
     assert report["telegram_delivery_flow"]["paper_sends_telegram_by_default"] is False
     assert report["telegram_delivery_flow"]["execution_authority"] is False
+    assert report["telegram_delivery_flow"]["telegram_analyzer_current_for_farm"] is False
+    assert report["telegram_delivery_flow"]["telegram_analyzer_imports_auto_execute"] is True
+    assert report["telegram_delivery_flow"]["telegram_analyzer_auto_trade_guarded"] is True
     main_boundary = report["main_engine_boundary"]
     assert main_boundary["order_capable"] is True
     assert main_boundary["sets_leverage"] is True
@@ -100,8 +104,14 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert "PFR database seeding, bounded and scanned after live movers" in flow["selection_priority"]
     assert flow["old_main_py_consumes_farm_pfr"] is False
     assert report["main_engine_boundary"]["replacement_path"] == "src.research_lab.main_paper_runtime"
+    assert report["legacy_loop_boundaries"]["scanner_farm_loop_current"] is False
+    assert report["legacy_loop_boundaries"]["scanner_farm_loop_has_abort_guard"] is True
+    assert report["legacy_loop_boundaries"]["universe_farm_loop_current"] is False
+    assert report["legacy_loop_boundaries"]["universe_farm_loop_has_abort_guard"] is True
+    assert report["legacy_loop_boundaries"]["canonical_replacement"] == "scripts.strategy_lab.farm_loop"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
     assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
+    assert report["readiness"]["legacy_loop_guards"]["status"] == "pass"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
 
 
@@ -115,12 +125,16 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert delivery["farm_core_sends_telegram"] is False
     assert delivery["paper_sends_telegram_by_default"] is False
     assert delivery["scanner_surface_sends_to_subscribers"] is True
+    assert delivery["telegram_analyzer_current_for_farm"] is False
+    assert delivery["telegram_analyzer_imports_auto_execute"] is True
+    assert delivery["telegram_analyzer_auto_trade_guarded"] is True
     assert delivery["legacy_ws_scanner_uses_okx_client"] is True
     assert delivery["secrets_printed"] is False
     assert delivery["execution_authority"] is False
     assert "llm_client" in delivery["scanner_provider_path"]
     assert "llm_formatter" in delivery["chart_formatter_path"]
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
+    assert report["readiness"]["telegram_analyzer_execution_boundary"]["status"] == "pass"
 
 
 def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch):
