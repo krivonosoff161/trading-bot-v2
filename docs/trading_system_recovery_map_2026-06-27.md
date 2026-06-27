@@ -218,6 +218,9 @@ product Telegram delivery is ready for unattended operation.
 Detailed product-surface audit:
 [`product_analyzer_revival_audit_2026-06-27.md`](product_analyzer_revival_audit_2026-06-27.md).
 
+Latest bounded farm/PFR/paper smoke:
+[`farm_paper_cycle_smoke_2026-06-27.md`](farm_paper_cycle_smoke_2026-06-27.md).
+
 ## Journal And Training Data
 
 The current training/reporting path is:
