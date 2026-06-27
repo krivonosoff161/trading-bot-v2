@@ -1,63 +1,100 @@
-# Farm Visibility & Notification Layer — design (Telegram NOT connected)
+# Farm Visibility And Notification Layer
 
-Status: **DESIGN / DEFERRED** · Last updated: 2026-06-18
+Status: **ACTIVE / GUARDED SURFACE**. Last updated: 2026-06-27.
 
-This is a design note only. **No Telegram credentials are wired and no real messages are
-sent.** Telegram returns later as a *notification layer*, never as part of the calculation
-core. Implementation requires an explicit, separate operator command. Paper/research only.
+The farm has visibility surfaces today, but Telegram is still not part of the
+calculation or execution path. This document separates three things that are easy to
+confuse:
+
+- **Farm core:** `farm_loop` computes, validates, observes paper signals, and writes
+  artifacts. It does not send Telegram messages.
+- **Paper preview:** `paper_telegram_preview` renders offline operator cards from
+  accepted paper instructions. It does not call Telegram and does not read tokens.
+- **Product/scanner surfaces:** `start.bat` / `scripts.telegram_bot` and
+  `scripts/ws/ws_main_screener.py` are separate operator notification or analyzer
+  surfaces. They are not the owner of the farm/PFR/paper lifecycle.
 
 ## Principle
 
-The farm's structured state (`farm_tasks.sqlite` + `logs/farm/*.jsonl`) is the source of
-truth. Every surface below is a **read-only consumer** of that state. Notifications are an
-output edge, not an input to compute or money.
+The farm's structured state is the source of truth:
 
-## 1. Dashboard (already reads lifecycle)
+- `state/farm_tasks.sqlite`
+- `state/strategy_lab.sqlite`
+- `state/derived/paper_signals*.json*`
+- `state/derived/main_paper_*.json*`
+- `state/derived/paper_telegram_preview.json`
+- `logs/farm/*.jsonl`
 
-`farm_cockpit.build_cockpit` (v2) already exposes a `lifecycle` section from
-`farm_tasks.sqlite`: `by_state`, `by_task_type`, `blocked_reasons`, `deferred_reasons`,
-`intake_unconsumed`, `calcs_completed_today`, `unique_candidates`, `validation`
-(hard_status), `export_followups`, plus the GPU/CPU split and a `live_trading:false`
-banner. The web dashboard / `farm_status_report` render this. Future polish: a small
-time-series from `cycle_log.jsonl` (throughput, blocked-over-time) — read-only, no new
-write path.
+Every dashboard, graph, report, or Telegram-facing artifact is a read-only consumer of
+that state. Notifications are an output edge, never an input to compute or money.
 
-## 2. Obsidian (meaningful summaries, not raw cycles)
+## Current Surfaces
 
-`farm_obsidian` should publish *semantic* notes, not raw cycle dumps:
-- per promoted / validated unique candidate (one note, updated on re-arm),
-- a rolling "farm state" note (latest cycle pivot, blocked/deferred reasons, calcs today),
-- a "data gaps" note (NEEDS_OI/FLOW/MICRO counts + which symbols).
-Source = `unique_candidates` + the latest `cycle_log.jsonl` row + `status_counts()`. It must
-summarize, never append a note per cycle (that would be log spam in note form).
-
-## 3. Telegram (future notification layer — design only)
-
-When (and only when) explicitly enabled by a separate command, a notifier reads farm state
-and emits **alerts a human should act on**:
-
-| Trigger | Source | Example |
+| Surface | Status | Authority |
 |---|---|---|
-| Promoted candidate | `unique_candidates.validation_status = FORWARD_PAPER` | "BTC-USDT-SWAP 1h momentum_breakout → FORWARD_PAPER" |
-| Validation verdict | `unique_candidates.hard_status` | "PAPER_FORWARD_READY / FAILED_OOS …" |
-| Blocked data requirement | `blocked_reasons` (e.g. NEEDS_MICRO_DATA persistent) | "3 families blocked: NEEDS_MICRO_DATA (no provider)" |
-| Error needing action | `logs/farm/errors.jsonl` | "worker error: …" |
-| Loop health | `cycle_log.jsonl` (no progress for N cycles / pivot=blocked) | "farm idle: blocked:no_eligible_tasks for 2h" |
+| `farm_status_report` / dashboard | Implemented | Read-only status. |
+| Obsidian graph/reports | Implemented/partial | Read-only summaries and links. |
+| `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
+| `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
+| `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher. |
+| `ws_scanner.py` | Legacy/diagnostic | Imports OKX client; do not use as canonical farm path. |
 
-### Hard constraints for the future implementation
+## Paper Telegram Preview
 
-- Telegram is a **separate process / opt-in flag**, reading farm state files — it is NOT
-  imported by `farm_coordinator` / `farm_tasks_db` / the compute path.
-- Credentials come from the existing `src/utils/telegram.py` env path **only when the
-  operator turns it on**; until then this doc is the only artifact.
-- Notifier is **read-only** on farm state; it never mutates tasks, queues, or candidates,
-  and has no order/`.env`/`AUTO_TRADE` access.
-- Rate-limited / deduped (one alert per state change, mirror the cycle-log change
-  signature) so it does not spam.
+`paper_telegram_preview` reads accepted paper instructions after the chain:
 
-## Status
+```text
+farm_loop --run-paper-signals
+  -> main_paper_bridge
+  -> main_paper_consumer
+  -> main_paper_runtime_adapter
+  -> main_paper_runtime
+  -> paper_telegram_preview
+```
 
-- Dashboard lifecycle: **implemented** (cockpit v2).
-- Obsidian semantic summaries: **partial** (`farm_obsidian` exists for farm_results;
-  task-lifecycle / unique-candidate notes are a follow-up).
-- Telegram notifier: **DEFERRED** — design only, not built, no creds wired.
+The preview validates operator-card text and writes:
+
+- `state/derived/paper_telegram_preview.jsonl`
+- `state/derived/paper_telegram_preview.json`
+
+It does not send a network request. It also does not promote a signal, mutate a queue, or
+enable execution.
+
+## Scanner And Analyzer Telegram
+
+The scanner/analyzer Telegram code remains separate from the farm:
+
+- `src.utils.llm_client` routes scanner/advisory LLM calls through `LLM_PROVIDER`
+  (`alibaba` or `yandex`) and role-specific models.
+- `src.utils.llm_formatter` is the chart/text formatter path used by the older
+  Telegram analyzer surface.
+- `src.utils.telegram` owns token/chat lookup and message sending for surfaces that are
+  explicitly started by the operator.
+
+These paths can notify a human, but they must not enqueue farm tasks, consume PFR paper
+instructions, or execute orders.
+
+## Machine-Checkable Invariant
+
+`python -m scripts.strategy_lab.operational_health` exposes
+`telegram_delivery_flow`:
+
+- `farm_core_sends_telegram = false`
+- `paper_sends_telegram_by_default = false`
+- `execution_authority = false`
+- `scanner_surface_sends_to_subscribers = true` when the scanner surface exists
+- `legacy_ws_scanner_uses_okx_client = true` when the legacy scanner file exists
+
+The `telegram_delivery_ownership` readiness gate must stay `pass` before long paper/farm
+runs. If it becomes blocked, someone blurred notification ownership and the run should
+stop until the boundary is restored.
+
+## Future Live Notification Rule
+
+If real paper alerts are enabled later, they must remain a separate opt-in process or
+flag:
+
+- read-only over derived farm/paper artifacts;
+- rate-limited and deduped;
+- no `.env` writes, no `AUTO_TRADE`, no private account endpoints, no order calls;
+- one alert per state change, not one alert per loop tick.

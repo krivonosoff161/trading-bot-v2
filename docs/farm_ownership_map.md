@@ -36,6 +36,8 @@ farm permission to touch the old money path.
 | `bat\strategy_lab_start.bat` | **LEGACY LAB WRAPPER** | Older standalone queue/dashboard/worker start. Kept for diagnostics; not the canonical farm/PFR/paper loop. |
 | `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`. |
 | `start_all.bat` | **LEGACY/FROZEN PRODUCT STACK** | Historical multi-window scanner/engine launcher. Do not use as the current farm/PFR/paper control path. |
+| `scripts/ws/ws_main_screener.py` | **SEPARATE SCANNER SURFACE** | Public-market scanner + Telegram/LLM reporting surface. It can notify humans, but it is not the farm trigger owner and not a farm/PFR executor. |
+| `scripts/ws/ws_scanner.py` | **LEGACY / DIAGNOSTIC** | Older scanner surface that imports the OKX client. Keep out of the canonical farm/PFR/paper path. |
 
 ## Main Engine Boundary
 
@@ -55,6 +57,9 @@ this map. Before a long run, it must show:
 - `paper_data_flow.current_owner = scripts.strategy_lab.farm_loop with --run-paper-signals`;
 - `paper_data_flow.old_main_py_consumes_farm_pfr = false`;
 - `paper_data_flow.execution_allowed = false`.
+- `telegram_delivery_flow.farm_core_sends_telegram = false`;
+- `telegram_delivery_flow.paper_sends_telegram_by_default = false`;
+- `readiness.telegram_delivery_ownership = pass`.
 
 Forbidden as farm imports:
 
@@ -67,6 +72,29 @@ Forbidden as farm imports:
 - `.env` / config money path
 
 This is enforced by the farm boundary tests.
+
+## Telegram And LLM Surface Boundary
+
+Telegram is split into operator surfaces, not a single trading brain:
+
+| Surface | Role | Farm authority |
+|---|---|---|
+| `paper_telegram_preview` | Offline cards from accepted paper instructions | None; no network send by default |
+| `scripts/ws/ws_main_screener.py` | Scanner/news/Telegram intake and reporting | None; upstream context only |
+| `start.bat` / `scripts.telegram_bot` | Product/analyzer bot surface | None; not Strategy Lab farm |
+| `scripts/ws/ws_scanner.py` | Legacy scanner path using the OKX client | None; diagnostic/history only |
+
+LLM ownership is also split:
+
+- `src.utils.llm_client` is the scanner/advisory provider router
+  (`LLM_PROVIDER=alibaba|yandex`, role-specific models).
+- `src.utils.llm_formatter` is the chart/text formatter route used by the older
+  Telegram analyzer surface.
+- `src.research_lab.llm_provider` is the Strategy Lab advisory provider gate, disabled
+  by default unless `STRATEGY_LAB_LLM_ENABLED` is set and configured.
+
+None of these LLM/Telegram surfaces can promote a setup, bypass PFR validation, or enable
+orders. The machine-check is `telegram_delivery_flow` in `operational_health`.
 
 ## Strategy Logic: Closed Engine, Open Hypothesis
 
