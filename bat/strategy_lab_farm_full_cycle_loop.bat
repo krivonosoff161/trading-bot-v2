@@ -28,6 +28,7 @@ if "%STRATEGY_LAB_FARM_PROVIDER%"=="" set "STRATEGY_LAB_FARM_PROVIDER=okx-public
 if "%STRATEGY_LAB_PFR_DB_PATH%"=="" set "STRATEGY_LAB_PFR_DB_PATH=%TRADING_BOT_RESEARCH_ROOT%\state\strategy_lab.sqlite"
 if "%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20"
 if "%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN=30"
+if "%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2"
 if "%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT=10"
 if "%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%"=="" set "STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT=50"
 
@@ -57,7 +58,7 @@ echo  pfr_db      : %STRATEGY_LAB_PFR_DB_PATH%
 echo  sleep       : %STRATEGY_LAB_FARM_SLEEP_SECONDS%s
 echo  mode        : %STRATEGY_LAB_FARM_MODE_ARG% %STRATEGY_LAB_FARM_RUN_ARG%
 echo  caps        : prepares=%STRATEGY_LAB_FARM_MAX_PREPARES% enrich=%STRATEGY_LAB_FARM_MAX_ENRICH% sweeps=%STRATEGY_LAB_FARM_MAX_SWEEPS% worker=%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%
-echo  paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE% pfr_scan=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN% runtime=%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%
+echo  paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE% pfr_scan=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN% pfr_reserved=%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED% runtime=%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%
 echo  safety      : paper-only; public OKX; no orders / .env / AUTO_TRADE / private endpoints / Telegram
 echo ============================================
 echo.
@@ -72,7 +73,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$env:PYTHONWARNINGS='ignore:CUDA path could not be detected:UserWarning';" ^
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8;" ^
   "$env:TRADING_BOT_RESEARCH_ROOT='%TRADING_BOT_RESEARCH_ROOT%';" ^
-  "$cmd = @('-X','utf8','-u','-m','scripts.strategy_lab.farm_loop','%STRATEGY_LAB_FARM_RUN_ARG%','%STRATEGY_LAB_FARM_MODE_ARG%','--run-worker','--run-validation','--run-paper','--run-paper-signals','--enrich-funding','--enrich-oi','--backend','%STRATEGY_LAB_FARM_BACKEND%','--provider','%STRATEGY_LAB_FARM_PROVIDER%','--pfr-db-path','%STRATEGY_LAB_PFR_DB_PATH%','--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%','--paper-signals-max-pfr-scan','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%','--paper-signals-fetch-timeout','%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%','--main-paper-runtime-limit','%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%','--max-plan-events','%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%','--max-prepares','%STRATEGY_LAB_FARM_MAX_PREPARES%','--max-enrich','%STRATEGY_LAB_FARM_MAX_ENRICH%','--max-sweeps','%STRATEGY_LAB_FARM_MAX_SWEEPS%','--max-worker-jobs','%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%','--max-paper-cards','%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%','--data-days','%STRATEGY_LAB_FARM_DATA_DAYS%','--sleep-seconds','%STRATEGY_LAB_FARM_SLEEP_SECONDS%','--stop-file','%STOP_FILE%','--private-root','%TRADING_BOT_RESEARCH_ROOT%','--night-mode','%STRATEGY_LAB_FARM_QUIET_ARG%') | Where-Object { $_ -ne '' };" ^
+  "$cmd = @('-X','utf8','-u','-m','scripts.strategy_lab.farm_loop','%STRATEGY_LAB_FARM_RUN_ARG%','%STRATEGY_LAB_FARM_MODE_ARG%','--run-worker','--run-validation','--run-paper','--run-paper-signals','--enrich-funding','--enrich-oi','--backend','%STRATEGY_LAB_FARM_BACKEND%','--provider','%STRATEGY_LAB_FARM_PROVIDER%','--pfr-db-path','%STRATEGY_LAB_PFR_DB_PATH%','--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%','--paper-signals-max-pfr-scan','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%','--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%','--paper-signals-fetch-timeout','%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%','--main-paper-runtime-limit','%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%','--max-plan-events','%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%','--max-prepares','%STRATEGY_LAB_FARM_MAX_PREPARES%','--max-enrich','%STRATEGY_LAB_FARM_MAX_ENRICH%','--max-sweeps','%STRATEGY_LAB_FARM_MAX_SWEEPS%','--max-worker-jobs','%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%','--max-paper-cards','%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%','--data-days','%STRATEGY_LAB_FARM_DATA_DAYS%','--sleep-seconds','%STRATEGY_LAB_FARM_SLEEP_SECONDS%','--stop-file','%STOP_FILE%','--private-root','%TRADING_BOT_RESEARCH_ROOT%','--night-mode','%STRATEGY_LAB_FARM_QUIET_ARG%') | Where-Object { $_ -ne '' };" ^
   "& python @cmd 2>&1 | Tee-Object -FilePath '%LOG_FILE%' -Append;" ^
   "exit $LASTEXITCODE"
 

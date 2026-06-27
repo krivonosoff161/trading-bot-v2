@@ -125,6 +125,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               families_arg=None, pfr_db_path: Path | None = None,
               pfr_quality_policy: dict | None = None,
               max_pfr_scan: int = 30,
+              pfr_reserved_new: int = 0,
               max_observe: int | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
     if provider is None:
@@ -180,18 +181,24 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         elif apply:
             store.update_signal(private_root, s)
 
+    max_new = max(0, int(max_new))
+    pfr_reserved = 0
+    if pfr_db_path is not None:
+        pfr_reserved = min(max_new, max(0, int(pfr_reserved_new)))
+    live_new_cap = max(0, max_new - pfr_reserved)
+
     # (2) generate new, deduplicated -- over the MEMORY-RANKED live-mover universe (search layer)
     movers = rank_movers(_load_movers(private_root), mem, known_bad)
     if apply:
         write_selection_snapshot(private_root, movers)
     new_sigs = []
     for mv in movers:
-        if len(new_sigs) >= max_new:
+        if len(new_sigs) >= live_new_cap:
             break
         inst = str(mv.get("inst_id") or "")
         symbol = str(mv.get("symbol") or inst.replace("-", "_"))
         for tf in timeframes:
-            if len(new_sigs) >= max_new:
+            if len(new_sigs) >= live_new_cap:
                 break
             candles = _fetch(provider, symbol, tf, now_ms)
             if not candles:
@@ -213,7 +220,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 continue
             for sig, fam in families.generate(symbol, inst, tf, decide, mover=mv, now=now,
                                               boundary_ts=boundary_ts, mode=mode, families=fam_order):
-                if len(new_sigs) >= max_new:
+                if len(new_sigs) >= live_new_cap:
                     break
                 if sig.dedup_key in by_key_active:
                     gate_counts["dedup_active"] = gate_counts.get("dedup_active", 0) + 1
@@ -236,6 +243,8 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     # (3) PFR lane - bounded separate source, runs after movers so dedup is shared
     pfr_counts: dict[str, int] = {}
     if pfr_db_path is not None and len(new_sigs) < max_new:
+        if pfr_reserved:
+            pfr_counts["pfr_reserved_slots"] = pfr_reserved
         all_pfr = pfr_bridge.load_pfr_records(pfr_db_path)
         passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
             all_pfr, policy=pfr_quality_policy
@@ -387,6 +396,7 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
              apply: bool = True, lock_file: str | Path | None = None,
              pfr_db_path: Path | None = None, pfr_quality_policy: dict | None = None,
              max_pfr_scan: int = 30,
+             pfr_reserved_new: int = 0,
              max_observe: int | None = None) -> list[dict]:
     private_root = Path(private_root)
     lock_path = Path(lock_file) if lock_file else private_root / "state" / "paper_signals_loop.lock"
@@ -409,6 +419,7 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
                                      pfr_db_path=pfr_db_path,
                                      pfr_quality_policy=pfr_quality_policy,
                                      max_pfr_scan=max_pfr_scan,
+                                     pfr_reserved_new=pfr_reserved_new,
                                      max_observe=max_observe))
             lock_path.write_text(str(time.time()), encoding="utf-8")
             if sleep_seconds and i < cycles - 1:
