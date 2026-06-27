@@ -21,6 +21,7 @@ public OKX discovery / scanner-watch context
   -> main_paper_runtime_adapter watch_paper queue
   -> main_paper_runtime public-candle observer
   -> paper_telegram_preview offline cards
+  -> paper_telegram_sender dry-run delivery audit
   -> paper_signal_training export
   -> scripts/journal.xlsx Paper Watch sheet
 ```
@@ -142,6 +143,8 @@ source lanes and that old live `main.py` still has no ownership of the queue.
 Telegram is split into surfaces:
 
 - paper Telegram preview: offline card rendering, no network send by default;
+- paper Telegram delivery audit: dry-run over preview cards during the canonical
+  farm cycle; network delivery still requires the separate explicit `--send` command;
 - scanner/news Telegram: operator context surface;
 - Telegram analyzer bot: separate product/analyzer surface, not the farm runner;
 - legacy scanner: diagnostic/history only.
@@ -160,8 +163,9 @@ Important legacy boundary: `scripts.telegram_bot` can still import
 opt-in `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1`; `AUTO_TRADE` is then checked as the second
 guard. `scripts.auto_execute` can set leverage and place OKX orders when enabled, so
 `start.bat` is still execution-adjacent and must not be used as the Strategy Lab
-paper/PFR launcher. The current paper alert path remains `paper_telegram_preview`,
-which writes offline artifacts first.
+paper/PFR launcher. The current paper alert path remains `paper_telegram_preview`
+followed by a dry-run `paper_telegram_sender` audit over the preview artifacts.
+This keeps delivery status current without sending Telegram messages.
 
 Provider boundary: a green Alibaba scanner/advisory path is not proof that the Telegram
 chart analyzer is using Alibaba. The analyzer calls `generate_client_text`,

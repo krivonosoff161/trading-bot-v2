@@ -109,10 +109,11 @@ Expected safe state:
 - `paper_telegram_sender_available` is optional for compute but useful before operator
   alerting. It is a dry-run audit over already validated preview cards unless the
   operator explicitly adds `--send`; it must use `PAPER_CHAT_ID`, never the default
-  scanner/product chat. If `paper_telegram_delivery.json` is older than
-  `paper_telegram_preview.json`, the gate stays `warn`; rerun
-  `python -m scripts.strategy_lab.paper_telegram_sender` before treating alert delivery
-  status as current.
+  scanner/product chat. The canonical `farm_loop --run-paper-signals` path refreshes
+  this dry-run audit immediately after preview generation. If
+  `paper_telegram_delivery.json` is still older than `paper_telegram_preview.json`,
+  rerun `python -m scripts.strategy_lab.paper_telegram_sender` before treating alert
+  delivery status as current.
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
@@ -349,6 +350,9 @@ follow-up analysis.
 - after the runtime observation, `src.research_lab.paper_telegram_preview` builds offline
   Telegram-card previews and validates message length, HTML escaping, and execution
   disclaimers without sending anything.
+- after preview generation, `src.research_lab.paper_telegram_sender` runs in dry-run
+  audit mode so `paper_telegram_delivery.json` stays current without importing Telegram
+  credentials or sending network messages.
 
 ### Main-Paper Authority Map
 
@@ -366,14 +370,16 @@ The current farm-to-main path is deliberately paper-only:
    pending, no-data, or provider-error outcomes.
 7. `paper_telegram_preview` renders offline operator cards; it does not send Telegram
    messages.
+8. `paper_telegram_sender` dry-runs the preview delivery audit; it does not send unless
+   the operator runs the separate CLI with `--send`.
 
 Telegram/analyzer ownership is intentionally separate:
 
 - `paper_telegram_preview` is the only current Strategy Lab paper Telegram artifact, and
   it is offline preview-only by default.
 - `paper_telegram_sender` is the only current Strategy Lab paper Telegram delivery
-  command. It reads the preview artifact, dry-runs by default, and sends only with
-  explicit `--send` plus `PAPER_CHAT_ID`.
+  command. It reads the preview artifact, dry-runs by default inside the canonical
+  farm loop, and sends only with explicit `--send` plus `PAPER_CHAT_ID`.
 - `ws_main_screener.py` and `start.bat` can be audited as operator/analyzer surfaces, but
   they are not the paper runtime and not the farm trigger owner.
 - `ws_scanner.py` is legacy/diagnostic because it imports the OKX client; do not use it
