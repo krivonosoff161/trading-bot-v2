@@ -29,7 +29,15 @@ Expected product-surface facts:
 - `telegram_chart_formatter_prompt_integrity = true`
 - `telegram_chart_formatter_mojibake_detected = false`
 - `telegram_chart_formatter_provider = yandex_only`
+- `telegram_chart_formatter_status.schema = llm_formatter_provider.v1`
+- `telegram_chart_formatter_status.provider = yandex`
+- `telegram_chart_formatter_status.configured = true/false` depending on local
+  `YANDEX_API_KEY` and `YANDEX_FOLDER_ID`
+- `telegram_chart_formatter_status.model_label` is sanitized and must not expose the
+  Yandex folder id or key values
 - `telegram_chart_formatter_uses_llm_provider_env = false`
+- `scanner_formatter_provider_mismatch = true` when `LLM_PROVIDER=alibaba` but the
+  legacy chart formatter still uses the Yandex-only path
 - `analyze_chart_send_default = false`
 - `run_latest_analysis_imports_auto_execute = true`
 - `run_latest_analysis_auto_trade_guarded = true`
@@ -68,7 +76,9 @@ Therefore they must not consume farm/PFR paper instructions directly.
    `python -m scripts.strategy_lab.paper_telegram_sender --send`. It uses `PAPER_CHAT_ID`
    and does not fall back to scanner/default chats.
 5. Decide whether `llm_formatter` remains Yandex-only or becomes an adapter over the
-   shared `llm_client` provider router. Do this as a separate change with tests.
+   shared `llm_client` provider router. Do this as a separate change with tests. The
+   current health report exposes this as sanitized provider metadata, not as an implicit
+   migration.
 6. Keep `run_latest_analysis`, `scripts.telegram_bot`, and `auto_execute` out of the farm
    launch path until a new executor contract exists and has its own paper-first
    validation. The current manual wrapper requires

@@ -29,6 +29,7 @@ except Exception:
 
 from src.research_lab.llm_provider import load_provider  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
+from src.utils.llm_formatter import formatter_provider_status  # noqa: E402
 from src.utils.telegram import telegram_status  # noqa: E402
 
 
@@ -528,6 +529,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     llm_formatter = ROOT / "src" / "utils" / "llm_formatter.py"
     analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
+    llm_formatter_status = formatter_provider_status()
     llm_formatter_prompt_markers = (
         "\u0422\u044b \u2014 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a",
         "\U0001f4ca \u0421\u0415\u0419\u0427\u0410\u0421 \u041d\u0410 \u0420\u042b\u041d\u041a\u0415",
@@ -635,11 +637,17 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "scanner_uses_llm_provider_env": _contains(llm_client, "LLM_PROVIDER"),
             "scanner_supports_alibaba": _contains(llm_client, "ALIBABA_API_KEY"),
             "telegram_chart_formatter": "src.utils.llm_formatter",
-            "telegram_chart_formatter_provider": "yandex_only",
-            "telegram_chart_formatter_uses_llm_provider_env": _contains(llm_formatter, "LLM_PROVIDER"),
-            "telegram_chart_formatter_uses_budget_guard": _contains(llm_formatter, "llm_budget_guard"),
+            "telegram_chart_formatter_provider": llm_formatter_status["provider_scope"],
+            "telegram_chart_formatter_status": llm_formatter_status,
+            "telegram_chart_formatter_configured": llm_formatter_status["configured"],
+            "telegram_chart_formatter_uses_llm_provider_env": llm_formatter_status["follows_llm_provider_env"],
+            "telegram_chart_formatter_uses_budget_guard": llm_formatter_status["budget_guard"],
             "telegram_chart_formatter_prompt_integrity": _contains_all(llm_formatter, llm_formatter_prompt_markers),
             "telegram_chart_formatter_mojibake_detected": _contains_any(llm_formatter, mojibake_markers),
+            "scanner_formatter_provider_mismatch": (
+                os.getenv("LLM_PROVIDER", "yandex").strip().lower()
+                != llm_formatter_status["provider"]
+            ),
             "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
             "analyze_chart_send_default": False,
             "strategy_lab_llm_separate_provider": "src.research_lab.llm_provider",
@@ -858,7 +866,9 @@ def _print_human(report: dict[str, Any]) -> None:
         f"scanner_router={llm_boundaries['scanner_provider_router']} "
         f"scanner_alibaba={llm_boundaries['scanner_supports_alibaba']} "
         f"telegram_formatter_provider={llm_boundaries['telegram_chart_formatter_provider']} "
+        f"telegram_formatter_configured={llm_boundaries['telegram_chart_formatter_configured']} "
         f"telegram_uses_llm_provider={llm_boundaries['telegram_chart_formatter_uses_llm_provider_env']} "
+        f"provider_mismatch={llm_boundaries['scanner_formatter_provider_mismatch']} "
         f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
         f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
         f"analyze_chart_send_default={llm_boundaries['analyze_chart_send_default']}"

@@ -21,10 +21,25 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert llm_boundaries["scanner_uses_llm_provider_env"] is True
     assert llm_boundaries["scanner_supports_alibaba"] is True
     assert llm_boundaries["telegram_chart_formatter_provider"] == "yandex_only"
+    formatter_status = llm_boundaries["telegram_chart_formatter_status"]
+    assert formatter_status["schema"] == "llm_formatter_provider.v1"
+    assert formatter_status["provider"] == "yandex"
+    assert formatter_status["provider_scope"] == "yandex_only"
+    assert isinstance(formatter_status["api_key_set"], bool)
+    assert isinstance(formatter_status["folder_id_set"], bool)
+    assert formatter_status["configured"] == (
+        formatter_status["api_key_set"] and formatter_status["folder_id_set"]
+    )
+    assert formatter_status["telegram_send_authority"] is False
+    assert formatter_status["execution_authority"] is False
+    assert "qwen3-235b" in formatter_status["model_label"]
+    assert "b1git" not in str(formatter_status)
+    assert llm_boundaries["telegram_chart_formatter_configured"] == formatter_status["configured"]
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is False
     assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
     assert llm_boundaries["telegram_chart_formatter_prompt_integrity"] is True
     assert llm_boundaries["telegram_chart_formatter_mojibake_detected"] is False
+    assert llm_boundaries["scanner_formatter_provider_mismatch"] is True
     assert llm_boundaries["analyze_chart_can_send_telegram"] is True
     assert llm_boundaries["analyze_chart_send_default"] is False
     analyzer = report["product_analyzer_boundary"]

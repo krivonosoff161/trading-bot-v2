@@ -29,6 +29,49 @@ _TIMEOUT    = 60  # seconds
 _FORMATTER_RUB_PER_1K_TOKENS = float(os.getenv("YANDEX_LLM_FORMATTER_RUB_PER_1K", "0.5"))
 
 
+def _model_label(model_uri: str) -> str:
+    parts = model_uri.split("/")
+    if len(parts) >= 5 and parts[0].startswith("gpt:"):
+        return "/".join(parts[3:])
+    return "configured" if model_uri else ""
+
+
+def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, object]:
+    """Return sanitized provider metadata for health checks.
+
+    This intentionally reports configuration shape only. It never returns API keys,
+    folder ids, chat ids, prompts, or request payloads.
+    """
+    source = env if env is not None else os.environ
+    api_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
+    folder_id_set = bool(source.get("YANDEX_FOLDER_ID", "").strip("'\""))
+    return {
+        "schema": "llm_formatter_provider.v1",
+        "surface": "legacy_chart_text_formatter",
+        "provider": "yandex",
+        "provider_scope": "yandex_only",
+        "follows_llm_provider_env": False,
+        "api_host": "ai.api.cloud.yandex.net",
+        "api_key_set": api_key_set,
+        "folder_id_set": folder_id_set,
+        "configured": api_key_set and folder_id_set,
+        "model_label": _model_label(_MODEL_URI),
+        "supports_vision": _SUPPORTS_VISION,
+        "budget_guard": True,
+        "telegram_send_authority": False,
+        "execution_authority": False,
+        "function_entrypoints": [
+            "generate_client_text",
+            "generate_premium_analysis",
+            "generate_edu_text",
+        ],
+        "non_claim": (
+            "This status describes only the legacy product/chart formatter path. "
+            "It does not prove scanner, farm, or Strategy Lab LLM routing."
+        ),
+    }
+
+
 def _estimated_cost_rub(tokens: int) -> float:
     return round(max(0, int(tokens or 0)) * _FORMATTER_RUB_PER_1K_TOKENS / 1000, 4)
 

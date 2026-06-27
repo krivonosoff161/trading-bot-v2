@@ -118,6 +118,13 @@ not the legacy Telegram chart analyzer. The chart analyzer must be audited separ
 because it calls `llm_formatter.generate_client_text`, `generate_premium_analysis`, and
 `generate_edu_text` through Yandex AI Studio.
 
+The machine-readable formatter status is intentionally sanitized. It reports only
+provider shape (`provider=yandex`, `provider_scope=yandex_only`, key presence booleans,
+sanitized `model_label`, and no Telegram/execution authority). It must never expose API
+keys, folder ids, chat ids, prompts, or request payloads. A mismatch such as
+`LLM_PROVIDER=alibaba` plus `scanner_formatter_provider_mismatch=true` is expected until
+the product analyzer is migrated through a dedicated adapter review.
+
 Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
 does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`
 is more execution-adjacent: it is interactive and can import `scripts.auto_execute` after
@@ -140,7 +147,11 @@ paper runtime.
 - `telegram_analyzer_auto_trade_guarded = true`
 - `telegram_analyzer_requires_auto_execute_opt_in = true`
 - `llm_surface_boundaries.telegram_chart_formatter_provider = yandex_only`
+- `llm_surface_boundaries.telegram_chart_formatter_status.schema = llm_formatter_provider.v1`
+- `llm_surface_boundaries.telegram_chart_formatter_configured = true/false`
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
+- `llm_surface_boundaries.scanner_formatter_provider_mismatch = true` when scanner
+  `LLM_PROVIDER` differs from the legacy chart formatter provider
 - `llm_surface_boundaries.telegram_chart_formatter_prompt_integrity = true`
 - `llm_surface_boundaries.telegram_chart_formatter_mojibake_detected = false`
 - `product_analyzer_boundary.analyze_chart_send_default = false`
