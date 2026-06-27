@@ -1,6 +1,12 @@
 # Trading System Revival Audit - Farm/Paper/Main Boundary
 
-Status: **ACTIVE operator audit**. Date: 2026-06-26, refreshed 2026-06-27.
+Status: **historical operator audit snapshot**. Date: 2026-06-26, refreshed 2026-06-27.
+
+Current operator truth has moved to
+[`trading_system_recovery_map_2026-06-27.md`](trading_system_recovery_map_2026-06-27.md).
+Use that recovery map for current paper-chain counts, training rows, Telegram delivery
+state, and product-analyzer boundaries. The numbers below are preserved as restoration
+evidence and may be lower than the current private derived artifacts.
 
 This document records the current runtime truth after auditing the farm, PFR bridge,
 paper runtime, paper-signal lane, main scanner, Telegram, journals, and runbooks. It is
@@ -446,9 +452,9 @@ Targeted tests:
 - `tests/test_build_journal_safety.py`: passed after the `Paper Watch` sheet addition.
 - `git diff --check`: clean.
 
-## Verification On 2026-06-27
+## Historical Verification On 2026-06-27
 
-Current commands re-run:
+Commands re-run during that audit refresh:
 
 ```bash
 python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --json
@@ -458,7 +464,7 @@ python -m scripts.strategy_lab.farm_status_report --json
 python -X utf8 scripts\build_journal.py
 ```
 
-Observed current state:
+Observed state during that audit refresh:
 
 - `operational_health` exits 0 and reports `mode=paper_research_only`,
   `auto_trade=False`, scanner LLM provider `alibaba`, scanner Telegram configured,
@@ -490,7 +496,7 @@ Observed current state:
   the header. Private OKX fills stay skipped unless `JOURNAL_ENABLE_PRIVATE_FILLS=1` is
   explicitly set.
 
-Current conclusion: the full operator chain is alive as a paper/research lifecycle:
+Historical conclusion from that audit refresh: the full operator chain was alive as a paper/research lifecycle:
 farm/PFR -> paper signals -> main-readable paper instructions -> contract consumer ->
 paper runtime queue -> public-candle observation -> Telegram preview -> training export ->
 Excel journal. The remaining product gap is deliberate: old `main.py` must still not
