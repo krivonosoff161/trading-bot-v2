@@ -211,5 +211,11 @@ def test_discovery_events_skip_covered():
     assert events[0]["priority"] == 4
 
 
+def test_discovery_events_limit_zero_returns_no_events():
+    snap = {"instruments": {"BTC_USDT_SWAP": {"group": "crypto_major", "inst_id": "BTC-USDT-SWAP"}}}
+
+    assert discovery_intake_events(snap, limit=0) == []
+
+
 def test_event_id_changes_across_windows():
     assert event_id("BTC", "s", "r", 0.0) != event_id("BTC", "s", "r", 48 * 3600)

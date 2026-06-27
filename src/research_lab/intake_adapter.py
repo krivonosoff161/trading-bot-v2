@@ -120,6 +120,8 @@ def watches_to_intake(watches: list[dict[str, Any]], *,
 def discovery_intake_events(snapshot: dict[str, Any], *, covered: set[str] | None = None,
                             now: float = 0.0, limit: int = 50) -> list[dict[str, Any]]:
     """Grind-source events for discovered OKX instruments not yet covered."""
+    if limit <= 0:
+        return []
     covered = {str(s).upper() for s in (covered or set())}
     instruments = snapshot.get("instruments") or {}
     out: list[dict[str, Any]] = []
