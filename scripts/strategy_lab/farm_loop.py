@@ -266,6 +266,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
         allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
         max_discovery=args.max_plan_events,
+        max_validations=int(getattr(args, "max_validations", 10)),
         run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
         max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
     )
@@ -411,6 +412,7 @@ def main() -> None:
     ap.add_argument("--max-enrich", type=int, default=4)
     ap.add_argument("--max-sweeps", type=int, default=4)
     ap.add_argument("--max-worker-jobs", type=int, default=4)
+    ap.add_argument("--max-validations", type=int, default=10)
     ap.add_argument("--max-paper-cards", type=int, default=20)
     ap.add_argument("--max-followups", type=int, default=10)
     ap.add_argument("--no-followups", action="store_true", help="disable automatic bounded feedback follow-ups")
