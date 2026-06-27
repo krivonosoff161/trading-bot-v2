@@ -46,6 +46,24 @@ It also passes `--paper-signals-pfr-reserved` (default 2 via
 `STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED`) so live-mover generation cannot starve
 already validated farm/PFR candidates.
 
+## Paper Source Priority
+
+The main-paper path does not read directly from old `main.py`. It receives a derived,
+paper-only instruction view from Strategy Lab artifacts. Priority is:
+
+1. `source=farm` live-mover paper signals are generated first from the outcome-memory
+   ranked mover universe.
+2. `source=pfr_farm` signals are generated second, only when `--pfr-db-path` is
+   explicitly provided. The PFR lane is bounded (`max_pfr_scan` default 30), can reserve
+   slots, and shares dedup/setup-id guards with the live-mover lane.
+3. `main_paper_bridge` exports only active paper rows (`armed`, `opened_paper`) into
+   `MainPaperInstruction.v1`.
+4. `main_paper_runtime_adapter` sorts accepted paper rows by family, timeframe, risk,
+   symbol, and source signal id before the public-candle observer watches them.
+
+`operational_health` exposes this as `paper_priority_policy.v1`. The invariant is
+`execution_allowed=false` and `old_main_py_consumer=false`.
+
 The preflight gate is:
 
 ```bash

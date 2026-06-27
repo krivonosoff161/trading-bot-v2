@@ -390,6 +390,13 @@ The queue priority is deterministic: `early_tp_tactical` first, then
 `momentum_breakout`, then continuation families. Shorter timeframes sort before longer
 ones, low-risk plans receive a small bonus, and risk above 8% receives a heavy penalty.
 
+The source priority is also deterministic and exposed by `operational_health` as
+`paper_priority_policy.v1`: live-mover `source=farm` paper signals are generated first;
+optional PFR `source=pfr_farm` signals run second only when `--pfr-db-path` is explicit
+and remain bounded by `--paper-signals-max-pfr-scan`; active rows then pass through
+`main_paper_bridge` and the accepted `watch_paper` queue. The invariant is
+`execution_allowed=false` and `old_main_py_consumer=false`.
+
 The old live `main.py` / `ws_main_screener.py` stack is not a farm/PFR executor today.
 It can be audited as a separate scanner/Telegram surface, but it must not be treated as
 the consumer of farm paper instructions until a separate paper-only port is reviewed and
