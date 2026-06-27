@@ -481,7 +481,10 @@ explicitly passed.
 - `state/derived/paper_telegram_delivery.jsonl` and
   `state/derived/paper_telegram_delivery.json` - dry-run or opt-in delivery audit over
   preview cards. Sending is possible only through `scripts.strategy_lab.paper_telegram_sender
-  --send` and only to `PAPER_CHAT_ID`.
+  --send` and only to `PAPER_CHAT_ID`. The fast preflight reports
+  `paper_telegram_delivery_breakdown` from this snapshot so dry-run, unconfigured
+  paper chat, invalid preview, token, and send-error states are visible without
+  opening the artifact manually.
 - `state/derived/setup_lifecycle.json` - optional rebuildable snapshot of setup lifecycle
   groups; canonical data remains in the DBs and artifacts above.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.

@@ -354,7 +354,17 @@ def test_operational_health_reports_paper_telegram_sender(tmp_path, monkeypatch)
     delivery = tmp_path / "state" / "derived" / "paper_telegram_delivery.json"
     delivery.parent.mkdir(parents=True)
     delivery.write_text(
-        json.dumps({"records_read": 2, "eligible": 2, "sent": 0, "skipped": 2, "errors": 0}),
+        json.dumps({
+            "records_read": 2,
+            "eligible": 2,
+            "sent": 0,
+            "skipped": 2,
+            "errors": 0,
+            "items": [
+                {"status": "dry_run", "problem": ""},
+                {"status": "skipped_no_paper_chat", "problem": "paper_telegram_not_configured"},
+            ],
+        }),
         encoding="utf-8",
     )
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -364,6 +374,9 @@ def test_operational_health_reports_paper_telegram_sender(tmp_path, monkeypatch)
     assert report["journals"]["paper_telegram_delivery_snapshot"]["exists"] is True
     assert report["paper_chain"]["telegram_delivery"]["eligible"] == 2
     assert report["paper_chain"]["telegram_delivery"]["skipped"] == 2
+    breakdown = report["paper_chain"]["telegram_delivery_breakdown"]
+    assert breakdown["by_status"] == {"dry_run": 1, "skipped_no_paper_chat": 1}
+    assert breakdown["by_problem"] == {"paper_telegram_not_configured": 1}
     assert report["readiness"]["paper_telegram_sender_available"]["status"] == "pass"
 
 

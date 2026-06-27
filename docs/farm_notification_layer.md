@@ -73,6 +73,13 @@ enable execution.
 - `state/derived/paper_telegram_delivery.jsonl`
 - `state/derived/paper_telegram_delivery.json`
 
+The delivery snapshot is an audit surface, not just a send log. Its per-item statuses
+explain why alerts did or did not leave the machine, for example `dry_run`,
+`skipped_no_paper_chat`, `invalid_preview`, `skipped_no_token`, or `error`. The fast
+`operational_health` preflight surfaces this as `paper_telegram_delivery_breakdown`,
+so an operator does not need to inspect JSON by hand to know whether Telegram is
+unconfigured, intentionally dry-run, or failing.
+
 Default mode is dry-run:
 
 ```bash
