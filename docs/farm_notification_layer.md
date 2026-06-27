@@ -36,7 +36,7 @@ that state. Notifications are an output edge, never an input to compute or money
 | Obsidian graph/reports | Implemented/partial | Read-only summaries and links. |
 | `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
-| `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy `AUTO_TRADE`-gated auto-execute hook exists. |
+| `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy auto-execute hook requires both `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and `AUTO_TRADE`. |
 | `scripts.analyze_chart` | Separate manual surface | Writes local chart/report analysis and can optionally send Telegram; not farm/PFR execution. |
 | `scripts.run_latest_analysis` | Separate manual surface | Interactive wrapper that can reach `scripts.auto_execute` only behind `AUTO_TRADE` plus explicit `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`; not a paper launcher. |
 | `ws_scanner.py` | Legacy/diagnostic | Imports OKX client; do not use as canonical farm path. |
@@ -78,10 +78,13 @@ These paths can notify a human, but they must not enqueue farm tasks, consume PF
 instructions, or execute orders.
 
 Important legacy boundary: `scripts/telegram_bot.py` still contains an
-`AUTO_TRADE`-gated `scripts.auto_execute` hook for the old product flow. Therefore
-`start.bat` must not be used as a Strategy Lab paper/PFR launcher. The current paper
-chain uses `paper_telegram_preview` first; any real Telegram send must be added later
-as a reviewed, opt-in read-only surface over derived paper artifacts.
+execution-adjacent `scripts.auto_execute` hook for the old product flow, but
+`AUTO_TRADE` alone is no longer enough to import or call it. The Telegram analyzer
+requires the explicit legacy opt-in `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and then the
+old `AUTO_TRADE` guard must also be true. Therefore `start.bat` must not be used as a
+Strategy Lab paper/PFR launcher. The current paper chain uses
+`paper_telegram_preview` first; any real Telegram send must be added later as a
+reviewed, opt-in read-only surface over derived paper artifacts.
 
 Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory provider path,
 not the legacy Telegram chart analyzer. The chart analyzer must be audited separately
@@ -106,6 +109,7 @@ paper runtime.
 - `telegram_analyzer_current_for_farm = false`
 - `telegram_analyzer_imports_auto_execute = true`
 - `telegram_analyzer_auto_trade_guarded = true`
+- `telegram_analyzer_requires_auto_execute_opt_in = true`
 - `llm_surface_boundaries.telegram_chart_formatter_provider = yandex_only`
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
 - `llm_surface_boundaries.telegram_chart_formatter_prompt_integrity = true`

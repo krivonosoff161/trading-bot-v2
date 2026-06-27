@@ -60,6 +60,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["telegram_delivery_flow"]["telegram_analyzer_current_for_farm"] is False
     assert report["telegram_delivery_flow"]["telegram_analyzer_imports_auto_execute"] is True
     assert report["telegram_delivery_flow"]["telegram_analyzer_auto_trade_guarded"] is True
+    assert report["telegram_delivery_flow"]["telegram_analyzer_requires_auto_execute_opt_in"] is True
     main_boundary = report["main_engine_boundary"]
     assert main_boundary["order_capable"] is True
     assert main_boundary["sets_leverage"] is True
@@ -213,6 +214,7 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert delivery["telegram_analyzer_current_for_farm"] is False
     assert delivery["telegram_analyzer_imports_auto_execute"] is True
     assert delivery["telegram_analyzer_auto_trade_guarded"] is True
+    assert delivery["telegram_analyzer_requires_auto_execute_opt_in"] is True
     assert delivery["legacy_ws_scanner_uses_okx_client"] is True
     assert delivery["secrets_printed"] is False
     assert delivery["execution_authority"] is False

@@ -29,9 +29,14 @@ def test_chart_formatter_runtime_labels_are_utf8_readable():
 def test_manual_analyzer_and_latest_wrapper_boundaries():
     analyze_chart = (ROOT / "scripts" / "analyze_chart.py").read_text(encoding="utf-8")
     run_latest_analysis = (ROOT / "scripts" / "run_latest_analysis.py").read_text(encoding="utf-8")
+    telegram_bot = (ROOT / "scripts" / "telegram_bot.py").read_text(encoding="utf-8")
 
     assert "send_telegram: bool = False" in analyze_chart
     assert "from scripts.analyze_chart import run" in run_latest_analysis
     assert "from scripts.auto_execute import AUTO_TRADE, execute_signal" in run_latest_analysis
     assert "if AUTO_TRADE" in run_latest_analysis
     assert "RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE" in run_latest_analysis
+    assert "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE" in telegram_bot
+    assert "if _auto_execute_opt_in()" in telegram_bot
+    assert "from scripts.auto_execute import AUTO_TRADE, execute_signal" in telegram_bot
+    assert "from scripts.auto_execute import AUTO_TRADE, check_and_close_timeouts" in telegram_bot

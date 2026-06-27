@@ -47,7 +47,9 @@ Expected safe state:
   farm/PFR executors. It should also show
   `telegram_analyzer_current_for_farm = false`; the old Telegram analyzer is
   execution-adjacent because old product paths can reach `auto_execute` only through
-  explicit guards, and they are not farm/PFR runtimes.
+  explicit guards. `telegram_analyzer_requires_auto_execute_opt_in = true` must be
+  present, proving `AUTO_TRADE` alone cannot make the Telegram analyzer import or call
+  `scripts.auto_execute`. These paths are not farm/PFR runtimes.
 - `main_engine_boundary` records why old `main.py` is isolated. It should show
   `order_capable = true`, `sets_leverage = true`, `imports_private_okx_client = true`,
   `consumes_main_paper_queue = false`, and `safe_to_use_as_paper_executor = false`.

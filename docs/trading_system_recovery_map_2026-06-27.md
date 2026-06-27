@@ -123,10 +123,11 @@ LLM is also split:
 
 None of these paths can promote a setup, bypass validation, or enable execution.
 
-Important legacy boundary: `scripts.telegram_bot` still imports
-`scripts.auto_execute` inside the old scanner loop. `scripts.auto_execute` is guarded by
-`AUTO_TRADE`, but it can set leverage and place OKX orders when that flag is enabled.
-Therefore `start.bat` is execution-adjacent and must not be used as the Strategy Lab
+Important legacy boundary: `scripts.telegram_bot` can still import
+`scripts.auto_execute` inside the old scanner loop, but only after the explicit legacy
+opt-in `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1`; `AUTO_TRADE` is then checked as the second
+guard. `scripts.auto_execute` can set leverage and place OKX orders when enabled, so
+`start.bat` is still execution-adjacent and must not be used as the Strategy Lab
 paper/PFR launcher. The current paper alert path remains `paper_telegram_preview`,
 which writes offline artifacts first.
 
