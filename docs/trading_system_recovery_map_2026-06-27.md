@@ -149,6 +149,14 @@ paper_signals terminal rows
   -> scripts/journal.xlsx / Paper Watch
 ```
 
+The operator proof is machine-checkable through `operational_health`:
+
+- `training_data.paper_signal_training.rows > 0`;
+- `training_data.paper_signal_training.schema_rows == rows`;
+- `training_data.paper_signal_training.invalid_json == 0`;
+- `training_data.paper_signal_training.paper_only_false == 0`;
+- readiness gate `paper_signal_training_export = pass`.
+
 Private OKX fills remain opt-in only:
 
 ```text
