@@ -42,6 +42,12 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert llm_boundaries["scanner_formatter_provider_mismatch"] is True
     assert llm_boundaries["analyze_chart_can_send_telegram"] is True
     assert llm_boundaries["analyze_chart_send_default"] is False
+    text_quality = report["legacy_product_text_quality"]
+    assert text_quality["schema"] == "legacy_product_text_quality.v1"
+    assert text_quality["files_scanned"] >= 5
+    assert text_quality["clean"] is True
+    assert text_quality["files_with_markers"] == 0
+    assert report["readiness"]["legacy_product_text_quality"]["status"] == "pass"
     analyzer = report["product_analyzer_boundary"]
     assert analyzer["analyze_chart_imports_okx_client"] is True
     assert analyzer["analyze_chart_reads_okx_credentials"] is True
@@ -96,6 +102,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
     assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
+    assert report["readiness"]["legacy_product_text_quality"]["status"] == "pass"
     assert report["readiness"]["manual_product_analyzer_boundary"]["status"] == "warn"
     assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
     assert "secret-token" not in rendered

@@ -38,6 +38,11 @@ Expected product-surface facts:
 - `telegram_chart_formatter_uses_llm_provider_env = false`
 - `scanner_formatter_provider_mismatch = true` when `LLM_PROVIDER=alibaba` but the
   legacy chart formatter still uses the Yandex-only path
+- `legacy_product_text_quality.clean = true` for the old operator/Telegram product
+  files. This is separate from the core chart prompt integrity: the prompt can be UTF-8
+  readable while surrounding legacy UI/log strings still need their own machine check.
+  If this gate flips to false, farm/PFR is unaffected, but old product Telegram delivery
+  remains blocked until the text is cleaned or migrated.
 - `analyze_chart_send_default = false`
 - `run_latest_analysis_imports_auto_execute = true`
 - `run_latest_analysis_auto_trade_guarded = true`

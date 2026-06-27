@@ -89,6 +89,11 @@ Expected safe state:
 - `product_analyzer_prompt_integrity = pass` is required before any manual product
   analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
   keeps risk/non-claim wording, and does not contain known mojibake markers.
+- `legacy_product_text_quality = pass` is required before any old product/Telegram
+  surface is considered readable. If this becomes `warn`, some legacy operator-facing
+  text contains mojibake markers. That would not affect the canonical farm/PFR paper
+  loop, but it would block using `start.bat` / Telegram analyzer as a polished product
+  channel until those strings are cleaned or migrated.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
