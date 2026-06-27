@@ -324,6 +324,11 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Configure STRATEGY_LAB_LLM_* or turn STRATEGY_LAB_LLM_ENABLED off."
             if lab_llm["enabled"] and not lab_llm["configured"] else "",
         ),
+        "telegram_analyzer_llm_provider_review": _gate(
+            "warn",
+            "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router.",
+            action="Audit llm_formatter prompts/provider before reviving Telegram product delivery.",
+        ),
         "journal_rebuild_available": _gate(
             "pass" if journals["excel"]["exists"] else "warn",
             "Excel journal exists and can be rebuilt locally."
@@ -382,6 +387,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     auto_execute = ROOT / "scripts" / "auto_execute.py"
     scanner_farm_loop = ROOT / "scripts" / "strategy_lab" / "scanner_farm_loop.py"
     universe_farm_loop = ROOT / "scripts" / "strategy_lab" / "universe_farm_loop.py"
+    llm_client = ROOT / "src" / "utils" / "llm_client.py"
+    llm_formatter = ROOT / "src" / "utils" / "llm_formatter.py"
+    analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     launch_surfaces = {
         "control_room": _surface(
             ROOT / "bat" / "strategy_lab_control_room.bat",
@@ -456,6 +464,25 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "yandex_key_set": bool(os.getenv("YANDEX_API_KEY", "").strip()),
             "cheap_model": os.getenv("LLM_CHEAP_MODEL", ""),
             "chief_model": os.getenv("LLM_CHIEF_MODEL", ""),
+        },
+        "llm_surface_boundaries": {
+            "schema": "llm_surface_boundaries.v1",
+            "scanner_provider_router": "src.utils.llm_client",
+            "scanner_uses_llm_provider_env": _contains(llm_client, "LLM_PROVIDER"),
+            "scanner_supports_alibaba": _contains(llm_client, "ALIBABA_API_KEY"),
+            "telegram_chart_formatter": "src.utils.llm_formatter",
+            "telegram_chart_formatter_provider": "yandex_only",
+            "telegram_chart_formatter_uses_llm_provider_env": _contains(llm_formatter, "LLM_PROVIDER"),
+            "telegram_chart_formatter_uses_budget_guard": _contains(llm_formatter, "llm_budget_guard"),
+            "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
+            "analyze_chart_send_default": False,
+            "strategy_lab_llm_separate_provider": "src.research_lab.llm_provider",
+            "strategy_lab_llm_default_enabled": False,
+            "note": (
+                "Alibaba/Yandex routing in src.utils.llm_client applies to scanner/advisory calls. "
+                "The legacy Telegram chart analyzer uses the Yandex-only formatter path and needs "
+                "a separate prompt/provider audit before product revival."
+            ),
         },
         "strategy_lab_llm": {
             "enabled": os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
@@ -609,6 +636,15 @@ def _print_human(report: dict[str, Any]) -> None:
         "scanner_llm: "
         f"provider={llm['provider']} alibaba_key={llm['alibaba_key_set']} "
         f"yandex_key={llm['yandex_key_set']}"
+    )
+    llm_boundaries = report["llm_surface_boundaries"]
+    print(
+        "llm_surface_boundaries: "
+        f"scanner_router={llm_boundaries['scanner_provider_router']} "
+        f"scanner_alibaba={llm_boundaries['scanner_supports_alibaba']} "
+        f"telegram_formatter_provider={llm_boundaries['telegram_chart_formatter_provider']} "
+        f"telegram_uses_llm_provider={llm_boundaries['telegram_chart_formatter_uses_llm_provider_env']} "
+        f"analyze_chart_send_default={llm_boundaries['analyze_chart_send_default']}"
     )
     lab = report["strategy_lab_llm"]
     print(f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}")

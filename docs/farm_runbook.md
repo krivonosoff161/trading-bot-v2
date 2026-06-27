@@ -22,6 +22,9 @@ Expected safe state:
 - `mode = paper_research_only`
 - `auto_trade = false`
 - scanner LLM provider/key presence visible, without secret values
+- `llm_surface_boundaries` separates the scanner/advisory LLM router from the legacy
+  Telegram chart formatter. Alibaba/Yandex routing in `src.utils.llm_client` does not
+  automatically cover `src.utils.llm_formatter`.
 - Telegram channel presence visible, without token/chat values
 - journal, paper-signal, and PFR artifact paths resolved
 - `launch_surfaces` explicitly marks the current visible control room and full-cycle
@@ -55,6 +58,8 @@ Expected safe state:
   cleanly separated from farm execution.
 - `telegram_analyzer_execution_boundary = pass` is required before treating
   `start.bat` as safely isolated from the Strategy Lab paper/PFR cycle.
+- `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
+  analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
