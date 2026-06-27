@@ -371,8 +371,9 @@ def main() -> None:
                          "(requires --run-paper-signals; OFF by default — must be explicit)")
     ap.add_argument("--paper-signals-max-pfr-scan", type=int, default=30,
                     help="max PFR records inspected by --run-paper-signals per farm cycle")
-    ap.add_argument("--paper-signals-max-observe", type=int, default=None,
-                    help="optional max active paper signals observed by --run-paper-signals; use for smoke checks")
+    ap.add_argument("--paper-signals-max-observe", type=int, default=50,
+                    help=("max active paper signals observed by --run-paper-signals per cycle "
+                          "(set 0 for smoke checks)"))
     ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
                     help="per-request public OKX timeout used by --run-paper-signals")
     ap.add_argument("--main-paper-runtime-limit", type=int, default=50,

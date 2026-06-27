@@ -193,12 +193,15 @@ python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --n
 # Verify the rebuilt chain as counts, not just files.
 python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
-# Continuous full cycle.
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
+# Continuous full cycle. Keep active paper-signal observation capped; otherwise a
+# large active watchlist can spend one whole cycle walking historical cards.
+python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 20 --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
 
 # Visible operator wrapper for the same continuous full cycle. The wrapper passes
 # STRATEGY_LAB_PFR_DB_PATH by default, so the PFR bridge is active unless you
-# override that environment variable.
+# override that environment variable. It also defaults
+# STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20 so active paper cards mature in bounded
+# batches instead of making a visible cycle look stuck.
 bat\strategy_lab_farm_full_cycle_loop.bat
 
 # Visible operator control room for farm + dashboard + graph + status windows.
@@ -259,8 +262,8 @@ follow-up analysis.
 - generated signals are written as JSONL/snapshots and visual review artifacts;
 - `PFR` records are loaded only when `--pfr-db-path` is provided;
 - PFR scanning is bounded by `--paper-signals-max-pfr-scan`;
-- active signal observation can be capped with `--paper-signals-max-observe` for smoke
-  checks;
+- active signal observation is capped with `--paper-signals-max-observe` (CLI default
+  50; visible wrapper default 20; use 0 for smoke checks);
 - public data fetch timeout is controlled by `--paper-signals-fetch-timeout`;
 - main-paper queue observation is bounded by `--main-paper-runtime-limit`;
 - no signal can enable live order execution.
