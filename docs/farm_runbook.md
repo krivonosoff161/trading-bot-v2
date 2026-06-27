@@ -47,6 +47,9 @@ be treated as their executor.
 - **Core:** `python -m scripts.strategy_lab.farm_loop`
   (brain DB: `state/farm_tasks.sqlite`).
 - **Visible one-click wrapper:** `bat\strategy_lab_farm_full_cycle_loop.bat`.
+- **Visible control room:** `bat\strategy_lab_control_room.bat` opens the farm loop,
+  dashboard, private graph viewer, and periodic status monitor in separate visible
+  windows.
 - **Clean stop wrapper:** `bat\strategy_lab_farm_full_cycle_stop.bat`.
 - **Compute executor:** `worker_once` / `worker_loop` drain `state/strategy_lab.sqlite`.
   In the normal loop, `--run-worker` drains a bounded number of jobs per cycle.
@@ -116,6 +119,9 @@ python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-valid
 # STRATEGY_LAB_PFR_DB_PATH by default, so the PFR bridge is active unless you
 # override that environment variable.
 bat\strategy_lab_farm_full_cycle_loop.bat
+
+# Visible operator control room for farm + dashboard + graph + status windows.
+bat\strategy_lab_control_room.bat
 
 # Clean stop for the wrapper above.
 bat\strategy_lab_farm_full_cycle_stop.bat
