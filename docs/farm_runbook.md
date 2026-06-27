@@ -13,6 +13,20 @@ Telegram is a guarded surface only; it is not part of the farm decision path.
 
 ## Operator Preflight
 
+Start with the lightweight local snapshot:
+
+```bash
+python scripts/project_snapshot.py
+```
+
+The `BOT` line is intentionally command-line aware. It must not treat arbitrary
+`python.exe` processes, pytest runs, health checks, or the snapshot script itself as a
+running trading bot. Relevant runtime kinds are reported explicitly, for example
+`canonical_farm_paper_loop`, `paper_signals_runner`, `main_engine`, `scanner`, or
+`telegram_surface`. If the line says `no relevant trading process found`, there may
+still be unrelated Python processes on the machine, but no recognized trading runtime
+is active.
+
 Run this before a long paper/farm cycle. It is read-only, loads local environment
 configuration, does not print secrets, and does not call exchange or Telegram providers.
 

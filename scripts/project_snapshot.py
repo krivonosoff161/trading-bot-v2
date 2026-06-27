@@ -1,99 +1,197 @@
 """
-project_snapshot.py - bystryy srez sostoyaniya proyekta dlya nachala sessii.
-Zapusk: python scripts/project_snapshot.py
+Fast operator snapshot for the trading-bot-v2 workspace.
+
+Run:
+    python scripts/project_snapshot.py
 """
-import sys
-import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone, timedelta
+import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parent.parent
 
-# ── 1. Git ──────────────────────────────────────────────────────────────────
-def git_status():
+
+def git_status() -> tuple[str, bool, str]:
     try:
         head = subprocess.run(
             ["git", "log", "--oneline", "-1"],
-            capture_output=True, text=True, cwd=ROOT
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
         ).stdout.strip()
         dirty = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=ROOT
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
         ).stdout.strip()
         return head, bool(dirty), dirty
     except Exception:
         return "?", False, ""
 
-# ── 2. Bot process ───────────────────────────────────────────────────────────
-def bot_status():
-    try:
-        result = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
-            capture_output=True, text=True
-        )
-        lines = [l for l in result.stdout.splitlines() if "python" in l.lower()]
-        return len(lines)
-    except Exception:
-        return 0
 
-# ── 3. Newest log entry ──────────────────────────────────────────────────────
-def last_log_line():
+def _json_records(raw: str) -> list[dict[str, Any]]:
+    raw = raw.strip()
+    if not raw:
+        return []
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    return []
+
+
+def _windows_python_processes() -> list[dict[str, Any]]:
+    script = (
+        "Get-CimInstance Win32_Process "
+        "-Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" | "
+        "Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        return _json_records(result.stdout)
+    except Exception:
+        return []
+
+
+def _posix_python_processes() -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["ps", "-eo", "pid=,comm=,args="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        if "python" not in line.lower():
+            continue
+        parts = line.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            continue
+        rows.append({"ProcessId": parts[0], "Name": parts[1], "CommandLine": parts[2]})
+    return rows
+
+
+def python_processes() -> list[dict[str, Any]]:
+    if sys.platform.startswith("win"):
+        return _windows_python_processes()
+    return _posix_python_processes()
+
+
+def classify_process(command_line: str) -> str | None:
+    cmd = (command_line or "").lower().replace("/", "\\")
+    if "scripts.strategy_lab.farm_loop" in cmd and "--run-paper-signals" in cmd:
+        return "canonical_farm_paper_loop"
+    if "scripts.strategy_lab.farm_loop" in cmd:
+        return "farm_loop_partial"
+    if "scripts.strategy_lab.paper_signals_run" in cmd:
+        return "paper_signals_runner"
+    if "\\main.py" in cmd or cmd.endswith(" main.py") or " main.py " in cmd:
+        return "main_engine"
+    if "scanner_runtime" in cmd or "news_scanner" in cmd or "scanner_status" in cmd:
+        return "scanner"
+    if "telegram" in cmd and ("bot" in cmd or "send" in cmd or "scanner" in cmd):
+        return "telegram_surface"
+    return None
+
+
+def bot_status(processes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    rows = python_processes() if processes is None else processes
+    relevant: list[dict[str, Any]] = []
+    ignored = 0
+    by_kind: dict[str, int] = defaultdict(int)
+    for row in rows:
+        cmd = str(row.get("CommandLine") or "")
+        kind = classify_process(cmd)
+        if kind is None:
+            ignored += 1
+            continue
+        by_kind[kind] += 1
+        relevant.append(
+            {
+                "pid": row.get("ProcessId"),
+                "kind": kind,
+                "command": cmd[:180],
+            }
+        )
+    return {
+        "relevant": relevant,
+        "ignored_python": ignored,
+        "by_kind": dict(sorted(by_kind.items())),
+    }
+
+
+def last_log_line() -> str:
     logs_dir = ROOT / "logs"
     try:
         log_files = list(logs_dir.rglob("*.log"))
         if not log_files:
-            return "нет лог-файлов"
+            return "no log files"
         newest = max(log_files, key=lambda p: p.stat().st_mtime)
-        with open(newest, "rb") as f:
+        with newest.open("rb") as f:
             f.seek(0, 2)
             size = f.tell()
             f.seek(max(0, size - 4096))
             tail = f.read().decode("utf-8", errors="ignore")
-        lines = [l for l in tail.splitlines() if l.strip()]
-        last = lines[-1][:90] if lines else "пусто"
+        lines = [line for line in tail.splitlines() if line.strip()]
+        last = lines[-1][:120] if lines else "empty"
         return f"{newest.name}: {last}"
     except Exception:
-        return "ошибка чтения"
+        return "log read error"
 
-# ── 4. Signal stats (WS main screener) ───────────────────────────────────────
-def _ts_ms(ts_str):
+
+def _ts_ms(ts_str: str) -> int:
     try:
         return int(datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp() * 1000)
     except Exception:
         return 0
 
 
-def signal_stats(days=7):
+def signal_stats(days: int = 7) -> dict[str, Any]:
     sig_file = ROOT / "logs" / "signals" / "main_signals.jsonl"
     lbl_file = ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 
-    signals = {}
+    signals: dict[str, dict[str, Any]] = {}
     try:
-        with open(sig_file, encoding="utf-8") as f:
+        with sig_file.open(encoding="utf-8") as f:
             for line in f:
                 try:
-                    s = json.loads(line)
-                    sid = s.get("id") or s.get("signal_id")
+                    signal = json.loads(line)
+                    sid = signal.get("id") or signal.get("signal_id")
                     if sid:
-                        s["_ts_ms"] = _ts_ms(s.get("ts", ""))
-                        signals[sid] = s
+                        signal["_ts_ms"] = _ts_ms(signal.get("ts", ""))
+                        signals[sid] = signal
                 except Exception:
                     pass
     except FileNotFoundError:
         pass
 
-    labels = {}
+    labels: dict[str, dict[str, Any]] = {}
     try:
-        with open(lbl_file, encoding="utf-8") as f:
+        with lbl_file.open(encoding="utf-8") as f:
             for line in f:
                 try:
-                    l = json.loads(line)
-                    labels[l["signal_id"]] = l
+                    label = json.loads(line)
+                    labels[label["signal_id"]] = label
                 except Exception:
                     pass
     except FileNotFoundError:
@@ -104,26 +202,26 @@ def signal_stats(days=7):
     pending = [sid for sid in recent if sid not in labels]
 
     tp = sl = te = invalid = 0
-    by_pair = defaultdict(lambda: {"tp": 0, "sl": 0, "te": 0})
+    by_pair: dict[str, dict[str, int]] = defaultdict(lambda: {"tp": 0, "sl": 0, "te": 0})
 
-    for sid, s in recent.items():
-        lbl = labels.get(sid)
-        if not lbl:
+    for sid, signal in recent.items():
+        label = labels.get(sid)
+        if not label:
             continue
-        if lbl.get("valid") is False:        # precision-bug / data-quality flag
+        if label.get("valid") is False:
             invalid += 1
             continue
-        out = lbl.get("outcome", "")
-        sym = s.get("symbol", "?")
-        if out.startswith("TP"):
+        outcome = label.get("outcome", "")
+        symbol = signal.get("symbol", "?")
+        if outcome.startswith("TP"):
             tp += 1
-            by_pair[sym]["tp"] += 1
-        elif out == "SL":
+            by_pair[symbol]["tp"] += 1
+        elif outcome == "SL":
             sl += 1
-            by_pair[sym]["sl"] += 1
-        elif out == "TIME":
+            by_pair[symbol]["sl"] += 1
+        elif outcome == "TIME":
             te += 1
-            by_pair[sym]["te"] += 1
+            by_pair[symbol]["te"] += 1
 
     decisive = tp + sl
     wr = tp / decisive * 100 if decisive else 0
@@ -134,19 +232,43 @@ def signal_stats(days=7):
         last = signals[last_sid]
 
     return {
-        "total": tp + sl + te, "tp": tp, "sl": sl, "te": te,
-        "wr": wr, "pending": len(pending), "invalid": invalid,
-        "by_pair": dict(by_pair), "last": last,
+        "total": tp + sl + te,
+        "tp": tp,
+        "sl": sl,
+        "te": te,
+        "wr": wr,
+        "pending": len(pending),
+        "invalid": invalid,
+        "by_pair": dict(by_pair),
+        "last": last,
     }
 
-# ── 5. Main ──────────────────────────────────────────────────────────────────
-def main():
-    now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"\n{'='*58}")
-    print(f"  PROJECT SNAPSHOT — {now}")
-    print(f"{'='*58}")
 
-    # Git
+def _print_process_status() -> None:
+    report = bot_status()
+    relevant = report["relevant"]
+    if relevant:
+        kinds = ", ".join(f"{k}={v}" for k, v in report["by_kind"].items())
+        print(f" BOT:  RUNNING relevant={len(relevant)} ({kinds})")
+        for row in relevant[:5]:
+            print(f"       pid={row['pid']} kind={row['kind']} cmd={row['command']}")
+    else:
+        ignored = report["ignored_python"]
+        suffix = f" (ignored unrelated python={ignored})" if ignored else ""
+        print(f" BOT:  no relevant trading process found{suffix}")
+
+
+def main() -> None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+    now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    print(f"\n{'=' * 58}")
+    print(f"  PROJECT SNAPSHOT - {now}")
+    print(f"{'=' * 58}")
+
     head, dirty, dirty_files = git_status()
     dirty_mark = " [DIRTY]" if dirty else ""
     print(f"\n GIT:  {head}{dirty_mark}")
@@ -154,44 +276,32 @@ def main():
         for line in dirty_files.splitlines()[:5]:
             print(f"       {line}")
 
-    # Bot
-    procs = bot_status()
-    status = f"ЗАПУЩЕН ({procs} процессов)" if procs >= 2 else "⚠ не найден"
-    print(f" БОТ:  {status}")
+    _print_process_status()
+    print(f" LOG:  {last_log_line()}")
 
-    # Last log
-    last_log = last_log_line()
-    print(f" ЛОГ:  {last_log}")
-
-    # Signal stats 7d
     st = signal_stats(days=7)
-    total = st["total"]
-    wr = st["wr"]
-    tp, sl, te = st["tp"], st["sl"], st["te"]
-    pending = st["pending"]
-    invalid = st["invalid"]
+    inv_mark = f"  |  invalid: {st['invalid']}" if st["invalid"] else ""
+    print(f"\n{'-' * 58}")
+    print(f" MAIN SIGNALS (7d): {st['total']} closed  |  pending: {st['pending']}{inv_mark}")
+    if st["tp"] + st["sl"] > 0:
+        print(f" WR decisive: {st['wr']:.0f}%  |  TP={st['tp']}  SL={st['sl']}  TIME={st['te']}")
+        print("\n By pair:")
+        for sym, row in sorted(st["by_pair"].items()):
+            n = row["tp"] + row["sl"] + row["te"]
+            w = row["tp"] / (row["tp"] + row["sl"]) * 100 if (row["tp"] + row["sl"]) else 0
+            bar = "+" * row["tp"] + "-" * row["sl"] + "." * row["te"]
+            print(f"   {sym.replace('-USDT-SWAP', ''):10} n={n:3}  WR={w:3.0f}%  {bar}")
 
-    print(f"\n{'-'*58}")
-    inv_mark = f"  |  invalid: {invalid}" if invalid else ""
-    print(f" СИГНАЛЫ MAIN (7 дней): {total} закрытых  |  pending: {pending}{inv_mark}")
-    if tp + sl > 0:
-        print(f" WR (decisive): {wr:.0f}%  |  TP={tp}  SL={sl}  TIME={te}")
-        print()
-        print(f" По парам:")
-        for sym, s in sorted(st["by_pair"].items()):
-            n = s["tp"] + s["sl"] + s["te"]
-            w = s["tp"] / (s["tp"] + s["sl"]) * 100 if (s["tp"] + s["sl"]) else 0
-            bar = "▓" * s["tp"] + "░" * s["sl"] + "·" * s["te"]
-            print(f"   {sym.replace('-USDT-SWAP',''):10} n={n:3}  WR={w:3.0f}%  {bar}")
-
-    # Last signal
     last = st["last"]
     if last:
         ts = datetime.utcfromtimestamp(last["_ts_ms"] / 1000).strftime("%m-%d %H:%M")
-        print(f"\n ПОСЛЕДНИЙ СИГНАЛ: {ts} UTC | {last.get('symbol')} | "
-              f"{last.get('side')} | {last.get('regime')} | {last.get('trade_style')}")
+        print(
+            f"\n LAST SIGNAL: {ts} UTC | {last.get('symbol')} | "
+            f"{last.get('side')} | {last.get('regime')} | {last.get('trade_style')}"
+        )
 
-    print(f"{'='*58}\n")
+    print(f"{'=' * 58}\n")
+
 
 if __name__ == "__main__":
     main()
