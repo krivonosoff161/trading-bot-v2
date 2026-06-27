@@ -14,10 +14,16 @@ from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import append_signal
 
 
-def _sig(signal_id: str, *, family: str = "early_tp_tactical", tf: str = "1h") -> PaperActionSignal:
+def _sig(
+    signal_id: str,
+    *,
+    family: str = "early_tp_tactical",
+    tf: str = "1h",
+    source: str = "farm",
+) -> PaperActionSignal:
     return PaperActionSignal(
         signal_id=signal_id,
-        source="farm",
+        source=source,
         symbol="BTC_USDT_SWAP",
         okx_inst_id="BTC-USDT-SWAP",
         timeframe=tf,
@@ -64,6 +70,7 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     ]
     assert rows[0]["setup_family"] == "early_tp_tactical"
     assert rows[0]["runtime_action"] == "watch_paper"
+    assert rows[0]["source"] == "farm"
     assert rows[0]["entry_zone"] == [100.0, 101.0]
     assert rows[0]["boundary_ts"] == 1
     assert rows[0]["created_at"] == 1_800_000_000.0
@@ -76,6 +83,21 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     assert rows[0]["exit_mode"] == "partial_be"
     assert all(row["paper_only"] is True for row in rows)
     assert all(row["execution_allowed"] is False for row in rows)
+
+
+def test_runtime_queue_preserves_pfr_source(tmp_path):
+    append_signal(tmp_path, _sig("pfr", source="pfr_farm"))
+    export_main_paper_instructions(tmp_path)
+    consume_main_paper_instructions(tmp_path)
+
+    summary = build_main_paper_runtime_queue(tmp_path)
+
+    rows = [
+        json.loads(line)
+        for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert summary["queued"] == 1
+    assert rows[0]["source"] == "pfr_farm"
 
 
 def test_runtime_queue_skips_rejected_consumer_rows(tmp_path):
@@ -102,6 +124,7 @@ def test_runtime_queue_record_rejects_execution_enabled():
             consumer_id="c",
             instruction_id="i",
             source_signal_id="s",
+            source="farm",
             pair="BTC-USDT-SWAP",
             okx_inst_id="BTC-USDT-SWAP",
             timeframe="1h",

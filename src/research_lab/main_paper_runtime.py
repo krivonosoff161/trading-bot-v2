@@ -82,7 +82,7 @@ def _signal_from_queue(row: dict[str, Any]) -> PaperActionSignal:
 
     sig = PaperActionSignal(
         signal_id=str(row.get("source_signal_id") or row.get("runtime_id") or ""),
-        source="pfr_farm",
+        source=str(row.get("source") or "farm"),
         symbol=str(row.get("okx_inst_id") or row.get("pair") or "").replace("-", "_"),
         okx_inst_id=str(row.get("okx_inst_id") or row.get("pair") or ""),
         timeframe=str(row.get("timeframe") or ""),
@@ -210,6 +210,7 @@ def _item_result(row: dict[str, Any], sig: PaperActionSignal, status: str, candl
     return {
         "runtime_id": row.get("runtime_id", ""),
         "source_signal_id": sig.signal_id,
+        "source": sig.source,
         "okx_inst_id": sig.okx_inst_id,
         "timeframe": sig.timeframe,
         "setup_family": sig.setup_family,

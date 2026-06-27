@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.main_paper_consumer import SUMMARY_SCHEMA as CONSUMER_SCHEMA
+from src.research_lab.paper_signals.contract import SOURCES
 
 SCHEMA = "MainPaperRuntimeQueueItem.v1"
 SUMMARY_SCHEMA = "main_paper_runtime_adapter.v1"
@@ -42,6 +43,7 @@ class MainPaperRuntimeQueueItem:
     consumer_id: str
     instruction_id: str
     source_signal_id: str
+    source: str
     pair: str
     okx_inst_id: str
     timeframe: str
@@ -80,6 +82,8 @@ class MainPaperRuntimeQueueItem:
             raise ValueError("runtime queue must be paper_only")
         if self.source_consumer_status != "accepted_for_paper_watch":
             raise ValueError("runtime queue accepts only accepted consumer rows")
+        if self.source not in SOURCES:
+            raise ValueError(f"runtime queue source must be one of {SOURCES}")
         if self.entry <= 0 or self.stop <= 0:
             raise ValueError("entry and stop must be positive")
         if self.entry == self.stop:
@@ -183,6 +187,7 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         consumer_id=str(row.get("consumer_id") or ""),
         instruction_id=str(row.get("instruction_id") or ""),
         source_signal_id=str(row.get("source_signal_id") or ""),
+        source=str(meta.get("source") or "farm"),
         pair=str(row.get("pair") or contract.get("pair") or ""),
         okx_inst_id=str(row.get("okx_inst_id") or contract.get("pair") or ""),
         timeframe=str(row.get("timeframe") or ""),
