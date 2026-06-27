@@ -61,6 +61,31 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert analyzer["run_latest_analysis_auto_trade_guarded"] is True
     assert analyzer["run_latest_analysis_requires_auto_execute_opt_in"] is True
     assert analyzer["safe_for_farm_pfr_runtime"] is False
+    launch_contract = report["product_analyzer_launch_contract"]
+    assert launch_contract["schema"] == "product_analyzer_launch_contract.v1"
+    assert launch_contract["canonical_paper_launcher"] == "bat/strategy_lab_farm_full_cycle_loop.bat"
+    assert launch_contract["canonical_farm_module"] == "scripts.strategy_lab.farm_loop"
+    assert launch_contract["canonical_requires_run_paper_signals"] is True
+    assert launch_contract["manual_telegram_launcher"] == "start.bat"
+    assert launch_contract["manual_telegram_current_for_farm"] is False
+    assert launch_contract["telegram_bot_main_starts_scanner_loop"] is False
+    assert launch_contract["telegram_bot_main_polls_updates"] is True
+    assert launch_contract["telegram_bot_auto_execute_opt_in"] is True
+    assert launch_contract["manual_chart_send_default"] is False
+    assert launch_contract["manual_chart_can_send_with_flag"] is True
+    assert launch_contract["manual_chart_uses_private_okx_client"] is True
+    assert launch_contract["manual_latest_requires_human_prompt"] is True
+    assert launch_contract["manual_latest_auto_execute_import_gated"] is True
+    assert launch_contract["text_card_shared_router_entrypoint"] == "generate_client_text"
+    assert launch_contract["shared_router_opt_in_env"] == "PRODUCT_ANALYZER_LLM_ROUTER"
+    assert launch_contract["shared_router_active"] is False
+    assert launch_contract["premium_vision_yandex_only"] is True
+    assert launch_contract["edu_qa_yandex_only"] is True
+    assert launch_contract["farm_pfr_runtime_uses_manual_product_stack"] is False
+    assert launch_contract["old_main_consumes_paper_queue"] is False
+    assert launch_contract["telegram_send_default"] is False
+    assert launch_contract["execution_allowed"] is False
+    assert report["readiness"]["product_analyzer_launch_contract"]["status"] == "pass"
     training = report["training_data"]["paper_signal_training"]
     assert training["rows"] == 0
     assert training["schema_rows"] == 0
@@ -101,6 +126,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
+    assert report["readiness"]["product_analyzer_launch_contract"]["status"] == "pass"
     assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
     assert report["readiness"]["legacy_product_text_quality"]["status"] == "pass"
     assert report["readiness"]["manual_product_analyzer_boundary"]["status"] == "warn"
@@ -394,6 +420,9 @@ def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_pa
     assert formatter_status["shared_router_active"] is True
     assert formatter_status["follows_llm_provider_env"] is True
     assert formatter_status["configured"] is True
+    assert report["product_analyzer_launch_contract"]["shared_router_active"] is True
+    assert report["product_analyzer_launch_contract"]["premium_vision_yandex_only"] is True
+    assert report["product_analyzer_launch_contract"]["edu_qa_yandex_only"] is True
     assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
     assert llm_boundaries["scanner_formatter_provider_mismatch"] is False

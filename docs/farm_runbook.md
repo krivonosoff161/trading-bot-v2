@@ -101,6 +101,17 @@ Expected safe state:
   text contains mojibake markers. That would not affect the canonical farm/PFR paper
   loop, but it would block using `start.bat` / Telegram analyzer as a polished product
   channel until those strings are cleaned or migrated.
+- `product_analyzer_launch_contract = pass` is required before treating the old
+  product/analyzer stack as safely isolated. It must show
+  `manual_telegram_current_for_farm = false`,
+  `telegram_bot_main_starts_scanner_loop = false`,
+  `manual_chart_send_default = false`,
+  `manual_latest_auto_execute_import_gated = true`,
+  `farm_pfr_runtime_uses_manual_product_stack = false`,
+  `old_main_consumes_paper_queue = false`, and `execution_allowed = false`.
+  This proves `start.bat`, `scripts.analyze_chart`, and
+  `scripts.run_latest_analysis` remain manual product surfaces, not the current
+  farm/PFR paper runtime.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
@@ -401,6 +412,19 @@ The old live `main.py` / `ws_main_screener.py` stack is not a farm/PFR executor 
 It can be audited as a separate scanner/Telegram surface, but it must not be treated as
 the consumer of farm paper instructions until a separate paper-only port is reviewed and
 tested.
+
+The manual product/analyzer launch contract is stricter than "the files exist":
+
+1. `bat/strategy_lab_farm_full_cycle_loop.bat` is the canonical farm/PFR/paper launcher.
+2. `start.bat` starts only the legacy Telegram analyzer polling loop; its `main()` does
+   not start the legacy `_scanner_loop`.
+3. `scripts.analyze_chart` can render a chart/report and can send Telegram only with
+   explicit `--send-telegram`; send is off by default.
+4. `scripts.run_latest_analysis` can reach old `auto_execute` only behind
+   `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE` and `AUTO_TRADE`.
+5. `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` only moves text-card
+   `generate_client_text` onto the shared `LLM_PROVIDER` router. Premium vision and
+   educational Q&A remain Yandex-only until a separate provider/prompt migration.
 
 For the standalone CLI, the matching flags are:
 

@@ -273,6 +273,20 @@ def _contains_any(path: Path, needles: tuple[str, ...]) -> bool:
     return any(needle in text for needle in needles)
 
 
+def _section_between(path: Path, start: str, end: str) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    start_idx = text.find(start)
+    if start_idx < 0:
+        return ""
+    end_idx = text.find(end, start_idx + len(start))
+    if end_idx < 0:
+        return text[start_idx:]
+    return text[start_idx:end_idx]
+
+
 _LEGACY_TEXT_MOJIBAKE_MARKERS = (
     "\u0432\u0402",  # mojibake punctuation/dash marker.
     "\u0432\u045a",
@@ -355,7 +369,18 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     telegram_flow = report["telegram_delivery_flow"]
     llm_boundaries = report["llm_surface_boundaries"]
     legacy_text = report["legacy_product_text_quality"]
+    product_launch = report["product_analyzer_launch_contract"]
     telegram_delivery_freshness = chain["telegram_delivery_freshness"]
+    product_launch_isolated = (
+        product_launch["manual_telegram_current_for_farm"] is False
+        and product_launch["telegram_bot_main_starts_scanner_loop"] is False
+        and product_launch["manual_chart_send_default"] is False
+        and product_launch["manual_latest_auto_execute_import_gated"] is True
+        and product_launch["farm_pfr_runtime_uses_manual_product_stack"] is False
+        and product_launch["old_main_consumes_paper_queue"] is False
+        and product_launch["telegram_send_default"] is False
+        and product_launch["execution_allowed"] is False
+    )
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -643,6 +668,19 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 "auto_execute path before reviving manual product delivery."
             ),
         ),
+        "product_analyzer_launch_contract": _gate(
+            "pass" if product_launch_isolated else "blocked",
+            (
+                "Product analyzer launch paths are isolated from the canonical farm/PFR paper loop."
+                if product_launch_isolated
+                else "Product analyzer launch paths are not isolated enough for the current paper loop."
+            ),
+            action=(
+                "Keep farm/PFR launches on bat/strategy_lab_farm_full_cycle_loop.bat."
+                if product_launch_isolated
+                else "Restore launcher isolation before running the visible paper cycle."
+            ),
+        ),
         "legacy_product_text_quality": _gate(
             "pass" if legacy_text["clean"] else "warn",
             "Legacy product/Telegram operator text has no known mojibake markers."
@@ -776,6 +814,12 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
     llm_formatter_status = formatter_provider_status()
+    telegram_bot_main_body = _section_between(telegram_bot, "async def main() -> None:", "def _setup_rotating_log")
+    run_latest_entry_block = _section_between(
+        run_latest_analysis,
+        'if result and result.get("entry_signal") == "ENTRY":',
+        '    print()',
+    )
     llm_formatter_prompt_markers = (
         "\u0422\u044b \u2014 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a",
         "\U0001f4ca \u0421\u0415\u0419\u0427\u0410\u0421 \u041d\u0410 \u0420\u042b\u041d\u041a\u0415",
@@ -1044,6 +1088,46 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 "Keep the farm/PFR paper runtime on the derived paper instruction path."
             ),
         },
+        "product_analyzer_launch_contract": {
+            "schema": "product_analyzer_launch_contract.v1",
+            "canonical_paper_launcher": "bat/strategy_lab_farm_full_cycle_loop.bat",
+            "canonical_farm_module": "scripts.strategy_lab.farm_loop",
+            "canonical_requires_run_paper_signals": True,
+            "manual_telegram_launcher": "start.bat",
+            "manual_telegram_role": "legacy product analyzer bot",
+            "manual_telegram_current_for_farm": False,
+            "telegram_bot_main_starts_scanner_loop": "_scanner_loop" in telegram_bot_main_body,
+            "telegram_bot_main_polls_updates": "getUpdates" in telegram_bot_main_body,
+            "telegram_bot_auto_execute_opt_in": _contains(
+                telegram_bot,
+                "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE",
+            ),
+            "manual_chart_analyzer": "scripts.analyze_chart",
+            "manual_chart_send_default": False,
+            "manual_chart_can_send_with_flag": _contains(analyze_chart, "--send-telegram"),
+            "manual_chart_uses_private_okx_client": _contains(analyze_chart, "OKXClient"),
+            "manual_latest_wrapper": "scripts.run_latest_analysis",
+            "manual_latest_requires_human_prompt": _contains(run_latest_analysis, "input("),
+            "manual_latest_auto_execute_import_gated": (
+                "ALLOW_AUTO_EXECUTE_ENV" in run_latest_entry_block
+                and "from scripts.auto_execute import AUTO_TRADE, execute_signal" in run_latest_entry_block
+            ),
+            "text_card_shared_router_entrypoint": "generate_client_text",
+            "shared_router_opt_in_env": "PRODUCT_ANALYZER_LLM_ROUTER",
+            "shared_router_active": llm_formatter_status["shared_router_active"],
+            "premium_vision_yandex_only": "generate_premium_analysis" in llm_formatter_status["yandex_only_entrypoints"],
+            "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
+            "farm_pfr_runtime_uses_manual_product_stack": False,
+            "old_main_consumes_paper_queue": False,
+            "telegram_send_default": False,
+            "execution_allowed": False,
+            "revival_rule": (
+                "Use the canonical paper launcher for farm/PFR/paper. Treat start.bat, "
+                "analyze_chart, and run_latest_analysis as manual product surfaces until "
+                "their prompts, provider routing, Telegram delivery, and auto-execute hooks "
+                "pass a separate product review."
+            ),
+        },
         "main_engine_boundary": {
             "schema": "main_engine_boundary.v1",
             "path": str(old_main),
@@ -1264,6 +1348,17 @@ def _print_human(report: dict[str, Any]) -> None:
         f"latest_auto_trade_guard={analyzer['run_latest_analysis_auto_trade_guarded']} "
         f"latest_manual_opt_in={analyzer['run_latest_analysis_requires_auto_execute_opt_in']} "
         f"safe_for_farm={analyzer['safe_for_farm_pfr_runtime']}"
+    )
+    launch_contract = report["product_analyzer_launch_contract"]
+    print(
+        "product_analyzer_launch_contract: "
+        f"canonical={launch_contract['canonical_paper_launcher']} "
+        f"manual_start={launch_contract['manual_telegram_launcher']} "
+        f"manual_current_for_farm={launch_contract['manual_telegram_current_for_farm']} "
+        f"tg_main_starts_scanner={launch_contract['telegram_bot_main_starts_scanner_loop']} "
+        f"latest_auto_execute_gated={launch_contract['manual_latest_auto_execute_import_gated']} "
+        f"shared_router_active={launch_contract['shared_router_active']} "
+        f"execution_allowed={launch_contract['execution_allowed']}"
     )
     main_boundary = report["main_engine_boundary"]
     print(

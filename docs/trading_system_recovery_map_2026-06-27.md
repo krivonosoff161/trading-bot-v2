@@ -206,6 +206,15 @@ These tools are useful for manual product review, but they are not the farm/PFR 
 runtime and must stay outside the canonical launch path until their prompts, provider,
 Telegram text, and execution hook are reviewed.
 
+Machine launch boundary: `operational_health` exposes
+`product_analyzer_launch_contract.v1`. It must show that `start.bat` is not current for
+farm/PFR, Telegram bot `main()` does not start the legacy `_scanner_loop`,
+`analyze_chart` does not send Telegram by default, `run_latest_analysis` gates old
+`auto_execute` behind `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE`, the product stack is not
+used by the farm/PFR runtime, old `main.py` does not consume the paper queue, and
+`execution_allowed=false`. This is a launch-path isolation proof, not a claim that old
+product Telegram delivery is ready for unattended operation.
+
 Detailed product-surface audit:
 [`product_analyzer_revival_audit_2026-06-27.md`](product_analyzer_revival_audit_2026-06-27.md).
 

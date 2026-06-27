@@ -135,3 +135,7 @@ def test_manual_analyzer_and_latest_wrapper_boundaries():
     assert "if _auto_execute_opt_in()" in telegram_bot
     assert "from scripts.auto_execute import AUTO_TRADE, execute_signal" in telegram_bot
     assert "from scripts.auto_execute import AUTO_TRADE, check_and_close_timeouts" in telegram_bot
+    main_body = telegram_bot.split("async def main() -> None:", 1)[1].split("def _setup_rotating_log", 1)[0]
+    assert "_scanner_loop" not in main_body
+    assert "getUpdates" in main_body
+    assert "scanner moved to scripts/ws/ws_scanner.py" in main_body
