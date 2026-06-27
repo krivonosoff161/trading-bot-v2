@@ -118,6 +118,18 @@ Bounded dry-run smoke:
 python -X utf8 -m scripts.strategy_lab.farm_loop --once --dry-run --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 20 --paper-signals-max-pfr-scan 5 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 5 --max-plan-events 5 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 3 --data-days 7 --provider okx-public --backend auto
 ```
 
+Bounded apply smoke actually run on public OKX after the launch audit:
+
+```bash
+python -X utf8 -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --max-followups 1 --data-days 7 --provider okx-public --backend auto
+```
+
+Result: exit code 0 in 47 seconds, `main_paper_bridge instructions=20`,
+`main_paper_consumer accepted=20 rejected=0`, `main_paper_runtime_queue queued=20`,
+`main_paper_runtime_observation observed=1`, and `paper_telegram_preview rendered=20`.
+This also verified the reason for the earlier long-running smoke: active paper-signal
+observation must be capped (`--paper-signals-max-observe`) in operator loops.
+
 ## Non-Claims
 
 This does not claim a profitable strategy, live readiness, or a safe production
