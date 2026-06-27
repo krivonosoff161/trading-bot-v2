@@ -95,6 +95,28 @@ def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str,
     return metrics
 
 
+def _freshness_metrics(derived: Path, source: Path) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "source_path": str(source),
+        "derived_path": str(derived),
+        "source_exists": source.exists(),
+        "derived_exists": derived.exists(),
+        "source_mtime": 0.0,
+        "derived_mtime": 0.0,
+        "stale_vs_source": False,
+        "age_delta_seconds": 0.0,
+    }
+    if source.exists():
+        metrics["source_mtime"] = source.stat().st_mtime
+    if derived.exists():
+        metrics["derived_mtime"] = derived.stat().st_mtime
+    if source.exists() and derived.exists():
+        delta = metrics["source_mtime"] - metrics["derived_mtime"]
+        metrics["age_delta_seconds"] = round(float(delta), 3)
+        metrics["stale_vs_source"] = delta > 1.0
+    return metrics
+
+
 def _gate(status: str, message: str, *, action: str = "") -> dict[str, str]:
     return {"status": status, "message": message, "action": action}
 
@@ -203,12 +225,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         or journals["paper_signal_training"]["exists"]
     )
     paper_training = training_data["paper_signal_training"]
+    paper_training_freshness = training_data["paper_signal_training_freshness"]
     paper_training_ready = (
         paper_training["rows"] > 0
         and paper_training["schema_rows"] == paper_training["rows"]
         and paper_training["invalid_json"] == 0
         and paper_training["paper_only_false"] == 0
         and paper_training["read_error"] == ""
+        and not paper_training_freshness["stale_vs_source"]
     )
     visible_cycle_blocked = (
         safety["auto_trade"]
@@ -431,8 +455,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         ),
         "paper_signal_training_export": _gate(
             "pass" if paper_training_ready else "warn",
-            "Paper signal training export is non-empty, schema-valid, and paper-only."
-            if paper_training_ready else "Paper signal training export is missing, empty, invalid, or not paper-only.",
+            "Paper signal training export is current, non-empty, schema-valid, and paper-only."
+            if paper_training_ready
+            else "Paper signal training export is missing, stale, empty, invalid, or not paper-only.",
             action="Run python -m scripts.strategy_lab.paper_signal_training_export, then rebuild the journal."
             if not paper_training_ready else "",
         ),
@@ -730,6 +755,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 paper_signal_training,
                 schema="PaperSignalTrainingRow.v1",
             ),
+            "paper_signal_training_freshness": _freshness_metrics(
+                paper_signal_training,
+                paper_signal_log,
+            ),
         },
         "pfr": {
             "db": _exists(pfr_db),
@@ -881,10 +910,12 @@ def _print_human(report: dict[str, Any]) -> None:
         f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
     )
     training = report["training_data"]["paper_signal_training"]
+    freshness = report["training_data"]["paper_signal_training_freshness"]
     print(
         "paper_signal_training: "
         f"rows={training['rows']} schema_rows={training['schema_rows']} "
-        f"invalid_json={training['invalid_json']} paper_only_false={training['paper_only_false']}"
+        f"invalid_json={training['invalid_json']} paper_only_false={training['paper_only_false']} "
+        f"stale_vs_source={freshness['stale_vs_source']}"
     )
     print("readiness:")
     for name, gate in report["readiness"].items():

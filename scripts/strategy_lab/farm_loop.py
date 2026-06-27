@@ -222,6 +222,13 @@ def _print_cycle(out: dict) -> None:
             f"rendered={tp.get('rendered', 0)} invalid={tp.get('invalid', 0)} "
             f"sends_network={tp.get('sends_network')}"
         )
+    train = out.get("paper_signal_training_export") or {}
+    if train:
+        print(
+            "  paper_signal_training_export: "
+            f"rows={train.get('rows', 0)} terminal_only={train.get('terminal_only')} "
+            f"paper_only={train.get('paper_only')}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -237,9 +244,11 @@ def _cycle_signature(out: dict) -> tuple:
     main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
     main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
+    training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
+        training_export,
         bool(out.get("errors")),
     )
 
@@ -334,6 +343,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
                 except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
+                try:
+                    from src.research_lab.paper_signals.training_export import export_training_rows
+                    out["paper_signal_training_export"] = export_training_rows(private_root)
+                except Exception as exc:  # noqa: BLE001 - training export must not break the cycle
+                    out.setdefault("errors", []).append({
+                        "where": "paper_signal_training_export",
+                        "error": str(exc),
+                    })
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)

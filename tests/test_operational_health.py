@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 from scripts.strategy_lab import operational_health as H
@@ -139,6 +140,28 @@ def test_operational_health_rejects_mixed_training_schema(tmp_path, monkeypatch)
     training = report["training_data"]["paper_signal_training"]
     assert training["rows"] == 2
     assert training["schema_rows"] == 1
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
+
+
+def test_operational_health_warns_when_paper_training_export_is_stale(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    paper = derived / "paper_signals.jsonl"
+    training = derived / "paper_signal_training.jsonl"
+    paper.write_text(json.dumps({"schema": "PaperActionSignal.v1"}) + "\n", encoding="utf-8")
+    training.write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(training, (1000, 1000))
+    os.utime(paper, (1005, 1005))
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["stale_vs_source"] is True
+    assert freshness["age_delta_seconds"] == 5.0
     assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
 
 
