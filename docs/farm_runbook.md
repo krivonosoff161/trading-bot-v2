@@ -203,6 +203,9 @@ prepared data, but broad `discovery_refill` has nothing to pull from. The loop w
 
 ## Commands
 
+Latest bounded wiring audit:
+[`farm_paper_cycle_smoke_2026-06-27.md`](farm_paper_cycle_smoke_2026-06-27.md).
+
 ```bash
 # Plan only, writes nothing.
 python -m scripts.strategy_lab.farm_loop --once --dry-run
