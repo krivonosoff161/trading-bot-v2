@@ -113,7 +113,8 @@ Telegram is split into surfaces:
 LLM is also split:
 
 - `src.utils.llm_client`: scanner/advisory provider router (`alibaba`/`yandex`);
-- `src.utils.llm_formatter`: older chart/text formatter for the Telegram analyzer;
+- `src.utils.llm_formatter`: older Yandex-only chart/text formatter for the Telegram
+  analyzer; it does not follow `LLM_PROVIDER`;
 - `src.research_lab.llm_provider`: Strategy Lab proposal gate, disabled by default.
 
 None of these paths can promote a setup, bypass validation, or enable execution.
@@ -124,6 +125,11 @@ Important legacy boundary: `scripts.telegram_bot` still imports
 Therefore `start.bat` is execution-adjacent and must not be used as the Strategy Lab
 paper/PFR launcher. The current paper alert path remains `paper_telegram_preview`,
 which writes offline artifacts first.
+
+Provider boundary: a green Alibaba scanner/advisory path is not proof that the Telegram
+chart analyzer is using Alibaba. The analyzer calls `generate_client_text`,
+`generate_premium_analysis`, and `generate_edu_text` in `llm_formatter`, so it needs a
+separate prompt/provider audit before product Telegram delivery is revived.
 
 ## Journal And Training Data
 

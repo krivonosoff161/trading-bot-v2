@@ -66,8 +66,9 @@ The scanner/analyzer Telegram code remains separate from the farm:
 
 - `src.utils.llm_client` routes scanner/advisory LLM calls through `LLM_PROVIDER`
   (`alibaba` or `yandex`) and role-specific models.
-- `src.utils.llm_formatter` is the chart/text formatter path used by the older
-  Telegram analyzer surface.
+- `src.utils.llm_formatter` is the Yandex-only chart/text formatter path used by the
+  older Telegram analyzer surface. It does not follow the scanner `LLM_PROVIDER`
+  router.
 - `src.utils.telegram` owns token/chat lookup and message sending for surfaces that are
   explicitly started by the operator.
 
@@ -80,6 +81,11 @@ Important legacy boundary: `scripts/telegram_bot.py` still contains an
 chain uses `paper_telegram_preview` first; any real Telegram send must be added later
 as a reviewed, opt-in read-only surface over derived paper artifacts.
 
+Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory provider path,
+not the legacy Telegram chart analyzer. The chart analyzer must be audited separately
+because it calls `llm_formatter.generate_client_text`, `generate_premium_analysis`, and
+`generate_edu_text` through Yandex AI Studio.
+
 ## Machine-Checkable Invariant
 
 `python -m scripts.strategy_lab.operational_health` exposes
@@ -91,6 +97,8 @@ as a reviewed, opt-in read-only surface over derived paper artifacts.
 - `telegram_analyzer_current_for_farm = false`
 - `telegram_analyzer_imports_auto_execute = true`
 - `telegram_analyzer_auto_trade_guarded = true`
+- `llm_surface_boundaries.telegram_chart_formatter_provider = yandex_only`
+- `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
 - `scanner_surface_sends_to_subscribers = true` when the scanner surface exists
 - `legacy_ws_scanner_uses_okx_client = true` when the legacy scanner file exists
 

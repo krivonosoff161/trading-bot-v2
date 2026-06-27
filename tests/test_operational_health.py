@@ -16,6 +16,14 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
 
     assert report["telegram"]["paper"]["configured"] is True
     assert report["scanner_llm"]["alibaba_key_set"] is True
+    llm_boundaries = report["llm_surface_boundaries"]
+    assert llm_boundaries["scanner_uses_llm_provider_env"] is True
+    assert llm_boundaries["scanner_supports_alibaba"] is True
+    assert llm_boundaries["telegram_chart_formatter_provider"] == "yandex_only"
+    assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is False
+    assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
+    assert llm_boundaries["analyze_chart_can_send_telegram"] is True
+    assert llm_boundaries["analyze_chart_send_default"] is False
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
@@ -50,6 +58,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
+    assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
