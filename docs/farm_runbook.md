@@ -88,11 +88,11 @@ Expected safe state:
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
   If scanner `LLM_PROVIDER=alibaba`, `scanner_formatter_provider_mismatch = true` is
   expected until the old formatter is migrated through a tested adapter.
-  For the text-only product chart card, the tested adapter is explicit opt-in:
+  For text-only product analyzer calls, the tested adapter is explicit opt-in:
   set `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. Then health should show
   `telegram_chart_formatter_provider = shared_llm_client_opt_in` and
   `scanner_formatter_provider_mismatch = false` when `LLM_PROVIDER` matches. This does
-  not migrate premium vision or educational Q&A.
+  not migrate premium vision.
 - `product_analyzer_prompt_integrity = pass` is required before any manual product
   analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
   keeps risk/non-claim wording, and does not contain known mojibake markers.
@@ -429,9 +429,10 @@ The manual product/analyzer launch contract is stricter than "the files exist":
    explicit `--send-telegram`; send is off by default.
 4. `scripts.run_latest_analysis` can reach old `auto_execute` only behind
    `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE` and `AUTO_TRADE`.
-5. `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` only moves text-card
-   `generate_client_text` onto the shared `LLM_PROVIDER` router. Premium vision and
-   educational Q&A remain Yandex-only until a separate provider/prompt migration.
+5. `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` moves text-only
+   `generate_client_text` and `generate_edu_text` onto the shared `LLM_PROVIDER`
+   router. Premium vision remains Yandex-only until a separate provider/prompt
+   migration.
 
 For the standalone CLI, the matching flags are:
 

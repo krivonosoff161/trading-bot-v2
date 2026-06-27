@@ -715,7 +715,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 else "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router."
             ),
             action=(
-                "Premium vision and educational Q&A still need separate provider/prompt review."
+                "Premium vision still needs separate provider/prompt review."
                 if telegram_analyzer_provider_ready
                 else "Audit provider routing before reviving Telegram product delivery."
             ),
@@ -1134,6 +1134,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 and "from scripts.auto_execute import AUTO_TRADE, execute_signal" in run_latest_entry_block
             ),
             "text_card_shared_router_entrypoint": "generate_client_text",
+            "educational_qa_shared_router_entrypoint": "generate_edu_text",
             "shared_router_opt_in_env": "PRODUCT_ANALYZER_LLM_ROUTER",
             "shared_router_active": llm_formatter_status["shared_router_active"],
             "start_bat_sets_shared_router": product_start_sets_shared_router,
@@ -1143,6 +1144,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "effective_provider": chart_formatter_effective_provider,
             "premium_vision_yandex_only": "generate_premium_analysis" in llm_formatter_status["yandex_only_entrypoints"],
             "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
+            "edu_qa_shared_router_entrypoint": "generate_edu_text" in llm_formatter_status["shared_router_entrypoints"],
             "farm_pfr_runtime_uses_manual_product_stack": False,
             "old_main_consumes_paper_queue": False,
             "telegram_send_default": False,

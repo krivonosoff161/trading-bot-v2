@@ -200,10 +200,10 @@ followed by a dry-run `paper_telegram_sender` audit over the preview artifacts.
 This keeps delivery status current without sending Telegram messages.
 
 Provider boundary: a green Alibaba scanner/advisory path is not proof that every
-Telegram analyzer feature is using Alibaba. `generate_client_text` uses the shared
-router under the product launchers; premium vision and educational Q&A still call
-the legacy formatter path and need separate prompt/provider audits before product
-Telegram delivery is treated as fully revived.
+Telegram analyzer feature is using Alibaba. Text-only `generate_client_text` and
+`generate_edu_text` use the shared router under the product launchers; premium
+vision still calls the legacy formatter path and needs a separate provider/prompt
+audit before product Telegram delivery is treated as fully revived.
 
 Text boundary: `product_analyzer_prompt_integrity = pass` covers the core chart prompt,
 not every legacy operator-facing string. `operational_health` also exposes

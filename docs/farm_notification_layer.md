@@ -132,8 +132,8 @@ the reviewed, opt-in `paper_telegram_sender` surface over derived paper artifact
 
 Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory provider path,
 not the legacy Telegram chart analyzer. The chart analyzer must be audited separately
-because it calls `llm_formatter.generate_client_text`, `generate_premium_analysis`, and
-`generate_edu_text` through Yandex AI Studio.
+because it calls `llm_formatter.generate_client_text`, `generate_edu_text`, and
+`generate_premium_analysis`; only the text-only entrypoints can use the shared router.
 
 The machine-readable formatter status is intentionally sanitized. It reports only
 provider shape (`provider=yandex`, `provider_scope=yandex_only`, key presence booleans,
@@ -142,9 +142,10 @@ keys, folder ids, chat ids, prompts, or request payloads. A mismatch such as
 `LLM_PROVIDER=alibaba` plus `scanner_formatter_provider_mismatch=true` is expected until
 the product analyzer is migrated through a dedicated adapter review. The text-only chart
 card can now be tested through the shared router with an explicit opt-in:
-`PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. That opt-in covers only
-`generate_client_text`; premium screenshot analysis and educational Q&A remain on the
-legacy Yandex formatter path until they receive separate prompt/provider reviews.
+`PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. That opt-in covers the text-only
+`generate_client_text` and `generate_edu_text` entrypoints; premium screenshot
+analysis remains on the legacy Yandex formatter path until it receives a separate
+vision provider/prompt review.
 
 Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
 does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`
