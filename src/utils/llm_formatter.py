@@ -27,6 +27,8 @@ _SUPPORTS_VISION = False   # Qwen3-235B = False
 _MAX_TOKENS = 900
 _TIMEOUT    = 60  # seconds
 _FORMATTER_RUB_PER_1K_TOKENS = float(os.getenv("YANDEX_LLM_FORMATTER_RUB_PER_1K", "0.5"))
+_ROUTER_ENV = "PRODUCT_ANALYZER_LLM_ROUTER"
+_SHARED_ROUTER_VALUES = {"shared", "llm_client"}
 
 
 def _model_label(model_uri: str) -> str:
@@ -36,6 +38,15 @@ def _model_label(model_uri: str) -> str:
     return "configured" if model_uri else ""
 
 
+def _router_value(env: dict[str, str] | None = None) -> str:
+    source = env if env is not None else os.environ
+    return source.get(_ROUTER_ENV, "yandex").strip("'\"").lower()
+
+
+def _use_shared_router(env: dict[str, str] | None = None) -> bool:
+    return _router_value(env) in _SHARED_ROUTER_VALUES
+
+
 def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, object]:
     """Return sanitized provider metadata for health checks.
 
@@ -43,23 +54,38 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
     folder ids, chat ids, prompts, or request payloads.
     """
     source = env if env is not None else os.environ
-    api_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
+    shared_router = _use_shared_router(source)
+    requested_router = _router_value(source)
+    shared_provider = source.get("LLM_PROVIDER", "yandex").strip("'\"").lower()
+    active_provider = shared_provider if shared_router else "yandex"
+    if shared_router and active_provider == "alibaba":
+        api_key_set = bool(source.get("ALIBABA_API_KEY", "").strip("'\""))
+        api_host = source.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com").split("//")[-1]
+    else:
+        api_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
+        api_host = "ai.api.cloud.yandex.net"
     folder_id_set = bool(source.get("YANDEX_FOLDER_ID", "").strip("'\""))
+    configured = api_key_set if shared_router else (api_key_set and folder_id_set)
     return {
         "schema": "llm_formatter_provider.v1",
         "surface": "legacy_chart_text_formatter",
-        "provider": "yandex",
-        "provider_scope": "yandex_only",
-        "follows_llm_provider_env": False,
-        "api_host": "ai.api.cloud.yandex.net",
+        "provider": active_provider,
+        "provider_scope": "shared_llm_client_opt_in" if shared_router else "yandex_only",
+        "router_env": _ROUTER_ENV,
+        "requested_router": requested_router,
+        "shared_router_active": shared_router,
+        "follows_llm_provider_env": shared_router,
+        "api_host": api_host,
         "api_key_set": api_key_set,
         "folder_id_set": folder_id_set,
-        "configured": api_key_set and folder_id_set,
+        "configured": configured,
         "model_label": _model_label(_MODEL_URI),
         "supports_vision": _SUPPORTS_VISION,
         "budget_guard": True,
         "telegram_send_authority": False,
         "execution_authority": False,
+        "shared_router_entrypoints": ["generate_client_text"] if shared_router else [],
+        "yandex_only_entrypoints": ["generate_premium_analysis", "generate_edu_text"],
         "function_entrypoints": [
             "generate_client_text",
             "generate_premium_analysis",
@@ -89,6 +115,30 @@ def _budget_allowed(role: str, model: str, *parts: str, max_output_tokens: int) 
 def _record_budget(role: str, tokens: int) -> None:
     if tokens:
         budget_guard.record_usage(role, tokens, _estimated_cost_rub(tokens))
+
+
+async def _call_shared_router(
+    system_prompt: str,
+    user_text: str,
+    *,
+    max_tokens: int,
+    timeout: int,
+) -> tuple[str | None, dict]:
+    """Opt-in text-only adapter over src.utils.llm_client.
+
+    This is deliberately limited to generate_client_text. Premium vision and
+    educational Q&A stay on the legacy formatter path until they receive their
+    own prompt/provider review.
+    """
+    from src.utils import llm_client
+
+    return await llm_client.call(
+        "chief",
+        system_prompt,
+        user_text,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
 
 _SYSTEM_PROMPT = """\
 Ты — аналитик крипторынка. Пишешь клиенту разбор на русском языке.
@@ -690,7 +740,8 @@ async def generate_client_text(
     Call Qwen3-235B via Yandex AI Studio and return natural Russian text.
     Returns None on any error (caller uses template fallback).
     """
-    if not _API_KEY or not _FOLDER_ID:
+    shared_router = _use_shared_router()
+    if not shared_router and (not _API_KEY or not _FOLDER_ID):
         print("LLM: YANDEX_API_KEY or YANDEX_FOLDER_ID not set — skipping")
         return None
 
@@ -705,6 +756,31 @@ async def generate_client_text(
         )
 
     analysis_text += _build_market_backdrop(symbol, market_context)
+
+    if shared_router:
+        body, usage = await _call_shared_router(
+            _SYSTEM_PROMPT,
+            analysis_text,
+            max_tokens=_MAX_TOKENS,
+            timeout=_TIMEOUT,
+        )
+        if not body:
+            return None
+        print(
+            "LLM formatter shared router: "
+            f"{usage.get('provider')}/{usage.get('role')} "
+            f"{usage.get('status')}"
+        )
+        ctx = snapshot.get("llm_context", {})
+        header = _build_header(
+            symbol, captured_at,
+            ctx.get("entry_signal", "WAIT"),
+            ctx.get("trade_style_hint", "NO_TRADE"),
+            ctx.get("bias_1h", "NEUTRAL"),
+            ctx.get("bias_4h", "NEUTRAL"),
+            side=ctx.get("side"),
+        )
+        return header + body
 
     # Build user message content
     content: list[dict] = [{"type": "text", "text": analysis_text}]
