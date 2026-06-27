@@ -100,6 +100,26 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["old_main_consumes_paper_queue"] is False
     assert launch_contract["telegram_send_default"] is False
     assert launch_contract["execution_allowed"] is False
+    revival = report["product_analyzer_revival_checklist"]
+    assert revival["schema"] == "product_analyzer_revival_checklist.v1"
+    assert revival["status"] == "review_required"
+    assert revival["canonical_paper_cycle_allowed"] is True
+    assert revival["manual_product_alerts_allowed"] is False
+    assert revival["live_execution_allowed"] is False
+    assert revival["validated"] == {
+        "text_prompt_integrity": True,
+        "text_prompt_no_mojibake": True,
+        "text_cards_use_effective_shared_router": True,
+        "scanner_formatter_provider_aligned": True,
+        "manual_chart_send_default_off": True,
+        "manual_latest_auto_execute_double_gated": True,
+        "farm_pfr_does_not_use_manual_product_stack": True,
+        "old_main_does_not_consume_paper_queue": True,
+    }
+    assert "premium_vision_provider_and_prompt" in revival["remaining_review"]
+    assert "executor_contract_before_any_old_main_reuse" in revival["remaining_review"]
+    assert "paper_telegram_preview" in revival["allowed_next_step"]
+    assert "does not prove" in revival["non_claim"]
     assert report["readiness"]["product_analyzer_launch_contract"]["status"] == "pass"
     training = report["training_data"]["paper_signal_training"]
     assert training["rows"] == 0
