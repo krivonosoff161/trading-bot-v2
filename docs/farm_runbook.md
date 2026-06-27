@@ -36,6 +36,10 @@ Expected safe state:
   `farm_core_sends_telegram = false`, `paper_sends_telegram_by_default = false`, and
   `execution_authority = false`. Scanner/Telegram surfaces may exist, but they are not
   farm/PFR executors.
+- `main_engine_boundary` records why old `main.py` is isolated. It should show
+  `order_capable = true`, `sets_leverage = true`, `imports_private_okx_client = true`,
+  `consumes_main_paper_queue = false`, and `safe_to_use_as_paper_executor = false`.
+  The paper observer remains `src.research_lab.main_paper_runtime`.
 - `readiness` gates show what is runnable, optional, or intentionally planned:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,

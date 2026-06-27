@@ -7,7 +7,7 @@ dedup_key + data_fingerprint so repeated runs never spam duplicates and a known-
 the same data; (3) persist the snapshot + a status JSON. Bounded N-cycle loop, stop-file aware.
 
 Live vs replay: a "live" signal pins boundary=now and matures forward over real cycles; a "replay" signal
-pins the boundary back and resolves immediately on already-elapsed bars — a labelled diagnostic, never
+pins the boundary back and resolves immediately on already-elapsed bars - a labelled diagnostic, never
 mixed with true-forward. No order/.env/live path anywhere.
 """
 from __future__ import annotations
@@ -233,7 +233,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 new_sigs.append((sig, candles))
                 by_key_active.add(sig.dedup_key)
 
-    # (3) PFR lane — bounded separate source, runs after movers so dedup is shared
+    # (3) PFR lane - bounded separate source, runs after movers so dedup is shared
     pfr_counts: dict[str, int] = {}
     if pfr_db_path is not None and len(new_sigs) < max_new:
         all_pfr = pfr_bridge.load_pfr_records(pfr_db_path)
@@ -264,7 +264,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             provider=provider,
             now=now,
             mode=mode,
-            active_dedup=by_key_active,          # shared mutable set — movers dedup carries over
+            active_dedup=by_key_active,          # shared mutable set - movers dedup carries over
             active_setup_ids=active_setup_ids,
             recent_fingerprints=recent_terminal,
             max_pfr=max(0, max_new - len(new_sigs)),
@@ -319,9 +319,9 @@ def learn_known_bad(memory: list[dict[str, Any]], *, min_n: int = 3) -> set[tupl
     """A (symbol, tf, family) becomes 'learned bad' after >= min_n terminal outcomes that are ALL
     losing/no-entry (stop / expired / no_follow_through). Deterministic; feeds the next cycle's gate."""
     agg: dict[tuple[str, str, str], list[str]] = {}
-    # Only genuine SETUP/direction failures count as "bad" — these are diagnoses review() actually emits.
+    # Only genuine SETUP/direction failures count as "bad" - these are diagnoses review() actually emits.
     # bad_exit_gave_back is an EXIT problem (fixed by execution geometry, not a dead setup); missed_pullback
-    # is a missed WIN (price ran the right way) — neither marks the setup known-bad.
+    # is a missed WIN (price ran the right way) - neither marks the setup known-bad.
     bad_diag = {"wrong_direction", "no_follow_through", "valid_loss"}
     for m in memory:
         key = (m.get("symbol"), m.get("timeframe"), m.get("family"))
@@ -355,7 +355,7 @@ def family_priority(memory: list[dict[str, Any]], *, default=None) -> list[str]:
 
 
 # Allowed keys for an LLM REVIEWER's advice: annotation only. It can never carry signal geometry
-# (entry/stop/side/take/order) — deterministic code remains the sole authority that mints a signal.
+# (entry/stop/side/take/order) - deterministic code remains the sole authority that mints a signal.
 _ADVICE_ALLOWED = {"diagnosis_note", "confidence", "suggested_family_priority", "rationale"}
 _ADVICE_FORBIDDEN = {"entry_zone", "stop_loss", "take_profit_plan", "side", "signal_id", "order", "size"}
 
