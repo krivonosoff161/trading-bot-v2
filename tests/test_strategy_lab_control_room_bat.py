@@ -12,6 +12,8 @@ def test_control_room_starts_visible_strategy_lab_surfaces():
     assert "strategy_lab_dashboard.bat" in text
     assert "strategy_lab_graph_viewer.bat" in text
     assert "strategy_lab_status_monitor.bat" in text
+    assert "scripts.strategy_lab.operational_health" in text
+    assert "--pfr-db-path" in text
     assert text.count('start "Strategy Lab -') >= 4
 
 
@@ -37,3 +39,10 @@ def test_status_monitor_is_read_only_and_stop_file_bounded():
     assert "scripts.strategy_lab.farm_status_report" in text
     assert "STOP_FARM_FULL_CYCLE.txt" in text
     assert "while (-not (Test-Path" in text
+
+
+def test_full_cycle_bat_points_to_fast_health_and_detailed_status():
+    text = (_read("strategy_lab_farm_full_cycle_loop.bat") + "\n" + _read("strategy_lab_farm_full_cycle_stop.bat"))
+
+    assert "scripts.strategy_lab.operational_health" in text
+    assert "scripts.strategy_lab.farm_status_report" in text
