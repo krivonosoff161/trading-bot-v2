@@ -29,6 +29,14 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["telegram_delivery_flow"]["farm_core_sends_telegram"] is False
     assert report["telegram_delivery_flow"]["paper_sends_telegram_by_default"] is False
     assert report["telegram_delivery_flow"]["execution_authority"] is False
+    main_boundary = report["main_engine_boundary"]
+    assert main_boundary["order_capable"] is True
+    assert main_boundary["sets_leverage"] is True
+    assert main_boundary["imports_private_okx_client"] is True
+    assert main_boundary["consumes_farm_tasks_db"] is False
+    assert main_boundary["consumes_strategy_lab_db"] is False
+    assert main_boundary["consumes_main_paper_queue"] is False
+    assert main_boundary["safe_to_use_as_paper_executor"] is False
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
@@ -91,6 +99,7 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert flow["current_owner"] == "scripts.strategy_lab.farm_loop with --run-paper-signals"
     assert "PFR database seeding, bounded and scanned after live movers" in flow["selection_priority"]
     assert flow["old_main_py_consumes_farm_pfr"] is False
+    assert report["main_engine_boundary"]["replacement_path"] == "src.research_lab.main_paper_runtime"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
     assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"

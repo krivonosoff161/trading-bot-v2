@@ -75,6 +75,13 @@ def _surface(path: Path, *, role: str, current: bool, boundary: str) -> dict[str
     }
 
 
+def _contains(path: Path, needle: str) -> bool:
+    try:
+        return needle in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+
 def _scanner_llm_ready(scanner: dict[str, Any]) -> bool:
     provider = str(scanner.get("provider") or "").lower()
     if provider == "alibaba":
@@ -349,6 +356,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
+    old_main = ROOT / "main.py"
     launch_surfaces = {
         "control_room": _surface(
             ROOT / "bat" / "strategy_lab_control_room.bat",
@@ -387,7 +395,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             boundary="do not use for Strategy Lab paper/PFR lifecycle",
         ),
         "old_main_py": _surface(
-            ROOT / "main.py",
+            old_main,
             role="old live/order-capable runtime; not a farm/PFR paper consumer",
             current=False,
             boundary="must remain isolated from farm/PFR paper instructions",
@@ -459,6 +467,25 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "chart_formatter_path": "src.utils.llm_formatter (Yandex chart formatter)",
             "secrets_printed": False,
             "execution_authority": False,
+        },
+        "main_engine_boundary": {
+            "schema": "main_engine_boundary.v1",
+            "path": str(old_main),
+            "exists": old_main.exists(),
+            "order_capable": _contains(old_main, "place_market_order"),
+            "sets_leverage": _contains(old_main, "set_leverage"),
+            "imports_private_okx_client": _contains(old_main, "OKXClient"),
+            "imports_telegram_sender": _contains(old_main, "send_message"),
+            "consumes_farm_tasks_db": _contains(old_main, "farm_tasks.sqlite"),
+            "consumes_strategy_lab_db": _contains(old_main, "strategy_lab.sqlite"),
+            "consumes_main_paper_queue": _contains(old_main, "main_paper_runtime_queue"),
+            "safe_to_use_as_paper_executor": False,
+            "replacement_path": "src.research_lab.main_paper_runtime",
+            "note": (
+                "Old main.py is a live/demo order-capable engine. The current farm/PFR "
+                "paper path stops at the paper runtime observer and must not be wired "
+                "into old main.py without a new reviewed executor contract."
+            ),
         },
         "journals": {
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
@@ -567,6 +594,16 @@ def _print_human(report: dict[str, Any]) -> None:
         f"scanner_surface={delivery['scanner_surface_sends_to_subscribers']} "
         f"legacy_ws_scanner_okx_client={delivery['legacy_ws_scanner_uses_okx_client']} "
         f"execution_authority={delivery['execution_authority']}"
+    )
+    main_boundary = report["main_engine_boundary"]
+    print(
+        "main_engine_boundary: "
+        f"order_capable={main_boundary['order_capable']} "
+        f"sets_leverage={main_boundary['sets_leverage']} "
+        f"private_okx_client={main_boundary['imports_private_okx_client']} "
+        f"consumes_farm_db={main_boundary['consumes_farm_tasks_db']} "
+        f"consumes_paper_queue={main_boundary['consumes_main_paper_queue']} "
+        f"safe_paper_executor={main_boundary['safe_to_use_as_paper_executor']}"
     )
     print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
     bridge = report["main_bridge"]
