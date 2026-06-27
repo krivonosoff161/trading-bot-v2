@@ -94,6 +94,7 @@ class TestCycleLogStages:
         def fake_coordinator(*_args, **kwargs):
             coordinator_seen["max_plan_events"] = kwargs["max_plan_events"]
             coordinator_seen["max_discovery"] = kwargs["max_discovery"]
+            coordinator_seen["max_validations"] = kwargs["max_validations"]
             return {
                 "pivot": "smoke",
                 "active_tasks": 0,
@@ -116,6 +117,7 @@ class TestCycleLogStages:
             max_sweeps=0,
             run_worker=False,
             max_worker_jobs=0,
+            max_validations=0,
             night_mode=False,
             allow_public_output=False,
             run_validation=False,
@@ -160,7 +162,7 @@ class TestCycleLogStages:
 
         out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
-        assert coordinator_seen == {"max_plan_events": 0, "max_discovery": 0}
+        assert coordinator_seen == {"max_plan_events": 0, "max_discovery": 0, "max_validations": 0}
         assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
         assert seen == {"max_new": 0, "max_pfr_scan": 0, "pfr_reserved_new": 0, "max_observe": 0}
         assert out["main_paper_runtime_queue"]["queued"] == 0
@@ -176,7 +178,9 @@ class TestCycleLogStages:
         bat = Path("bat/strategy_lab_farm_full_cycle_loop.bat").read_text(encoding="utf-8")
 
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20" in bat
+        assert "STRATEGY_LAB_FARM_MAX_VALIDATIONS=10" in bat
         assert "paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%" in bat
         assert "'--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%'" in bat
+        assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat

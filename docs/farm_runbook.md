@@ -212,10 +212,10 @@ python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFIL
 python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
 
 # Fast wiring smoke for the farm -> paper-watch -> main instruction -> Telegram preview chain.
-# This intentionally disables worker/validation/paper execution and caps forward/paper generation at 0;
-# the stage warning is expected. `--main-paper-runtime-limit 0` verifies wiring without
-# overwriting the latest real runtime-observation artifact. Use this before a long loop.
-python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --main-paper-runtime-limit 0 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+# Keep critical stages ON so the latest cycle is not reported as a partial loop, but cap all
+# heavy work at 0. `--main-paper-runtime-limit 0` verifies wiring without overwriting the
+# latest real runtime-observation artifact. Use this before a long loop.
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-validations 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-pfr-reserved 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --main-paper-runtime-limit 0 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Verify the rebuilt chain as counts, not just files.
 python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
