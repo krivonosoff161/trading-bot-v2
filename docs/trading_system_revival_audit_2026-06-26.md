@@ -495,3 +495,89 @@ farm/PFR -> paper signals -> main-readable paper instructions -> contract consum
 paper runtime queue -> public-candle observation -> Telegram preview -> training export ->
 Excel journal. The remaining product gap is deliberate: old `main.py` must still not
 execute farm/PFR instructions until a separate executor contract is reviewed and tested.
+
+## Acceptance Run On 2026-06-27
+
+The current acceptance run checked the chain in two bounded modes.
+
+Fast wiring smoke:
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --no-discovery-refresh --max-plan-events 0 --max-prepares 0 --max-enrich 0 --max-sweeps 0 --max-worker-jobs 0 --max-paper-cards 0 --max-followups 0 --no-followups --true-forward-max-candidates 0 --run-paper-signals --paper-signals-max-new 0 --paper-signals-max-pfr-scan 0 --paper-signals-max-observe 0 --paper-signals-fetch-timeout 1 --main-paper-runtime-limit 0 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Result: the bridge, consumer, runtime queue, and Telegram preview stages executed without
+enabling worker compute or overwriting the latest real runtime observation. The expected
+warning about worker/validation/paper being off was non-blocking. Observed counts:
+
+- `main_paper_bridge.instructions = 53`
+- `main_paper_consumer.accepted = 53`, `rejected = 0`
+- `main_paper_runtime_queue.queued = 50`, `invalid = 0`, `execution_allowed = false`
+- `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false`
+
+Bounded compute acceptance cycle:
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --max-followups 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Result: the cycle created and processed bounded real research work while keeping the
+money boundary closed:
+
+- `tasks_created = 8`
+- `planned_run_sweep = 8`
+- `prepared_ok = 1`
+- `sweeps_materialized = 1`
+- `runs_completed = 1`
+- `classified = 1`
+- `unique_upserted = 20`
+- `paper.cards = 1`
+- `paper_ready.checked = 500`, `ready = 14`, `plan_ready = 14`,
+  `local_data_ready = 14`
+- `main_paper_bridge.instructions = 58`, `execution_allowed = false`
+- `main_paper_consumer.accepted = 58`, `rejected = 0`
+- `main_paper_runtime_queue.queued = 50`, `invalid = 0`,
+  `execution_allowed = false`
+- `main_paper_runtime_observation.read = 1`, `observed = 1`, `reviewed = 1`,
+  `pending = 0`, `invalid = 0`, `provider_error = 0`, `execution_allowed = false`
+- `paper_telegram_preview.rendered = 20`, `invalid = 0`, `sends_network = false`
+
+Post-run health:
+
+- `ready_for_visible_paper_research_loop = pass`
+- `main_paper_runtime_observation_available = pass`
+- `paper_chain_counts = pass`
+- `paper_runtime_observed = pass`
+- `telegram_delivery_ownership = pass`
+- `training_data_exports = pass`
+- `paper_telegram_surface = warn` because `PAPER_CHAT_ID` is intentionally not
+  configured; offline preview is available and network delivery remains opt-in.
+- `main_runtime_consumer = planned`; this is a product boundary, not a failing health
+  check.
+
+Status after the bounded cycle:
+
+- `COMPLETION = PAUSED_WITH_WORK`
+- `eligible_now = 53`
+- `running = 0`
+- `deferred_future = 6`
+- `blocked = 3`
+- `PFR bridge: records_loaded = 53`, `passed_quality = 43`,
+  `rejected_quality = 10`, `unique_setups = 11`
+- `paper signals: total = 657`, `armed = 46`, `opened_paper = 12`,
+  `reviewed = 599`
+- `true-forward watched = 59`, `matured = 0`
+
+Safety boundary during the acceptance run:
+
+- `.env` was not read or modified.
+- `AUTO_TRADE` stayed off.
+- No order placement path was enabled.
+- No private OKX/account endpoints were used.
+- Telegram remained preview-only for the paper path.
+
+The current state is therefore not merely documented wiring. It is a tested paper/research
+cycle with bounded compute, paper instruction generation, paper runtime observation, and
+operator-visible health. The project is still not a live trading system; the next product
+audit must cover the old main runtime, Telegram delivery text, Alibaba/LLM prompts, and
+journal/training-data ownership before any broader execution integration.
