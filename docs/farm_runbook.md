@@ -24,10 +24,20 @@ Expected safe state:
 - scanner LLM provider/key presence visible, without secret values
 - Telegram channel presence visible, without token/chat values
 - journal, paper-signal, and PFR artifact paths resolved
+- `launch_surfaces` explicitly marks the current visible control room and full-cycle
+  farm loop as current, while `start.bat`, `start_all.bat`, `strategy_lab_start.bat`,
+  and old `main.py` are surfaced as separate/legacy paths.
+- `paper_data_flow` records the current owner and priority order:
+  live movers -> paper-signal lifecycle -> bounded PFR seeding -> main-paper bridge
+  -> consumer audit -> runtime queue -> public-candle observer -> Telegram preview.
+  It must report `old_main_py_consumes_farm_pfr = false`,
+  `execution_allowed = false`, and `telegram_send_default = false`.
 - `readiness` gates show what is runnable, optional, or intentionally planned:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,
   journals, and the explicit `main_runtime_consumer = planned` boundary.
+- `canonical_launch_surface = pass` and `legacy_live_runtime_isolated = pass` are
+  required before treating the operator picture as clean.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.

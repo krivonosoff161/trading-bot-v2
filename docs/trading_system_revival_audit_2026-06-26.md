@@ -463,6 +463,13 @@ Observed current state:
 - `operational_health` exits 0 and reports `mode=paper_research_only`,
   `auto_trade=False`, scanner LLM provider `alibaba`, scanner Telegram configured,
   paper Telegram not configured.
+- `launch_surfaces` reports `control_room=True`, `farm_loop=True`, `stop=True`,
+  `old_main_current=False`.
+- `paper_data_flow` reports owner `scripts.strategy_lab.farm_loop with --run-paper-signals`,
+  `old_main_py_consumes_farm_pfr=false`, `execution_allowed=false`,
+  `telegram_send_default=false`.
+- Readiness includes `canonical_launch_surface=pass` and
+  `legacy_live_runtime_isolated=pass`.
 - `main_bridge.status = paper_runtime_observed`.
 - Paper chain counts: `instructions=53`, `accepted=53`, `rejected=0`,
   `queued=50`, `invalid_queue=0`, `observed=5`, `reviewed=5`,

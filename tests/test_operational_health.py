@@ -18,6 +18,14 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["scanner_llm"]["alibaba_key_set"] is True
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
+    assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
+    assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
+    assert report["launch_surfaces"]["control_room"]["current"] is True
+    assert report["launch_surfaces"]["farm_full_cycle_loop"]["current"] is True
+    assert report["launch_surfaces"]["old_main_py"]["current"] is False
+    assert report["paper_data_flow"]["old_main_py_consumes_farm_pfr"] is False
+    assert report["paper_data_flow"]["execution_allowed"] is False
+    assert report["paper_data_flow"]["telegram_send_default"] is False
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
@@ -55,6 +63,29 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert Path(report["pfr"]["db"]["path"]) == pfr
+
+
+def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+    surfaces = report["launch_surfaces"]
+    flow = report["paper_data_flow"]
+
+    assert surfaces["control_room"]["exists"] is True
+    assert "canonical visible operator entrypoint" in surfaces["control_room"]["role"]
+    assert surfaces["farm_full_cycle_loop"]["exists"] is True
+    assert surfaces["farm_full_cycle_loop"]["current"] is True
+    assert surfaces["strategy_lab_start_legacy"]["current"] is False
+    assert surfaces["telegram_analyzer_start"]["current"] is False
+    assert surfaces["legacy_product_stack"]["current"] is False
+    assert surfaces["old_main_py"]["current"] is False
+    assert "must remain isolated" in surfaces["old_main_py"]["boundary"]
+    assert flow["current_owner"] == "scripts.strategy_lab.farm_loop with --run-paper-signals"
+    assert "PFR database seeding, bounded and scanned after live movers" in flow["selection_priority"]
+    assert flow["old_main_py_consumes_farm_pfr"] is False
+    assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
+    assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
 
 
 def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch):
