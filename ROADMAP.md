@@ -1,11 +1,20 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-06-19
+Updated: 2026-06-27
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
+
+> **Update 2026-06-27 - revival acceptance gate.** The current work is not to revive
+> the old live engine. The active target is one visible paper/research operator cycle:
+> farm -> validation/PFR -> paper signals -> main-paper instruction/consumer/runtime
+> observation -> offline Telegram preview -> journal/training export. The machine
+> gate is `operational_health.readiness.ready_for_visible_paper_research_loop`. It must
+> pass before a long run is considered clean. `main.py`, `start_all.bat`, and
+> `ws_scanner.py` remain legacy/diagnostic unless a separate reviewed paper-only port is
+> built.
 
 > **Update 2026-06-19 - canonical farm/paper loop.** The current center of
 > `trading-bot-v2` is `farm_loop` over `farm_tasks.sqlite`, paper/research only:

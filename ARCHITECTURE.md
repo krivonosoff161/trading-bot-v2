@@ -1,8 +1,17 @@
 # Architecture
 
-Updated: 2026-06-19
+Updated: 2026-06-27
 
 ## Boundary
+
+> **Update 2026-06-27 - paper/main/Telegram ownership.** The active architecture now
+> has a rebuildable paper handoff after the farm: paper signals/PFR ->
+> `main_paper_instructions` -> `main_paper_consumed` -> `main_paper_runtime_queue` ->
+> public-candle `main_paper_runtime_observation` -> offline `paper_telegram_preview` ->
+> training/journal export. This is still paper/research only. The old live `main.py`
+> does not consume farm instructions, and Telegram is a surface, not an executor.
+> `operational_health.readiness.ready_for_visible_paper_research_loop` is the aggregate
+> machine-check for this operator state.
 
 > **Update 2026-06-19 — center shifted to the calculation farm.** The current
 > research center is the **universe-driven calculation farm** (`farm_loop` →
@@ -59,8 +68,10 @@ sources
 ```
 
 The scanner can send `GO/WATCH` cards to Telegram, but those are paper research
-cards, not trade instructions. Telegram returns only as a notification layer after a
-validated farm result — see [docs/farm_notification_layer.md](docs/farm_notification_layer.md).
+cards, not trade instructions. Strategy Lab paper alerts are currently offline preview
+artifacts by default; scanner/analyzer Telegram surfaces are separate operator surfaces,
+not farm/PFR executors. See
+[docs/farm_notification_layer.md](docs/farm_notification_layer.md).
 
 ## Scanner Components
 

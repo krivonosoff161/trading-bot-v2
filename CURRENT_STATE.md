@@ -1,6 +1,20 @@
 # Current State
 
-Updated: 2026-06-26
+Updated: 2026-06-27
+
+> **Update 2026-06-27 - visible paper/research loop acceptance.**
+> `operational_health` now has a single aggregate gate:
+> `ready_for_visible_paper_research_loop`. It passes only when the canonical visible
+> launch scripts exist, `AUTO_TRADE` is off, old live `main.py` is isolated, PFR exists,
+> the paper chain is non-empty and clean, the public-candle paper runtime has observed
+> the queue without invalid/provider errors, the Excel journal exists, and a training
+> export exists. Telegram ownership is now explicit through `telegram_delivery_flow`:
+> farm core does not send Telegram, paper alerts are preview-only by default, scanner
+> and analyzer Telegram surfaces are separate operator surfaces, and legacy
+> `ws_scanner.py` remains diagnostic. See
+> [docs/farm_notification_layer.md](docs/farm_notification_layer.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md), and
+> [docs/farm_runbook.md](docs/farm_runbook.md).
 
 > **Update 2026-06-26 - paper-trading operational preflight.**
 > The farm/PFR/paper-signal path was checked end-to-end in bounded paper/research mode.
