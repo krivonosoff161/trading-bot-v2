@@ -169,6 +169,9 @@ class TestCycleLogStages:
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False
         assert out["main_paper_runtime_observation"]["rows_read"] == 0
         assert out["main_paper_runtime_observation"]["execution_allowed"] is False
+        assert out["paper_telegram_delivery"]["dry_run"] is True
+        assert out["paper_telegram_delivery"]["sends_network"] is False
+        assert out["paper_telegram_delivery"]["execution_allowed"] is False
         assert out["paper_signal_training_export"]["rows"] == 0
         assert out["paper_signal_training_export"]["terminal_only"] is True
         assert out["paper_signal_training_export"]["paper_only"] is True

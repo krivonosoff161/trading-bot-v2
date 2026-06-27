@@ -222,6 +222,14 @@ def _print_cycle(out: dict) -> None:
             f"rendered={tp.get('rendered', 0)} invalid={tp.get('invalid', 0)} "
             f"sends_network={tp.get('sends_network')}"
         )
+    td = out.get("paper_telegram_delivery") or {}
+    if td:
+        print(
+            "  paper_telegram_delivery: "
+            f"eligible={td.get('eligible', 0)} sent={td.get('sent', 0)} "
+            f"skipped={td.get('skipped', 0)} errors={td.get('errors', 0)} "
+            f"dry_run={td.get('dry_run')} sends_network={td.get('sends_network')}"
+        )
     train = out.get("paper_signal_training_export") or {}
     if train:
         print(
@@ -244,11 +252,12 @@ def _cycle_signature(out: dict) -> tuple:
     main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
     main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
+    telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
-        training_export,
+        telegram_delivery, training_export,
         bool(out.get("errors")),
     )
 
@@ -346,6 +355,17 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
                 except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
+                try:
+                    from src.research_lab.paper_telegram_sender import send_paper_telegram_previews
+                    out["paper_telegram_delivery"] = send_paper_telegram_previews(
+                        private_root,
+                        apply=False,
+                        paper_chat_configured=False,
+                        paper_chat_ids_count=0,
+                        send_text=None,
+                    )
+                except Exception as exc:  # noqa: BLE001 - delivery audit must not break the cycle
+                    out.setdefault("errors", []).append({"where": "paper_telegram_delivery", "error": str(exc)})
                 try:
                     from src.research_lab.paper_signals.training_export import export_training_rows
                     out["paper_signal_training_export"] = export_training_rows(private_root)

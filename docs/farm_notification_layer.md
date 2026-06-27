@@ -11,7 +11,9 @@ confuse:
 - **Paper preview:** `paper_telegram_preview` renders offline operator cards from
   accepted paper instructions. It does not call Telegram and does not read tokens.
 - **Paper sender:** `paper_telegram_sender` dry-runs delivery over preview artifacts
-  by default and sends only with explicit `--send` to `PAPER_CHAT_ID`.
+  by default. The canonical farm loop runs that dry-run after preview generation so
+  delivery status stays current; network sending still requires explicit `--send` to
+  `PAPER_CHAT_ID`.
 - **Product/scanner surfaces:** `start.bat` / `scripts.telegram_bot` and
   `scripts/ws/ws_main_screener.py` are separate operator notification or analyzer
   surfaces. They are not the owner of the farm/PFR/paper lifecycle.
@@ -56,6 +58,7 @@ farm_loop --run-paper-signals
   -> main_paper_runtime_adapter
   -> main_paper_runtime
   -> paper_telegram_preview
+  -> paper_telegram_sender dry-run audit
 ```
 
 The preview validates operator-card text and writes:
@@ -80,8 +83,10 @@ explain why alerts did or did not leave the machine, for example `dry_run`,
 so an operator does not need to inspect JSON by hand to know whether Telegram is
 unconfigured, intentionally dry-run, or failing.
 
-The delivery snapshot must be current against `paper_telegram_preview.json`. If the
-preview artifact is newer than the delivery snapshot, `operational_health` reports
+The delivery snapshot must be current against `paper_telegram_preview.json`. The
+canonical `farm_loop --run-paper-signals` path refreshes it in dry-run mode immediately
+after preview generation. If a preview is regenerated manually or by another tool and
+becomes newer than the delivery snapshot, `operational_health` reports
 `paper_telegram_sender_available = warn` and the sender dry-run must be repeated before
 an operator treats Telegram status as reviewed.
 
