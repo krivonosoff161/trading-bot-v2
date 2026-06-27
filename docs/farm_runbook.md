@@ -137,7 +137,9 @@ be treated as their executor.
   In the normal loop, `--run-worker` drains a bounded number of jobs per cycle.
 - **Fast operator health:** `python -m scripts.strategy_lab.operational_health`
   with the private root and PFR DB path. This is the preflight used by the visible
-  control room.
+  control room and farm-loop wrapper. The wrappers pass `--fail-on-blocked`: `warn`
+  and `planned` gates stay visible, but any readiness gate with `status=blocked`
+  stops the visible launch before compute starts.
 - **Detailed operator status:** `python -m scripts.strategy_lab.status` and
   `python -m scripts.strategy_lab.farm_status_report`. These read broader farm state and
   can be slower on a large private DB; use them after the fast health gate is clean.
@@ -239,7 +241,9 @@ python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USE
 # large active watchlist can spend one whole cycle walking historical cards.
 python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 20 --paper-signals-pfr-reserved 2 --sleep-seconds 180 --stop-file STOP --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --quiet
 
-# Visible operator wrapper for the same continuous full cycle. The wrapper passes
+# Visible operator wrapper for the same continuous full cycle. The wrapper runs a
+# blocking preflight first: only status=blocked stops the launch; warn/planned gates
+# remain operator-visible but do not block research-only paper operation. The wrapper passes
 # STRATEGY_LAB_PFR_DB_PATH by default, so the PFR bridge is active unless you
 # override that environment variable. It also defaults
 # STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20 so active paper cards mature in bounded
@@ -249,10 +253,11 @@ python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-valid
 bat\strategy_lab_farm_full_cycle_loop.bat
 
 # Visible operator control room for farm + dashboard + graph + status windows.
+# It uses the same blocked-only preflight before opening windows.
 bat\strategy_lab_control_room.bat
 
 # Fast preflight used by the visible control room.
-python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --fail-on-blocked
 
 # Clean stop for the wrapper above.
 bat\strategy_lab_farm_full_cycle_stop.bat

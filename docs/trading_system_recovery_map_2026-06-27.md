@@ -47,8 +47,12 @@ already validated farm/PFR candidates.
 The preflight gate is:
 
 ```bash
-python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --fail-on-blocked
 ```
+
+Both visible wrappers run this blocked-only preflight before opening/starting work.
+Warnings and planned boundaries remain visible operator information. A `blocked`
+readiness gate stops the launch and must be fixed before the long paper/research cycle.
 
 Required operator facts:
 

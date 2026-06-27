@@ -35,12 +35,19 @@ echo   3. Private graph viewer build/open
 echo   4. Periodic farm status monitor
 echo.
 echo Stop farm loop: bat\strategy_lab_farm_full_cycle_stop.bat
-echo Preflight: python -m scripts.strategy_lab.operational_health
-echo Fast status: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
+echo Preflight: python -m scripts.strategy_lab.operational_health --fail-on-blocked
+echo Fast status: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%" --fail-on-blocked
 echo Close dashboard/graph/status windows manually when done.
 echo.
 
-python -X utf8 -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
+python -X utf8 -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%" --fail-on-blocked
+if errorlevel 1 (
+  echo.
+  echo Preflight blocked. Fix readiness gates with status=blocked before starting visible windows.
+  if not "%STRATEGY_LAB_NO_PAUSE%"=="1" pause
+  endlocal
+  exit /b 2
+)
 echo.
 
 start "Strategy Lab - Farm Full Cycle" cmd /k "cd /d ""%CD%"" && bat\strategy_lab_farm_full_cycle_loop.bat"

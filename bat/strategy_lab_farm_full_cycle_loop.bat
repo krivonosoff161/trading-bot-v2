@@ -46,7 +46,6 @@ set "LOG_FILE=%LOG_DIR%\farm_full_cycle_loop.log"
 
 if not exist "%TRADING_BOT_RESEARCH_ROOT%\state" mkdir "%TRADING_BOT_RESEARCH_ROOT%\state"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-if exist "%STOP_FILE%" del "%STOP_FILE%"
 
 echo ============================================
 echo  Strategy Lab - Farm Full Cycle Loop
@@ -64,9 +63,21 @@ echo  safety      : paper-only; public OKX; no orders / .env / AUTO_TRADE / priv
 echo ============================================
 echo.
 echo Tip: stop with bat\strategy_lab_farm_full_cycle_stop.bat or Ctrl+C.
-echo Fast health: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
+echo Fast health: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%" --fail-on-blocked
 echo Detailed status: python -m scripts.strategy_lab.farm_status_report
 echo.
+
+python -X utf8 -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%" --fail-on-blocked
+if errorlevel 1 (
+  echo.
+  echo Preflight blocked. Fix readiness gates with status=blocked before starting the farm loop.
+  if not "%STRATEGY_LAB_NO_PAUSE%"=="1" pause
+  endlocal
+  exit /b 2
+)
+echo.
+
+if exist "%STOP_FILE%" del "%STOP_FILE%"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Continue';" ^
