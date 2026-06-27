@@ -23,6 +23,7 @@ public OKX discovery / scanner-watch context
   -> paper_telegram_preview offline cards
   -> paper_telegram_sender dry-run delivery audit
   -> paper_signal_training export
+  -> optional scripts/build_journal.py rebuild
   -> scripts/journal.xlsx Paper Watch sheet
 ```
 
@@ -208,14 +209,20 @@ The operator proof is machine-checkable through `operational_health`:
 - `training_data.paper_signal_training.invalid_json == 0`;
 - `training_data.paper_signal_training.paper_only_false == 0`;
 - `training_data.paper_signal_training_freshness.stale_vs_source == false`;
+- `training_data.excel_journal_freshness.stale_vs_source == false` when the local
+  workbook is expected to be current;
 - readiness gate `paper_signal_training_export = pass`.
+- readiness gate `journal_rebuild_available = pass` only when `scripts/journal.xlsx`
+  exists and is not older than `paper_signal_training.jsonl`.
 
 The local Excel workbook is an operator surface, not a source of truth. Current
 `scripts/build_journal.py` rebuilds a `Paper Watch` sheet from the private
 `paper_signal_training.jsonl` export and includes family, result, diagnosis, and net
 summary blocks. The canonical farm loop refreshes the private training export after
 `--run-paper-signals`; Excel is still rebuilt explicitly so a workbook lock cannot
-stall the long-running loop. The canonical data remains the private JSONL/snapshot export.
+stall the long-running loop. `operational_health` now reports Excel freshness against
+the training JSONL so a stale workbook is visible instead of silently passing as current.
+The canonical data remains the private JSONL/snapshot export.
 
 Private OKX fills remain opt-in only:
 
