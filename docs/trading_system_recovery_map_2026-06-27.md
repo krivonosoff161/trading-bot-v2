@@ -160,6 +160,11 @@ The operator proof is machine-checkable through `operational_health`:
 - `training_data.paper_signal_training.paper_only_false == 0`;
 - readiness gate `paper_signal_training_export = pass`.
 
+The local Excel workbook is an operator surface, not a source of truth. Current
+`scripts/build_journal.py` rebuilds a `Paper Watch` sheet from the private
+`paper_signal_training.jsonl` export and includes family, result, diagnosis, and net
+summary blocks. The canonical data remains the private JSONL/snapshot export.
+
 Private OKX fills remain opt-in only:
 
 ```text
@@ -193,8 +198,9 @@ Do not delete legacy paths until imports, docs, and tests prove retirement is sa
    `src.utils.llm_formatter` Yandex path and any operator-facing text.
 2. Decide whether paper alerts should become a real opt-in sender after preview text and
    charts are reviewed.
-3. Modernize `scripts/journal.xlsx` views over `Paper Watch` so outcomes, diagnoses, and
-   family performance are visible without reading JSONL files.
+3. Add higher-level Excel dashboard/charts over `Paper Watch` so outcomes, diagnoses,
+   and family performance are visible without opening the raw sheet. The raw sheet and
+   basic summaries already exist.
 4. Design a future product executor contract only after paper-forward outcomes justify
    it. The executor must start from `SignalContract`/paper queue semantics, not from the
    old live `main.py` internals.
