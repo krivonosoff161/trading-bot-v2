@@ -65,7 +65,7 @@ python -X utf8 -m scripts.strategy_lab.paper_signals_run ^
 
 Observed: completed in seconds, generated one bounded live paper signal, no live/money path.
 
-Bounded farm smoke with paper-signal lane:
+Bounded farm compute cycle with paper-signal lane:
 
 ```bash
 python -X utf8 -m scripts.strategy_lab.farm_loop ^
@@ -80,8 +80,11 @@ python -X utf8 -m scripts.strategy_lab.farm_loop ^
   --max-sweeps 1 --max-worker-jobs 1 --max-validation 1 --max-paper 1
 ```
 
-Observed: completed without crash, refreshed discovery, executed bounded farm work, kept
-paper/PFR surfaces bounded.
+Observed at the time of this audit: completed without crash, refreshed discovery, executed
+bounded farm work, kept paper/PFR surfaces bounded. Follow-up clarification: because this
+command includes `--run-worker`, it can start a real `evaluate_spec()` job and must not be
+used as the fast preflight. For quick wiring checks, use the `farm_runbook.md` fast wiring
+smoke that disables worker/validation/paper execution.
 
 Journal rebuild:
 

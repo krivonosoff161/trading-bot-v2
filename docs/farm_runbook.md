@@ -86,7 +86,10 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-valid
 # One bounded paper-signal/PFR smoke. It is intentionally capped for operator checks.
 python -m scripts.strategy_lab.paper_signals_run --mode live --max-signals 1 --max-observe 0 --max-pfr-scan 2 --public-fetch-timeout 3
 
-# One bounded full-cycle smoke with paper-signal/PFR lane enabled.
+# Bounded compute cycle with paper-signal/PFR lane enabled.
+# This is NOT a fast smoke: --run-worker can start a real evaluate_spec() job.
+# Use the fast wiring smoke below first; use this only when you intentionally
+# want to spend compute on one queued sweep.
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Rebuild the main-readable paper instruction view from active paper signals.
@@ -131,6 +134,17 @@ python -m scripts.strategy_lab.status
 python -m scripts.strategy_lab.farm_status_report
 python -m scripts.strategy_lab.farm_status_report --json
 ```
+
+The distinction matters:
+
+- **Fast wiring smoke** checks farm -> paper-watch -> main-paper queue -> Telegram
+  preview plumbing. It deliberately disables worker/validation/paper execution and
+  should finish quickly.
+- **Bounded compute cycle** may start a real strategy sweep through `worker_once`.
+  It is bounded by queue/cap policy, but it is still a calculation run. The worker now
+  writes `state/worker_status.json` with `status=running`, `job_id`, `experiment_id`,
+  symbol/family counts, and `max_runs` before entering `evaluate_spec()`, so the
+  dashboard/status window can show what is being computed.
 
 `farm_loop` runs bounded feedback follow-ups by default. Use `--max-followups N` to cap
 the number handled per cycle, or `--no-followups` only for diagnostics. A follow-up does

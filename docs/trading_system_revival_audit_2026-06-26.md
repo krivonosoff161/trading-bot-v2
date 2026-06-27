@@ -243,11 +243,15 @@ python -m scripts.strategy_lab.operational_health \
   --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
 ```
 
-Bounded full-cycle smoke:
+Bounded compute cycle:
 
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --main-paper-runtime-limit 1 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
+
+This command is bounded by counts, but it is not a fast smoke check: `--run-worker`
+can start a real `evaluate_spec()` calculation. Use the fast wiring smoke below before
+operator runs; use this command only when intentionally spending compute.
 
 Rebuild only the main-readable paper instruction view:
 
@@ -353,8 +357,10 @@ with code 0.
 python -X utf8 -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --run-paper-signals --enrich-funding --enrich-oi --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite" --paper-signals-max-observe 0 --paper-signals-max-pfr-scan 1 --paper-signals-fetch-timeout 3 --max-plan-events 1 --max-prepares 1 --max-enrich 1 --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1 --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
-Result: bounded apply smoke completed in paper/research mode. It found active work,
-checked paper readiness, and kept the live/money boundary closed.
+Result at the time of this audit: bounded apply completed in paper/research mode. Later
+follow-up clarified the terminology: with `--run-worker`, this command is a bounded
+compute cycle, not a guaranteed fast smoke. It may start a real strategy sweep through
+`worker_once`; the fast wiring smoke below is the quick preflight.
 
 ```bash
 python -m scripts.strategy_lab.farm_status_report --json
