@@ -357,16 +357,37 @@ def test_operational_health_reports_paper_source_composition(tmp_path, monkeypat
         json.dumps({
             "items": [
                 {
+                    "source": "farm",
                     "setup_family": "early_tp_tactical",
                     "timeframe": "15m",
                     "runtime_action": "watch_paper",
                     "priority": -2,
                 },
                 {
+                    "source": "pfr_farm",
                     "setup_family": "mean_reversion_fade",
                     "timeframe": "4h",
                     "runtime_action": "watch_paper",
                     "priority": 120,
+                },
+            ]
+        }),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_runtime_observation.json").write_text(
+        json.dumps({
+            "items": [
+                {
+                    "source": "farm",
+                    "setup_family": "early_tp_tactical",
+                    "timeframe": "15m",
+                    "signal_status": "reviewed",
+                },
+                {
+                    "source": "pfr_farm",
+                    "setup_family": "mean_reversion_fade",
+                    "timeframe": "4h",
+                    "signal_status": "armed",
                 },
             ]
         }),
@@ -385,9 +406,17 @@ def test_operational_health_reports_paper_source_composition(tmp_path, monkeypat
         "mean_reversion_fade": 1,
     }
     assert composition["main_runtime_queue"]["items"] == 2
+    assert composition["main_runtime_queue"]["by"]["source"] == {"farm": 1, "pfr_farm": 1}
     assert composition["main_runtime_queue"]["by"]["runtime_action"] == {"watch_paper": 2}
     assert composition["main_runtime_queue"]["priority_min"] == -2
     assert composition["main_runtime_queue"]["priority_max"] == 120
+    assert composition["main_runtime_observation"]["items"] == 2
+    assert composition["main_runtime_observation"]["by"]["source"] == {"farm": 1, "pfr_farm": 1}
+    assert composition["main_runtime_observation"]["by"]["signal_status"] == {
+        "reviewed": 1,
+        "armed": 1,
+    }
+    assert "source is preserved" in composition["priority_contract"][3]
     assert composition["pfr_activation"]["requires_explicit_db_path"] is True
     assert composition["pfr_activation"]["source_name"] == "pfr_farm"
     assert composition["execution_allowed"] is False
