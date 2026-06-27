@@ -66,6 +66,15 @@ def _gate(status: str, message: str, *, action: str = "") -> dict[str, str]:
     return {"status": status, "message": message, "action": action}
 
 
+def _surface(path: Path, *, role: str, current: bool, boundary: str) -> dict[str, Any]:
+    return {
+        **_exists(path),
+        "role": role,
+        "current": current,
+        "boundary": boundary,
+    }
+
+
 def _scanner_llm_ready(scanner: dict[str, Any]) -> bool:
     provider = str(scanner.get("provider") or "").lower()
     if provider == "alibaba":
@@ -89,6 +98,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     pfr = report["pfr"]["db"]
     bridge = report["main_bridge"]
     chain = report["paper_chain"]
+    surfaces = report["launch_surfaces"]
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -110,6 +120,44 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             "AUTO_TRADE is off for paper/research mode."
             if not safety["auto_trade"] else "AUTO_TRADE is enabled; do not run research wrappers.",
             action="Unset AUTO_TRADE before paper/research operation." if safety["auto_trade"] else "",
+        ),
+        "canonical_launch_surface": _gate(
+            "pass" if (
+                surfaces["control_room"]["exists"]
+                and surfaces["farm_full_cycle_loop"]["exists"]
+                and surfaces["farm_full_cycle_stop"]["exists"]
+            ) else "blocked",
+            "Canonical Strategy Lab control-room launch/loop/stop scripts are present."
+            if (
+                surfaces["control_room"]["exists"]
+                and surfaces["farm_full_cycle_loop"]["exists"]
+                and surfaces["farm_full_cycle_stop"]["exists"]
+            ) else "Canonical Strategy Lab launch scripts are missing.",
+            action="Restore bat/strategy_lab_control_room.bat and farm full-cycle scripts."
+            if not (
+                surfaces["control_room"]["exists"]
+                and surfaces["farm_full_cycle_loop"]["exists"]
+                and surfaces["farm_full_cycle_stop"]["exists"]
+            ) else "",
+        ),
+        "legacy_live_runtime_isolated": _gate(
+            "pass" if (
+                surfaces["old_main_py"]["exists"]
+                and surfaces["old_main_py"]["current"] is False
+                and bridge["orders_enabled_by_bridge"] is False
+            ) else "blocked",
+            "Old live/order-capable main.py is present but isolated from the farm/PFR paper bridge."
+            if (
+                surfaces["old_main_py"]["exists"]
+                and surfaces["old_main_py"]["current"] is False
+                and bridge["orders_enabled_by_bridge"] is False
+            ) else "Old main runtime ownership is ambiguous.",
+            action="Do not wire farm/PFR into main.py; use paper runtime observer."
+            if not (
+                surfaces["old_main_py"]["exists"]
+                and surfaces["old_main_py"]["current"] is False
+                and bridge["orders_enabled_by_bridge"] is False
+            ) else "",
         ),
         "pfr_source_available": _gate(
             "pass" if pfr["exists"] else "warn",
@@ -275,6 +323,56 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
+    launch_surfaces = {
+        "control_room": _surface(
+            ROOT / "bat" / "strategy_lab_control_room.bat",
+            role="canonical visible operator entrypoint; opens farm loop, dashboard, graph, and status windows",
+            current=True,
+            boundary="paper/research only",
+        ),
+        "farm_full_cycle_loop": _surface(
+            ROOT / "bat" / "strategy_lab_farm_full_cycle_loop.bat",
+            role="canonical one-window Strategy Lab farm loop with --run-paper-signals and PFR bridge",
+            current=True,
+            boundary="paper/research only; public OKX data; no orders",
+        ),
+        "farm_full_cycle_stop": _surface(
+            ROOT / "bat" / "strategy_lab_farm_full_cycle_stop.bat",
+            role="canonical stop-file helper for the farm full-cycle loop",
+            current=True,
+            boundary="stop signal only",
+        ),
+        "strategy_lab_start_legacy": _surface(
+            ROOT / "bat" / "strategy_lab_start.bat",
+            role="legacy standalone Strategy Lab wrapper; not the current full lifecycle",
+            current=False,
+            boundary="do not use for the current control-room cycle",
+        ),
+        "telegram_analyzer_start": _surface(
+            ROOT / "start.bat",
+            role="Telegram analyzer product surface; not the Strategy Lab farm launcher",
+            current=False,
+            boundary="operator notifications/analysis only; not farm/PFR execution",
+        ),
+        "legacy_product_stack": _surface(
+            ROOT / "start_all.bat",
+            role="legacy/frozen product stack launcher",
+            current=False,
+            boundary="do not use for Strategy Lab paper/PFR lifecycle",
+        ),
+        "old_main_py": _surface(
+            ROOT / "main.py",
+            role="old live/order-capable runtime; not a farm/PFR paper consumer",
+            current=False,
+            boundary="must remain isolated from farm/PFR paper instructions",
+        ),
+        "scanner_runtime": _surface(
+            ROOT / "scripts" / "ws" / "ws_main_screener.py",
+            role="scanner/news/Telegram intake surface; upstream context, not farm trigger owner",
+            current=True,
+            boundary="Telegram/LLM surface; no farm/PFR execution authority",
+        ),
+    }
     report = {
         "mode": "paper_research_only",
         "safety": {
@@ -298,6 +396,24 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "enabled": os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
             "provider_name": getattr(provider, "name", "unknown"),
             "configured": bool(getattr(provider, "configured", False)),
+        },
+        "launch_surfaces": launch_surfaces,
+        "paper_data_flow": {
+            "schema": "paper_data_flow.v1",
+            "current_owner": "scripts.strategy_lab.farm_loop with --run-paper-signals",
+            "selection_priority": [
+                "live mover universe ranked by outcome memory",
+                "paper_signals active store dedup and lifecycle",
+                "PFR database seeding, bounded and scanned after live movers",
+                "main_paper_bridge export of active paper signals",
+                "main_paper_consumer audit view",
+                "main_paper_runtime_adapter queue",
+                "main_paper_runtime observer on public candles",
+                "paper_telegram_preview surface only; no network send by default",
+            ],
+            "old_main_py_consumes_farm_pfr": False,
+            "execution_allowed": False,
+            "telegram_send_default": False,
         },
         "journals": {
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
@@ -382,6 +498,22 @@ def _print_human(report: dict[str, Any]) -> None:
     )
     lab = report["strategy_lab_llm"]
     print(f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}")
+    surfaces = report["launch_surfaces"]
+    print(
+        "launch_surfaces: "
+        f"control_room={surfaces['control_room']['exists']} "
+        f"farm_loop={surfaces['farm_full_cycle_loop']['exists']} "
+        f"stop={surfaces['farm_full_cycle_stop']['exists']} "
+        f"old_main_current={surfaces['old_main_py']['current']}"
+    )
+    flow = report["paper_data_flow"]
+    print(
+        "paper_data_flow: "
+        f"owner={flow['current_owner']} "
+        f"old_main_consumes={flow['old_main_py_consumes_farm_pfr']} "
+        f"execution_allowed={flow['execution_allowed']} "
+        f"telegram_send_default={flow['telegram_send_default']}"
+    )
     print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
     bridge = report["main_bridge"]
     print(

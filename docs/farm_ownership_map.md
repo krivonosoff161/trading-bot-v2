@@ -47,6 +47,15 @@ Current paper handoff stops at the rebuildable main-paper instruction, consumer,
 runtime-observation, and preview artifacts. That proves the paper lifecycle and operator
 surface. It does not authorize the old live `main.py` to execute farm/PFR instructions.
 
+`python -m scripts.strategy_lab.operational_health` is the machine-checkable version of
+this map. Before a long run, it must show:
+
+- `readiness.canonical_launch_surface = pass`;
+- `readiness.legacy_live_runtime_isolated = pass`;
+- `paper_data_flow.current_owner = scripts.strategy_lab.farm_loop with --run-paper-signals`;
+- `paper_data_flow.old_main_py_consumes_farm_pfr = false`;
+- `paper_data_flow.execution_allowed = false`.
+
 Forbidden as farm imports:
 
 - `main.py`
