@@ -382,6 +382,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.paper_telegram_preview."
             if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
         ),
+        "paper_telegram_sender_available": _gate(
+            "pass" if journals["paper_telegram_delivery_snapshot"]["exists"] else "warn",
+            "Paper Telegram delivery audit artifact exists; sender is explicit opt-in."
+            if journals["paper_telegram_delivery_snapshot"]["exists"]
+            else "Paper Telegram sender has not been dry-run against the preview artifact yet.",
+            action="Run python -m scripts.strategy_lab.paper_telegram_sender for dry-run; add --send only after PAPER_CHAT_ID review."
+            if not journals["paper_telegram_delivery_snapshot"]["exists"] else "",
+        ),
         "telegram_delivery_ownership": _gate(
             "pass" if telegram_ownership_ready else "blocked",
             "Telegram surfaces are separated from farm execution; paper alerts are preview-only by default."
@@ -508,6 +516,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_paper_runtime_observation_log = private_root / "state" / "derived" / "main_paper_runtime_observation.jsonl"
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
+    paper_telegram_delivery_snapshot = private_root / "state" / "derived" / "paper_telegram_delivery.json"
+    paper_telegram_delivery_log = private_root / "state" / "derived" / "paper_telegram_delivery.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     old_main = ROOT / "main.py"
     telegram_bot = ROOT / "scripts" / "telegram_bot.py"
@@ -668,6 +678,9 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "farm_core_sends_telegram": False,
             "paper_sends_telegram_by_default": False,
             "paper_preview_artifact": "state/derived/paper_telegram_preview.json",
+            "paper_sender_artifact": "state/derived/paper_telegram_delivery.json",
+            "paper_sender_cli": "scripts.strategy_lab.paper_telegram_sender",
+            "paper_sender_chat_env": "PAPER_CHAT_ID",
             "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"]["exists"],
             "telegram_analyzer_surface": "start.bat / scripts.telegram_bot",
             "telegram_analyzer_current_for_farm": False,
@@ -760,6 +773,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_paper_runtime_observation_snapshot": _exists(main_paper_runtime_observation_snapshot),
             "paper_telegram_preview": _exists(paper_telegram_preview_log),
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
+            "paper_telegram_delivery": _exists(paper_telegram_delivery_log),
+            "paper_telegram_delivery_snapshot": _exists(paper_telegram_delivery_snapshot),
             "main_signals": _exists(main_signal_log),
         },
         "training_data": {
@@ -803,6 +818,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_preview": _snapshot_metrics(
                 paper_telegram_preview_snapshot,
                 ("records_read", "rendered", "invalid"),
+            ),
+            "telegram_delivery": _snapshot_metrics(
+                paper_telegram_delivery_snapshot,
+                ("records_read", "eligible", "sent", "skipped", "errors"),
             ),
         },
     }
@@ -867,6 +886,8 @@ def _print_human(report: dict[str, Any]) -> None:
         "telegram_delivery_flow: "
         f"farm_core_sends={delivery['farm_core_sends_telegram']} "
         f"paper_send_default={delivery['paper_sends_telegram_by_default']} "
+        f"paper_sender={delivery['paper_sender_cli']} "
+        f"paper_chat_env={delivery['paper_sender_chat_env']} "
         f"scanner_surface={delivery['scanner_surface_sends_to_subscribers']} "
         f"tg_analyzer_farm={delivery['telegram_analyzer_current_for_farm']} "
         f"tg_analyzer_auto_execute={delivery['telegram_analyzer_imports_auto_execute']} "
@@ -921,6 +942,13 @@ def _print_human(report: dict[str, Any]) -> None:
         f"reviewed={chain['runtime_observation']['reviewed']} "
         f"runtime_errors={chain['runtime_observation']['invalid'] + chain['runtime_observation']['provider_error']} "
         f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
+    )
+    print(
+        "paper_telegram_delivery: "
+        f"eligible={chain['telegram_delivery']['eligible']} "
+        f"sent={chain['telegram_delivery']['sent']} "
+        f"skipped={chain['telegram_delivery']['skipped']} "
+        f"errors={chain['telegram_delivery']['errors']}"
     )
     training = report["training_data"]["paper_signal_training"]
     freshness = report["training_data"]["paper_signal_training_freshness"]

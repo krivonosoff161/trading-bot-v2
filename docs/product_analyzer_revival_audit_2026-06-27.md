@@ -16,6 +16,7 @@ paper delivery, and what must remain isolated until a separate review.
 | `scripts.telegram_bot` | Legacy Telegram analyzer bot | Execution-adjacent, but the old `scripts.auto_execute` hook now requires both `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and `AUTO_TRADE`; not the farm/PFR paper launcher. |
 | `scripts.auto_execute` | Old demo/live order path | Guarded by `AUTO_TRADE`, but can set leverage and place OKX orders when enabled. |
 | `src.utils.telegram` | Telegram send helper | Reads env at call time, does not print token/chat values, skips when not configured. |
+| `scripts.strategy_lab.paper_telegram_sender` | Paper alert delivery surface | Reads validated `paper_telegram_preview` artifacts, dry-runs by default, and sends only with explicit `--send` to `PAPER_CHAT_ID`. |
 
 Machine check:
 
@@ -63,8 +64,9 @@ Therefore they must not consume farm/PFR paper instructions directly.
 1. Keep the farm/PFR/paper observer as the source of truth.
 2. Use `paper_telegram_preview` as the first alert surface: offline, validated, no send.
 3. Review the actual Telegram card text and chart payloads from derived paper artifacts.
-4. If live paper alerts are needed, add an opt-in sender over preview artifacts only,
-   using `PAPER_CHAT_ID`; do not fall back to scanner/default chats.
+4. If live paper alerts are needed, use the opt-in sender over preview artifacts only:
+   `python -m scripts.strategy_lab.paper_telegram_sender --send`. It uses `PAPER_CHAT_ID`
+   and does not fall back to scanner/default chats.
 5. Decide whether `llm_formatter` remains Yandex-only or becomes an adapter over the
    shared `llm_client` provider router. Do this as a separate change with tests.
 6. Keep `run_latest_analysis`, `scripts.telegram_bot`, and `auto_execute` out of the farm

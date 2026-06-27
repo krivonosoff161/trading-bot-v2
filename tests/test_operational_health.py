@@ -77,6 +77,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
     assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
+    assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
     assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
@@ -113,6 +114,7 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
+    assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert report["training_data"]["paper_signal_training"]["rows"] == 1
     assert report["training_data"]["paper_signal_training"]["schema_rows"] == 1
@@ -210,6 +212,8 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert delivery["schema"] == "telegram_delivery_flow.v1"
     assert delivery["farm_core_sends_telegram"] is False
     assert delivery["paper_sends_telegram_by_default"] is False
+    assert delivery["paper_sender_cli"] == "scripts.strategy_lab.paper_telegram_sender"
+    assert delivery["paper_sender_chat_env"] == "PAPER_CHAT_ID"
     assert delivery["scanner_surface_sends_to_subscribers"] is True
     assert delivery["telegram_analyzer_current_for_farm"] is False
     assert delivery["telegram_analyzer_imports_auto_execute"] is True
@@ -295,6 +299,23 @@ def test_operational_health_reports_paper_telegram_preview(tmp_path, monkeypatch
 
     assert report["journals"]["paper_telegram_preview_snapshot"]["exists"] is True
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "pass"
+
+
+def test_operational_health_reports_paper_telegram_sender(tmp_path, monkeypatch):
+    delivery = tmp_path / "state" / "derived" / "paper_telegram_delivery.json"
+    delivery.parent.mkdir(parents=True)
+    delivery.write_text(
+        json.dumps({"records_read": 2, "eligible": 2, "sent": 0, "skipped": 2, "errors": 0}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    assert report["journals"]["paper_telegram_delivery_snapshot"]["exists"] is True
+    assert report["paper_chain"]["telegram_delivery"]["eligible"] == 2
+    assert report["paper_chain"]["telegram_delivery"]["skipped"] == 2
+    assert report["readiness"]["paper_telegram_sender_available"]["status"] == "pass"
 
 
 def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkeypatch):

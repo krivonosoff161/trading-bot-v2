@@ -83,6 +83,10 @@ Expected safe state:
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
   If this gate is `warn`, rebuild the bounded paper chain before trusting the operator
   picture.
+- `paper_telegram_sender_available` is optional for compute but useful before operator
+  alerting. It is a dry-run audit over already validated preview cards unless the
+  operator explicitly adds `--send`; it must use `PAPER_CHAT_ID`, never the default
+  scanner/product chat.
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
@@ -182,6 +186,15 @@ python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%
 # Build offline Telegram-card previews from accepted paper instructions. This does
 # not call Telegram and does not read chat IDs or tokens.
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Dry-run the Telegram delivery layer over the preview artifact. This writes a
+# delivery audit and never sends without --send.
+python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Optional paper alert delivery. Sends only to PAPER_CHAT_ID when TELEGRAM_BOT_TOKEN
+# is already configured. It never falls back to TELEGRAM_CHAT_ID and never touches
+# orders or execution state.
+python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --send
 
 # Observe the main-compatible paper runtime queue on public candles. This writes
 # a paper-only lifecycle status; it never imports the old live main engine.
@@ -316,6 +329,9 @@ Telegram/analyzer ownership is intentionally separate:
 
 - `paper_telegram_preview` is the only current Strategy Lab paper Telegram artifact, and
   it is offline preview-only by default.
+- `paper_telegram_sender` is the only current Strategy Lab paper Telegram delivery
+  command. It reads the preview artifact, dry-runs by default, and sends only with
+  explicit `--send` plus `PAPER_CHAT_ID`.
 - `ws_main_screener.py` and `start.bat` can be audited as operator/analyzer surfaces, but
   they are not the paper runtime and not the farm trigger owner.
 - `ws_scanner.py` is legacy/diagnostic because it imports the OKX client; do not use it
@@ -355,6 +371,7 @@ python -m scripts.strategy_lab.main_paper_consumer --private-root "%USERPROFILE%
 python -m scripts.strategy_lab.main_paper_runtime_adapter --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 python -m scripts.strategy_lab.main_paper_runtime --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --limit 50 --apply
 python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
 ## Journal And Training Data
@@ -430,6 +447,10 @@ explicitly passed.
 - `state/derived/paper_telegram_preview.jsonl` and
   `state/derived/paper_telegram_preview.json` - offline Telegram-card previews for
   accepted paper instructions; `sends_network=false`, no token/chat values, no API call.
+- `state/derived/paper_telegram_delivery.jsonl` and
+  `state/derived/paper_telegram_delivery.json` - dry-run or opt-in delivery audit over
+  preview cards. Sending is possible only through `scripts.strategy_lab.paper_telegram_sender
+  --send` and only to `PAPER_CHAT_ID`.
 - `state/derived/setup_lifecycle.json` - optional rebuildable snapshot of setup lifecycle
   groups; canonical data remains in the DBs and artifacts above.
 - `logs/farm/{cycle_log,task_transitions,errors}.jsonl` - structured farm logs.

@@ -10,6 +10,8 @@ confuse:
   artifacts. It does not send Telegram messages.
 - **Paper preview:** `paper_telegram_preview` renders offline operator cards from
   accepted paper instructions. It does not call Telegram and does not read tokens.
+- **Paper sender:** `paper_telegram_sender` dry-runs delivery over preview artifacts
+  by default and sends only with explicit `--send` to `PAPER_CHAT_ID`.
 - **Product/scanner surfaces:** `start.bat` / `scripts.telegram_bot` and
   `scripts/ws/ws_main_screener.py` are separate operator notification or analyzer
   surfaces. They are not the owner of the farm/PFR/paper lifecycle.
@@ -23,6 +25,7 @@ The farm's structured state is the source of truth:
 - `state/derived/paper_signals*.json*`
 - `state/derived/main_paper_*.json*`
 - `state/derived/paper_telegram_preview.json`
+- `state/derived/paper_telegram_delivery.json`
 - `logs/farm/*.jsonl`
 
 Every dashboard, graph, report, or Telegram-facing artifact is a read-only consumer of
@@ -35,6 +38,7 @@ that state. Notifications are an output edge, never an input to compute or money
 | `farm_status_report` / dashboard | Implemented | Read-only status. |
 | Obsidian graph/reports | Implemented/partial | Read-only summaries and links. |
 | `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
+| `paper_telegram_sender` | Implemented | Dry-run by default; optional `--send` only to `PAPER_CHAT_ID`. |
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
 | `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy auto-execute hook requires both `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and `AUTO_TRADE`. |
 | `scripts.analyze_chart` | Separate manual surface | Writes local chart/report analysis and can optionally send Telegram; not farm/PFR execution. |
@@ -62,6 +66,29 @@ The preview validates operator-card text and writes:
 It does not send a network request. It also does not promote a signal, mutate a queue, or
 enable execution.
 
+## Paper Telegram Sender
+
+`paper_telegram_sender` reads only the preview artifact and writes:
+
+- `state/derived/paper_telegram_delivery.jsonl`
+- `state/derived/paper_telegram_delivery.json`
+
+Default mode is dry-run:
+
+```bash
+python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+```
+
+Network delivery requires explicit `--send` and existing `TELEGRAM_BOT_TOKEN` plus
+`PAPER_CHAT_ID`:
+
+```bash
+python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --send
+```
+
+It never falls back to `TELEGRAM_CHAT_ID`, never reads farm queues as input, and never
+enables execution.
+
 ## Scanner And Analyzer Telegram
 
 The scanner/analyzer Telegram code remains separate from the farm:
@@ -83,8 +110,8 @@ execution-adjacent `scripts.auto_execute` hook for the old product flow, but
 requires the explicit legacy opt-in `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and then the
 old `AUTO_TRADE` guard must also be true. Therefore `start.bat` must not be used as a
 Strategy Lab paper/PFR launcher. The current paper chain uses
-`paper_telegram_preview` first; any real Telegram send must be added later as a
-reviewed, opt-in read-only surface over derived paper artifacts.
+`paper_telegram_preview` first; real paper Telegram delivery is available only through
+the reviewed, opt-in `paper_telegram_sender` surface over derived paper artifacts.
 
 Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory provider path,
 not the legacy Telegram chart analyzer. The chart analyzer must be audited separately
@@ -105,6 +132,8 @@ paper runtime.
 
 - `farm_core_sends_telegram = false`
 - `paper_sends_telegram_by_default = false`
+- `paper_sender_cli = scripts.strategy_lab.paper_telegram_sender`
+- `paper_sender_chat_env = PAPER_CHAT_ID`
 - `execution_authority = false`
 - `telegram_analyzer_current_for_farm = false`
 - `telegram_analyzer_imports_auto_execute = true`
@@ -127,10 +156,11 @@ stop until the boundary is restored.
 
 ## Future Live Notification Rule
 
-If real paper alerts are enabled later, they must remain a separate opt-in process or
+If real paper alerts are enabled, they must remain the separate opt-in sender process or
 flag:
 
 - read-only over derived farm/paper artifacts;
+- `PAPER_CHAT_ID` only, never scanner/default chats;
 - rate-limited and deduped;
 - no `.env` writes, no `AUTO_TRADE`, no private account endpoints, no order calls;
 - one alert per state change, not one alert per loop tick.
