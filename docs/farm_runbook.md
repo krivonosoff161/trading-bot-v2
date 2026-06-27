@@ -434,6 +434,10 @@ The rebuild now includes a `Paper Watch` sheet when the private derived export e
 at `state/derived/paper_signal_training.jsonl`. The sheet is read-only reporting over
 paper-watch outcomes: family, side, exit mode, result, net %, net R, MFE/MAE, capture,
 diagnosis, and summary counts. It does not call private OKX account/fill endpoints.
+The long-running farm loop refreshes the JSONL export, not the workbook, so an open
+Excel file cannot stall the cycle. `operational_health` reports
+`excel_journal: stale_vs_training=...` and the `journal_rebuild_available` gate warns
+until the workbook is rebuilt from the current JSONL.
 
 Paper-signal outcomes can also be exported into a compact training-friendly JSONL
 without touching private fills:

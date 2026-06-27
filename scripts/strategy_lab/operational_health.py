@@ -233,6 +233,10 @@ def _freshness_metrics(derived: Path, source: Path) -> dict[str, Any]:
     return metrics
 
 
+def _excel_journal_freshness(root: Path, paper_signal_training: Path) -> dict[str, Any]:
+    return _freshness_metrics(root / "scripts" / "journal.xlsx", paper_signal_training)
+
+
 def _gate(status: str, message: str, *, action: str = "") -> dict[str, str]:
     return {"status": status, "message": message, "action": action}
 
@@ -403,6 +407,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     )
     paper_training = training_data["paper_signal_training"]
     paper_training_freshness = training_data["paper_signal_training_freshness"]
+    excel_journal_freshness = training_data["excel_journal_freshness"]
     paper_training_ready = (
         paper_training["rows"] > 0
         and paper_training["schema_rows"] == paper_training["rows"]
@@ -411,6 +416,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and paper_training["read_error"] == ""
         and not paper_training_freshness["stale_vs_source"]
     )
+    excel_journal_current = journals["excel"]["exists"] and not excel_journal_freshness["stale_vs_source"]
     visible_cycle_blocked = (
         safety["auto_trade"]
         or not canonical_surface_ready
@@ -424,9 +430,18 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and pfr["exists"]
         and paper_chain_ready
         and runtime_observation_ready
-        and journals["excel"]["exists"]
+        and excel_journal_current
         and training_export_ready
         and paper_training_ready
+    )
+    visible_cycle_needs_journal_rebuild = (
+        not visible_cycle_blocked
+        and pfr["exists"]
+        and paper_chain_ready
+        and runtime_observation_ready
+        and training_export_ready
+        and paper_training_ready
+        and not excel_journal_current
     )
 
     return {
@@ -537,8 +552,12 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 "Fix blocked safety/ownership gates first."
                 if visible_cycle_blocked
                 else (
+                    "Run python -X utf8 scripts/build_journal.py."
+                    if visible_cycle_needs_journal_rebuild
+                    else (
                     "Run the bounded chain rebuild: farm_loop --run-paper-signals, main paper bridge/"
                     "consumer/runtime/preview, and paper_signal_training_export."
+                    )
                 )
                 if not visible_cycle_ready
                 else ""
@@ -680,10 +699,15 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             else "",
         ),
         "journal_rebuild_available": _gate(
-            "pass" if journals["excel"]["exists"] else "warn",
-            "Excel journal exists and can be rebuilt locally."
-            if journals["excel"]["exists"] else "Excel journal does not exist yet.",
-            action="Run python scripts/build_journal.py." if not journals["excel"]["exists"] else "",
+            (
+                "pass"
+                if excel_journal_current
+                else "warn"
+            ),
+            "Excel journal exists and is current against the paper-signal training export."
+            if excel_journal_current
+            else "Excel journal is missing or older than the paper-signal training export.",
+            action="Run python -X utf8 scripts/build_journal.py." if not excel_journal_current else "",
         ),
         "training_data_exports": _gate(
             "pass" if training_export_ready else "warn",
@@ -1053,6 +1077,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 paper_signal_training,
                 paper_signal_log,
             ),
+            "excel_journal_freshness": _excel_journal_freshness(ROOT, paper_signal_training),
         },
         "pfr": {
             "db": _exists(pfr_db),
@@ -1254,11 +1279,18 @@ def _print_human(report: dict[str, Any]) -> None:
         )
     training = report["training_data"]["paper_signal_training"]
     freshness = report["training_data"]["paper_signal_training_freshness"]
+    excel_freshness = report["training_data"]["excel_journal_freshness"]
     print(
         "paper_signal_training: "
         f"rows={training['rows']} schema_rows={training['schema_rows']} "
         f"invalid_json={training['invalid_json']} paper_only_false={training['paper_only_false']} "
         f"stale_vs_source={freshness['stale_vs_source']}"
+    )
+    print(
+        "excel_journal: "
+        f"exists={excel_freshness['derived_exists']} "
+        f"stale_vs_training={excel_freshness['stale_vs_source']} "
+        f"age_delta_seconds={excel_freshness['age_delta_seconds']}"
     )
     print("readiness:")
     for name, gate in report["readiness"].items():

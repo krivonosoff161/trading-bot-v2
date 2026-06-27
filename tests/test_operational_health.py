@@ -190,6 +190,50 @@ def test_operational_health_warns_when_paper_training_export_is_stale(tmp_path, 
     assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
 
 
+def test_excel_journal_freshness_tracks_training_export(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    journal = scripts / "journal.xlsx"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    training.parent.mkdir(parents=True)
+    journal.write_bytes(b"xlsx")
+    training.write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(training, (1000, 1000))
+    os.utime(journal, (1005, 1005))
+
+    freshness = H._excel_journal_freshness(tmp_path, training)
+
+    assert freshness["source_exists"] is True
+    assert freshness["derived_exists"] is True
+    assert freshness["stale_vs_source"] is False
+    assert freshness["age_delta_seconds"] == -5.0
+
+
+def test_excel_journal_freshness_detects_stale_workbook(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    journal = scripts / "journal.xlsx"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    training.parent.mkdir(parents=True)
+    journal.write_bytes(b"xlsx")
+    training.write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(journal, (1000, 1000))
+    os.utime(training, (1005, 1005))
+
+    freshness = H._excel_journal_freshness(tmp_path, training)
+
+    assert freshness["source_exists"] is True
+    assert freshness["derived_exists"] is True
+    assert freshness["stale_vs_source"] is True
+    assert freshness["age_delta_seconds"] == 5.0
+
+
 def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
@@ -486,6 +530,7 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
         json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
         encoding="utf-8",
     )
+    os.utime(derived / "paper_signal_training.jsonl", (1000, 1000))
     (derived / "main_paper_instructions.json").write_text(
         json.dumps({"instructions": 2, "items": [{}, {}]}),
         encoding="utf-8",
