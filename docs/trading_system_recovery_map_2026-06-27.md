@@ -83,6 +83,19 @@ python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\
 Both visible wrappers run this blocked-only preflight before opening/starting work.
 Warnings and planned boundaries remain visible operator information. A `blocked`
 readiness gate stops the launch and must be fixed before the long paper/research cycle.
+The same report now exposes `operator_next_actions.v1`, a derived checklist that
+classifies the visible gates without changing their meaning:
+
+- `blocking` means the launch must not start;
+- `operator_configuration` means an external operator setting/review is missing,
+  for example `PAPER_CHAT_ID`;
+- `intentional_boundaries` means a safety boundary is deliberately kept, for example
+  old `main.py` isolation;
+- `rebuild_actions` means a generated artifact is missing or stale and should be
+  rebuilt before trusting the operator picture.
+
+The normal visible paper/research state is `operator_next_actions.launch_blocked=false`.
+This does not imply live trading readiness and does not prove a trading edge.
 
 Required operator facts:
 

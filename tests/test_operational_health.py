@@ -674,3 +674,37 @@ def test_operational_health_fail_on_blocked_ignores_warn_and_planned(tmp_path, m
     assert any(gate["status"] == "warn" for gate in report["readiness"].values())
     assert H.has_blocked_readiness(report) is False
     assert H.exit_code_for_report(report, fail_on_blocked=True) == 0
+
+    next_actions = report["operator_next_actions"]
+    assert next_actions["schema"] == "operator_next_actions.v1"
+    assert next_actions["launch_blocked"] is False
+    assert next_actions["blocking"] == []
+    assert next_actions["status_counts"]["planned"] >= 1
+    assert next_actions["status_counts"]["warn"] >= 1
+    assert {item["name"] for item in next_actions["intentional_boundaries"]} == {
+        "main_runtime_consumer",
+        "manual_product_analyzer_boundary",
+    }
+    assert "paper_telegram_surface" in {
+        item["name"] for item in next_actions["operator_configuration"]
+    }
+    assert "paper_chain_counts" in {item["name"] for item in next_actions["rebuild_actions"]}
+
+
+def test_operational_health_operator_next_actions_exposes_blockers(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_LAB_LLM_ENABLED", "1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_PROVIDER", "alibaba")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("STRATEGY_LAB_LLM_MODEL_CHEAP", "qwen-test")
+    monkeypatch.delenv("STRATEGY_LAB_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("ALIBABA_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+    next_actions = report["operator_next_actions"]
+
+    assert next_actions["launch_blocked"] is True
+    assert "strategy_lab_llm_policy" in {item["name"] for item in next_actions["blocking"]}
+    assert "strategy_lab_llm_policy" in {
+        item["name"] for item in next_actions["operator_configuration"]
+    }
