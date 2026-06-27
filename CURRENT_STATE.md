@@ -123,6 +123,8 @@ Important active files — calculation farm (current core):
 - `src/research_lab/farm_journal.py` - structured cycle/transition/error logs.
 - `scripts/strategy_lab/farm_status_report.py` - operator picture (run after a cycle).
 - `bat/strategy_lab_farm_full_cycle_loop.bat` - visible full-cycle operator wrapper.
+- `bat/strategy_lab_control_room.bat` - visible control room for farm loop,
+  dashboard, private graph viewer, and status monitor windows.
 - `bat/strategy_lab_farm_full_cycle_stop.bat` - clean stop-file wrapper for that loop.
 
 Important active files — scanner (upstream intake, second level):
@@ -198,6 +200,7 @@ Farm (current core) — after a bounded cycle:
 python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, writes nothing
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-oi
 bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper/PFR-watch loop
+bat\strategy_lab_control_room.bat                                 # visible farm + dashboard + graph + status windows
 python -m scripts.strategy_lab.farm_status_report                  # tasks by type/state, blocked/deferred, unique candidates
 ```
 
