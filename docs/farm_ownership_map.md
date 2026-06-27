@@ -34,7 +34,7 @@ farm permission to touch the old money path.
 | `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
 | `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
 | `bat\strategy_lab_start.bat` | **LEGACY LAB WRAPPER** | Older standalone queue/dashboard/worker start. Kept for diagnostics; not the canonical farm/PFR/paper loop. |
-| `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`. |
+| `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`; any legacy auto-execute path requires `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` plus `AUTO_TRADE`. |
 | `start_all.bat` | **LEGACY/FROZEN PRODUCT STACK** | Historical multi-window scanner/engine launcher. Do not use as the current farm/PFR/paper control path. |
 | `scripts/ws/ws_main_screener.py` | **SEPARATE SCANNER SURFACE** | Public-market scanner + Telegram/LLM reporting surface. It can notify humans, but it is not the farm trigger owner and not a farm/PFR executor. |
 | `scripts/ws/ws_scanner.py` | **LEGACY / DIAGNOSTIC** | Older scanner surface that imports the OKX client. Keep out of the canonical farm/PFR/paper path. |
@@ -83,7 +83,7 @@ Telegram is split into operator surfaces, not a single trading brain:
 |---|---|---|
 | `paper_telegram_preview` | Offline cards from accepted paper instructions | None; no network send by default |
 | `scripts/ws/ws_main_screener.py` | Scanner/news/Telegram intake and reporting | None; upstream context only |
-| `start.bat` / `scripts.telegram_bot` | Product/analyzer bot surface | None; not Strategy Lab farm |
+| `start.bat` / `scripts.telegram_bot` | Product/analyzer bot surface | None; not Strategy Lab farm; old auto-execute hook requires explicit Telegram opt-in plus `AUTO_TRADE` |
 | `scripts.analyze_chart` | Manual chart/report analyzer | None by default; optional Telegram send only when explicitly requested |
 | `scripts.run_latest_analysis` | Interactive manual analyzer wrapper | None for farm; can reach `AUTO_TRADE`-gated auto-execute only after explicit manual wrapper opt-in in the old product path |
 | `scripts/ws/ws_scanner.py` | Legacy scanner path using the OKX client | None; diagnostic/history only |

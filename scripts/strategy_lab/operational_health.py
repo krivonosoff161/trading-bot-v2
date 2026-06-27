@@ -199,6 +199,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and telegram_flow["paper_sends_telegram_by_default"] is False
         and telegram_flow["execution_authority"] is False
         and telegram_flow["telegram_analyzer_current_for_farm"] is False
+        and telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"] is True
         and surfaces["scanner_runtime"]["current"] is True
         and surfaces["legacy_ws_scanner"]["current"] is False
     )
@@ -389,12 +390,19 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if not telegram_ownership_ready else "",
         ),
         "telegram_analyzer_execution_boundary": _gate(
-            "pass",
+            "pass" if telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"] else "blocked",
             (
                 "Legacy Telegram analyzer is explicitly not the farm/PFR launcher; old "
-                "execution-adjacent paths are guarded and isolated from the paper loop."
+                "execution-adjacent paths require explicit auto-execute opt-in and are isolated "
+                "from the paper loop."
+            )
+            if telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"]
+            else "Legacy Telegram analyzer can reach auto_execute without the explicit Telegram opt-in.",
+            action=(
+                "Restore TELEGRAM_BOT_ALLOW_AUTO_EXECUTE around scripts.auto_execute imports."
+                if not telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"]
+                else "Do not use start.bat as a paper/PFR runtime. Use the control room or farm full-cycle loop."
             ),
-            action="Do not use start.bat as a paper/PFR runtime. Use the control room or farm full-cycle loop.",
         ),
         "manual_product_analyzer_boundary": _gate(
             "warn",
@@ -665,6 +673,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_analyzer_current_for_farm": False,
             "telegram_analyzer_imports_auto_execute": _contains(telegram_bot, "scripts.auto_execute"),
             "telegram_analyzer_auto_trade_guarded": _contains(auto_execute, "AUTO_TRADE"),
+            "telegram_analyzer_requires_auto_execute_opt_in": _contains(
+                telegram_bot,
+                "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE",
+            ),
             "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"]["exists"],
             "scanner_provider_path": "src.utils.llm_client (LLM_PROVIDER: alibaba/yandex)",
             "chart_formatter_path": "src.utils.llm_formatter (Yandex chart formatter)",
@@ -858,6 +870,7 @@ def _print_human(report: dict[str, Any]) -> None:
         f"scanner_surface={delivery['scanner_surface_sends_to_subscribers']} "
         f"tg_analyzer_farm={delivery['telegram_analyzer_current_for_farm']} "
         f"tg_analyzer_auto_execute={delivery['telegram_analyzer_imports_auto_execute']} "
+        f"tg_analyzer_manual_opt_in={delivery['telegram_analyzer_requires_auto_execute_opt_in']} "
         f"legacy_ws_scanner_okx_client={delivery['legacy_ws_scanner_uses_okx_client']} "
         f"execution_authority={delivery['execution_authority']}"
     )

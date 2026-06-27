@@ -47,6 +47,7 @@ from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
+ALLOW_AUTO_EXECUTE_ENV = "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"
 
 TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
@@ -77,6 +78,10 @@ WELCOME_TEXT = (
 
 CHAT_LINK  = "https://t.me/+B9T_L7VHdpkwZjZi"
 ADMIN_LINK = "https://t.me/Krivonosoff"
+
+
+def _auto_execute_opt_in() -> bool:
+    return os.getenv(ALLOW_AUTO_EXECUTE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 START_TEXT = """\
 Привет 👋
@@ -1056,8 +1061,6 @@ async def _scanner_loop() -> None:
     while True:
       try:
         now  = datetime.now(timezone.utc)
-        hour = now.hour
-
         # No night block — scanner runs 24/7, disclaimer added to client summary
         msk_str = f"{(now.hour+3)%24:02d}:{now.minute:02d} МСК"
         _scan_log(f"── Цикл сканирования {msk_str} ──────────────────")
@@ -1114,12 +1117,15 @@ async def _scanner_loop() -> None:
                     )
                 except Exception as _e:
                     _scan_log(f"  [signal_log] ошибка записи: {_e}")
-                # Auto-execute on operator demo account
-                try:
-                    from scripts.auto_execute import execute_signal
-                    await execute_signal(result)
-                except Exception:
-                    pass
+                # Auto-execute on operator demo account is an explicit legacy opt-in.
+                # AUTO_TRADE alone is not enough to import or call the money path.
+                if _auto_execute_opt_in():
+                    try:
+                        from scripts.auto_execute import AUTO_TRADE, execute_signal
+                        if AUTO_TRADE:
+                            await execute_signal(result)
+                    except Exception:
+                        pass
             else:
                 # Log NO_TRADE tick for live funnel analysis
                 try:
@@ -1152,9 +1158,12 @@ async def _scanner_loop() -> None:
                     _arr  = "↗️" if fade_hint == "LONG" else "↘️"
                     _band = "нижней" if fade_hint == "LONG" else "верхней"
                     def _fp(v):
-                        if v is None: return "?"
-                        if v >= 1000: return f"{v:.1f}"
-                        if v >= 10:   return f"{v:.3f}"
+                        if v is None:
+                            return "?"
+                        if v >= 1000:
+                            return f"{v:.1f}"
+                        if v >= 10:
+                            return f"{v:.3f}"
                         return f"{v:.5f}"
                     _until = result.get("expiry_time", "")
                     fade_msg = (
@@ -1215,12 +1224,15 @@ async def _scanner_loop() -> None:
 
             last_signal[pair] = signal
 
-        # Check timeouts on auto-positions
-        try:
-            from scripts.auto_execute import check_and_close_timeouts
-            await check_and_close_timeouts()
-        except Exception:
-            pass
+        # Check timeouts on legacy auto-positions only when the same explicit
+        # legacy opt-in is set. AUTO_TRADE alone is not a Telegram-bot trigger.
+        if _auto_execute_opt_in():
+            try:
+                from scripts.auto_execute import AUTO_TRADE, check_and_close_timeouts
+                if AUTO_TRADE:
+                    await check_and_close_timeouts()
+            except Exception:
+                pass
 
         # Sleep until next :00/:15/:30/:45
         now      = datetime.now(timezone.utc)
