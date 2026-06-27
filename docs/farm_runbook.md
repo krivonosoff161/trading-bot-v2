@@ -294,7 +294,8 @@ bat\strategy_lab_farm_full_cycle_stop.bat
 # Status, no raw log tailing needed.
 python -m scripts.strategy_lab.status
 python -m scripts.strategy_lab.farm_status_report --fast
-python -m scripts.strategy_lab.farm_status_report --json
+python -m scripts.strategy_lab.farm_status_report --fast --json
+python -m scripts.strategy_lab.farm_status_report   # full audit/drilldown
 ```
 
 The distinction matters:

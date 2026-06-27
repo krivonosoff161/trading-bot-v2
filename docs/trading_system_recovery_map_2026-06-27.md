@@ -33,6 +33,16 @@ The visible operator entry point is:
 bat\strategy_lab_control_room.bat
 ```
 
+The visible status monitor should use the fast status report:
+
+```bash
+python -m scripts.strategy_lab.farm_status_report --fast
+```
+
+Run the full report without `--fast` only for manual audit/drilldown. It can rebuild
+heavier derived research views from the private artifact tree and is intentionally not
+the default monitor command.
+
 The one-window farm loop is:
 
 ```bat

@@ -241,7 +241,8 @@ python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-valid
 bat\strategy_lab_farm_full_cycle_loop.bat
 bat\strategy_lab_control_room.bat
 bat\strategy_lab_farm_full_cycle_stop.bat
-python -m scripts.strategy_lab.farm_status_report
+python -m scripts.strategy_lab.farm_status_report --fast
+python -m scripts.strategy_lab.farm_status_report   # full audit/drilldown
 ```
 
 **Legacy demo (superseded):** the older flat bridge path

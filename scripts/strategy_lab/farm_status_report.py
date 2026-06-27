@@ -10,7 +10,7 @@ v3 tables is upgraded non-destructively instead of crashing.
 
     python -m scripts.strategy_lab.farm_status_report --fast
     python -m scripts.strategy_lab.farm_status_report
-    python -m scripts.strategy_lab.farm_status_report --json
+    python -m scripts.strategy_lab.farm_status_report --fast --json
 
 Never writes results, never touches the network, orders, .env, or private endpoints.
 Use --fast for visible operator monitors; the default full report may rebuild derived
