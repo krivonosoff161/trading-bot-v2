@@ -68,7 +68,8 @@ runtime:
 - `main.py` is order-capable, sets leverage, imports the private OKX client, and
   sends Telegram messages.
 - `scripts.run_latest_analysis` is an interactive product wrapper and can reach
-  `scripts.auto_execute` under the `AUTO_TRADE` guard.
+  `scripts.auto_execute` only under the `AUTO_TRADE` guard plus explicit
+  `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1` manual opt-in.
 - `scripts.analyze_chart` reads OKX credentials through `OKXClient`, writes local
   report/snapshot/chart artifacts, and can optionally send Telegram.
 - `src.utils.llm_client` supports the scanner Alibaba/Yandex router through
@@ -89,8 +90,9 @@ Before connecting Telegram/product analysis back into the operator workflow:
    shared provider router.
 3. Audit Telegram text and chart payloads for paper-only wording, risk language,
    price/SL/TP clarity, and no execution claims.
-4. Audit `run_latest_analysis` and `scripts.auto_execute` so the `AUTO_TRADE`
-   guard remains impossible to bypass accidentally.
+4. Keep the `run_latest_analysis` double gate intact: `AUTO_TRADE` alone must not import
+   or call `scripts.auto_execute`; explicit `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`
+   is required for manual execution tests.
 5. Decide whether paper alerts use only `PAPER_CHAT_ID`; they must not fall back
    to scanner/default chats.
 6. Keep the main paper runtime as observer/journal authority until a separate

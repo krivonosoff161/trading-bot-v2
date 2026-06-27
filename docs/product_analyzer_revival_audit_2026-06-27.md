@@ -12,7 +12,7 @@ paper delivery, and what must remain isolated until a separate review.
 |---|---|---|
 | `scripts.analyze_chart` | Manual chart/report generator | Writes local report, snapshot, chart, and client summary. Telegram send is off by default. |
 | `src.utils.llm_formatter` | Legacy chart text formatter | UTF-8 prompt is intact and still carries risk/non-claim language. Provider path is Yandex-only. |
-| `scripts.run_latest_analysis` | Interactive wrapper over `analyze_chart` | Execution-adjacent because it can lazy-import `scripts.auto_execute` after an ENTRY result. |
+| `scripts.run_latest_analysis` | Interactive wrapper over `analyze_chart` | Execution-adjacent, but the old `scripts.auto_execute` hook now requires both `AUTO_TRADE` and the explicit manual wrapper opt-in `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`. |
 | `scripts.auto_execute` | Old demo/live order path | Guarded by `AUTO_TRADE`, but can set leverage and place OKX orders when enabled. |
 | `src.utils.telegram` | Telegram send helper | Reads env at call time, does not print token/chat values, skips when not configured. |
 
@@ -31,6 +31,7 @@ Expected product-surface facts:
 - `analyze_chart_send_default = false`
 - `run_latest_analysis_imports_auto_execute = true`
 - `run_latest_analysis_auto_trade_guarded = true`
+- `run_latest_analysis_requires_auto_execute_opt_in = true`
 - `product_analyzer_prompt_integrity = pass`
 - `manual_product_analyzer_boundary = warn`
 
@@ -63,11 +64,15 @@ Therefore they must not consume farm/PFR paper instructions directly.
 5. Decide whether `llm_formatter` remains Yandex-only or becomes an adapter over the
    shared `llm_client` provider router. Do this as a separate change with tests.
 6. Keep `run_latest_analysis` and `auto_execute` out of the farm launch path until a new
-   executor contract exists and has its own paper-first validation.
+   executor contract exists and has its own paper-first validation. The current manual
+   wrapper requires `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1` before it can import the
+   old auto-execute module; that flag is for explicit manual execution tests only, not
+   for farm/PFR launches.
 
 ## Non-Claims
 
 This audit does not claim that Telegram/product analysis is ready for unattended trade
 delivery. It claims that the legacy formatter prompt is readable, the provider split is
 visible, the analyzer does not send by default, and the execution-adjacent path is
-explicitly isolated from the restored paper/farm loop.
+explicitly isolated from the restored paper/farm loop by an additional manual opt-in
+guard.

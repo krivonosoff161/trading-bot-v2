@@ -12,6 +12,7 @@ Workflow:
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.analyze_chart import run  # noqa: E402
 
+
+ALLOW_AUTO_EXECUTE_ENV = "RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE"
 
 SYMBOL_MAP = {
     "1": "BTC-USDT",
@@ -128,11 +131,19 @@ def main() -> int:
 
     # Auto-execute if ENTRY signal and AUTO_TRADE enabled
     if result and result.get("entry_signal") == "ENTRY":
-        from scripts.auto_execute import AUTO_TRADE, execute_signal
+        allow_auto_execute = os.getenv(ALLOW_AUTO_EXECUTE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+        if allow_auto_execute:
+            from scripts.auto_execute import AUTO_TRADE, execute_signal
+        else:
+            AUTO_TRADE = False
+            execute_signal = None
         if AUTO_TRADE:
             print()
             print(f"AUTO_TRADE включён — открываю позицию {symbol} ...")
             asyncio.run(execute_signal(result))
+        elif not allow_auto_execute:
+            print()
+            print(f"Auto-execute blocked: set {ALLOW_AUTO_EXECUTE_ENV}=1 only for explicit manual execution tests.")
 
     print()
     print("Готово.")
