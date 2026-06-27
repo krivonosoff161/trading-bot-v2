@@ -123,7 +123,11 @@ provider shape (`provider=yandex`, `provider_scope=yandex_only`, key presence bo
 sanitized `model_label`, and no Telegram/execution authority). It must never expose API
 keys, folder ids, chat ids, prompts, or request payloads. A mismatch such as
 `LLM_PROVIDER=alibaba` plus `scanner_formatter_provider_mismatch=true` is expected until
-the product analyzer is migrated through a dedicated adapter review.
+the product analyzer is migrated through a dedicated adapter review. The text-only chart
+card can now be tested through the shared router with an explicit opt-in:
+`PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. That opt-in covers only
+`generate_client_text`; premium screenshot analysis and educational Q&A remain on the
+legacy Yandex formatter path until they receive separate prompt/provider reviews.
 
 Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
 does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`
@@ -152,6 +156,11 @@ paper runtime.
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
 - `llm_surface_boundaries.scanner_formatter_provider_mismatch = true` when scanner
   `LLM_PROVIDER` differs from the legacy chart formatter provider
+- With `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`,
+  `llm_surface_boundaries.telegram_chart_formatter_provider = shared_llm_client_opt_in`,
+  `telegram_chart_formatter_uses_llm_provider_env = true`, and
+  `scanner_formatter_provider_mismatch = false` when the shared router follows the same
+  `LLM_PROVIDER`.
 - `llm_surface_boundaries.telegram_chart_formatter_prompt_integrity = true`
 - `llm_surface_boundaries.telegram_chart_formatter_mojibake_detected = false`
 - `product_analyzer_boundary.analyze_chart_send_default = false`

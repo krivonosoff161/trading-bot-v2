@@ -243,6 +243,30 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert report["readiness"]["telegram_analyzer_execution_boundary"]["status"] == "pass"
 
 
+def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRODUCT_ANALYZER_LLM_ROUTER", "llm_client")
+    monkeypatch.setenv("LLM_PROVIDER", "alibaba")
+    monkeypatch.setenv("ALIBABA_API_KEY", "secret-alibaba")
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.delenv("YANDEX_FOLDER_ID", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+    llm_boundaries = report["llm_surface_boundaries"]
+    formatter_status = llm_boundaries["telegram_chart_formatter_status"]
+    rendered = str(report)
+
+    assert formatter_status["provider"] == "alibaba"
+    assert formatter_status["provider_scope"] == "shared_llm_client_opt_in"
+    assert formatter_status["shared_router_active"] is True
+    assert formatter_status["follows_llm_provider_env"] is True
+    assert formatter_status["configured"] is True
+    assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"
+    assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
+    assert llm_boundaries["scanner_formatter_provider_mismatch"] is False
+    assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "pass"
+    assert "secret-alibaba" not in rendered
+
+
 def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch):
     view = tmp_path / "state" / "derived" / "main_paper_instructions.json"
     view.parent.mkdir(parents=True)

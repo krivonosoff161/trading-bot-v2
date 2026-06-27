@@ -204,6 +204,10 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and surfaces["scanner_runtime"]["current"] is True
         and surfaces["legacy_ws_scanner"]["current"] is False
     )
+    telegram_analyzer_provider_ready = (
+        llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
+        and llm_boundaries["scanner_formatter_provider_mismatch"] is False
+    )
     canonical_surface_ready = (
         surfaces["control_room"]["exists"]
         and surfaces["farm_full_cycle_loop"]["exists"]
@@ -437,9 +441,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if lab_llm["enabled"] and not lab_llm["configured"] else "",
         ),
         "telegram_analyzer_llm_provider_review": _gate(
-            "warn",
-            "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router.",
-            action="Audit provider routing before reviving Telegram product delivery.",
+            "pass" if telegram_analyzer_provider_ready else "warn",
+            (
+                "Text-only legacy chart analyzer is explicitly opted in to the shared LLM_PROVIDER router."
+                if telegram_analyzer_provider_ready
+                else "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router."
+            ),
+            action=(
+                "Premium vision and educational Q&A still need separate provider/prompt review."
+                if telegram_analyzer_provider_ready
+                else "Audit provider routing before reviving Telegram product delivery."
+            ),
         ),
         "product_analyzer_prompt_integrity": _gate(
             "pass"

@@ -81,6 +81,11 @@ Expected safe state:
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
   If scanner `LLM_PROVIDER=alibaba`, `scanner_formatter_provider_mismatch = true` is
   expected until the old formatter is migrated through a tested adapter.
+  For the text-only product chart card, the tested adapter is explicit opt-in:
+  set `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. Then health should show
+  `telegram_chart_formatter_provider = shared_llm_client_opt_in` and
+  `scanner_formatter_provider_mismatch = false` when `LLM_PROVIDER` matches. This does
+  not migrate premium vision or educational Q&A.
 - `product_analyzer_prompt_integrity = pass` is required before any manual product
   analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
   keeps risk/non-claim wording, and does not contain known mojibake markers.
