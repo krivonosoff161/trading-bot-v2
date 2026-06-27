@@ -124,6 +124,15 @@ Visible launch:
 bat\strategy_lab_control_room.bat
 ```
 
+Visible status monitor:
+
+```bash
+python -m scripts.strategy_lab.farm_status_report --fast
+```
+
+The full `farm_status_report` remains the manual audit/drilldown command and is not
+intended for a tight visible monitor loop on a large private artifact tree.
+
 Bounded dry-run smoke:
 
 ```bash

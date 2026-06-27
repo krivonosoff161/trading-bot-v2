@@ -135,7 +135,9 @@ Important active files — calculation farm (current core):
 - `src/research_lab/setup_library.py` - hard-validated setup card writer.
 - `scripts/strategy_lab/paper_loop.py` - gated paper runtime over ready setup cards.
 - `src/research_lab/farm_journal.py` - structured cycle/transition/error logs.
-- `scripts/strategy_lab/farm_status_report.py` - operator picture (run after a cycle).
+- `scripts/strategy_lab/farm_status_report.py` - operator picture. Use `--fast`
+  for visible status monitors; run the full report without `--fast` only for manual
+  audit/drilldown because it rebuilds heavier derived research views.
 - `bat/strategy_lab_farm_full_cycle_loop.bat` - visible full-cycle operator wrapper.
 - `bat/strategy_lab_control_room.bat` - visible control room for farm loop,
   dashboard, private graph viewer, and status monitor windows.
@@ -215,7 +217,8 @@ python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, 
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-oi
 bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper/PFR-watch loop
 bat\strategy_lab_control_room.bat                                 # visible farm + dashboard + graph + status windows
-python -m scripts.strategy_lab.farm_status_report                  # tasks by type/state, blocked/deferred, unique candidates
+python -m scripts.strategy_lab.farm_status_report --fast           # visible status: tasks, blocked/deferred, paper/PFR/main-paper
+python -m scripts.strategy_lab.farm_status_report                  # full audit/drilldown; slower on a large private DB
 ```
 
 Scanner intake (second level) — after the scanner has run for 24-48h:
