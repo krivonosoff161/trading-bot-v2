@@ -298,8 +298,21 @@ def test_farm_surface_recursive_no_money_path():
     Unlike the NEW_MODULES allowlist above, this scans the entire src/research_lab tree
     plus the farm entry scripts, so a newly added farm module is auto-guarded.
     """
-    farm_scripts = ["farm_loop.py", "paper_loop.py", "worker_once.py", "farm_status_report.py",
-                    "discover_okx_universe.py", "enrich_oi_data.py", "enrich_flow_data.py"]
+    farm_scripts = [
+        "farm_loop.py",
+        "paper_loop.py",
+        "worker_once.py",
+        "farm_status_report.py",
+        "discover_okx_universe.py",
+        "enrich_oi_data.py",
+        "enrich_flow_data.py",
+        "main_paper_bridge.py",
+        "main_paper_consumer.py",
+        "main_paper_runtime.py",
+        "main_paper_runtime_adapter.py",
+        "paper_signal_training_export.py",
+        "paper_telegram_preview.py",
+    ]
     files = _py_files("src/research_lab")
     files += [_ROOT / "scripts" / "strategy_lab" / s for s in farm_scripts]
     _assert_surface_clean(files, RECURSIVE_FARM_FORBIDDEN)
