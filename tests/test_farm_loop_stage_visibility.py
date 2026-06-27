@@ -85,6 +85,7 @@ class TestCycleLogStages:
         def fake_cycle(*_args, **kwargs):
             seen["max_new"] = kwargs["max_new"]
             seen["max_pfr_scan"] = kwargs["max_pfr_scan"]
+            seen["pfr_reserved_new"] = kwargs["pfr_reserved_new"]
             seen["max_observe"] = kwargs["max_observe"]
             return {"generated": 0, "pfr_counts": {}, "state": {}, "gate_counts": {}}
 
@@ -129,6 +130,7 @@ class TestCycleLogStages:
             paper_signals_fetch_timeout=1.0,
             paper_signals_max_new=0,
             paper_signals_max_pfr_scan=0,
+            paper_signals_pfr_reserved=0,
             paper_signals_max_observe=0,
             main_paper_runtime_limit=0,
             provider="synthetic",
@@ -160,7 +162,7 @@ class TestCycleLogStages:
 
         assert coordinator_seen == {"max_plan_events": 0, "max_discovery": 0}
         assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
-        assert seen == {"max_new": 0, "max_pfr_scan": 0, "max_observe": 0}
+        assert seen == {"max_new": 0, "max_pfr_scan": 0, "pfr_reserved_new": 0, "max_observe": 0}
         assert out["main_paper_runtime_queue"]["queued"] == 0
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False
         assert out["main_paper_runtime_observation"]["rows_read"] == 0
@@ -176,3 +178,5 @@ class TestCycleLogStages:
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20" in bat
         assert "paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%" in bat
         assert "'--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%'" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
+        assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat

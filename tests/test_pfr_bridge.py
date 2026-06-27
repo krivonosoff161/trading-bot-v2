@@ -26,7 +26,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.research_lab.paper_signals import lane, pfr_bridge  # noqa: E402
+from src.research_lab.paper_signals import cycle, lane, pfr_bridge  # noqa: E402
 from src.research_lab.paper_signals.contract import PaperActionSignal  # noqa: E402
 from src.research_lab.strategies.detectors import (  # noqa: E402
     detect_mean_reversion_fade,
@@ -126,6 +126,88 @@ class FakeProvider:
 
     def fetch_ohlcv(self, symbol: str, tf: str, start_ts: int, end_ts: int) -> list[dict]:
         return self._candles
+
+
+def _live_signal(symbol: str = "LIVE_USDT_SWAP", tf: str = "15m", now: float = 25.0) -> PaperActionSignal:
+    return PaperActionSignal(
+        signal_id=f"{symbol}_{tf}_fake_live",
+        source="farm",
+        symbol=symbol,
+        okx_inst_id=symbol.replace("_", "-"),
+        timeframe=tf,
+        side="long",
+        setup_family="fake_live_family",
+        entry_zone=[99.0, 100.0],
+        stop_loss=95.0,
+        invalidation_rule="synthetic test invalidation",
+        take_profit_plan=[{"label": "tp1", "price": 110.0, "size_frac": 1.0}],
+        max_hold_bars=5,
+        max_hold_minutes=75,
+        reason_now="synthetic live signal for reservation test",
+        status="armed",
+        created_at=now,
+        expires_at=now + 3600,
+        ref_price=100.0,
+        risk_pct=5.0,
+        boundary_ts=24,
+        data_fingerprint="fake-live-fingerprint",
+        dedup_key=f"{symbol}|{tf}|fake_live_family",
+        mode="live",
+    )
+
+
+class TestPFRReservation:
+    def test_pfr_reserve_prevents_live_mover_starvation(self, tmp_path, monkeypatch):
+        db = tmp_path / "sl.sqlite"
+        _make_db(db, [_MRF_ROW_DICT])
+
+        monkeypatch.setattr(cycle, "_load_movers", lambda _root: [{
+            "symbol": "LIVE_USDT_SWAP",
+            "inst_id": "LIVE-USDT-SWAP",
+            "score": 100,
+            "group": "test",
+            "spread_bps": 1,
+            "vol_usd": 100_000_000,
+            "move_pct": 10,
+        }])
+        monkeypatch.setattr(lane, "gate_candidate", lambda *_a, **_k: "ok")
+        monkeypatch.setattr(cycle.families, "watch_only_reason", lambda _candles: None)
+        monkeypatch.setattr(cycle.families, "generate", lambda *_a, **_k: [(_live_signal(now=4000.0), "fake_live")])
+
+        seen_max_pfr: list[int] = []
+
+        def fake_generate_pfr(*_args, max_pfr: int, **_kwargs):
+            seen_max_pfr.append(max_pfr)
+            return []
+
+        monkeypatch.setattr(pfr_bridge, "generate_pfr_signals", fake_generate_pfr)
+
+        no_reserve = cycle.run_cycle(
+            tmp_path,
+            max_new=1,
+            apply=False,
+            provider=FakeProvider(_mrf_candles_short()),
+            now=4000.0,
+            pfr_db_path=db,
+            max_pfr_scan=10,
+            pfr_reserved_new=0,
+        )
+        assert no_reserve["generated"] == 1
+        assert seen_max_pfr == []
+
+        with_reserve = cycle.run_cycle(
+            tmp_path,
+            max_new=2,
+            apply=False,
+            provider=FakeProvider(_mrf_candles_short()),
+            now=4000.0,
+            pfr_db_path=db,
+            max_pfr_scan=10,
+            pfr_reserved_new=1,
+        )
+        assert with_reserve["generated"] == 1
+        assert seen_max_pfr == [1]
+        assert with_reserve["pfr_counts"]["pfr_reserved_slots"] == 1
 
 
 # ── Category 1: non-PFR records excluded ─────────────────────────────────────

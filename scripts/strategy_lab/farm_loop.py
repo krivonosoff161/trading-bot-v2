@@ -309,6 +309,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     max_new=int(getattr(args, "paper_signals_max_new", 5)), apply=True,
                     pfr_db_path=_pfr_db, provider=paper_provider,
                     max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+                    pfr_reserved_new=int(getattr(args, "paper_signals_pfr_reserved", 0)),
                     max_observe=getattr(args, "paper_signals_max_observe", None))
                 try:
                     from src.research_lab.main_paper_bridge import export_main_paper_instructions
@@ -389,6 +390,9 @@ def main() -> None:
                          "(requires --run-paper-signals; OFF by default — must be explicit)")
     ap.add_argument("--paper-signals-max-pfr-scan", type=int, default=30,
                     help="max PFR records inspected by --run-paper-signals per farm cycle")
+    ap.add_argument("--paper-signals-pfr-reserved", type=int, default=0,
+                    help=("reserve this many new paper-watch card slots for PFR records when "
+                          "--pfr-db-path is provided"))
     ap.add_argument("--paper-signals-max-observe", type=int, default=50,
                     help=("max active paper signals observed by --run-paper-signals per cycle "
                           "(set 0 for smoke checks)"))
