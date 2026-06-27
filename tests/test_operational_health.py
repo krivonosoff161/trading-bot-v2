@@ -36,6 +36,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert analyzer["run_latest_analysis_imports_auto_execute"] is True
     assert analyzer["run_latest_analysis_auto_trade_guarded"] is True
     assert analyzer["safe_for_farm_pfr_runtime"] is False
+    training = report["training_data"]["paper_signal_training"]
+    assert training["rows"] == 0
+    assert training["schema_rows"] == 0
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
@@ -72,6 +75,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
     assert report["readiness"]["manual_product_analyzer_boundary"]["status"] == "warn"
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
@@ -84,7 +88,10 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     paper.parent.mkdir(parents=True)
     paper.write_text("{}", encoding="utf-8")
     training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
-    training.write_text("{}", encoding="utf-8")
+    training.write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     report = H.collect(private_root=tmp_path, pfr_db_path=pfr)
@@ -101,7 +108,34 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
+    assert report["training_data"]["paper_signal_training"]["rows"] == 1
+    assert report["training_data"]["paper_signal_training"]["schema_rows"] == 1
+    assert report["training_data"]["paper_signal_training"]["paper_only_false"] == 0
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
     assert Path(report["pfr"]["db"]["path"]) == pfr
+
+
+def test_operational_health_rejects_mixed_training_schema(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}),
+                json.dumps({"schema": "OtherSchema.v1", "paper_only": True}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    training = report["training_data"]["paper_signal_training"]
+    assert training["rows"] == 2
+    assert training["schema_rows"] == 1
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
 
 
 def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeypatch):
@@ -240,7 +274,10 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
     pfr = tmp_path / "state" / "strategy_lab.sqlite"
     pfr.parent.mkdir(parents=True, exist_ok=True)
     pfr.write_bytes(b"sqlite")
-    (derived / "paper_signal_training.jsonl").write_text("{}", encoding="utf-8")
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
     (derived / "main_paper_instructions.json").write_text(
         json.dumps({"instructions": 2, "items": [{}, {}]}),
         encoding="utf-8",
@@ -273,6 +310,7 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
     assert report["readiness"]["paper_chain_counts"]["status"] == "pass"
     assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
     assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "pass"
 
 

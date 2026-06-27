@@ -62,6 +62,39 @@ def _snapshot_metrics(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
     return metrics
 
 
+def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "rows": 0,
+        "schema_rows": 0,
+        "invalid_json": 0,
+        "paper_only_false": 0,
+        "read_error": "",
+    }
+    if not path.exists():
+        return metrics
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    for line in lines:
+        if not line.strip():
+            continue
+        metrics["rows"] += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            metrics["invalid_json"] += 1
+            continue
+        if schema is None or row.get("schema") == schema:
+            metrics["schema_rows"] += 1
+        if row.get("paper_only") is False:
+            metrics["paper_only_false"] += 1
+    return metrics
+
+
 def _gate(status: str, message: str, *, action: str = "") -> dict[str, str]:
     return {"status": status, "message": message, "action": action}
 
@@ -102,6 +135,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     scanner_llm = report["scanner_llm"]
     lab_llm = report["strategy_lab_llm"]
     journals = report["journals"]
+    training_data = report["training_data"]
     pfr = report["pfr"]["db"]
     bridge = report["main_bridge"]
     chain = report["paper_chain"]
@@ -151,6 +185,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         or journals["main_impulse_training"]["exists"]
         or journals["paper_signal_training"]["exists"]
     )
+    paper_training = training_data["paper_signal_training"]
+    paper_training_ready = (
+        paper_training["rows"] > 0
+        and paper_training["schema_rows"] == paper_training["rows"]
+        and paper_training["invalid_json"] == 0
+        and paper_training["paper_only_false"] == 0
+        and paper_training["read_error"] == ""
+    )
     visible_cycle_blocked = (
         safety["auto_trade"]
         or not canonical_surface_ready
@@ -166,6 +208,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and runtime_observation_ready
         and journals["excel"]["exists"]
         and training_export_ready
+        and paper_training_ready
     )
 
     return {
@@ -349,6 +392,13 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if training_export_ready else "No paper/impulse training export is present yet.",
             action="Modernize journal/training export after paper outcomes stabilize."
             if not training_export_ready else "",
+        ),
+        "paper_signal_training_export": _gate(
+            "pass" if paper_training_ready else "warn",
+            "Paper signal training export is non-empty, schema-valid, and paper-only."
+            if paper_training_ready else "Paper signal training export is missing, empty, invalid, or not paper-only.",
+            action="Run python -m scripts.strategy_lab.paper_signal_training_export, then rebuild the journal."
+            if not paper_training_ready else "",
         ),
     }
 
@@ -618,6 +668,12 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "main_signals": _exists(main_signal_log),
         },
+        "training_data": {
+            "paper_signal_training": _jsonl_schema_metrics(
+                paper_signal_training,
+                schema="PaperSignalTrainingRow.v1",
+            ),
+        },
         "pfr": {
             "db": _exists(pfr_db),
         },
@@ -763,6 +819,12 @@ def _print_human(report: dict[str, Any]) -> None:
         f"reviewed={chain['runtime_observation']['reviewed']} "
         f"runtime_errors={chain['runtime_observation']['invalid'] + chain['runtime_observation']['provider_error']} "
         f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
+    )
+    training = report["training_data"]["paper_signal_training"]
+    print(
+        "paper_signal_training: "
+        f"rows={training['rows']} schema_rows={training['schema_rows']} "
+        f"invalid_json={training['invalid_json']} paper_only_false={training['paper_only_false']}"
     )
     print("readiness:")
     for name, gate in report["readiness"].items():

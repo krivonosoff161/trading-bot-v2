@@ -72,6 +72,9 @@ Expected safe state:
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
+- `paper_signal_training_export = pass` means the training-friendly paper outcome JSONL
+  is non-empty, schema-valid, and paper-only. The human output should show
+  `paper_signal_training: rows=N schema_rows=N invalid_json=0 paper_only_false=0`.
 - `ready_for_visible_paper_research_loop` is the aggregate operator gate. It passes only
   when the visible launch surface, PFR source, clean paper chain, runtime observation,
   journal/training exports, Telegram ownership, LLM policy, and old-main isolation are
