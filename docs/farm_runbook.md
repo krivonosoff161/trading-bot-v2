@@ -4,6 +4,8 @@ Status: **ACTIVE**. Last updated: 2026-06-27.
 
 Current revival audit:
 [`trading_cycle_revival_audit_2026-06-27.md`](trading_cycle_revival_audit_2026-06-27.md).
+Product analyzer boundary audit:
+[`product_analyzer_revival_audit_2026-06-27.md`](product_analyzer_revival_audit_2026-06-27.md).
 
 The calculation farm is now driven by `farm_loop`. The system is paper/research only:
 public OKX market data, no `AUTO_TRADE`, no orders, no private account endpoints.
@@ -67,6 +69,9 @@ Expected safe state:
   This is not a farm-loop failure; it is a product-revival boundary.
 - `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
+- `product_analyzer_prompt_integrity = pass` is required before any manual product
+  analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
+  keeps risk/non-claim wording, and does not contain known mojibake markers.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.

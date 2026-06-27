@@ -106,6 +106,8 @@ an ENTRY result when `AUTO_TRADE` is enabled. Neither file is the farm/PFR paper
 - `telegram_analyzer_auto_trade_guarded = true`
 - `llm_surface_boundaries.telegram_chart_formatter_provider = yandex_only`
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
+- `llm_surface_boundaries.telegram_chart_formatter_prompt_integrity = true`
+- `llm_surface_boundaries.telegram_chart_formatter_mojibake_detected = false`
 - `product_analyzer_boundary.analyze_chart_send_default = false`
 - `product_analyzer_boundary.run_latest_analysis_imports_auto_execute = true`
 - `product_analyzer_boundary.safe_for_farm_pfr_runtime = false`

@@ -22,6 +22,8 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert llm_boundaries["telegram_chart_formatter_provider"] == "yandex_only"
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is False
     assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
+    assert llm_boundaries["telegram_chart_formatter_prompt_integrity"] is True
+    assert llm_boundaries["telegram_chart_formatter_mojibake_detected"] is False
     assert llm_boundaries["analyze_chart_can_send_telegram"] is True
     assert llm_boundaries["analyze_chart_send_default"] is False
     analyzer = report["product_analyzer_boundary"]
@@ -74,6 +76,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
+    assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
     assert report["readiness"]["manual_product_analyzer_boundary"]["status"] == "warn"
     assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
     assert "secret-token" not in rendered
