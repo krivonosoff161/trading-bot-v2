@@ -59,6 +59,7 @@ Required operator facts:
 - `legacy_loop_guards = pass`
 - `telegram_delivery_ownership = pass`
 - `telegram_analyzer_execution_boundary = pass`
+- `paper_main_runtime_current = pass`
 - `ready_for_visible_paper_research_loop = pass` before a long unattended run
 
 ## Main Engine Boundary
@@ -91,6 +92,13 @@ src.research_lab.main_paper_runtime
 
 This is intentional. A future product executor must be a separate reviewed contract,
 not an import of farm/PFR data into old `main.py`.
+
+`operational_health` also exposes `paper_main_runtime_current`. That is the positive
+counterpart to the old-main boundary: it passes only when the current paper-only
+main-compatible runtime (`src.research_lab.main_paper_runtime`) has produced a clean
+observation artifact. `main_runtime_consumer = planned` is therefore not a missing
+paper-chain step; it is the explicit statement that old live `main.py` remains
+outside the farm/PFR paper path.
 
 ## Data Priority
 

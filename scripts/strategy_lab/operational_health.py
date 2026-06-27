@@ -396,6 +396,18 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.main_paper_runtime --apply after queue rebuild."
             if not runtime_observation_ready else "",
         ),
+        "paper_main_runtime_current": _gate(
+            "pass" if runtime_observation_ready else "warn",
+            "Current main-compatible runtime path is the paper-only observer, not old main.py."
+            if runtime_observation_ready
+            else "Current main-compatible paper runtime has not produced a clean observation yet.",
+            action=(
+                "Run main_paper_bridge, main_paper_consumer, main_paper_runtime_adapter, "
+                "then main_paper_runtime --apply."
+            )
+            if not runtime_observation_ready
+            else "",
+        ),
         "ready_for_visible_paper_research_loop": _gate(
             "pass" if visible_cycle_ready else ("blocked" if visible_cycle_blocked else "warn"),
             "Visible farm/PFR/paper/main-paper/journal cycle is assembled and observed."
@@ -418,8 +430,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         ),
         "main_runtime_consumer": _gate(
             "planned",
-            "Old live main/Telegram runtime still does not execute farm/PFR paper instructions.",
-            action="Keep old main execution disabled; use the paper runtime observer for paper-only lifecycle.",
+            "Old live main.py remains intentionally isolated; paper lifecycle is handled by main_paper_runtime.",
+            action="Keep old main execution disabled unless a new reviewed paper executor contract is built.",
         ),
         "scanner_telegram_surface": _gate(
             "pass" if telegram["scanner"]["configured"] else "warn",
@@ -755,6 +767,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         "paper_data_flow": {
             "schema": "paper_data_flow.v1",
             "current_owner": "scripts.strategy_lab.farm_loop with --run-paper-signals",
+            "current_main_compatible_runtime": "src.research_lab.main_paper_runtime",
             "selection_priority": [
                 "live mover universe ranked by outcome memory",
                 "paper_signals active store dedup and lifecycle",
