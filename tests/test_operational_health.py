@@ -24,6 +24,18 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
     assert llm_boundaries["analyze_chart_can_send_telegram"] is True
     assert llm_boundaries["analyze_chart_send_default"] is False
+    analyzer = report["product_analyzer_boundary"]
+    assert analyzer["analyze_chart_imports_okx_client"] is True
+    assert analyzer["analyze_chart_reads_okx_credentials"] is True
+    assert analyzer["analyze_chart_uses_llm_formatter"] is True
+    assert analyzer["analyze_chart_can_send_telegram"] is True
+    assert analyzer["analyze_chart_send_default"] is False
+    assert analyzer["analyze_chart_imports_auto_execute"] is False
+    assert analyzer["run_latest_analysis_interactive"] is True
+    assert analyzer["run_latest_analysis_wraps_analyze_chart"] is True
+    assert analyzer["run_latest_analysis_imports_auto_execute"] is True
+    assert analyzer["run_latest_analysis_auto_trade_guarded"] is True
+    assert analyzer["safe_for_farm_pfr_runtime"] is False
     assert report["main_bridge"]["orders_enabled_by_bridge"] is False
     assert report["readiness"]["auto_trade_off"]["status"] == "pass"
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
@@ -59,6 +71,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
+    assert report["readiness"]["manual_product_analyzer_boundary"]["status"] == "warn"
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
@@ -104,6 +117,8 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert surfaces["farm_full_cycle_loop"]["current"] is True
     assert surfaces["strategy_lab_start_legacy"]["current"] is False
     assert surfaces["telegram_analyzer_start"]["current"] is False
+    assert surfaces["manual_chart_analyzer"]["current"] is False
+    assert surfaces["manual_latest_analysis"]["current"] is False
     assert surfaces["legacy_product_stack"]["current"] is False
     assert surfaces["scanner_runtime"]["current"] is True
     assert surfaces["legacy_ws_scanner"]["current"] is False

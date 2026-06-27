@@ -29,7 +29,8 @@ Expected safe state:
 - journal, paper-signal, and PFR artifact paths resolved
 - `launch_surfaces` explicitly marks the current visible control room and full-cycle
   farm loop as current, while `start.bat`, `start_all.bat`, `strategy_lab_start.bat`,
-  and old `main.py` are surfaced as separate/legacy paths.
+  `scripts.analyze_chart`, `scripts.run_latest_analysis`, and old `main.py` are surfaced
+  as separate/legacy/manual paths.
 - `paper_data_flow` records the current owner and priority order:
   live movers -> paper-signal lifecycle -> bounded PFR seeding -> main-paper bridge
   -> consumer audit -> runtime queue -> public-candle observer -> Telegram preview.
@@ -58,6 +59,9 @@ Expected safe state:
   cleanly separated from farm execution.
 - `telegram_analyzer_execution_boundary = pass` is required before treating
   `start.bat` as safely isolated from the Strategy Lab paper/PFR cycle.
+- `manual_product_analyzer_boundary = warn` is expected until manual chart/latest
+  analysis prompts, provider, Telegram text, and `AUTO_TRADE` hook behavior are reviewed.
+  This is not a farm-loop failure; it is a product-revival boundary.
 - `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
