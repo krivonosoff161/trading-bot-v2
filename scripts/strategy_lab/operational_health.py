@@ -115,6 +115,22 @@ def _contains(path: Path, needle: str) -> bool:
         return False
 
 
+def _contains_all(path: Path, needles: tuple[str, ...]) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return all(needle in text for needle in needles)
+
+
+def _contains_any(path: Path, needles: tuple[str, ...]) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return any(needle in text for needle in needles)
+
+
 def _scanner_llm_ready(scanner: dict[str, Any]) -> bool:
     provider = str(scanner.get("provider") or "").lower()
     if provider == "alibaba":
@@ -141,6 +157,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     chain = report["paper_chain"]
     surfaces = report["launch_surfaces"]
     telegram_flow = report["telegram_delivery_flow"]
+    llm_boundaries = report["llm_surface_boundaries"]
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -356,7 +373,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             "warn",
             "Manual chart/latest analyzers are product surfaces, not farm/PFR paper runtimes.",
             action=(
-                "Audit prompts, provider, Telegram text, and AUTO_TRADE-gated auto_execute before "
+                "Audit provider routing, Telegram text, and AUTO_TRADE-gated auto_execute before "
                 "reviving manual product delivery."
             ),
         ),
@@ -378,7 +395,23 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "telegram_analyzer_llm_provider_review": _gate(
             "warn",
             "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router.",
-            action="Audit llm_formatter prompts/provider before reviving Telegram product delivery.",
+            action="Audit provider routing before reviving Telegram product delivery.",
+        ),
+        "product_analyzer_prompt_integrity": _gate(
+            "pass"
+            if llm_boundaries["telegram_chart_formatter_prompt_integrity"]
+            and not llm_boundaries["telegram_chart_formatter_mojibake_detected"]
+            else "blocked",
+            "Legacy chart formatter prompt is UTF-8 readable and still carries required risk/non-claim markers."
+            if llm_boundaries["telegram_chart_formatter_prompt_integrity"]
+            and not llm_boundaries["telegram_chart_formatter_mojibake_detected"]
+            else "Legacy chart formatter prompt is missing required markers or contains mojibake markers.",
+            action="Fix src.utils.llm_formatter before using the product analyzer."
+            if (
+                not llm_boundaries["telegram_chart_formatter_prompt_integrity"]
+                or llm_boundaries["telegram_chart_formatter_mojibake_detected"]
+            )
+            else "",
         ),
         "journal_rebuild_available": _gate(
             "pass" if journals["excel"]["exists"] else "warn",
@@ -449,6 +482,17 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     llm_formatter = ROOT / "src" / "utils" / "llm_formatter.py"
     analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
+    llm_formatter_prompt_markers = (
+        "\u0422\u044b \u2014 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a",
+        "\U0001f4ca \u0421\u0415\u0419\u0427\u0410\u0421 \u041d\u0410 \u0420\u042b\u041d\u041a\u0415",
+        "\u041d\u0415 \u0433\u0430\u0440\u0430\u043d\u0442",
+        "\u043d\u0435 \u0438\u043d\u0432\u0435\u0441\u0442-\u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f",
+    )
+    mojibake_markers = (
+        "\u0420\u045e\u0421\u2039",  # "Ты" when UTF-8 was decoded as cp1251.
+        "\u0432\u0402",  # mojibake dash/quotes marker.
+        "\u0440\u045f",  # mojibake emoji marker.
+    )
     launch_surfaces = {
         "control_room": _surface(
             ROOT / "bat" / "strategy_lab_control_room.bat",
@@ -545,6 +589,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_chart_formatter_provider": "yandex_only",
             "telegram_chart_formatter_uses_llm_provider_env": _contains(llm_formatter, "LLM_PROVIDER"),
             "telegram_chart_formatter_uses_budget_guard": _contains(llm_formatter, "llm_budget_guard"),
+            "telegram_chart_formatter_prompt_integrity": _contains_all(llm_formatter, llm_formatter_prompt_markers),
+            "telegram_chart_formatter_mojibake_detected": _contains_any(llm_formatter, mojibake_markers),
             "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
             "analyze_chart_send_default": False,
             "strategy_lab_llm_separate_provider": "src.research_lab.llm_provider",
@@ -742,6 +788,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"scanner_alibaba={llm_boundaries['scanner_supports_alibaba']} "
         f"telegram_formatter_provider={llm_boundaries['telegram_chart_formatter_provider']} "
         f"telegram_uses_llm_provider={llm_boundaries['telegram_chart_formatter_uses_llm_provider_env']} "
+        f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
+        f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
         f"analyze_chart_send_default={llm_boundaries['analyze_chart_send_default']}"
     )
     lab = report["strategy_lab_llm"]

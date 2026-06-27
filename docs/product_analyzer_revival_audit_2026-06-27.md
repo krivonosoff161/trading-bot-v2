@@ -1,0 +1,73 @@
+# Product Analyzer Revival Audit (2026-06-27)
+
+Status: **guarded product surface; not the farm/PFR runtime**.
+
+This audit covers the old chart/Telegram/main product path after the Strategy Lab
+paper loop was restored. It answers one narrow question: what can be reused for product
+paper delivery, and what must remain isolated until a separate review.
+
+## Verified Components
+
+| Component | Current role | Verified boundary |
+|---|---|---|
+| `scripts.analyze_chart` | Manual chart/report generator | Writes local report, snapshot, chart, and client summary. Telegram send is off by default. |
+| `src.utils.llm_formatter` | Legacy chart text formatter | UTF-8 prompt is intact and still carries risk/non-claim language. Provider path is Yandex-only. |
+| `scripts.run_latest_analysis` | Interactive wrapper over `analyze_chart` | Execution-adjacent because it can lazy-import `scripts.auto_execute` after an ENTRY result. |
+| `scripts.auto_execute` | Old demo/live order path | Guarded by `AUTO_TRADE`, but can set leverage and place OKX orders when enabled. |
+| `src.utils.telegram` | Telegram send helper | Reads env at call time, does not print token/chat values, skips when not configured. |
+
+Machine check:
+
+```bash
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
+```
+
+Expected product-surface facts:
+
+- `telegram_chart_formatter_prompt_integrity = true`
+- `telegram_chart_formatter_mojibake_detected = false`
+- `telegram_chart_formatter_provider = yandex_only`
+- `telegram_chart_formatter_uses_llm_provider_env = false`
+- `analyze_chart_send_default = false`
+- `run_latest_analysis_imports_auto_execute = true`
+- `run_latest_analysis_auto_trade_guarded = true`
+- `product_analyzer_prompt_integrity = pass`
+- `manual_product_analyzer_boundary = warn`
+
+## Why This Is Still Not The Unified Executor
+
+The current canonical Strategy Lab path is paper/research only:
+
+```text
+farm_loop --run-paper-signals
+  -> paper_signals / PFR seeding
+  -> main_paper_bridge
+  -> main_paper_consumer
+  -> main_paper_runtime_adapter
+  -> main_paper_runtime observer
+  -> paper_telegram_preview
+  -> paper_signal_training_export
+```
+
+The old `main.py` and `scripts.auto_execute` are not dead code, but they are money-path
+code. They import the authenticated OKX client and can reach leverage/order methods.
+Therefore they must not consume farm/PFR paper instructions directly.
+
+## Product Revival Order
+
+1. Keep the farm/PFR/paper observer as the source of truth.
+2. Use `paper_telegram_preview` as the first alert surface: offline, validated, no send.
+3. Review the actual Telegram card text and chart payloads from derived paper artifacts.
+4. If live paper alerts are needed, add an opt-in sender over preview artifacts only,
+   using `PAPER_CHAT_ID`; do not fall back to scanner/default chats.
+5. Decide whether `llm_formatter` remains Yandex-only or becomes an adapter over the
+   shared `llm_client` provider router. Do this as a separate change with tests.
+6. Keep `run_latest_analysis` and `auto_execute` out of the farm launch path until a new
+   executor contract exists and has its own paper-first validation.
+
+## Non-Claims
+
+This audit does not claim that Telegram/product analysis is ready for unattended trade
+delivery. It claims that the legacy formatter prompt is readable, the provider split is
+visible, the analyzer does not send by default, and the execution-adjacent path is
+explicitly isolated from the restored paper/farm loop.

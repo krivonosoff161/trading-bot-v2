@@ -138,6 +138,9 @@ interactive and can lazy-import `scripts.auto_execute` after an ENTRY result whe
 not the farm/PFR paper runtime and must stay outside the canonical launch path until
 their prompts, provider, Telegram text, and execution hook are reviewed.
 
+Detailed product-surface audit:
+[`product_analyzer_revival_audit_2026-06-27.md`](product_analyzer_revival_audit_2026-06-27.md).
+
 ## Journal And Training Data
 
 The current training/reporting path is:

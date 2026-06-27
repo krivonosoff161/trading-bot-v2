@@ -83,15 +83,17 @@ product delivery is revived.
 
 Before connecting Telegram/product analysis back into the operator workflow:
 
-1. Audit `llm_formatter` prompts and decide whether it remains Yandex-only or
-   becomes an adapter over the shared provider router.
-2. Audit Telegram text and chart payloads for paper-only wording, risk language,
+1. Keep `product_analyzer_prompt_integrity = pass`; the legacy formatter prompt must
+   remain UTF-8 readable and free of mojibake markers.
+2. Decide whether `llm_formatter` remains Yandex-only or becomes an adapter over the
+   shared provider router.
+3. Audit Telegram text and chart payloads for paper-only wording, risk language,
    price/SL/TP clarity, and no execution claims.
-3. Audit `run_latest_analysis` and `scripts.auto_execute` so the `AUTO_TRADE`
+4. Audit `run_latest_analysis` and `scripts.auto_execute` so the `AUTO_TRADE`
    guard remains impossible to bypass accidentally.
-4. Decide whether paper alerts use only `PAPER_CHAT_ID`; they must not fall back
+5. Decide whether paper alerts use only `PAPER_CHAT_ID`; they must not fall back
    to scanner/default chats.
-5. Keep the main paper runtime as observer/journal authority until a separate
+6. Keep the main paper runtime as observer/journal authority until a separate
    reviewed executor contract exists.
 
 ## Operator Commands
