@@ -36,10 +36,13 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert "b1git" not in str(formatter_status)
     assert llm_boundaries["telegram_chart_formatter_configured"] == formatter_status["configured"]
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is False
+    assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True
+    assert llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
+    assert llm_boundaries["telegram_chart_formatter_effective_provider"] == "alibaba"
     assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
     assert llm_boundaries["telegram_chart_formatter_prompt_integrity"] is True
     assert llm_boundaries["telegram_chart_formatter_mojibake_detected"] is False
-    assert llm_boundaries["scanner_formatter_provider_mismatch"] is True
+    assert llm_boundaries["scanner_formatter_provider_mismatch"] is False
     assert llm_boundaries["analyze_chart_can_send_telegram"] is True
     assert llm_boundaries["analyze_chart_send_default"] is False
     text_quality = report["legacy_product_text_quality"]
@@ -79,6 +82,11 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["text_card_shared_router_entrypoint"] == "generate_client_text"
     assert launch_contract["shared_router_opt_in_env"] == "PRODUCT_ANALYZER_LLM_ROUTER"
     assert launch_contract["shared_router_active"] is False
+    assert launch_contract["start_bat_sets_shared_router"] is True
+    assert launch_contract["start_telegram_bot_bat_sets_shared_router"] is True
+    assert launch_contract["launcher_sets_shared_router"] is True
+    assert launch_contract["effective_shared_router"] is True
+    assert launch_contract["effective_provider"] == "alibaba"
     assert launch_contract["premium_vision_yandex_only"] is True
     assert launch_contract["edu_qa_yandex_only"] is True
     assert launch_contract["farm_pfr_runtime_uses_manual_product_stack"] is False
@@ -125,7 +133,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
     assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
-    assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "warn"
+    assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "pass"
     assert report["readiness"]["product_analyzer_launch_contract"]["status"] == "pass"
     assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
     assert report["readiness"]["legacy_product_text_quality"]["status"] == "pass"
@@ -421,10 +429,16 @@ def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_pa
     assert formatter_status["follows_llm_provider_env"] is True
     assert formatter_status["configured"] is True
     assert report["product_analyzer_launch_contract"]["shared_router_active"] is True
+    assert report["product_analyzer_launch_contract"]["launcher_sets_shared_router"] is True
+    assert report["product_analyzer_launch_contract"]["effective_shared_router"] is True
+    assert report["product_analyzer_launch_contract"]["effective_provider"] == "alibaba"
     assert report["product_analyzer_launch_contract"]["premium_vision_yandex_only"] is True
     assert report["product_analyzer_launch_contract"]["edu_qa_yandex_only"] is True
     assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
+    assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True
+    assert llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
+    assert llm_boundaries["telegram_chart_formatter_effective_provider"] == "alibaba"
     assert llm_boundaries["scanner_formatter_provider_mismatch"] is False
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "pass"
     assert "secret-alibaba" not in rendered

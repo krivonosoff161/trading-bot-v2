@@ -1,5 +1,10 @@
 """
-LLM formatter — Yandex AI Studio (Qwen3-235B).
+LLM formatter - legacy chart/product text formatter.
+
+By default it uses the older Yandex AI Studio path. Text-card generation can opt in
+to the shared scanner/advisory LLM router by setting
+PRODUCT_ANALYZER_LLM_ROUTER=llm_client. Premium vision and educational Q&A remain on
+the legacy path until they receive their own provider/prompt review.
 
 Takes structured analysis snapshot + optional chart image,
 returns natural Russian text for client delivery.

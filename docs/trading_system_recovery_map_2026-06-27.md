@@ -181,8 +181,11 @@ Telegram is split into surfaces:
 LLM is also split:
 
 - `src.utils.llm_client`: scanner/advisory provider router (`alibaba`/`yandex`);
-- `src.utils.llm_formatter`: older Yandex-only chart/text formatter for the Telegram
-  analyzer; it does not follow `LLM_PROVIDER`;
+- `src.utils.llm_formatter`: older chart/text formatter for the Telegram analyzer.
+  Its default path is Yandex-only, but text-card generation can opt in to the shared
+  `LLM_PROVIDER` router with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. The product
+  launchers (`start.bat` and `bat/start_telegram_bot.bat`) now set that opt-in by
+  default when the variable is absent;
 - `src.research_lab.llm_provider`: Strategy Lab proposal gate, disabled by default.
 
 None of these paths can promote a setup, bypass validation, or enable execution.
@@ -196,10 +199,11 @@ paper/PFR launcher. The current paper alert path remains `paper_telegram_preview
 followed by a dry-run `paper_telegram_sender` audit over the preview artifacts.
 This keeps delivery status current without sending Telegram messages.
 
-Provider boundary: a green Alibaba scanner/advisory path is not proof that the Telegram
-chart analyzer is using Alibaba. The analyzer calls `generate_client_text`,
-`generate_premium_analysis`, and `generate_edu_text` in `llm_formatter`, so it needs a
-separate prompt/provider audit before product Telegram delivery is revived.
+Provider boundary: a green Alibaba scanner/advisory path is not proof that every
+Telegram analyzer feature is using Alibaba. `generate_client_text` uses the shared
+router under the product launchers; premium vision and educational Q&A still call
+the legacy formatter path and need separate prompt/provider audits before product
+Telegram delivery is treated as fully revived.
 
 Text boundary: `product_analyzer_prompt_integrity = pass` covers the core chart prompt,
 not every legacy operator-facing string. `operational_health` also exposes

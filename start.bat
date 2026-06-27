@@ -25,6 +25,7 @@ set HTTP_PROXY=
 set HTTPS_PROXY=
 set ALL_PROXY=
 set PYTHONUTF8=1
+if "%PRODUCT_ANALYZER_LLM_ROUTER%"=="" set PRODUCT_ANALYZER_LLM_ROUTER=llm_client
 
 REM Check Python
 python --version >nul 2>&1
