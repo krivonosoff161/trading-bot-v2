@@ -61,7 +61,8 @@ Expected safe state:
 - `readiness` gates show what is runnable, optional, or intentionally planned:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,
-  journals, archived-loop guards, and the explicit `main_runtime_consumer = planned`
+  journals, archived-loop guards, the positive `paper_main_runtime_current` paper
+  observer gate, and the explicit `main_runtime_consumer = planned` old-live-main
   boundary.
 - `canonical_launch_surface = pass` and `legacy_live_runtime_isolated = pass` are
   required before treating the operator picture as clean.
@@ -106,6 +107,9 @@ Expected safe state:
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
+- `paper_main_runtime_current = pass` is the positive main-compatible paper runtime
+  signal. It means `src.research_lab.main_paper_runtime` is the active observed
+  runtime path for paper lifecycle. It does not mean old `main.py` is attached.
 - `paper_signal_training_export = pass` means the training-friendly paper outcome JSONL
   is current against `paper_signals.jsonl`, non-empty, schema-valid, and paper-only.
   The human output should show
