@@ -405,7 +405,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and surfaces["legacy_ws_scanner"]["current"] is False
     )
     telegram_analyzer_provider_ready = (
-        llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
+        llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
         and llm_boundaries["scanner_formatter_provider_mismatch"] is False
     )
     canonical_surface_ready = (
@@ -710,7 +710,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "telegram_analyzer_llm_provider_review": _gate(
             "pass" if telegram_analyzer_provider_ready else "warn",
             (
-                "Text-only legacy chart analyzer is explicitly opted in to the shared LLM_PROVIDER router."
+                "Text-only legacy chart analyzer is routed through the shared LLM_PROVIDER path by env or launcher."
                 if telegram_analyzer_provider_ready
                 else "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router."
             ),
@@ -806,6 +806,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     old_main = ROOT / "main.py"
     telegram_bot = ROOT / "scripts" / "telegram_bot.py"
+    start_bat = ROOT / "start.bat"
+    start_telegram_bot_bat = ROOT / "bat" / "start_telegram_bot.bat"
     auto_execute = ROOT / "scripts" / "auto_execute.py"
     scanner_farm_loop = ROOT / "scripts" / "strategy_lab" / "scanner_farm_loop.py"
     universe_farm_loop = ROOT / "scripts" / "strategy_lab" / "universe_farm_loop.py"
@@ -814,6 +816,22 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
     llm_formatter_status = formatter_provider_status()
+    product_start_sets_shared_router = _contains(start_bat, "PRODUCT_ANALYZER_LLM_ROUTER=llm_client")
+    product_tg_start_sets_shared_router = _contains(
+        start_telegram_bot_bat,
+        "PRODUCT_ANALYZER_LLM_ROUTER=llm_client",
+    )
+    product_launcher_sets_shared_router = (
+        product_start_sets_shared_router and product_tg_start_sets_shared_router
+    )
+    chart_formatter_effective_shared_router = (
+        llm_formatter_status["shared_router_active"] or product_launcher_sets_shared_router
+    )
+    chart_formatter_effective_provider = (
+        os.getenv("LLM_PROVIDER", "yandex").strip().lower()
+        if chart_formatter_effective_shared_router
+        else llm_formatter_status["provider"]
+    )
     telegram_bot_main_body = _section_between(telegram_bot, "async def main() -> None:", "def _setup_rotating_log")
     run_latest_entry_block = _section_between(
         run_latest_analysis,
@@ -857,7 +875,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             boundary="do not use for the current control-room cycle",
         ),
         "telegram_analyzer_start": _surface(
-            ROOT / "start.bat",
+            start_bat,
             role="Telegram analyzer product surface; not the Strategy Lab farm launcher",
             current=False,
             boundary="operator notifications/analysis only; not farm/PFR execution",
@@ -931,12 +949,15 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_chart_formatter_status": llm_formatter_status,
             "telegram_chart_formatter_configured": llm_formatter_status["configured"],
             "telegram_chart_formatter_uses_llm_provider_env": llm_formatter_status["follows_llm_provider_env"],
+            "telegram_chart_formatter_launcher_sets_shared_router": product_launcher_sets_shared_router,
+            "telegram_chart_formatter_effective_shared_router": chart_formatter_effective_shared_router,
+            "telegram_chart_formatter_effective_provider": chart_formatter_effective_provider,
             "telegram_chart_formatter_uses_budget_guard": llm_formatter_status["budget_guard"],
             "telegram_chart_formatter_prompt_integrity": _contains_all(llm_formatter, llm_formatter_prompt_markers),
             "telegram_chart_formatter_mojibake_detected": _contains_any(llm_formatter, mojibake_markers),
             "scanner_formatter_provider_mismatch": (
                 os.getenv("LLM_PROVIDER", "yandex").strip().lower()
-                != llm_formatter_status["provider"]
+                != chart_formatter_effective_provider
             ),
             "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
             "analyze_chart_send_default": False,
@@ -1115,6 +1136,11 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "text_card_shared_router_entrypoint": "generate_client_text",
             "shared_router_opt_in_env": "PRODUCT_ANALYZER_LLM_ROUTER",
             "shared_router_active": llm_formatter_status["shared_router_active"],
+            "start_bat_sets_shared_router": product_start_sets_shared_router,
+            "start_telegram_bot_bat_sets_shared_router": product_tg_start_sets_shared_router,
+            "launcher_sets_shared_router": product_launcher_sets_shared_router,
+            "effective_shared_router": chart_formatter_effective_shared_router,
+            "effective_provider": chart_formatter_effective_provider,
             "premium_vision_yandex_only": "generate_premium_analysis" in llm_formatter_status["yandex_only_entrypoints"],
             "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
             "farm_pfr_runtime_uses_manual_product_stack": False,
@@ -1273,6 +1299,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"telegram_formatter_provider={llm_boundaries['telegram_chart_formatter_provider']} "
         f"telegram_formatter_configured={llm_boundaries['telegram_chart_formatter_configured']} "
         f"telegram_uses_llm_provider={llm_boundaries['telegram_chart_formatter_uses_llm_provider_env']} "
+        f"telegram_launcher_shared_router={llm_boundaries['telegram_chart_formatter_launcher_sets_shared_router']} "
+        f"telegram_effective_shared_router={llm_boundaries['telegram_chart_formatter_effective_shared_router']} "
         f"provider_mismatch={llm_boundaries['scanner_formatter_provider_mismatch']} "
         f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
         f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
@@ -1358,6 +1386,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"tg_main_starts_scanner={launch_contract['telegram_bot_main_starts_scanner_loop']} "
         f"latest_auto_execute_gated={launch_contract['manual_latest_auto_execute_import_gated']} "
         f"shared_router_active={launch_contract['shared_router_active']} "
+        f"launcher_shared_router={launch_contract['launcher_sets_shared_router']} "
+        f"effective_shared_router={launch_contract['effective_shared_router']} "
         f"execution_allowed={launch_contract['execution_allowed']}"
     )
     main_boundary = report["main_engine_boundary"]

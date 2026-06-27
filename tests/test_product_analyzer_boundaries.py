@@ -125,6 +125,8 @@ def test_manual_analyzer_and_latest_wrapper_boundaries():
     analyze_chart = (ROOT / "scripts" / "analyze_chart.py").read_text(encoding="utf-8")
     run_latest_analysis = (ROOT / "scripts" / "run_latest_analysis.py").read_text(encoding="utf-8")
     telegram_bot = (ROOT / "scripts" / "telegram_bot.py").read_text(encoding="utf-8")
+    start_bat = (ROOT / "start.bat").read_text(encoding="utf-8")
+    start_tg_bat = (ROOT / "bat" / "start_telegram_bot.bat").read_text(encoding="utf-8")
 
     assert "send_telegram: bool = False" in analyze_chart
     assert "from scripts.analyze_chart import run" in run_latest_analysis
@@ -139,3 +141,5 @@ def test_manual_analyzer_and_latest_wrapper_boundaries():
     assert "_scanner_loop" not in main_body
     assert "getUpdates" in main_body
     assert "scanner moved to scripts/ws/ws_scanner.py" in main_body
+    assert "PRODUCT_ANALYZER_LLM_ROUTER=llm_client" in start_bat
+    assert "PRODUCT_ANALYZER_LLM_ROUTER=llm_client" in start_tg_bat
