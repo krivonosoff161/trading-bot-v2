@@ -14,6 +14,7 @@ if "%TRADING_BOT_RESEARCH_ROOT%"=="" (
   set "TRADING_BOT_RESEARCH_ROOT=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 )
 if "%STRATEGY_LAB_STATUS_SLEEP_SECONDS%"=="" set "STRATEGY_LAB_STATUS_SLEEP_SECONDS=300"
+if "%STRATEGY_LAB_PFR_DB_PATH%"=="" set "STRATEGY_LAB_PFR_DB_PATH=%TRADING_BOT_RESEARCH_ROOT%\state\strategy_lab.sqlite"
 
 set "STOP_FILE=%TRADING_BOT_RESEARCH_ROOT%\state\STOP_FARM_FULL_CYCLE.txt"
 if not exist "%TRADING_BOT_RESEARCH_ROOT%\state" mkdir "%TRADING_BOT_RESEARCH_ROOT%\state"
@@ -34,7 +35,12 @@ echo   3. Private graph viewer build/open
 echo   4. Periodic farm status monitor
 echo.
 echo Stop farm loop: bat\strategy_lab_farm_full_cycle_stop.bat
+echo Preflight: python -m scripts.strategy_lab.operational_health
+echo Fast status: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
 echo Close dashboard/graph/status windows manually when done.
+echo.
+
+python -X utf8 -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
 echo.
 
 start "Strategy Lab - Farm Full Cycle" cmd /k "cd /d ""%CD%"" && bat\strategy_lab_farm_full_cycle_loop.bat"

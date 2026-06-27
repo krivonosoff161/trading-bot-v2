@@ -17,7 +17,8 @@ echo stop file: %STOP_FILE%
 echo stop requested at %date% %time% > "%STOP_FILE%"
 echo.
 echo The farm loop will exit after the current cycle.
-echo Status: python -m scripts.strategy_lab.status
+echo Fast health: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%TRADING_BOT_RESEARCH_ROOT%\state\strategy_lab.sqlite"
+echo Detailed status: python -m scripts.strategy_lab.farm_status_report
 echo.
 if not "%STRATEGY_LAB_NO_PAUSE%"=="1" pause
 endlocal

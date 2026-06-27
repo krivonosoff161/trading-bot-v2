@@ -60,7 +60,8 @@ echo  safety      : paper-only; public OKX; no orders / .env / AUTO_TRADE / priv
 echo ============================================
 echo.
 echo Tip: stop with bat\strategy_lab_farm_full_cycle_stop.bat or Ctrl+C.
-echo Status: python -m scripts.strategy_lab.status
+echo Fast health: python -m scripts.strategy_lab.operational_health --private-root "%TRADING_BOT_RESEARCH_ROOT%" --pfr-db-path "%STRATEGY_LAB_PFR_DB_PATH%"
+echo Detailed status: python -m scripts.strategy_lab.farm_status_report
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

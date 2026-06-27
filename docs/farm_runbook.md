@@ -96,8 +96,12 @@ be treated as their executor.
 - **Clean stop wrapper:** `bat\strategy_lab_farm_full_cycle_stop.bat`.
 - **Compute executor:** `worker_once` / `worker_loop` drain `state/strategy_lab.sqlite`.
   In the normal loop, `--run-worker` drains a bounded number of jobs per cycle.
-- **Operator status:** `python -m scripts.strategy_lab.status` and
-  `python -m scripts.strategy_lab.farm_status_report`.
+- **Fast operator health:** `python -m scripts.strategy_lab.operational_health`
+  with the private root and PFR DB path. This is the preflight used by the visible
+  control room.
+- **Detailed operator status:** `python -m scripts.strategy_lab.status` and
+  `python -m scripts.strategy_lab.farm_status_report`. These read broader farm state and
+  can be slower on a large private DB; use them after the fast health gate is clean.
 - **Legacy/off-default:** `scanner_farm_loop`, `universe_farm_loop`, `research_loop`,
   `strategy_lab_start.bat`. Keep them for diagnostics/history; do not build new operator
   work on top of them.
@@ -187,6 +191,9 @@ bat\strategy_lab_farm_full_cycle_loop.bat
 
 # Visible operator control room for farm + dashboard + graph + status windows.
 bat\strategy_lab_control_room.bat
+
+# Fast preflight used by the visible control room.
+python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --pfr-db-path "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite"
 
 # Clean stop for the wrapper above.
 bat\strategy_lab_farm_full_cycle_stop.bat
