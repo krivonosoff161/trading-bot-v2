@@ -1,6 +1,6 @@
 # Farm Runbook - Active Operator Path
 
-Status: **ACTIVE**. Last updated: 2026-06-26.
+Status: **ACTIVE**. Last updated: 2026-06-27.
 
 The calculation farm is now driven by `farm_loop`. The system is paper/research only:
 public OKX market data, no `AUTO_TRADE`, no orders, no private account endpoints.
@@ -260,7 +260,7 @@ python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFI
 The Excel journal is rebuilt locally:
 
 ```bash
-python scripts/build_journal.py
+python -X utf8 scripts/build_journal.py
 ```
 
 The rebuild now includes a `Paper Watch` sheet when the private derived export exists
@@ -281,7 +281,7 @@ are opt-in only:
 
 ```bash
 set JOURNAL_ENABLE_PRIVATE_FILLS=1
-python scripts/build_journal.py
+python -X utf8 scripts/build_journal.py
 ```
 
 Use that opt-in only when explicitly auditing account history. The farm/paper research loop
