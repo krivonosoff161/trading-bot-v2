@@ -45,6 +45,12 @@ Expected safe state:
   -> consumer audit -> runtime queue -> public-candle observer -> Telegram preview.
   It must report `old_main_py_consumes_farm_pfr = false`,
   `execution_allowed = false`, and `telegram_send_default = false`.
+- `paper_source_composition` is the machine-readable source mix behind that text. It
+  must show paper-signal rows grouped by `source` / `setup_family` / `status` /
+  `timeframe`, runtime-queue rows grouped by family/timeframe/action, and
+  `pfr_activation.requires_explicit_db_path = true`. This is the quick check that live
+  movers, optional PFR seeds, and the main-paper watch queue have not silently changed
+  ownership or execution authority.
 - `telegram_delivery_flow` records notification ownership. It must report
   `farm_core_sends_telegram = false`, `paper_sends_telegram_by_default = false`, and
   `execution_authority = false`. Scanner/Telegram surfaces may exist, but they are not
@@ -117,6 +123,8 @@ Expected safe state:
   is current against `paper_signals.jsonl`, non-empty, schema-valid, and paper-only.
   The human output should show
   `paper_signal_training: rows=N schema_rows=N invalid_json=0 paper_only_false=0 stale_vs_source=False`.
+- The human output should also show
+  `paper_source_composition: signals_rows=N signal_sources={...} signal_families={...} queue_items=M queue_families={...} pfr_explicit=True execution_allowed=False`.
 - `ready_for_visible_paper_research_loop` is the aggregate operator gate. It passes only
   when the visible launch surface, PFR source, clean paper chain, runtime observation,
   journal/training exports, Telegram ownership, LLM policy, and old-main isolation are

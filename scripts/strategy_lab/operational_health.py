@@ -101,6 +101,83 @@ def _snapshot_status_breakdown(path: Path, field: str = "status") -> dict[str, A
     return metrics
 
 
+def _bump_field_count(target: dict[str, dict[str, int]], field: str, value: Any) -> None:
+    key = str(value or "missing")
+    bucket = target.setdefault(field, {})
+    bucket[key] = bucket.get(key, 0) + 1
+
+
+def _jsonl_field_breakdown(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "rows": 0,
+        "invalid_json": 0,
+        "by": {field: {} for field in fields},
+        "read_error": "",
+    }
+    if not path.exists():
+        return metrics
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    for line in lines:
+        if not line.strip():
+            continue
+        metrics["rows"] += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            metrics["invalid_json"] += 1
+            continue
+        if not isinstance(row, dict):
+            continue
+        for field in fields:
+            _bump_field_count(metrics["by"], field, row.get(field))
+    return metrics
+
+
+def _snapshot_field_breakdown(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "items": 0,
+        "by": {field: {} for field in fields},
+        "priority_min": None,
+        "priority_max": None,
+        "read_error": "",
+    }
+    if not path.exists():
+        return metrics
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    if not isinstance(data, dict):
+        metrics["read_error"] = "not_object"
+        return metrics
+    items = data.get("items")
+    if not isinstance(items, list):
+        return metrics
+    metrics["items"] = len(items)
+    priorities: list[int] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for field in fields:
+            _bump_field_count(metrics["by"], field, item.get(field))
+        priority = item.get("priority")
+        if isinstance(priority, int):
+            priorities.append(priority)
+    if priorities:
+        metrics["priority_min"] = min(priorities)
+        metrics["priority_max"] = max(priorities)
+    return metrics
+
+
 def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "path": str(path),
@@ -837,6 +914,32 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "execution_allowed": False,
             "telegram_send_default": False,
         },
+        "paper_source_composition": {
+            "schema": "paper_source_composition.v1",
+            "paper_signals": _jsonl_field_breakdown(
+                paper_signal_log,
+                ("source", "setup_family", "status", "timeframe"),
+            ),
+            "main_runtime_queue": _snapshot_field_breakdown(
+                main_paper_runtime_queue_snapshot,
+                ("setup_family", "timeframe", "runtime_action"),
+            ),
+            "priority_contract": [
+                "live mover universe is the default paper-signal search lane",
+                "PFR is inactive unless --pfr-db-path is provided",
+                "pfr_reserved_new only reserves part of max_new; it never enables execution",
+                "main_paper_runtime_adapter sorts accepted paper rows by family/timeframe/risk priority",
+                "old main.py remains isolated and does not consume the paper queue",
+            ],
+            "pfr_activation": {
+                "requires_explicit_db_path": True,
+                "db_path": str(pfr_db),
+                "db_exists": pfr_db.exists(),
+                "bounded_scan_default": 30,
+                "source_name": "pfr_farm",
+            },
+            "execution_allowed": False,
+        },
         "telegram_delivery_flow": {
             "schema": "telegram_delivery_flow.v1",
             "farm_core_sends_telegram": False,
@@ -1057,6 +1160,20 @@ def _print_human(report: dict[str, Any]) -> None:
         f"old_main_consumes={flow['old_main_py_consumes_farm_pfr']} "
         f"execution_allowed={flow['execution_allowed']} "
         f"telegram_send_default={flow['telegram_send_default']}"
+    )
+    sources = report["paper_source_composition"]
+    signal_sources = sources["paper_signals"]["by"].get("source", {})
+    signal_families = sources["paper_signals"]["by"].get("setup_family", {})
+    queue_families = sources["main_runtime_queue"]["by"].get("setup_family", {})
+    print(
+        "paper_source_composition: "
+        f"signals_rows={sources['paper_signals']['rows']} "
+        f"signal_sources={signal_sources} "
+        f"signal_families={signal_families} "
+        f"queue_items={sources['main_runtime_queue']['items']} "
+        f"queue_families={queue_families} "
+        f"pfr_explicit={sources['pfr_activation']['requires_explicit_db_path']} "
+        f"execution_allowed={sources['execution_allowed']}"
     )
     delivery = report["telegram_delivery_flow"]
     print(

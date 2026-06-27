@@ -225,6 +225,69 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
 
 
+def test_operational_health_reports_paper_source_composition(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_signals.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "source": "farm",
+                    "setup_family": "early_tp_tactical",
+                    "status": "armed",
+                    "timeframe": "15m",
+                }),
+                json.dumps({
+                    "source": "pfr_farm",
+                    "setup_family": "mean_reversion_fade",
+                    "status": "opened_paper",
+                    "timeframe": "4h",
+                }),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (derived / "main_paper_runtime_queue.json").write_text(
+        json.dumps({
+            "items": [
+                {
+                    "setup_family": "early_tp_tactical",
+                    "timeframe": "15m",
+                    "runtime_action": "watch_paper",
+                    "priority": -2,
+                },
+                {
+                    "setup_family": "mean_reversion_fade",
+                    "timeframe": "4h",
+                    "runtime_action": "watch_paper",
+                    "priority": 120,
+                },
+            ]
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    composition = report["paper_source_composition"]
+    assert composition["schema"] == "paper_source_composition.v1"
+    assert composition["paper_signals"]["rows"] == 2
+    assert composition["paper_signals"]["by"]["source"] == {"farm": 1, "pfr_farm": 1}
+    assert composition["paper_signals"]["by"]["setup_family"] == {
+        "early_tp_tactical": 1,
+        "mean_reversion_fade": 1,
+    }
+    assert composition["main_runtime_queue"]["items"] == 2
+    assert composition["main_runtime_queue"]["by"]["runtime_action"] == {"watch_paper": 2}
+    assert composition["main_runtime_queue"]["priority_min"] == -2
+    assert composition["main_runtime_queue"]["priority_max"] == 120
+    assert composition["pfr_activation"]["requires_explicit_db_path"] is True
+    assert composition["pfr_activation"]["source_name"] == "pfr_farm"
+    assert composition["execution_allowed"] is False
+
+
 def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
