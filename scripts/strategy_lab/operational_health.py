@@ -63,6 +63,44 @@ def _snapshot_metrics(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
     return metrics
 
 
+def _snapshot_status_breakdown(path: Path, field: str = "status") -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "items": 0,
+        "by_status": {},
+        "by_problem": {},
+        "read_error": "",
+    }
+    if not path.exists():
+        return metrics
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    if not isinstance(data, dict):
+        metrics["read_error"] = "not_object"
+        return metrics
+    items = data.get("items")
+    if not isinstance(items, list):
+        return metrics
+    metrics["items"] = len(items)
+    by_status: dict[str, int] = {}
+    by_problem: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get(field) or "missing")
+        by_status[status] = by_status.get(status, 0) + 1
+        problem = str(item.get("problem") or "")
+        if problem:
+            by_problem[problem] = by_problem.get(problem, 0) + 1
+    metrics["by_status"] = by_status
+    metrics["by_problem"] = by_problem
+    return metrics
+
+
 def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "path": str(path),
@@ -932,6 +970,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 paper_telegram_delivery_snapshot,
                 ("records_read", "eligible", "sent", "skipped", "errors"),
             ),
+            "telegram_delivery_breakdown": _snapshot_status_breakdown(paper_telegram_delivery_snapshot),
         },
     }
     bridge = report["main_bridge"]
@@ -1067,6 +1106,13 @@ def _print_human(report: dict[str, Any]) -> None:
         f"skipped={chain['telegram_delivery']['skipped']} "
         f"errors={chain['telegram_delivery']['errors']}"
     )
+    delivery_breakdown = chain["telegram_delivery_breakdown"]
+    if delivery_breakdown["by_status"] or delivery_breakdown["by_problem"]:
+        print(
+            "paper_telegram_delivery_breakdown: "
+            f"status={delivery_breakdown['by_status']} "
+            f"problems={delivery_breakdown['by_problem']}"
+        )
     training = report["training_data"]["paper_signal_training"]
     freshness = report["training_data"]["paper_signal_training_freshness"]
     print(
