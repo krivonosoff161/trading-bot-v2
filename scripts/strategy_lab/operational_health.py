@@ -765,6 +765,70 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     }
 
 
+_INTENTIONAL_BOUNDARY_GATES = frozenset(
+    {
+        "main_runtime_consumer",
+        "manual_product_analyzer_boundary",
+    }
+)
+
+_OPERATOR_CONFIGURATION_GATES = frozenset(
+    {
+        "paper_telegram_surface",
+        "scanner_telegram_surface",
+        "scanner_llm_provider",
+        "strategy_lab_llm_policy",
+    }
+)
+
+
+def _operator_gate_item(name: str, gate: dict[str, str]) -> dict[str, str]:
+    return {
+        "name": name,
+        "status": gate.get("status", ""),
+        "message": gate.get("message", ""),
+        "action": gate.get("action", ""),
+    }
+
+
+def _build_operator_next_actions(readiness: dict[str, dict[str, str]]) -> dict[str, Any]:
+    """Classify readiness gates into operator-facing action groups."""
+    status_counts: dict[str, int] = {}
+    blocking: list[dict[str, str]] = []
+    operator_configuration: list[dict[str, str]] = []
+    intentional_boundaries: list[dict[str, str]] = []
+    rebuild_actions: list[dict[str, str]] = []
+
+    for name, gate in readiness.items():
+        status = gate.get("status", "")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        item = _operator_gate_item(name, gate)
+        if status == "blocked":
+            blocking.append(item)
+        if name in _INTENTIONAL_BOUNDARY_GATES:
+            intentional_boundaries.append(item)
+            continue
+        if status in {"warn", "blocked"} and name in _OPERATOR_CONFIGURATION_GATES:
+            operator_configuration.append(item)
+            continue
+        if status == "warn" and gate.get("action"):
+            rebuild_actions.append(item)
+
+    return {
+        "schema": "operator_next_actions.v1",
+        "launch_blocked": bool(blocking),
+        "status_counts": status_counts,
+        "blocking": blocking,
+        "operator_configuration": operator_configuration,
+        "intentional_boundaries": intentional_boundaries,
+        "rebuild_actions": rebuild_actions,
+        "non_claim": (
+            "This summary classifies operational gates only. It does not prove a "
+            "trading edge and does not authorize live orders."
+        ),
+    }
+
+
 def _main_bridge_status(
     *,
     instruction_view_exists: bool,
@@ -1284,6 +1348,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         runtime_observation_exists=bridge["runtime_observation_exists"],
     )
     report["readiness"] = _build_readiness(report)
+    report["operator_next_actions"] = _build_operator_next_actions(report["readiness"])
     return report
 
 
@@ -1476,6 +1541,24 @@ def _print_human(report: dict[str, Any]) -> None:
     for name, gate in report["readiness"].items():
         action = f" action={gate['action']}" if gate.get("action") else ""
         print(f"  {name}: {gate['status']} - {gate['message']}{action}")
+    next_actions = report["operator_next_actions"]
+    print(
+        "operator_next_actions: "
+        f"launch_blocked={next_actions['launch_blocked']} "
+        f"status_counts={next_actions['status_counts']} "
+        f"blocking={len(next_actions['blocking'])} "
+        f"operator_configuration={len(next_actions['operator_configuration'])} "
+        f"intentional_boundaries={len(next_actions['intentional_boundaries'])} "
+        f"rebuild_actions={len(next_actions['rebuild_actions'])}"
+    )
+    for item in next_actions["blocking"]:
+        print(f"  BLOCKING {item['name']}: {item['message']} action={item['action']}")
+    for item in next_actions["operator_configuration"]:
+        print(f"  OPERATOR {item['name']}: {item['message']} action={item['action']}")
+    for item in next_actions["intentional_boundaries"]:
+        print(f"  BOUNDARY {item['name']}: {item['message']} action={item['action']}")
+    for item in next_actions["rebuild_actions"]:
+        print(f"  REBUILD {item['name']}: {item['message']} action={item['action']}")
     print("journals:")
     for name, item in report["journals"].items():
         print(f"  {name}: exists={item['exists']} bytes={item['size_bytes']} path={item['path']}")

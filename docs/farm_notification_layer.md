@@ -177,13 +177,15 @@ paper runtime.
   `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`
 - `llm_surface_boundaries.telegram_chart_formatter_effective_shared_entrypoints =
   ["generate_client_text", "generate_edu_text"]` under that effective launcher route
-- `llm_surface_boundaries.scanner_formatter_provider_mismatch = true` when scanner
-  `LLM_PROVIDER` differs from the legacy chart formatter provider
-- With `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`,
-  `llm_surface_boundaries.telegram_chart_formatter_provider = shared_llm_client_opt_in`,
-  `telegram_chart_formatter_uses_llm_provider_env = true`, and
-  `scanner_formatter_provider_mismatch = false` when the shared router follows the same
-  `LLM_PROVIDER`.
+- `llm_surface_boundaries.scanner_formatter_provider_mismatch = false` when the
+  reviewed product launchers route text-only formatter calls through the same shared
+  `LLM_PROVIDER` path as the scanner.
+- With `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`, the direct formatter status reports
+  `provider_scope = shared_llm_client_opt_in` and
+  `telegram_chart_formatter_uses_llm_provider_env = true`. In a bare shell the direct
+  formatter may still report `telegram_chart_formatter_provider = yandex_only`; use
+  `telegram_chart_formatter_effective_provider_scope` to evaluate the reviewed
+  launcher route.
 - `llm_surface_boundaries.telegram_chart_formatter_prompt_integrity = true`
 - `llm_surface_boundaries.telegram_chart_formatter_mojibake_detected = false`
 - `product_analyzer_boundary.analyze_chart_send_default = false`

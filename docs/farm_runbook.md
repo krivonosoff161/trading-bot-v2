@@ -70,6 +70,12 @@ Expected safe state:
   journals, archived-loop guards, the positive `paper_main_runtime_current` paper
   observer gate, and the explicit `main_runtime_consumer = planned` old-live-main
   boundary.
+- `operator_next_actions` is the derived operator summary over the same gates. It
+  separates `blocking` launch blockers from `operator_configuration` items such as
+  `PAPER_CHAT_ID`, `intentional_boundaries` such as old `main.py` isolation, and
+  `rebuild_actions` for stale/missing derived artifacts. This summary is an
+  operational checklist only; it does not prove edge and does not authorize live
+  orders.
 - `canonical_launch_surface = pass` and `legacy_live_runtime_isolated = pass` are
   required before treating the operator picture as clean.
 - `legacy_loop_guards = pass` is required; archived `scanner_farm_loop` and
@@ -84,15 +90,14 @@ Expected safe state:
   The latest wrapper must also report
   `run_latest_analysis_requires_auto_execute_opt_in = true`; otherwise a manual analyzer
   path can reach the old auto-execute module too easily.
-- `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
-  analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
-  If scanner `LLM_PROVIDER=alibaba`, `scanner_formatter_provider_mismatch = true` is
-  expected until the old formatter is migrated through a tested adapter.
-  For text-only product analyzer calls, the tested adapter is explicit opt-in:
-  set `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. Then health should show
-  `telegram_chart_formatter_provider = shared_llm_client_opt_in` and
-  `scanner_formatter_provider_mismatch = false` when `LLM_PROVIDER` matches. This does
-  not migrate premium vision.
+- `telegram_analyzer_llm_provider_review = pass` means the text-only product
+  analyzer path is routed through the shared `LLM_PROVIDER` router by environment or
+  by the reviewed launchers. In a bare shell the legacy formatter may still report
+  `telegram_chart_formatter_provider = yandex_only`; the effective launch contract is
+  the important field:
+  `telegram_chart_formatter_effective_provider_scope = shared_llm_client_opt_in` and
+  `scanner_formatter_provider_mismatch = false` when `LLM_PROVIDER` matches. This
+  does not migrate premium vision.
 - `product_analyzer_prompt_integrity = pass` is required before any manual product
   analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
   keeps risk/non-claim wording, and does not contain known mojibake markers.
@@ -137,6 +142,11 @@ Expected safe state:
   `paper_signal_training: rows=N schema_rows=N invalid_json=0 paper_only_false=0 stale_vs_source=False`.
 - The human output should also show
   `paper_source_composition: signals_rows=N signal_sources={...} signal_families={...} queue_items=M queue_families={...} pfr_explicit=True execution_allowed=False`.
+- The human output should also show
+  `operator_next_actions: launch_blocked=False ... blocking=0 ...`. Any item printed
+  under `BLOCKING` must be fixed before a long visible run. `OPERATOR` items are
+  external configuration/review tasks; `BOUNDARY` items are intentional safety limits;
+  `REBUILD` items are generated artifacts that need a refresh.
 - `ready_for_visible_paper_research_loop` is the aggregate operator gate. It passes only
   when the visible launch surface, PFR source, clean paper chain, runtime observation,
   journal/training exports, Telegram ownership, LLM policy, and old-main isolation are
