@@ -76,8 +76,9 @@ python -X utf8 -m scripts.strategy_lab.farm_loop ^
   --paper-signals-max-observe 0 ^
   --paper-signals-max-pfr-scan 1 ^
   --paper-signals-fetch-timeout 3 ^
-  --max-prepares 1 --max-enrich-funding 1 --max-enrich-oi 1 ^
-  --max-sweeps 1 --max-worker-jobs 1 --max-validation 1 --max-paper 1
+  --main-paper-runtime-limit 1 ^
+  --max-plan-events 1 --max-prepares 1 --max-enrich 1 ^
+  --max-sweeps 1 --max-worker-jobs 1 --max-paper-cards 1
 ```
 
 Observed at the time of this audit: completed without crash, refreshed discovery, executed
