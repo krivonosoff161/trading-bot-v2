@@ -75,8 +75,8 @@ def test_chart_formatter_shared_router_status_is_sanitized():
     assert status["api_key_set"] is True
     assert status["folder_id_set"] is False
     assert status["configured"] is True
-    assert status["shared_router_entrypoints"] == ["generate_client_text"]
-    assert status["yandex_only_entrypoints"] == ["generate_premium_analysis", "generate_edu_text"]
+    assert status["shared_router_entrypoints"] == ["generate_client_text", "generate_edu_text"]
+    assert status["yandex_only_entrypoints"] == ["generate_premium_analysis"]
     assert status["telegram_send_authority"] is False
     assert status["execution_authority"] is False
     assert "secret-alibaba-key" not in rendered
@@ -119,6 +119,44 @@ def test_chart_formatter_shared_router_opt_in_uses_text_adapter(monkeypatch):
     assert calls
     assert "\U0001f4ca \u0421\u0415\u0419\u0427\u0410\u0421 \u041d\u0410 \u0420\u042b\u041d\u041a\u0415" in calls[0]["system_prompt"]
     assert "BTC-USDT-SWAP" in calls[0]["user_text"]
+
+
+def test_educational_qa_shared_router_opt_in_uses_text_adapter(monkeypatch):
+    calls = []
+
+    async def fake_shared_router(system_prompt, user_text, *, max_tokens, timeout, role="chief"):
+        calls.append(
+            {
+                "system_prompt": system_prompt,
+                "user_text": user_text,
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+                "role": role,
+            }
+        )
+        return "educational shared answer", {
+            "provider": "alibaba",
+            "role": role,
+            "status": "ok",
+        }
+
+    monkeypatch.setenv("PRODUCT_ANALYZER_LLM_ROUTER", "llm_client")
+    monkeypatch.delenv("YANDEX_API_KEY", raising=False)
+    monkeypatch.delenv("YANDEX_FOLDER_ID", raising=False)
+    monkeypatch.setattr(llm_formatter, "_call_shared_router", fake_shared_router)
+
+    text = asyncio.run(llm_formatter.generate_edu_text("Что такое стоп-лосс?"))
+
+    assert text == "educational shared answer"
+    assert calls == [
+        {
+            "system_prompt": llm_formatter._EDU_SYSTEM_PROMPT,
+            "user_text": "Что такое стоп-лосс?",
+            "max_tokens": 400,
+            "timeout": llm_formatter._TIMEOUT,
+            "role": "mid",
+        }
+    ]
 
 
 def test_manual_analyzer_and_latest_wrapper_boundaries():

@@ -80,6 +80,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["manual_latest_requires_human_prompt"] is True
     assert launch_contract["manual_latest_auto_execute_import_gated"] is True
     assert launch_contract["text_card_shared_router_entrypoint"] == "generate_client_text"
+    assert launch_contract["educational_qa_shared_router_entrypoint"] == "generate_edu_text"
     assert launch_contract["shared_router_opt_in_env"] == "PRODUCT_ANALYZER_LLM_ROUTER"
     assert launch_contract["shared_router_active"] is False
     assert launch_contract["start_bat_sets_shared_router"] is True
@@ -88,7 +89,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["effective_shared_router"] is True
     assert launch_contract["effective_provider"] == "alibaba"
     assert launch_contract["premium_vision_yandex_only"] is True
-    assert launch_contract["edu_qa_yandex_only"] is True
+    assert launch_contract["edu_qa_yandex_only"] is False
     assert launch_contract["farm_pfr_runtime_uses_manual_product_stack"] is False
     assert launch_contract["old_main_consumes_paper_queue"] is False
     assert launch_contract["telegram_send_default"] is False
@@ -433,7 +434,8 @@ def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_pa
     assert report["product_analyzer_launch_contract"]["effective_shared_router"] is True
     assert report["product_analyzer_launch_contract"]["effective_provider"] == "alibaba"
     assert report["product_analyzer_launch_contract"]["premium_vision_yandex_only"] is True
-    assert report["product_analyzer_launch_contract"]["edu_qa_yandex_only"] is True
+    assert report["product_analyzer_launch_contract"]["edu_qa_yandex_only"] is False
+    assert report["product_analyzer_launch_contract"]["edu_qa_shared_router_entrypoint"] is True
     assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"
     assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
     assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True

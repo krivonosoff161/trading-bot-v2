@@ -1,10 +1,10 @@
 """
 LLM formatter - legacy chart/product text formatter.
 
-By default it uses the older Yandex AI Studio path. Text-card generation can opt in
+By default it uses the older Yandex AI Studio path. Text-only generation can opt in
 to the shared scanner/advisory LLM router by setting
-PRODUCT_ANALYZER_LLM_ROUTER=llm_client. Premium vision and educational Q&A remain on
-the legacy path until they receive their own provider/prompt review.
+PRODUCT_ANALYZER_LLM_ROUTER=llm_client. Premium vision remains on the legacy path
+until it receives its own provider/prompt review.
 
 Takes structured analysis snapshot + optional chart image,
 returns natural Russian text for client delivery.
@@ -89,8 +89,8 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
         "budget_guard": True,
         "telegram_send_authority": False,
         "execution_authority": False,
-        "shared_router_entrypoints": ["generate_client_text"] if shared_router else [],
-        "yandex_only_entrypoints": ["generate_premium_analysis", "generate_edu_text"],
+        "shared_router_entrypoints": ["generate_client_text", "generate_edu_text"] if shared_router else [],
+        "yandex_only_entrypoints": ["generate_premium_analysis"],
         "function_entrypoints": [
             "generate_client_text",
             "generate_premium_analysis",
@@ -128,17 +128,17 @@ async def _call_shared_router(
     *,
     max_tokens: int,
     timeout: int,
+    role: str = "chief",
 ) -> tuple[str | None, dict]:
     """Opt-in text-only adapter over src.utils.llm_client.
 
-    This is deliberately limited to generate_client_text. Premium vision and
-    educational Q&A stay on the legacy formatter path until they receive their
-    own prompt/provider review.
+    This is deliberately limited to text-only entrypoints. Premium vision stays
+    on the legacy formatter path until it receives its own prompt/provider review.
     """
     from src.utils import llm_client
 
     return await llm_client.call(
-        "chief",
+        role,
         system_prompt,
         user_text,
         max_tokens=max_tokens,
@@ -941,6 +941,24 @@ _EDU_SYSTEM_PROMPT = """\
 
 async def generate_edu_text(question: str) -> str | None:
     """Answer a user's educational question via Qwen. Returns None on error."""
+    shared_router = _use_shared_router()
+    if shared_router:
+        body, usage = await _call_shared_router(
+            _EDU_SYSTEM_PROMPT,
+            question,
+            max_tokens=400,
+            timeout=_TIMEOUT,
+            role="mid",
+        )
+        if not body:
+            return None
+        print(
+            "LLM edu shared router: "
+            f"{usage.get('provider')}/{usage.get('role')} "
+            f"{usage.get('status')}"
+        )
+        return body
+
     if not _API_KEY or not _FOLDER_ID:
         print("LLM edu: YANDEX_API_KEY or YANDEX_FOLDER_ID not set — skipping")
         return None

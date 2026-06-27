@@ -84,10 +84,11 @@ runtime:
 - `src.utils.llm_client` supports the scanner Alibaba/Yandex router through
   `LLM_PROVIDER`.
 - `src.utils.llm_formatter` is a separate chart formatter path used by the chart
-  analyzer. Its default is Yandex-only, but `generate_client_text` can opt in to
-  the shared `LLM_PROVIDER` router with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`;
-  `start.bat` and `bat/start_telegram_bot.bat` set this opt-in by default for the
-  product text-card path.
+  analyzer. Its default is Yandex-only, but text-only `generate_client_text` and
+  `generate_edu_text` can opt in to the shared `LLM_PROVIDER` router with
+  `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`; `start.bat` and
+  `bat/start_telegram_bot.bat` set this opt-in by default for the product text
+  surfaces.
 
 These are not runtime failures. They are boundaries that must be audited before
 product delivery is revived.
@@ -98,9 +99,9 @@ Before connecting Telegram/product analysis back into the operator workflow:
 
 1. Keep `product_analyzer_prompt_integrity = pass`; the legacy formatter prompt must
    remain UTF-8 readable and free of mojibake markers.
-2. Keep text-card generation on the shared provider router by launcher/env, but do
-   not treat premium vision or educational Q&A as migrated until they pass a separate
-   provider/prompt review.
+2. Keep text-only generation on the shared provider router by launcher/env, but do
+   not treat premium vision as migrated until it passes a separate provider/prompt
+   review.
 3. Audit Telegram text and chart payloads for paper-only wording, risk language,
    price/SL/TP clarity, and no execution claims.
 4. Keep the `run_latest_analysis` double gate intact: `AUTO_TRADE` alone must not import
