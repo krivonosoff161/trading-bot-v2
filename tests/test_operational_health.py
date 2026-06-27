@@ -39,6 +39,11 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_provider"] == "alibaba"
+    assert llm_boundaries["telegram_chart_formatter_effective_provider_scope"] == "shared_llm_client_opt_in"
+    assert llm_boundaries["telegram_chart_formatter_effective_shared_entrypoints"] == [
+        "generate_client_text",
+        "generate_edu_text",
+    ]
     assert llm_boundaries["telegram_chart_formatter_uses_budget_guard"] is True
     assert llm_boundaries["telegram_chart_formatter_prompt_integrity"] is True
     assert llm_boundaries["telegram_chart_formatter_mojibake_detected"] is False
@@ -90,6 +95,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["effective_provider"] == "alibaba"
     assert launch_contract["premium_vision_yandex_only"] is True
     assert launch_contract["edu_qa_yandex_only"] is False
+    assert launch_contract["edu_qa_shared_router_entrypoint"] is True
     assert launch_contract["farm_pfr_runtime_uses_manual_product_stack"] is False
     assert launch_contract["old_main_consumes_paper_queue"] is False
     assert launch_contract["telegram_send_default"] is False
@@ -408,6 +414,7 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert delivery["execution_authority"] is False
     assert "llm_client" in delivery["scanner_provider_path"]
     assert "llm_formatter" in delivery["chart_formatter_path"]
+    assert "shared-router" in delivery["chart_formatter_path"]
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_execution_boundary"]["status"] == "pass"
 
@@ -441,6 +448,11 @@ def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_pa
     assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_provider"] == "alibaba"
+    assert llm_boundaries["telegram_chart_formatter_effective_provider_scope"] == "shared_llm_client_opt_in"
+    assert llm_boundaries["telegram_chart_formatter_effective_shared_entrypoints"] == [
+        "generate_client_text",
+        "generate_edu_text",
+    ]
     assert llm_boundaries["scanner_formatter_provider_mismatch"] is False
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "pass"
     assert "secret-alibaba" not in rendered
