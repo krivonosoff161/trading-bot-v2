@@ -52,6 +52,10 @@ Expected safe state:
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
+- `ready_for_visible_paper_research_loop` is the aggregate operator gate. It passes only
+  when the visible launch surface, PFR source, clean paper chain, runtime observation,
+  journal/training exports, Telegram ownership, LLM policy, and old-main isolation are
+  all in the expected paper/research state.
 
 Treat a `planned` main-runtime consumer as a safety boundary, not as a launch failure.
 The visible farm loop can produce paper instructions, consume them into an audit view, and

@@ -114,6 +114,43 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and chain["runtime_observation"]["invalid"] == 0
         and chain["runtime_observation"]["provider_error"] == 0
     )
+    telegram_ownership_ready = (
+        telegram_flow["farm_core_sends_telegram"] is False
+        and telegram_flow["paper_sends_telegram_by_default"] is False
+        and telegram_flow["execution_authority"] is False
+        and surfaces["scanner_runtime"]["current"] is True
+        and surfaces["legacy_ws_scanner"]["current"] is False
+    )
+    canonical_surface_ready = (
+        surfaces["control_room"]["exists"]
+        and surfaces["farm_full_cycle_loop"]["exists"]
+        and surfaces["farm_full_cycle_stop"]["exists"]
+    )
+    legacy_main_isolated = (
+        surfaces["old_main_py"]["exists"]
+        and surfaces["old_main_py"]["current"] is False
+        and bridge["orders_enabled_by_bridge"] is False
+    )
+    training_export_ready = (
+        journals["impulse_training"]["exists"]
+        or journals["main_impulse_training"]["exists"]
+        or journals["paper_signal_training"]["exists"]
+    )
+    visible_cycle_blocked = (
+        safety["auto_trade"]
+        or not canonical_surface_ready
+        or not legacy_main_isolated
+        or not telegram_ownership_ready
+        or (lab_llm["enabled"] and not lab_llm["configured"])
+    )
+    visible_cycle_ready = (
+        not visible_cycle_blocked
+        and pfr["exists"]
+        and paper_chain_ready
+        and runtime_observation_ready
+        and journals["excel"]["exists"]
+        and training_export_ready
+    )
 
     return {
         "auto_trade_off": _gate(
@@ -123,42 +160,18 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Unset AUTO_TRADE before paper/research operation." if safety["auto_trade"] else "",
         ),
         "canonical_launch_surface": _gate(
-            "pass" if (
-                surfaces["control_room"]["exists"]
-                and surfaces["farm_full_cycle_loop"]["exists"]
-                and surfaces["farm_full_cycle_stop"]["exists"]
-            ) else "blocked",
+            "pass" if canonical_surface_ready else "blocked",
             "Canonical Strategy Lab control-room launch/loop/stop scripts are present."
-            if (
-                surfaces["control_room"]["exists"]
-                and surfaces["farm_full_cycle_loop"]["exists"]
-                and surfaces["farm_full_cycle_stop"]["exists"]
-            ) else "Canonical Strategy Lab launch scripts are missing.",
+            if canonical_surface_ready else "Canonical Strategy Lab launch scripts are missing.",
             action="Restore bat/strategy_lab_control_room.bat and farm full-cycle scripts."
-            if not (
-                surfaces["control_room"]["exists"]
-                and surfaces["farm_full_cycle_loop"]["exists"]
-                and surfaces["farm_full_cycle_stop"]["exists"]
-            ) else "",
+            if not canonical_surface_ready else "",
         ),
         "legacy_live_runtime_isolated": _gate(
-            "pass" if (
-                surfaces["old_main_py"]["exists"]
-                and surfaces["old_main_py"]["current"] is False
-                and bridge["orders_enabled_by_bridge"] is False
-            ) else "blocked",
+            "pass" if legacy_main_isolated else "blocked",
             "Old live/order-capable main.py is present but isolated from the farm/PFR paper bridge."
-            if (
-                surfaces["old_main_py"]["exists"]
-                and surfaces["old_main_py"]["current"] is False
-                and bridge["orders_enabled_by_bridge"] is False
-            ) else "Old main runtime ownership is ambiguous.",
+            if legacy_main_isolated else "Old main runtime ownership is ambiguous.",
             action="Do not wire farm/PFR into main.py; use paper runtime observer."
-            if not (
-                surfaces["old_main_py"]["exists"]
-                and surfaces["old_main_py"]["current"] is False
-                and bridge["orders_enabled_by_bridge"] is False
-            ) else "",
+            if not legacy_main_isolated else "",
         ),
         "pfr_source_available": _gate(
             "pass" if pfr["exists"] else "warn",
@@ -215,6 +228,26 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.main_paper_runtime --apply after queue rebuild."
             if not runtime_observation_ready else "",
         ),
+        "ready_for_visible_paper_research_loop": _gate(
+            "pass" if visible_cycle_ready else ("blocked" if visible_cycle_blocked else "warn"),
+            "Visible farm/PFR/paper/main-paper/journal cycle is assembled and observed."
+            if visible_cycle_ready
+            else (
+                "A safety or ownership boundary blocks the visible paper/research cycle."
+                if visible_cycle_blocked
+                else "Visible paper/research cycle is not fully assembled or observed yet."
+            ),
+            action=(
+                "Fix blocked safety/ownership gates first."
+                if visible_cycle_blocked
+                else (
+                    "Run the bounded chain rebuild: farm_loop --run-paper-signals, main paper bridge/"
+                    "consumer/runtime/preview, and paper_signal_training_export."
+                )
+                if not visible_cycle_ready
+                else ""
+            ),
+        ),
         "main_runtime_consumer": _gate(
             "planned",
             "Old live main/Telegram runtime still does not execute farm/PFR paper instructions.",
@@ -242,29 +275,11 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
         ),
         "telegram_delivery_ownership": _gate(
-            "pass" if (
-                telegram_flow["farm_core_sends_telegram"] is False
-                and telegram_flow["paper_sends_telegram_by_default"] is False
-                and telegram_flow["execution_authority"] is False
-                and surfaces["scanner_runtime"]["current"] is True
-                and surfaces["legacy_ws_scanner"]["current"] is False
-            ) else "blocked",
+            "pass" if telegram_ownership_ready else "blocked",
             "Telegram surfaces are separated from farm execution; paper alerts are preview-only by default."
-            if (
-                telegram_flow["farm_core_sends_telegram"] is False
-                and telegram_flow["paper_sends_telegram_by_default"] is False
-                and telegram_flow["execution_authority"] is False
-                and surfaces["scanner_runtime"]["current"] is True
-                and surfaces["legacy_ws_scanner"]["current"] is False
-            ) else "Telegram ownership is ambiguous.",
+            if telegram_ownership_ready else "Telegram ownership is ambiguous.",
             action="Keep Telegram as a surface; do not import it into farm compute or paper execution."
-            if not (
-                telegram_flow["farm_core_sends_telegram"] is False
-                and telegram_flow["paper_sends_telegram_by_default"] is False
-                and telegram_flow["execution_authority"] is False
-                and surfaces["scanner_runtime"]["current"] is True
-                and surfaces["legacy_ws_scanner"]["current"] is False
-            ) else "",
+            if not telegram_ownership_ready else "",
         ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
@@ -288,26 +303,11 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python scripts/build_journal.py." if not journals["excel"]["exists"] else "",
         ),
         "training_data_exports": _gate(
-            "pass"
-            if (
-                journals["impulse_training"]["exists"]
-                or journals["main_impulse_training"]["exists"]
-                or journals["paper_signal_training"]["exists"]
-            )
-            else "warn",
+            "pass" if training_export_ready else "warn",
             "At least one training-data export exists."
-            if (
-                journals["impulse_training"]["exists"]
-                or journals["main_impulse_training"]["exists"]
-                or journals["paper_signal_training"]["exists"]
-            )
-            else "No impulse/main-impulse training export is present; paper signals still have their own JSONL.",
+            if training_export_ready else "No paper/impulse training export is present yet.",
             action="Modernize journal/training export after paper outcomes stabilize."
-            if not (
-                journals["impulse_training"]["exists"]
-                or journals["main_impulse_training"]["exists"]
-                or journals["paper_signal_training"]["exists"]
-            ) else "",
+            if not training_export_ready else "",
         ),
     }
 
