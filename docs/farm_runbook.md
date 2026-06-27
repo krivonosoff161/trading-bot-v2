@@ -103,7 +103,10 @@ Expected safe state:
 - `paper_telegram_sender_available` is optional for compute but useful before operator
   alerting. It is a dry-run audit over already validated preview cards unless the
   operator explicitly adds `--send`; it must use `PAPER_CHAT_ID`, never the default
-  scanner/product chat.
+  scanner/product chat. If `paper_telegram_delivery.json` is older than
+  `paper_telegram_preview.json`, the gate stays `warn`; rerun
+  `python -m scripts.strategy_lab.paper_telegram_sender` before treating alert delivery
+  status as current.
 - `paper_runtime_observed` shows whether the main-paper observer actually read the
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.

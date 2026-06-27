@@ -80,6 +80,11 @@ explain why alerts did or did not leave the machine, for example `dry_run`,
 so an operator does not need to inspect JSON by hand to know whether Telegram is
 unconfigured, intentionally dry-run, or failing.
 
+The delivery snapshot must be current against `paper_telegram_preview.json`. If the
+preview artifact is newer than the delivery snapshot, `operational_health` reports
+`paper_telegram_sender_available = warn` and the sender dry-run must be repeated before
+an operator treats Telegram status as reviewed.
+
 Default mode is dry-run:
 
 ```bash

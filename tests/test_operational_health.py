@@ -351,8 +351,13 @@ def test_operational_health_reports_paper_telegram_preview(tmp_path, monkeypatch
 
 
 def test_operational_health_reports_paper_telegram_sender(tmp_path, monkeypatch):
+    preview = tmp_path / "state" / "derived" / "paper_telegram_preview.json"
     delivery = tmp_path / "state" / "derived" / "paper_telegram_delivery.json"
     delivery.parent.mkdir(parents=True)
+    preview.write_text(
+        json.dumps({"records_read": 2, "rendered": 2, "invalid": 0, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
     delivery.write_text(
         json.dumps({
             "records_read": 2,
@@ -377,7 +382,35 @@ def test_operational_health_reports_paper_telegram_sender(tmp_path, monkeypatch)
     breakdown = report["paper_chain"]["telegram_delivery_breakdown"]
     assert breakdown["by_status"] == {"dry_run": 1, "skipped_no_paper_chat": 1}
     assert breakdown["by_problem"] == {"paper_telegram_not_configured": 1}
+    assert report["paper_chain"]["telegram_delivery_freshness"]["stale_vs_source"] is False
     assert report["readiness"]["paper_telegram_sender_available"]["status"] == "pass"
+
+
+def test_operational_health_warns_on_stale_paper_telegram_delivery(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    preview = derived / "paper_telegram_preview.json"
+    delivery = derived / "paper_telegram_delivery.json"
+    preview.write_text(
+        json.dumps({"records_read": 2, "rendered": 2, "invalid": 0, "items": [{}, {}]}),
+        encoding="utf-8",
+    )
+    delivery.write_text(
+        json.dumps({"records_read": 2, "eligible": 2, "sent": 0, "skipped": 2, "errors": 0, "items": []}),
+        encoding="utf-8",
+    )
+    os.utime(delivery, (1000, 1000))
+    os.utime(preview, (1005, 1005))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    freshness = report["paper_chain"]["telegram_delivery_freshness"]
+    assert freshness["source_exists"] is True
+    assert freshness["derived_exists"] is True
+    assert freshness["stale_vs_source"] is True
+    assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
+    assert "paper_telegram_sender" in report["readiness"]["paper_telegram_sender_available"]["action"]
 
 
 def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkeypatch):
