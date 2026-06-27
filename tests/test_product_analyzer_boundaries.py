@@ -26,6 +26,32 @@ def test_chart_formatter_runtime_labels_are_utf8_readable():
     )
 
 
+def test_chart_formatter_provider_status_is_sanitized():
+    status = llm_formatter.formatter_provider_status(
+        {
+            "YANDEX_API_KEY": "secret-yandex-key",
+            "YANDEX_FOLDER_ID": "secret-folder",
+            "LLM_PROVIDER": "alibaba",
+        }
+    )
+    rendered = str(status)
+
+    assert status["schema"] == "llm_formatter_provider.v1"
+    assert status["provider"] == "yandex"
+    assert status["provider_scope"] == "yandex_only"
+    assert status["follows_llm_provider_env"] is False
+    assert status["api_key_set"] is True
+    assert status["folder_id_set"] is True
+    assert status["configured"] is True
+    assert status["supports_vision"] is False
+    assert status["telegram_send_authority"] is False
+    assert status["execution_authority"] is False
+    assert "qwen3-235b" in status["model_label"]
+    assert "secret-yandex-key" not in rendered
+    assert "secret-folder" not in rendered
+    assert "b1git" not in rendered
+
+
 def test_manual_analyzer_and_latest_wrapper_boundaries():
     analyze_chart = (ROOT / "scripts" / "analyze_chart.py").read_text(encoding="utf-8")
     run_latest_analysis = (ROOT / "scripts" / "run_latest_analysis.py").read_text(encoding="utf-8")

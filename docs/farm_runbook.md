@@ -29,7 +29,11 @@ Expected safe state:
 - scanner LLM provider/key presence visible, without secret values
 - `llm_surface_boundaries` separates the scanner/advisory LLM router from the legacy
   Telegram chart formatter. Alibaba/Yandex routing in `src.utils.llm_client` does not
-  automatically cover `src.utils.llm_formatter`.
+  automatically cover `src.utils.llm_formatter`. The formatter must also expose
+  `telegram_chart_formatter_status.schema = llm_formatter_provider.v1` with sanitized
+  provider metadata only: key presence booleans, `provider = yandex`,
+  `provider_scope = yandex_only`, and a model label that does not include Yandex folder
+  ids or secret values.
 - Telegram channel presence visible, without token/chat values
 - journal, paper-signal, and PFR artifact paths resolved
 - `launch_surfaces` explicitly marks the current visible control room and full-cycle
@@ -75,6 +79,8 @@ Expected safe state:
   path can reach the old auto-execute module too easily.
 - `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
+  If scanner `LLM_PROVIDER=alibaba`, `scanner_formatter_provider_mismatch = true` is
+  expected until the old formatter is migrated through a tested adapter.
 - `product_analyzer_prompt_integrity = pass` is required before any manual product
   analyzer revival. This proves the legacy chart formatter prompt is UTF-8 readable,
   keeps risk/non-claim wording, and does not contain known mojibake markers.
