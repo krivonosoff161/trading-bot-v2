@@ -170,6 +170,10 @@ senders, does not read `TELEGRAM_BOT_TOKEN` or chat IDs, and sends no network re
 `farm_loop --run-paper-signals` rebuilds this preview after the consumer audit, and
 `farm_status_report` / `operational_health` surface the preview counts.
 
+Follow-up hardening: `paper_signals_run --notify` requires `PAPER_CHAT_ID`
+explicitly and does not fall back to `SCANNER_CHAT_ID`. Scanner and paper-watch
+notifications are separate operator surfaces.
+
 ### F8 - Main-paper runtime needed a queue before touching the old main engine
 
 The old `main.py` is a real runtime: it imports the OKX client, sets leverage at startup,

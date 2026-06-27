@@ -34,9 +34,9 @@ def _notify(cards: list[str]) -> str:
     """Best-effort Telegram NOTIFICATION (surface only). Fires only when a token AND a paper chat id are
     already configured in env — never sends otherwise, never touches orders/credentials in code."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = (os.getenv("PAPER_CHAT_ID") or os.getenv("SCANNER_CHAT_ID") or "").split(",")[0].strip()
+    chat = (os.getenv("PAPER_CHAT_ID") or "").split(",")[0].strip()
     if not token or not chat:
-        return "skipped:no_token_or_chat"
+        return "skipped:no_paper_token_or_chat"
     try:
         import asyncio
         from src.utils.telegram import send_message_to
@@ -78,7 +78,7 @@ def main() -> None:
     ap.add_argument("--select", action="store_true", help="print the memory-ranked top-N universe with reasons and exit")
     ap.add_argument("--ab-report", action="store_true",
                     help="write/read paper exit-mode A/B comparison artifact and exit")
-    ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+chat already in env")
+    ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+PAPER_CHAT_ID exist")
     ap.add_argument("--pfr-db-path", default="",
                     help="path to strategy_lab.sqlite — activates PFR lane (PAPER_FORWARD_READY records)")
     ap.add_argument("--max-pfr-scan", type=int, default=30,
