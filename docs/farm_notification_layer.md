@@ -37,6 +37,8 @@ that state. Notifications are an output edge, never an input to compute or money
 | `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
 | `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy `AUTO_TRADE`-gated auto-execute hook exists. |
+| `scripts.analyze_chart` | Separate manual surface | Writes local chart/report analysis and can optionally send Telegram; not farm/PFR execution. |
+| `scripts.run_latest_analysis` | Separate manual surface | Interactive wrapper that can reach `scripts.auto_execute` behind `AUTO_TRADE`; not a paper launcher. |
 | `ws_scanner.py` | Legacy/diagnostic | Imports OKX client; do not use as canonical farm path. |
 
 ## Paper Telegram Preview
@@ -86,10 +88,15 @@ not the legacy Telegram chart analyzer. The chart analyzer must be audited separ
 because it calls `llm_formatter.generate_client_text`, `generate_premium_analysis`, and
 `generate_edu_text` through Yandex AI Studio.
 
+Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
+does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`
+is more execution-adjacent: it is interactive and can import `scripts.auto_execute` after
+an ENTRY result when `AUTO_TRADE` is enabled. Neither file is the farm/PFR paper runtime.
+
 ## Machine-Checkable Invariant
 
 `python -m scripts.strategy_lab.operational_health` exposes
-`telegram_delivery_flow`:
+`telegram_delivery_flow`, `llm_surface_boundaries`, and `product_analyzer_boundary`:
 
 - `farm_core_sends_telegram = false`
 - `paper_sends_telegram_by_default = false`
@@ -99,6 +106,9 @@ because it calls `llm_formatter.generate_client_text`, `generate_premium_analysi
 - `telegram_analyzer_auto_trade_guarded = true`
 - `llm_surface_boundaries.telegram_chart_formatter_provider = yandex_only`
 - `llm_surface_boundaries.telegram_chart_formatter_uses_llm_provider_env = false`
+- `product_analyzer_boundary.analyze_chart_send_default = false`
+- `product_analyzer_boundary.run_latest_analysis_imports_auto_execute = true`
+- `product_analyzer_boundary.safe_for_farm_pfr_runtime = false`
 - `scanner_surface_sends_to_subscribers = true` when the scanner surface exists
 - `legacy_ws_scanner_uses_okx_client = true` when the legacy scanner file exists
 

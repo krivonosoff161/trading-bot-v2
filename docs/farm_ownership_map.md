@@ -38,6 +38,8 @@ farm permission to touch the old money path.
 | `start_all.bat` | **LEGACY/FROZEN PRODUCT STACK** | Historical multi-window scanner/engine launcher. Do not use as the current farm/PFR/paper control path. |
 | `scripts/ws/ws_main_screener.py` | **SEPARATE SCANNER SURFACE** | Public-market scanner + Telegram/LLM reporting surface. It can notify humans, but it is not the farm trigger owner and not a farm/PFR executor. |
 | `scripts/ws/ws_scanner.py` | **LEGACY / DIAGNOSTIC** | Older scanner surface that imports the OKX client. Keep out of the canonical farm/PFR/paper path. |
+| `scripts/analyze_chart.py` | **MANUAL PRODUCT ANALYZER** | Generates local chart/report output and can optionally send Telegram; not a farm/PFR runtime. |
+| `scripts/run_latest_analysis.py` | **EXECUTION-ADJACENT MANUAL TOOL** | Interactive wrapper that can reach `scripts.auto_execute` behind `AUTO_TRADE`; never use as the farm/PFR launcher. |
 
 ## Main Engine Boundary
 
@@ -82,14 +84,16 @@ Telegram is split into operator surfaces, not a single trading brain:
 | `paper_telegram_preview` | Offline cards from accepted paper instructions | None; no network send by default |
 | `scripts/ws/ws_main_screener.py` | Scanner/news/Telegram intake and reporting | None; upstream context only |
 | `start.bat` / `scripts.telegram_bot` | Product/analyzer bot surface | None; not Strategy Lab farm |
+| `scripts.analyze_chart` | Manual chart/report analyzer | None by default; optional Telegram send only when explicitly requested |
+| `scripts.run_latest_analysis` | Interactive manual analyzer wrapper | None for farm; can reach `AUTO_TRADE`-gated auto-execute in the old product path |
 | `scripts/ws/ws_scanner.py` | Legacy scanner path using the OKX client | None; diagnostic/history only |
 
 LLM ownership is also split:
 
 - `src.utils.llm_client` is the scanner/advisory provider router
   (`LLM_PROVIDER=alibaba|yandex`, role-specific models).
-- `src.utils.llm_formatter` is the chart/text formatter route used by the older
-  Telegram analyzer surface.
+- `src.utils.llm_formatter` is the older Yandex-only chart/text formatter route used
+  by the Telegram/chart analyzer surface. It does not follow `LLM_PROVIDER`.
 - `src.research_lab.llm_provider` is the Strategy Lab advisory provider gate, disabled
   by default unless `STRATEGY_LAB_LLM_ENABLED` is set and configured.
 

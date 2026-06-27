@@ -131,6 +131,13 @@ chart analyzer is using Alibaba. The analyzer calls `generate_client_text`,
 `generate_premium_analysis`, and `generate_edu_text` in `llm_formatter`, so it needs a
 separate prompt/provider audit before product Telegram delivery is revived.
 
+Manual product boundary: `scripts.analyze_chart` is a report/snapshot/chart generator
+with optional `--send-telegram`; it is off by default. `scripts.run_latest_analysis` is
+interactive and can lazy-import `scripts.auto_execute` after an ENTRY result when
+`AUTO_TRADE` is enabled. These tools are useful for manual product review, but they are
+not the farm/PFR paper runtime and must stay outside the canonical launch path until
+their prompts, provider, Telegram text, and execution hook are reviewed.
+
 ## Journal And Training Data
 
 The current training/reporting path is:
