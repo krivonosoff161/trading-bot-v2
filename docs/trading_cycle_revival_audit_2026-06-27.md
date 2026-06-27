@@ -24,7 +24,9 @@ Current data priority:
 6. `main_paper_runtime_adapter` builds a bounded `watch_paper` queue.
 7. `main_paper_runtime` observes the queue on public candles.
 8. `paper_telegram_preview` renders offline operator cards.
-9. `paper_signal_training_export` exports paper-only rows for future learning.
+9. `paper_signal_training_export` exports current paper-only rows for future learning.
+   `farm_loop --run-paper-signals` refreshes this private derived artifact in-cycle;
+   Excel/journal rebuild remains an explicit operator step.
 
 The old `main.py` is not in this chain.
 
@@ -37,11 +39,15 @@ The old `main.py` is not in this chain.
 - `paper_runtime_observed = pass`
 - `paper_signal_training_export = pass`
 - PFR DB present
-- 58 main-readable paper instructions
-- 58 accepted consumer rows, 0 rejected
-- 50 runtime queue rows, 0 invalid
+- non-empty main-readable paper instructions and accepted consumer rows, 0 rejected
+- non-empty runtime queue rows, 0 invalid
 - runtime observer ran with 0 invalid/provider errors
-- 599 `PaperSignalTrainingRow.v1` rows, all paper-only
+- current `PaperSignalTrainingRow.v1` rows, all paper-only, not stale against
+  `paper_signals.jsonl`
+
+Latest bounded preflight example after the training-export wiring fix:
+20 instructions, 20 accepted consumer rows, 20 queued runtime rows, 1 observed runtime
+row, 20 offline Telegram previews, and 642 current training rows.
 
 The visible control room now runs this fast health check before opening the farm,
 dashboard, graph, and status windows.
@@ -129,6 +135,8 @@ Result: exit code 0 in 47 seconds, `main_paper_bridge instructions=20`,
 `main_paper_runtime_observation observed=1`, and `paper_telegram_preview rendered=20`.
 This also verified the reason for the earlier long-running smoke: active paper-signal
 observation must be capped (`--paper-signals-max-observe`) in operator loops.
+The cycle now also refreshes `paper_signal_training_export`, so the private training
+JSONL cannot silently lag behind the current paper-signal store.
 
 ## Non-Claims
 

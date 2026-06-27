@@ -163,12 +163,15 @@ The operator proof is machine-checkable through `operational_health`:
 - `training_data.paper_signal_training.schema_rows == rows`;
 - `training_data.paper_signal_training.invalid_json == 0`;
 - `training_data.paper_signal_training.paper_only_false == 0`;
+- `training_data.paper_signal_training_freshness.stale_vs_source == false`;
 - readiness gate `paper_signal_training_export = pass`.
 
 The local Excel workbook is an operator surface, not a source of truth. Current
 `scripts/build_journal.py` rebuilds a `Paper Watch` sheet from the private
 `paper_signal_training.jsonl` export and includes family, result, diagnosis, and net
-summary blocks. The canonical data remains the private JSONL/snapshot export.
+summary blocks. The canonical farm loop refreshes the private training export after
+`--run-paper-signals`; Excel is still rebuilt explicitly so a workbook lock cannot
+stall the long-running loop. The canonical data remains the private JSONL/snapshot export.
 
 Private OKX fills remain opt-in only:
 

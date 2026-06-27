@@ -85,8 +85,9 @@ Expected safe state:
   runtime queue without invalid rows or provider errors. This is the paper lifecycle
   check after the queue, still not an order executor.
 - `paper_signal_training_export = pass` means the training-friendly paper outcome JSONL
-  is non-empty, schema-valid, and paper-only. The human output should show
-  `paper_signal_training: rows=N schema_rows=N invalid_json=0 paper_only_false=0`.
+  is current against `paper_signals.jsonl`, non-empty, schema-valid, and paper-only.
+  The human output should show
+  `paper_signal_training: rows=N schema_rows=N invalid_json=0 paper_only_false=0 stale_vs_source=False`.
 - `ready_for_visible_paper_research_loop` is the aggregate operator gate. It passes only
   when the visible launch surface, PFR source, clean paper chain, runtime observation,
   journal/training exports, Telegram ownership, LLM policy, and old-main isolation are
@@ -192,6 +193,12 @@ python -m scripts.strategy_lab.farm_loop --once --apply --provider synthetic --n
 
 # Verify the rebuilt chain as counts, not just files.
 python -m scripts.strategy_lab.operational_health --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
+
+# Refresh the private paper-training export manually if the health gate reports
+# paper_signal_training_export=warn because it is stale. The canonical farm loop
+# now does this automatically after --run-paper-signals, but this command remains
+# useful before rebuilding the Excel journal by hand.
+python -m scripts.strategy_lab.paper_signal_training_export --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 
 # Continuous full cycle. Keep active paper-signal observation capped; otherwise a
 # large active watchlist can spend one whole cycle walking historical cards.
