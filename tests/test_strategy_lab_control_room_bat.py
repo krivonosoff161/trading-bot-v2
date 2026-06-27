@@ -50,6 +50,58 @@ def test_full_cycle_bat_points_to_fast_health_and_detailed_status():
     assert "scripts.strategy_lab.farm_status_report" in text
 
 
+def test_full_cycle_bat_preserves_paper_pfr_runtime_contract():
+    text = _read("strategy_lab_farm_full_cycle_loop.bat")
+
+    required_flags = [
+        "--run-worker",
+        "--run-validation",
+        "--run-paper",
+        "--run-paper-signals",
+        "--enrich-funding",
+        "--enrich-oi",
+        "--pfr-db-path",
+        "--paper-signals-max-observe",
+        "--paper-signals-max-pfr-scan",
+        "--paper-signals-pfr-reserved",
+        "--paper-signals-fetch-timeout",
+        "--main-paper-runtime-limit",
+        "--private-root",
+        "--stop-file",
+    ]
+    for flag in required_flags:
+        assert flag in text
+
+    required_defaults = [
+        "STRATEGY_LAB_PFR_DB_PATH=%TRADING_BOT_RESEARCH_ROOT%\\state\\strategy_lab.sqlite",
+        "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20",
+        "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN=30",
+        "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2",
+        "STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT=50",
+    ]
+    for default in required_defaults:
+        assert default in text
+
+
+def test_full_cycle_bat_keeps_notifications_and_money_paths_out():
+    text = _read("strategy_lab_farm_full_cycle_loop.bat").lower()
+
+    forbidden = [
+        "auto_trade=true",
+        "telegram_bot.py",
+        "paper_chat_id",
+        "telegram_bot_token",
+        "place_order",
+        "place_market_order",
+        "set_leverage",
+        "src.exchange.okx_client",
+        "main.py",
+        "start_all.bat",
+    ]
+    for token in forbidden:
+        assert token not in text
+
+
 def test_visible_launchers_stop_on_blocked_preflight():
     text = (_read("strategy_lab_control_room.bat") + "\n" + _read("strategy_lab_farm_full_cycle_loop.bat"))
 
