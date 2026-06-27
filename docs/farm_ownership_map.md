@@ -1,6 +1,6 @@
 # Farm Ownership Map
 
-Status: **ACTIVE**. Last updated: 2026-06-19.
+Status: **ACTIVE**. Last updated: 2026-06-27.
 
 Purpose: after `farm_loop` + `farm_tasks.sqlite` became the calculation farm's core,
 this map records which loops are active, diagnostic, or legacy. Nothing here gives the
@@ -19,6 +19,7 @@ farm permission to touch the old money path.
 | Entry point | Role | Notes |
 |---|---|---|
 | `scripts/strategy_lab/farm_loop.py` | **CORE** | Current continuous self-deciding lifecycle. |
+| `bat\strategy_lab_control_room.bat` | **CORE OPERATOR ROOM** | Opens visible farm loop, dashboard, graph viewer, and status windows. Preferred operator start for long paper/research runs. |
 | `bat\strategy_lab_farm_full_cycle_loop.bat` | **CORE WRAPPER** | Visible operator path: farm -> worker -> validation -> paper. |
 | `bat\strategy_lab_farm_full_cycle_stop.bat` | **CORE WRAPPER** | Clean stop-file for the wrapper above. |
 | `scripts/strategy_lab/worker_once.py` | **CORE EXECUTOR** | Single-job compute executor. Must not delete. |
@@ -32,12 +33,19 @@ farm permission to touch the old money path.
 | `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic. |
 | `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
 | `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
+| `bat\strategy_lab_start.bat` | **LEGACY LAB WRAPPER** | Older standalone queue/dashboard/worker start. Kept for diagnostics; not the canonical farm/PFR/paper loop. |
+| `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`. |
+| `start_all.bat` | **LEGACY/FROZEN PRODUCT STACK** | Historical multi-window scanner/engine launcher. Do not use as the current farm/PFR/paper control path. |
 
 ## Main Engine Boundary
 
 The old live/paper runners are closed as trading engines. They must not be imported, run,
 or wired into farm/paper/operator paths. Useful math can be copied or re-derived inside
 `research_lab`, then tested through the farm.
+
+Current paper handoff stops at the rebuildable main-paper instruction, consumer, queue,
+runtime-observation, and preview artifacts. That proves the paper lifecycle and operator
+surface. It does not authorize the old live `main.py` to execute farm/PFR instructions.
 
 Forbidden as farm imports:
 
