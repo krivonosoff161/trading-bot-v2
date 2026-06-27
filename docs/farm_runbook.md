@@ -59,6 +59,23 @@ be treated as their executor.
   `strategy_lab_start.bat`. Keep them for diagnostics/history; do not build new operator
   work on top of them.
 
+## Launch Surface Boundaries
+
+The names are easy to confuse, so treat this as the operator truth table:
+
+| Command | Current role | Use for farm/PFR/paper? |
+|---|---|---|
+| `bat\strategy_lab_control_room.bat` | Opens visible farm loop, dashboard, graph, and status windows | Yes, preferred long-run operator start |
+| `bat\strategy_lab_farm_full_cycle_loop.bat` | Runs the canonical full-cycle `farm_loop` in one visible window | Yes |
+| `bat\strategy_lab_farm_full_cycle_stop.bat` | Writes the clean stop-file for the canonical wrapper | Yes |
+| `bat\strategy_lab_start.bat` | Older standalone lab queue/dashboard/worker wrapper | Diagnostics/history only |
+| `start.bat` | Telegram analyzer product surface | No |
+| `start_all.bat` | Legacy/frozen multi-window product stack | No |
+| `main.py` | Old live order-capable runtime | No; not a farm/PFR executor |
+
+If a future paper/live executor is built, it must be a separate reviewed contract. Do not
+make the old live `main.py` consume farm/PFR instructions directly.
+
 ## Prerequisite: OKX Universe Snapshot
 
 Build or refresh the keyless OKX instrument snapshot:

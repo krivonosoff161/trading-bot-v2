@@ -237,6 +237,31 @@ plus local summary counts by family/diagnosis/result. The loader is read-only, f
 expected `PaperSignalTrainingRow.v1` schema, and does not call OKX account endpoints,
 Telegram, or LLM providers. The generated `scripts/journal.xlsx` remains ignored by git.
 
+### F11 - Operator launch names were easy to confuse
+
+The repo has several historical launchers with overlapping names. That created a real
+operator risk: starting the wrong window could look like "the bot is alive" while bypassing
+the current farm/PFR/paper lifecycle, or worse, could lead someone toward the old
+order-capable runtime.
+
+Current verified ownership:
+
+- `bat\strategy_lab_control_room.bat` is the preferred visible operator start for the
+  restored paper/research cycle. It opens farm loop, dashboard, graph, and status windows.
+- `bat\strategy_lab_farm_full_cycle_loop.bat` is the canonical one-window farm loop.
+- `bat\strategy_lab_farm_full_cycle_stop.bat` is the clean stop path for that loop.
+- `bat\strategy_lab_start.bat` is an older standalone lab wrapper, not the current
+  farm/PFR/paper lifecycle.
+- `start.bat` starts the Telegram analyzer product surface, not Strategy Lab farm and not
+  old `main.py`.
+- `start_all.bat` is legacy/frozen product-stack history.
+- `main.py` is still a live order-capable runtime and must not consume farm/PFR
+  instructions directly.
+
+Fix: the runbook and ownership map now make these boundaries explicit. This is
+documentation hardening rather than a code change; the code boundary remains enforced by
+the existing paper-only artifacts and tests.
+
 ## Operator Commands
 
 Preflight:

@@ -1,6 +1,6 @@
 # Strategy Lab -- Operator Guide
 
-Date: 2026-06-13. How to run the local research machine safely. It produces
+Date: 2026-06-27. How to run the local research machine safely. It produces
 research labels and candidates, **not** profitability claims. No live trading,
 no `.env`/secrets, no automatic LLM spend.
 
@@ -71,15 +71,37 @@ See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
 
 ## Safe start
 
-Normal operator start is one command:
+Current normal operator start is one command:
+
+```bash
+bat\strategy_lab_control_room.bat
+```
+
+This opens the current paper/research control room: farm full-cycle loop, dashboard,
+graph viewer, and status monitor in visible windows. It is the preferred start for the
+farm -> validation -> paper/PFR -> paper-watch lifecycle.
+
+If you only need the farm loop window, use:
+
+```bash
+bat\strategy_lab_farm_full_cycle_loop.bat
+```
+
+Stop it with:
+
+```bash
+bat\strategy_lab_farm_full_cycle_stop.bat
+```
+
+Legacy standalone lab start:
 
 ```bash
 bat\strategy_lab_start.bat
 ```
 
-Default behavior: sync the private state DB, queue a bounded `core_market / 1d`
-research plan, open the dashboard, and start one throttled worker loop. The
-dashboard opens at `http://127.0.0.1:8765`.
+This older wrapper syncs the private state DB, queues a bounded research plan,
+opens the dashboard, and starts one throttled worker loop. Keep it for diagnostics or
+old queue repair; do not use it as the current farm/PFR/paper lifecycle.
 
 Optional overrides before running the bat:
 
@@ -128,6 +150,7 @@ trades, or write to the public repo.
 
 | Need | Command |
 |---|---|
+| Start visible current control room | `bat\strategy_lab_control_room.bat` |
 | Start canonical farm/validation/paper loop | `bat\strategy_lab_farm_full_cycle_loop.bat` |
 | Stop canonical farm loop cleanly | `bat\strategy_lab_farm_full_cycle_stop.bat` |
 | Start legacy dashboard + standalone worker | `bat\strategy_lab_start.bat` |

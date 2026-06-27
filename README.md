@@ -199,7 +199,7 @@ Stop it with `bat\strategy_lab_graceful_stop.bat` or Ctrl+C in the window.
 python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
 ```
 
-Continuous calculation farm (current core — paper/research only):
+Continuous calculation farm (current core, paper/research only):
 
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --dry-run                       # plan only
@@ -210,17 +210,27 @@ python -m scripts.strategy_lab.farm_status_report                               
 See [docs/farm_runbook.md](docs/farm_runbook.md) for loop/validation flags, stop/restart,
 and where artifacts are written.
 
-Legacy one-command local start (still works; the legacy queue loop, not the new lifecycle):
+Current visible operator start:
+
+```bash
+bat\strategy_lab_control_room.bat
+```
+
+This opens the canonical paper/research control room in visible windows: farm full-cycle
+loop, dashboard, graph viewer, and periodic status. The underlying farm loop is still
+paper/research only: public OKX market data, no `.env`, no `AUTO_TRADE`, no private
+account endpoints, and no order execution. Use
+`bat\strategy_lab_farm_full_cycle_stop.bat` for a clean stop.
+
+Legacy local lab start (kept for diagnostics/history; not the current full-cycle path):
 
 ```bash
 bat\strategy_lab_start.bat
 ```
 
-This is the legacy operator entrypoint. By default it syncs the private state
-DB, queues a bounded `core_market / 1d` research plan, opens the local
-dashboard, and starts the one-worker queue loop. The worker processes one job at
-a time and is throttled by `configs/strategy_lab/resource_policy.yaml`, so the
-desktop is not flooded.
+This older entrypoint syncs the private state DB, queues a bounded research plan,
+opens the local dashboard, and starts a standalone worker loop. Do not use it as the
+main farm/PFR/paper lifecycle while the current `farm_loop` control room exists.
 
 Optional overrides before running the bat:
 
@@ -250,8 +260,9 @@ MAE/MFE), and a validated coarse-sweep spec that gates 1m/heavy jobs.
 The resource policy is now enforced at runtime (not only the schema): the worker
 throttles by `min_seconds_between_jobs` / `max_jobs_per_hour`, caps per-job
 variants by `max_variants_per_job`, defaults to `quiet_desktop`, and treats
-`night_mode` as opt-in. `bat\strategy_lab_start.bat` wraps the safe default
-chain. For diagnostics, generate bounded jobs from a universe group + timeframe,
+`night_mode` as opt-in. `bat\strategy_lab_start.bat` wraps the older standalone
+lab queue; the current full-cycle operator path is `bat\strategy_lab_control_room.bat`.
+For diagnostics, generate bounded jobs from a universe group + timeframe,
 then dry-run or apply manually:
 
 ```bash
@@ -391,10 +402,10 @@ bat\strategy_lab_demo_all.bat
 This syncs state, queues `configs/strategy_lab/l2_smoke.json`, runs one queued
 job, and opens the dashboard.
 
-For continuous local research, prefer `bat\strategy_lab_start.bat` or, if the
-queue is already prepared, `bat\strategy_lab_worker_loop.bat`. The older
-`bat\strategy_lab_loop.bat` is a legacy fixed-spec loop kept for manual
-diagnostics.
+For continuous local research, prefer `bat\strategy_lab_control_room.bat` or
+`bat\strategy_lab_farm_full_cycle_loop.bat`. Use `bat\strategy_lab_start.bat` only
+for the older standalone lab queue. The older `bat\strategy_lab_loop.bat` is a
+legacy fixed-spec loop kept for manual diagnostics.
 
 Local read-only dashboard:
 
