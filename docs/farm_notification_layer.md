@@ -38,7 +38,7 @@ that state. Notifications are an output edge, never an input to compute or money
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
 | `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy `AUTO_TRADE`-gated auto-execute hook exists. |
 | `scripts.analyze_chart` | Separate manual surface | Writes local chart/report analysis and can optionally send Telegram; not farm/PFR execution. |
-| `scripts.run_latest_analysis` | Separate manual surface | Interactive wrapper that can reach `scripts.auto_execute` behind `AUTO_TRADE`; not a paper launcher. |
+| `scripts.run_latest_analysis` | Separate manual surface | Interactive wrapper that can reach `scripts.auto_execute` only behind `AUTO_TRADE` plus explicit `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`; not a paper launcher. |
 | `ws_scanner.py` | Legacy/diagnostic | Imports OKX client; do not use as canonical farm path. |
 
 ## Paper Telegram Preview
@@ -91,7 +91,9 @@ because it calls `llm_formatter.generate_client_text`, `generate_premium_analysi
 Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
 does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`
 is more execution-adjacent: it is interactive and can import `scripts.auto_execute` after
-an ENTRY result when `AUTO_TRADE` is enabled. Neither file is the farm/PFR paper runtime.
+an ENTRY result only when `AUTO_TRADE` is enabled and
+`RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1` is also set. Neither file is the farm/PFR
+paper runtime.
 
 ## Machine-Checkable Invariant
 
@@ -110,6 +112,7 @@ an ENTRY result when `AUTO_TRADE` is enabled. Neither file is the farm/PFR paper
 - `llm_surface_boundaries.telegram_chart_formatter_mojibake_detected = false`
 - `product_analyzer_boundary.analyze_chart_send_default = false`
 - `product_analyzer_boundary.run_latest_analysis_imports_auto_execute = true`
+- `product_analyzer_boundary.run_latest_analysis_requires_auto_execute_opt_in = true`
 - `product_analyzer_boundary.safe_for_farm_pfr_runtime = false`
 - `scanner_surface_sends_to_subscribers = true` when the scanner surface exists
 - `legacy_ws_scanner_uses_okx_client = true` when the legacy scanner file exists

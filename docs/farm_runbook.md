@@ -46,7 +46,8 @@ Expected safe state:
   `execution_authority = false`. Scanner/Telegram surfaces may exist, but they are not
   farm/PFR executors. It should also show
   `telegram_analyzer_current_for_farm = false`; the old Telegram analyzer is
-  execution-adjacent because it still has an `AUTO_TRADE`-gated `auto_execute` hook.
+  execution-adjacent because old product paths can reach `auto_execute` only through
+  explicit guards, and they are not farm/PFR runtimes.
 - `main_engine_boundary` records why old `main.py` is isolated. It should show
   `order_capable = true`, `sets_leverage = true`, `imports_private_okx_client = true`,
   `consumes_main_paper_queue = false`, and `safe_to_use_as_paper_executor = false`.
@@ -67,6 +68,9 @@ Expected safe state:
 - `manual_product_analyzer_boundary = warn` is expected until manual chart/latest
   analysis prompts, provider, Telegram text, and `AUTO_TRADE` hook behavior are reviewed.
   This is not a farm-loop failure; it is a product-revival boundary.
+  The latest wrapper must also report
+  `run_latest_analysis_requires_auto_execute_opt_in = true`; otherwise a manual analyzer
+  path can reach the old auto-execute module too easily.
 - `telegram_analyzer_llm_provider_review = warn` is expected until the old Telegram
   analyzer prompts/provider are reviewed separately. It is not a farm-loop failure.
 - `product_analyzer_prompt_integrity = pass` is required before any manual product

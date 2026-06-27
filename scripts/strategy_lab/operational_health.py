@@ -366,14 +366,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         ),
         "telegram_analyzer_execution_boundary": _gate(
             "pass",
-            "Legacy Telegram analyzer is explicitly not the farm/PFR launcher; it still has an AUTO_TRADE-gated auto_execute hook.",
+            (
+                "Legacy Telegram analyzer is explicitly not the farm/PFR launcher; old "
+                "execution-adjacent paths are guarded and isolated from the paper loop."
+            ),
             action="Do not use start.bat as a paper/PFR runtime. Use the control room or farm full-cycle loop.",
         ),
         "manual_product_analyzer_boundary": _gate(
             "warn",
             "Manual chart/latest analyzers are product surfaces, not farm/PFR paper runtimes.",
             action=(
-                "Audit provider routing, Telegram text, and AUTO_TRADE-gated auto_execute before "
+                "Audit provider routing, Telegram text, and the double-gated auto_execute path before "
                 "reviving manual product delivery."
             ),
         ),
@@ -532,7 +535,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         ),
         "manual_latest_analysis": _surface(
             run_latest_analysis,
-            role="interactive wrapper around chart analyzer; can reach AUTO_TRADE-gated auto_execute",
+            role=(
+                "interactive wrapper around chart analyzer; can reach AUTO_TRADE-gated "
+                "auto_execute only after explicit manual wrapper opt-in"
+            ),
             current=False,
             boundary="execution-adjacent manual product tool; never use as farm/PFR launcher",
         ),
@@ -654,10 +660,15 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "run_latest_analysis_wraps_analyze_chart": _contains(run_latest_analysis, "from scripts.analyze_chart import run"),
             "run_latest_analysis_imports_auto_execute": _contains(run_latest_analysis, "scripts.auto_execute"),
             "run_latest_analysis_auto_trade_guarded": _contains(run_latest_analysis, "if AUTO_TRADE"),
+            "run_latest_analysis_requires_auto_execute_opt_in": _contains(
+                run_latest_analysis,
+                "RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE",
+            ),
             "safe_for_farm_pfr_runtime": False,
             "note": (
                 "The legacy product analyzer is a manual/operator surface. It may read OKX credentials "
-                "through OKXClient and run_latest_analysis can reach AUTO_TRADE-gated auto_execute. "
+                "through OKXClient and run_latest_analysis can reach AUTO_TRADE-gated auto_execute only "
+                "after an explicit manual wrapper opt-in. "
                 "Keep the farm/PFR paper runtime on the derived paper instruction path."
             ),
         },
@@ -828,6 +839,7 @@ def _print_human(report: dict[str, Any]) -> None:
         f"analyze_send_default={analyzer['analyze_chart_send_default']} "
         f"latest_auto_execute={analyzer['run_latest_analysis_imports_auto_execute']} "
         f"latest_auto_trade_guard={analyzer['run_latest_analysis_auto_trade_guarded']} "
+        f"latest_manual_opt_in={analyzer['run_latest_analysis_requires_auto_execute_opt_in']} "
         f"safe_for_farm={analyzer['safe_for_farm_pfr_runtime']}"
     )
     main_boundary = report["main_engine_boundary"]

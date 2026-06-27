@@ -37,6 +37,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert analyzer["run_latest_analysis_wraps_analyze_chart"] is True
     assert analyzer["run_latest_analysis_imports_auto_execute"] is True
     assert analyzer["run_latest_analysis_auto_trade_guarded"] is True
+    assert analyzer["run_latest_analysis_requires_auto_execute_opt_in"] is True
     assert analyzer["safe_for_farm_pfr_runtime"] is False
     training = report["training_data"]["paper_signal_training"]
     assert training["rows"] == 0

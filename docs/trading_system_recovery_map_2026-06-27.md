@@ -133,10 +133,11 @@ separate prompt/provider audit before product Telegram delivery is revived.
 
 Manual product boundary: `scripts.analyze_chart` is a report/snapshot/chart generator
 with optional `--send-telegram`; it is off by default. `scripts.run_latest_analysis` is
-interactive and can lazy-import `scripts.auto_execute` after an ENTRY result when
-`AUTO_TRADE` is enabled. These tools are useful for manual product review, but they are
-not the farm/PFR paper runtime and must stay outside the canonical launch path until
-their prompts, provider, Telegram text, and execution hook are reviewed.
+interactive and can lazy-import `scripts.auto_execute` after an ENTRY result only when
+`AUTO_TRADE` is enabled and `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1` is also set.
+These tools are useful for manual product review, but they are not the farm/PFR paper
+runtime and must stay outside the canonical launch path until their prompts, provider,
+Telegram text, and execution hook are reviewed.
 
 Detailed product-surface audit:
 [`product_analyzer_revival_audit_2026-06-27.md`](product_analyzer_revival_audit_2026-06-27.md).

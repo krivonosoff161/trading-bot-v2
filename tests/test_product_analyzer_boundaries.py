@@ -34,3 +34,4 @@ def test_manual_analyzer_and_latest_wrapper_boundaries():
     assert "from scripts.analyze_chart import run" in run_latest_analysis
     assert "from scripts.auto_execute import AUTO_TRADE, execute_signal" in run_latest_analysis
     assert "if AUTO_TRADE" in run_latest_analysis
+    assert "RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE" in run_latest_analysis
