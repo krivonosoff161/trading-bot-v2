@@ -99,6 +99,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     bridge = report["main_bridge"]
     chain = report["paper_chain"]
     surfaces = report["launch_surfaces"]
+    telegram_flow = report["telegram_delivery_flow"]
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -240,6 +241,31 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.paper_telegram_preview."
             if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
         ),
+        "telegram_delivery_ownership": _gate(
+            "pass" if (
+                telegram_flow["farm_core_sends_telegram"] is False
+                and telegram_flow["paper_sends_telegram_by_default"] is False
+                and telegram_flow["execution_authority"] is False
+                and surfaces["scanner_runtime"]["current"] is True
+                and surfaces["legacy_ws_scanner"]["current"] is False
+            ) else "blocked",
+            "Telegram surfaces are separated from farm execution; paper alerts are preview-only by default."
+            if (
+                telegram_flow["farm_core_sends_telegram"] is False
+                and telegram_flow["paper_sends_telegram_by_default"] is False
+                and telegram_flow["execution_authority"] is False
+                and surfaces["scanner_runtime"]["current"] is True
+                and surfaces["legacy_ws_scanner"]["current"] is False
+            ) else "Telegram ownership is ambiguous.",
+            action="Keep Telegram as a surface; do not import it into farm compute or paper execution."
+            if not (
+                telegram_flow["farm_core_sends_telegram"] is False
+                and telegram_flow["paper_sends_telegram_by_default"] is False
+                and telegram_flow["execution_authority"] is False
+                and surfaces["scanner_runtime"]["current"] is True
+                and surfaces["legacy_ws_scanner"]["current"] is False
+            ) else "",
+        ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
             "Scanner LLM provider has a configured key."
@@ -372,6 +398,12 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             current=True,
             boundary="Telegram/LLM surface; no farm/PFR execution authority",
         ),
+        "legacy_ws_scanner": _surface(
+            ROOT / "scripts" / "ws" / "ws_scanner.py",
+            role="legacy scanner surface that imports the OKX client; not the farm trigger owner",
+            current=False,
+            boundary="diagnostic/history only; do not use as canonical paper/farm path",
+        ),
     }
     report = {
         "mode": "paper_research_only",
@@ -414,6 +446,19 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "old_main_py_consumes_farm_pfr": False,
             "execution_allowed": False,
             "telegram_send_default": False,
+        },
+        "telegram_delivery_flow": {
+            "schema": "telegram_delivery_flow.v1",
+            "farm_core_sends_telegram": False,
+            "paper_sends_telegram_by_default": False,
+            "paper_preview_artifact": "state/derived/paper_telegram_preview.json",
+            "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"]["exists"],
+            "telegram_analyzer_surface": "start.bat / scripts.telegram_bot",
+            "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"]["exists"],
+            "scanner_provider_path": "src.utils.llm_client (LLM_PROVIDER: alibaba/yandex)",
+            "chart_formatter_path": "src.utils.llm_formatter (Yandex chart formatter)",
+            "secrets_printed": False,
+            "execution_authority": False,
         },
         "journals": {
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
@@ -513,6 +558,15 @@ def _print_human(report: dict[str, Any]) -> None:
         f"old_main_consumes={flow['old_main_py_consumes_farm_pfr']} "
         f"execution_allowed={flow['execution_allowed']} "
         f"telegram_send_default={flow['telegram_send_default']}"
+    )
+    delivery = report["telegram_delivery_flow"]
+    print(
+        "telegram_delivery_flow: "
+        f"farm_core_sends={delivery['farm_core_sends_telegram']} "
+        f"paper_send_default={delivery['paper_sends_telegram_by_default']} "
+        f"scanner_surface={delivery['scanner_surface_sends_to_subscribers']} "
+        f"legacy_ws_scanner_okx_client={delivery['legacy_ws_scanner_uses_okx_client']} "
+        f"execution_authority={delivery['execution_authority']}"
     )
     print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
     bridge = report["main_bridge"]

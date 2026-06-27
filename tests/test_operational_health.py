@@ -26,6 +26,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["paper_data_flow"]["old_main_py_consumes_farm_pfr"] is False
     assert report["paper_data_flow"]["execution_allowed"] is False
     assert report["paper_data_flow"]["telegram_send_default"] is False
+    assert report["telegram_delivery_flow"]["farm_core_sends_telegram"] is False
+    assert report["telegram_delivery_flow"]["paper_sends_telegram_by_default"] is False
+    assert report["telegram_delivery_flow"]["execution_authority"] is False
     assert report["readiness"]["main_paper_consumer_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_queue_available"]["status"] == "warn"
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "warn"
@@ -33,6 +36,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_runtime_observed"]["status"] == "warn"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
     assert report["readiness"]["paper_telegram_preview_available"]["status"] == "warn"
+    assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert "secret-token" not in rendered
     assert "secret-alibaba" not in rendered
 
@@ -79,6 +83,8 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert surfaces["strategy_lab_start_legacy"]["current"] is False
     assert surfaces["telegram_analyzer_start"]["current"] is False
     assert surfaces["legacy_product_stack"]["current"] is False
+    assert surfaces["scanner_runtime"]["current"] is True
+    assert surfaces["legacy_ws_scanner"]["current"] is False
     assert surfaces["old_main_py"]["current"] is False
     assert "must remain isolated" in surfaces["old_main_py"]["boundary"]
     assert flow["current_owner"] == "scripts.strategy_lab.farm_loop with --run-paper-signals"
@@ -86,6 +92,25 @@ def test_operational_health_documents_launch_surface_ownership(tmp_path, monkeyp
     assert flow["old_main_py_consumes_farm_pfr"] is False
     assert report["readiness"]["canonical_launch_surface"]["status"] == "pass"
     assert report["readiness"]["legacy_live_runtime_isolated"]["status"] == "pass"
+    assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
+
+
+def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+    delivery = report["telegram_delivery_flow"]
+
+    assert delivery["schema"] == "telegram_delivery_flow.v1"
+    assert delivery["farm_core_sends_telegram"] is False
+    assert delivery["paper_sends_telegram_by_default"] is False
+    assert delivery["scanner_surface_sends_to_subscribers"] is True
+    assert delivery["legacy_ws_scanner_uses_okx_client"] is True
+    assert delivery["secrets_printed"] is False
+    assert delivery["execution_authority"] is False
+    assert "llm_client" in delivery["scanner_provider_path"]
+    assert "llm_formatter" in delivery["chart_formatter_path"]
+    assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
 
 
 def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch):

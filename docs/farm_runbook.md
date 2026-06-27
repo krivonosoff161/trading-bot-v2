@@ -32,12 +32,18 @@ Expected safe state:
   -> consumer audit -> runtime queue -> public-candle observer -> Telegram preview.
   It must report `old_main_py_consumes_farm_pfr = false`,
   `execution_allowed = false`, and `telegram_send_default = false`.
+- `telegram_delivery_flow` records notification ownership. It must report
+  `farm_core_sends_telegram = false`, `paper_sends_telegram_by_default = false`, and
+  `execution_authority = false`. Scanner/Telegram surfaces may exist, but they are not
+  farm/PFR executors.
 - `readiness` gates show what is runnable, optional, or intentionally planned:
   PFR source, paper-signal store, main-readable instruction view, paper-only main
   consumer audit, offline paper Telegram preview, Telegram surfaces, LLM policy,
   journals, and the explicit `main_runtime_consumer = planned` boundary.
 - `canonical_launch_surface = pass` and `legacy_live_runtime_isolated = pass` are
   required before treating the operator picture as clean.
+- `telegram_delivery_ownership = pass` is required before treating notifications as
+  cleanly separated from farm execution.
 - `paper_chain_counts` is the quick integrity check for the farm/PFR -> paper-watch ->
   main handoff. It should show a non-empty chain such as
   `instructions=N accepted=N rejected=0 queued=M invalid_queue=0 observed=O reviewed=R preview=K invalid_preview=0`.
@@ -82,6 +88,8 @@ The names are easy to confuse, so treat this as the operator truth table:
 | `start.bat` | Telegram analyzer product surface | No |
 | `start_all.bat` | Legacy/frozen multi-window product stack | No |
 | `main.py` | Old live order-capable runtime | No; not a farm/PFR executor |
+| `scripts/ws/ws_main_screener.py` | Scanner/news/Telegram reporting surface | No; upstream/operator context only |
+| `scripts/ws/ws_scanner.py` | Legacy scanner that imports the OKX client | No; diagnostic/history only |
 
 If a future paper/live executor is built, it must be a separate reviewed contract. Do not
 make the old live `main.py` consume farm/PFR instructions directly.
@@ -245,6 +253,15 @@ The current farm-to-main path is deliberately paper-only:
    pending, no-data, or provider-error outcomes.
 7. `paper_telegram_preview` renders offline operator cards; it does not send Telegram
    messages.
+
+Telegram/analyzer ownership is intentionally separate:
+
+- `paper_telegram_preview` is the only current Strategy Lab paper Telegram artifact, and
+  it is offline preview-only by default.
+- `ws_main_screener.py` and `start.bat` can be audited as operator/analyzer surfaces, but
+  they are not the paper runtime and not the farm trigger owner.
+- `ws_scanner.py` is legacy/diagnostic because it imports the OKX client; do not use it
+  as the canonical farm/PFR intake path.
 
 The queue priority is deterministic: `early_tp_tactical` first, then
 `mean_reversion_fade` / `reversal_fade`, then `liquidity_sweep_reclaim`, then
