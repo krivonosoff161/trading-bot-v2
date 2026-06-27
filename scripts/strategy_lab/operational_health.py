@@ -274,6 +274,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     telegram_flow = report["telegram_delivery_flow"]
     llm_boundaries = report["llm_surface_boundaries"]
     legacy_text = report["legacy_product_text_quality"]
+    telegram_delivery_freshness = chain["telegram_delivery_freshness"]
     paper_chain_ready = (
         chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
@@ -493,12 +494,28 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
         ),
         "paper_telegram_sender_available": _gate(
-            "pass" if journals["paper_telegram_delivery_snapshot"]["exists"] else "warn",
+            (
+                "pass"
+                if (
+                    journals["paper_telegram_delivery_snapshot"]["exists"]
+                    and not telegram_delivery_freshness["stale_vs_source"]
+                )
+                else "warn"
+            ),
             "Paper Telegram delivery audit artifact exists; sender is explicit opt-in."
-            if journals["paper_telegram_delivery_snapshot"]["exists"]
+            if (
+                journals["paper_telegram_delivery_snapshot"]["exists"]
+                and not telegram_delivery_freshness["stale_vs_source"]
+            )
+            else "Paper Telegram delivery audit is older than the preview artifact."
+            if telegram_delivery_freshness["stale_vs_source"]
             else "Paper Telegram sender has not been dry-run against the preview artifact yet.",
             action="Run python -m scripts.strategy_lab.paper_telegram_sender for dry-run; add --send only after PAPER_CHAT_ID review."
-            if not journals["paper_telegram_delivery_snapshot"]["exists"] else "",
+            if (
+                not journals["paper_telegram_delivery_snapshot"]["exists"]
+                or telegram_delivery_freshness["stale_vs_source"]
+            )
+            else "",
         ),
         "telegram_delivery_ownership": _gate(
             "pass" if telegram_ownership_ready else "blocked",
@@ -971,6 +988,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 ("records_read", "eligible", "sent", "skipped", "errors"),
             ),
             "telegram_delivery_breakdown": _snapshot_status_breakdown(paper_telegram_delivery_snapshot),
+            "telegram_delivery_freshness": _freshness_metrics(
+                paper_telegram_delivery_snapshot,
+                paper_telegram_preview_snapshot,
+            ),
         },
     }
     bridge = report["main_bridge"]
@@ -1104,7 +1125,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"eligible={chain['telegram_delivery']['eligible']} "
         f"sent={chain['telegram_delivery']['sent']} "
         f"skipped={chain['telegram_delivery']['skipped']} "
-        f"errors={chain['telegram_delivery']['errors']}"
+        f"errors={chain['telegram_delivery']['errors']} "
+        f"stale_vs_preview={chain['telegram_delivery_freshness']['stale_vs_source']}"
     )
     delivery_breakdown = chain["telegram_delivery_breakdown"]
     if delivery_breakdown["by_status"] or delivery_breakdown["by_problem"]:
