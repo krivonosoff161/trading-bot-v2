@@ -42,6 +42,7 @@ from scripts.analysis.feedback import (  # noqa: E402
 from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
 from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status, mark_reminded  # noqa: E402
 from src.utils.llm_formatter import generate_premium_analysis  # noqa: E402
+from src.utils.telegram_audit import record_message_audit  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -226,10 +227,27 @@ async def _get_session() -> aiohttp.ClientSession:
 
 
 async def _tg(method: str, http_timeout: int = 10, **params) -> dict:
+    audit_mode = params.pop("_audit_mode", "telegram_bot")
+    audit_event = params.pop("_audit_event", method)
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     s = await _get_session()
     async with s.post(url, json=params, timeout=aiohttp.ClientTimeout(total=http_timeout)) as resp:
-        return await resp.json()
+        result = await resp.json()
+    if method == "sendMessage" and params.get("chat_id"):
+        try:
+            record_message_audit(
+                chat_id=str(params.get("chat_id")),
+                direction="outgoing",
+                mode=audit_mode,
+                event=audit_event,
+                text=str(params.get("text") or ""),
+                status="ok" if result.get("ok", True) else "telegram_error",
+                delivery_status="sent" if result.get("ok", True) else "error",
+                message_id=result.get("result", {}).get("message_id"),
+            )
+        except Exception:
+            pass
+    return result
 
 
 async def _send(chat_id: str, text: str) -> None:
@@ -624,10 +642,35 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
         if summary_text:
-            await send_message_to(chat_id, summary_text)
+            message_id = await send_message_to(chat_id, summary_text)
+            try:
+                record_message_audit(
+                    chat_id=chat_id,
+                    direction="outgoing",
+                    mode="manual_analysis",
+                    event="client_summary",
+                    text=summary_text,
+                    symbol=symbol,
+                    delivery_status="sent" if message_id is not None else "skipped_no_token",
+                    message_id=message_id,
+                )
+            except Exception:
+                pass
 
         if png_path.exists():
             await send_photo_to(chat_id, str(png_path))
+            try:
+                record_message_audit(
+                    chat_id=chat_id,
+                    direction="outgoing",
+                    mode="manual_analysis",
+                    event="chart_photo",
+                    text=png_path.name,
+                    symbol=symbol,
+                    delivery_status="sent_or_noop",
+                )
+            except Exception:
+                pass
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
@@ -746,6 +789,17 @@ async def _start_analysis(chat_id: str, symbol: str) -> None:
 
 async def _handle_image(msg: dict, file_id: str) -> None:
     chat_id = str(msg["chat"]["id"])
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="image",
+            event="photo_upload",
+            text=msg.get("caption") or "",
+            extra={"has_file_id": bool(file_id)},
+        )
+    except Exception:
+        pass
     if not is_subscribed(chat_id):
         await _tg(
             "sendMessage",
@@ -807,6 +861,16 @@ async def _handle_image(msg: dict, file_id: str) -> None:
 async def _handle_callback(cbq: dict) -> None:
     chat_id = str(cbq["message"]["chat"]["id"])
     data    = cbq.get("data", "")
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="callback",
+            event=str(data),
+            text=str(data),
+        )
+    except Exception:
+        pass
 
     if not is_subscribed(chat_id):
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
@@ -932,6 +996,16 @@ async def _handle_text(msg: dict) -> None:
     text = msg.get("text", "").strip()
     if not text:
         return
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="text",
+            event="message",
+            text=text,
+        )
+    except Exception:
+        pass
 
     # ── /start — show banner to everyone, no access check ────────────────────
     if text == "/start":
