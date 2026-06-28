@@ -104,6 +104,53 @@ def test_telegram_main_menu_admin_button_is_superadmin_only(monkeypatch):
     assert "__admin__" not in str(user_markup)
 
 
+def test_telegram_admin_panel_exposes_read_only_farm_status(monkeypatch):
+    telegram_bot = _telegram_bot_module()
+    calls = []
+
+    async def fake_tg(method, **params):
+        calls.append((method, params))
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_bot, "_tg", fake_tg)
+    monkeypatch.setattr(telegram_bot, "get_status", lambda chat_id: {"plan": "superadmin"})
+
+    asyncio.run(telegram_bot._send_admin_panel("1"))
+
+    rendered = str(calls)
+    assert "__farm_status__" in rendered
+    assert "Admin read-only tools" in rendered
+
+
+def test_telegram_admin_farm_status_text_is_read_only():
+    telegram_bot = _telegram_bot_module()
+    text = telegram_bot._format_farm_status_for_admin(
+        {
+            "farm_activity": {
+                "available": True,
+                "heartbeat_ok": True,
+                "last_cycle_age_seconds": 12,
+                "last_pivot": "work_available",
+                "last_mode": "apply",
+                "discovery": {"status": "fresh", "count": 42},
+            },
+            "lifecycle": {
+                "by_state": {"queued": 3, "running": 1, "completed": 10, "blocked": 0},
+                "validation": {"PAPER_FORWARD_READY": 2, "FAILED_COSTS": 5},
+                "paper_status": {"PAPER_RECORDED": 1},
+            },
+            "paper_pnl": {"n_trades": 4, "net_sum_pct": -1.25},
+            "data_readiness": {"prepared_files_by_timeframe": {"15m": 7, "1h": 8, "4h": 9, "1d": 1}},
+            "safety": {"read_only": True, "live_trading": False},
+        }
+    )
+
+    assert "read-only" in text
+    assert "live_trading=NO" in text
+    assert "queued=3" in text
+    assert "PFR=2" in text
+
+
 def test_chart_formatter_prompt_is_utf8_readable_and_guarded():
     prompt = llm_formatter._SYSTEM_PROMPT
 
@@ -178,6 +225,75 @@ def test_chart_formatter_shared_router_status_is_sanitized():
     assert status["execution_authority"] is False
     assert "secret-alibaba-key" not in rendered
     assert "b1git" not in rendered
+
+
+def test_premium_vision_status_is_sanitized():
+    status = llm_formatter.premium_vision_status(
+        {
+            "YANDEX_API_KEY": "secret-yandex-key",
+            "YANDEX_GEMMA_MODEL_URI": "gpt://secret-folder/model/latest",
+        }
+    )
+    rendered = str(status)
+
+    assert status["schema"] == "premium_vision_provider.v1"
+    assert status["surface"] == "telegram_premium_screenshot"
+    assert status["provider"] == "yandex"
+    assert status["provider_scope"] == "yandex_only"
+    assert status["configured"] is True
+    assert status["model_label"] == "model/latest"
+    assert status["shared_router_active"] is False
+    assert status["telegram_send_authority"] is False
+    assert status["execution_authority"] is False
+    assert "secret-yandex-key" not in rendered
+    assert "secret-folder" not in rendered
+
+
+def test_manual_analysis_skips_llm_for_no_trade_by_default(monkeypatch):
+    from scripts import analyze_chart
+
+    monkeypatch.delenv("PRODUCT_ANALYZER_LLM_FOR_NO_TRADE", raising=False)
+
+    assert analyze_chart.should_use_llm_for_delivery(
+        {"llm_context": {"entry_signal": "NO_TRADE"}}
+    ) is False
+
+
+def test_manual_analysis_can_opt_in_llm_for_no_trade(monkeypatch):
+    from scripts import analyze_chart
+
+    monkeypatch.setenv("PRODUCT_ANALYZER_LLM_FOR_NO_TRADE", "1")
+
+    assert analyze_chart.should_use_llm_for_delivery(
+        {"llm_context": {"entry_signal": "NO_TRADE"}}
+    ) is True
+
+
+def test_manual_analysis_uses_llm_for_actionable_states(monkeypatch):
+    from scripts import analyze_chart
+
+    monkeypatch.delenv("PRODUCT_ANALYZER_LLM_FOR_NO_TRADE", raising=False)
+
+    assert analyze_chart.should_use_llm_for_delivery(
+        {"llm_context": {"entry_signal": "ENTRY"}}
+    ) is True
+    assert analyze_chart.should_use_llm_for_delivery(
+        {"llm_context": {"entry_signal": "WAIT"}}
+    ) is True
+
+
+def test_manual_analyzer_chart_plan_documents_execution_tf():
+    from scripts import analyze_chart
+
+    class Result:
+        trade_style = "SWING"
+
+    plan = analyze_chart.manual_chart_plan(Result())
+
+    assert plan["primary_timeframe"] == "15m"
+    assert plan["trigger_timeframe"] == "5m"
+    assert plan["context_timeframes"] == ["1H", "4H"]
+    assert "legacy_main_engine_levels_are_15m" in plan["reason"]
 
 
 def test_chart_formatter_shared_router_opt_in_uses_text_adapter(monkeypatch):

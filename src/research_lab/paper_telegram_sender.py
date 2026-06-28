@@ -1,14 +1,16 @@
 """Opt-in Telegram sender for validated paper-watch previews.
 
 This module is deliberately downstream of ``paper_telegram_preview``. It never
-builds trading decisions and never falls back to the default Telegram chat. The
-only delivery target is ``PAPER_CHAT_ID`` and sending requires an explicit
+builds trading decisions and never falls back to public scanner/default chats.
+Paper setup delivery is a subscriber product surface: it sends only to active
+bot subscribers/superadmins supplied by the caller, and only after an explicit
 ``apply=True`` call from the CLI/operator.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import Any, Awaitable, Callable
 
 SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
-DEFAULT_CHAT_ENV = "PAPER_CHAT_ID"
+DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
 
 
 @dataclass(frozen=True)
@@ -31,9 +33,11 @@ class PaperTelegramDelivery:
     status: str
     message_id: int | None = None
     problem: str = ""
+    destination: str = "personal_bot"
+    recipient_hash: str = ""
     paper_only: bool = True
     execution_allowed: bool = False
-    chat_env: str = DEFAULT_CHAT_ENV
+    chat_env: str = DEFAULT_DELIVERY_TARGET
     schema: str = SCHEMA
 
     def __post_init__(self) -> None:
@@ -43,8 +47,10 @@ class PaperTelegramDelivery:
             raise ValueError("paper Telegram delivery must never allow execution")
         if not self.paper_only:
             raise ValueError("paper Telegram delivery must be paper_only")
-        if self.chat_env != DEFAULT_CHAT_ENV:
-            raise ValueError("paper Telegram delivery must use PAPER_CHAT_ID")
+        if self.destination != "personal_bot":
+            raise ValueError("paper Telegram delivery must use personal bot chats")
+        if self.chat_env != DEFAULT_DELIVERY_TARGET:
+            raise ValueError("paper Telegram delivery must use subscription users")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,6 +66,35 @@ def _delivery_jsonl_path(private_root: Path) -> Path:
 
 def _delivery_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_delivery.json"
+
+
+def _sent_keys_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_telegram_sent_keys.json"
+
+
+def _load_sent_keys(private_root: Path) -> set[str]:
+    path = _sent_keys_path(private_root)
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {str(item) for item in data.get("sent_keys", []) if str(item)}
+
+
+def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
+    path = _sent_keys_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"schema": "paper_telegram_sent_keys.v1", "sent_keys": sorted(sent_keys)},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _load_preview_items(private_root: Path) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
@@ -88,23 +123,55 @@ def _valid_preview(item: dict[str, Any]) -> tuple[bool, str]:
 
 async def _send_items(
     items: list[dict[str, Any]],
-    send_text: Callable[[str], Awaitable[int | None]],
+    recipient_ids: list[str],
+    send_text: Callable[[str, str], Awaitable[int | None]],
+    sent_keys: set[str],
 ) -> list[PaperTelegramDelivery]:
     deliveries: list[PaperTelegramDelivery] = []
     for item in items:
-        message_id: int | None = None
-        problem = ""
-        status = "sent"
-        try:
-            message_id = await send_text(str(item.get("text") or ""))
-            if message_id is None:
-                status = "skipped_no_token"
-                problem = "telegram_token_not_configured"
-        except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
-            status = "error"
-            problem = type(exc).__name__
-        deliveries.append(_delivery_from_preview(item, status=status, message_id=message_id, problem=problem))
+        for recipient_id in recipient_ids:
+            delivery_key = _delivery_key(item, recipient_id)
+            if delivery_key in sent_keys:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="skipped_duplicate",
+                        problem="already_sent_to_recipient",
+                        recipient_id=recipient_id,
+                    )
+                )
+                continue
+            message_id: int | None = None
+            problem = ""
+            status = "sent"
+            try:
+                message_id = await send_text(recipient_id, str(item.get("text") or ""))
+                if message_id is None:
+                    status = "skipped_no_token"
+                    problem = "telegram_token_not_configured"
+            except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
+                status = "error"
+                problem = type(exc).__name__
+            deliveries.append(
+                _delivery_from_preview(
+                    item,
+                    status=status,
+                    message_id=message_id,
+                    problem=problem,
+                    recipient_id=recipient_id,
+                )
+            )
+            if status == "sent":
+                sent_keys.add(delivery_key)
     return deliveries
+
+
+def _recipient_hash(recipient_id: str) -> str:
+    return hashlib.sha256(recipient_id.encode("utf-8")).hexdigest()[:16] if recipient_id else ""
+
+
+def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
+    return f"{str(item.get('preview_id') or '')}:{_recipient_hash(recipient_id)}"
 
 
 def _delivery_from_preview(
@@ -113,6 +180,7 @@ def _delivery_from_preview(
     status: str,
     message_id: int | None = None,
     problem: str = "",
+    recipient_id: str = "",
 ) -> PaperTelegramDelivery:
     return PaperTelegramDelivery(
         preview_id=str(item.get("preview_id") or ""),
@@ -125,6 +193,7 @@ def _delivery_from_preview(
         status=status,
         message_id=message_id,
         problem=problem,
+        recipient_hash=_recipient_hash(recipient_id),
     )
 
 
@@ -135,9 +204,10 @@ def send_paper_telegram_previews(
     apply: bool = False,
     paper_chat_configured: bool = False,
     paper_chat_ids_count: int = 0,
-    send_text: Callable[[str], Awaitable[int | None]] | None = None,
+    recipient_ids: list[str] | None = None,
+    send_text: Callable[[str, str], Awaitable[int | None]] | None = None,
 ) -> dict[str, Any]:
-    """Dry-run or send validated paper previews to ``PAPER_CHAT_ID``.
+    """Dry-run or send validated paper previews to active subscriber bot chats.
 
     ``apply=False`` is a pure dry-run and never calls Telegram. ``apply=True``
     still sends nothing unless the caller provides a configured ``send_text``
@@ -145,6 +215,8 @@ def send_paper_telegram_previews(
     from importing Telegram or credential-aware modules.
     """
     items, source_path, source = _load_preview_items(private_root)
+    recipient_ids = [str(r).strip() for r in (recipient_ids or []) if str(r).strip()]
+    sent_keys = _load_sent_keys(private_root)
     accepted: list[dict[str, Any]] = []
     deliveries: list[PaperTelegramDelivery] = []
     invalid = 0
@@ -159,13 +231,14 @@ def send_paper_telegram_previews(
 
     if not apply:
         deliveries.extend(_delivery_from_preview(item, status="dry_run") for item in accepted)
-    elif not paper_chat_configured or send_text is None:
+    elif not paper_chat_configured or send_text is None or not recipient_ids:
         deliveries.extend(
-            _delivery_from_preview(item, status="skipped_no_paper_chat", problem="paper_telegram_not_configured")
+            _delivery_from_preview(item, status="skipped_no_subscribers", problem="paper_subscribers_not_configured")
             for item in accepted
         )
     else:
-        deliveries.extend(asyncio.run(_send_items(accepted, send_text)))
+        deliveries.extend(asyncio.run(_send_items(accepted, recipient_ids, send_text, sent_keys)))
+        _save_sent_keys(private_root, sent_keys)
 
     out_jsonl = _delivery_jsonl_path(private_root)
     out_snapshot = _delivery_snapshot_path(private_root)
@@ -184,14 +257,17 @@ def send_paper_telegram_previews(
         "invalid_preview": invalid,
         "dry_run": not apply,
         "configured": bool(paper_chat_configured),
-        "chat_env": DEFAULT_CHAT_ENV,
+        "chat_env": DEFAULT_DELIVERY_TARGET,
         "chat_ids_count": int(paper_chat_ids_count),
+        "targets": len(recipient_ids),
+        "delivery_target": "active_subscription_users",
         "sent": sum(1 for delivery in deliveries if delivery.status == "sent"),
+        "duplicates": sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate"),
         "skipped": sum(1 for delivery in deliveries if delivery.status.startswith("skipped")),
         "errors": sum(1 for delivery in deliveries if delivery.status == "error"),
         "paper_only": True,
         "execution_allowed": False,
-        "sends_network": bool(apply and paper_chat_configured and send_text is not None),
+        "sends_network": bool(apply and paper_chat_configured and send_text is not None and recipient_ids),
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
     }

@@ -84,6 +84,10 @@ def test_preview_renders_safe_operator_card(tmp_path):
     assert summary["sends_network"] is False
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     text = data["items"][0]["text"]
+    assert "Paper setup:" in text
+    assert "Strategy:" in text
+    assert "Entry zone:" in text
+    assert "Evidence:" in text
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
     assert "&lt;reason&gt;" in text

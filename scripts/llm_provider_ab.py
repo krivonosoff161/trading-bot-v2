@@ -21,6 +21,10 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "logs" / "llm_provider_ab"
 sys.path.insert(0, str(ROOT))
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 
 CASES = [
     {

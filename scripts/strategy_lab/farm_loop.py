@@ -362,6 +362,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         apply=False,
                         paper_chat_configured=False,
                         paper_chat_ids_count=0,
+                        recipient_ids=[],
                         send_text=None,
                     )
                 except Exception as exc:  # noqa: BLE001 - delivery audit must not break the cycle

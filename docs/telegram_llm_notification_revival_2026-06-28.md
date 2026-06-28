@@ -89,6 +89,85 @@ Working verdict for the next pass:
 Raw provider responses are local runtime artifacts under `logs/llm_provider_ab/` and are
 not committed.
 
+## 2026-06-28 Runtime Follow-up
+
+Operator testing showed two product-layer issues:
+
+1. Manual pair analysis was slow because the chart analyzer spent an LLM formatter call
+   even for deterministic `NO_TRADE` results. This is now changed: `NO_TRADE` uses the
+   engine summary by default, while `ENTRY`/`WAIT` cards still use the formatter.
+   Operators can opt back into LLM-formatted no-trade cards with:
+
+   ```powershell
+   $env:PRODUCT_ANALYZER_LLM_FOR_NO_TRADE = "1"
+   ```
+
+2. Premium screenshot analysis failed with Yandex/Gemma `HTTP 403`. This is a provider
+   authorization/configuration failure on the vision-only path. The shared Alibaba text
+   router does not handle images, so this was not fixed by text-provider routing. The bot
+   now reports a clear temporary vision-provider failure instead of a generic retry
+   message.
+
+Neither change enables order execution, `AUTO_TRADE`, private OKX endpoints, or automatic
+Telegram trade alerts.
+
+## 2026-06-28 Subscriber Paper Delivery Update
+
+Paper setup alerts are now routed as a subscriber product surface, not as a public
+channel broadcast:
+
+- `scripts.strategy_lab.paper_telegram_sender` reads validated
+  `paper_telegram_preview` artifacts and sends only to active Telegram bot
+  subscribers/superadmins from `scripts/subscriptions.json`.
+- Raw chat IDs are not written into the paper delivery artifact; delivery rows store
+  a recipient hash plus status.
+- Delivery is deduplicated per `preview_id` and recipient hash via
+  `state/derived/paper_telegram_sent_keys.json`, so a sender loop cannot spam the
+  same setup repeatedly.
+- `farm_loop` remains Telegram-decoupled. It only builds preview and dry-run delivery
+  audit artifacts. Real network sends run through the separate visible
+  `bat/strategy_lab_paper_telegram_sender_loop.bat` surface.
+- `bat/strategy_lab_control_room.bat` starts the sender window only when
+  `STRATEGY_LAB_PAPER_TELEGRAM_SEND=1` is explicitly set.
+
+Runtime smoke after the change:
+
+| Check | Result |
+|---|---|
+| Paper sender dry-run | `configured=true`, `targets=4`, `eligible=3`, `sends_network=false` |
+| Operational health | `paper_telegram_surface=pass`, delivery target `active_subscription_users` |
+| Tests | `79 passed`, ruff clean on touched files |
+
+VIP screenshot analysis is still blocked by provider authorization:
+
+| Surface | Result |
+|---|---|
+| Text LLM A/B | Yandex and Alibaba both returned text successfully. |
+| Premium screenshot vision | Yandex/Gemma returned `HTTP 403 Forbidden` with key/model URI present. |
+
+Interpretation: text LLM routing works; VIP screenshot failure is a Yandex/Gemma vision
+access/configuration issue, not a Telegram delivery failure. The bot reports this as a
+temporary vision-provider failure instead of pretending the screenshot was analyzed.
+
+## 2026-06-28 Product/Farm Debt Closure
+
+This follow-up closed four operator-facing debts without changing trade authority:
+
+1. Paper setup Telegram previews now render as human-readable cards: setup family,
+   entry, stop, targets, max hold, source/verdict provenance, and the required
+   `research-only, not an order` / `execution_allowed=false` boundary.
+2. The Telegram superadmin panel has a read-only farm status button. It reads the
+   farm cockpit snapshot and cannot start/stop loops, send alerts, change `.env`, or
+   execute orders.
+3. Manual chart analysis now writes an explicit `chart_plan` into the snapshot:
+   15m execution chart, 5m trigger context, 1H/4H regime/veto context. This documents
+   the current main-engine reality instead of pretending every analysis is a single-TF
+   chart.
+4. Premium screenshot vision remains blocked by the Yandex/Gemma authorization/config
+   issue. Alibaba is currently integrated for text-only paths; adding Alibaba vision
+   would require a separate image-capable adapter and prompt review, not a silent
+   fallback.
+
 ## Telegram Smoke Result
 
 Dry-run checks:
@@ -137,4 +216,3 @@ fallback only when explicitly requested.
 4. Add rate limits/dedup for automatic subscriber notifications before unattended sends.
 5. Keep old main execution code isolated until a separate paper-first executor contract
    is reviewed and tested.
-

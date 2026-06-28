@@ -7,7 +7,7 @@ from scripts.strategy_lab import operational_health as H
 
 def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "secret-token")
-    monkeypatch.setenv("PAPER_CHAT_ID", "111")
+    monkeypatch.setattr(H, "list_delivery_users", lambda: [{"chat_id": "111", "status": "active"}])
     monkeypatch.setenv("ALIBABA_API_KEY", "secret-alibaba")
     monkeypatch.setenv("LLM_PROVIDER", "alibaba")
     monkeypatch.delenv("STRATEGY_LAB_LLM_ENABLED", raising=False)
@@ -452,7 +452,8 @@ def test_operational_health_documents_telegram_delivery_ownership(tmp_path, monk
     assert delivery["farm_core_sends_telegram"] is False
     assert delivery["paper_sends_telegram_by_default"] is False
     assert delivery["paper_sender_cli"] == "scripts.strategy_lab.paper_telegram_sender"
-    assert delivery["paper_sender_chat_env"] == "PAPER_CHAT_ID"
+    assert delivery["paper_sender_chat_env"] == "SUBSCRIPTION_USERS"
+    assert delivery["paper_delivery_target"] == "active_subscription_users"
     assert delivery["scanner_surface_sends_to_subscribers"] is True
     assert delivery["telegram_analyzer_current_for_farm"] is False
     assert delivery["telegram_analyzer_imports_auto_execute"] is True

@@ -81,11 +81,25 @@ def _targets(contract: dict[str, Any]) -> str:
     return ", ".join(rendered) or "n/a"
 
 
+def _family_label(family: str) -> str:
+    labels = {
+        "early_tp_tactical": "early take-profit tactical",
+        "reversal_fade": "reversal fade",
+        "liquidity_sweep_reclaim": "liquidity sweep reclaim",
+        "continuation": "continuation",
+        "pullback_continuation": "pullback continuation",
+        "pfr_momentum_breakout": "farm PFR momentum breakout",
+        "pfr_mean_reversion_fade": "farm PFR mean-reversion fade",
+    }
+    return labels.get(family, family or "unknown")
+
+
 def render_preview_text(record: dict[str, Any]) -> str:
     contract = dict(record.get("signal_contract") or {})
     meta = dict(contract.get("metadata") or {})
     pair = html.escape(str(record.get("okx_inst_id") or record.get("pair") or "unknown"))
-    family = html.escape(str(record.get("setup_family") or "unknown"))
+    family_raw = str(record.get("setup_family") or "unknown")
+    family = html.escape(_family_label(family_raw))
     side = html.escape(str(record.get("side") or "unknown").upper())
     timeframe = html.escape(str(record.get("timeframe") or "unknown"))
     entry = _fmt_price(contract.get("entry"))
@@ -93,20 +107,24 @@ def render_preview_text(record: dict[str, Any]) -> str:
     max_hold = html.escape(str(contract.get("max_hold_min") or "n/a"))
     reason = html.escape(str(meta.get("reason_now") or "paper-watch candidate"))
     source = html.escape(str(record.get("source_signal_id") or "unknown"))
+    source_name = html.escape(str(contract.get("source") or meta.get("source") or record.get("source") or "paper_lane"))
+    source_verdict = html.escape(str(meta.get("source_validation_verdict") or record.get("source_status") or "armed"))
+    setup_id = html.escape(str(meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
     return "\n".join(
         [
-            "<b>PAPER WATCH</b>",
+            f"<b>Paper setup: {pair} {timeframe} {side}</b>",
             REQUIRED_DISCLAIMER,
             "",
-            f"<b>{pair}</b> {timeframe} {side}",
-            f"family: <code>{family}</code>",
-            f"entry: <code>{entry}</code>",
-            f"stop: <code>{stop}</code>",
-            f"targets: <code>{_targets(contract)}</code>",
-            f"max_hold_min: <code>{max_hold}</code>",
+            f"Strategy: <code>{family}</code>",
+            f"Entry zone: <code>{entry}</code>",
+            f"Stop: <code>{stop}</code>",
+            f"Targets: <code>{_targets(contract)}</code>",
+            f"Max hold: <code>{max_hold} min</code>",
             "",
-            f"reason: {reason}",
-            f"source: <code>{source}</code>",
+            f"Why now: {reason}",
+            f"Evidence: <code>{source_name}</code> / <code>{source_verdict}</code>",
+            f"Setup ref: <code>{setup_id}</code>",
+            f"Signal ref: <code>{source}</code>",
             "",
             "execution_allowed=false",
         ]

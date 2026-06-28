@@ -18,6 +18,18 @@ def test_control_room_starts_visible_strategy_lab_surfaces():
     assert text.count('start "Strategy Lab -') >= 4
 
 
+def test_control_room_starts_paper_sender_only_when_explicitly_enabled():
+    text = _read("strategy_lab_control_room.bat")
+    sender = _read("strategy_lab_paper_telegram_sender_loop.bat")
+
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND" in text
+    assert "strategy_lab_paper_telegram_sender_loop.bat" in text
+    assert "scripts.strategy_lab.paper_telegram_sender" in sender
+    assert "--send" in sender
+    assert "active subscription users" in sender
+    assert "AUTO_TRADE" in sender
+
+
 def test_control_room_does_not_start_live_or_secret_paths():
     text = (_read("strategy_lab_control_room.bat") + "\n" + _read("strategy_lab_status_monitor.bat")).lower()
 

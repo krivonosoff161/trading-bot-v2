@@ -41,7 +41,7 @@ from scripts.analysis.feedback import (  # noqa: E402
 )
 from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
 from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status, mark_reminded  # noqa: E402
-from src.utils.llm_formatter import generate_premium_analysis  # noqa: E402
+from src.utils.llm_formatter import generate_premium_analysis, premium_vision_status  # noqa: E402
 from src.utils.telegram_audit import record_message_audit  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
@@ -125,6 +125,71 @@ _PAIR_CATEGORY_LIMIT = 24
 def _is_superadmin(chat_id: str) -> bool:
     entry = get_status(str(chat_id))
     return bool(entry and entry.get("plan") == "superadmin")
+
+
+def _strategy_lab_private_root() -> Path:
+    configured = os.getenv("STRATEGY_LAB_PRIVATE_ROOT") or os.getenv("TRADING_BOT_RESEARCH_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+
+
+def _format_farm_status_for_admin(cockpit: dict) -> str:
+    activity = cockpit.get("farm_activity") or {}
+    lifecycle = cockpit.get("lifecycle") or {}
+    paper_pnl = cockpit.get("paper_pnl") or {}
+    readiness = cockpit.get("data_readiness") or {}
+    safety = cockpit.get("safety") or {}
+
+    by_state = lifecycle.get("by_state") or {}
+    validation = lifecycle.get("validation") or {}
+    paper_status = lifecycle.get("paper_status") or {}
+    prepared = readiness.get("prepared_files_by_timeframe") or {}
+
+    heartbeat = "OK" if activity.get("heartbeat_ok") else "STALE"
+    available = "yes" if activity.get("available") else "no"
+    live = "NO" if safety.get("live_trading") is False else "CHECK"
+    age = activity.get("last_cycle_age_seconds")
+    age_text = f"{int(age)}s ago" if isinstance(age, (int, float)) else "n/a"
+    discovery = activity.get("discovery") or {}
+
+    lines = [
+        "📡 Статус фермы (read-only)",
+        "",
+        f"Loop: {available}, heartbeat={heartbeat}, last={age_text}",
+        f"Pivot: {activity.get('last_pivot') or 'n/a'} / mode={activity.get('last_mode') or 'n/a'}",
+        f"Tasks: queued={by_state.get('queued', 0)} running={by_state.get('running', 0)} "
+        f"completed={by_state.get('completed', 0)} blocked={by_state.get('blocked', 0)}",
+        f"Validation: PFR={validation.get('PAPER_FORWARD_READY', 0)} "
+        f"REGIME={validation.get('REGIME_ONLY', 0)} COSTS={validation.get('FAILED_COSTS', 0)} "
+        f"OOS={validation.get('FAILED_OOS', 0)}",
+        f"Paper: recorded={paper_status.get('PAPER_RECORDED', 0)} "
+        f"trades={paper_pnl.get('n_trades', 0)} net={paper_pnl.get('net_sum_pct', 0)}%",
+        f"Data: 15m={prepared.get('15m', 0)} 1h={prepared.get('1h', 0)} "
+        f"4h={prepared.get('4h', 0)} 1d={prepared.get('1d', 0)}",
+        f"Discovery: {discovery.get('status') or 'n/a'} count={discovery.get('count', 0)}",
+        "",
+        f"Safety: read_only={safety.get('read_only') is True}, live_trading={live}",
+    ]
+    recent_errors = activity.get("recent_errors") or []
+    if recent_errors:
+        lines.extend(["", "Recent errors:"])
+        for item in recent_errors[:3]:
+            lines.append(f"- {str(item)[:160]}")
+    return "\n".join(lines)
+
+
+async def _send_admin_farm_status(chat_id: str) -> None:
+    if not _is_superadmin(chat_id):
+        await _send(chat_id, "Админ-статус фермы доступен только superadmin.")
+        return
+    try:
+        from src.research_lab.farm_cockpit import build_cockpit
+
+        cockpit = build_cockpit(_strategy_lab_private_root())
+        await _send(chat_id, _format_farm_status_for_admin(cockpit))
+    except Exception as exc:
+        await _send(chat_id, f"Не удалось прочитать статус фермы: {type(exc).__name__}: {exc}")
 
 
 def _normalize_manual_symbol(text: str) -> str | None:
@@ -361,6 +426,14 @@ async def _send_admin_panel(chat_id: str) -> None:
     )
 
 
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text="Admin read-only tools:",
+        reply_markup={"inline_keyboard": [[{"text": "📡 Статус фермы", "callback_data": "__farm_status__"}]]},
+    )
+
+
 async def _send_premium_categories(chat_id: str) -> None:
     """Show asset class selection for Premium screenshot analysis."""
     await _tg(
@@ -394,7 +467,14 @@ async def _run_premium_analysis(chat_id: str, image_path: str, category: str) ->
         if result:
             await _send(chat_id, result)
         else:
-            await _send(chat_id, "Не удалось получить анализ. Попробуй позже.")
+            status = premium_vision_status()
+            reason = "provider_blocked" if status.get("configured") else "provider_not_configured"
+            print(f"Premium vision unavailable: {reason} status={status}")
+            await _send(
+                chat_id,
+                "VIP-анализ скрина временно недоступен: vision-провайдер не прошёл проверку. "
+                "Обычный анализ пары и обучение работают. Попробуй позже после переключения/настройки модели.",
+            )
         try:
             user_dir = USERS_ROOT / str(chat_id)
             user_dir.mkdir(parents=True, exist_ok=True)
@@ -890,6 +970,11 @@ async def _handle_callback(cbq: dict) -> None:
         return
 
     # ── Premium: show category menu ────────────────────────────────────────
+    if data == "__farm_status__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        await _send_admin_farm_status(chat_id)
+        return
+
     if data == "__premium__":
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         await _send_premium_categories(chat_id)

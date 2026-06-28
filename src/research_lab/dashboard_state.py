@@ -7,6 +7,7 @@ import csv
 import datetime as dt
 import glob
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from src.research_lab.universe import load_universe
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 SCOUT_BUDGET_LOG = ROOT / "logs" / "scout" / "llm_budget.jsonl"
+DEFAULT_MAX_COMPLETED_RUNS = 100
 
 
 def resolve_allowed_path(path: Path, allowed_roots: list[Path]) -> Path:
@@ -59,11 +61,32 @@ def private_root_from_env(value: str | None = None) -> Path:
     return Path(raw).expanduser() if raw.strip() else DEFAULT_PRIVATE_ROOT
 
 
+def dashboard_max_completed_runs(env_value: str | None = None) -> int:
+    raw = env_value if env_value is not None else ""
+    if not raw.strip():
+        return DEFAULT_MAX_COMPLETED_RUNS
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_COMPLETED_RUNS
+    return max(1, parsed)
+
+
 def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
     private_root = private_root.expanduser().resolve()
     completed_root = private_root / "experiments" / "completed"
-    runs = load_completed_runs(completed_root, private_root)
+    max_runs = dashboard_max_completed_runs(os.getenv("STRATEGY_LAB_DASHBOARD_MAX_RUNS"))
+    runs = load_completed_runs(completed_root, private_root, limit=max_runs)
     state_db = dashboard_snapshot(default_db_path(private_root))
+    totals = aggregate_runs(runs)
+    db_totals = state_db.get("totals") or {}
+    if db_totals:
+        totals = {
+            **totals,
+            "run_count": db_totals.get("run_count", totals.get("run_count", 0)),
+            "candidate_count": db_totals.get("candidate_count", totals.get("candidate_count", 0)),
+            "loaded_run_count": len(runs),
+        }
     return {
         "schema": "strategy_lab_dashboard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -89,7 +112,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "next_run": next_run_hint(private_root),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
-        "totals": aggregate_runs(runs),
+        "totals": totals,
         "farm_cockpit": build_cockpit(private_root),
         "llm_cost": load_llm_cost_summary(SCOUT_BUDGET_LOG),
         "safety": {
@@ -102,12 +125,15 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
     }
 
 
-def load_completed_runs(completed_root: Path, private_root: Path) -> list[dict[str, Any]]:
+def load_completed_runs(completed_root: Path, private_root: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
     completed_root = resolve_allowed_path(completed_root, [private_root])
     if not completed_root.exists():
         return []
     runs = []
-    for run_dir in sorted([p for p in completed_root.iterdir() if p.is_dir()], reverse=True):
+    run_dirs = sorted([p for p in completed_root.iterdir() if p.is_dir()], reverse=True)
+    if limit is not None:
+        run_dirs = run_dirs[: max(1, int(limit))]
+    for run_dir in run_dirs:
         try:
             run_dir = resolve_allowed_path(run_dir, [completed_root])
         except ValueError:
