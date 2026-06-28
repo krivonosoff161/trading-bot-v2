@@ -257,7 +257,7 @@ def test_premium_vision_status_is_sanitized():
 
 
 def test_premium_vision_prompts_are_balanced_and_guarded():
-    assert premium_prompts.PREMIUM_PROMPT_VERSION == "premium_vision_v2_balanced_horizon"
+    assert premium_prompts.PREMIUM_PROMPT_VERSION == "premium_vision_v3_active_tf_guard"
 
     user_prompt = premium_prompts.PREMIUM_USER_PROMPT
     assert "ГОРИЗОНТ ИДЕИ" in user_prompt
@@ -274,6 +274,21 @@ def test_premium_vision_prompts_are_balanced_and_guarded():
         assert "R/R меньше 1.5" in prompt, category
         assert "срок актуальности" in prompt, category
         assert "не обещай прибыль" in prompt_lower, category
+
+
+def test_premium_vision_prompt_guards_active_timeframe_confusion():
+    user_prompt = premium_prompts.PREMIUM_USER_PROMPT
+    assert "Активный таймфрейм" in user_prompt
+    assert "выделенная/активная кнопка" in user_prompt
+    assert "не считай время курсора датой" in user_prompt
+    assert "Если активный TF = 1д, горизонт не может быть scalp" in user_prompt
+
+    for prompt in premium_prompts.PREMIUM_SYSTEM_PROMPTS.values():
+        assert "активную/выделенную кнопку" in prompt
+        assert "если выделено '1 д', это дневной график" in prompt
+        assert "Не превращай время на ценнике/курсоре" in prompt
+        assert "для 1d запрещено писать scalp" in prompt
+        assert "Если в сценарии получилось R/R меньше 1.5" in prompt
 
 
 def test_manual_analysis_skips_llm_for_no_trade_by_default(monkeypatch):
