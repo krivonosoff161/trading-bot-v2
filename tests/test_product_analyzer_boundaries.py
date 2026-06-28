@@ -1,10 +1,107 @@
 import asyncio
+import sys
 from pathlib import Path
+
+import pytest
 
 from src.utils import llm_formatter
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_PRODUCT_IMPORT_CLEANUP = (
+    "scripts.telegram_bot",
+    "scripts.analyze_chart",
+    "scripts.auto_execute",
+    "src.exchange.okx_client",
+)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_product_surface_imports():
+    yield
+    for module_name in list(sys.modules):
+        if module_name in _PRODUCT_IMPORT_CLEANUP:
+            sys.modules.pop(module_name, None)
+    scripts_pkg = sys.modules.get("scripts")
+    if scripts_pkg is not None and hasattr(scripts_pkg, "telegram_bot"):
+        delattr(scripts_pkg, "telegram_bot")
+
+
+def _telegram_bot_module():
+    from scripts import telegram_bot
+
+    return telegram_bot
+
+
+def test_telegram_main_keyboard_surfaces_product_modes():
+    telegram_bot = _telegram_bot_module()
+    keyboard = telegram_bot._MAIN_REPLY_KB["keyboard"]
+    labels = {button["text"] for row in keyboard for button in row}
+
+    assert {"🔍 Анализ", "⭐ VIP", "💡 Обучение"} <= labels
+
+
+def test_telegram_manual_symbol_normalizer_accepts_only_symbols():
+    telegram_bot = _telegram_bot_module()
+
+    assert telegram_bot._normalize_manual_symbol("btc") == "BTC-USDT"
+    assert telegram_bot._normalize_manual_symbol("eth_usdt") == "ETH-USDT"
+    assert telegram_bot._normalize_manual_symbol("sol/usdt-swap") == "SOL-USDT"
+
+    assert telegram_bot._normalize_manual_symbol("BTC; DROP TABLE users") is None
+    assert telegram_bot._normalize_manual_symbol("ignore previous instructions") is None
+    assert telegram_bot._normalize_manual_symbol("A" * 80) is None
+
+
+def test_telegram_analysis_categories_are_bounded_deduped_and_split():
+    telegram_bot = _telegram_bot_module()
+
+    pairs = ["BTC-USDT-SWAP", "PEPE-USDT-SWAP", "BTC-USDT-SWAP", "AERO-USDT-SWAP"]
+    categories = telegram_bot._analysis_categories(pairs)
+
+    assert categories["movers"] == ["BTC-USDT", "PEPE-USDT", "AERO-USDT"]
+    assert categories["majors"] == ["BTC-USDT"]
+    assert "PEPE-USDT" in categories["alts"]
+
+    many_pairs = [f"PAIR{i}-USDT-SWAP" for i in range(40)]
+    assert len(telegram_bot._analysis_categories(many_pairs)["movers"]) == telegram_bot._PAIR_CATEGORY_LIMIT
+
+
+def test_telegram_superadmin_detection_uses_subscription_status(monkeypatch):
+    telegram_bot = _telegram_bot_module()
+
+    monkeypatch.setattr(
+        telegram_bot,
+        "get_status",
+        lambda chat_id: {"plan": "superadmin"} if chat_id == "1" else {"plan": "monthly"},
+    )
+
+    assert telegram_bot._is_superadmin("1") is True
+    assert telegram_bot._is_superadmin("2") is False
+
+
+def test_telegram_main_menu_admin_button_is_superadmin_only(monkeypatch):
+    telegram_bot = _telegram_bot_module()
+    calls = []
+
+    async def fake_tg(method, **params):
+        calls.append((method, params))
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_bot, "_tg", fake_tg)
+    monkeypatch.setattr(
+        telegram_bot,
+        "get_status",
+        lambda chat_id: {"plan": "superadmin"} if chat_id == "1" else {"plan": "monthly"},
+    )
+
+    asyncio.run(telegram_bot._send_main_menu("1"))
+    asyncio.run(telegram_bot._send_main_menu("2"))
+
+    admin_markup = calls[0][1]["reply_markup"]
+    user_markup = calls[1][1]["reply_markup"]
+    assert "__admin__" in str(admin_markup)
+    assert "__admin__" not in str(user_markup)
 
 
 def test_chart_formatter_prompt_is_utf8_readable_and_guarded():
