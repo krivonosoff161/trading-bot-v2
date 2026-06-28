@@ -39,9 +39,10 @@ from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: 
 from scripts.analysis.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
-from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
+from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES, PREMIUM_PROMPT_VERSION  # noqa: E402
 from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status, mark_reminded  # noqa: E402
 from src.utils.llm_formatter import generate_premium_analysis, premium_vision_status  # noqa: E402
+from src.utils.signal_event_log import record_manual_analysis_event, record_signal_event  # noqa: E402
 from src.utils.telegram_audit import record_message_audit  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
@@ -461,30 +462,64 @@ async def _send_premium_categories(chat_id: str) -> None:
 async def _run_premium_analysis(chat_id: str, image_path: str, category: str) -> None:
     """Send screenshot to Gemma 3 27B IT and deliver analysis to user."""
     cat_name = PREMIUM_CATEGORY_NAMES.get(category, category)
+    user_dir = USERS_ROOT / str(chat_id)
+    premium_dir = user_dir / "premium"
+    saved_image = premium_dir / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}_{category}.png"
+    premium_status: dict = {}
+    result = ""
     try:
         await _send(chat_id, f"⭐ Анализирую {cat_name}... ⏳")
-        result = await generate_premium_analysis(category, Path(image_path).read_bytes())
+        image_bytes = Path(image_path).read_bytes()
+        premium_dir.mkdir(parents=True, exist_ok=True)
+        saved_image.write_bytes(image_bytes)
+        result = await generate_premium_analysis(category, image_bytes) or ""
         if result:
             await _send(chat_id, result)
         else:
-            status = premium_vision_status()
-            reason = "provider_blocked" if status.get("configured") else "provider_not_configured"
-            print(f"Premium vision unavailable: {reason} status={status}")
+            premium_status = premium_vision_status()
+            reason = "provider_blocked" if premium_status.get("configured") else "provider_not_configured"
+            print(f"Premium vision unavailable: {reason} status={premium_status}")
             await _send(
                 chat_id,
                 "VIP-анализ скрина временно недоступен: vision-провайдер не прошёл проверку. "
                 "Обычный анализ пары и обучение работают. Попробуй позже после переключения/настройки модели.",
             )
         try:
-            user_dir = USERS_ROOT / str(chat_id)
             user_dir.mkdir(parents=True, exist_ok=True)
+            if not premium_status:
+                premium_status = premium_vision_status()
             record = {
                 "ts":       datetime.now(timezone.utc).isoformat(),
                 "category": category,
-                "response": result or "",
+                "prompt_version": PREMIUM_PROMPT_VERSION,
+                "image_ref": str(saved_image),
+                "provider": premium_status.get("provider"),
+                "model": premium_status.get("model_label"),
+                "status": "ok" if result else "provider_unavailable",
+                "response": result,
             }
             with open(user_dir / "premium_log.jsonl", "a", encoding="utf-8") as lf:
                 lf.write(json.dumps(record, ensure_ascii=False) + "\n")
+            record_signal_event(
+                source="vip_screenshot",
+                mode="vision_analysis",
+                decision="ANALYSIS" if result else "PROVIDER_UNAVAILABLE",
+                chat_id=str(chat_id),
+                provider=premium_status.get("provider"),
+                model=premium_status.get("model_label"),
+                prompt_version=PREMIUM_PROMPT_VERSION,
+                artifacts={
+                    "image": str(saved_image),
+                    "premium_log": str(user_dir / "premium_log.jsonl"),
+                },
+                status="recorded" if result else "provider_unavailable",
+                extra={
+                    "category": category,
+                    "provider_scope": premium_status.get("provider_scope"),
+                    "execution_authority": False,
+                    "telegram_send_authority": False,
+                },
+            )
         except Exception as _le:
             print(f"[premium_log] error: {_le}")
     except Exception:
@@ -709,6 +744,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
 
         # Read LLM-generated summary if available, else reconstruct from snapshot
         summary_text = None
+        summary_message_id = None
         summary_file = run_dir / f"{symbol}_client_summary.txt"
         if summary_file.exists():
             import html as _html
@@ -722,7 +758,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
         if summary_text:
-            message_id = await send_message_to(chat_id, summary_text)
+            summary_message_id = await send_message_to(chat_id, summary_text)
             try:
                 record_message_audit(
                     chat_id=chat_id,
@@ -731,8 +767,8 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                     event="client_summary",
                     text=summary_text,
                     symbol=symbol,
-                    delivery_status="sent" if message_id is not None else "skipped_no_token",
-                    message_id=message_id,
+                    delivery_status="sent" if summary_message_id is not None else "skipped_no_token",
+                    message_id=summary_message_id,
                 )
             except Exception:
                 pass
@@ -757,6 +793,21 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
         # Disclaimer + feedback buttons — for ENTRY and WAIT signals
         snap = json.loads(snap_path.read_text(encoding="utf-8"))
         ctx = snap.get("llm_context", {})
+        try:
+            record_manual_analysis_event(
+                chat_id=str(chat_id),
+                symbol=symbol,
+                captured_at=captured_at,
+                snapshot=snap,
+                run_dir=run_dir,
+                summary_path=summary_file if summary_file.exists() else None,
+                chart_path=png_path if png_path.exists() else None,
+                report_path=run_dir / f"{symbol}_report.md",
+                snapshot_path=snap_path,
+                message_id=summary_message_id,
+            )
+        except Exception as _event_error:
+            print(f"[signal_event/manual] error | symbol={symbol} err={_event_error}")
         entry_signal = ctx.get("entry_signal", "")
         if entry_signal == "ENTRY":
             try:

@@ -49,6 +49,30 @@ The legacy product bot now records:
 - outgoing manual-analysis summaries;
 - outgoing chart photos.
 
+Product decision-event audit path:
+
+```text
+logs/signals/signal_events.jsonl
+```
+
+This is the analysis/training-oriented log. Manual pair analysis writes one
+`signal_event.v1` row after the report/snapshot/chart/summary are produced. VIP
+screenshot analysis writes one row after the vision provider returns a result or a
+provider failure. These rows store normalized decision fields and artifact references,
+not raw secrets or execution authority:
+
+- source/mode/decision;
+- symbol/timeframe/side when available;
+- entry/stop/TP/max-hold/risk fields when the deterministic analyzer produced them;
+- provider/model/prompt version when an LLM was involved;
+- local artifact refs for the snapshot, report, chart, summary, premium screenshot,
+  and premium log;
+- `paper_only=true`;
+- `execution_allowed=false`.
+
+This closes the gap where Telegram/VIP activity was visible as chat traffic but not
+as a machine-readable decision package for later outcome analysis.
+
 ## Runtime Log Archive
 
 Old runtime logs were archived before the new notification tests:
@@ -167,6 +191,9 @@ This follow-up closed four operator-facing debts without changing trade authorit
    issue. Alibaba is currently integrated for text-only paths; adding Alibaba vision
    would require a separate image-capable adapter and prompt review, not a silent
    fallback.
+5. Manual and VIP product events are now captured in
+   `logs/signals/signal_events.jsonl`, with health checks for schema, paper-only
+   status, and execution-disabled rows.
 
 ## Telegram Smoke Result
 

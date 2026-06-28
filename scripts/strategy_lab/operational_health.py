@@ -215,6 +215,7 @@ def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str,
         "schema_rows": 0,
         "invalid_json": 0,
         "paper_only_false": 0,
+        "execution_allowed_true": 0,
         "read_error": "",
     }
     if not path.exists():
@@ -237,6 +238,8 @@ def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str,
             metrics["schema_rows"] += 1
         if row.get("paper_only") is False:
             metrics["paper_only_false"] += 1
+        if row.get("execution_allowed") is True:
+            metrics["execution_allowed_true"] += 1
     return metrics
 
 
@@ -460,6 +463,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         or journals["paper_signal_training"]["exists"]
     )
     paper_training = training_data["paper_signal_training"]
+    product_signal_events = training_data["product_signal_events"]
     paper_training_freshness = training_data["paper_signal_training_freshness"]
     excel_journal_freshness = training_data["excel_journal_freshness"]
     paper_training_ready = (
@@ -467,8 +471,19 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and paper_training["schema_rows"] == paper_training["rows"]
         and paper_training["invalid_json"] == 0
         and paper_training["paper_only_false"] == 0
+        and paper_training["execution_allowed_true"] == 0
         and paper_training["read_error"] == ""
         and not paper_training_freshness["stale_vs_source"]
+    )
+    product_signal_events_ready = (
+        not journals["product_signal_events"]["exists"]
+        or (
+            product_signal_events["schema_rows"] == product_signal_events["rows"]
+            and product_signal_events["invalid_json"] == 0
+            and product_signal_events["paper_only_false"] == 0
+            and product_signal_events["execution_allowed_true"] == 0
+            and product_signal_events["read_error"] == ""
+        )
     )
     excel_journal_current = journals["excel"]["exists"] and not excel_journal_freshness["stale_vs_source"]
     visible_cycle_blocked = (
@@ -792,6 +807,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.paper_signal_training_export, then rebuild the journal."
             if not paper_training_ready else "",
         ),
+        "product_signal_event_log": _gate(
+            "pass" if product_signal_events_ready else "warn",
+            "Product/manual/VIP signal-event log is absent or schema-valid and paper-only."
+            if product_signal_events_ready
+            else "Product/manual/VIP signal-event log has invalid rows or execution-enabled rows.",
+            action="Inspect logs/signals/signal_events.jsonl before using product events for training."
+            if not product_signal_events_ready else "",
+        ),
     }
 
 
@@ -952,6 +975,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_telegram_delivery_snapshot = private_root / "state" / "derived" / "paper_telegram_delivery.json"
     paper_telegram_delivery_log = private_root / "state" / "derived" / "paper_telegram_delivery.jsonl"
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
+    product_signal_events_log = ROOT / "logs" / "signals" / "signal_events.jsonl"
     old_main = ROOT / "main.py"
     telegram_bot = ROOT / "scripts" / "telegram_bot.py"
     start_bat = ROOT / "start.bat"
@@ -1375,6 +1399,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_telegram_delivery": _exists(paper_telegram_delivery_log),
             "paper_telegram_delivery_snapshot": _exists(paper_telegram_delivery_snapshot),
             "main_signals": _exists(main_signal_log),
+            "product_signal_events": _exists(product_signal_events_log),
         },
         "training_data": {
             "paper_signal_training": _jsonl_schema_metrics(
@@ -1386,6 +1411,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 paper_signal_log,
             ),
             "excel_journal_freshness": _excel_journal_freshness(ROOT, paper_signal_training),
+            "product_signal_events": _jsonl_schema_metrics(
+                product_signal_events_log,
+                schema="signal_event.v1",
+            ),
         },
         "pfr": {
             "db": _exists(pfr_db),
@@ -1634,6 +1663,15 @@ def _print_human(report: dict[str, Any]) -> None:
         f"rows={training['rows']} schema_rows={training['schema_rows']} "
         f"invalid_json={training['invalid_json']} paper_only_false={training['paper_only_false']} "
         f"stale_vs_source={freshness['stale_vs_source']}"
+    )
+    product_events = report["training_data"]["product_signal_events"]
+    print(
+        "product_signal_events: "
+        f"exists={report['journals']['product_signal_events']['exists']} "
+        f"rows={product_events['rows']} schema_rows={product_events['schema_rows']} "
+        f"invalid_json={product_events['invalid_json']} "
+        f"paper_only_false={product_events['paper_only_false']} "
+        f"execution_allowed_true={product_events['execution_allowed_true']}"
     )
     print(
         "excel_journal: "

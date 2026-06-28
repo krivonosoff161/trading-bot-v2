@@ -203,7 +203,53 @@ def test_operational_health_reports_existing_journal_files(tmp_path, monkeypatch
     assert report["training_data"]["paper_signal_training"]["schema_rows"] == 1
     assert report["training_data"]["paper_signal_training"]["paper_only_false"] == 0
     assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
+    assert report["readiness"]["product_signal_event_log"]["status"] == "pass"
     assert Path(report["pfr"]["db"]["path"]) == pfr
+
+
+def test_operational_health_reports_product_signal_event_safety(tmp_path, monkeypatch):
+    events = tmp_path / "logs" / "signals" / "signal_events.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text(
+        json.dumps(
+            {
+                "schema": "signal_event.v1",
+                "source": "manual_telegram",
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(H, "ROOT", tmp_path)
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    product_events = report["training_data"]["product_signal_events"]
+    assert product_events["rows"] == 1
+    assert product_events["schema_rows"] == 1
+    assert product_events["execution_allowed_true"] == 0
+    assert report["readiness"]["product_signal_event_log"]["status"] == "pass"
+
+    events.write_text(
+        json.dumps(
+            {
+                "schema": "signal_event.v1",
+                "source": "manual_telegram",
+                "paper_only": True,
+                "execution_allowed": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    assert report["training_data"]["product_signal_events"]["execution_allowed_true"] == 1
+    assert report["readiness"]["product_signal_event_log"]["status"] == "warn"
 
 
 def test_operational_health_rejects_mixed_training_schema(tmp_path, monkeypatch):
