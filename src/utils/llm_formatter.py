@@ -3,8 +3,9 @@ LLM formatter - legacy chart/product text formatter.
 
 By default it uses the older Yandex AI Studio path. Text-only generation can opt in
 to the shared scanner/advisory LLM router by setting
-PRODUCT_ANALYZER_LLM_ROUTER=llm_client. Premium vision remains on the legacy path
-until it receives its own provider/prompt review.
+PRODUCT_ANALYZER_LLM_ROUTER=llm_client. Premium vision uses its own image-capable
+provider path: Alibaba Qwen-VL when available, with Yandex Gemma as an explicit
+fallback/legacy option.
 
 Takes structured analysis snapshot + optional chart image,
 returns natural Russian text for client delivery.
@@ -34,6 +35,14 @@ _TIMEOUT    = 60  # seconds
 _FORMATTER_RUB_PER_1K_TOKENS = float(os.getenv("YANDEX_LLM_FORMATTER_RUB_PER_1K", "0.5"))
 _ROUTER_ENV = "PRODUCT_ANALYZER_LLM_ROUTER"
 _SHARED_ROUTER_VALUES = {"shared", "llm_client"}
+_ALIBABA_KEY = os.getenv("ALIBABA_API_KEY", "").strip("'\"")
+_ALIBABA_URL = (
+    os.getenv("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+    .rstrip("/")
+    + "/chat/completions"
+)
+_ALIBABA_VISION_MODEL = os.getenv("ALIBABA_VISION_MODEL", "qwen-vl-plus").strip("'\"")
+_PREMIUM_VISION_PROVIDER = os.getenv("PREMIUM_VISION_PROVIDER", "auto").strip("'\"").lower()
 
 
 def _model_label(model_uri: str) -> str:
@@ -90,7 +99,7 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
         "telegram_send_authority": False,
         "execution_authority": False,
         "shared_router_entrypoints": ["generate_client_text", "generate_edu_text"] if shared_router else [],
-        "yandex_only_entrypoints": ["generate_premium_analysis"],
+        "yandex_only_entrypoints": [],
         "function_entrypoints": [
             "generate_client_text",
             "generate_premium_analysis",
@@ -106,22 +115,43 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
 def premium_vision_status(env: dict[str, str] | None = None) -> dict[str, object]:
     """Return sanitized premium screenshot provider status."""
     source = env if env is not None else os.environ
-    api_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
-    model_uri = source.get("YANDEX_GEMMA_MODEL_URI", "").strip("'\"")
+    requested = source.get("PREMIUM_VISION_PROVIDER", "auto").strip("'\"").lower()
+    alibaba_key_set = bool(source.get("ALIBABA_API_KEY", "").strip("'\""))
+    alibaba_model = source.get("ALIBABA_VISION_MODEL", "qwen-vl-plus").strip("'\"")
+    yandex_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
+    yandex_model_uri = source.get("YANDEX_GEMMA_MODEL_URI", "").strip("'\"")
+    if requested == "yandex":
+        active_provider = "yandex"
+    elif requested == "alibaba":
+        active_provider = "alibaba"
+    else:
+        active_provider = "alibaba" if alibaba_key_set else "yandex"
+    if active_provider == "alibaba":
+        api_key_set = alibaba_key_set
+        configured = alibaba_key_set and bool(alibaba_model)
+        model_label = alibaba_model
+        api_host = source.get("ALIBABA_BASE_URL", "https://dashscope-intl.aliyuncs.com").split("//")[-1]
+    else:
+        api_key_set = yandex_key_set
+        configured = yandex_key_set and bool(yandex_model_uri)
+        model_label = _model_label(yandex_model_uri)
+        api_host = "ai.api.cloud.yandex.net"
     return {
         "schema": "premium_vision_provider.v1",
         "surface": "telegram_premium_screenshot",
-        "provider": "yandex",
-        "provider_scope": "yandex_only",
-        "api_host": "ai.api.cloud.yandex.net",
+        "provider": active_provider,
+        "provider_scope": "image_provider_auto" if requested == "auto" else f"{active_provider}_only",
+        "requested_provider": requested,
+        "api_host": api_host,
         "api_key_set": api_key_set,
-        "model_uri_set": bool(model_uri),
-        "configured": api_key_set and bool(model_uri),
-        "model_label": _model_label(model_uri),
+        "model_uri_set": bool(yandex_model_uri) if active_provider == "yandex" else bool(alibaba_model),
+        "configured": configured,
+        "model_label": model_label,
+        "fallback_provider": "yandex" if active_provider == "alibaba" and bool(yandex_model_uri) else "",
         "shared_router_active": False,
         "execution_authority": False,
         "telegram_send_authority": False,
-        "review_required": True,
+        "review_required": not configured,
         "non_claim": (
             "Premium screenshot analysis is a vision-provider surface only. "
             "It does not make trading decisions and is not connected to farm/PFR execution."
@@ -887,7 +917,149 @@ _GEMMA_MAX_TOKENS = 500
 _GEMMA_TIMEOUT   = 90
 
 
+def _image_mime(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"GIF8"):
+        return "image/gif"
+    return "image/jpeg"
+
+
+async def _call_alibaba_premium_vision(
+    system_prompt: str,
+    user_prompt: str,
+    image_bytes: bytes,
+) -> str | None:
+    if not _ALIBABA_KEY or not _ALIBABA_VISION_MODEL:
+        print("Alibaba vision: ALIBABA_API_KEY or ALIBABA_VISION_MODEL not set — skipping")
+        return None
+    if not _budget_allowed(
+        "audit",
+        _ALIBABA_VISION_MODEL,
+        system_prompt,
+        user_prompt,
+        max_output_tokens=_GEMMA_MAX_TOKENS,
+    ):
+        return None
+    b64 = base64.b64encode(image_bytes).decode()
+    payload = {
+        "model": _ALIBABA_VISION_MODEL,
+        "max_tokens": _GEMMA_MAX_TOKENS,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{_image_mime(image_bytes)};base64,{b64}"},
+                    },
+                ],
+            },
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {_ALIBABA_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _ALIBABA_URL,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"Alibaba vision: HTTP {resp.status} — {body[:200]}")
+                    return None
+                data = await resp.json()
+        body = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {})
+        _record_budget("audit", int(tokens.get("total_tokens") or 0))
+        print(f"Alibaba vision: OK — {tokens.get('total_tokens', '?')} tokens")
+        return body or None
+    except Exception as exc:
+        print(f"Alibaba vision: error — {exc}")
+        return None
+
+
+async def _call_yandex_premium_vision(
+    system_prompt: str,
+    user_prompt: str,
+    image_bytes: bytes,
+) -> str | None:
+    if not _API_KEY or not _GEMMA_MODEL_URI:
+        print("Gemma: YANDEX_API_KEY or YANDEX_GEMMA_MODEL_URI not set — skipping")
+        return None
+    if not _budget_allowed(
+        "audit",
+        _GEMMA_MODEL_URI,
+        system_prompt,
+        user_prompt,
+        max_output_tokens=_GEMMA_MAX_TOKENS,
+    ):
+        return None
+    b64 = base64.b64encode(image_bytes).decode()
+    payload = {
+        "model": _GEMMA_MODEL_URI,
+        "max_tokens": _GEMMA_MAX_TOKENS,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": user_prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{_image_mime(image_bytes)};base64,{b64}"},
+                },
+            ]},
+        ],
+    }
+    headers = {
+        "Authorization": f"Api-Key {_API_KEY}",
+        "Content-Type":  "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _API_URL, json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"Gemma: HTTP {resp.status} — {body[:200]}")
+                    return None
+                data = await resp.json()
+        body = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {})
+        _record_budget("audit", int(tokens.get("total_tokens") or 0))
+        print(f"Gemma: OK — {tokens.get('total_tokens', '?')} tokens")
+        return body or None
+    except Exception as exc:
+        print(f"Gemma: error — {exc}")
+        return None
+
+
 async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | None:
+    from scripts.premium_prompts import PREMIUM_SYSTEM_PROMPTS, PREMIUM_USER_PROMPT
+    system_prompt = PREMIUM_SYSTEM_PROMPTS.get(category, PREMIUM_SYSTEM_PROMPTS["CRYPTO"])
+    provider = _PREMIUM_VISION_PROVIDER
+    if provider not in {"auto", "alibaba", "yandex"}:
+        provider = "auto"
+
+    if provider in {"auto", "alibaba"} and _ALIBABA_KEY:
+        result = await _call_alibaba_premium_vision(system_prompt, PREMIUM_USER_PROMPT, image_bytes)
+        if result or provider == "alibaba":
+            return result
+
+    if provider in {"auto", "yandex"}:
+        return await _call_yandex_premium_vision(system_prompt, PREMIUM_USER_PROMPT, image_bytes)
+
+    return None
     """Call Gemma 3 27B IT (vision) to analyze a chart screenshot."""
     if not _API_KEY or not _GEMMA_MODEL_URI:
         print("Gemma: YANDEX_API_KEY or YANDEX_GEMMA_MODEL_URI not set — skipping")

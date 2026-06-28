@@ -93,7 +93,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["launcher_sets_shared_router"] is True
     assert launch_contract["effective_shared_router"] is True
     assert launch_contract["effective_provider"] == "alibaba"
-    assert launch_contract["premium_vision_yandex_only"] is True
+    assert launch_contract["premium_vision_provider"] == "alibaba"
+    assert launch_contract["premium_vision_configured"] is True
+    assert launch_contract["premium_vision_yandex_only"] is False
     assert launch_contract["edu_qa_yandex_only"] is False
     assert launch_contract["edu_qa_shared_router_entrypoint"] is True
     assert launch_contract["farm_pfr_runtime_uses_manual_product_stack"] is False
@@ -115,8 +117,9 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
         "manual_latest_auto_execute_double_gated": True,
         "farm_pfr_does_not_use_manual_product_stack": True,
         "old_main_does_not_consume_paper_queue": True,
+        "premium_vision_provider_configured": True,
     }
-    assert "premium_vision_provider_and_prompt" in revival["remaining_review"]
+    assert "premium_vision_provider_and_prompt" not in revival["remaining_review"]
     assert "executor_contract_before_any_old_main_reuse" in revival["remaining_review"]
     assert "paper_telegram_preview" in revival["allowed_next_step"]
     assert "does not prove" in revival["non_claim"]
@@ -161,6 +164,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert report["readiness"]["paper_telegram_sender_available"]["status"] == "warn"
     assert report["readiness"]["telegram_delivery_ownership"]["status"] == "pass"
     assert report["readiness"]["telegram_analyzer_llm_provider_review"]["status"] == "pass"
+    assert report["readiness"]["premium_vision_provider"]["status"] == "pass"
     assert report["readiness"]["product_analyzer_launch_contract"]["status"] == "pass"
     assert report["readiness"]["product_analyzer_prompt_integrity"]["status"] == "pass"
     assert report["readiness"]["legacy_product_text_quality"]["status"] == "pass"
@@ -536,7 +540,9 @@ def test_operational_health_reports_product_analyzer_shared_router_opt_in(tmp_pa
     assert report["product_analyzer_launch_contract"]["launcher_sets_shared_router"] is True
     assert report["product_analyzer_launch_contract"]["effective_shared_router"] is True
     assert report["product_analyzer_launch_contract"]["effective_provider"] == "alibaba"
-    assert report["product_analyzer_launch_contract"]["premium_vision_yandex_only"] is True
+    assert report["product_analyzer_launch_contract"]["premium_vision_provider"] == "alibaba"
+    assert report["product_analyzer_launch_contract"]["premium_vision_configured"] is True
+    assert report["product_analyzer_launch_contract"]["premium_vision_yandex_only"] is False
     assert report["product_analyzer_launch_contract"]["edu_qa_yandex_only"] is False
     assert report["product_analyzer_launch_contract"]["edu_qa_shared_router_entrypoint"] is True
     assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"

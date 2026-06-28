@@ -221,7 +221,7 @@ def test_chart_formatter_shared_router_status_is_sanitized():
     assert status["folder_id_set"] is False
     assert status["configured"] is True
     assert status["shared_router_entrypoints"] == ["generate_client_text", "generate_edu_text"]
-    assert status["yandex_only_entrypoints"] == ["generate_premium_analysis"]
+    assert status["yandex_only_entrypoints"] == []
     assert status["telegram_send_authority"] is False
     assert status["execution_authority"] is False
     assert "secret-alibaba-key" not in rendered
@@ -231,6 +231,9 @@ def test_chart_formatter_shared_router_status_is_sanitized():
 def test_premium_vision_status_is_sanitized():
     status = llm_formatter.premium_vision_status(
         {
+            "PREMIUM_VISION_PROVIDER": "auto",
+            "ALIBABA_API_KEY": "secret-alibaba-key",
+            "ALIBABA_VISION_MODEL": "qwen-vl-plus",
             "YANDEX_API_KEY": "secret-yandex-key",
             "YANDEX_GEMMA_MODEL_URI": "gpt://secret-folder/model/latest",
         }
@@ -239,13 +242,16 @@ def test_premium_vision_status_is_sanitized():
 
     assert status["schema"] == "premium_vision_provider.v1"
     assert status["surface"] == "telegram_premium_screenshot"
-    assert status["provider"] == "yandex"
-    assert status["provider_scope"] == "yandex_only"
+    assert status["provider"] == "alibaba"
+    assert status["provider_scope"] == "image_provider_auto"
+    assert status["requested_provider"] == "auto"
     assert status["configured"] is True
-    assert status["model_label"] == "model/latest"
+    assert status["model_label"] == "qwen-vl-plus"
+    assert status["fallback_provider"] == "yandex"
     assert status["shared_router_active"] is False
     assert status["telegram_send_authority"] is False
     assert status["execution_authority"] is False
+    assert "secret-alibaba-key" not in rendered
     assert "secret-yandex-key" not in rendered
     assert "secret-folder" not in rendered
 
