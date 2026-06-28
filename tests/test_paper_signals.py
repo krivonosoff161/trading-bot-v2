@@ -444,12 +444,15 @@ class TestRicherDiagnosis:
 
 class TestNoLiveBoundary:
     def test_notify_does_not_fallback_to_scanner_chat(self, monkeypatch):
+        from scripts import subscriptions
         from scripts.strategy_lab import paper_signals_run
+
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
         monkeypatch.delenv("PAPER_CHAT_ID", raising=False)
         monkeypatch.setenv("SCANNER_CHAT_ID", "scanner-chat")
+        monkeypatch.setattr(subscriptions, "list_delivery_users", lambda: [])
 
-        assert paper_signals_run._notify(["card"]) == "skipped:no_paper_token_or_chat"
+        assert paper_signals_run._notify(["card"]) == "skipped:no_active_subscribers"
 
     def test_no_forbidden_imports_in_lane(self):
         pkg = _ROOT / "src" / "research_lab" / "paper_signals"

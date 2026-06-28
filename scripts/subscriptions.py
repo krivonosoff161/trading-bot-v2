@@ -97,6 +97,32 @@ def list_users() -> list[dict]:
     return result
 
 
+def list_delivery_users() -> list[dict]:
+    """Return users normalized for notification delivery.
+
+    This keeps delivery code away from localized display strings returned by
+    list_users().
+    """
+    data = _load()
+    today = date.today()
+    result = []
+    for cid, entry in data.items():
+        expires = entry.get("expires")
+        if expires is None:
+            status = "superadmin"
+        elif date.fromisoformat(expires) >= today:
+            status = "active"
+        else:
+            status = "expired"
+        result.append({
+            "chat_id": cid,
+            "plan": entry.get("plan", ""),
+            "expires": expires,
+            "status": status,
+        })
+    return result
+
+
 def mark_reminded(chat_id: str, when: str) -> None:
     """Записать дату когда юзеру отправлено напоминание о скором истечении."""
     data = _load()

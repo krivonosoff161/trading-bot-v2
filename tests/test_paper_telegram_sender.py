@@ -57,7 +57,7 @@ def test_sender_dry_run_never_calls_telegram(tmp_path):
     assert data["items"][0]["status"] == "dry_run"
 
 
-def test_sender_apply_skips_without_paper_chat(monkeypatch, tmp_path):
+def test_sender_apply_skips_without_subscribers(monkeypatch, tmp_path):
     _write_preview_snapshot(tmp_path, [_preview()])
 
     summary = sender.send_paper_telegram_previews(tmp_path, apply=True)
@@ -67,31 +67,73 @@ def test_sender_apply_skips_without_paper_chat(monkeypatch, tmp_path):
     assert summary["sent"] == 0
     assert summary["skipped"] == 1
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
-    assert data["items"][0]["status"] == "skipped_no_paper_chat"
+    assert data["items"][0]["status"] == "skipped_no_subscribers"
+    assert data["items"][0]["problem"] == "paper_subscribers_not_configured"
 
 
-def test_sender_uses_injected_paper_transport(tmp_path):
+def test_sender_uses_injected_subscriber_transport(tmp_path):
     _write_preview_snapshot(tmp_path, [_preview()])
     calls = []
 
-    async def fake_send(text):
-        calls.append(text)
-        return 101
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
 
     summary = sender.send_paper_telegram_previews(
         tmp_path,
         apply=True,
         paper_chat_configured=True,
         paper_chat_ids_count=2,
+        recipient_ids=["111", "222"],
         send_text=fake_send,
     )
 
     assert summary["configured"] is True
     assert summary["sends_network"] is True
-    assert summary["sent"] == 1
-    assert calls == ["<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"]
+    assert summary["targets"] == 2
+    assert summary["sent"] == 2
+    assert calls == [
+        ("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
+        ("222", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
+    ]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["chat_env"] == "SUBSCRIPTION_USERS"
     assert data["items"][0]["message_id"] == 101
+    assert data["items"][0]["destination"] == "personal_bot"
+    assert data["items"][0]["recipient_hash"]
+    assert "111" not in json.dumps(data, ensure_ascii=False)
+    assert "222" not in json.dumps(data, ensure_ascii=False)
+
+
+def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert first["sent"] == 1
+    assert second["sent"] == 0
+    assert second["duplicates"] == 1
+    assert len(calls) == 1
 
 
 def test_sender_rejects_invalid_preview(tmp_path):

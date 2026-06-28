@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import date, timedelta
 
 from scripts.archive_runtime_logs import archive_runtime_logs
 from src.utils.notification_policy import decide_notification
@@ -71,6 +72,29 @@ def test_delivery_router_dry_run_subscriber_only(monkeypatch, tmp_path):
     assert report["targets"] == 2
     assert {r["chat_id"] for r in report["rows"]} == {"1", "3"}
     assert all(r["status"] == "dry_run" for r in report["rows"])
+
+
+def test_subscription_delivery_users_are_normalized(monkeypatch, tmp_path):
+    from scripts import subscriptions
+
+    path = tmp_path / "subscriptions.json"
+    path.write_text(
+        json.dumps({
+            "1": {"expires": None, "plan": "superadmin"},
+            "2": {"expires": (date.today() + timedelta(days=7)).isoformat(), "plan": "monthly"},
+            "3": {"expires": (date.today() - timedelta(days=1)).isoformat(), "plan": "monthly"},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(subscriptions, "SUBS_FILE", path)
+
+    rows = subscriptions.list_delivery_users()
+
+    assert {row["chat_id"]: row["status"] for row in rows} == {
+        "1": "superadmin",
+        "2": "active",
+        "3": "expired",
+    }
 
 
 def test_archive_runtime_logs_dry_run_and_apply(tmp_path):

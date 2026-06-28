@@ -103,6 +103,32 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
     }
 
 
+def premium_vision_status(env: dict[str, str] | None = None) -> dict[str, object]:
+    """Return sanitized premium screenshot provider status."""
+    source = env if env is not None else os.environ
+    api_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
+    model_uri = source.get("YANDEX_GEMMA_MODEL_URI", "").strip("'\"")
+    return {
+        "schema": "premium_vision_provider.v1",
+        "surface": "telegram_premium_screenshot",
+        "provider": "yandex",
+        "provider_scope": "yandex_only",
+        "api_host": "ai.api.cloud.yandex.net",
+        "api_key_set": api_key_set,
+        "model_uri_set": bool(model_uri),
+        "configured": api_key_set and bool(model_uri),
+        "model_label": _model_label(model_uri),
+        "shared_router_active": False,
+        "execution_authority": False,
+        "telegram_send_authority": False,
+        "review_required": True,
+        "non_claim": (
+            "Premium screenshot analysis is a vision-provider surface only. "
+            "It does not make trading decisions and is not connected to farm/PFR execution."
+        ),
+    }
+
+
 def _estimated_cost_rub(tokens: int) -> float:
     return round(max(0, int(tokens or 0)) * _FORMATTER_RUB_PER_1K_TOKENS / 1000, 4)
 

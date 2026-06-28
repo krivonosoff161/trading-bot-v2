@@ -13,7 +13,7 @@ confuse:
 - **Paper sender:** `paper_telegram_sender` dry-runs delivery over preview artifacts
   by default. The canonical farm loop runs that dry-run after preview generation so
   delivery status stays current; network sending still requires explicit `--send` to
-  `PAPER_CHAT_ID`.
+  active Telegram bot subscribers/superadmins from `scripts/subscriptions.json`.
 - **Product/scanner surfaces:** `start.bat` / `scripts.telegram_bot` and
   `scripts/ws/ws_main_screener.py` are separate operator notification or analyzer
   surfaces. They are not the owner of the farm/PFR/paper lifecycle.
@@ -40,7 +40,7 @@ that state. Notifications are an output edge, never an input to compute or money
 | `farm_status_report` / dashboard | Implemented | Read-only status. |
 | Obsidian graph/reports | Implemented/partial | Read-only summaries and links. |
 | `paper_telegram_preview` | Implemented | Offline preview only, no network send by default. |
-| `paper_telegram_sender` | Implemented | Dry-run by default; optional `--send` only to `PAPER_CHAT_ID`. |
+| `paper_telegram_sender` | Implemented | Dry-run by default; optional `--send` only to active subscriber bot chats. |
 | `ws_main_screener.py` | Separate product surface | Sends scanner/operator alerts, not farm/PFR execution. |
 | `start.bat` / Telegram analyzer | Separate product surface | Product analyzer, not Strategy Lab farm launcher; legacy auto-execute hook requires both `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and `AUTO_TRADE`. |
 | `scripts.analyze_chart` | Separate manual surface | Writes local chart/report analysis and can optionally send Telegram; not farm/PFR execution. |
@@ -78,7 +78,7 @@ enable execution.
 
 The delivery snapshot is an audit surface, not just a send log. Its per-item statuses
 explain why alerts did or did not leave the machine, for example `dry_run`,
-`skipped_no_paper_chat`, `invalid_preview`, `skipped_no_token`, or `error`. The fast
+`skipped_no_subscribers`, `skipped_duplicate`, `invalid_preview`, `skipped_no_token`, or `error`. The fast
 `operational_health` preflight surfaces this as `paper_telegram_delivery_breakdown`,
 so an operator does not need to inspect JSON by hand to know whether Telegram is
 unconfigured, intentionally dry-run, or failing.
@@ -88,7 +88,8 @@ canonical `farm_loop --run-paper-signals` path refreshes it in dry-run mode imme
 after preview generation. If a preview is regenerated manually or by another tool and
 becomes newer than the delivery snapshot, `operational_health` reports
 `paper_telegram_sender_available = warn` and the sender dry-run must be repeated before
-an operator treats Telegram status as reviewed.
+an operator treats Telegram status as reviewed. Delivery artifacts store recipient
+hashes, not raw chat ids.
 
 Default mode is dry-run:
 
@@ -96,8 +97,8 @@ Default mode is dry-run:
 python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
 ```
 
-Network delivery requires explicit `--send` and existing `TELEGRAM_BOT_TOKEN` plus
-`PAPER_CHAT_ID`:
+Network delivery requires explicit `--send`, existing `TELEGRAM_BOT_TOKEN`, and active
+subscriber/superadmin records:
 
 ```bash
 python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab" --send
@@ -105,6 +106,10 @@ python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFIL
 
 It never falls back to `TELEGRAM_CHAT_ID`, never reads farm queues as input, and never
 enables execution.
+
+Paper setup cards are human-readable but still bounded. They include setup family,
+entry, stop, targets, max hold, source/verdict provenance, and the required
+`research-only, not an order` plus `execution_allowed=false` boundary.
 
 ## Scanner And Analyzer Telegram
 
@@ -128,6 +133,10 @@ route to their existing premium/educational handlers; superadmins also see an
 admin-only command helper. This is a product convenience layer only. The farm/PFR paper
 loop still owns paper instructions, paper previews, delivery dry-runs, and training
 exports.
+
+Current correction: the admin menu also exposes a superadmin-only read-only farm status
+button. It reads `farm_cockpit.build_cockpit()` and must not start/stop loops, send
+paper alerts, read secrets, or call exchange/order code.
 
 Important legacy boundary: `scripts/telegram_bot.py` still contains an
 execution-adjacent `scripts.auto_execute` hook for the old product flow, but
@@ -162,6 +171,11 @@ an ENTRY result only when `AUTO_TRADE` is enabled and
 `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1` is also set. Neither file is the farm/PFR
 paper runtime.
 
+Current correction: the manual analyzer chart is explicitly documented in each snapshot
+as a 15m execution chart with 5m trigger context and 1H/4H regime/veto context. The
+legacy engine still computes entry/SL/TP geometry from 15m levels, so a 1H/4H-only
+chart would be visually cleaner but less truthful.
+
 ## Machine-Checkable Invariant
 
 `python -m scripts.strategy_lab.operational_health` exposes
@@ -170,7 +184,7 @@ paper runtime.
 - `farm_core_sends_telegram = false`
 - `paper_sends_telegram_by_default = false`
 - `paper_sender_cli = scripts.strategy_lab.paper_telegram_sender`
-- `paper_sender_chat_env = PAPER_CHAT_ID`
+- `paper_sender_chat_env = SUBSCRIPTION_USERS`
 - `execution_authority = false`
 - `telegram_analyzer_current_for_farm = false`
 - `telegram_analyzer_imports_auto_execute = true`
@@ -225,7 +239,7 @@ If real paper alerts are enabled, they must remain the separate opt-in sender pr
 flag:
 
 - read-only over derived farm/paper artifacts;
-- `PAPER_CHAT_ID` only, never scanner/default chats;
+- active subscriber/superadmin bot chats only, never scanner/default public chats;
 - rate-limited and deduped;
 - no `.env` writes, no `AUTO_TRADE`, no private account endpoints, no order calls;
 - one alert per state change, not one alert per loop tick.

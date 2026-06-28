@@ -105,6 +105,19 @@ def test_completed_runs_sort_newest_first(tmp_path):
     assert runs[0]["run_id"] == "20260612_020000_new"
 
 
+def test_completed_runs_can_be_limited_for_dashboard_latency(tmp_path):
+    _write_run(tmp_path, "20260612_010000_old")
+    _write_run(tmp_path, "20260612_020000_mid")
+    _write_run(tmp_path, "20260612_030000_new")
+
+    runs = load_completed_runs(tmp_path / "experiments" / "completed", tmp_path, limit=2)
+
+    assert [run["run_id"] for run in runs] == [
+        "20260612_030000_new",
+        "20260612_020000_mid",
+    ]
+
+
 def test_render_html_escapes_candidate_fields():
     state = {
         "private_root_label": "strategy-lab",

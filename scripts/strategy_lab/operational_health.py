@@ -31,6 +31,7 @@ from src.research_lab.llm_provider import load_provider  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 from src.utils.llm_formatter import formatter_provider_status  # noqa: E402
 from src.utils.telegram import telegram_status  # noqa: E402
+from scripts.subscriptions import list_delivery_users  # noqa: E402
 
 
 def _exists(path: Path) -> dict[str, Any]:
@@ -38,6 +39,34 @@ def _exists(path: Path) -> dict[str, Any]:
         "path": str(path),
         "exists": path.exists(),
         "size_bytes": path.stat().st_size if path.exists() else 0,
+    }
+
+
+def _paper_subscription_delivery_status() -> dict[str, Any]:
+    token_status = telegram_status()
+    try:
+        users = list_delivery_users()
+    except Exception as exc:  # noqa: BLE001 - status must report configuration errors, not crash.
+        return {
+            "token_set": token_status["token_set"],
+            "chat_env": "SUBSCRIPTION_USERS",
+            "chat_ids_count": 0,
+            "configured": False,
+            "delivery_target": "active_subscription_users",
+            "load_error": type(exc).__name__,
+        }
+    count = sum(
+        1
+        for user in users
+        if str(user.get("status") or "").lower() in {"active", "superadmin"}
+    )
+    return {
+        "token_set": token_status["token_set"],
+        "chat_env": "SUBSCRIPTION_USERS",
+        "chat_ids_count": count,
+        "configured": bool(token_status["token_set"] and count),
+        "delivery_target": "active_subscription_users",
+        "load_error": "",
     }
 
 
@@ -602,9 +631,10 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         ),
         "paper_telegram_surface": _gate(
             "pass" if telegram["paper"]["configured"] else "warn",
-            "Paper Telegram channel is configured."
-            if telegram["paper"]["configured"] else "Paper Telegram channel is not configured; paper loop still works.",
-            action="Set PAPER_CHAT_ID after paper-alert text/chart review." if not telegram["paper"]["configured"] else "",
+            "Paper Telegram subscriber delivery is configured."
+            if telegram["paper"]["configured"] else "Paper Telegram subscriber delivery is not configured; paper loop still works.",
+            action="Configure TELEGRAM_BOT_TOKEN and active subscriptions after paper-alert text/chart review."
+            if not telegram["paper"]["configured"] else "",
         ),
         "paper_telegram_preview_available": _gate(
             "pass" if journals["paper_telegram_preview_snapshot"]["exists"] else "warn",
@@ -631,7 +661,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             else "Paper Telegram delivery audit is older than the preview artifact."
             if telegram_delivery_freshness["stale_vs_source"]
             else "Paper Telegram sender has not been dry-run against the preview artifact yet.",
-            action="Run python -m scripts.strategy_lab.paper_telegram_sender for dry-run; add --send only after PAPER_CHAT_ID review."
+            action="Run python -m scripts.strategy_lab.paper_telegram_sender for dry-run; add --send only after subscriber delivery review."
             if (
                 not journals["paper_telegram_delivery_snapshot"]["exists"]
                 or telegram_delivery_freshness["stale_vs_source"]
@@ -1055,7 +1085,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         },
         "telegram": {
             "default": telegram_status(),
-            "paper": telegram_status(chat_env="PAPER_CHAT_ID"),
+            "paper": _paper_subscription_delivery_status(),
             "scanner": telegram_status(chat_env="SCANNER_CHAT_ID"),
         },
         "scanner_llm": {
@@ -1201,7 +1231,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_preview_artifact": "state/derived/paper_telegram_preview.json",
             "paper_sender_artifact": "state/derived/paper_telegram_delivery.json",
             "paper_sender_cli": "scripts.strategy_lab.paper_telegram_sender",
-            "paper_sender_chat_env": "PAPER_CHAT_ID",
+            "paper_sender_chat_env": "SUBSCRIPTION_USERS",
+            "paper_delivery_target": "active_subscription_users",
             "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"]["exists"],
             "telegram_analyzer_surface": "start.bat / scripts.telegram_bot",
             "telegram_analyzer_current_for_farm": False,

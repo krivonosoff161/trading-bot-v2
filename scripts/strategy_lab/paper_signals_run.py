@@ -8,7 +8,7 @@ Pipeline (all keyless, deterministic, no order path):
 
 Boundary note: each signal's geometry is decided using ONLY bars up to a boundary set max_hold+arm bars
 back (no look-ahead), then observed on the already-elapsed bars after it. So a signal is checkable in one
-session (closed or pending) with a real path — while staying honest (the decision saw no future bars).
+session (closed or pending) with a real path вЂ” while staying honest (the decision saw no future bars).
 
 Acceptance: produce 3-5 signals, OR a gate-by-gate failure report explaining why none qualify.
 NOT an order, NOT live trading; .env/AUTO_TRADE/private endpoints/Telegram-credentials untouched.
@@ -31,21 +31,29 @@ from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider  #
 
 
 def _notify(cards: list[str]) -> str:
-    """Best-effort Telegram NOTIFICATION (surface only). Fires only when a token AND a paper chat id are
-    already configured in env — never sends otherwise, never touches orders/credentials in code."""
+    """Best-effort Telegram notification through active subscriber bot chats only."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = (os.getenv("PAPER_CHAT_ID") or "").split(",")[0].strip()
-    if not token or not chat:
-        return "skipped:no_paper_token_or_chat"
+    if not token:
+        return "skipped:no_telegram_token"
     try:
         import asyncio
+
+        from scripts.subscriptions import list_delivery_users
         from src.utils.telegram import send_message_to
-        for c in cards:
-            asyncio.run(send_message_to(chat, "📄 PAPER WATCH (research-only, not an order)\n\n" + c))
-        return f"sent:{len(cards)}"
+
+        chats = [
+            str(user["chat_id"])
+            for user in list_delivery_users()
+            if str(user.get("status") or "").lower() in {"active", "superadmin"}
+        ]
+        if not chats:
+            return "skipped:no_active_subscribers"
+        for card in cards:
+            for chat in chats:
+                asyncio.run(send_message_to(chat, "PAPER WATCH (research-only, not an order)\n\n" + card))
+        return f"sent:{len(cards) * len(chats)}"
     except Exception as exc:  # noqa: BLE001 - notification must never break the lane
         return f"error:{type(exc).__name__}"
-
 
 def _print_status(private_root: Path) -> None:
     sigs = store.load_signals(private_root)
@@ -78,9 +86,10 @@ def main() -> None:
     ap.add_argument("--select", action="store_true", help="print the memory-ranked top-N universe with reasons and exit")
     ap.add_argument("--ab-report", action="store_true",
                     help="write/read paper exit-mode A/B comparison artifact and exit")
-    ap.add_argument("--notify", action="store_true", help="send cards to Telegram IF token+PAPER_CHAT_ID exist")
+    ap.add_argument("--notify", action="store_true",
+                    help="send cards to active Telegram bot subscribers if TELEGRAM_BOT_TOKEN is configured")
     ap.add_argument("--pfr-db-path", default="",
-                    help="path to strategy_lab.sqlite — activates PFR lane (PAPER_FORWARD_READY records)")
+                    help="path to strategy_lab.sqlite вЂ” activates PFR lane (PAPER_FORWARD_READY records)")
     ap.add_argument("--max-pfr-scan", type=int, default=30,
                     help="max PFR records to inspect per cycle; lower this for fast smoke checks")
     ap.add_argument("--pfr-reserved-signals", type=int, default=0,
@@ -141,7 +150,5 @@ def main() -> None:
         if args.notify:
             cards = [render_card(s) for s in store.load_signals(root) if s.status in cycle.ACTIVE]
             print("\ntelegram:", _notify(cards))
-
-
 if __name__ == "__main__":
     main()

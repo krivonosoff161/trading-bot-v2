@@ -8,8 +8,9 @@ set "PYTHONWARNINGS=ignore:CUDA path could not be detected:UserWarning"
 rem Canonical Strategy Lab farm cycle:
 rem scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper runtime
 rem -> operational paper-signal watch lane.
-rem Paper/research only: public OKX market data, no .env, no AUTO_TRADE, no orders,
-rem no private exchange endpoints, no Telegram.
+rem Paper/research only: public OKX market data, no AUTO_TRADE, no orders,
+rem no private exchange endpoints. Telegram paper delivery is opt-in via
+rem STRATEGY_LAB_PAPER_TELEGRAM_SEND=1 and goes only to active bot subscribers.
 
 if "%TRADING_BOT_RESEARCH_ROOT%"=="" (
   set "TRADING_BOT_RESEARCH_ROOT=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
@@ -59,7 +60,8 @@ echo  sleep       : %STRATEGY_LAB_FARM_SLEEP_SECONDS%s
 echo  mode        : %STRATEGY_LAB_FARM_MODE_ARG% %STRATEGY_LAB_FARM_RUN_ARG%
 echo  caps        : prepares=%STRATEGY_LAB_FARM_MAX_PREPARES% enrich=%STRATEGY_LAB_FARM_MAX_ENRICH% sweeps=%STRATEGY_LAB_FARM_MAX_SWEEPS% worker=%STRATEGY_LAB_FARM_MAX_WORKER_JOBS% validations=%STRATEGY_LAB_FARM_MAX_VALIDATIONS%
 echo  paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE% pfr_scan=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN% pfr_reserved=%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED% runtime=%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%
-echo  safety      : paper-only; public OKX; no orders / .env / AUTO_TRADE / private endpoints / Telegram
+echo  telegram    : paper_send=%STRATEGY_LAB_PAPER_TELEGRAM_SEND% target=active subscription users
+echo  safety      : paper-only; public OKX; no orders / AUTO_TRADE / private endpoints
 echo ============================================
 echo.
 echo Tip: stop with bat\strategy_lab_farm_full_cycle_stop.bat or Ctrl+C.
