@@ -42,6 +42,37 @@ canonical paper loop.
 Current correction: the superadmin panel also exposes a read-only farm status button.
 It reads farm cockpit status only and has no start/stop/send/execution authority.
 
+## Product Signal Event Log
+
+Manual Telegram analysis and VIP screenshot analysis now write a normalized,
+append-only decision event in addition to delivery/message logs:
+
+```text
+logs/signals/signal_events.jsonl
+```
+
+This file is the product-side bridge for later outcome analysis and local training
+exports. It is deliberately separate from `logs/telegram/message_audit.jsonl`:
+
+- `message_audit.jsonl` answers "what was sent/received in Telegram?";
+- `signal_events.jsonl` answers "what decision package did the product surface show?".
+
+Each `signal_event.v1` row stores the source (`manual_telegram` or
+`vip_screenshot`), decision (`ENTRY`, `WAIT`, `NO_TRADE`, `ANALYSIS`,
+`PROVIDER_UNAVAILABLE`), symbol/timeframe when available, entry/stop/TP fields when
+the deterministic analyzer produced them, provider/model/prompt version when an LLM
+surface was involved, and references to the local artifacts (`snapshot`, `report`,
+`chart`, `summary`, or premium screenshot copy). The row is always
+`paper_only=true` and `execution_allowed=false`.
+
+Full long-form text and screenshots stay as local runtime artifacts under `logs/`
+and are ignored by git. The event log stores references rather than embedding raw
+Telegram text, provider prompts, API keys, or credentials.
+
+`operational_health` now reports `product_signal_events` counts and validates that
+the file is schema-valid, paper-only, and has no execution-enabled rows before those
+events are used for analysis/training.
+
 Machine check:
 
 ```bash
@@ -96,6 +127,10 @@ Expected product-surface facts:
 - `product_analyzer_launch_contract = pass`
 - `product_analyzer_prompt_integrity = pass`
 - `manual_product_analyzer_boundary = warn`
+- `product_signal_events` reports schema-valid rows when manual/VIP product events
+  have happened; absence before the first event is acceptable.
+- `product_signal_event_log = pass` when the log is absent or every row is
+  `signal_event.v1`, `paper_only=true`, and `execution_allowed=false`.
 
 Optional shared-router check for the text-only chart card:
 
