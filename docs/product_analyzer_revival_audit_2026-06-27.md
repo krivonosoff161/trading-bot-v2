@@ -18,6 +18,22 @@ paper delivery, and what must remain isolated until a separate review.
 | `src.utils.telegram` | Telegram send helper | Reads env at call time, does not print token/chat values, skips when not configured. |
 | `scripts.strategy_lab.paper_telegram_sender` | Paper alert delivery surface | Reads validated `paper_telegram_preview` artifacts, dry-runs by default, and sends only with explicit `--send` to `PAPER_CHAT_ID`. |
 
+## Telegram Product Menu Contract
+
+The user-facing Telegram analyzer keeps the old product shape but makes the modes
+explicit:
+
+| Mode | Surface | Current contract |
+|---|---|---|
+| `Анализ` | OKX pair analysis | Shows bounded pair categories (`Сейчас в движении`, `Majors`, `Alts / Meme`) plus manual symbol input. Manual symbols are normalized (`BTC`, `BTC_USDT`, `BTC/USDT-SWAP`) and prompt/SQL-like payloads are rejected before reaching the analyzer. |
+| `VIP` | Premium screenshot analysis | Still uses the existing premium screenshot flow. It remains a separate vision-provider review item and is not a trading decision authority. |
+| `Обучение` | Educational Q&A | Uses the existing educational text path. When `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` is active, this text-only path follows the shared `LLM_PROVIDER` router. |
+| `Админ` | Superadmin-only helper panel | Visible only for subscription entries with `plan=superadmin`. It lists subscription commands only and has no trading/execution authority. |
+
+The menu change is intentionally product-surface only. It does not connect the old
+Telegram analyzer to farm/PFR queues and does not enable Telegram sending from the
+canonical paper loop.
+
 Machine check:
 
 ```bash

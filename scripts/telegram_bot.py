@@ -108,10 +108,59 @@ _premium_state: dict[str, str] = {}
 
 # Persistent bottom keyboard — set once on /start, stays in chat forever
 _MAIN_REPLY_KB = {
-    "keyboard":        [[{"text": "🔍 Анализ"}]],
+    "keyboard": [
+        [{"text": "🔍 Анализ"}, {"text": "⭐ VIP"}],
+        [{"text": "💡 Обучение"}],
+    ],
     "resize_keyboard": True,
-    "persistent":      True,
+    "persistent": True,
 }
+
+_MAJOR_PAIRS = {"BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"}
+_MEME_HINTS = ("DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF", "MEME", "PUMP")
+_PAIR_CATEGORY_LIMIT = 24
+
+
+def _is_superadmin(chat_id: str) -> bool:
+    entry = get_status(str(chat_id))
+    return bool(entry and entry.get("plan") == "superadmin")
+
+
+def _normalize_manual_symbol(text: str) -> str | None:
+    raw = (text or "").strip().upper()
+    raw = raw.replace("_", "-").replace("/", "-")
+    if raw.endswith("-SWAP"):
+        raw = raw[:-5]
+    if re.fullmatch(r"[A-Z0-9]{2,16}", raw):
+        raw = f"{raw}-USDT"
+    if not re.fullmatch(r"[A-Z0-9]{2,16}-[A-Z0-9]{2,8}", raw):
+        return None
+    return raw
+
+
+def _analysis_categories(pairs: list[str] | None = None) -> dict[str, list[str]]:
+    universe = pairs if pairs is not None else _load_universe_pairs()
+    clean: list[str] = []
+    for pair in universe:
+        normalized = _normalize_manual_symbol(str(pair))
+        if normalized and normalized not in clean:
+            clean.append(normalized)
+
+    majors = [pair for pair in clean if pair in _MAJOR_PAIRS]
+    alt_meme = [
+        pair
+        for pair in clean
+        if pair not in _MAJOR_PAIRS or any(hint in pair for hint in _MEME_HINTS)
+    ]
+    return {
+        "movers": clean[:_PAIR_CATEGORY_LIMIT],
+        "majors": majors[:_PAIR_CATEGORY_LIMIT],
+        "alts": alt_meme[:_PAIR_CATEGORY_LIMIT],
+    }
+
+
+def _pairs_for_category(category: str) -> list[str]:
+    return _analysis_categories().get(category, [])
 
 # Persistent HTTP session — one per bot lifetime, not per request
 _SESSION: aiohttp.ClientSession | None = None
@@ -207,35 +256,90 @@ def _load_universe_pairs() -> list[str]:
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 
 
-async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool = False) -> None:
+async def _send_pair_keyboard(
+    chat_id: str,
+    extra_note: str = "",
+    welcome: bool = False,
+    *,
+    pairs: list[str] | None = None,
+    title: str = "Выбери пару или введи свою:",
+) -> None:
     parts = []
     if welcome:
         parts.append(WELCOME_TEXT)
     if extra_note:
         parts.append(extra_note)
     parts.append(TRANSPARENCY_NOTE)
-    pairs = _load_universe_pairs()
+    pairs = pairs if pairs is not None else _load_universe_pairs()
     # 3 per row
     pair_rows = [[{"text": p, "callback_data": p} for p in pairs[i:i+3]] for i in range(0, len(pairs), 3)]
-    buttons = pair_rows + [[{"text": "Другая пара", "callback_data": "__manual__"}, {"text": "💡 Совет", "callback_data": "__edu__"}]]
+    buttons = pair_rows + [
+        [
+            {"text": "Другая пара", "callback_data": "__manual__"},
+            {"text": "Назад", "callback_data": "__start_analysis__"},
+        ],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}],
+    ]
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="\n".join(parts) + "\n\nВыбери пару или введи свою:",
+        text="\n".join(parts) + f"\n\n{title}",
+        reply_markup={"inline_keyboard": buttons},
+    )
+
+
+async def _send_analysis_categories(chat_id: str) -> None:
+    categories = _analysis_categories()
+    buttons = [
+        [{"text": f"🔥 Сейчас в движении ({len(categories['movers'])})", "callback_data": "paircat:movers"}],
+        [{"text": f"₿ Majors ({len(categories['majors'])})", "callback_data": "paircat:majors"}],
+        [{"text": f"⚡ Alts / Meme ({len(categories['alts'])})", "callback_data": "paircat:alts"}],
+        [{"text": "Ввести пару вручную", "callback_data": "__manual__"}],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}, {"text": "⭐ VIP", "callback_data": "__premium__"}],
+    ]
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=(
+            "Выбери источник анализа. Решение и уровни считает код по OKX-данным; "
+            "LLM только объясняет карточку."
+        ),
         reply_markup={"inline_keyboard": buttons},
     )
 
 
 async def _send_main_menu(chat_id: str) -> None:
     """Top-level menu: OKX crypto scanner or Premium screenshot analysis."""
+    buttons = [
+        [{"text": "📊 Анализ пары", "callback_data": "__start_analysis__"}],
+        [{"text": "⭐ VIP — анализ скрина", "callback_data": "__premium__"}],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}],
+    ]
+    if _is_superadmin(chat_id):
+        buttons.append([{"text": "🛠 Админ", "callback_data": "__admin__"}])
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="Выберите тип анализа:",
-        reply_markup={"inline_keyboard": [
-            [{"text": "📊 Анализ пары",              "callback_data": "__start_analysis__"}],
-            [{"text": "⭐ Premium — анализ скрина",  "callback_data": "__premium__"}],
-        ]},
+        text="Выберите режим:",
+        reply_markup={"inline_keyboard": buttons},
+    )
+
+
+async def _send_admin_panel(chat_id: str) -> None:
+    if not _is_superadmin(chat_id):
+        await _send(chat_id, "Админ-панель доступна только superadmin.")
+        return
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=(
+            "Админ-панель\n\n"
+            "/users - список пользователей\n"
+            "/add <chat_id> [days] - выдать доступ\n"
+            "/addsuper <chat_id> - выдать superadmin\n"
+            "/del <chat_id> - удалить доступ\n\n"
+            "Команды меняют только подписки Telegram-бота. Торговые действия здесь недоступны."
+        ),
     )
 
 
@@ -713,7 +817,12 @@ async def _handle_callback(cbq: dict) -> None:
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         _state[chat_id] = {"status": "awaiting_symbol", "image_path": None,
                            "started_at": time.time(), "msg_date": int(time.time())}
-        await _send_pair_keyboard(chat_id)
+        await _send_analysis_categories(chat_id)
+        return
+
+    if data == "__admin__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        await _send_admin_panel(chat_id)
         return
 
     # ── Premium: show category menu ────────────────────────────────────────
@@ -800,8 +909,22 @@ async def _handle_callback(cbq: dict) -> None:
 
     if data == "__manual__":
         await _send(chat_id, "Напиши тикер пары в формате BTC-USDT, например AVAX-USDT.")
+    elif data.startswith("paircat:"):
+        category = data.split(":", 1)[1]
+        pairs = _pairs_for_category(category)
+        if not pairs:
+            await _send(chat_id, "В этой категории сейчас нет активных пар. Выбери другую или введи пару вручную.")
+            return
+        titles = {
+            "movers": "Сейчас в движении:",
+            "majors": "Основные пары:",
+            "alts": "Альты / мемы:",
+        }
+        await _send_pair_keyboard(chat_id, pairs=pairs, title=titles.get(category, "Выбери пару:"))
     else:
-        await _start_analysis(chat_id, data)
+        symbol = _normalize_manual_symbol(data)
+        if symbol:
+            await _start_analysis(chat_id, symbol)
 
 
 async def _handle_text(msg: dict) -> None:
@@ -823,7 +946,7 @@ async def _handle_text(msg: dict) -> None:
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
-                text="Нажми «🔍 Анализ» внизу чтобы начать.",
+                text="Нажми кнопку внизу: «🔍 Анализ», «⭐ VIP» или «💡 Обучение».",
                 reply_markup={"inline_keyboard": [
                     [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
                 ]},
@@ -933,9 +1056,8 @@ async def _handle_text(msg: dict) -> None:
             _reset(chat_id)
             await _send(chat_id, "Время вышло. Напиши «Анализ» чтобы начать заново.")
             return
-        # Validate format: letters/digits, dash, letters/digits (e.g. BTC-USDT)
-        symbol = text.upper()
-        if re.match(r"^[A-Z0-9]+-[A-Z0-9]+$", symbol):
+        symbol = _normalize_manual_symbol(text)
+        if symbol:
             await _start_analysis(chat_id, symbol)
         else:
             await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
@@ -952,14 +1074,20 @@ async def _handle_text(msg: dict) -> None:
         asyncio.create_task(_run_edu(chat_id, text))
         return
 
-    # idle — "анализ" (or bottom keyboard button) → show main menu
-    if "анализ" in text.lower():
+    normalized_text = text.lower()
+    if "vip" in normalized_text or "premium" in normalized_text:
+        await _send_premium_categories(chat_id)
+    elif "обуч" in normalized_text or "совет" in normalized_text:
+        _reset(chat_id)
+        _state[chat_id] = {"status": "edu_awaiting", "started_at": time.time()}
+        await _send(chat_id, "Напиши вопрос по торговле или рискам — отвечу простыми словами.")
+    elif "анализ" in normalized_text:
         await _send_main_menu(chat_id)
     else:
         await _tg(
             "sendMessage",
             chat_id=chat_id,
-            text="Нажми кнопку «🔍 Анализ» внизу чтобы начать.",
+            text="Нажми кнопку внизу: «🔍 Анализ», «⭐ VIP» или «💡 Обучение».",
             reply_markup=_MAIN_REPLY_KB,
         )
 

@@ -121,6 +121,14 @@ The scanner/analyzer Telegram code remains separate from the farm:
 These paths can notify a human, but they must not enqueue farm tasks, consume PFR paper
 instructions, or execute orders.
 
+Current Telegram analyzer UX: `scripts.telegram_bot` exposes `Анализ`, `VIP`, and
+`Обучение` in the persistent bottom keyboard. `Анализ` now opens bounded pair
+categories instead of dumping the whole active universe at once; `VIP` and `Обучение`
+route to their existing premium/educational handlers; superadmins also see an
+admin-only command helper. This is a product convenience layer only. The farm/PFR paper
+loop still owns paper instructions, paper previews, delivery dry-runs, and training
+exports.
+
 Important legacy boundary: `scripts/telegram_bot.py` still contains an
 execution-adjacent `scripts.auto_execute` hook for the old product flow, but
 `AUTO_TRADE` alone is no longer enough to import or call it. The Telegram analyzer
