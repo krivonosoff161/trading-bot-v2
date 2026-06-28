@@ -18,6 +18,7 @@ SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "research-only, not an order"
+HUMAN_DISCLAIMER = "Это paper-наблюдение, не ордер и не команда к входу."
 
 
 @dataclass(frozen=True)
@@ -83,50 +84,83 @@ def _targets(contract: dict[str, Any]) -> str:
 
 def _family_label(family: str) -> str:
     labels = {
-        "early_tp_tactical": "early take-profit tactical",
-        "reversal_fade": "reversal fade",
-        "liquidity_sweep_reclaim": "liquidity sweep reclaim",
-        "continuation": "continuation",
-        "pullback_continuation": "pullback continuation",
-        "pfr_momentum_breakout": "farm PFR momentum breakout",
-        "pfr_mean_reversion_fade": "farm PFR mean-reversion fade",
+        "early_tp_tactical": "быстрый тактический TP",
+        "reversal_fade": "отбой после растяжения",
+        "liquidity_sweep_reclaim": "снятие ликвидности и возврат",
+        "continuation": "продолжение движения",
+        "pullback_continuation": "откат по тренду",
+        "pfr_momentum_breakout": "PFR импульсный пробой",
+        "pfr_mean_reversion_fade": "PFR возврат к среднему",
     }
     return labels.get(family, family or "unknown")
+
+
+def _side_label(side: str) -> str:
+    normalized = side.strip().lower()
+    if normalized == "long":
+        return "LONG"
+    if normalized == "short":
+        return "SHORT"
+    return side.upper() or "UNKNOWN"
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "armed": "ждет входа",
+        "opened_paper": "открыт в paper-наблюдении",
+        "accepted_for_paper_watch": "принят к paper-наблюдению",
+    }
+    return labels.get(status, status or "unknown")
+
+
+def _reason_label(reason: str) -> str:
+    side = "LONG" if reason.startswith("long ") else "SHORT" if reason.startswith("short ") else ""
+    normalized = reason.removeprefix("long ").removeprefix("short ").strip()
+    labels = {
+        "continuation, not exhausted; trend over 10 bars": "продолжение тренда без признака сильного истощения",
+        "liquidity-sweep + reclaim of structure": "цена сняла ликвидность и вернулась обратно в структуру",
+        "pullback-continuation; dip into trend": "откат внутри тренда, идея на продолжение движения",
+        "tactical early-TP scalp; fast in/out": "быстрый тактический вход с ранней фиксацией",
+    }
+    text = labels.get(normalized, reason or "paper-watch candidate")
+    return f"{side}: {text}" if side else text
 
 
 def render_preview_text(record: dict[str, Any]) -> str:
     contract = dict(record.get("signal_contract") or {})
     meta = dict(contract.get("metadata") or {})
     pair = html.escape(str(record.get("okx_inst_id") or record.get("pair") or "unknown"))
-    family_raw = str(record.get("setup_family") or "unknown")
-    family = html.escape(_family_label(family_raw))
-    side = html.escape(str(record.get("side") or "unknown").upper())
+    family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
+    side = html.escape(_side_label(str(record.get("side") or "unknown")))
     timeframe = html.escape(str(record.get("timeframe") or "unknown"))
     entry = _fmt_price(contract.get("entry"))
     stop = _fmt_price(contract.get("stop"))
     max_hold = html.escape(str(contract.get("max_hold_min") or "n/a"))
-    reason = html.escape(str(meta.get("reason_now") or "paper-watch candidate"))
+    reason = html.escape(_reason_label(str(meta.get("reason_now") or "paper-watch candidate")))
     source = html.escape(str(record.get("source_signal_id") or "unknown"))
     source_name = html.escape(str(contract.get("source") or meta.get("source") or record.get("source") or "paper_lane"))
-    source_verdict = html.escape(str(meta.get("source_validation_verdict") or record.get("source_status") or "armed"))
+    source_status = str(meta.get("source_validation_verdict") or record.get("source_status") or "armed")
+    source_verdict = html.escape(_status_label(source_status))
     setup_id = html.escape(str(meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
     return "\n".join(
         [
-            f"<b>Paper setup: {pair} {timeframe} {side}</b>",
-            REQUIRED_DISCLAIMER,
+            f"<b>Paper-сетап: {pair} · {timeframe} · {side}</b>",
+            HUMAN_DISCLAIMER,
+            f"<code>{REQUIRED_DISCLAIMER}</code>",
             "",
-            f"Strategy: <code>{family}</code>",
-            f"Entry zone: <code>{entry}</code>",
-            f"Stop: <code>{stop}</code>",
-            f"Targets: <code>{_targets(contract)}</code>",
-            f"Max hold: <code>{max_hold} min</code>",
+            f"<b>Идея:</b> {family}",
+            f"<b>Вход:</b> <code>{entry}</code>",
+            f"<b>Стоп:</b> <code>{stop}</code>",
+            f"<b>Цели:</b> <code>{_targets(contract)}</code>",
+            f"<b>Макс. удержание:</b> <code>{max_hold} мин</code>",
             "",
-            f"Why now: {reason}",
-            f"Evidence: <code>{source_name}</code> / <code>{source_verdict}</code>",
-            f"Setup ref: <code>{setup_id}</code>",
-            f"Signal ref: <code>{source}</code>",
+            f"<b>Почему сейчас:</b> {reason}",
+            f"<b>Статус:</b> {source_verdict}",
+            f"<b>Источник:</b> <code>{source_name}</code>",
+            f"<b>Setup:</b> <code>{setup_id}</code>",
+            f"<b>Signal:</b> <code>{source}</code>",
             "",
-            "execution_allowed=false",
+            "<i>Автоисполнение выключено: execution_allowed=false</i>",
         ]
     )
 
@@ -210,9 +244,9 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
     }
+    payload = {**summary, "items": [preview.to_dict() for preview in previews]}
     out_snapshot.write_text(
-        json.dumps({**summary, "items": [preview.to_dict() for preview in previews]},
-                   ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return summary

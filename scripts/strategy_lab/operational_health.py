@@ -29,7 +29,7 @@ except Exception:
 
 from src.research_lab.llm_provider import load_provider  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
-from src.utils.llm_formatter import formatter_provider_status  # noqa: E402
+from src.utils.llm_formatter import formatter_provider_status, premium_vision_status  # noqa: E402
 from src.utils.telegram import telegram_status  # noqa: E402
 from scripts.subscriptions import list_delivery_users  # noqa: E402
 
@@ -760,10 +760,24 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 else "Legacy Telegram chart analyzer uses the Yandex formatter path, not the scanner LLM_PROVIDER router."
             ),
             action=(
-                "Premium vision still needs separate provider/prompt review."
+                "Premium vision is checked by the separate premium_vision_provider gate."
                 if telegram_analyzer_provider_ready
                 else "Audit provider routing before reviving Telegram product delivery."
             ),
+        ),
+        "premium_vision_provider": _gate(
+            "pass" if llm_boundaries["premium_vision_configured"] else "warn",
+            (
+                "VIP screenshot analysis provider is configured via "
+                f"{llm_boundaries['premium_vision_provider']}."
+            )
+            if llm_boundaries["premium_vision_configured"]
+            else "VIP screenshot analysis has no configured image-capable provider.",
+            action=(
+                "Set ALIBABA_API_KEY/ALIBABA_VISION_MODEL or a valid Yandex vision URI "
+                "before using VIP screenshots."
+            )
+            if not llm_boundaries["premium_vision_configured"] else "",
         ),
         "product_analyzer_prompt_integrity": _gate(
             "pass"
@@ -887,6 +901,7 @@ def _build_product_analyzer_revival_checklist(report: dict[str, Any]) -> dict[st
     llm = report["llm_surface_boundaries"]
     analyzer = report["product_analyzer_boundary"]
     launch = report["product_analyzer_launch_contract"]
+    premium_ready = bool(llm["premium_vision_configured"]) and not bool(llm["premium_vision_review_required"])
     text_path_ready = (
         llm["telegram_chart_formatter_prompt_integrity"] is True
         and llm["telegram_chart_formatter_mojibake_detected"] is False
@@ -912,18 +927,21 @@ def _build_product_analyzer_revival_checklist(report: dict[str, Any]) -> dict[st
             "text_prompt_integrity": llm["telegram_chart_formatter_prompt_integrity"],
             "text_prompt_no_mojibake": not llm["telegram_chart_formatter_mojibake_detected"],
             "text_cards_use_effective_shared_router": llm["telegram_chart_formatter_effective_shared_router"],
+            "premium_vision_provider_configured": premium_ready,
             "scanner_formatter_provider_aligned": not llm["scanner_formatter_provider_mismatch"],
             "manual_chart_send_default_off": analyzer["analyze_chart_send_default"] is False,
             "manual_latest_auto_execute_double_gated": launch["manual_latest_auto_execute_import_gated"],
             "farm_pfr_does_not_use_manual_product_stack": launch["farm_pfr_runtime_uses_manual_product_stack"] is False,
             "old_main_does_not_consume_paper_queue": launch["old_main_consumes_paper_queue"] is False,
         },
-        "remaining_review": [
-            "premium_vision_provider_and_prompt",
-            "manual_telegram_card_text_and_chart_payload",
-            "product_alert_rate_limit_and_dedup",
-            "executor_contract_before_any_old_main_reuse",
-        ],
+        "remaining_review": (
+            ([] if premium_ready else ["premium_vision_provider_and_prompt"])
+            + [
+                "manual_telegram_card_text_and_chart_payload",
+                "product_alert_rate_limit_and_dedup",
+                "executor_contract_before_any_old_main_reuse",
+            ]
+        ),
         "allowed_next_step": (
             "Keep using bat/strategy_lab_farm_full_cycle_loop.bat for farm/PFR/paper. "
             "Review generated paper_telegram_preview cards and use paper_telegram_sender "
@@ -988,6 +1006,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     analyze_chart = ROOT / "scripts" / "analyze_chart.py"
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
     llm_formatter_status = formatter_provider_status()
+    premium_status = premium_vision_status()
     product_start_sets_shared_router = _contains(start_bat, "PRODUCT_ANALYZER_LLM_ROUTER=llm_client")
     product_tg_start_sets_shared_router = _contains(
         start_telegram_bot_bat,
@@ -1127,6 +1146,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "telegram_chart_formatter": "src.utils.llm_formatter",
             "telegram_chart_formatter_provider": llm_formatter_status["provider_scope"],
             "telegram_chart_formatter_status": llm_formatter_status,
+            "premium_vision_provider_status": premium_status,
+            "premium_vision_provider": premium_status["provider"],
+            "premium_vision_configured": premium_status["configured"],
+            "premium_vision_review_required": premium_status["review_required"],
             "telegram_chart_formatter_configured": llm_formatter_status["configured"],
             "telegram_chart_formatter_uses_llm_provider_env": llm_formatter_status["follows_llm_provider_env"],
             "telegram_chart_formatter_launcher_sets_shared_router": product_launcher_sets_shared_router,
@@ -1149,7 +1172,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 "Alibaba/Yandex routing in src.utils.llm_client applies to scanner/advisory calls. "
                 "Product analyzer text defaults to the legacy formatter in a bare shell, but the "
                 "reviewed product launchers route text-only formatter calls through the shared "
-                "LLM_PROVIDER path. Premium vision still needs a separate prompt/provider audit."
+                "LLM_PROVIDER path. Premium vision is handled by premium_vision_provider.v1."
             ),
         },
         "legacy_product_text_quality": _text_quality_metrics(
@@ -1331,7 +1354,10 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "launcher_sets_shared_router": product_launcher_sets_shared_router,
             "effective_shared_router": chart_formatter_effective_shared_router,
             "effective_provider": chart_formatter_effective_provider,
-            "premium_vision_yandex_only": "generate_premium_analysis" in llm_formatter_status["yandex_only_entrypoints"],
+            "premium_vision_provider": premium_status["provider"],
+            "premium_vision_configured": premium_status["configured"],
+            "premium_vision_review_required": premium_status["review_required"],
+            "premium_vision_yandex_only": premium_status["provider"] == "yandex",
             "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
             "edu_qa_shared_router_entrypoint": "generate_edu_text" in chart_formatter_effective_shared_entrypoints,
             "farm_pfr_runtime_uses_manual_product_stack": False,
@@ -1504,6 +1530,12 @@ def _print_human(report: dict[str, Any]) -> None:
         f"prompt_integrity={llm_boundaries['telegram_chart_formatter_prompt_integrity']} "
         f"mojibake={llm_boundaries['telegram_chart_formatter_mojibake_detected']} "
         f"analyze_chart_send_default={llm_boundaries['analyze_chart_send_default']}"
+    )
+    print(
+        "premium_vision: "
+        f"provider={llm_boundaries['premium_vision_provider']} "
+        f"configured={llm_boundaries['premium_vision_configured']} "
+        f"review_required={llm_boundaries['premium_vision_review_required']}"
     )
     print(
         "legacy_product_text_quality: "

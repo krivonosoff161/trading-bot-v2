@@ -16,7 +16,7 @@ paper delivery, and what must remain isolated until a separate review.
 | Component | Current role | Verified boundary |
 |---|---|---|
 | `scripts.analyze_chart` | Manual chart/report generator | Writes local report, snapshot, chart, and client summary. Telegram send is off by default. |
-| `src.utils.llm_formatter` | Legacy chart text formatter | UTF-8 prompt is intact and still carries risk/non-claim language. Default provider path is Yandex-only. Text-only `generate_client_text` and `generate_edu_text` can opt in to the shared `llm_client` router with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`; premium vision remains Yandex-only. |
+| `src.utils.llm_formatter` | Legacy chart text formatter plus premium screenshot formatter | UTF-8 prompt is intact and still carries risk/non-claim language. Text-only `generate_client_text` and `generate_edu_text` can opt in to the shared `llm_client` router with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. Premium screenshot analysis uses a separate image-provider path: Alibaba Qwen-VL in `auto` mode when configured, with Yandex/Gemma as an explicit fallback/legacy option. |
 | `scripts.run_latest_analysis` | Interactive wrapper over `analyze_chart` | Execution-adjacent, but the old `scripts.auto_execute` hook now requires both `AUTO_TRADE` and the explicit manual wrapper opt-in `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`. |
 | `scripts.telegram_bot` | Legacy Telegram analyzer bot | Execution-adjacent, but the old `scripts.auto_execute` hook now requires both `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` and `AUTO_TRADE`; not the farm/PFR paper launcher. |
 | `scripts.auto_execute` | Old demo/live order path | Guarded by `AUTO_TRADE`, but can set leverage and place OKX orders when enabled. |
@@ -31,7 +31,7 @@ explicit:
 | Mode | Surface | Current contract |
 |---|---|---|
 | `Анализ` | OKX pair analysis | Shows bounded pair categories (`Сейчас в движении`, `Majors`, `Alts / Meme`) plus manual symbol input. Manual symbols are normalized (`BTC`, `BTC_USDT`, `BTC/USDT-SWAP`) and prompt/SQL-like payloads are rejected before reaching the analyzer. |
-| `VIP` | Premium screenshot analysis | Still uses the existing premium screenshot flow. It remains a separate vision-provider review item and is not a trading decision authority. |
+| `VIP` | Premium screenshot analysis | Uses the dedicated premium screenshot flow. It remains a separate vision-provider surface and is not a trading decision authority. |
 | `Обучение` | Educational Q&A | Uses the existing educational text path. When `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` is active, this text-only path follows the shared `LLM_PROVIDER` router. |
 | `Админ` | Superadmin-only helper panel | Visible only for subscription entries with `plan=superadmin`. It lists subscription commands only and has no trading/execution authority. |
 
@@ -96,8 +96,9 @@ Expected product-surface facts:
   `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`
 - `telegram_chart_formatter_effective_shared_entrypoints =
   ["generate_client_text", "generate_edu_text"]` under that launcher route
-- `scanner_formatter_provider_mismatch = true` when `LLM_PROVIDER=alibaba` but the
-  legacy chart formatter still uses the Yandex-only path
+- `scanner_formatter_provider_mismatch = true` only when the product text formatter is
+  not launched through the reviewed shared router while the scanner uses a different
+  provider path
 - `legacy_product_text_quality.clean = true` for the old operator/Telegram product
   files. This is separate from the core chart prompt integrity: the prompt can be UTF-8
   readable while surrounding legacy UI/log strings still need their own machine check.
@@ -147,11 +148,18 @@ Expected opt-in facts:
 - `telegram_chart_formatter_uses_llm_provider_env = true`
 - `scanner_formatter_provider_mismatch = false`
 - `telegram_chart_formatter_status.shared_router_entrypoints = ["generate_client_text", "generate_edu_text"]`
-- `telegram_chart_formatter_status.yandex_only_entrypoints = ["generate_premium_analysis"]`
+- `telegram_chart_formatter_status.yandex_only_entrypoints = []`
+- `premium_vision_provider_status.schema = premium_vision_provider.v1`
+- `premium_vision_provider = alibaba` when `PREMIUM_VISION_PROVIDER=auto` and
+  `ALIBABA_API_KEY` is configured; `yandex` when explicitly selected or when Alibaba is
+  unavailable
+- `premium_vision_configured = true/false` depending on the active vision provider
+  configuration
 
 This opt-in is deliberately narrow: it only changes text-only formatter calls. It does
-not revive Telegram sending, does not touch `start.bat`, does not call `auto_execute`,
-and does not migrate the premium screenshot analyzer.
+not revive Telegram sending, does not touch `start.bat`, and does not call
+`auto_execute`. Premium screenshots are handled by the separate
+`premium_vision_provider.v1` path, not by the shared text router.
 
 ## Launch Contract
 
@@ -166,7 +174,7 @@ path is not confused with the canonical farm/PFR/paper loop:
 | `scripts.run_latest_analysis` | Manual wrapper | Can import old `auto_execute` only behind `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE` plus `AUTO_TRADE`. |
 | `src.utils.llm_formatter.generate_client_text` | Text-card LLM formatter | Can opt in to `llm_client` with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. |
 | `src.utils.llm_formatter.generate_edu_text` | Educational Q&A formatter | Can opt in to `llm_client` with `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`; text-only and no Telegram/execution authority. |
-| `generate_premium_analysis` | Legacy vision prompt | Still Yandex-only; not migrated by the text-only opt-in. |
+| `generate_premium_analysis` | Premium vision prompt | Separate image-provider path: Alibaba Qwen-VL in auto mode when configured, Yandex/Gemma when explicitly selected or used as fallback. |
 
 This contract is a blocker check, not a readiness claim for unattended product alerts.
 It only proves the old product surfaces remain isolated from the restored paper loop.
@@ -225,8 +233,9 @@ Therefore they must not consume farm/PFR paper instructions directly.
    subscriber/superadmin bot chats and does not fall back to scanner/default chats.
 5. If the old product text surfaces must use the shared provider router, enable only
    the explicit text-only opt-in: `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. Keep
-   reviewing the generated card before any Telegram send. Premium vision still
-   requires a separate provider/prompt migration.
+   reviewing the generated card before any Telegram send. Premium vision remains
+   separate from the text router and must be checked through
+   `premium_vision_provider.v1`.
 6. Keep `run_latest_analysis`, `scripts.telegram_bot`, and `auto_execute` out of the farm
    launch path until a new executor contract exists and has its own paper-first
    validation. The current manual wrapper requires

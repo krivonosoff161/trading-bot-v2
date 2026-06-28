@@ -126,11 +126,11 @@ Operator testing showed two product-layer issues:
    $env:PRODUCT_ANALYZER_LLM_FOR_NO_TRADE = "1"
    ```
 
-2. Premium screenshot analysis failed with Yandex/Gemma `HTTP 403`. This is a provider
-   authorization/configuration failure on the vision-only path. The shared Alibaba text
-   router does not handle images, so this was not fixed by text-provider routing. The bot
-   now reports a clear temporary vision-provider failure instead of a generic retry
-   message.
+2. Premium screenshot analysis failed with Yandex/Gemma `HTTP 403`. The VIP screenshot
+   path now has its own image-provider route: Alibaba Qwen-VL in `auto` mode when
+   configured, with Yandex/Gemma as explicit fallback/legacy. This is deliberately
+   separate from the text-only shared router so image analysis cannot silently inherit
+   scanner/text settings.
 
 Neither change enables order execution, `AUTO_TRADE`, private OKX endpoints, or automatic
 Telegram trade alerts.
@@ -162,16 +162,17 @@ Runtime smoke after the change:
 | Operational health | `paper_telegram_surface=pass`, delivery target `active_subscription_users` |
 | Tests | `79 passed`, ruff clean on touched files |
 
-VIP screenshot analysis is still blocked by provider authorization:
+VIP screenshot analysis was re-routed away from the failing Yandex-only path:
 
 | Surface | Result |
 |---|---|
 | Text LLM A/B | Yandex and Alibaba both returned text successfully. |
-| Premium screenshot vision | Yandex/Gemma returned `HTTP 403 Forbidden` with key/model URI present. |
+| Premium screenshot vision | Dedicated image-provider path: Alibaba Qwen-VL in auto mode, Yandex/Gemma fallback/legacy. |
 
-Interpretation: text LLM routing works; VIP screenshot failure is a Yandex/Gemma vision
-access/configuration issue, not a Telegram delivery failure. The bot reports this as a
-temporary vision-provider failure instead of pretending the screenshot was analyzed.
+Interpretation: text LLM routing works; VIP screenshot handling is now checked through a
+separate provider contract. If the active vision provider is not configured, the bot
+reports a temporary vision-provider failure instead of pretending the screenshot was
+analyzed.
 
 ## 2026-06-28 Product/Farm Debt Closure
 
@@ -187,10 +188,9 @@ This follow-up closed four operator-facing debts without changing trade authorit
    15m execution chart, 5m trigger context, 1H/4H regime/veto context. This documents
    the current main-engine reality instead of pretending every analysis is a single-TF
    chart.
-4. Premium screenshot vision remains blocked by the Yandex/Gemma authorization/config
-   issue. Alibaba is currently integrated for text-only paths; adding Alibaba vision
-   would require a separate image-capable adapter and prompt review, not a silent
-   fallback.
+4. Premium screenshot vision now uses the dedicated `premium_vision_provider.v1`
+   route. Alibaba vision is preferred in `auto` mode when `ALIBABA_API_KEY` is
+   configured; Yandex/Gemma remains available only as an explicit/fallback provider.
 5. Manual and VIP product events are now captured in
    `logs/signals/signal_events.jsonl`, with health checks for schema, paper-only
    status, and execution-disabled rows.
@@ -238,8 +238,8 @@ fallback only when explicitly requested.
    from each subsystem.
 2. Set a canonical `TELEGRAM_NOTIFICATION_CHAT_ID` and keep legacy `SCANNER_CHAT_ID`
    as a documented fallback.
-3. Review VIP screenshot and education prompts separately; this pass only proved shared
-   routing and text-provider A/B for representative text cases.
+3. Continue reviewing VIP screenshot and education prompts separately; shared text
+   routing and premium vision routing are intentionally different provider surfaces.
 4. Add rate limits/dedup for automatic subscriber notifications before unattended sends.
 5. Keep old main execution code isolated until a separate paper-first executor contract
    is reviewed and tested.
