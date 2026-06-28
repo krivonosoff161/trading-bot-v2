@@ -2,6 +2,11 @@
 
 Status: **guarded product surface; not the farm/PFR runtime**.
 
+Current Telegram/LLM notification routing and smoke results are recorded in
+[`telegram_llm_notification_revival_2026-06-28.md`](telegram_llm_notification_revival_2026-06-28.md).
+Use that document for the current public/subscriber/admin notification policy,
+message-audit path, provider A/B result, and test-send commands.
+
 This audit covers the old chart/Telegram/main product path after the Strategy Lab
 paper loop was restored. It answers one narrow question: what can be reused for product
 paper delivery, and what must remain isolated until a separate review.
