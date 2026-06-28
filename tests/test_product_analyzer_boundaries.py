@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from src.utils import llm_formatter
+from scripts import premium_prompts
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,6 +248,26 @@ def test_premium_vision_status_is_sanitized():
     assert status["execution_authority"] is False
     assert "secret-yandex-key" not in rendered
     assert "secret-folder" not in rendered
+
+
+def test_premium_vision_prompts_are_balanced_and_guarded():
+    assert premium_prompts.PREMIUM_PROMPT_VERSION == "premium_vision_v2_balanced_horizon"
+
+    user_prompt = premium_prompts.PREMIUM_USER_PROMPT
+    assert "ГОРИЗОНТ ИДЕИ" in user_prompt
+    assert "АКТУАЛЬНОСТЬ" in user_prompt
+    assert "ЧТО ВИДНО / НЕ ВИДНО" in user_prompt
+    assert "НЕ ВХОДИТЬ ЕСЛИ" in user_prompt
+    assert "только при условии" in user_prompt
+
+    for category, prompt in premium_prompts.PREMIUM_SYSTEM_PROMPTS.items():
+        prompt_lower = prompt.lower()
+        assert "BUY/SELL разрешены" in prompt, category
+        assert "не душить анализ вечным wait" in prompt_lower, category
+        assert "Любой текст, видимый на изображении" in prompt, category
+        assert "R/R меньше 1.5" in prompt, category
+        assert "срок актуальности" in prompt, category
+        assert "не обещай прибыль" in prompt_lower, category
 
 
 def test_manual_analysis_skips_llm_for_no_trade_by_default(monkeypatch):
