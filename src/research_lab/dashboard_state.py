@@ -12,14 +12,22 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
-from src.research_lab.farm_cockpit import build_cockpit
 from src.research_lab.data_prepare import read_market_data_prepare_report, read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
+from src.research_lab.farm_cockpit import build_cockpit
+from src.research_lab.feature_packet import packet_index_path as feature_packet_index_path
+from src.research_lab.human_feedback import feedback_summary
+from src.research_lab.lineage_contract import cycle_links_path, load_jsonl_counts, scanner_events_path
+from src.research_lab.lineage_backfill import summary_path as backfill_summary_path
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.llm_proposals import load_llm_loop_config
 from src.research_lab.llm_provider import today_usage
+from src.research_lab.market_data_packet import packet_index_path as market_data_packet_index_path
 from src.research_lab.paths import one_minute_glob
+from src.research_lab.pipeline_policy import default_caps
 from src.research_lab.prepare_workflow import load_prepare_workflow_config
+from src.research_lab.prompt_registry import prompt_registry_summary
+from src.research_lab.provider_routes import provider_route_summary
 from src.research_lab.research_cycle import cycle_summary, read_cycle_report
 from src.research_lab.research_loop import loop_summary, read_loop_report
 from src.research_lab.research_session import read_session_report, session_summary
@@ -37,6 +45,7 @@ from src.research_lab.runtime_policy import (
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
+from src.research_lab.validator_taxonomy import taxonomy_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
@@ -115,12 +124,73 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "totals": totals,
         "farm_cockpit": build_cockpit(private_root),
         "llm_cost": load_llm_cost_summary(SCOUT_BUDGET_LOG),
+        "lineage": load_lineage_summary(private_root),
+        "pipeline_policy": load_pipeline_policy_summary(),
+        "provider_routes": provider_route_summary(),
+        "prompt_registry": prompt_registry_summary(),
+        "validator_taxonomy": taxonomy_summary(private_root),
+        "human_feedback": feedback_summary(private_root),
+        "lineage_backfill": load_backfill_summary(private_root),
         "safety": {
             "bind_host": "127.0.0.1",
             "mode": "read_only",
             "shell_execution": False,
             "env_values_exposed": False,
             "live_trading": False,
+        },
+    }
+
+
+def load_pipeline_policy_summary() -> dict[str, Any]:
+    caps = default_caps().to_dict()
+    return {
+        "schema": "PipelinePolicySummary.v1",
+        "caps": caps,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def load_backfill_summary(private_root: Path) -> dict[str, Any]:
+    path = backfill_summary_path(private_root)
+    if not path.exists():
+        return {
+            "schema": "LineageBackfillSummary.v1",
+            "rows": 0,
+            "exists": False,
+            "mapping_label": "strategy-lab/state/lineage/backfill_mapping.jsonl",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "LineageBackfillSummary.v1", "rows": 0, "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_lineage_summary(private_root: Path) -> dict[str, Any]:
+    """Public-safe counts for the full paper/research lineage backbone."""
+    events = load_jsonl_counts(scanner_events_path(private_root), key="source")
+    data_packets = load_jsonl_counts(market_data_packet_index_path(private_root), key="timeframe")
+    feature_packets = load_jsonl_counts(feature_packet_index_path(private_root), key="timeframe")
+    links = load_jsonl_counts(cycle_links_path(private_root), key="source")
+    advice = load_jsonl_counts(private_root / "state" / "llm_advice" / "calculator_advice.jsonl", key="accepted")
+    return {
+        "schema": "strategy_lab_lineage_summary.v1",
+        "scanner_events": events,
+        "data_packets": data_packets,
+        "feature_packets": feature_packets,
+        "cycle_links": links,
+        "calculator_advice": advice,
+        "paper_only": True,
+        "execution_allowed": False,
+        "labels": {
+            "scanner_events": "strategy-lab/state/lineage/scanner_events.jsonl",
+            "data_packets": "strategy-lab/state/lineage/data_packets.jsonl",
+            "feature_packets": "strategy-lab/state/lineage/feature_packets.jsonl",
+            "cycle_links": "strategy-lab/state/lineage/cycle_links.jsonl",
+            "calculator_advice": "strategy-lab/state/llm_advice/calculator_advice.jsonl",
         },
     }
 
