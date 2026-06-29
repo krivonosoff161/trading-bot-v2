@@ -9,10 +9,12 @@ import pytest
 from src.research_lab.dashboard_server import default_private_root, render_html
 from src.research_lab.dashboard_state import (
     aggregate_runs,
+    load_lineage_summary,
     load_completed_runs,
     load_dashboard_state,
     resolve_allowed_path,
 )
+from src.research_lab.paper_research_status import build_status
 
 
 def _write_run(root: Path, name: str) -> Path:
@@ -206,7 +208,94 @@ def test_dashboard_state_has_research_summary_fields(tmp_path, monkeypatch):
     state = load_dashboard_state(tmp_path)
     assert "obsidian_notes" in state
     assert "next_run" in state
+    assert "lineage" in state
+    assert "pipeline_policy" in state
+    assert "provider_routes" in state
+    assert "prompt_registry" in state
+    assert "validator_taxonomy" in state
+    assert "human_feedback" in state
+    assert state["prompt_registry"]["schema"] == "PromptRegistry.v1"
     assert state["next_run"].get("allowed") is True  # no prior runs -> allowed
+
+
+def test_lineage_summary_counts_private_indexes(tmp_path):
+    lineage = tmp_path / "state" / "lineage"
+    lineage.mkdir(parents=True)
+    (lineage / "scanner_events.jsonl").write_text(
+        json.dumps({"source": "farm"}) + "\n",
+        encoding="utf-8",
+    )
+    (lineage / "data_packets.jsonl").write_text(
+        json.dumps({"timeframe": "15m"}) + "\n",
+        encoding="utf-8",
+    )
+    (lineage / "feature_packets.jsonl").write_text(
+        json.dumps({"timeframe": "15m"}) + "\n",
+        encoding="utf-8",
+    )
+    (lineage / "cycle_links.jsonl").write_text(
+        json.dumps({"source": "farm"}) + "\n",
+        encoding="utf-8",
+    )
+
+    summary = load_lineage_summary(tmp_path)
+
+    assert summary["scanner_events"]["rows"] == 1
+    assert summary["data_packets"]["by_key"] == {"15m": 1}
+    assert summary["feature_packets"]["rows"] == 1
+    assert summary["cycle_links"]["by_key"] == {"farm": 1}
+    assert summary["execution_allowed"] is False
+
+
+def test_paper_research_status_is_sanitized(tmp_path):
+    lineage = tmp_path / "state" / "lineage"
+    lineage.mkdir(parents=True)
+    (lineage / "scanner_events.jsonl").write_text(json.dumps({"source": "farm"}) + "\n", encoding="utf-8")
+    (lineage / "data_packets.jsonl").write_text(json.dumps({"timeframe": "15m"}) + "\n", encoding="utf-8")
+    (lineage / "feature_packets.jsonl").write_text(json.dumps({"timeframe": "15m"}) + "\n", encoding="utf-8")
+    (lineage / "cycle_links.jsonl").write_text(json.dumps({"source": "farm"}) + "\n", encoding="utf-8")
+    (lineage / "backfill_summary.json").write_text(
+        json.dumps({"schema": "LineageBackfillSummary.v1", "rows": 1, "paper_only": True}),
+        encoding="utf-8",
+    )
+
+    status = build_status(tmp_path)
+
+    assert status["schema"] == "PaperResearchStatus.v1"
+    assert status["ready_flags"]["has_data_packets"] is True
+    assert status["execution_allowed"] is False
+    assert status["secrets_exposed"] is False
+    assert status["prompt_registry"]["schema"] == "PromptRegistry.v1"
+    assert status["validator_taxonomy"]["schema"] == "ValidatorTaxonomy.v1"
+    assert str(tmp_path) not in json.dumps(status)
+
+
+def test_validator_taxonomy_maps_memory_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.research_lab.dashboard_state.SCOUT_BUDGET_LOG", tmp_path / "missing.jsonl")
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    derived.joinpath("setup_outcome_memory.json").write_text(
+        json.dumps(
+            {
+                "schema": "setup_outcome_memory.v1",
+                "items": [
+                    {"outcome_class": "CONFIRMED_BAD"},
+                    {"outcome_class": "WRONG_EXIT"},
+                    {"outcome_class": "TACTICAL_1_2_TRADE"},
+                    {"lite_status": "REGIME_SPECIFIC"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = load_dashboard_state(tmp_path)
+    by_class = state["validator_taxonomy"]["by_class"]
+
+    assert by_class["confirmed_bad"] == 1
+    assert by_class["wrong_exit"] == 1
+    assert by_class["tactical_candidate"] == 1
+    assert by_class["regime_only"] == 1
 
 
 def test_dashboard_state_shows_proposal_counts(tmp_path, monkeypatch):

@@ -207,7 +207,7 @@ def _snapshot_field_breakdown(path: Path, fields: tuple[str, ...]) -> dict[str, 
     return metrics
 
 
-def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str, Any]:
+def _jsonl_schema_metrics(path: Path, *, schema: str | tuple[str, ...] | None = None) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
@@ -234,7 +234,11 @@ def _jsonl_schema_metrics(path: Path, *, schema: str | None = None) -> dict[str,
         except json.JSONDecodeError:
             metrics["invalid_json"] += 1
             continue
-        if schema is None or row.get("schema") == schema:
+        if schema is None:
+            metrics["schema_rows"] += 1
+        elif isinstance(schema, tuple) and row.get("schema") in schema:
+            metrics["schema_rows"] += 1
+        elif isinstance(schema, str) and row.get("schema") == schema:
             metrics["schema_rows"] += 1
         if row.get("paper_only") is False:
             metrics["paper_only_false"] += 1
@@ -1430,7 +1434,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
         "training_data": {
             "paper_signal_training": _jsonl_schema_metrics(
                 paper_signal_training,
-                schema="PaperSignalTrainingRow.v1",
+                schema=("TrainingRow.v2", "PaperSignalTrainingRow.v2", "PaperSignalTrainingRow.v1"),
             ),
             "paper_signal_training_freshness": _freshness_metrics(
                 paper_signal_training,

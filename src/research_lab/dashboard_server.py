@@ -97,6 +97,13 @@ def render_html(state: dict) -> str:
     llm_loop = state.get("llm_loop") or {}
     queue_capacity = state.get("queue_capacity") or {}
     farm_cockpit = state.get("farm_cockpit") or {}
+    lineage = state.get("lineage") or {}
+    pipeline_policy = state.get("pipeline_policy") or {}
+    provider_routes = state.get("provider_routes") or {}
+    prompt_registry = state.get("prompt_registry") or {}
+    validator_taxonomy = state.get("validator_taxonomy") or {}
+    human_feedback = state.get("human_feedback") or {}
+    lineage_backfill = state.get("lineage_backfill") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -170,6 +177,16 @@ def render_html(state: dict) -> str:
   </section>
 
   <section class="section card">
+    <h2>Paper Research Lineage</h2>
+    {lineage_html(lineage)}
+  </section>
+
+  <section class="section card">
+    <h2>Pipeline Safety</h2>
+    {pipeline_safety_html(pipeline_policy, provider_routes, prompt_registry, validator_taxonomy, human_feedback, lineage_backfill)}
+  </section>
+
+  <section class="section card">
     <h2>Proposals (closed loop)</h2>
     {proposals_html(proposals, llm_review, queue_capacity)}
   </section>
@@ -230,6 +247,88 @@ def render_html(state: dict) -> str:
 def metric_card(label: str, value: object, cls: str = "") -> str:
     klass = f"metric {cls}".strip()
     return f'<div class="card"><div class="muted">{esc(label)}</div><div class="{klass}">{esc(value)}</div></div>'
+
+
+def lineage_html(lineage: dict) -> str:
+    if not lineage:
+        return '<p class="muted">No lineage summary loaded.</p>'
+    events = lineage.get("scanner_events") or {}
+    data_packets = lineage.get("data_packets") or {}
+    feature_packets = lineage.get("feature_packets") or {}
+    links = lineage.get("cycle_links") or {}
+    advice = lineage.get("calculator_advice") or {}
+    labels = lineage.get("labels") or {}
+    rows = [
+        ("scanner events", events.get("rows", 0), events.get("by_key", {}), labels.get("scanner_events", "")),
+        ("data packets", data_packets.get("rows", 0), data_packets.get("by_key", {}), labels.get("data_packets", "")),
+        ("feature packets", feature_packets.get("rows", 0), feature_packets.get("by_key", {}), labels.get("feature_packets", "")),
+        ("cycle links", links.get("rows", 0), links.get("by_key", {}), labels.get("cycle_links", "")),
+        ("calculator advice", advice.get("rows", 0), advice.get("by_key", {}), labels.get("calculator_advice", "")),
+    ]
+    body = "".join(
+        "<tr>"
+        f"<td>{esc(name)}</td><td>{esc(count)}</td><td>{esc(json.dumps(by_key, ensure_ascii=False, sort_keys=True))}</td>"
+        f"<td class=\"path\">{esc(label)}</td>"
+        "</tr>"
+        for name, count, by_key, label in rows
+    )
+    return (
+        "<table><tr><th>artifact</th><th>rows</th><th>breakdown</th><th>private label</th></tr>"
+        f"{body}</table>"
+        '<p class="muted">paper_only=true · execution_allowed=false · raw packets stay under private root</p>'
+    )
+
+
+def pipeline_safety_html(
+    policy: dict,
+    routes: dict,
+    prompts: dict,
+    validator: dict,
+    feedback: dict,
+    backfill: dict,
+) -> str:
+    caps = policy.get("caps") or {}
+    cap_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in caps.items()
+    )
+    route_rows = "".join(
+        "<tr>"
+        f"<td>{esc(row.get('surface'))}</td><td>{esc(row.get('provider'))}</td>"
+        f"<td>{esc(row.get('model'))}</td><td>{esc(row.get('prompt_version'))}</td>"
+        f"<td>{esc(row.get('fallback'))}</td>"
+        f"<td>{esc(row.get('active'))}</td>"
+        "</tr>"
+        for row in (routes.get("routes") or [])
+    )
+    prompt_rows = "".join(
+        "<tr>"
+        f"<td>{esc(row.get('surface'))}</td><td>{esc(row.get('role'))}</td>"
+        f"<td>{esc(row.get('version'))}</td><td>{esc(row.get('prompt_hash'))}</td>"
+        f"<td>{esc(row.get('schema_gate'))}</td>"
+        f"<td>{esc(', '.join(row.get('forbidden') or []))}</td>"
+        "</tr>"
+        for row in (prompts.get("rows") or [])
+    )
+    validator_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((validator.get("by_class") or {}).items())
+    )
+    return (
+        "<h3>Caps</h3>"
+        f"<table><tr><th>cap</th><th>value</th></tr>{cap_rows}</table>"
+        "<h3>Provider Routes</h3>"
+        "<table><tr><th>surface</th><th>provider</th><th>model</th><th>prompt</th><th>fallback</th><th>active</th></tr>"
+        f"{route_rows}</table>"
+        "<h3>Prompt Registry</h3>"
+        "<table><tr><th>surface</th><th>role</th><th>version</th><th>hash</th><th>gate</th><th>forbidden</th></tr>"
+        f"{prompt_rows}</table>"
+        "<h3>Validator Taxonomy</h3>"
+        f"<table><tr><th>class</th><th>rows</th></tr>{validator_rows}</table>"
+        f"<p>feedback rows: {esc(feedback.get('rows', 0))} · {esc(json.dumps(feedback.get('by_label') or {}, ensure_ascii=False, sort_keys=True))}</p>"
+        f"<p>backfill rows: {esc(backfill.get('rows', 0))} · exists={esc(backfill.get('exists', False))}</p>"
+        '<p class="muted">Provider status exposes no keys. Feedback does not change validator verdicts.</p>'
+    )
 
 
 def latest_run_html(run: dict) -> str:
