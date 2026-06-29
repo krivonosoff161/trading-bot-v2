@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
+from src.research_lab.trade_math import CostAssumptions, capture, gross_pct, net_pct
 
 # Per-timeframe holding horizon (the owner's gradation): max_hold in BARS.
 HORIZON_BARS = {"1m": 5, "5m": 24, "15m": 28, "1h": 30, "4h": 9, "1d": 5}
@@ -236,12 +237,18 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
 
 
 def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_held, long_):
-    leg2 = (exit_px - entry_px if long_ else entry_px - exit_px) / entry_px * 100
+    side = "long" if long_ else "short"
+    leg2 = gross_pct(entry_px, exit_px, side)
     # remaining size is 0.5 after a partial, else full
-    net = banked + 0.5 * leg2 if partial_done else leg2
+    gross = banked + 0.5 * leg2 if partial_done else leg2
+    assumptions = CostAssumptions()
+    net = net_pct(gross, assumptions)
     sig.status = "closed_paper"
     sig.outcome = {"result": kind, "entry": round(entry_px, 8), "exit": round(exit_px, 8),
-                   "net_pct": round(net, 3), "banked_pct": round(banked, 4), "partial_done": partial_done,
+                   "gross_pct": round(gross, 3), "net_pct": round(net, 3),
+                   "fees_bps_round_trip": assumptions.fees_bps_round_trip,
+                   "slippage_bps_round_trip": assumptions.slippage_bps_round_trip,
+                   "banked_pct": round(banked, 4), "partial_done": partial_done,
                    "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3), "bars_held": bars_held,
                    "reached_tp1": bool(partial_done or kind == "take")}
     return sig
@@ -272,7 +279,7 @@ def review(sig: PaperActionSignal) -> PaperActionSignal:
     net = float(o.get("net_pct") or 0.0)
     mfe = float(o.get("mfe_pct") or 0.0)
     mae = float(o.get("mae_pct") or 0.0)
-    capture = round(net / mfe, 3) if mfe > 0 else 0.0
+    captured = round(capture(net, mfe), 3)
     r1 = sig.risk_pct or 1e-9                 # 1R in % — diagnose on R-multiples, not absolute %
     mfe_r, mae_r = mfe / r1, mae / r1
     if res in ("no_data",):
@@ -309,7 +316,7 @@ def review(sig: PaperActionSignal) -> PaperActionSignal:
         diag = "uncharacterized"
     sig.review = {"diagnosis": diag, "net_pct": round(net, 3), "net_r": round(net / r1, 2),
                   "mfe_pct": mfe, "mae_pct": mae, "mfe_r": round(mfe_r, 2), "risk_pct": sig.risk_pct,
-                  "capture_of_mfe": capture, "bars_held": o.get("bars_held"),
+                  "capture_of_mfe": captured, "bars_held": o.get("bars_held"),
                   "deterministic": True, "llm_diagnosis": None,
                   "note": "deterministic metrics first; llm_diagnosis is an optional constrained hook"}
     if sig.status == "closed_paper" or sig.status == "expired":

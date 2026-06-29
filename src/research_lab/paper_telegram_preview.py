@@ -8,6 +8,7 @@ IDs, and never sends network requests.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 from dataclasses import asdict, dataclass, field
@@ -16,6 +17,7 @@ from typing import Any
 
 SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
+CARD_TEMPLATE_VERSION = "paper_telegram_card_v2_human_ru"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "research-only, not an order"
 HUMAN_DISCLAIMER = "Это paper-наблюдение, не ордер и не команда к входу."
@@ -23,6 +25,7 @@ HUMAN_DISCLAIMER = "Это paper-наблюдение, не ордер и не �
 
 @dataclass(frozen=True)
 class PaperTelegramPreview:
+    telegram_card_id: str
     preview_id: str
     instruction_id: str
     source_signal_id: str
@@ -33,6 +36,7 @@ class PaperTelegramPreview:
     consumer_status: str
     text: str
     problems: list[str] = field(default_factory=list)
+    card_template_version: str = CARD_TEMPLATE_VERSION
     paper_only: bool = True
     execution_allowed: bool = False
     schema: str = SCHEMA
@@ -59,6 +63,10 @@ def _jsonl_path(private_root: Path) -> Path:
 
 def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_preview.json"
+
+
+def _card_hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _fmt_price(value: Any) -> str:
@@ -117,10 +125,18 @@ def _reason_label(reason: str) -> str:
     side = "LONG" if reason.startswith("long ") else "SHORT" if reason.startswith("short ") else ""
     normalized = reason.removeprefix("long ").removeprefix("short ").strip()
     labels = {
-        "continuation, not exhausted; trend over 10 bars": "продолжение тренда без признака сильного истощения",
-        "liquidity-sweep + reclaim of structure": "цена сняла ликвидность и вернулась обратно в структуру",
-        "pullback-continuation; dip into trend": "откат внутри тренда, идея на продолжение движения",
-        "tactical early-TP scalp; fast in/out": "быстрый тактический вход с ранней фиксацией",
+        "continuation, not exhausted; trend over 10 bars": (
+            "продолжение тренда без признака сильного истощения"
+        ),
+        "liquidity-sweep + reclaim of structure": (
+            "цена сняла ликвидность и вернулась обратно в структуру"
+        ),
+        "pullback-continuation; dip into trend": (
+            "откат внутри тренда, идея на продолжение движения"
+        ),
+        "tactical early-TP scalp; fast in/out": (
+            "быстрый тактический вход с ранней фиксацией"
+        ),
     }
     text = labels.get(normalized, reason or "paper-watch candidate")
     return f"{side}: {text}" if side else text
@@ -181,6 +197,8 @@ def validate_preview(record: dict[str, Any], text: str) -> list[str]:
         problems.append("missing_execution_boundary")
     if "<script" in text.lower():
         problems.append("unsafe_html")
+    if any(marker in text for marker in ("СЃ", "С‚", "Р°", "Рµ", "РЅ", "Рё", "вЂ", "Â")):
+        problems.append("mojibake_text")
     return problems
 
 
@@ -204,9 +222,11 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
             break
         text = render_preview_text(row)
         problems = validate_preview(row, text)
+        preview_id = f"preview_{row.get('instruction_id') or len(previews)}"
         previews.append(
             PaperTelegramPreview(
-                preview_id=f"preview_{row.get('instruction_id') or len(previews)}",
+                telegram_card_id=f"tgcard_{row.get('source_signal_id') or preview_id}_{_card_hash(text)}",
+                preview_id=preview_id,
                 instruction_id=str(row.get("instruction_id") or ""),
                 source_signal_id=str(row.get("source_signal_id") or ""),
                 pair=str(row.get("okx_inst_id") or row.get("pair") or ""),
@@ -237,6 +257,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "invalid": invalid,
         "skipped_rejected": skipped_rejected,
         "limit": int(limit),
+        "card_template_version": CARD_TEMPLATE_VERSION,
         "max_message_chars": MAX_MESSAGE_CHARS,
         "paper_only": True,
         "execution_allowed": False,

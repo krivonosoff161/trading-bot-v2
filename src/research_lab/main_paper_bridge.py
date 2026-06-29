@@ -14,6 +14,7 @@ from typing import Any
 
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import load_signals
+from src.research_lab.trade_math import midpoint
 from src.strategy.signal_contract import ExitRule, FollowRule, SignalContract
 
 SCHEMA = "MainPaperInstruction.v1"
@@ -65,8 +66,7 @@ def _iso_from_epoch(ts: float) -> str:
 
 
 def _entry_midpoint(sig: PaperActionSignal) -> float:
-    lo, hi = sig.entry_zone
-    return round((float(lo) + float(hi)) / 2.0, 10)
+    return midpoint(sig.entry_zone)
 
 
 def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContract:
@@ -111,6 +111,13 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
             "expires_at": sig.expires_at,
             "max_hold_bars": sig.max_hold_bars,
             "data_fingerprint": sig.data_fingerprint,
+            "scanner_event_id": sig.scanner_event_id,
+            "data_packet_id": sig.data_packet_id,
+            "feature_packet_id": sig.feature_packet_id,
+            "setup_candidate_id": sig.setup_candidate_id,
+            "sweep_run_id": sig.sweep_run_id,
+            "validation_id": sig.validation_id,
+            "llm_interpretation_ref": sig.llm_interpretation_ref,
             "dedup_key": sig.dedup_key,
             "mode": sig.mode,
             "exit_mode": sig.exit_mode,

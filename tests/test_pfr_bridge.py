@@ -620,7 +620,8 @@ class TestBEStop:
         candles = [_c(1, 100.0, 97.5, 98.5), _c(2, 99.5, 98.5, 99.0), _c(3, 99.0, 97.0, 97.5)]
         s = lane.review(lane.observe(sig, candles))
         assert s.outcome["result"] == "simple_be", f"Expected simple_be, got {s.outcome['result']}"
-        assert abs(s.outcome["net_pct"]) < 0.01  # ~= 0 (exit at breakeven)
+        assert abs(s.outcome["gross_pct"]) < 0.01  # ~= 0 before paper costs
+        assert s.outcome["net_pct"] == -0.1
         assert s.review["diagnosis"] == "breakeven_save"
 
     def test_short_be_stop_fires_and_result_is_simple_be(self):
@@ -629,7 +630,8 @@ class TestBEStop:
         candles = [_c(1, 102.5, 100.0, 101.0), _c(2, 101.5, 100.8, 101.0), _c(3, 102.5, 101.5, 102.0)]
         s = lane.review(lane.observe(sig, candles))
         assert s.outcome["result"] == "simple_be", f"Expected simple_be, got {s.outcome['result']}"
-        assert abs(s.outcome["net_pct"]) < 0.01
+        assert abs(s.outcome["gross_pct"]) < 0.01
+        assert s.outcome["net_pct"] == -0.1
         assert s.review["diagnosis"] == "breakeven_save"
 
     def test_same_bar_ambiguity_honors_original_stop(self):
