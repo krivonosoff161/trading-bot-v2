@@ -237,6 +237,14 @@ def _print_cycle(out: dict) -> None:
             f"rows={train.get('rows', 0)} terminal_only={train.get('terminal_only')} "
             f"paper_only={train.get('paper_only')}"
         )
+    advisor = out.get("calculator_advisor") or {}
+    if advisor:
+        print(
+            "  calculator_advisor: "
+            f"processed={advisor.get('processed', 0)} accepted={advisor.get('accepted', 0)} "
+            f"skipped={advisor.get('skipped', 0)} blocked={advisor.get('blocked', 0)} "
+            f"reason_counts={advisor.get('reason_counts', {})}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -254,17 +262,99 @@ def _cycle_signature(out: dict) -> tuple:
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
+    calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
-        telegram_delivery, training_export,
+        telegram_delivery, training_export, calculator_advisor,
         bool(out.get("errors")),
     )
+
+
+def _provider_env(args) -> dict[str, str]:
+    env = dict(os.environ)
+    if args.calculator_provider:
+        env["STRATEGY_LAB_LLM_ENABLED"] = "1"
+        env["STRATEGY_LAB_LLM_PROVIDER"] = args.calculator_provider
+    if args.calculator_model:
+        env["STRATEGY_LAB_LLM_MODEL_CHEAP"] = args.calculator_model
+    if args.calculator_base_url:
+        env["STRATEGY_LAB_LLM_BASE_URL"] = args.calculator_base_url
+    if args.calculator_timeout:
+        env["STRATEGY_LAB_LLM_TIMEOUT"] = str(args.calculator_timeout)
+    return env
+
+
+def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict:
+    result = {
+        "schema": "CalculatorAdvisorStage.v1",
+        "processed": 0,
+        "accepted": 0,
+        "skipped": 0,
+        "deferred": 0,
+        "blocked": 0,
+        "reason_counts": {},
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    if not apply:
+        result["skipped"] = 1
+        result["reason_counts"] = {"dry_run": 1}
+        return result
+    max_calls = max(0, int(getattr(args, "calculator_advisor_max_calls", 1)))
+    if max_calls < 1:
+        result["skipped"] = 1
+        result["reason_counts"] = {"cap_zero": 1}
+        return result
+    from src.research_lab.calculator_advisor import request_calculator_advice
+    from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
+    from src.research_lab.feature_packet import latest_feature_packet_path, load_feature_packet
+    from src.research_lab.lineage_contract import write_cycle_link
+    from src.research_lab.llm_provider import load_provider
+
+    packet_path = latest_feature_packet_path(private_root)
+    if packet_path is None:
+        result["deferred"] = 1
+        result["reason_counts"] = {"missing_feature_packet": 1}
+        return result
+    packet = load_feature_packet(packet_path)
+    advice = request_calculator_advice(
+        private_root,
+        packet,
+        load_provider(_provider_env(args)),
+        allow_public_output=bool(getattr(args, "allow_public_output", False)),
+    )
+    reason = "accepted" if advice.accepted else (advice.problems[0] if advice.problems else "llm_schema_reject")
+    result["processed"] = 1
+    result["accepted"] = 1 if advice.accepted else 0
+    result["blocked"] = 0 if advice.accepted else 1
+    result["reason_counts"] = {reason: 1}
+    result["advisor_ref"] = advice.advisor_ref
+    result["feature_packet_id"] = packet.feature_packet_id
+    result["provider"] = advice.provider
+    result["model"] = advice.model
+    result["sweep_proposals"] = compile_sweep_proposals(private_root, advice)
+    write_cycle_link(
+        private_root,
+        {
+            "feature_packet_id": packet.feature_packet_id,
+            "llm_interpretation_ref": advice.advisor_ref,
+            "source": "calculator_advisor",
+            "mode": packet.mode,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
+    return result
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
     provider, flow_provider, oi_provider = _providers(args, apply)
     events = _read_intake(args.max_plan_events)
+    if apply and events:
+        from src.research_lab.lineage_contract import scanner_event_from_intake, write_scanner_event
+        for event in events[: max(0, int(getattr(args, "max_plan_events", 20)))]:
+            write_scanner_event(private_root, scanner_event_from_intake(event, mode="live"))
     snapshot, discovery_info = _discovery(args, private_root, apply)
     out = run_coordinator_cycle(
         tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
@@ -375,6 +465,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         "where": "paper_signal_training_export",
                         "error": str(exc),
                     })
+                if getattr(args, "run_calculator_advisor", False):
+                    try:
+                        out["calculator_advisor"] = _run_calculator_advisor_stage(args, private_root, apply)
+                    except Exception as exc:  # noqa: BLE001 - advisory stage must not break the cycle
+                        out.setdefault("errors", []).append({"where": "calculator_advisor", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
@@ -403,6 +498,18 @@ def main() -> None:
     ap.add_argument("--run-paper", action="store_true", help="simulate paper outcomes from validated setup cards")
     ap.add_argument("--run-paper-signals", action="store_true",
                     help="run one bounded operational paper-watch cycle (observe+generate; research-only)")
+    ap.add_argument("--run-calculator-advisor", action="store_true",
+                    help="run bounded calculator advisor over the latest feature packet (requires paper signals)")
+    ap.add_argument("--calculator-advisor-max-calls", type=int, default=1,
+                    help="max calculator advisor calls per cycle")
+    ap.add_argument("--calculator-provider", default="",
+                    help="optional LLM provider override for calculator advisor, e.g. ollama")
+    ap.add_argument("--calculator-model", default="",
+                    help="optional calculator model override, e.g. calculator")
+    ap.add_argument("--calculator-base-url", default="",
+                    help="optional OpenAI-compatible base URL for calculator advisor")
+    ap.add_argument("--calculator-timeout", type=float, default=0.0,
+                    help="optional calculator advisor timeout seconds")
     ap.add_argument("--true-forward-max-candidates", type=int, default=20,
                     help="max true-forward records collected per apply cycle; set 0 for wiring smoke checks")
     ap.add_argument("--paper-signals-max-new", type=int, default=5,
