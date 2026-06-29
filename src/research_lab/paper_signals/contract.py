@@ -44,6 +44,13 @@ class PaperActionSignal:
     boundary_ts: int = 0              # last bar ts at creation; outcome is measured on bars after this
     data_fingerprint: str = ""        # hash of the decision window -> new bars => new fingerprint
     dedup_key: str = ""               # symbol|tf|family -> identity across re-runs (no duplicate spam)
+    scanner_event_id: str = ""
+    data_packet_id: str = ""
+    feature_packet_id: str = ""
+    setup_candidate_id: str = ""
+    sweep_run_id: str = ""
+    validation_id: str = ""
+    llm_interpretation_ref: str = ""
     mode: str = "live"                # "live" (boundary=now, forward) | "replay" (historical-tail diagnostic)
     exit_mode: str = "partial_be"     # "partial_be" (bank 0.5 at tp1 + move stop to breakeven) | "fixed"
     outcome: dict[str, Any] = field(default_factory=dict)

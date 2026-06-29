@@ -39,10 +39,13 @@ def test_training_row_contains_outcome_and_review_fields():
 
     row = training_row(sig)
 
-    assert row["schema"] == "PaperSignalTrainingRow.v1"
+    assert row["schema"] == "TrainingRow.v2"
+    assert "PaperSignalTrainingRow.v1" in row["schema_compat"]
     assert row["paper_only"] is True
+    assert row["execution_allowed"] is False
     assert row["entry_mid"] == 100.5
     assert row["tp1"] == 105.0
+    assert row["geometry"]["rr_tp1"] > 0
     assert row["result"] == "take"
     assert row["diagnosis"] == "good_signal"
 
@@ -60,9 +63,77 @@ def test_export_training_rows_uses_latest_terminal_state(tmp_path):
     rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
 
     assert summary["rows"] == 1
+    assert summary["row_schema"] == "TrainingRow.v2"
+    assert summary["execution_allowed"] is False
     assert rows[0]["status"] == "reviewed"
     assert rows[0]["result"] == "stop"
     assert summary["by_diagnosis"] == {"wrong_direction": 1}
+
+
+def test_export_training_rows_links_telegram_preview(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+    preview = tmp_path / "state" / "derived" / "paper_telegram_preview.json"
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "telegram_card_id": "tgcard_1",
+                        "text": "human paper card",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["telegram_card_id"] == "tgcard_1"
+    assert rows[0]["final_card_text"] == "human paper card"
+    assert rows[0]["final_card_hash"]
+
+
+def test_export_training_rows_links_calculator_advice(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.feature_packet_id = "fp1"
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "late_but_worked"}
+    append_signal(tmp_path, sig)
+    advice = tmp_path / "state" / "llm_advice" / "calculator_advice.jsonl"
+    advice.parent.mkdir(parents=True, exist_ok=True)
+    advice.write_text(
+        json.dumps(
+            {
+                "calculator_advice_id": "advisor_1",
+                "advisor_ref": "advisor_1",
+                "feature_packet_id": "fp1",
+                "accepted": True,
+                "provider": "ollama",
+                "model": "calculator",
+                "prompt_version": "calculator_advisor_v2_feature_packet_json",
+                "prompt_hash": "abc123",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["calculator_advice_id"] == "advisor_1"
+    assert rows[0]["llm_interpretation_ref"] == "advisor_1"
+    assert rows[0]["llm_provider"] == "ollama"
+    assert rows[0]["llm_model"] == "calculator"
+    assert rows[0]["prompt_hash"] == "abc123"
 
 
 def test_export_training_rows_skips_active_by_default(tmp_path):

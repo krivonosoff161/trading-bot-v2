@@ -17,8 +17,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
+from src.research_lab.lineage_contract import scanner_event_from_mover, write_cycle_link, write_scanner_event
+from src.research_lab.market_data_packet import build_market_data_packet, write_market_data_packet
 from src.research_lab.paper_signals import families, lane, pfr_bridge, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
+from src.research_lab.pipeline_policy import add_reason, default_caps, new_stage_counts
 
 REGEN_TTL_SECONDS = 3600        # do not regenerate the same dedup_key within this window
 TERMINAL = ("closed_paper", "expired", "reviewed", "invalidated")
@@ -67,6 +71,86 @@ def _fetch(provider, symbol: str, tf: str, now_ms: int) -> list[dict[str, Any]]:
         return provider.fetch_ohlcv(symbol, tf, now_ms - 1500 * bars_ms, now_ms)
     except Exception:  # noqa: BLE001 - network must not crash a cycle
         return []
+
+
+def _attach_lineage(
+    private_root: Path,
+    sig: PaperActionSignal,
+    candles: list[dict[str, Any]],
+    *,
+    mode: str,
+    provider: Any,
+) -> PaperActionSignal:
+    """Persist scanner/data/feature lineage for one stored paper signal."""
+    ctx = sig.validator_context or {}
+    setup_id = str(ctx.get("setup_id") or ctx.get("candidate_id") or "")
+    sweep_run_id = str(ctx.get("run_id") or ctx.get("sweep_run_id") or "")
+    validation_id = str(ctx.get("validation_id") or "")
+    pseudo_mover = {
+        "source": sig.source,
+        "reason": sig.reason_now,
+        "symbol": sig.symbol,
+        "inst_id": sig.okx_inst_id,
+        "_bucket": ctx.get("asset_group") or ctx.get("group"),
+        "score": ctx.get("score"),
+        "move_pct": ctx.get("move_pct"),
+        "vol_usd": ctx.get("vol_usd"),
+        "spread_bps": ctx.get("spread_bps"),
+    }
+    event = scanner_event_from_mover(
+        pseudo_mover,
+        symbol=sig.symbol,
+        instrument=sig.okx_inst_id,
+        timeframe=sig.timeframe,
+        mode=mode,
+    )
+    write_scanner_event(private_root, event)
+    data_packet = build_market_data_packet(
+        scanner_event_id=event.scanner_event_id,
+        symbol=sig.symbol,
+        instrument=sig.okx_inst_id,
+        timeframe=sig.timeframe,
+        mode=mode,
+        candles=candles,
+        scanner_reason=event.reason,
+        liquidity=event.liquidity,
+        context_refs=event.context_refs,
+        provider_name=str(getattr(provider, "name", "unknown")),
+    )
+    write_market_data_packet(private_root, data_packet)
+    feature_packet = build_feature_packet(
+        data_packet,
+        side=sig.side,
+        entry_zone=sig.entry_zone,
+        stop_loss=sig.stop_loss,
+        take_profit_plan=sig.take_profit_plan,
+    )
+    write_feature_packet(private_root, feature_packet)
+    sig.scanner_event_id = event.scanner_event_id
+    sig.data_packet_id = data_packet.data_packet_id
+    sig.feature_packet_id = feature_packet.feature_packet_id
+    sig.setup_candidate_id = setup_id
+    sig.sweep_run_id = sweep_run_id
+    sig.validation_id = validation_id
+    write_cycle_link(
+        private_root,
+        {
+            "scanner_event_id": sig.scanner_event_id,
+            "data_packet_id": sig.data_packet_id,
+            "feature_packet_id": sig.feature_packet_id,
+            "setup_candidate_id": sig.setup_candidate_id,
+            "sweep_run_id": sig.sweep_run_id,
+            "validation_id": sig.validation_id,
+            "paper_signal_id": sig.signal_id,
+            "source": sig.source,
+            "symbol": sig.symbol,
+            "instrument": sig.okx_inst_id,
+            "timeframe": sig.timeframe,
+            "setup_family": sig.setup_family,
+            "mode": sig.mode,
+        },
+    )
+    return sig
 
 
 def _load_movers(private_root: Path) -> list[dict]:
@@ -288,6 +372,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     if apply:
         for sig, candles in new_sigs:
+            sig = _attach_lineage(private_root, sig, candles, mode=mode, provider=provider)
             store.append_signal(private_root, sig)
             sig.chart_context_ref = str(lane.write_review_artifact(private_root, sig, candles))
             store.update_signal(private_root, sig)   # persist the chart ref (armed cards get a chart too)
@@ -297,12 +382,23 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     report = {"mode": mode, "apply": apply, "observed": observed, "closed": closed,
               "generated": len(new_sigs), "gate_counts": gate_counts,
+              "pipeline_counts": _pipeline_counts(gate_counts, generated=len(new_sigs), observed=observed),
+              "resource_caps": default_caps().to_dict(),
               "pfr_counts": pfr_counts,
               "state": store.current_state_view(private_root)["by_status"] if apply else {},
               "new_cards": [s.signal_id for s, _ in new_sigs]}
     if apply:
         _write_status(private_root, report, now)
     return report
+
+
+def _pipeline_counts(gate_counts: dict[str, int], *, generated: int, observed: int) -> dict[str, Any]:
+    counts = new_stage_counts()
+    counts["processed"] = int(generated) + int(observed)
+    for reason, n in gate_counts.items():
+        for _ in range(int(n or 0)):
+            add_reason(counts, reason)
+    return counts
 
 
 def _write_status(private_root: Path, report: dict[str, Any], now: float) -> Path:

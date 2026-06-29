@@ -64,10 +64,11 @@ def _write_consumer_snapshot(root: Path, rows: list[dict]) -> None:
             {
                 "schema": "main_paper_consumer.v1",
                 "instructions_read": len(rows),
-                "accepted": sum(1 for row in rows if row.get("consumer_status") == "accepted_for_paper_watch"),
-                "rejected": sum(1 for row in rows if row.get("consumer_status") != "accepted_for_paper_watch"),
+                "accepted": sum(row.get("consumer_status") == "accepted_for_paper_watch" for row in rows),
+                "rejected": sum(row.get("consumer_status") != "accepted_for_paper_watch" for row in rows),
                 "items": rows,
-            }
+            },
+            ensure_ascii=False,
         ),
         encoding="utf-8",
     )
@@ -82,8 +83,10 @@ def test_preview_renders_safe_operator_card(tmp_path):
     assert summary["rendered"] == 1
     assert summary["invalid"] == 0
     assert summary["sends_network"] is False
+    assert summary["card_template_version"] == "paper_telegram_card_v2_human_ru"
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     text = data["items"][0]["text"]
+    assert data["items"][0]["card_template_version"] == "paper_telegram_card_v2_human_ru"
     assert "Paper-сетап:" in text
     assert "Идея:" in text
     assert "Вход:" in text
@@ -92,6 +95,7 @@ def test_preview_renders_safe_operator_card(tmp_path):
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
     assert "&lt;reason&gt;" in text
+    assert not any(marker in text for marker in ("СЃ", "вЂ", "Â"))
 
 
 def test_preview_skips_rejected_consumer_rows(tmp_path):
@@ -118,6 +122,13 @@ def test_preview_validation_catches_bad_authority_and_length():
 
     assert "execution_allowed_not_false" in problems
     assert "telegram_message_too_long" in problems
+
+
+def test_preview_validation_catches_mojibake_text():
+    row = _record()
+    problems = validate_preview(row, "Paper-СЃРµС‚Р°Рї: BTC")
+
+    assert "mojibake_text" in problems
 
 
 def test_preview_writes_empty_snapshot_when_consumer_missing(tmp_path):
