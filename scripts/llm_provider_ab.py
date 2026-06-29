@@ -1,7 +1,8 @@
 """Run a small real A/B check for Yandex vs Alibaba text providers.
 
-The script writes full raw outputs to logs/llm_provider_ab/ so provider quality,
-latency, and cost can be compared without changing product routing.
+Full raw outputs are private research artifacts and are written only under the
+Strategy Lab private root when --apply is used. The script does not change
+product routing, .env, Telegram, or trading execution.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "logs" / "llm_provider_ab"
+DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 sys.path.insert(0, str(ROOT))
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -63,6 +64,11 @@ CASES = [
 ]
 
 
+def private_out_dir(raw_root: str = "") -> Path:
+    root = Path(raw_root).expanduser() if raw_root.strip() else DEFAULT_PRIVATE_ROOT
+    return root / "reports" / "llm_provider_ab"
+
+
 async def _call_provider(provider: str, case: dict, max_tokens: int) -> dict:
     os.environ["LLM_PROVIDER"] = provider
     from src.utils import llm_client
@@ -88,7 +94,7 @@ async def _call_provider(provider: str, case: dict, max_tokens: int) -> dict:
     }
 
 
-async def run_ab(*, providers: list[str], max_tokens: int, apply: bool) -> dict:
+async def run_ab(*, providers: list[str], max_tokens: int, apply: bool, private_root: str = "") -> dict:
     load_dotenv()
     rows = []
     for case in CASES:
@@ -100,13 +106,17 @@ async def run_ab(*, providers: list[str], max_tokens: int, apply: bool) -> dict:
         "providers": providers,
         "cases": [c["case_id"] for c in CASES],
         "rows": rows,
+        "paper_only": True,
+        "execution_allowed": False,
+        "secrets_exposed": False,
     }
     if apply:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = private_out_dir(private_root)
+        out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
-        path = OUT_DIR / f"provider_ab_{stamp}.json"
+        path = out_dir / f"provider_ab_{stamp}.json"
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        report["path"] = str(path)
+        report["path_label"] = "strategy-lab/reports/llm_provider_ab/" + path.name
     return report
 
 
@@ -114,10 +124,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--providers", default="yandex,alibaba")
     ap.add_argument("--max-tokens", type=int, default=500)
-    ap.add_argument("--apply", action="store_true", help="write full outputs to logs/llm_provider_ab")
+    ap.add_argument("--apply", action="store_true", help="write full outputs to private Strategy Lab root")
+    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", ""))
     args = ap.parse_args()
     providers = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
-    report = asyncio.run(run_ab(providers=providers, max_tokens=args.max_tokens, apply=args.apply))
+    report = asyncio.run(
+        run_ab(providers=providers, max_tokens=args.max_tokens, apply=args.apply, private_root=args.private_root)
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
