@@ -17,8 +17,10 @@ from src.research_lab.event_microscope import plan_microscope
 from src.research_lab.farm_cockpit import build_cockpit
 from src.research_lab.feature_packet import packet_index_path as feature_packet_index_path
 from src.research_lab.human_feedback import feedback_summary
+from src.research_lab.agent_role_registry import role_registry_summary
 from src.research_lab.lineage_contract import cycle_links_path, load_jsonl_counts, scanner_events_path
 from src.research_lab.lineage_backfill import summary_path as backfill_summary_path
+from src.research_lab.llm_role_reviews import review_summary as llm_role_review_summary
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.llm_proposals import load_llm_loop_config
 from src.research_lab.llm_provider import today_usage
@@ -127,6 +129,11 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "lineage": load_lineage_summary(private_root),
         "pipeline_policy": load_pipeline_policy_summary(),
         "provider_routes": provider_route_summary(),
+        "agent_roles": role_registry_summary(),
+        "llm_role_reviews": llm_role_review_summary(private_root),
+        "provider_bench": load_provider_bench_summary(private_root),
+        "agent_role_review_cycle": load_agent_role_review_cycle_summary(private_root),
+        "vip_vision_smoke": load_vip_vision_smoke_summary(private_root),
         "prompt_registry": prompt_registry_summary(),
         "validator_taxonomy": taxonomy_summary(private_root),
         "human_feedback": feedback_summary(private_root),
@@ -139,6 +146,80 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
             "live_trading": False,
         },
     }
+
+
+def load_provider_bench_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "provider_bench" / "agent_role_provider_bench_summary.json"
+    if not path.exists():
+        return {
+            "schema": "ProviderBenchSummary.v1",
+            "exists": False,
+            "rows": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "private_path_label": "strategy-lab/reports/provider_bench/agent_role_provider_bench.jsonl",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "ProviderBenchSummary.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_agent_role_review_cycle_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "agent_role_review_cycle" / "summary.json"
+    if not path.exists():
+        return {
+            "schema": "AgentRoleReviewCycleSummary.v1",
+            "exists": False,
+            "reviews": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "private_path_label": "strategy-lab/reports/agent_role_review_cycle/summary.json",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "AgentRoleReviewCycleSummary.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_vip_vision_smoke_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "provider_bench" / "vip_vision_provider_smoke.json"
+    if not path.exists():
+        return {
+            "schema": "VipVisionProviderSmoke.v1",
+            "exists": False,
+            "configured": False,
+            "called_provider": False,
+            "has_result": False,
+            "private_path_label": "strategy-lab/reports/provider_bench/vip_vision_provider_smoke.json",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "VipVisionProviderSmoke.v1", "exists": True, "error": "read_failed"}
+    public = {key: data.get(key) for key in (
+        "schema",
+        "configured",
+        "provider",
+        "model_label",
+        "provider_scope",
+        "called_provider",
+        "has_result",
+        "result_chars",
+        "error",
+        "private_path_label",
+        "paper_only",
+        "execution_allowed",
+    )}
+    return {**public, "exists": True}
 
 
 def load_pipeline_policy_summary() -> dict[str, Any]:
