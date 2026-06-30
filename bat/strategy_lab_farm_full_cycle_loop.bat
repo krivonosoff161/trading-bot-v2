@@ -33,6 +33,18 @@ if "%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%"=="" set "STRATEGY_LAB_PAPER_SIGNA
 if "%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2"
 if "%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%"=="" set "STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT=10"
 if "%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%"=="" set "STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT=50"
+if "%STRATEGY_LAB_RUN_CALCULATOR_ADVISOR%"=="" set "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=0"
+if "%STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS%"=="" set "STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=0"
+if "%STRATEGY_LAB_CALCULATOR_PROVIDER%"=="" set "STRATEGY_LAB_CALCULATOR_PROVIDER=ollama"
+if "%STRATEGY_LAB_CALCULATOR_MODEL%"=="" set "STRATEGY_LAB_CALCULATOR_MODEL=calculator"
+if "%STRATEGY_LAB_CALCULATOR_BASE_URL%"=="" set "STRATEGY_LAB_CALCULATOR_BASE_URL=http://127.0.0.1:11434/v1"
+if "%STRATEGY_LAB_CALCULATOR_TIMEOUT%"=="" set "STRATEGY_LAB_CALCULATOR_TIMEOUT=120"
+if "%STRATEGY_LAB_AGENT_ROLE_PROVIDER%"=="" set "STRATEGY_LAB_AGENT_ROLE_PROVIDER=alibaba"
+if "%STRATEGY_LAB_AGENT_ROLE_MODEL%"=="" set "STRATEGY_LAB_AGENT_ROLE_MODEL=qwen-plus"
+if "%STRATEGY_LAB_AGENT_ROLE_TIMEOUT%"=="" set "STRATEGY_LAB_AGENT_ROLE_TIMEOUT=60"
+if "%STRATEGY_LAB_AGENT_ROLE_MAX_OUTCOMES%"=="" set "STRATEGY_LAB_AGENT_ROLE_MAX_OUTCOMES=1"
+if "%STRATEGY_LAB_AGENT_ROLE_MAX_VALIDATOR%"=="" set "STRATEGY_LAB_AGENT_ROLE_MAX_VALIDATOR=1"
+if "%STRATEGY_LAB_AGENT_ROLE_MAX_SOURCES%"=="" set "STRATEGY_LAB_AGENT_ROLE_MAX_SOURCES=1"
 
 set "STRATEGY_LAB_FARM_MODE_ARG=--apply"
 if /I "%STRATEGY_LAB_FARM_DRY_RUN%"=="1" set "STRATEGY_LAB_FARM_MODE_ARG=--dry-run"
@@ -40,6 +52,10 @@ set "STRATEGY_LAB_FARM_RUN_ARG=--loop"
 if /I "%STRATEGY_LAB_FARM_ONCE%"=="1" set "STRATEGY_LAB_FARM_RUN_ARG=--once"
 set "STRATEGY_LAB_FARM_QUIET_ARG=--quiet"
 if /I "%STRATEGY_LAB_FARM_ONCE%"=="1" set "STRATEGY_LAB_FARM_QUIET_ARG="
+set "STRATEGY_LAB_CALCULATOR_ADVISOR_ARG="
+if /I "%STRATEGY_LAB_RUN_CALCULATOR_ADVISOR%"=="1" set "STRATEGY_LAB_CALCULATOR_ADVISOR_ARG=--run-calculator-advisor"
+set "STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG="
+if /I "%STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS%"=="1" set "STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG=--run-agent-role-reviews"
 
 set "STOP_FILE=%TRADING_BOT_RESEARCH_ROOT%\state\STOP_FARM_FULL_CYCLE.txt"
 set "LOG_DIR=%TRADING_BOT_RESEARCH_ROOT%\logs"
@@ -60,6 +76,7 @@ echo  sleep       : %STRATEGY_LAB_FARM_SLEEP_SECONDS%s
 echo  mode        : %STRATEGY_LAB_FARM_MODE_ARG% %STRATEGY_LAB_FARM_RUN_ARG%
 echo  caps        : prepares=%STRATEGY_LAB_FARM_MAX_PREPARES% enrich=%STRATEGY_LAB_FARM_MAX_ENRICH% sweeps=%STRATEGY_LAB_FARM_MAX_SWEEPS% worker=%STRATEGY_LAB_FARM_MAX_WORKER_JOBS% validations=%STRATEGY_LAB_FARM_MAX_VALIDATIONS%
 echo  paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE% pfr_scan=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN% pfr_reserved=%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED% runtime=%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%
+echo  llm roles   : calculator=%STRATEGY_LAB_RUN_CALCULATOR_ADVISOR%/%STRATEGY_LAB_CALCULATOR_MODEL% agent_reviews=%STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS%/%STRATEGY_LAB_AGENT_ROLE_MODEL%
 echo  telegram    : paper_send=%STRATEGY_LAB_PAPER_TELEGRAM_SEND% target=active subscription users
 echo  safety      : paper-only; public OKX; no orders / AUTO_TRADE / private endpoints
 echo ============================================
@@ -88,7 +105,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$env:PYTHONWARNINGS='ignore:CUDA path could not be detected:UserWarning';" ^
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8;" ^
   "$env:TRADING_BOT_RESEARCH_ROOT='%TRADING_BOT_RESEARCH_ROOT%';" ^
-  "$cmd = @('-X','utf8','-u','-m','scripts.strategy_lab.farm_loop','%STRATEGY_LAB_FARM_RUN_ARG%','%STRATEGY_LAB_FARM_MODE_ARG%','--run-worker','--run-validation','--run-paper','--run-paper-signals','--enrich-funding','--enrich-oi','--backend','%STRATEGY_LAB_FARM_BACKEND%','--provider','%STRATEGY_LAB_FARM_PROVIDER%','--pfr-db-path','%STRATEGY_LAB_PFR_DB_PATH%','--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%','--paper-signals-max-pfr-scan','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%','--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%','--paper-signals-fetch-timeout','%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%','--main-paper-runtime-limit','%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%','--max-plan-events','%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%','--max-prepares','%STRATEGY_LAB_FARM_MAX_PREPARES%','--max-enrich','%STRATEGY_LAB_FARM_MAX_ENRICH%','--max-sweeps','%STRATEGY_LAB_FARM_MAX_SWEEPS%','--max-worker-jobs','%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%','--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%','--max-paper-cards','%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%','--data-days','%STRATEGY_LAB_FARM_DATA_DAYS%','--sleep-seconds','%STRATEGY_LAB_FARM_SLEEP_SECONDS%','--stop-file','%STOP_FILE%','--private-root','%TRADING_BOT_RESEARCH_ROOT%','--night-mode','%STRATEGY_LAB_FARM_QUIET_ARG%') | Where-Object { $_ -ne '' };" ^
+  "$cmd = @('-X','utf8','-u','-m','scripts.strategy_lab.farm_loop','%STRATEGY_LAB_FARM_RUN_ARG%','%STRATEGY_LAB_FARM_MODE_ARG%','--run-worker','--run-validation','--run-paper','--run-paper-signals','%STRATEGY_LAB_CALCULATOR_ADVISOR_ARG%','%STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG%','--enrich-funding','--enrich-oi','--backend','%STRATEGY_LAB_FARM_BACKEND%','--provider','%STRATEGY_LAB_FARM_PROVIDER%','--pfr-db-path','%STRATEGY_LAB_PFR_DB_PATH%','--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%','--paper-signals-max-pfr-scan','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN%','--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%','--paper-signals-fetch-timeout','%STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT%','--main-paper-runtime-limit','%STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT%','--calculator-provider','%STRATEGY_LAB_CALCULATOR_PROVIDER%','--calculator-model','%STRATEGY_LAB_CALCULATOR_MODEL%','--calculator-base-url','%STRATEGY_LAB_CALCULATOR_BASE_URL%','--calculator-timeout','%STRATEGY_LAB_CALCULATOR_TIMEOUT%','--agent-role-provider','%STRATEGY_LAB_AGENT_ROLE_PROVIDER%','--agent-role-model','%STRATEGY_LAB_AGENT_ROLE_MODEL%','--agent-role-timeout','%STRATEGY_LAB_AGENT_ROLE_TIMEOUT%','--agent-role-max-outcomes','%STRATEGY_LAB_AGENT_ROLE_MAX_OUTCOMES%','--agent-role-max-validator','%STRATEGY_LAB_AGENT_ROLE_MAX_VALIDATOR%','--agent-role-max-sources','%STRATEGY_LAB_AGENT_ROLE_MAX_SOURCES%','--max-plan-events','%STRATEGY_LAB_FARM_MAX_PLAN_EVENTS%','--max-prepares','%STRATEGY_LAB_FARM_MAX_PREPARES%','--max-enrich','%STRATEGY_LAB_FARM_MAX_ENRICH%','--max-sweeps','%STRATEGY_LAB_FARM_MAX_SWEEPS%','--max-worker-jobs','%STRATEGY_LAB_FARM_MAX_WORKER_JOBS%','--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%','--max-paper-cards','%STRATEGY_LAB_FARM_MAX_PAPER_CARDS%','--data-days','%STRATEGY_LAB_FARM_DATA_DAYS%','--sleep-seconds','%STRATEGY_LAB_FARM_SLEEP_SECONDS%','--stop-file','%STOP_FILE%','--private-root','%TRADING_BOT_RESEARCH_ROOT%','--night-mode','%STRATEGY_LAB_FARM_QUIET_ARG%') | Where-Object { $_ -ne '' };" ^
   "& python @cmd 2>&1 | Tee-Object -FilePath '%LOG_FILE%' -Append;" ^
   "exit $LASTEXITCODE"
 

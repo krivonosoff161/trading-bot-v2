@@ -47,6 +47,7 @@ def _record(**overrides):
             "ts": "2026-06-26T00:00:00+00:00",
             "metadata": {
                 "reason_now": "safe <reason> & no order",
+                "ready_strategy_id": "ready_abc",
                 "execution_allowed": False,
                 "paper_only": True,
             },
@@ -83,19 +84,20 @@ def test_preview_renders_safe_operator_card(tmp_path):
     assert summary["rendered"] == 1
     assert summary["invalid"] == 0
     assert summary["sends_network"] is False
-    assert summary["card_template_version"] == "paper_telegram_card_v2_human_ru"
+    assert summary["card_template_version"] == "paper_telegram_card_v3_human_ru"
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     text = data["items"][0]["text"]
-    assert data["items"][0]["card_template_version"] == "paper_telegram_card_v2_human_ru"
+    assert data["items"][0]["card_template_version"] == "paper_telegram_card_v3_human_ru"
     assert "Paper-сетап:" in text
     assert "Идея:" in text
     assert "Вход:" in text
     assert "Источник:" in text
     assert "Это paper-наблюдение" in text
+    assert "ready_abc" in text
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
     assert "&lt;reason&gt;" in text
-    assert not any(marker in text for marker in ("СЃ", "вЂ", "Â"))
+    assert not any(marker in text for marker in ("РЎ", "Р ", "РІР‚", "вЂ", "СЃРµС‚Р°Рї"))
 
 
 def test_preview_skips_rejected_consumer_rows(tmp_path):
@@ -126,7 +128,7 @@ def test_preview_validation_catches_bad_authority_and_length():
 
 def test_preview_validation_catches_mojibake_text():
     row = _record()
-    problems = validate_preview(row, "Paper-СЃРµС‚Р°Рї: BTC")
+    problems = validate_preview(row, "Paper-РЎРѓР ВµРЎвЂљР В°Р С—: BTC")
 
     assert "mojibake_text" in problems
 

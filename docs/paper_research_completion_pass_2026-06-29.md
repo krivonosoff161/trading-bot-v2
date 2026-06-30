@@ -79,6 +79,49 @@ messages.
 The paper/research path uses deterministic calculation modules for levels and
 outcome numbers. LLM output is schema-gated and cannot mutate those fields.
 
+## 2026-06-30 Runtime Completion Addendum
+
+This follow-up pass moved the backbone from "assembled contracts" to a more
+operator-ready paper/research loop:
+
+- `ReadyStrategyCatalog.v1` derives a private catalog from the validator/PFR
+  database. Current bounded smoke loaded 53 records, with 43
+  `ready_for_paper_runtime` and 10 `rejected_quality`; all rows remain
+  `paper_only=true` and `execution_allowed=false`.
+- PFR-origin paper signals now carry `ready_strategy_id`, `setup_id`,
+  `candidate_id`, and source validator verdict metadata into the main paper
+  bridge and `TrainingRow.v2`.
+- Paper Telegram previews render human-readable Russian cards. They are still
+  deterministic, offline, dry-run by default, and reject mojibake text.
+- Advisory role reviews can be run from `farm_loop` with
+  `--run-agent-role-reviews`. They are opt-in, provider-configurable, private
+  logged, and schema-gated. Local `calculator` is accepted only when it returns
+  compact valid JSON; invalid answers are stored as rejected advice and do not
+  change validation, paper readiness, or execution.
+- Farm task enqueue is idempotent for duplicate active `task_key` collisions, so
+  long-running loops do not crash on a duplicate follow-up insert.
+- The visible loop BAT exposes calculator and role-review flags but keeps both
+  off by default. Telegram network send remains explicit opt-in.
+
+Bounded runtime proof:
+
+- `paper_research_e2e_smoke ok=True`
+- scanner/data/feature packet rows: `24 / 30 / 30`
+- cycle links: `3491`
+- calculator advice rows: `14`, current-run accepted: `1/1`
+- paper signals: `7025`
+- main paper instructions / queue / Telegram preview: `11 / 11 / 11`
+- training rows: `891`
+- Telegram preview human-readable check: `bad=0`
+- training safety: `paper_only_false=0`, `execution_allowed_true=0`
+- operational health blocking gates: `[]`
+
+Validation:
+
+- `python -m pytest` -> `1862 passed`, one existing CuPy/CUDA warning.
+- Ruff over changed Python files -> clean.
+- `git diff --check` -> clean, with only Git CRLF normalization warnings.
+
 Shared paper path:
 - `trade_math.py`: entry midpoint, TP, RR, costs, geometry, capture.
 - `feature_packet.py`: deterministic feature/geometry packet and live no-lookahead guard.
