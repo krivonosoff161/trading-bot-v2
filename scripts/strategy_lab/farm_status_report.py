@@ -309,6 +309,11 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["main_paper_runtime_queue"] = json.loads(rt_path.read_text(encoding="utf-8")) if rt_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_runtime_queue"] = {}
+        try:  # adaptive policy selected for main paper runtime rows (never prices/orders)
+            ap_path = db_path.parent.parent / "state" / "derived" / "main_adaptive_policy.json"
+            report["main_adaptive_policy"] = json.loads(ap_path.read_text(encoding="utf-8")) if ap_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_adaptive_policy"] = {}
         try:  # paper-only runtime observation of the main-compatible queue (never orders)
             rto_path = db_path.parent.parent / "state" / "derived" / "main_paper_runtime_observation.json"
             report["main_paper_runtime_observation"] = (
@@ -446,6 +451,13 @@ def _print(report: dict) -> None:
               f"invalid={rtq.get('invalid', 0)} action={rtq.get('runtime_action')} "
               f"execution_allowed={rtq.get('execution_allowed')} "
               "(paper watch queue; old main executor still disabled)")
+    ap = report.get("main_adaptive_policy") or {}
+    if ap.get("policies") is not None:
+        print("  main adaptive policy: "
+              f"policies={ap.get('policies', 0)} "
+              f"by_profile={ap.get('by_execution_profile') or '(none)'} "
+              f"execution_allowed={ap.get('execution_allowed')} "
+              "(LLM/profile lane; code still owns prices and outcomes)")
     rto = report.get("main_paper_runtime_observation") or {}
     if rto.get("rows_read") is not None:
         print("  main paper runtime observation: "

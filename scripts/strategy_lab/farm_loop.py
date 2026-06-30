@@ -206,6 +206,13 @@ def _print_cycle(out: dict) -> None:
             f"queued={rtq.get('queued', 0)} invalid={rtq.get('invalid', 0)} "
             f"action={rtq.get('runtime_action')} execution_allowed={rtq.get('execution_allowed')}"
         )
+        ap = rtq.get("adaptive_policy") or {}
+        if ap:
+            print(
+                "  main_adaptive_policy: "
+                f"policies={ap.get('policies', 0)} "
+                f"by_profile={ap.get('by_execution_profile') or {}}"
+            )
     rto = out.get("main_paper_runtime_observation") or {}
     if rto:
         print(

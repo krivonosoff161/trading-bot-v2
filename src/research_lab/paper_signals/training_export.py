@@ -61,6 +61,22 @@ def _calculator_refs(private_root: Path) -> dict[str, dict[str, Any]]:
     return refs
 
 
+def _adaptive_policy_refs(private_root: Path) -> dict[str, dict[str, Any]]:
+    path = private_root / "state" / "derived" / "main_adaptive_policy.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    refs: dict[str, dict[str, Any]] = {}
+    for item in data.get("items") or []:
+        sid = str(item.get("source_signal_id") or "")
+        if sid:
+            refs[sid] = item
+    return refs
+
+
 def _hash_text(text: str) -> str:
     import hashlib
 
@@ -72,6 +88,7 @@ def training_row(
     *,
     telegram_card: dict[str, Any] | None = None,
     calculator_advice: dict[str, Any] | None = None,
+    adaptive_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     outcome = sig.outcome or {}
     review = sig.review or {}
@@ -79,6 +96,7 @@ def training_row(
     training_row_id = f"training_{sig.signal_id}"
     card = telegram_card or {}
     advice = calculator_advice or {}
+    policy = adaptive_policy or {}
     card_text = str(card.get("text") or "")
     calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
@@ -140,6 +158,15 @@ def training_row(
         "chart_context_ref": sig.chart_context_ref,
         "llm_interpretation_ref": llm_ref,
         "calculator_advice_id": calculator_advice_id,
+        "adaptive_policy_id": str(policy.get("policy_id") or ""),
+        "adaptive_execution_profile": str(policy.get("execution_profile") or ""),
+        "adaptive_entry_profile": str(policy.get("entry_profile") or ""),
+        "adaptive_exit_profile": str(policy.get("exit_profile") or ""),
+        "adaptive_stop_profile": str(policy.get("stop_profile") or ""),
+        "adaptive_max_hold_profile": str(policy.get("max_hold_profile") or ""),
+        "adaptive_regime_hint": str(policy.get("regime_hint") or ""),
+        "adaptive_policy_confidence": policy.get("confidence"),
+        "adaptive_policy_reasons": list(policy.get("reason_codes") or []),
         "llm_provider": str(advice.get("provider") or ""),
         "llm_model": str(advice.get("model") or ""),
         "prompt_version": str(advice.get("prompt_version") or ""),
@@ -158,11 +185,13 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True) -> d
         signals = [sig for sig in signals if sig.status in TERMINAL_STATUSES]
     cards = _card_refs(private_root)
     advice_by_feature = _calculator_refs(private_root)
+    policy_by_signal = _adaptive_policy_refs(private_root)
     rows = [
         training_row(
             sig,
             telegram_card=cards.get(sig.signal_id),
             calculator_advice=advice_by_feature.get(sig.feature_packet_id),
+            adaptive_policy=policy_by_signal.get(sig.signal_id),
         )
         for sig in signals
     ]
@@ -181,6 +210,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True) -> d
                 "outcome_id": row["outcome_id"],
                 "training_row_id": row["training_row_id"],
                 "llm_interpretation_ref": row["llm_interpretation_ref"],
+                "adaptive_policy_id": row["adaptive_policy_id"],
                 "source": row["source"],
                 "symbol": row["symbol"],
                 "instrument": row["okx_inst_id"],

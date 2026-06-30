@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.main_adaptive_policy import build_policy, write_policy_artifacts
 from src.research_lab.main_paper_consumer import SUMMARY_SCHEMA as CONSUMER_SCHEMA
 from src.research_lab.paper_signals.contract import SOURCES
 
@@ -64,6 +65,15 @@ class MainPaperRuntimeQueueItem:
     source_mode: str
     exit_mode: str
     priority: int
+    adaptive_policy_id: str
+    adaptive_execution_profile: str
+    adaptive_entry_profile: str
+    adaptive_exit_profile: str
+    adaptive_stop_profile: str
+    adaptive_max_hold_profile: str
+    adaptive_regime_hint: str
+    adaptive_policy_confidence: float
+    adaptive_policy_reasons: list[str]
     priority_reasons: list[str] = field(default_factory=list)
     runtime_action: str = "watch_paper"
     source_consumer_status: str = "accepted_for_paper_watch"
@@ -104,6 +114,10 @@ class MainPaperRuntimeQueueItem:
             raise ValueError("dedup_key required")
         if not self.take_profit_plan:
             raise ValueError("take_profit_plan must be non-empty")
+        if not self.adaptive_policy_id:
+            raise ValueError("adaptive_policy_id required")
+        if self.adaptive_policy_confidence < 0 or self.adaptive_policy_confidence > 1:
+            raise ValueError("adaptive_policy_confidence must be in [0, 1]")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -182,6 +196,17 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         or []
     )
     priority, priority_reasons = _priority(row, contract)
+    policy_input = {
+        "source_signal_id": str(row.get("source_signal_id") or ""),
+        "okx_inst_id": str(row.get("okx_inst_id") or contract.get("pair") or ""),
+        "pair": str(row.get("pair") or contract.get("pair") or ""),
+        "timeframe": str(row.get("timeframe") or ""),
+        "side": str(row.get("side") or contract.get("side") or ""),
+        "setup_family": str(row.get("setup_family") or ""),
+        "risk_pct": float(meta.get("risk_pct") or 0.0),
+        "exit_mode": str(meta.get("exit_mode") or exit_params.get("exit_mode") or ""),
+    }
+    policy = build_policy(policy_input)
     return MainPaperRuntimeQueueItem(
         runtime_id=f"runtime_{row.get('consumer_id') or row.get('instruction_id')}",
         consumer_id=str(row.get("consumer_id") or ""),
@@ -208,6 +233,15 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         source_mode=str(meta.get("mode") or ""),
         exit_mode=str(meta.get("exit_mode") or exit_params.get("exit_mode") or ""),
         priority=priority,
+        adaptive_policy_id=policy.policy_id,
+        adaptive_execution_profile=policy.execution_profile,
+        adaptive_entry_profile=policy.entry_profile,
+        adaptive_exit_profile=policy.exit_profile,
+        adaptive_stop_profile=policy.stop_profile,
+        adaptive_max_hold_profile=policy.max_hold_profile,
+        adaptive_regime_hint=policy.regime_hint,
+        adaptive_policy_confidence=policy.confidence,
+        adaptive_policy_reasons=policy.reason_codes,
         priority_reasons=priority_reasons,
     )
 
@@ -232,6 +266,22 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
     items.sort(key=lambda item: (item.priority, item.okx_inst_id, item.timeframe, item.source_signal_id))
     if limit >= 0:
         items = items[:limit]
+    policies = []
+    for item in items:
+        policies.append(
+            build_policy(
+                {
+                    "source_signal_id": item.source_signal_id,
+                    "okx_inst_id": item.okx_inst_id,
+                    "timeframe": item.timeframe,
+                    "side": item.side,
+                    "setup_family": item.setup_family,
+                    "risk_pct": item.risk_pct,
+                    "exit_mode": item.exit_mode,
+                }
+            )
+        )
+    policy_summary = write_policy_artifacts(private_root, policies)
 
     out_jsonl = _jsonl_path(private_root)
     out_snapshot = _snapshot_path(private_root)
@@ -256,6 +306,12 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
         "runtime_action": "watch_paper",
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
+        "adaptive_policy": {
+            "schema": policy_summary["schema"],
+            "policies": policy_summary["policies"],
+            "snapshot_path": policy_summary["snapshot_path"],
+            "by_execution_profile": policy_summary["by_execution_profile"],
+        },
     }
     out_snapshot.write_text(
         json.dumps({**summary, "items": [item.to_dict() for item in items]},
