@@ -47,6 +47,15 @@ def _queue_item(runtime_id: str = "runtime_1", *, execution_allowed: bool = Fals
         "exit_mode": "partial_be",
         "priority": 0,
         "priority_reasons": ["test"],
+        "adaptive_policy_id": "main_policy_test",
+        "adaptive_execution_profile": "fast_tactical_watch",
+        "adaptive_entry_profile": "limit_or_pullback",
+        "adaptive_exit_profile": "early_tp_partial_be",
+        "adaptive_stop_profile": "tight_atr_cap",
+        "adaptive_max_hold_profile": "short",
+        "adaptive_regime_hint": "impulse_exhaustion_scalp",
+        "adaptive_policy_confidence": 0.7,
+        "adaptive_policy_reasons": ["test_policy"],
         "runtime_action": "watch_paper",
         "source_consumer_status": "accepted_for_paper_watch",
         "paper_only": True,
@@ -85,6 +94,8 @@ def test_main_paper_runtime_observes_and_reviews_terminal_signal(tmp_path):
     assert summary["execution_allowed"] is False
     item = summary["items"][0]
     assert item["source"] == "farm"
+    assert item["adaptive_policy_id"] == "main_policy_test"
+    assert item["adaptive_execution_profile"] == "fast_tactical_watch"
     assert item["signal_status"] == "reviewed"
     assert item["outcome"]["result"] == "take"
     assert item["review"]["diagnosis"] == "good_signal"

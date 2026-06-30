@@ -144,6 +144,44 @@ def test_export_training_rows_links_calculator_advice(tmp_path):
     assert rows[0]["prompt_hash"] == "abc123"
 
 
+def test_export_training_rows_links_adaptive_policy(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+    policy = tmp_path / "state" / "derived" / "main_adaptive_policy.json"
+    policy.parent.mkdir(parents=True, exist_ok=True)
+    policy.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "policy_id": "main_policy_1",
+                        "source_signal_id": sig.signal_id,
+                        "execution_profile": "fast_tactical_watch",
+                        "entry_profile": "limit_or_pullback",
+                        "exit_profile": "early_tp_partial_be",
+                        "stop_profile": "tight_atr_cap",
+                        "max_hold_profile": "short",
+                        "regime_hint": "impulse_exhaustion_scalp",
+                        "confidence": 0.72,
+                        "reason_codes": ["forward_lead:early_tp_tactical"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["adaptive_policy_id"] == "main_policy_1"
+    assert rows[0]["adaptive_execution_profile"] == "fast_tactical_watch"
+    assert rows[0]["adaptive_exit_profile"] == "early_tp_partial_be"
+    assert rows[0]["adaptive_policy_reasons"] == ["forward_lead:early_tp_tactical"]
+
+
 def test_export_training_rows_skips_active_by_default(tmp_path):
     append_signal(tmp_path, _signal(status="armed"))
 

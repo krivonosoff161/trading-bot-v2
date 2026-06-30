@@ -81,6 +81,12 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     assert rows[0]["dedup_key"] == "BTC|15m|early_tp_tactical|fast"
     assert rows[0]["source_mode"] == "live"
     assert rows[0]["exit_mode"] == "partial_be"
+    assert rows[0]["adaptive_policy_id"].startswith("main_policy_")
+    assert rows[0]["adaptive_execution_profile"] == "fast_tactical_watch"
+    assert rows[0]["adaptive_exit_profile"] == "early_tp_partial_be"
+    assert "forward_lead:early_tp_tactical" in rows[0]["adaptive_policy_reasons"]
+    policy_snapshot = tmp_path / "state" / "derived" / "main_adaptive_policy.json"
+    assert policy_snapshot.exists()
     assert all(row["paper_only"] is True for row in rows)
     assert all(row["execution_allowed"] is False for row in rows)
 
@@ -145,6 +151,15 @@ def test_runtime_queue_record_rejects_execution_enabled():
             source_mode="live",
             exit_mode="partial_be",
             priority=0,
+            adaptive_policy_id="main_policy_test",
+            adaptive_execution_profile="fast_tactical_watch",
+            adaptive_entry_profile="limit_or_pullback",
+            adaptive_exit_profile="early_tp_partial_be",
+            adaptive_stop_profile="tight_atr_cap",
+            adaptive_max_hold_profile="short",
+            adaptive_regime_hint="impulse_exhaustion_scalp",
+            adaptive_policy_confidence=0.7,
+            adaptive_policy_reasons=["test"],
             execution_allowed=True,
         )
 
