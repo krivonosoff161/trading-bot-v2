@@ -138,6 +138,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "prompt_registry": prompt_registry_summary(),
         "validator_taxonomy": taxonomy_summary(private_root),
         "ready_strategy_catalog": load_ready_strategy_catalog_summary(private_root),
+        "product_signal_training": load_product_signal_training_summary(private_root),
         "human_feedback": feedback_summary(private_root),
         "lineage_backfill": load_backfill_summary(private_root),
         "safety": {
@@ -206,6 +207,24 @@ def load_ready_strategy_catalog_summary(private_root: Path) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"schema": "ready_strategy_catalog.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True, "items": []}
+
+
+def load_product_signal_training_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "state" / "derived" / "product_signal_training.json"
+    if not path.exists():
+        return {
+            "schema": "product_signal_training_export.v1",
+            "exists": False,
+            "rows": 0,
+            "source_rows": 0,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "product_signal_training_export.v1", "exists": True, "error": "read_failed"}
     return {**data, "exists": True, "items": []}
 
 

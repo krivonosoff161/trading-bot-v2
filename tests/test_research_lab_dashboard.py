@@ -189,6 +189,8 @@ def test_dashboard_state_includes_worker_and_llm_sections(tmp_path, monkeypatch)
     assert state["worker_status"]["status"] == "deferred"
     assert state["llm_review"]["enabled"] is False
     assert state["llm_review"]["auto_execute"] is False
+    assert state["product_signal_training"]["schema"] == "product_signal_training_export.v1"
+    assert state["product_signal_training"]["exists"] is False
     assert state["lab_config"]["resource_mode"] == "quiet_desktop"
     assert str(tmp_path) not in json.dumps(state)
 
