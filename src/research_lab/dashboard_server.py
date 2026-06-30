@@ -98,6 +98,7 @@ def render_html(state: dict) -> str:
     queue_capacity = state.get("queue_capacity") or {}
     farm_cockpit = state.get("farm_cockpit") or {}
     lineage = state.get("lineage") or {}
+    ready_catalog = state.get("ready_strategy_catalog") or {}
     pipeline_policy = state.get("pipeline_policy") or {}
     provider_routes = state.get("provider_routes") or {}
     prompt_registry = state.get("prompt_registry") or {}
@@ -179,6 +180,11 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Paper Research Lineage</h2>
     {lineage_html(lineage)}
+  </section>
+
+  <section class="section card">
+    <h2>Ready Strategy Catalog</h2>
+    {ready_strategy_catalog_html(ready_catalog)}
   </section>
 
   <section class="section card">
@@ -276,6 +282,33 @@ def lineage_html(lineage: dict) -> str:
         "<table><tr><th>artifact</th><th>rows</th><th>breakdown</th><th>private label</th></tr>"
         f"{body}</table>"
         '<p class="muted">paper_only=true · execution_allowed=false · raw packets stay under private root</p>'
+    )
+
+
+def ready_strategy_catalog_html(catalog: dict) -> str:
+    if not catalog:
+        return '<p class="muted">No ready strategy catalog loaded.</p>'
+    family_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((catalog.get("ready_by_family") or {}).items())
+    )
+    tf_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((catalog.get("ready_by_timeframe") or {}).items())
+    )
+    return (
+        "<p>"
+        f"exists={esc(catalog.get('exists', False))} · "
+        f"loaded={esc(catalog.get('records_loaded', 0))} · "
+        f"ready={esc(catalog.get('ready', 0))} · "
+        f"rejected_quality={esc(catalog.get('rejected_quality', 0))} · "
+        f"execution_allowed={esc(catalog.get('execution_allowed'))}"
+        "</p>"
+        "<h3>Ready by family</h3>"
+        f"<table><tr><th>family</th><th>ready</th></tr>{family_rows}</table>"
+        "<h3>Ready by timeframe</h3>"
+        f"<table><tr><th>timeframe</th><th>ready</th></tr>{tf_rows}</table>"
+        '<p class="muted">Only hard-validator PFR rows that pass quality policy enter this catalog.</p>'
     )
 
 

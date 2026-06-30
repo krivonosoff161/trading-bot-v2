@@ -187,3 +187,8 @@ class TestCycleLogStages:
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat
+        assert "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=0" in bat
+        assert "STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=0" in bat
+        assert "'%STRATEGY_LAB_CALCULATOR_ADVISOR_ARG%'" in bat
+        assert "'%STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG%'" in bat
+        assert "'--agent-role-provider','%STRATEGY_LAB_AGENT_ROLE_PROVIDER%'" in bat

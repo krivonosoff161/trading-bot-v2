@@ -30,6 +30,7 @@ from src.research_lab.pipeline_policy import default_caps
 from src.research_lab.prepare_workflow import load_prepare_workflow_config
 from src.research_lab.prompt_registry import prompt_registry_summary
 from src.research_lab.provider_routes import provider_route_summary
+from src.research_lab.ready_strategy_catalog import catalog_snapshot_path
 from src.research_lab.research_cycle import cycle_summary, read_cycle_report
 from src.research_lab.research_loop import loop_summary, read_loop_report
 from src.research_lab.research_session import read_session_report, session_summary
@@ -136,6 +137,7 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "vip_vision_smoke": load_vip_vision_smoke_summary(private_root),
         "prompt_registry": prompt_registry_summary(),
         "validator_taxonomy": taxonomy_summary(private_root),
+        "ready_strategy_catalog": load_ready_strategy_catalog_summary(private_root),
         "human_feedback": feedback_summary(private_root),
         "lineage_backfill": load_backfill_summary(private_root),
         "safety": {
@@ -186,6 +188,25 @@ def load_agent_role_review_cycle_summary(private_root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {"schema": "AgentRoleReviewCycleSummary.v1", "exists": True, "error": "read_failed"}
     return {**data, "exists": True}
+
+
+def load_ready_strategy_catalog_summary(private_root: Path) -> dict[str, Any]:
+    path = catalog_snapshot_path(private_root)
+    if not path.exists():
+        return {
+            "schema": "ready_strategy_catalog.v1",
+            "exists": False,
+            "records_loaded": 0,
+            "ready": 0,
+            "rejected_quality": 0,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "ready_strategy_catalog.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True, "items": []}
 
 
 def load_vip_vision_smoke_summary(private_root: Path) -> dict[str, Any]:

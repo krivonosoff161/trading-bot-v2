@@ -200,15 +200,24 @@ class FarmTasksDB:
         ).fetchone()
         if done is not None and (now - float(done["updated_at"])) < ttl_seconds:
             return int(done["task_id"]), False
-        cur = self._conn.execute(
-            """INSERT INTO tasks(task_key, task_type, state, priority, symbol, asset_group,
-                 timeframe, family, params_hash, data_fingerprint, depends_on, machine_reason,
-                 deferred_until, source_event_id, payload_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (task_key, task_type, state, int(priority), symbol, asset_group, timeframe, family,
-             params_hash, data_fingerprint, depends_on, machine_reason, deferred_until,
-             source_event_id, json.dumps(payload or {}), now, now),
-        )
+        try:
+            cur = self._conn.execute(
+                """INSERT INTO tasks(task_key, task_type, state, priority, symbol, asset_group,
+                     timeframe, family, params_hash, data_fingerprint, depends_on, machine_reason,
+                     deferred_until, source_event_id, payload_json, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (task_key, task_type, state, int(priority), symbol, asset_group, timeframe, family,
+                 params_hash, data_fingerprint, depends_on, machine_reason, deferred_until,
+                 source_event_id, json.dumps(payload or {}), now, now),
+            )
+        except sqlite3.IntegrityError:
+            active = self._conn.execute(
+                f"SELECT task_id FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
+                "ORDER BY task_id ASC LIMIT 1", (task_key,),
+            ).fetchone()
+            if active is not None:
+                return int(active["task_id"]), False
+            raise
         self._conn.commit()
         return int(cur.lastrowid), True
 

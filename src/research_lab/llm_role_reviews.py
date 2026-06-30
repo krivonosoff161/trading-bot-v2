@@ -33,18 +33,24 @@ ROLE_SYSTEM_PROMPTS = {
         "Classify why a completed paper setup won, lost, expired, or gave back. "
         "You may suggest bounded next-test dimensions. You must not change entry, "
         "stop, take profit, side, validator verdict, paper_ready, order, size, or execution."
+        " Keep the object compact: summary, diagnosis, confidence, evidence, warnings, "
+        "next_test_dimensions. Confidence must be a number from 0 to 1."
     ),
     "validator_reviewer": (
         "You are an advisory validator reviewer. Return JSON only. Explain why a "
         "candidate failed, was underpowered, needed data, or looked regime-only. "
         "You may suggest bounded next tests. You must not change hard validator status, "
         "paper_ready, trade levels, order, size, or execution."
+        " Keep the object compact: summary, validator_class, confidence, evidence, warnings, "
+        "next_test_dimensions. Confidence must be a number from 0 to 1."
     ),
     "source_trust_reviewer": (
         "You are an advisory source-trust reviewer. Return JSON only. Classify a "
         "scanner/news/source event and whether later outcomes should increase or "
         "decrease trust in similar sources. You must not create trades, paper_ready, "
         "validator verdicts, orders, sizes, or execution."
+        " Keep the object compact: summary, source_class, trust_delta, confidence, evidence, "
+        "warnings, followup_window. Confidence must be a number from 0 to 1."
     ),
 }
 
@@ -84,6 +90,11 @@ def normalize_review_payload(role_id: str, payload: Mapping[str, Any]) -> dict[s
     and will still be rejected by validate_role_payload().
     """
     normalized = dict(payload)
+    for wrapper in ("review", "result", "output", "analysis"):
+        nested = normalized.get(wrapper)
+        if isinstance(nested, Mapping):
+            normalized = dict(nested)
+            break
     if "reason" in normalized and "summary" not in normalized:
         normalized["summary"] = normalized.pop("reason")
     if "explanation" in normalized and "summary" not in normalized:
@@ -96,6 +107,18 @@ def normalize_review_payload(role_id: str, payload: Mapping[str, Any]) -> dict[s
         normalized["next_test_dimensions"] = normalized.pop("suggestion")
     if "next_test_dimensions" in normalized and isinstance(normalized["next_test_dimensions"], str):
         normalized["next_test_dimensions"] = [normalized["next_test_dimensions"]]
+    if "evidence" in normalized and isinstance(normalized["evidence"], str):
+        normalized["evidence"] = [normalized["evidence"]]
+    if "warnings" in normalized and isinstance(normalized["warnings"], str):
+        normalized["warnings"] = [normalized["warnings"]]
+    confidence = normalized.get("confidence")
+    if isinstance(confidence, str):
+        try:
+            normalized["confidence"] = float(confidence.strip().rstrip("%")) / (
+                100.0 if confidence.strip().endswith("%") else 1.0
+            )
+        except ValueError:
+            pass
 
     if role_id == "outcome_reviewer":
         for key in ("classification", "outcome", "outcome_classification"):

@@ -17,7 +17,7 @@ from typing import Any
 
 SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
-CARD_TEMPLATE_VERSION = "paper_telegram_card_v2_human_ru"
+CARD_TEMPLATE_VERSION = "paper_telegram_card_v3_human_ru"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "research-only, not an order"
 HUMAN_DISCLAIMER = "Это paper-наблюдение, не ордер и не команда к входу."
@@ -97,6 +97,8 @@ def _family_label(family: str) -> str:
         "liquidity_sweep_reclaim": "снятие ликвидности и возврат",
         "continuation": "продолжение движения",
         "pullback_continuation": "откат по тренду",
+        "momentum_breakout": "импульсный пробой",
+        "mean_reversion_fade": "возврат к среднему",
         "pfr_momentum_breakout": "PFR импульсный пробой",
         "pfr_mean_reversion_fade": "PFR возврат к среднему",
     }
@@ -117,6 +119,7 @@ def _status_label(status: str) -> str:
         "armed": "ждет входа",
         "opened_paper": "открыт в paper-наблюдении",
         "accepted_for_paper_watch": "принят к paper-наблюдению",
+        "PAPER_FORWARD_READY": "прошел hard validation для forward-paper",
     }
     return labels.get(status, status or "unknown")
 
@@ -157,7 +160,7 @@ def render_preview_text(record: dict[str, Any]) -> str:
     source_name = html.escape(str(contract.get("source") or meta.get("source") or record.get("source") or "paper_lane"))
     source_status = str(meta.get("source_validation_verdict") or record.get("source_status") or "armed")
     source_verdict = html.escape(_status_label(source_status))
-    setup_id = html.escape(str(meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
+    setup_id = html.escape(str(meta.get("ready_strategy_id") or meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
     return "\n".join(
         [
             f"<b>Paper-сетап: {pair} · {timeframe} · {side}</b>",
@@ -197,7 +200,10 @@ def validate_preview(record: dict[str, Any], text: str) -> list[str]:
         problems.append("missing_execution_boundary")
     if "<script" in text.lower():
         problems.append("unsafe_html")
-    if any(marker in text for marker in ("СЃ", "С‚", "Р°", "Рµ", "РЅ", "Рё", "вЂ", "Â")):
+    mojibake_markers = (
+        "РЎ", "Р ", "РІР‚", "Рџ", "Рќ", "Рђ", "Р", "В·", "СЃРµС‚Р°Рї", "вЂ",
+    )
+    if any(marker in text for marker in mojibake_markers):
         problems.append("mojibake_text")
     return problems
 
@@ -256,18 +262,33 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "rendered": len(previews),
         "invalid": invalid,
         "skipped_rejected": skipped_rejected,
-        "limit": int(limit),
-        "card_template_version": CARD_TEMPLATE_VERSION,
-        "max_message_chars": MAX_MESSAGE_CHARS,
+        "items": [preview.to_dict() for preview in previews],
+        "jsonl_path": str(out_jsonl),
+        "snapshot_path": str(out_snapshot),
         "paper_only": True,
         "execution_allowed": False,
         "sends_network": False,
-        "jsonl_path": str(out_jsonl),
-        "snapshot_path": str(out_snapshot),
+        "card_template_version": CARD_TEMPLATE_VERSION,
     }
-    payload = {**summary, "items": [preview.to_dict() for preview in previews]}
-    out_snapshot.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
+
+
+def load_paper_telegram_preview_summary(private_root: Path) -> dict[str, Any]:
+    path = _snapshot_path(private_root)
+    if not path.exists():
+        return {
+            "schema": SUMMARY_SCHEMA,
+            "exists": False,
+            "rendered": 0,
+            "invalid": 0,
+            "paper_only": True,
+            "execution_allowed": False,
+            "sends_network": False,
+        }
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["exists"] = True
+    data.setdefault("paper_only", True)
+    data.setdefault("execution_allowed", False)
+    data.setdefault("sends_network", False)
+    return data

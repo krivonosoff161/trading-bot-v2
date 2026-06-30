@@ -23,6 +23,12 @@ def _signal(signal_id: str = "s1", status: str = "armed") -> PaperActionSignal:
         max_hold_bars=12,
         max_hold_minutes=180,
         reason_now="fresh pullback",
+        validator_context={
+            "ready_strategy_id": "ready_1",
+            "setup_id": "setup_1",
+            "candidate_id": "candidate_1",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+        },
         status=status,
         created_at=1000.0,
         boundary_ts=900,
@@ -44,6 +50,8 @@ def test_training_row_contains_outcome_and_review_fields():
     assert row["paper_only"] is True
     assert row["execution_allowed"] is False
     assert row["entry_mid"] == 100.5
+    assert row["ready_strategy_id"] == "ready_1"
+    assert row["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert row["tp1"] == 105.0
     assert row["geometry"]["rr_tp1"] > 0
     assert row["result"] == "take"

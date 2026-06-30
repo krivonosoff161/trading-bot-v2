@@ -245,6 +245,22 @@ def _print_cycle(out: dict) -> None:
             f"skipped={advisor.get('skipped', 0)} blocked={advisor.get('blocked', 0)} "
             f"reason_counts={advisor.get('reason_counts', {})}"
         )
+    role_reviews = out.get("agent_role_reviews") or {}
+    if role_reviews:
+        print(
+            "  agent_role_reviews: "
+            f"provider={role_reviews.get('provider')} configured={role_reviews.get('configured')} "
+            f"reviews={role_reviews.get('reviews', 0)} accepted={role_reviews.get('accepted', 0)} "
+            f"rejected={role_reviews.get('rejected', 0)}"
+        )
+    catalog = out.get("ready_strategy_catalog") or {}
+    if catalog:
+        print(
+            "  ready_strategy_catalog: "
+            f"loaded={catalog.get('records_loaded', 0)} "
+            f"ready={catalog.get('ready', 0)} rejected={catalog.get('rejected_quality', 0)} "
+            f"execution_allowed={catalog.get('execution_allowed')}"
+        )
     for e in out.get("errors") or []:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
@@ -263,10 +279,12 @@ def _cycle_signature(out: dict) -> tuple:
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
     calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
+    agent_role_reviews = tuple(sorted((out.get("agent_role_reviews") or {}).items()))
+    ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
-        telegram_delivery, training_export, calculator_advisor,
+        telegram_delivery, training_export, calculator_advisor, agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
 
@@ -401,6 +419,15 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
                 _pfr_db = Path(getattr(args, "pfr_db_path", "") or "")
                 _pfr_db = _pfr_db if _pfr_db.as_posix() not in ("", ".") else None
+                if _pfr_db is not None:
+                    try:
+                        from src.research_lab.ready_strategy_catalog import build_ready_strategy_catalog
+                        out["ready_strategy_catalog"] = build_ready_strategy_catalog(private_root, _pfr_db)
+                    except Exception as exc:  # noqa: BLE001 - catalog must not break the cycle
+                        out.setdefault("errors", []).append({
+                            "where": "ready_strategy_catalog",
+                            "error": str(exc),
+                        })
                 paper_provider = OkxPublicMarketDataProvider(
                     timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
                 )
@@ -470,6 +497,25 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         out["calculator_advisor"] = _run_calculator_advisor_stage(args, private_root, apply)
                     except Exception as exc:  # noqa: BLE001 - advisory stage must not break the cycle
                         out.setdefault("errors", []).append({"where": "calculator_advisor", "error": str(exc)})
+                if getattr(args, "run_agent_role_reviews", False):
+                    try:
+                        from argparse import Namespace
+                        from scripts.strategy_lab.agent_role_review_cycle import run_cycle as run_role_review_cycle
+                        out["agent_role_reviews"] = run_role_review_cycle(Namespace(
+                            private_root=private_root,
+                            provider=getattr(args, "agent_role_provider", "alibaba"),
+                            base_url=getattr(args, "agent_role_base_url", ""),
+                            api_key_env=getattr(args, "agent_role_api_key_env", "ALIBABA_API_KEY"),
+                            model=getattr(args, "agent_role_model", ""),
+                            timeout=float(getattr(args, "agent_role_timeout", 60.0)),
+                            rate_rub_per_1k=float(getattr(args, "agent_role_rate_rub_per_1k", 0.0)),
+                            max_outcomes=int(getattr(args, "agent_role_max_outcomes", 1)),
+                            max_validator=int(getattr(args, "agent_role_max_validator", 1)),
+                            max_sources=int(getattr(args, "agent_role_max_sources", 1)),
+                            sleep_seconds=float(getattr(args, "agent_role_sleep_seconds", 0.0)),
+                        ))
+                    except Exception as exc:  # noqa: BLE001 - advisory reviews must not break the cycle
+                        out.setdefault("errors", []).append({"where": "agent_role_reviews", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
     stages = _stage_status(args, apply)
@@ -500,6 +546,8 @@ def main() -> None:
                     help="run one bounded operational paper-watch cycle (observe+generate; research-only)")
     ap.add_argument("--run-calculator-advisor", action="store_true",
                     help="run bounded calculator advisor over the latest feature packet (requires paper signals)")
+    ap.add_argument("--run-agent-role-reviews", action="store_true",
+                    help="run bounded advisory LLM reviews over outcomes/validator/source artifacts")
     ap.add_argument("--calculator-advisor-max-calls", type=int, default=1,
                     help="max calculator advisor calls per cycle")
     ap.add_argument("--calculator-provider", default="",
@@ -510,6 +558,26 @@ def main() -> None:
                     help="optional OpenAI-compatible base URL for calculator advisor")
     ap.add_argument("--calculator-timeout", type=float, default=0.0,
                     help="optional calculator advisor timeout seconds")
+    ap.add_argument("--agent-role-provider", default="alibaba",
+                    help="provider for advisory role reviews")
+    ap.add_argument("--agent-role-base-url", default="",
+                    help="optional OpenAI-compatible base URL for role reviews")
+    ap.add_argument("--agent-role-api-key-env", default="ALIBABA_API_KEY",
+                    help="environment variable that holds the role-review provider key")
+    ap.add_argument("--agent-role-model", default="",
+                    help="model for advisory role reviews")
+    ap.add_argument("--agent-role-timeout", type=float, default=60.0,
+                    help="role-review provider timeout seconds")
+    ap.add_argument("--agent-role-rate-rub-per-1k", type=float, default=0.0,
+                    help="optional accounting rate for role-review provider")
+    ap.add_argument("--agent-role-max-outcomes", type=int, default=1,
+                    help="max outcome rows reviewed per cycle")
+    ap.add_argument("--agent-role-max-validator", type=int, default=1,
+                    help="max validator rows reviewed per cycle")
+    ap.add_argument("--agent-role-max-sources", type=int, default=1,
+                    help="max scanner/source rows reviewed per cycle")
+    ap.add_argument("--agent-role-sleep-seconds", type=float, default=0.0,
+                    help="sleep between role-review provider calls")
     ap.add_argument("--true-forward-max-candidates", type=int, default=20,
                     help="max true-forward records collected per apply cycle; set 0 for wiring smoke checks")
     ap.add_argument("--paper-signals-max-new", type=int, default=5,

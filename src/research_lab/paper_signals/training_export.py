@@ -82,6 +82,7 @@ def training_row(
     card_text = str(card.get("text") or "")
     calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
+    validator_context = sig.validator_context or {}
     return {
         "schema": SCHEMA,
         "schema_compat": ["PaperSignalTrainingRow.v1", "PaperSignalTrainingRow.v2"],
@@ -96,6 +97,10 @@ def training_row(
         "setup_candidate_id": sig.setup_candidate_id,
         "sweep_run_id": sig.sweep_run_id,
         "validation_id": sig.validation_id,
+        "ready_strategy_id": str(validator_context.get("ready_strategy_id") or ""),
+        "setup_id": str(validator_context.get("setup_id") or ""),
+        "candidate_id": str(validator_context.get("candidate_id") or ""),
+        "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
         "telegram_card_id": str(card.get("telegram_card_id") or ""),
         "outcome_id": f"outcome_{sig.signal_id}" if sig.status in TERMINAL_STATUSES else "",
         "source": sig.source,

@@ -53,6 +53,29 @@ def test_review_payload_normalizes_provider_synonyms_without_bypassing_forbidden
     assert "forbidden field: entry" in problems
 
 
+def test_review_payload_normalizes_wrappers_and_scalar_types():
+    payload = normalize_review_payload(
+        "source_trust_reviewer",
+        {
+            "review": {
+                "source_classification": "scanner",
+                "trust_adjustment": "neutral",
+                "confidence": "75%",
+                "evidence": "fresh public event",
+                "warnings": "needs follow-up",
+            }
+        },
+    )
+    assert payload["source_class"] == "scanner"
+    assert payload["trust_delta"] == "neutral"
+    assert payload["confidence"] == 0.75
+    assert payload["evidence"] == ["fresh public event"]
+    assert payload["warnings"] == ["needs follow-up"]
+    ok, problems = validate_role_payload("source_trust_reviewer", payload)
+    assert ok is True
+    assert problems == []
+
+
 def test_disabled_provider_writes_private_review_row(tmp_path):
     review = request_role_review(
         tmp_path,

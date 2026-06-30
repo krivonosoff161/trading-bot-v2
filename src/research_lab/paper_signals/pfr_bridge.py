@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.lineage_contract import stable_id
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
 from src.research_lab.paper_signals.lane import (
     ARM_WINDOW_BARS, MAX_RISK_PCT, TF_MINUTES,
@@ -47,6 +48,18 @@ _MIN_RR = 2.0   # minimum risk-reward required (matches param_schemas.executable
 def _params_hash(params: dict) -> str:
     """Stable 12-char SHA1 of sorted params JSON — the canonical identity of a parameter set."""
     return hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def _ready_strategy_id(row: dict[str, Any]) -> str:
+    payload = {
+        "run_id": row.get("run_id"),
+        "candidate_id": row.get("candidate_id"),
+        "symbol": row.get("symbol"),
+        "timeframe": row.get("timeframe"),
+        "family": row.get("family"),
+        "params_hash": row.get("params_hash"),
+    }
+    return stable_id("ready", payload, length=20)
 
 
 def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
@@ -245,7 +258,9 @@ def build_pfr_momentum_breakout(
         ),
         validator_context={
             "setup_id": row["setup_id"],
+            "ready_strategy_id": _ready_strategy_id(row),
             "candidate_id": str(row["candidate_id"]),
+            "run_id": str(row.get("run_id") or ""),
             "params_hash": row["params_hash"],
             "source_validation_verdict": str(row.get("hard_status") or ""),
             "family": row["family"],
@@ -378,7 +393,9 @@ def build_pfr_mean_reversion_fade(
         ),
         validator_context={
             "setup_id": row["setup_id"],
+            "ready_strategy_id": _ready_strategy_id(row),
             "candidate_id": str(row["candidate_id"]),
+            "run_id": str(row.get("run_id") or ""),
             "params_hash": row["params_hash"],
             "source_validation_verdict": str(row.get("hard_status") or ""),
             "family": row["family"],

@@ -11,6 +11,7 @@ from src.research_lab.dashboard_state import (
     load_lineage_summary,
     load_pipeline_policy_summary,
     load_provider_bench_summary,
+    load_ready_strategy_catalog_summary,
     load_vip_vision_smoke_summary,
 )
 from src.research_lab.human_feedback import feedback_summary
@@ -31,6 +32,7 @@ def build_status(private_root: Path) -> dict[str, Any]:
     policy = load_pipeline_policy_summary()
     prompts = prompt_registry_summary()
     validator = taxonomy_summary(private_root)
+    ready_catalog = load_ready_strategy_catalog_summary(private_root)
     roles = role_registry_summary()
     role_reviews = llm_role_review_summary(private_root)
     provider_bench = load_provider_bench_summary(private_root)
@@ -50,6 +52,7 @@ def build_status(private_root: Path) -> dict[str, Any]:
         "vip_vision_smoke": vision_smoke,
         "prompt_registry": prompts,
         "validator_taxonomy": validator,
+        "ready_strategy_catalog": ready_catalog,
         "pipeline_policy": policy,
         "ready_flags": {
             "has_scanner_events": int((lineage.get("scanner_events") or {}).get("rows") or 0) > 0,
@@ -57,6 +60,7 @@ def build_status(private_root: Path) -> dict[str, Any]:
             "has_feature_packets": int((lineage.get("feature_packets") or {}).get("rows") or 0) > 0,
             "has_cycle_links": int((lineage.get("cycle_links") or {}).get("rows") or 0) > 0,
             "has_backfill": int(backfill.get("rows") or 0) > 0,
+            "has_ready_strategy_catalog": int(ready_catalog.get("ready") or 0) > 0,
         },
         "paper_only": True,
         "execution_allowed": False,
