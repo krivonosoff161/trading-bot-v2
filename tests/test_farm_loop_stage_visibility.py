@@ -175,6 +175,8 @@ class TestCycleLogStages:
         assert out["paper_signal_training_export"]["rows"] == 0
         assert out["paper_signal_training_export"]["terminal_only"] is True
         assert out["paper_signal_training_export"]["paper_only"] is True
+        assert out["product_signal_training_export"]["paper_only"] is True
+        assert out["product_signal_training_export"]["execution_allowed"] is False
         assert existing_observation.read_text(encoding="utf-8") == before
 
     def test_visible_full_cycle_bat_bounds_paper_signal_observation(self) -> None:

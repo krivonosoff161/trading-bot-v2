@@ -237,6 +237,13 @@ def _print_cycle(out: dict) -> None:
             f"rows={train.get('rows', 0)} terminal_only={train.get('terminal_only')} "
             f"paper_only={train.get('paper_only')}"
         )
+    product_train = out.get("product_signal_training_export") or {}
+    if product_train:
+        print(
+            "  product_signal_training_export: "
+            f"rows={product_train.get('rows', 0)} source_rows={product_train.get('source_rows', 0)} "
+            f"paper_only={product_train.get('paper_only')}"
+        )
     advisor = out.get("calculator_advisor") or {}
     if advisor:
         print(
@@ -278,13 +285,15 @@ def _cycle_signature(out: dict) -> tuple:
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
+    product_training_export = tuple(sorted((out.get("product_signal_training_export") or {}).items()))
     calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
     agent_role_reviews = tuple(sorted((out.get("agent_role_reviews") or {}).items()))
     ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
-        telegram_delivery, training_export, calculator_advisor, agent_role_reviews, ready_catalog,
+        telegram_delivery, training_export, product_training_export, calculator_advisor,
+        agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
 
@@ -490,6 +499,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 except Exception as exc:  # noqa: BLE001 - training export must not break the cycle
                     out.setdefault("errors", []).append({
                         "where": "paper_signal_training_export",
+                        "error": str(exc),
+                    })
+                try:
+                    from src.research_lab.product_signal_training import export_product_signal_training
+                    out["product_signal_training_export"] = export_product_signal_training(private_root)
+                except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
+                    out.setdefault("errors", []).append({
+                        "where": "product_signal_training_export",
                         "error": str(exc),
                     })
                 if getattr(args, "run_calculator_advisor", False):

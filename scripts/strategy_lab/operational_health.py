@@ -468,7 +468,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     )
     paper_training = training_data["paper_signal_training"]
     product_signal_events = training_data["product_signal_events"]
+    product_signal_training = training_data["product_signal_training"]
     paper_training_freshness = training_data["paper_signal_training_freshness"]
+    product_training_freshness = training_data["product_signal_training_freshness"]
     excel_journal_freshness = training_data["excel_journal_freshness"]
     paper_training_ready = (
         paper_training["rows"] > 0
@@ -487,6 +489,18 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             and product_signal_events["paper_only_false"] == 0
             and product_signal_events["execution_allowed_true"] == 0
             and product_signal_events["read_error"] == ""
+        )
+    )
+    product_signal_training_ready = (
+        not journals["product_signal_events"]["exists"]
+        or (
+            journals["product_signal_training"]["exists"]
+            and product_signal_training["schema_rows"] == product_signal_training["rows"]
+            and product_signal_training["invalid_json"] == 0
+            and product_signal_training["paper_only_false"] == 0
+            and product_signal_training["execution_allowed_true"] == 0
+            and product_signal_training["read_error"] == ""
+            and not product_training_freshness["stale_vs_source"]
         )
     )
     excel_journal_current = journals["excel"]["exists"] and not excel_journal_freshness["stale_vs_source"]
@@ -833,6 +847,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Inspect logs/signals/signal_events.jsonl before using product events for training."
             if not product_signal_events_ready else "",
         ),
+        "product_signal_training_export": _gate(
+            "pass" if product_signal_training_ready else "warn",
+            "Product/manual/VIP signal events are mirrored into private training rows."
+            if product_signal_training_ready
+            else "Product/manual/VIP events exist but private training export is missing, stale, invalid, or not paper-only.",
+            action="Run python -m scripts.strategy_lab.product_signal_training_export."
+            if not product_signal_training_ready else "",
+        ),
     }
 
 
@@ -984,6 +1006,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_signal_log = private_root / "state" / "derived" / "paper_signals.jsonl"
     paper_signal_training = private_root / "state" / "derived" / "paper_signal_training.jsonl"
     paper_signal_training_snapshot = private_root / "state" / "derived" / "paper_signal_training.json"
+    product_signal_training = private_root / "state" / "derived" / "product_signal_training.jsonl"
+    product_signal_training_snapshot = private_root / "state" / "derived" / "product_signal_training.json"
     main_paper_instruction_snapshot = private_root / "state" / "derived" / "main_paper_instructions.json"
     main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
     main_paper_consumed_snapshot = private_root / "state" / "derived" / "main_paper_consumed.json"
@@ -1430,6 +1454,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "paper_telegram_delivery_snapshot": _exists(paper_telegram_delivery_snapshot),
             "main_signals": _exists(main_signal_log),
             "product_signal_events": _exists(product_signal_events_log),
+            "product_signal_training": _exists(product_signal_training),
+            "product_signal_training_snapshot": _exists(product_signal_training_snapshot),
         },
         "training_data": {
             "paper_signal_training": _jsonl_schema_metrics(
@@ -1444,6 +1470,14 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "product_signal_events": _jsonl_schema_metrics(
                 product_signal_events_log,
                 schema="signal_event.v1",
+            ),
+            "product_signal_training": _jsonl_schema_metrics(
+                product_signal_training,
+                schema="ProductSignalTrainingRow.v1",
+            ),
+            "product_signal_training_freshness": _freshness_metrics(
+                product_signal_training,
+                product_signal_events_log,
             ),
         },
         "pfr": {
@@ -1701,6 +1735,8 @@ def _print_human(report: dict[str, Any]) -> None:
         f"stale_vs_source={freshness['stale_vs_source']}"
     )
     product_events = report["training_data"]["product_signal_events"]
+    product_training = report["training_data"]["product_signal_training"]
+    product_training_freshness = report["training_data"]["product_signal_training_freshness"]
     print(
         "product_signal_events: "
         f"exists={report['journals']['product_signal_events']['exists']} "
@@ -1708,6 +1744,15 @@ def _print_human(report: dict[str, Any]) -> None:
         f"invalid_json={product_events['invalid_json']} "
         f"paper_only_false={product_events['paper_only_false']} "
         f"execution_allowed_true={product_events['execution_allowed_true']}"
+    )
+    print(
+        "product_signal_training: "
+        f"exists={report['journals']['product_signal_training']['exists']} "
+        f"rows={product_training['rows']} schema_rows={product_training['schema_rows']} "
+        f"invalid_json={product_training['invalid_json']} "
+        f"paper_only_false={product_training['paper_only_false']} "
+        f"execution_allowed_true={product_training['execution_allowed_true']} "
+        f"stale_vs_source={product_training_freshness['stale_vs_source']}"
     )
     print(
         "excel_journal: "

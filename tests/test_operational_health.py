@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from scripts.strategy_lab import operational_health as H
+from src.research_lab.product_signal_training import export_product_signal_training
 
 
 def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch):
@@ -236,6 +237,17 @@ def test_operational_health_reports_product_signal_event_safety(tmp_path, monkey
     assert product_events["schema_rows"] == 1
     assert product_events["execution_allowed_true"] == 0
     assert report["readiness"]["product_signal_event_log"]["status"] == "pass"
+    assert report["readiness"]["product_signal_training_export"]["status"] == "warn"
+
+    export_product_signal_training(tmp_path, source_log=events)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    product_training = report["training_data"]["product_signal_training"]
+    assert product_training["rows"] == 1
+    assert product_training["schema_rows"] == 1
+    assert product_training["execution_allowed_true"] == 0
+    assert report["journals"]["product_signal_training"]["exists"] is True
+    assert report["readiness"]["product_signal_training_export"]["status"] == "pass"
 
     events.write_text(
         json.dumps(
