@@ -33,6 +33,27 @@ def main() -> None:
     print(f"  cycle_links={lineage['cycle_links']['rows']}")
     print(f"  backfill_rows={status['backfill']['rows']}")
     print(f"  feedback_rows={status['feedback']['rows']}")
+    print(f"  agent_roles={status['agent_roles']['roles']}")
+    print(f"  provider_bench_rows={status['provider_bench'].get('rows', 0)}")
+    review_cycle = status["agent_role_review_cycle"]
+    print(
+        "  agent_role_review_cycle="
+        f"reviews={review_cycle.get('reviews', 0)} "
+        f"accepted={review_cycle.get('accepted', 0)} "
+        f"configured={review_cycle.get('configured', False)}"
+    )
+    vision = status["vip_vision_smoke"]
+    print(
+        "  vip_vision_smoke="
+        f"configured={vision.get('configured', False)} "
+        f"called={vision.get('called_provider', False)} "
+        f"has_result={vision.get('has_result', False)}"
+    )
+    reviews = status["llm_role_reviews"]["roles"]
+    print(
+        "  llm_reviews="
+        + ",".join(f"{name}:{row['accepted']}/{row['rows']}" for name, row in sorted(reviews.items()))
+    )
     print(f"  execution_allowed={status['execution_allowed']}")
 
 

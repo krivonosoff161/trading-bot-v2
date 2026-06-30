@@ -62,6 +62,37 @@ Local model capacity, summarized for public documentation:
 | Local models | small Qwen/Llama/Prometheus-family models plus the `calculator` role | Use as cheap classifiers/advisors, not as trading brains. |
 | Cloud/API candidates | Alibaba/Yandex/DeepSeek/Kimi/GLM and compatible routes | Treat as optional senior review routes after provider bench. |
 
+## Current Architecture Verdict
+
+The project already has a working deterministic paper/research spine. The missing
+piece is not "an LLM trading bot". The missing piece is a measured learning layer
+that turns paper outcomes, validator failures, source quality, and product feedback
+into structured memory for the next cycle.
+
+| Claim | Verdict | Why |
+|---|---|---|
+| The farm can create paper-only artifacts | Proven in bounded e2e smoke | scanner/data/feature/paper/Telegram/training rows were generated with `execution_allowed=false`. |
+| The local `calculator` can participate safely | Proven narrowly | one bounded farm-loop call accepted `CalculatorAdvice.v1`; forbidden fields are schema-gated. |
+| The system is self-learning | Not yet | outcome reviews, source-trust memory, provider/model memory, and family/regime priority feedback are planned but not implemented as one loop. |
+| The old main engine is revived | No | old order-capable `main.py` remains isolated by design. |
+| Telegram paper cards are a production signal channel | No | preview/dry-run works; network delivery and subscriber policy need a separate operator pass. |
+| LLMs can trade or validate | No | LLMs are sidecars only; deterministic code owns math, validator status, and execution flags. |
+| Open-source agent frameworks should be imported now | No | current gaps are schemas, memory, reviewer roles, and metrics; a framework import would add complexity before contracts stabilize. |
+
+## Gap Map to the Desired Trading Swarm
+
+| Desired capability | Current state | Build next |
+|---|---|---|
+| Shared scanner for farm and main paper | scanner events exist, but Scout role is not first-class | `ScoutEvent.v1`/`ScannerEvent.v2` with source, reason, freshness, liquidity, and route policy. |
+| News/source context | scanner/product routes exist, source quality not linked to outcomes | `SourceTrustEvent.v1` and source-memory table. |
+| LLM selects useful variations | calculator advice can suggest bounded dimensions, but no role registry or provider bench | `AgentRoleRegistry.v1` + provider/model bench over sanitized cases. |
+| LLM explains validator rejects | taxonomy is visible, reviewer schema is missing | `ValidatorReview.v1`, private JSONL, dashboard counters. |
+| LLM diagnoses paper losses | deterministic diagnosis exists, reviewer schema is missing | `OutcomeReview.v1` linked into `TrainingRow.v2`. |
+| Main paper consumes only validated setups | paper bridge exists, old main remains isolated | keep current paper runtime; do not attach old live engine until paper/runtime contract is reviewed. |
+| VIP/manual requests become learning data | `signal_event.v1` exists, outcome linkage incomplete | link product events to outcome windows and training rows. |
+| Provider/model economics are measured | one text smoke exists, no role-level benchmark | private `provider_bench.v1` with latency/cost/schema violations by role. |
+| Operator sees the swarm health | status/graph exist, role health is partial | add role health, spend, schema validity, source trust, review counts. |
+
 ## What Already Works
 
 | Block | State | Evidence | Remaining gap |
@@ -172,6 +203,179 @@ paper/live claims in detail.
 Conclusion: use open-source projects as design references, not as the core runtime.
 The repo already has a safer deterministic farm/paper backbone. The missing layer is
 role contracts, memory, review schemas, provider bench, and operator reporting.
+
+## Open-Source Findings That Matter
+
+The strongest external signal is not "copy this framework". The signal is that
+serious trading-agent projects converge on explicit roles, state, provider routing,
+and memory. They do not remove the need for deterministic validation.
+
+| Finding | External signal | Project implication |
+|---|---|---|
+| Role decomposition is standard | TradingAgents separates analyst, researcher, trader, risk, and portfolio roles. | Keep role separation, but make every role write typed artifacts instead of free-form chat. |
+| Local and OpenAI-compatible endpoints are normal | TradingAgents documents Ollama/OpenAI-compatible use and multi-provider routing. | Our Ollama `calculator` route is directionally correct, but must remain bounded and measured. |
+| Research warnings are explicit | TradingAgents labels the framework as research, not financial advice. | Public docs must keep the same discipline: no profit/edge claims from paper/replay. |
+| Quant platforms emphasize experiment discipline | Qlib focuses on AI-oriented quant research and production research workflow. | Adopt experiment lineage and repeatability, not a wholesale platform migration. |
+| Mature bots separate backtest/paper/live | Freqtrade is useful as a boundary reference. | Keep old live `main.py` isolated until paper runtime has a reviewed execution contract. |
+| Agent frameworks are generic | CrewAI/LangGraph/AutoGen provide orchestration concepts. | Do not add a framework before `AgentRoleRegistry.v1` and reviewer schemas are stable. |
+
+## Runtime Milestone: Agent Roles Wired Into The Paper Backbone
+
+Implemented after the architecture pass:
+
+- `AgentRoleRegistry.v1` defines six bounded roles: farm calculator advisor,
+  outcome reviewer, validator reviewer, source trust reviewer, VIP vision
+  reviewer, and education Q&A.
+- `OutcomeReview.v1`, `ValidatorReview.v1`, and `SourceTrustEvent.v1` are written
+  only to private Strategy Lab JSONL files.
+- Alibaba-compatible text review is measured through a private provider bench.
+- Alibaba VIP vision is measured through a separate private smoke runner.
+- Dashboard/status now expose role registry, provider bench, role-review cycle,
+  and VIP vision smoke summaries without leaking provider responses.
+
+Measured local run on 2026-06-29:
+
+| Check | Result |
+|---|---|
+| Provider bench | Alibaba configured; 3/3 role sample cases accepted after canonical schema normalization. |
+| Real role review cycle | 7/7 private artifacts accepted: 3 paper outcomes, 2 validator-memory rows, 2 scanner events. |
+| VIP vision smoke | Alibaba vision configured; one private chart image returned a bounded result. |
+| E2E paper/research smoke | `ok=True`; scanner/data/feature/calculator/farm/validator/paper/main-watch/Telegram-preview/training path completed. |
+| Safety | `paper_only=True`; `execution_allowed=False`; no `AUTO_TRADE`; no live/private order execution. |
+
+Important nuance: the first Alibaba pass produced useful-looking but non-canonical
+JSON keys. The gate rejected those rows. The fix was not to relax the gate; the
+fix was to add a small canonicalization layer for common provider synonyms while
+keeping forbidden trade/execution fields rejected.
+
+Current claim level:
+
+- the agent roles can review real private artifacts and write bounded memory;
+- the roles are advisory only;
+- deterministic code still owns math, validator status, paper readiness, and all
+  Telegram rendering for paper cards;
+- this is not a live trading engine and not proof of a profitable edge.
+
+The 2026 agentic-trading survey signal is also uncomfortable but useful: the
+field is growing fast, yet reproducibility, execution semantics, transaction-cost
+models, universe handling, and comparable evaluation protocols are still weak in
+published work. This means `trading-bot-v2` should not chase "LLM trader" demos.
+Its edge as a project is the boring part: traceable data packets, cost-aware math,
+paper-only outcomes, validator classes, and repeatable lineage.
+
+Additional open-source notes from this pass:
+
+| Project / source | Useful signal | Risk for this repo |
+|---|---|---|
+| AgenticTrading | It exposes LLM trading agents, interactive backtests, live-market paper trading, decision logs, and reasoning traces. | It is closer to a playground; do not let BUY/SELL/HOLD decisions bypass our validator. |
+| AgenticTrading orchestration | Mentions DAG planning, specialized agent pools, memory, MCP, and A2A style communication. | Useful later for architecture comparison; too early to import before our contracts stabilize. |
+| FinLLM/FinAgent examples | LLM signals from news can enrich trading/RL environments. | News sentiment must become source context and trust memory, not a standalone signal. |
+| Survey evidence map | Recent survey work reports protocol incomparability and weak reproducibility across many LLM-trading studies. | Our public claim should be stronger on evidence quality, not stronger on profit claims. |
+| Awesome LLM quantitative trading papers | The space now contains many 2025-2026 multi-agent/quant-agent papers. | Good backlog source, but each idea needs our cost/no-lookahead/OOS/paper gates. |
+
+## Provider Findings That Matter
+
+Provider choice should be per role, not global.
+
+| Provider family | Observed capability/pricing signal | Project implication |
+|---|---|---|
+| DeepSeek | Official pricing is low for text and supports JSON/tool-style API features. | Good candidate for validator/outcome reviewer and daily reports after private bench. |
+| Kimi | Current docs expose multimodal/code families and token-billed chat completion. | Good human-in-the-loop and code/research review candidate; needs role-level latency/cost bench. |
+| GLM/Z.AI | Official pricing lists text, vision, web-search, and agent products. | Candidate for senior reviewer, vision fallback, and search-assisted review, but only with caps. |
+| Alibaba Model Studio | Offers Qwen, third-party text models, and image/video understanding models. | Strong candidate for VIP vision and product text; not needed for farm candle math. |
+| RunPod/GPU burst | GPU pricing makes burst research feasible but not free. | Use only for batch experiments/fine-tuning after training schema stabilizes. |
+
+The project should not choose "Alibaba vs Yandex vs DeepSeek" by preference. It
+should run `provider_bench.v1` by role and route by measured schema validity,
+latency, cost, and human usefulness.
+
+## Local Model Verdict
+
+Local models currently available are enough to build a small trading swarm, but
+not enough to make a strong autonomous trading brain.
+
+| Local model class | Good role | Bad role |
+|---|---|---|
+| `qwen2.5:0.5b`, `qwen2.5-coder:0.5b-instruct` | cheap schema-validation probes, tiny classifiers, failure-mode tests | market reasoning, validator review, chart/VIP analysis |
+| `llama3.2:1b` | simple natural-language explanation and safety/product wording tests | high-confidence strategy review |
+| `qwen2.5:1.5b`, `calculator`, `prometheus-qwen15b-lowctx` | bounded `FeaturePacket` reviewer, sweep-dimension suggestions, local security/trading-role simulation | final verdict, paper-ready, execution, complex multi-day reasoning |
+| cloud aliases in Ollama | candidate manual/senior review routes if configured and measurable | hidden runtime dependency without provider bench |
+
+Therefore the right architecture is a two-tier swarm:
+
+1. local always-on cheap roles for structured, bounded review;
+2. API/senior roles only for sampled hard cases, daily summaries, validator
+   failures, and VIP/product quality.
+
+## Where We Were Wrong or Too Optimistic
+
+| Assumption | Correction |
+|---|---|
+| "If LLMs are everywhere, the system becomes smarter." | False. Without role contracts and memory, more LLM calls just add cost and inconsistency. |
+| "Vision is needed for farm analysis." | Mostly false. The farm should feed structured OHLCV/features/geometry to LLMs. Vision belongs to VIP/product chart explanation. |
+| "Provider choice can be decided by one smoke." | False. Alibaba/Yandex/DeepSeek/Kimi/GLM must be compared per role with schema validity, latency, cost, and usefulness. |
+| "We can train our own model from current logs now." | Premature. Training data must first carry stable reviewer labels, source trust, prompt/model performance, and outcome math. |
+| "Main engine revival is just wiring." | False. Old `main.py` is order-capable and must stay isolated until a reviewed paper executor contract exists. |
+
+## Autonomous Pass Final Opinion
+
+The project is closer to a useful self-learning research machine than to a
+finished trading bot. That is not a failure; it is the correct order.
+
+What is real now:
+
+- deterministic paper/research backbone;
+- paper-only lineage;
+- local calculator advisor through schema gates;
+- paper Telegram previews;
+- training rows;
+- operational health and graph/status surfaces.
+
+What is not real yet:
+
+- LLM-driven self-learning memory;
+- validator reviewer;
+- outcome reviewer;
+- source-trust feedback loop;
+- provider/model performance routing;
+- old main integration;
+- proven trading edge.
+
+The next build should be deliberately narrow:
+
+1. implement `AgentRoleRegistry.v1`;
+2. implement private `ProviderBench.v1`;
+3. implement `OutcomeReview.v1`;
+4. attach outcome-review refs to `TrainingRow.v2`;
+5. expose role/provider metrics in status/dashboard.
+
+Only after that should the project add `ValidatorReview.v1`, source-trust memory,
+and product/VIP outcome linkage. This sequence creates a real learning loop
+instead of a bigger prompt machine.
+
+## Adoption Decision Records
+
+| Decision | Ruling | Reason |
+|---|---|---|
+| Import a trading-agent framework as runtime | Reject for now | It would move authority toward LLM conversations before the project has role-level contracts, memory, and outcome review. |
+| Use local LLMs for every farm step | Reject | The local models are small; use them for bounded cheap classification, not senior reasoning or vision. |
+| Use API models for every paper event | Reject | Cost is manageable, but latency and privacy are unnecessary for bulk events. Use API only for sampled/high-value reviewer roles. |
+| Use LLM vision for farm candles | Reject | The farm already has structured OHLCV/features; vision belongs to product/VIP chart explanation, not calculation. |
+| Teach one model directly from all logs | Defer | First normalize `TrainingRow.v2`, reviewer labels, prompt/model metrics, and source trust. Fine-tuning before schema stability would train noise. |
+| Let feedback buttons change priorities | Allow only indirectly | Human feedback can create review rows; deterministic memory logic decides whether it affects future priority. |
+
+## Phase 1 Detailed Acceptance
+
+Phase 1 must be completed before adding more LLM autonomy.
+
+| Work item | Artifact | Acceptance |
+|---|---|---|
+| Agent role registry | `AgentRoleRegistry.v1` public-safe module/table | every LLM surface declares provider, input schema, output schema, forbidden fields, caps, private log path, and fallback. |
+| Provider bench | private `provider_bench.v1` JSONL + sanitized summary | at least 5 role cases: feature advice, validator reject, paper loss, source trust/news, VIP screenshot/text-only fallback. |
+| Local model bench | private Ollama benchmark rows | `calculator`, small Qwen/Llama/Prometheus-family models measured for schema validity, latency, and refusal/overreach. |
+| Forbidden-field tests | targeted tests | model outputs containing entry/SL/TP/RR/paper_ready/execution fields are rejected for every reviewer role. |
+| Cost counters | status/dashboard fields | per-provider call count, latency, estimated cost, schema-valid rate visible without raw prompts. |
+| Public/private split | doc + scans | raw responses only private; public doc contains no prompts with private data, no keys, no absolute user-specific paths. |
 
 ## Financial Model
 
