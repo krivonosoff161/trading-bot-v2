@@ -128,6 +128,16 @@ class FakeProvider:
         return self._candles
 
 
+class CountingProvider(FakeProvider):
+    def __init__(self, candles: list[dict]):
+        super().__init__(candles)
+        self.calls = 0
+
+    def fetch_ohlcv(self, symbol: str, tf: str, start_ts: int, end_ts: int) -> list[dict]:
+        self.calls += 1
+        return super().fetch_ohlcv(symbol, tf, start_ts, end_ts)
+
+
 def _live_signal(symbol: str = "LIVE_USDT_SWAP", tf: str = "15m", now: float = 25.0) -> PaperActionSignal:
     return PaperActionSignal(
         signal_id=f"{symbol}_{tf}_fake_live",
@@ -448,6 +458,99 @@ class TestPFRDedup:
         )
         assert len(sigs) <= 1
         assert sc.get("pfr_cap_reached", 0) >= 1
+
+    def test_fetch_cap_bounds_pfr_network_attempts(self):
+        rows = [
+            _row({**_MRF_ROW_DICT, "candidate_id": f"C{i}", "symbol": f"AAOI{i}_USDT_SWAP"})
+            for i in range(3)
+        ]
+        prov = CountingProvider(_mrf_candles_short())
+        sc: dict = {}
+
+        sigs = pfr_bridge.generate_pfr_signals(
+            rows,
+            provider=prov,
+            now=1e6,
+            mode="live",
+            active_dedup=set(),
+            active_setup_ids=set(),
+            recent_fingerprints=set(),
+            max_pfr=5,
+            max_pfr_scan=10,
+            max_pfr_fetches=1,
+            timeframes=("1h",),
+            status_counts=sc,
+        )
+
+        assert prov.calls == 1
+        assert len(sigs) <= 1
+        assert sc.get("pfr_fetch_limit_reached", 0) == 1
+
+    def test_duplicate_param_variants_do_not_starve_distinct_pfr_setup(self):
+        rows = [
+            _row({**_MBR_ROW_DICT, "candidate_id": "DUP1", "symbol": "BEAT_USDT_SWAP"}),
+            _row({**_MBR_ROW_DICT, "candidate_id": "DUP2", "symbol": "BEAT_USDT_SWAP"}),
+            _row({**_MRF_ROW_DICT, "candidate_id": "MRF1", "symbol": "AAOI_USDT_SWAP"}),
+        ]
+        calls: list[str] = []
+
+        class Provider:
+            def fetch_ohlcv(self, symbol, tf, start, end):
+                calls.append(symbol)
+                if symbol == "BEAT-USDT-SWAP":
+                    return _flat_candles()
+                if symbol == "AAOI-USDT-SWAP":
+                    return _mrf_candles_short()
+                return []
+
+        sc: dict = {}
+        sigs = pfr_bridge.generate_pfr_signals(
+            rows,
+            provider=Provider(),
+            now=1e6,
+            mode="live",
+            active_dedup=set(),
+            active_setup_ids=set(),
+            recent_fingerprints=set(),
+            max_pfr=1,
+            max_pfr_scan=10,
+            max_pfr_fetches=2,
+            timeframes=("1h", "4h"),
+            status_counts=sc,
+        )
+
+        assert calls == ["BEAT-USDT-SWAP", "AAOI-USDT-SWAP"]
+        assert sc["pfr_duplicate_setup_variant"] == 1
+        assert len(sigs) == 1
+        assert sigs[0][0].symbol == "AAOI_USDT_SWAP"
+        assert sigs[0][0].validator_context["source_validation_verdict"] == "PAPER_FORWARD_READY"
+
+    def test_fetch_window_is_bounded_not_zero_to_now(self):
+        row = self._mrf_row()
+        calls = []
+
+        class Provider:
+            def fetch_ohlcv(self, symbol, tf, start, end):
+                calls.append((symbol, tf, start, end))
+                return _mrf_candles_short()
+
+        pfr_bridge.generate_pfr_signals(
+            [row],
+            provider=Provider(),
+            now=1_700_000_000.0,
+            mode="live",
+            active_dedup=set(),
+            active_setup_ids=set(),
+            recent_fingerprints=set(),
+            max_pfr=1,
+            timeframes=("1h",),
+            status_counts={},
+        )
+
+        assert calls
+        _symbol, _tf, start, end = calls[0]
+        assert start > 0
+        assert end - start == 1500 * 60 * 60_000
 
 
 # ── Category 6: AST boundary — pfr_bridge has no forbidden imports ────────────

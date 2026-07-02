@@ -2,6 +2,7 @@
 """Operational paper-watch lane: contract gate, store, selection gates, geometry, lifecycle, review,
 and the hard no-live-order boundary. All research-only."""
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -155,12 +156,41 @@ class _FakeProvider:
                  "low": p * 0.99, "close": p} for i, p in enumerate(self._p)]
 
 
+class _CountingEmptyProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+        self.calls += 1
+        return []
+
+
 def _seed_universe(root: Path):
     d = root / "discovery"
     d.mkdir(parents=True, exist_ok=True)
     (d / "live_universe.json").write_text(
         '{"detail": {"g": [{"inst_id": "AAA-USDT-SWAP", "symbol": "AAA_USDT_SWAP", '
         '"score": 9, "spread_bps": 2, "vol_usd": 50000000, "move_pct": 10}]}}', encoding="utf-8")
+
+
+def _seed_large_universe(root: Path, n: int = 12):
+    d = root / "discovery"
+    d.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "inst_id": f"AAA{i}-USDT-SWAP",
+            "symbol": f"AAA{i}_USDT_SWAP",
+            "score": 100 - i,
+            "spread_bps": 2,
+            "vol_usd": 50_000_000,
+            "move_pct": 10,
+        }
+        for i in range(n)
+    ]
+    (d / "live_universe.json").write_text(
+        json.dumps({"detail": {"g": rows}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 class TestCycle:
@@ -180,6 +210,29 @@ class TestCycle:
         cycle.run_cycle(tmp_path, mode="live", timeframes=("15m",), provider=prov, apply=True, now=1e6 + 10)
         keys = [s.dedup_key for s in store.load_signals(tmp_path)]
         assert len(keys) == len(set(keys)) and len(keys) == n1
+
+    def test_live_fetch_cap_bounds_network_attempts(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_large_universe(tmp_path)
+        prov = _CountingEmptyProvider()
+
+        rep = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("15m", "1h", "4h"),
+            provider=prov,
+            apply=True,
+            now=1e6,
+            max_live_fetches=3,
+            max_network_fetches=3,
+        )
+
+        assert prov.calls == 3
+        assert rep["live_fetches"] == 3
+        assert rep["max_live_fetches"] == 3
+        assert rep["network_fetches"] == 3
+        assert rep["max_network_fetches"] == 3
+        assert rep["gate_counts"]["live_fetch_limit_reached"] == 1
 
     def test_memory_roundtrip_and_learn_known_bad(self, tmp_path):
         from src.research_lab.paper_signals import cycle

@@ -209,8 +209,11 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               families_arg=None, pfr_db_path: Path | None = None,
               pfr_quality_policy: dict | None = None,
               max_pfr_scan: int = 30,
+              max_pfr_fetches: int | None = 8,
               pfr_reserved_new: int = 0,
-              max_observe: int | None = None) -> dict[str, Any]:
+              max_observe: int | None = None,
+              max_live_fetches: int | None = 12,
+              max_network_fetches: int | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
@@ -225,6 +228,15 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     mem = load_memory(private_root)
     learned_bad = learn_known_bad(mem)
     fam_order = families_arg or family_priority(mem)
+    network_fetches = 0
+    network_limit = None if max_network_fetches is None else max(0, int(max_network_fetches))
+
+    def fetch_with_budget(symbol: str, tf: str) -> tuple[list[dict[str, Any]], bool]:
+        nonlocal network_fetches
+        if network_limit is not None and network_fetches >= network_limit:
+            return [], False
+        network_fetches += 1
+        return _fetch(provider, symbol, tf, now_ms), True
 
     observed, closed = 0, 0
     gate_counts: dict[str, int] = {}
@@ -237,7 +249,12 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             gate_counts["observe_scan_limit_reached"] = gate_counts.get("observe_scan_limit_reached", 0) + 1
             break
         active_seen += 1
-        candles = _fetch(provider, s.symbol, s.timeframe, now_ms)
+        candles, fetch_attempted = fetch_with_budget(s.symbol, s.timeframe)
+        if not fetch_attempted:
+            gate_counts["observe_network_fetch_limit_reached"] = (
+                gate_counts.get("observe_network_fetch_limit_reached", 0) + 1
+            )
+            break
         if not candles:
             s.outcome = {**(s.outcome or {}), "result": "no_data",
                          "no_data_count": int((s.outcome or {}).get("no_data_count") or 0) + 1}
@@ -276,15 +293,26 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     if apply:
         write_selection_snapshot(private_root, movers)
     new_sigs = []
+    live_fetches = 0
+    live_fetch_limit_reached = False
     for mv in movers:
-        if len(new_sigs) >= live_new_cap:
+        if len(new_sigs) >= live_new_cap or live_fetch_limit_reached:
             break
         inst = str(mv.get("inst_id") or "")
         symbol = str(mv.get("symbol") or inst.replace("-", "_"))
         for tf in timeframes:
             if len(new_sigs) >= live_new_cap:
                 break
-            candles = _fetch(provider, symbol, tf, now_ms)
+            if max_live_fetches is not None and live_fetches >= max(0, int(max_live_fetches)):
+                gate_counts["live_fetch_limit_reached"] = gate_counts.get("live_fetch_limit_reached", 0) + 1
+                live_fetch_limit_reached = True
+                break
+            candles, fetch_attempted = fetch_with_budget(symbol, tf)
+            if not fetch_attempted:
+                gate_counts["network_fetch_limit_reached"] = gate_counts.get("network_fetch_limit_reached", 0) + 1
+                live_fetch_limit_reached = True
+                break
+            live_fetches += 1
             if not candles:
                 gate_counts["no_data"] = gate_counts.get("no_data", 0) + 1
                 continue
@@ -364,6 +392,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             timeframes=timeframes,
             status_counts=pfr_counts,
             max_pfr_scan=max_pfr_scan,
+            max_pfr_fetches=max_pfr_fetches,
         )
         new_sigs.extend(pfr_sigs)
         # gate_counts merged for single report surface
@@ -382,9 +411,14 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     report = {"mode": mode, "apply": apply, "observed": observed, "closed": closed,
               "generated": len(new_sigs), "gate_counts": gate_counts,
+              "live_fetches": live_fetches,
+              "max_live_fetches": max_live_fetches,
+              "network_fetches": network_fetches,
+              "max_network_fetches": max_network_fetches,
               "pipeline_counts": _pipeline_counts(gate_counts, generated=len(new_sigs), observed=observed),
               "resource_caps": default_caps().to_dict(),
               "pfr_counts": pfr_counts,
+              "max_pfr_fetches": max_pfr_fetches,
               "state": store.current_state_view(private_root)["by_status"] if apply else {},
               "new_cards": [s.signal_id for s, _ in new_sigs]}
     if apply:
