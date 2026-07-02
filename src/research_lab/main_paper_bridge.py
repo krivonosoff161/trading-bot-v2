@@ -19,6 +19,7 @@ from src.strategy.signal_contract import ExitRule, FollowRule, SignalContract
 
 SCHEMA = "MainPaperInstruction.v1"
 ACTIVE_STATUSES = ("armed", "opened_paper")
+MAIN_READY_VERDICT = "PAPER_FORWARD_READY"
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,8 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
 def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | None:
     if sig.status not in ACTIVE_STATUSES:
         return None
+    if not is_main_ready_signal(sig):
+        return None
     entry = _entry_midpoint(sig)
     contract = _contract_from_signal(sig, entry)
     return MainPaperInstruction(
@@ -155,6 +158,20 @@ def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | No
     )
 
 
+def is_main_ready_signal(sig: PaperActionSignal) -> bool:
+    """Return True only for validator-backed signals allowed into main-paper runtime.
+
+    The paper signal lane may create broad research/watch cards. The main-paper runtime
+    is stricter: it receives only candidates that came through the hard validator/PFR
+    catalog and carry a stable ready strategy identity. This keeps farm exploration out
+    of operator/subscriber cards until validation promoted the setup to forward-watch.
+    """
+    context = sig.validator_context or {}
+    ready_strategy_id = str(context.get("ready_strategy_id") or "").strip()
+    verdict = str(context.get("source_validation_verdict") or "").strip()
+    return bool(ready_strategy_id) and verdict == MAIN_READY_VERDICT
+
+
 def _jsonl_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_instructions.jsonl"
 
@@ -165,7 +182,34 @@ def _snapshot_path(private_root: Path) -> Path:
 
 def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
     signals = load_signals(private_root)
-    instructions = [item for sig in signals if (item := instruction_from_signal(sig)) is not None]
+    active = [sig for sig in signals if sig.status in ACTIVE_STATUSES]
+    instructions = [item for sig in active if (item := instruction_from_signal(sig)) is not None]
+    skipped_unvalidated = len(active) - len(instructions)
+    skip_reasons: dict[str, int] = {}
+    skipped_examples: list[dict[str, Any]] = []
+    for sig in active:
+        if instruction_from_signal(sig) is not None:
+            continue
+        context = sig.validator_context or {}
+        ready_strategy_id = str(context.get("ready_strategy_id") or "").strip()
+        verdict = str(context.get("source_validation_verdict") or "").strip()
+        if not ready_strategy_id:
+            reason = "missing_ready_strategy_id"
+        elif verdict != MAIN_READY_VERDICT:
+            reason = f"verdict_not_{MAIN_READY_VERDICT}"
+        else:
+            reason = "not_main_ready"
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+        if len(skipped_examples) < 5:
+            skipped_examples.append({
+                "signal_id": sig.signal_id,
+                "symbol": sig.symbol,
+                "timeframe": sig.timeframe,
+                "family": sig.setup_family,
+                "source": sig.source,
+                "status": sig.status,
+                "reason": reason,
+            })
     out_jsonl = _jsonl_path(private_root)
     out_snapshot = _snapshot_path(private_root)
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +220,11 @@ def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
         "schema": "main_paper_bridge.v1",
         "source_schema": "paper_signals.v1",
         "instructions": len(instructions),
+        "active_source_signals": len(active),
+        "skipped_unvalidated": skipped_unvalidated,
+        "skip_reasons": skip_reasons,
+        "skipped_examples": skipped_examples,
+        "required_validator_verdict": MAIN_READY_VERDICT,
         "active_source_statuses": list(ACTIVE_STATUSES),
         "execution_allowed": False,
         "paper_only": True,

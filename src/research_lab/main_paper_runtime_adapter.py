@@ -74,6 +74,11 @@ class MainPaperRuntimeQueueItem:
     adaptive_regime_hint: str
     adaptive_policy_confidence: float
     adaptive_policy_reasons: list[str]
+    ready_strategy_id: str = ""
+    source_validation_verdict: str = ""
+    setup_id: str = ""
+    candidate_id: str = ""
+    validation_id: str = ""
     priority_reasons: list[str] = field(default_factory=list)
     runtime_action: str = "watch_paper"
     source_consumer_status: str = "accepted_for_paper_watch"
@@ -242,6 +247,11 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         adaptive_regime_hint=policy.regime_hint,
         adaptive_policy_confidence=policy.confidence,
         adaptive_policy_reasons=policy.reason_codes,
+        ready_strategy_id=str(meta.get("ready_strategy_id") or ""),
+        source_validation_verdict=str(meta.get("source_validation_verdict") or ""),
+        setup_id=str(meta.get("setup_id") or ""),
+        candidate_id=str(meta.get("candidate_id") or ""),
+        validation_id=str(meta.get("validation_id") or ""),
         priority_reasons=priority_reasons,
     )
 

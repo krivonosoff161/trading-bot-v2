@@ -108,6 +108,38 @@ def test_export_training_rows_links_telegram_preview(tmp_path):
     assert rows[0]["final_card_hash"]
 
 
+def test_export_training_rows_links_main_paper_trade(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+    trades = tmp_path / "state" / "derived" / "main_paper_trades.json"
+    trades.parent.mkdir(parents=True, exist_ok=True)
+    trades.write_text(
+        json.dumps(
+            {
+                "schema": "main_paper_trade_ledger.v1",
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "paper_trade_id": "papertrade_1",
+                        "runtime_id": "runtime_1",
+                        "status": "closed_take",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["paper_trade_id"] == "papertrade_1"
+    assert rows[0]["main_paper_runtime_id"] == "runtime_1"
+    assert rows[0]["main_paper_status"] == "closed_take"
+
+
 def test_export_training_rows_links_calculator_advice(tmp_path):
     sig = _signal(status="reviewed")
     sig.feature_packet_id = "fp1"
@@ -188,6 +220,76 @@ def test_export_training_rows_skips_active_by_default(tmp_path):
     summary = export_training_rows(tmp_path)
 
     assert summary["rows"] == 0
+
+
+def test_export_training_rows_skips_unchanged_terminal_source(tmp_path, monkeypatch):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+
+    first = export_training_rows(tmp_path)
+
+    def fail_if_rebuilt(*_args, **_kwargs):
+        raise AssertionError("unchanged training export should not rewrite lineage")
+
+    monkeypatch.setattr(
+        "src.research_lab.paper_signals.training_export.write_cycle_link",
+        fail_if_rebuilt,
+    )
+    second = export_training_rows(tmp_path)
+
+    assert first["source_terminal_hash"] == second["source_terminal_hash"]
+    assert second["skipped"] is True
+    assert second["skip_reason"] == "source_terminal_unchanged"
+
+
+def test_export_training_rows_rebuilds_when_linked_card_changes(tmp_path, monkeypatch):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+
+    preview = tmp_path / "state" / "derived" / "paper_telegram_preview.json"
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "telegram_card_id": "tgcard_1",
+                        "text": "first card",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    first = export_training_rows(tmp_path)
+
+    preview.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "telegram_card_id": "tgcard_2",
+                        "text": "updated card",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    second = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(second["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert first["source_terminal_hash"] == second["source_terminal_hash"]
+    assert first["export_refs_hash"] != second["export_refs_hash"]
+    assert second["skipped"] is False
+    assert rows[0]["telegram_card_id"] == "tgcard_2"
+    assert rows[0]["final_card_text"] == "updated card"
 
 
 def test_training_export_has_no_live_order_imports():

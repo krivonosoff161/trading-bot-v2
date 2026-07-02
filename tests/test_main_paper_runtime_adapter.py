@@ -29,6 +29,12 @@ def _sig(
         timeframe=tf,
         side="long",
         setup_family=family,
+        validator_context={
+            "ready_strategy_id": f"ready_{signal_id}",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+            "setup_id": f"setup_{signal_id}",
+            "candidate_id": f"cand_{signal_id}",
+        },
         entry_zone=[100.0, 101.0],
         stop_loss=95.0,
         invalidation_rule="close below 95",
@@ -82,6 +88,8 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     assert rows[0]["source_mode"] == "live"
     assert rows[0]["exit_mode"] == "partial_be"
     assert rows[0]["adaptive_policy_id"].startswith("main_policy_")
+    assert rows[0]["ready_strategy_id"] == "ready_fast"
+    assert rows[0]["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert rows[0]["adaptive_execution_profile"] == "fast_tactical_watch"
     assert rows[0]["adaptive_exit_profile"] == "early_tp_partial_be"
     assert "forward_lead:early_tp_tactical" in rows[0]["adaptive_policy_reasons"]

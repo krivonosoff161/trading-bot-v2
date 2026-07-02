@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from src.research_lab.main_paper_runtime import observe_main_paper_runtime
+from src.research_lab.providers.okx_public import MarketDataError
 
 
 class FakeProvider:
@@ -13,6 +14,11 @@ class FakeProvider:
     def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
         self.calls.append((symbol, timeframe, start_ts, end_ts))
         return [c for c in self.candles if start_ts <= c["ts"] <= end_ts]
+
+
+class ErrorProvider:
+    def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+        raise MarketDataError("okx-public API error code=50011")
 
 
 def _queue_item(runtime_id: str = "runtime_1", *, execution_allowed: bool = False, source: str = "farm") -> dict:
@@ -137,6 +143,28 @@ def test_main_paper_runtime_preserves_pfr_source(tmp_path):
 
     assert summary["invalid"] == 0
     assert summary["items"][0]["source"] == "pfr_farm"
+
+
+def test_main_paper_runtime_provider_error_keeps_instrument_context(tmp_path):
+    _write_queue(tmp_path, [_queue_item(source="pfr_farm")])
+
+    summary = observe_main_paper_runtime(
+        tmp_path,
+        apply=True,
+        provider=ErrorProvider(),
+        now_ms=2_000_000,
+    )
+
+    assert summary["provider_error"] == 1
+    item = summary["items"][0]
+    assert item["status"] == "provider_error"
+    assert item["okx_inst_id"] == "BTC-USDT-SWAP"
+    assert item["timeframe"] == "15m"
+    assert item["setup_family"] == "early_tp_tactical"
+    assert item["source"] == "pfr_farm"
+    assert "MarketDataError" in item["error"]
+    assert item["paper_only"] is True
+    assert item["execution_allowed"] is False
 
 
 def test_main_paper_runtime_has_no_live_order_imports():
