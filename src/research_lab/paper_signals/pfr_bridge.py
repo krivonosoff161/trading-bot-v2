@@ -41,6 +41,7 @@ DEFAULT_QUALITY_POLICY: dict[str, float | int] = {
 }
 
 _MIN_RR = 2.0   # minimum risk-reward required (matches param_schemas.executable_params_ready)
+_FETCH_WINDOW_BARS = 1500
 
 
 # ── canonical DB helpers ──────────────────────────────────────────────────────
@@ -429,6 +430,31 @@ _BUILDERS = {
 }
 
 
+def _diverse_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Keep the strongest record per live trigger identity.
+
+    PFR rows are ordered by historical net. A bounded live-forward cycle should
+    not spend all candle fetches on many parameter variants of the same
+    symbol/timeframe/family; that starves other validated setups and makes the
+    main-paper lane look dead even when the catalog has diverse candidates.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    duplicates = 0
+    for row in records:
+        key = (
+            str(row.get("symbol") or ""),
+            str(row.get("timeframe") or ""),
+            str(row.get("family") or ""),
+        )
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        out.append(row)
+    return out, duplicates
+
+
 # ── PFR generation (called from cycle.run_cycle) ──────────────────────────────
 
 def generate_pfr_signals(
@@ -441,9 +467,10 @@ def generate_pfr_signals(
     active_setup_ids: set[str],
     recent_fingerprints: set[tuple[str, str]],
     max_pfr: int = 3,
-    timeframes: tuple[str, ...] | list[str] = ("15m", "1h"),
+    timeframes: tuple[str, ...] | list[str] = ("15m", "1h", "4h"),
     status_counts: dict[str, int] | None = None,
     max_pfr_scan: int = 30,
+    max_pfr_fetches: int | None = 8,
 ) -> list[tuple[PaperActionSignal, list[dict]]]:
     """Generate paper-watch signals from PFR records using live candles.
 
@@ -460,8 +487,12 @@ def generate_pfr_signals(
     tf_set = set(timeframes)
     generated: list[tuple[PaperActionSignal, list[dict]]] = []
     pfr_scanned = 0
+    pfr_fetches = 0
+    diverse_records, duplicate_variants = _diverse_records(records)
+    if duplicate_variants:
+        sc["pfr_duplicate_setup_variant"] = sc.get("pfr_duplicate_setup_variant", 0) + duplicate_variants
 
-    for row in records:
+    for row in diverse_records:
         if pfr_scanned >= max_pfr_scan:
             sc["pfr_scan_limit_reached"] = sc.get("pfr_scan_limit_reached", 0) + 1
             continue
@@ -495,9 +526,16 @@ def generate_pfr_signals(
             sc["pfr_dedup_setup_id"] = sc.get("pfr_dedup_setup_id", 0) + 1
             continue
 
-        # Fetch live candles via provider
+        # Fetch live candles via provider. Keep the request bounded; OKX public provider
+        # refuses unbounded windows and PFR should never ask for "0..now" history.
+        if max_pfr_fetches is not None and pfr_fetches >= max(0, int(max_pfr_fetches)):
+            sc["pfr_fetch_limit_reached"] = sc.get("pfr_fetch_limit_reached", 0) + 1
+            break
         try:
-            candles = provider.fetch_ohlcv(inst, tf, 0, int(now * 1000))
+            now_ms = int(now * 1000)
+            tf_ms = TF_MINUTES.get(tf, 15) * 60_000
+            pfr_fetches += 1
+            candles = provider.fetch_ohlcv(inst, tf, now_ms - _FETCH_WINDOW_BARS * tf_ms, now_ms)
         except TimeoutError:
             sc["pfr_fetch_timeout"] = sc.get("pfr_fetch_timeout", 0) + 1
             continue

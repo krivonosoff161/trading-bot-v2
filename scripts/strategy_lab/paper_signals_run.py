@@ -92,6 +92,8 @@ def main() -> None:
                     help="path to strategy_lab.sqlite вЂ” activates PFR lane (PAPER_FORWARD_READY records)")
     ap.add_argument("--max-pfr-scan", type=int, default=30,
                     help="max PFR records to inspect per cycle; lower this for fast smoke checks")
+    ap.add_argument("--max-pfr-fetches", type=int, default=8,
+                    help="max PFR candle fetches per cycle; bounds public network work")
     ap.add_argument("--pfr-reserved-signals", type=int, default=0,
                     help="reserve this many new-signal slots for PFR records when --pfr-db-path is set")
     ap.add_argument("--max-observe", type=int, default=None,
@@ -127,6 +129,7 @@ def main() -> None:
                                  stop_file=args.stop_file, mode=args.mode, timeframes=tfs,
                                  max_new=args.max_signals, apply=True, pfr_db_path=pfr_db,
                                  provider=provider, max_pfr_scan=args.max_pfr_scan,
+                                 max_pfr_fetches=args.max_pfr_fetches,
                                  pfr_reserved_new=args.pfr_reserved_signals,
                                  max_observe=args.max_observe)
         for i, r in enumerate(reports):
@@ -136,6 +139,7 @@ def main() -> None:
         r = cycle.run_cycle(root, mode=args.mode, timeframes=tfs, max_new=args.max_signals,
                             apply=args.apply, pfr_db_path=pfr_db, provider=provider,
                             max_pfr_scan=args.max_pfr_scan,
+                            max_pfr_fetches=args.max_pfr_fetches,
                             pfr_reserved_new=args.pfr_reserved_signals,
                             max_observe=args.max_observe)
         print(f"mode={args.mode} apply={args.apply} observed={r['observed']} closed={r['closed']} "
