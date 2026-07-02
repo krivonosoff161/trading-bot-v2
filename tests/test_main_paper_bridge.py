@@ -13,9 +13,17 @@ from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import append_signal
 
 
-def _sig(status: str = "armed") -> PaperActionSignal:
+def _sig(status: str = "armed", *, validated: bool = True, suffix: str = "") -> PaperActionSignal:
+    validator_context = {}
+    if validated:
+        validator_context = {
+            "ready_strategy_id": "ready_abc",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+            "setup_id": "setup_abc",
+            "candidate_id": "cand_abc",
+        }
     return PaperActionSignal(
-        signal_id=f"sig-{status}",
+        signal_id=f"sig-{status}{suffix}",
         source="farm",
         symbol="BTC_USDT_SWAP",
         okx_inst_id="BTC-USDT-SWAP",
@@ -37,9 +45,10 @@ def _sig(status: str = "armed") -> PaperActionSignal:
         expires_at=1_800_003_600.0,
         ref_price=100.0,
         risk_pct=5.0,
+        validator_context=validator_context,
         boundary_ts=1,
         data_fingerprint="abc123",
-        dedup_key="BTC|1h|early",
+        dedup_key=f"BTC|1h|early|{status}|{suffix}",
         exit_mode="partial_be",
     )
 
@@ -61,7 +70,7 @@ def test_instruction_from_signal_reuses_signal_contract_shape():
     assert item.signal_contract["metadata"]["expires_at"] == 1_800_003_600.0
     assert item.signal_contract["metadata"]["max_hold_bars"] == 10
     assert item.signal_contract["metadata"]["data_fingerprint"] == "abc123"
-    assert item.signal_contract["metadata"]["dedup_key"] == "BTC|1h|early"
+    assert item.signal_contract["metadata"]["dedup_key"] == "BTC|1h|early|armed|"
     assert item.signal_contract["metadata"]["mode"] == "live"
     assert item.signal_contract["metadata"]["exit_mode"] == "partial_be"
 
@@ -71,21 +80,32 @@ def test_instruction_from_signal_ignores_terminal_reviews():
 
 
 def test_export_main_paper_instructions_rebuilds_private_view(tmp_path):
-    append_signal(tmp_path, _sig("armed"))
-    append_signal(tmp_path, _sig("opened_paper"))
-    append_signal(tmp_path, _sig("reviewed"))
+    append_signal(tmp_path, _sig("armed", suffix="1"))
+    append_signal(tmp_path, _sig("opened_paper", suffix="2"))
+    append_signal(tmp_path, _sig("reviewed", suffix="3"))
+    append_signal(tmp_path, _sig("armed", validated=False, suffix="4"))
 
     summary = export_main_paper_instructions(tmp_path)
     out_jsonl = Path(summary["jsonl_path"])
     out_snapshot = Path(summary["snapshot_path"])
 
     assert summary["instructions"] == 2
+    assert summary["active_source_signals"] == 3
+    assert summary["skipped_unvalidated"] == 1
+    assert summary["skip_reasons"] == {"missing_ready_strategy_id": 1}
+    assert summary["skipped_examples"][0]["reason"] == "missing_ready_strategy_id"
+    assert summary["required_validator_verdict"] == "PAPER_FORWARD_READY"
     assert summary["execution_allowed"] is False
     rows = [json.loads(line) for line in out_jsonl.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2
     assert all(row["execution_allowed"] is False for row in rows)
     snap = json.loads(out_snapshot.read_text(encoding="utf-8"))
     assert snap["instructions"] == 2
+    assert snap["skip_reasons"] == {"missing_ready_strategy_id": 1}
+
+
+def test_instruction_from_signal_skips_unvalidated_research_watch():
+    assert instruction_from_signal(_sig("armed", validated=False)) is None
 
 
 def test_main_paper_instruction_rejects_execution_enabled():

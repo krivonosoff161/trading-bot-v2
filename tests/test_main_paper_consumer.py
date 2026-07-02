@@ -16,7 +16,7 @@ from src.research_lab.paper_signals.store import append_signal
 def _sig(status: str = "armed") -> PaperActionSignal:
     return PaperActionSignal(
         signal_id=f"sig-{status}",
-        source="farm",
+        source="pfr_farm",
         symbol="BTC_USDT_SWAP",
         okx_inst_id="BTC-USDT-SWAP",
         timeframe="1h",
@@ -39,8 +39,15 @@ def _sig(status: str = "armed") -> PaperActionSignal:
         risk_pct=5.0,
         boundary_ts=1,
         data_fingerprint="abc123",
-        dedup_key="BTC|1h|early",
+        dedup_key=f"BTC|1h|early|{status}",
         exit_mode="partial_be",
+        validator_context={
+            "ready_strategy_id": f"ready-{status}",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+            "setup_id": f"setup-{status}",
+            "candidate_id": f"candidate-{status}",
+            "validation_id": f"validation-{status}",
+        },
     )
 
 

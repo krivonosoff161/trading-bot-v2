@@ -182,10 +182,10 @@ def observe_main_paper_runtime(
             items.append(_item_result(row, observed, "observed", candles))
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             counts["invalid"] += 1
-            items.append({"runtime_id": row.get("runtime_id", ""), "status": "invalid", "error": str(exc)})
+            items.append(_error_result(row, "invalid", str(exc)))
         except (MarketDataError, OSError, TimeoutError) as exc:
             counts["provider_error"] += 1
-            items.append({"runtime_id": row.get("runtime_id", ""), "status": "provider_error", "error": type(exc).__name__})
+            items.append(_error_result(row, "provider_error", f"{type(exc).__name__}:{exc}"))
 
     summary = {
         "schema": SUMMARY_SCHEMA,
@@ -204,6 +204,35 @@ def observe_main_paper_runtime(
     if apply:
         _write_summary(private_root, summary)
     return summary
+
+
+def _error_result(row: dict[str, Any], status: str, error: str) -> dict[str, Any]:
+    return {
+        "runtime_id": row.get("runtime_id", ""),
+        "source_signal_id": row.get("source_signal_id", ""),
+        "source": row.get("source", ""),
+        "okx_inst_id": row.get("okx_inst_id") or row.get("pair") or "",
+        "timeframe": row.get("timeframe", ""),
+        "setup_family": row.get("setup_family", ""),
+        "side": row.get("side", ""),
+        "adaptive_policy_id": row.get("adaptive_policy_id", ""),
+        "adaptive_execution_profile": row.get("adaptive_execution_profile", ""),
+        "adaptive_entry_profile": row.get("adaptive_entry_profile", ""),
+        "adaptive_exit_profile": row.get("adaptive_exit_profile", ""),
+        "adaptive_stop_profile": row.get("adaptive_stop_profile", ""),
+        "adaptive_max_hold_profile": row.get("adaptive_max_hold_profile", ""),
+        "adaptive_regime_hint": row.get("adaptive_regime_hint", ""),
+        "adaptive_policy_confidence": row.get("adaptive_policy_confidence", 0.0),
+        "adaptive_policy_reasons": row.get("adaptive_policy_reasons", []),
+        "status": status,
+        "signal_status": "",
+        "outcome": {},
+        "review": {},
+        "error": str(error)[:240],
+        "new_bars": 0,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
 
 
 def _item_result(row: dict[str, Any], sig: PaperActionSignal, status: str, candles: list[dict[str, Any]]) -> dict[str, Any]:
