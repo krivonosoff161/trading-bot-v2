@@ -45,6 +45,8 @@ FORBIDDEN_KEYS = {
 ALIASES = {
     "classification": "situation_class",
     "suggested_dimensions": "sweep_suggestions",
+    "additional_suggestions": "warnings",
+    "suggestions": "sweep_suggestions",
     "reason": "advisory_reason",
     "missing": "missing_data",
 }
@@ -84,13 +86,32 @@ def advice_path(private_root: Path) -> Path:
 
 
 def normalize_advice_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    def as_list(value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        return [value]
+
     normalized: dict[str, Any] = {}
+    dropped: list[str] = []
     for key, value in payload.items():
         target_key = ALIASES.get(key, key)
-        if target_key == "sweep_suggestions" and isinstance(value, str):
-            normalized[target_key] = [value]
+        if target_key in FORBIDDEN_KEYS:
+            normalized[target_key] = value
+        elif target_key not in ALLOWED_KEYS:
+            dropped.append(str(key))
+        elif target_key in {"sweep_suggestions", "warnings", "missing_data"}:
+            normalized[target_key] = as_list(value)
         else:
             normalized[target_key] = value
+    if dropped:
+        warnings = normalized.get("warnings")
+        warnings = as_list(warnings)
+        warnings.extend(f"dropped_unknown_field:{key}" for key in dropped)
+        normalized["warnings"] = warnings
     return normalized
 
 
@@ -110,6 +131,12 @@ def validate_advice_payload(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     suggestions = payload.get("sweep_suggestions")
     if suggestions is not None and not isinstance(suggestions, list):
         problems.append("sweep_suggestions must be a list")
+    missing = payload.get("missing_data")
+    if missing is not None and not isinstance(missing, list):
+        problems.append("missing_data must be a list")
+    warnings = payload.get("warnings")
+    if warnings is not None and not isinstance(warnings, list):
+        problems.append("warnings must be a list")
     return (not problems, problems)
 
 
