@@ -131,6 +131,54 @@ def test_calculator_advice_normalizes_single_sweep_suggestion_string():
     assert problems == []
 
 
+def test_calculator_advice_normalizes_local_model_shape_without_granting_trade_authority():
+    payload = normalize_advice_payload(
+        {
+            "classification": "late_entry",
+            "suggestions": "hold",
+            "additional_suggestions": "check slippage",
+            "vendor_extra": "ignored",
+            "entry": 100,
+        }
+    )
+
+    assert payload["situation_class"] == "late_entry"
+    assert payload["sweep_suggestions"] == ["hold"]
+    assert payload["warnings"] == ["check slippage", "dropped_unknown_field:vendor_extra"]
+    assert payload["entry"] == 100
+    ok, problems = validate_advice_payload(payload)
+    assert ok is False
+    assert "forbidden field: entry" in problems
+
+
+def test_calculator_advice_normalizes_missing_and_warning_strings():
+    payload = normalize_advice_payload({"missing": "oi", "warnings": "thin sample"})
+
+    assert payload == {"missing_data": ["oi"], "warnings": ["thin sample"]}
+    ok, problems = validate_advice_payload(payload)
+    assert ok is True
+    assert problems == []
+
+
+def test_calculator_advice_normalizes_non_string_list_fields():
+    payload = normalize_advice_payload(
+        {
+            "missing_data": {"field": "oi", "reason": "not available"},
+            "warnings": None,
+            "sweep_suggestions": {"dimension": "hold_bars"},
+        }
+    )
+
+    assert payload == {
+        "missing_data": [{"field": "oi", "reason": "not available"}],
+        "warnings": [],
+        "sweep_suggestions": [{"dimension": "hold_bars"}],
+    }
+    ok, problems = validate_advice_payload(payload)
+    assert ok is True
+    assert problems == []
+
+
 class _Provider:
     name = "synthetic"
     configured = True

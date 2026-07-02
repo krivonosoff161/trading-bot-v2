@@ -8,8 +8,10 @@ Run:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -97,6 +99,61 @@ def python_processes() -> list[dict[str, Any]]:
     return _posix_python_processes()
 
 
+def _private_root() -> Path:
+    return Path(
+        os.getenv(
+            "TRADING_BOT_RESEARCH_ROOT",
+            str(Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"),
+        )
+    )
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform.startswith("win"):
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"if (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) {{ '1' }}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.stdout.strip() == "1"
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError, ValueError):
+        return False
+    return True
+
+
+def _farm_loop_status_fallback() -> list[dict[str, Any]]:
+    """Recover the canonical farm loop from its heartbeat when WMI returns no rows."""
+    status_path = _private_root() / "state" / "farm_loop_status.json"
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    pid = int(data.get("pid") or 0)
+    updated_at = float(data.get("updated_at") or 0.0)
+    if not pid or time.time() - updated_at > 900 or not _pid_exists(pid):
+        return []
+
+    return [{
+        "ProcessId": pid,
+        "Name": "python.exe",
+        "CommandLine": (
+            "python -m scripts.strategy_lab.farm_loop "
+            "--loop --apply --run-paper-signals # recovered from farm_loop_status.json"
+        ),
+    }]
+
+
 def classify_process(command_line: str) -> str | None:
     cmd = (command_line or "").lower().replace("/", "\\")
     if "scripts.strategy_lab.farm_loop" in cmd and "--run-paper-signals" in cmd:
@@ -116,6 +173,8 @@ def classify_process(command_line: str) -> str | None:
 
 def bot_status(processes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     rows = python_processes() if processes is None else processes
+    if processes is None and not rows:
+        rows = _farm_loop_status_fallback()
     relevant: list[dict[str, Any]] = []
     ignored = 0
     by_kind: dict[str, int] = defaultdict(int)

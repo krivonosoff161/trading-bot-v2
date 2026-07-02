@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import time
+
 from scripts import project_snapshot
 
 
@@ -50,3 +53,26 @@ def test_bot_status_counts_only_relevant_processes() -> None:
         "paper_signals_runner": 1,
     }
     assert [row["pid"] for row in report["relevant"]] == [10, 11]
+
+
+def test_bot_status_recovers_farm_loop_from_fresh_status(tmp_path, monkeypatch) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "farm_loop_status.json").write_text(
+        json.dumps({
+            "pid": 12345,
+            "stage": "sleep",
+            "updated_at": time.time(),
+            "paper_only": True,
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(project_snapshot, "python_processes", lambda: [])
+    monkeypatch.setattr(project_snapshot, "_pid_exists", lambda pid: pid == 12345)
+
+    report = project_snapshot.bot_status()
+
+    assert report["by_kind"] == {"canonical_farm_paper_loop": 1}
+    assert report["relevant"][0]["pid"] == 12345

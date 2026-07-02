@@ -10,9 +10,12 @@ separately with --probe-live.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import hashlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,10 +31,133 @@ except Exception:
     pass
 
 from src.research_lab.llm_provider import load_provider  # noqa: E402
+from src.research_lab.paper_signals.contract import PaperActionSignal  # noqa: E402
+from src.research_lab.paper_signals.training_export import TERMINAL_STATUSES  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 from src.utils.llm_formatter import formatter_provider_status, premium_vision_status  # noqa: E402
 from src.utils.telegram import telegram_status  # noqa: E402
 from scripts.subscriptions import list_delivery_users  # noqa: E402
+
+PAPER_TRAINING_STALE_GRACE_SECONDS = 900.0
+ACTIVE_FARM_LOOP_STALE_GRACE_SECONDS = 3600.0
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            int(pid),
+        )
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _active_farm_loop(private_root: Path) -> dict[str, Any]:
+    lock = Path(private_root) / "state" / "farm_loop.lock"
+    status: dict[str, Any] = {
+        "lock_path": str(lock),
+        "lock_exists": lock.exists(),
+        "pid": 0,
+        "pid_alive": False,
+        "lock_age_seconds": 0.0,
+    }
+    if not lock.exists():
+        return status
+    try:
+        status["lock_age_seconds"] = round(float(time.time() - lock.stat().st_mtime), 3)
+        raw = lock.read_text(encoding="utf-8").strip()
+        status["pid"] = int(raw) if raw.isdigit() else 0
+        status["pid_alive"] = _pid_is_alive(int(status["pid"]))
+    except (OSError, ValueError):
+        status["pid"] = 0
+        status["pid_alive"] = False
+    return status
+
+
+def _farm_loop_runtime_status(private_root: Path) -> dict[str, Any]:
+    path = Path(private_root) / "state" / "farm_loop_status.json"
+    status: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "read_error": "",
+        "stage": "",
+        "pid": 0,
+        "updated_age_seconds": 0.0,
+        "cycle_age_seconds": 0.0,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    if not path.exists():
+        return status
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status["read_error"] = type(exc).__name__
+        return status
+    if not isinstance(data, dict):
+        status["read_error"] = "not_object"
+        return status
+    updated_at = data.get("updated_at")
+    status["stage"] = str(data.get("stage") or "")
+    status["pid"] = int(data.get("pid") or 0)
+    status["cycle_age_seconds"] = round(float(data.get("cycle_age_seconds") or 0.0), 3)
+    status["paper_only"] = bool(data.get("paper_only", True))
+    status["execution_allowed"] = bool(data.get("execution_allowed", False))
+    status["details"] = data.get("details") if isinstance(data.get("details"), dict) else {}
+    if isinstance(updated_at, (int, float)):
+        status["updated_age_seconds"] = round(float(time.time() - updated_at), 3)
+    return status
+
+
+def _farm_loop_process_gate(
+    active_loop: dict[str, Any],
+    runtime_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify whether the visible farm loop is currently alive.
+
+    This is intentionally separate from readiness of artifacts. A previous run
+    can leave valid paper/training outputs while the overnight loop is no
+    longer running; operators need that called out explicitly.
+    """
+    lock_exists = bool(active_loop.get("lock_exists"))
+    pid = int(active_loop.get("pid") or 0)
+    pid_alive = bool(active_loop.get("pid_alive"))
+    runtime_exists = bool(runtime_status.get("exists"))
+    runtime_pid = int(runtime_status.get("pid") or 0)
+    runtime_read_error = str(runtime_status.get("read_error") or "")
+    runtime_fresh = (
+        runtime_exists
+        and not runtime_read_error
+        and float(runtime_status.get("updated_age_seconds") or 0.0)
+        <= ACTIVE_FARM_LOOP_STALE_GRACE_SECONDS
+    )
+    pid_matches_runtime = not runtime_pid or not pid or runtime_pid == pid
+    current = bool(pid_alive and runtime_fresh and pid_matches_runtime)
+    stale_artifacts = bool(
+        (lock_exists and not pid_alive)
+        or (runtime_exists and not runtime_fresh)
+        or (pid_alive and not pid_matches_runtime)
+    )
+    return {
+        "current": current,
+        "stale_artifacts": stale_artifacts,
+        "pid": pid,
+        "pid_alive": pid_alive,
+        "runtime_pid": runtime_pid,
+        "runtime_fresh": runtime_fresh,
+        "runtime_age_seconds": runtime_status.get("updated_age_seconds", 0.0),
+    }
 
 
 def _exists(path: Path) -> dict[str, Any]:
@@ -87,6 +213,16 @@ def _snapshot_metrics(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
     for field in fields:
         value = data.get(field, 0)
         metrics[field] = value if isinstance(value, int) else 0
+    skip_reasons = data.get("skip_reasons")
+    if isinstance(skip_reasons, dict):
+        metrics["skip_reasons"] = {
+            str(k): int(v) for k, v in skip_reasons.items() if isinstance(v, int)
+        }
+    skipped_examples = data.get("skipped_examples")
+    if isinstance(skipped_examples, list):
+        metrics["skipped_examples"] = [
+            item for item in skipped_examples[:5] if isinstance(item, dict)
+        ]
     items = data.get("items")
     metrics["items"] = len(items) if isinstance(items, list) else 0
     return metrics
@@ -269,6 +405,105 @@ def _freshness_metrics(derived: Path, source: Path) -> dict[str, Any]:
     return metrics
 
 
+def _paper_terminal_source_metrics(source: Path) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "path": str(source),
+        "exists": source.exists(),
+        "terminal_rows": 0,
+        "source_terminal_hash": "",
+        "read_error": "",
+    }
+    if not source.exists():
+        return metrics
+    latest: dict[str, dict[str, Any]] = {}
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        metrics["read_error"] = type(exc).__name__
+        return metrics
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            metrics["read_error"] = "JSONDecodeError"
+            continue
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("signal_id")
+        if not sid:
+            continue
+        latest[str(sid)] = row
+    terminal = []
+    for row in latest.values():
+        sig = PaperActionSignal.from_dict(row)
+        if sig.status in TERMINAL_STATUSES:
+            terminal.append(sig)
+    payload = [sig.to_dict() for sig in sorted(terminal, key=lambda item: item.signal_id)]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    metrics["terminal_rows"] = len(payload)
+    metrics["source_terminal_hash"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return metrics
+
+
+def _paper_training_freshness(
+    derived: Path,
+    snapshot: Path,
+    source: Path,
+    *,
+    private_root: Path | None = None,
+) -> dict[str, Any]:
+    metrics = _freshness_metrics(derived, source)
+    source_metrics = _paper_terminal_source_metrics(source)
+    active_loop = _active_farm_loop(private_root) if private_root is not None else {}
+    metrics["source_terminal_rows"] = source_metrics["terminal_rows"]
+    metrics["source_terminal_hash"] = source_metrics["source_terminal_hash"]
+    metrics["source_read_error"] = source_metrics["read_error"]
+    metrics["active_farm_loop"] = active_loop
+    metrics["snapshot_path"] = str(snapshot)
+    metrics["snapshot_exists"] = snapshot.exists()
+    metrics["snapshot_source_terminal_rows"] = 0
+    metrics["snapshot_source_terminal_hash"] = ""
+    metrics["freshness_mode"] = "mtime"
+    metrics["terminal_hash_mismatch"] = False
+    metrics["in_motion"] = False
+    if not snapshot.exists():
+        return metrics
+    try:
+        data = json.loads(snapshot.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        metrics["snapshot_read_error"] = type(exc).__name__
+        return metrics
+    if not isinstance(data, dict):
+        metrics["snapshot_read_error"] = "not_object"
+        return metrics
+    snapshot_hash = str(data.get("source_terminal_hash") or "")
+    snapshot_rows = data.get("source_terminal_rows", 0)
+    metrics["snapshot_source_terminal_hash"] = snapshot_hash
+    metrics["snapshot_source_terminal_rows"] = snapshot_rows if isinstance(snapshot_rows, int) else 0
+    if snapshot_hash:
+        metrics["freshness_mode"] = "terminal_hash"
+        mismatch = snapshot_hash != source_metrics["source_terminal_hash"]
+        delta = float(metrics["source_mtime"] - metrics["derived_mtime"])
+        active_loop_fresh = bool(
+            active_loop.get("pid_alive")
+            and abs(delta) <= ACTIVE_FARM_LOOP_STALE_GRACE_SECONDS
+        )
+        metrics["terminal_hash_mismatch"] = mismatch
+        metrics["age_delta_seconds"] = round(delta, 3)
+        metrics["in_motion"] = bool(
+            mismatch
+            and (
+                abs(delta) <= PAPER_TRAINING_STALE_GRACE_SECONDS
+                or active_loop_fresh
+            )
+        )
+        metrics["stale_vs_source"] = mismatch and not metrics["in_motion"]
+    return metrics
+
+
 def _excel_journal_freshness(root: Path, paper_signal_training: Path) -> dict[str, Any]:
     return _freshness_metrics(root / "scripts" / "journal.xlsx", paper_signal_training)
 
@@ -407,6 +642,10 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     legacy_text = report["legacy_product_text_quality"]
     product_launch = report["product_analyzer_launch_contract"]
     telegram_delivery_freshness = chain["telegram_delivery_freshness"]
+    farm_loop_process = _farm_loop_process_gate(
+        report["active_farm_loop"],
+        report["farm_loop_runtime_status"],
+    )
     product_launch_isolated = (
         product_launch["manual_telegram_current_for_farm"] is False
         and product_launch["telegram_bot_main_starts_scanner_loop"] is False
@@ -512,14 +751,36 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         or not telegram_ownership_ready
         or (lab_llm["enabled"] and not lab_llm["configured"])
     )
-    visible_cycle_ready = (
+    last_cycle = ((report.get("farm_loop_runtime_status") or {}).get("details") or {}).get("last_summary") or {}
+    last_pfr_counts = last_cycle.get("pfr_counts") or {}
+    last_main_bridge = last_cycle.get("main_paper_bridge") or {}
+    pfr_idle_no_validated_trigger = (
+        int(last_pfr_counts.get("pfr_unique_setups") or 0) > 0
+        and int(last_main_bridge.get("instructions") or 0) == 0
+        and any(str(k).startswith("pfr_rejected:") for k in last_pfr_counts)
+        and int(last_pfr_counts.get("pfr_fetch_limit_reached") or 0) == 0
+        and int(last_pfr_counts.get("pfr_candle_fetch_error") or 0) == 0
+        and int(last_pfr_counts.get("pfr_fetch_timeout") or 0) == 0
+    )
+    visible_cycle_idle_ready = (
         not visible_cycle_blocked
         and pfr["exists"]
-        and paper_chain_ready
-        and runtime_observation_ready
-        and excel_journal_current
+        and pfr_idle_no_validated_trigger
         and training_export_ready
         and paper_training_ready
+    )
+    visible_cycle_ready = (
+        not visible_cycle_blocked
+        and (
+            (
+                pfr["exists"]
+                and paper_chain_ready
+                and runtime_observation_ready
+                and training_export_ready
+                and paper_training_ready
+            )
+            or visible_cycle_idle_ready
+        )
     )
     visible_cycle_needs_journal_rebuild = (
         not visible_cycle_blocked
@@ -544,6 +805,20 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if canonical_surface_ready else "Canonical Strategy Lab launch scripts are missing.",
             action="Restore bat/strategy_lab_control_room.bat and farm full-cycle scripts."
             if not canonical_surface_ready else "",
+        ),
+        "farm_loop_process_current": _gate(
+            "pass" if farm_loop_process["current"] else "warn",
+            "Visible farm loop process is running and its status heartbeat is fresh."
+            if farm_loop_process["current"]
+            else (
+                "Visible farm loop is not currently running, or its status heartbeat is stale."
+                if farm_loop_process["stale_artifacts"]
+                else "Visible farm loop is not currently running."
+            ),
+            action=(
+                "Start bat/strategy_lab_farm_full_cycle_loop.bat for a live paper/research run."
+                if not farm_loop_process["current"] else ""
+            ),
         ),
         "legacy_live_runtime_isolated": _gate(
             "pass" if legacy_main_isolated else "blocked",
@@ -614,6 +889,14 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action="Run python -m scripts.strategy_lab.main_paper_runtime --apply after queue rebuild."
             if not runtime_observation_ready else "",
         ),
+        "main_paper_trade_ledger_available": _gate(
+            "pass" if chain["trade_ledger"]["trades"] > 0 else "warn",
+            "Validated main-paper trade ledger has trade rows for outcome/training analysis."
+            if chain["trade_ledger"]["trades"] > 0
+            else "Main-paper trade ledger is empty or not built; this is OK when no validator/PFR setup is active.",
+            action="Run a bounded farm_loop --run-paper-signals cycle; ledger builds after runtime observation."
+            if chain["trade_ledger"]["trades"] <= 0 else "",
+        ),
         "paper_main_runtime_current": _gate(
             "pass" if runtime_observation_ready else "warn",
             "Current main-compatible runtime path is the paper-only observer, not old main.py."
@@ -628,7 +911,12 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         ),
         "ready_for_visible_paper_research_loop": _gate(
             "pass" if visible_cycle_ready else ("blocked" if visible_cycle_blocked else "warn"),
-            "Visible farm/PFR/paper/main-paper/journal cycle is assembled and observed."
+            (
+                "Visible farm/PFR/paper/main-paper/journal cycle is assembled; "
+                "current validator/PFR catalog has no live entry trigger."
+            )
+            if visible_cycle_idle_ready
+            else "Visible farm/PFR/paper/main-paper/journal cycle is assembled and observed."
             if visible_cycle_ready
             else (
                 "A safety or ownership boundary blocks the visible paper/research cycle."
@@ -642,8 +930,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                     "Run python -X utf8 scripts/build_journal.py."
                     if visible_cycle_needs_journal_rebuild
                     else (
-                    "Run the bounded chain rebuild: farm_loop --run-paper-signals, main paper bridge/"
-                    "consumer/runtime/preview, and paper_signal_training_export."
+                        "Run the bounded chain rebuild: farm_loop --run-paper-signals, main paper bridge/"
+                        "consumer/runtime/preview, and paper_signal_training_export."
                     )
                 )
                 if not visible_cycle_ready
@@ -1016,6 +1304,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     main_paper_runtime_queue_log = private_root / "state" / "derived" / "main_paper_runtime_queue.jsonl"
     main_paper_runtime_observation_snapshot = private_root / "state" / "derived" / "main_paper_runtime_observation.json"
     main_paper_runtime_observation_log = private_root / "state" / "derived" / "main_paper_runtime_observation.jsonl"
+    main_paper_trade_ledger_snapshot = private_root / "state" / "derived" / "main_paper_trades.json"
+    main_paper_trade_ledger_log = private_root / "state" / "derived" / "main_paper_trades.jsonl"
     paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     paper_telegram_delivery_snapshot = private_root / "state" / "derived" / "paper_telegram_delivery.json"
@@ -1154,6 +1444,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "orders_enabled_by_this_report": False,
             "prints_secrets": False,
         },
+        "active_farm_loop": _active_farm_loop(private_root),
+        "farm_loop_runtime_status": _farm_loop_runtime_status(private_root),
         "telegram": {
             "default": telegram_status(),
             "paper": _paper_subscription_delivery_status(),
@@ -1448,6 +1740,8 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "main_paper_runtime_queue_snapshot": _exists(main_paper_runtime_queue_snapshot),
             "main_paper_runtime_observation": _exists(main_paper_runtime_observation_log),
             "main_paper_runtime_observation_snapshot": _exists(main_paper_runtime_observation_snapshot),
+            "main_paper_trade_ledger": _exists(main_paper_trade_ledger_log),
+            "main_paper_trade_ledger_snapshot": _exists(main_paper_trade_ledger_snapshot),
             "paper_telegram_preview": _exists(paper_telegram_preview_log),
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "paper_telegram_delivery": _exists(paper_telegram_delivery_log),
@@ -1462,9 +1756,11 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 paper_signal_training,
                 schema=("TrainingRow.v2", "PaperSignalTrainingRow.v2", "PaperSignalTrainingRow.v1"),
             ),
-            "paper_signal_training_freshness": _freshness_metrics(
+            "paper_signal_training_freshness": _paper_training_freshness(
                 paper_signal_training,
+                paper_signal_training_snapshot,
                 paper_signal_log,
+                private_root=private_root,
             ),
             "excel_journal_freshness": _excel_journal_freshness(ROOT, paper_signal_training),
             "product_signal_events": _jsonl_schema_metrics(
@@ -1508,6 +1804,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
                 main_paper_runtime_observation_snapshot,
                 ("rows_read", "observed", "reviewed", "pending", "invalid", "provider_error"),
             ),
+            "trade_ledger": _snapshot_metrics(main_paper_trade_ledger_snapshot, ("queue_rows", "trades", "invalid")),
             "telegram_preview": _snapshot_metrics(
                 paper_telegram_preview_snapshot,
                 ("records_read", "rendered", "invalid"),
@@ -1539,6 +1836,15 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
 def _print_human(report: dict[str, Any]) -> None:
     print("Strategy Lab operational preflight")
     print(f"mode={report['mode']} auto_trade={report['safety']['auto_trade']}")
+    active = report.get("active_farm_loop", {})
+    runtime = report.get("farm_loop_runtime_status", {})
+    print(
+        "farm_loop: "
+        f"pid={active.get('pid', 0)} alive={active.get('pid_alive', False)} "
+        f"stage={runtime.get('stage', '') or 'unknown'} "
+        f"updated_age={runtime.get('updated_age_seconds', 0)}s "
+        f"cycle_age={runtime.get('cycle_age_seconds', 0)}s"
+    )
     tg = report["telegram"]
     print(
         "telegram: "
@@ -1710,6 +2016,12 @@ def _print_human(report: dict[str, Any]) -> None:
         f"runtime_errors={chain['runtime_observation']['invalid'] + chain['runtime_observation']['provider_error']} "
         f"preview={chain['telegram_preview']['rendered']} invalid_preview={chain['telegram_preview']['invalid']}"
     )
+    if chain["instructions"].get("skip_reasons"):
+        print(
+            "paper_chain_skip: "
+            f"reasons={chain['instructions'].get('skip_reasons')} "
+            f"examples={chain['instructions'].get('skipped_examples') or []}"
+        )
     print(
         "paper_telegram_delivery: "
         f"eligible={chain['telegram_delivery']['eligible']} "

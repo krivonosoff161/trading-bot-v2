@@ -321,6 +321,11 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             )
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_runtime_observation"] = {}
+        try:  # validated main-paper trade ledger (never orders)
+            tr_path = db_path.parent.parent / "state" / "derived" / "main_paper_trades.json"
+            report["main_paper_trade_ledger"] = json.loads(tr_path.read_text(encoding="utf-8")) if tr_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["main_paper_trade_ledger"] = {}
         try:  # offline Telegram-card preview for paper-watch instructions (never sends)
             pt_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_preview.json"
             report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
@@ -437,6 +442,16 @@ def _print(report: dict) -> None:
               f"instructions={mp.get('instructions', 0)} "
               f"paper_only={mp.get('paper_only')} execution_allowed={mp.get('execution_allowed')} "
               "(derived view; main runtime not live-consuming)")
+        if mp.get("skipped_unvalidated"):
+            print("    main paper skip: "
+                  f"skipped_unvalidated={mp.get('skipped_unvalidated', 0)} "
+                  f"reasons={mp.get('skip_reasons') or {}}")
+            examples = mp.get("skipped_examples") or []
+            if examples:
+                first = examples[0]
+                print("    main paper skip example: "
+                      f"{first.get('symbol')} {first.get('timeframe')} "
+                      f"{first.get('family')} -> {first.get('reason')}")
     mc = report.get("main_paper_consumer") or {}
     if mc.get("instructions_read") is not None:
         print("  main paper consumer: "
@@ -466,6 +481,13 @@ def _print(report: dict) -> None:
               f"invalid={rto.get('invalid', 0)} provider_error={rto.get('provider_error', 0)} "
               f"execution_allowed={rto.get('execution_allowed')} "
               "(paper lifecycle observer; no order path)")
+    tl = report.get("main_paper_trade_ledger") or {}
+    if tl.get("trades") is not None:
+        print("  main paper trade ledger: "
+              f"trades={tl.get('trades', 0)} invalid={tl.get('invalid', 0)} "
+              f"by_status={tl.get('by_status') or '(none)'} "
+              f"execution_allowed={tl.get('execution_allowed')} "
+              "(validated paper trades only; no order path)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "

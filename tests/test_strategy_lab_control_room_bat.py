@@ -77,7 +77,14 @@ def test_full_cycle_bat_preserves_paper_pfr_runtime_contract():
         "--paper-signals-max-pfr-scan",
         "--paper-signals-pfr-reserved",
         "--paper-signals-fetch-timeout",
+        "--paper-signals-timeframes",
         "--main-paper-runtime-limit",
+        "--calculator-advisor-max-calls",
+        "--calculator-provider",
+        "--calculator-model",
+        "--calculator-base-url",
+        "--calculator-timeout",
+        "--run-journal-export",
         "--private-root",
         "--stop-file",
     ]
@@ -89,7 +96,11 @@ def test_full_cycle_bat_preserves_paper_pfr_runtime_contract():
         "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20",
         "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_SCAN=30",
         "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2",
+        "STRATEGY_LAB_PAPER_SIGNALS_TIMEFRAMES=15m,1h,4h",
         "STRATEGY_LAB_MAIN_PAPER_RUNTIME_LIMIT=50",
+        "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=1",
+        "STRATEGY_LAB_CALCULATOR_ADVISOR_MAX_CALLS=1",
+        "STRATEGY_LAB_RUN_JOURNAL_EXPORT=1",
     ]
     for default in required_defaults:
         assert default in text

@@ -8,6 +8,7 @@ so an operator never mistakes a partial loop for a working one.
 from __future__ import annotations
 
 import json
+import asyncio
 from argparse import Namespace
 from pathlib import Path
 
@@ -17,12 +18,20 @@ from src.research_lab import farm_journal
 
 def _args(**over) -> Namespace:
     base = dict(run_worker=False, run_validation=False, run_paper=False,
-                enrich_funding=False, enrich_oi=False)
+                enrich_funding=False, enrich_oi=False, run_journal_export=False)
     base.update(over)
     return Namespace(**base)
 
 
 class TestStageStatus:
+    def test_pid_probe_treats_windows_system_error_as_dead(self, monkeypatch) -> None:
+        def bad_kill(_pid: int, _sig: int) -> None:
+            raise SystemError("<built-in function kill> returned a result with an exception set")
+
+        monkeypatch.setattr(farm_loop.os, "kill", bad_kill)
+
+        assert farm_loop._pid_is_alive(123456789) is False
+
     def test_critical_flags_marked(self) -> None:
         s = farm_loop._stage_status(_args(), apply=True)
         for name in ("worker", "validation", "paper"):
@@ -39,6 +48,13 @@ class TestStageStatus:
         s = farm_loop._stage_status(_args(run_validation=True), apply=True)
         assert s["validation"]["enabled"] is True
         assert s["validation"]["skipped_reason"] is None
+
+    def test_journal_export_is_non_critical(self) -> None:
+        s = farm_loop._stage_status(_args(run_journal_export=False), apply=True)
+
+        assert s["journal_export"]["enabled"] is False
+        assert s["journal_export"]["critical"] is False
+        assert "--run-journal-export" in s["journal_export"]["skipped_reason"]
 
 
 class TestPrintWarning:
@@ -62,6 +78,66 @@ class TestPrintWarning:
 
 
 class TestCycleLogStages:
+    def test_paper_telegram_config_default_is_dry_run(self) -> None:
+        cfg = farm_loop._paper_telegram_delivery_config(
+            Namespace(send_paper_telegram=False),
+            apply=True,
+        )
+
+        assert cfg["apply"] is False
+        assert cfg["configured"] is False
+        assert cfg["ids"] == []
+        assert cfg["send_text"] is None
+
+    def test_paper_telegram_config_opt_in_uses_active_subscribers(self, monkeypatch) -> None:
+        from scripts.strategy_lab import paper_telegram_transport
+        from scripts import subscriptions
+        from src.utils import telegram
+
+        class FakeResponse:
+            status = 200
+
+            async def text(self) -> str:
+                return '{"ok": true, "result": {"message_id": 42}}'
+
+            async def json(self) -> dict:
+                return {"ok": True, "result": {"message_id": 42}}
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, url: str, *, json: dict, timeout):
+                assert url.startswith("https://api.telegram.org/bottoken/")
+                assert json["chat_id"] == "111"
+                assert json["text"] == "card"
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            subscriptions,
+            "list_delivery_users",
+            lambda: [
+                {"chat_id": "111", "status": "active"},
+                {"chat_id": "222", "status": "expired"},
+                {"chat_id": "333", "status": "superadmin"},
+            ],
+        )
+        monkeypatch.setattr(telegram, "bot_token", lambda: "token")
+        monkeypatch.setattr(paper_telegram_transport.aiohttp, "ClientSession", FakeSession)
+
+        cfg = farm_loop._paper_telegram_delivery_config(
+            Namespace(send_paper_telegram=True),
+            apply=True,
+        )
+
+        assert cfg["apply"] is True
+        assert cfg["configured"] is True
+        assert cfg["ids"] == ["111", "333"]
+        assert asyncio.run(cfg["send_text"]("111", "card")) == 42
+
     def test_log_cycle_records_stages_and_skipped(self, tmp_path) -> None:
         stages = farm_loop._stage_status(_args(run_worker=True), apply=True)
         result = {"pivot": "work_available", "active_tasks": 3, "counters": {"sweeps": 2},
@@ -77,6 +153,12 @@ class TestCycleLogStages:
     def test_skipped_stages_empty_when_no_stage_data(self) -> None:
         assert farm_journal.skipped_stages({"pivot": "x"}) == []
 
+    def test_sleep_until_next_cycle_stops_immediately_when_stop_file_exists(self, tmp_path) -> None:
+        stop_file = tmp_path / "STOP_FARM_FULL_CYCLE.txt"
+        stop_file.write_text("stop", encoding="utf-8")
+
+        assert farm_loop._sleep_until_next_cycle(600, str(stop_file)) is False
+
     def test_smoke_caps_skip_forward_and_new_paper_generation(self, tmp_path, monkeypatch) -> None:
         from src.research_lab.paper_signals import cycle as paper_cycle
 
@@ -85,8 +167,12 @@ class TestCycleLogStages:
         def fake_cycle(*_args, **kwargs):
             seen["max_new"] = kwargs["max_new"]
             seen["max_pfr_scan"] = kwargs["max_pfr_scan"]
+            seen["max_pfr_fetches"] = kwargs["max_pfr_fetches"]
             seen["pfr_reserved_new"] = kwargs["pfr_reserved_new"]
             seen["max_observe"] = kwargs["max_observe"]
+            seen["max_live_fetches"] = kwargs["max_live_fetches"]
+            seen["max_network_fetches"] = kwargs["max_network_fetches"]
+            seen["timeframes"] = kwargs["timeframes"]
             return {"generated": 0, "pfr_counts": {}, "state": {}, "gate_counts": {}}
 
         coordinator_seen: dict[str, int] = {}
@@ -130,16 +216,21 @@ class TestCycleLogStages:
             run_paper_signals=True,
             pfr_db_path="",
             paper_signals_fetch_timeout=1.0,
+            paper_signals_timeframes="15m,1h,4h",
             paper_signals_max_new=0,
             paper_signals_max_pfr_scan=0,
+            paper_signals_max_pfr_fetches=0,
             paper_signals_pfr_reserved=0,
             paper_signals_max_observe=0,
+            paper_signals_max_live_fetches=0,
+            paper_signals_max_network_fetches=0,
             main_paper_runtime_limit=0,
             provider="synthetic",
             backend="cpu",
             data_days=None,
             enrich_funding=False,
             enrich_oi=False,
+            run_journal_export=False,
             discovery_ttl_seconds=3600,
             no_discovery_refresh=True,
         )
@@ -164,7 +255,16 @@ class TestCycleLogStages:
 
         assert coordinator_seen == {"max_plan_events": 0, "max_discovery": 0, "max_validations": 0}
         assert out["true_forward"]["skipped"] == "true_forward_max_candidates=0"
-        assert seen == {"max_new": 0, "max_pfr_scan": 0, "pfr_reserved_new": 0, "max_observe": 0}
+        assert seen == {
+            "max_new": 0,
+            "max_pfr_scan": 0,
+            "max_pfr_fetches": 0,
+            "pfr_reserved_new": 0,
+            "max_observe": 0,
+            "max_live_fetches": 0,
+            "max_network_fetches": 0,
+            "timeframes": ("15m", "1h", "4h"),
+        }
         assert out["main_paper_runtime_queue"]["queued"] == 0
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False
         assert out["main_paper_runtime_observation"]["rows_read"] == 0
@@ -183,14 +283,56 @@ class TestCycleLogStages:
         bat = Path("bat/strategy_lab_farm_full_cycle_loop.bat").read_text(encoding="utf-8")
 
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES=12" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES=16" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES=12" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT=3" in bat
         assert "STRATEGY_LAB_FARM_MAX_VALIDATIONS=10" in bat
-        assert "paper caps  : observe=%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%" in bat
+        assert "live_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%" in bat
+        assert "network_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%" in bat
+        assert "pfr_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%" in bat
         assert "'--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%'" in bat
+        assert "'--paper-signals-max-live-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%'" in bat
+        assert "'--paper-signals-max-network-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%'" in bat
+        assert "'--paper-signals-max-pfr-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%'" in bat
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat
-        assert "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=0" in bat
+        assert "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=1" in bat
+        assert "STRATEGY_LAB_CALCULATOR_ADVISOR_MAX_CALLS=1" in bat
+        assert "'--calculator-advisor-max-calls','%STRATEGY_LAB_CALCULATOR_ADVISOR_MAX_CALLS%'" in bat
         assert "STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=0" in bat
+        assert "STRATEGY_LAB_RUN_JOURNAL_EXPORT=1" in bat
+        assert "'%STRATEGY_LAB_JOURNAL_EXPORT_ARG%'" in bat
+        assert "private_fills=forced_off" in bat
         assert "'%STRATEGY_LAB_CALCULATOR_ADVISOR_ARG%'" in bat
         assert "'%STRATEGY_LAB_AGENT_ROLE_REVIEWS_ARG%'" in bat
         assert "'--agent-role-provider','%STRATEGY_LAB_AGENT_ROLE_PROVIDER%'" in bat
+        assert "Tee-Object" not in bat
+        assert "Add-Content -Path '%LOG_FILE%' -Value $line -Encoding UTF8" in bat
+
+    def test_journal_export_forces_private_fills_off_and_restores_env(self, monkeypatch, tmp_path) -> None:
+        import scripts.build_journal as journal
+
+        journal_path = tmp_path / "journal.xlsx"
+        seen: dict[str, str | None] = {}
+
+        def fake_build() -> None:
+            seen["root"] = farm_loop.os.environ.get("TRADING_BOT_RESEARCH_ROOT")
+            seen["private_fills"] = farm_loop.os.environ.get("JOURNAL_ENABLE_PRIVATE_FILLS")
+            journal_path.write_bytes(b"xlsx")
+
+        monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", "old-root")
+        monkeypatch.setenv("JOURNAL_ENABLE_PRIVATE_FILLS", "1")
+        monkeypatch.setattr(journal, "build", fake_build)
+        monkeypatch.setattr(journal, "JOURNAL_PATH", journal_path)
+
+        out = farm_loop._run_journal_export_stage(tmp_path, apply=True)
+
+        assert seen == {"root": str(tmp_path), "private_fills": "0"}
+        assert out["status"] == "rebuilt"
+        assert out["private_fills"] is False
+        assert out["paper_only"] is True
+        assert out["execution_allowed"] is False
+        assert farm_loop.os.environ["TRADING_BOT_RESEARCH_ROOT"] == "old-root"
+        assert farm_loop.os.environ["JOURNAL_ENABLE_PRIVATE_FILLS"] == "1"

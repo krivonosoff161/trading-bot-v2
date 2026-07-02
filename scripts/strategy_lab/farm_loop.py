@@ -10,12 +10,14 @@ tasks -> never spin on already_queued (it pivots to discovery / deferred work or
     python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding
     python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --sleep-seconds 180
 
-Safety: paper/research only. Public OKX market data only. Never touches .env, AUTO_TRADE,
-order execution, private exchange endpoints, or Telegram credentials.
+Safety: paper/research only. Public OKX market data only. Default path never touches
+.env, AUTO_TRADE, order execution, private exchange endpoints, or Telegram credentials.
+Telegram paper delivery is an explicit opt-in surface.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -31,6 +33,56 @@ from src.research_lab.intake_adapter import watches_to_intake  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
+
+
+def _env_flag(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError, ValueError):
+        return False
+    return True
+
+
+def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
+    """Resolve the explicit paper Telegram delivery transport.
+
+    The farm loop must stay preview/dry-run by default. Network delivery is
+    allowed only when the operator explicitly enables it via CLI/env. Loading
+    `.env` is delayed until that point so normal research cycles remain
+    credential-free.
+    """
+    send_enabled = bool(getattr(args, "send_paper_telegram", False))
+    if not (apply and send_enabled):
+        return {
+            "apply": False,
+            "configured": False,
+            "ids": [],
+            "send_text": None,
+        }
+
+    try:
+        from scripts.strategy_lab.paper_telegram_transport import build_subscription_delivery_config
+        config = build_subscription_delivery_config(ROOT)
+    except Exception as exc:  # noqa: BLE001 - delivery config must not crash the farm
+        return {
+            "apply": True,
+            "configured": False,
+            "ids": [],
+            "send_text": None,
+            "config_error": type(exc).__name__,
+        }
+    return {
+        "apply": True,
+        "configured": bool(config.get("configured")),
+        "ids": list(config.get("ids") or []),
+        "send_text": config.get("send_text"),
+    }
 
 
 def _read_intake(limit: int) -> list[dict]:
@@ -62,6 +114,7 @@ def _stage_status(args, apply: bool) -> dict:
         "paper": st(args.run_paper, "--run-paper", True),
         "enrich_funding": st(args.enrich_funding, "--enrich-funding", False),
         "enrich_oi": st(args.enrich_oi, "--enrich-oi", False),
+        "journal_export": st(getattr(args, "run_journal_export", False), "--run-journal-export", False),
     }
 
 
@@ -222,6 +275,14 @@ def _print_cycle(out: dict) -> None:
             f"invalid={rto.get('invalid', 0)} provider_error={rto.get('provider_error', 0)} "
             f"execution_allowed={rto.get('execution_allowed')}"
         )
+    trade_ledger = out.get("main_paper_trade_ledger") or {}
+    if trade_ledger:
+        print(
+            "  main_paper_trade_ledger: "
+            f"trades={trade_ledger.get('trades', 0)} invalid={trade_ledger.get('invalid', 0)} "
+            f"by_status={trade_ledger.get('by_status') or {}} "
+            f"execution_allowed={trade_ledger.get('execution_allowed')}"
+        )
     tp = out.get("paper_telegram_preview") or {}
     if tp:
         print(
@@ -251,6 +312,14 @@ def _print_cycle(out: dict) -> None:
             f"rows={product_train.get('rows', 0)} source_rows={product_train.get('source_rows', 0)} "
             f"paper_only={product_train.get('paper_only')}"
         )
+    journal_export = out.get("journal_export") or {}
+    if journal_export:
+        print(
+            "  journal_export: "
+            f"status={journal_export.get('status') or journal_export.get('skipped')} "
+            f"exists={journal_export.get('exists')} private_fills={journal_export.get('private_fills')} "
+            f"execution_allowed={journal_export.get('execution_allowed')}"
+        )
     advisor = out.get("calculator_advisor") or {}
     if advisor:
         print(
@@ -279,6 +348,41 @@ def _print_cycle(out: dict) -> None:
         print(f"  ERROR [{e.get('where')}]: {e.get('error')}")
 
 
+def _cycle_summary(out: dict) -> dict:
+    """Compact operator-facing state for farm_loop_status.json.
+
+    The verbose log remains the audit trail. This summary is for health/status
+    tools that need to distinguish "pipeline broken" from "pipeline idle: no
+    validator/PFR trigger on this market cycle".
+    """
+    paper_signals = out.get("paper_signals") or {}
+    return {
+        "pivot": out.get("pivot"),
+        "active_tasks": out.get("active_tasks"),
+        "errors": len(out.get("errors") or []),
+        "pfr_counts": paper_signals.get("pfr_counts") or {},
+        "main_paper_bridge": {
+            "instructions": (out.get("main_paper_bridge") or {}).get("instructions", 0),
+            "skip_reasons": (out.get("main_paper_bridge") or {}).get("skip_reasons") or {},
+        },
+        "main_paper_runtime": {
+            "queued": (out.get("main_paper_runtime_queue") or {}).get("queued", 0),
+            "observed": (out.get("main_paper_runtime_observation") or {}).get("observed", 0),
+            "provider_error": (out.get("main_paper_runtime_observation") or {}).get("provider_error", 0),
+        },
+        "telegram": {
+            "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),
+            "delivery_sent": (out.get("paper_telegram_delivery") or {}).get("sent", 0),
+            "delivery_errors": (out.get("paper_telegram_delivery") or {}).get("errors", 0),
+        },
+        "calculator_advisor": {
+            "processed": (out.get("calculator_advisor") or {}).get("processed", 0),
+            "accepted": (out.get("calculator_advisor") or {}).get("accepted", 0),
+            "blocked": (out.get("calculator_advisor") or {}).get("blocked", 0),
+        },
+    }
+
+
 def _cycle_signature(out: dict) -> tuple:
     """A change-signature so --loop doesn't reprint identical state every sleep tick."""
     nz = tuple(sorted(k for k, v in out["counters"].items() if isinstance(v, int) and v))
@@ -289,6 +393,7 @@ def _cycle_signature(out: dict) -> tuple:
     main_consumer = tuple(sorted((out.get("main_paper_consumer") or {}).items()))
     main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
     main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
+    main_trade_ledger = tuple(sorted((out.get("main_paper_trade_ledger") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
@@ -298,11 +403,25 @@ def _cycle_signature(out: dict) -> tuple:
     ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
-        main_consumer, main_runtime_queue, main_runtime_observation, telegram_preview,
+        main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, telegram_preview,
         telegram_delivery, training_export, product_training_export, calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
+
+
+def _parse_csv(value: str, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    items = tuple(item.strip() for item in str(value or "").split(",") if item.strip())
+    return items or default
+
+
+def _sleep_until_next_cycle(seconds: int, stop_file: str = "") -> bool:
+    deadline = time.time() + max(1, seconds)
+    while time.time() < deadline:
+        if stop_file and Path(stop_file).exists():
+            return False
+        time.sleep(min(5.0, max(0.0, deadline - time.time())))
+    return True
 
 
 def _provider_env(args) -> dict[str, str]:
@@ -382,14 +501,135 @@ def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict
     return result
 
 
+def _run_journal_export_stage(private_root: Path, apply: bool) -> dict:
+    """Rebuild the operator Excel journal from paper/training artifacts.
+
+    The legacy journal builder has an optional private-fills path. The farm loop is
+    paper/research only, so force that opt-in off while this stage runs and restore
+    the caller environment afterwards.
+    """
+    if not apply:
+        return {
+            "schema": "journal_export_stage.v1",
+            "skipped": "dry_run",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    old_root = os.environ.get("TRADING_BOT_RESEARCH_ROOT")
+    old_private_fills = os.environ.get("JOURNAL_ENABLE_PRIVATE_FILLS")
+    os.environ["TRADING_BOT_RESEARCH_ROOT"] = str(private_root)
+    os.environ["JOURNAL_ENABLE_PRIVATE_FILLS"] = "0"
+    try:
+        import scripts.build_journal as build_journal
+
+        build_journal.build()
+        journal_path = Path(getattr(build_journal, "JOURNAL_PATH", ROOT / "scripts" / "journal.xlsx"))
+        return {
+            "schema": "journal_export_stage.v1",
+            "status": "rebuilt",
+            "path": str(journal_path),
+            "exists": journal_path.exists(),
+            "size_bytes": journal_path.stat().st_size if journal_path.exists() else 0,
+            "private_fills": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    finally:
+        if old_root is None:
+            os.environ.pop("TRADING_BOT_RESEARCH_ROOT", None)
+        else:
+            os.environ["TRADING_BOT_RESEARCH_ROOT"] = old_root
+        if old_private_fills is None:
+            os.environ.pop("JOURNAL_ENABLE_PRIVATE_FILLS", None)
+        else:
+            os.environ["JOURNAL_ENABLE_PRIVATE_FILLS"] = old_private_fills
+
+
+def _write_loop_status(
+    private_root: Path,
+    *,
+    stage: str,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    details: dict | None = None,
+) -> None:
+    """Write a private heartbeat for long visible runs.
+
+    The loop prints a full summary only after a cycle finishes. Some stages can take
+    minutes, so this status file is the operator-facing "where is it now" signal.
+    """
+    if not apply:
+        return
+    path = private_root / "state" / "farm_loop_status.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    payload = {
+        "schema": "FarmLoopStatus.v1",
+        "pid": os.getpid(),
+        "stage": stage,
+        "updated_at": now,
+        "cycle_started_at": cycle_started_at,
+        "cycle_age_seconds": round(now - cycle_started_at, 3),
+        "loop": bool(loop),
+        "paper_only": True,
+        "execution_allowed": False,
+        "details": details or {},
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
+    cycle_started_at = time.time()
+    loop = bool(getattr(args, "loop", False))
+    _write_loop_status(
+        private_root,
+        stage="cycle_start",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+    )
+    _write_loop_status(
+        private_root,
+        stage="provider_setup",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+    )
     provider, flow_provider, oi_provider = _providers(args, apply)
+    _write_loop_status(
+        private_root,
+        stage="intake",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"max_plan_events": int(getattr(args, "max_plan_events", 20))},
+    )
     events = _read_intake(args.max_plan_events)
     if apply and events:
         from src.research_lab.lineage_contract import scanner_event_from_intake, write_scanner_event
         for event in events[: max(0, int(getattr(args, "max_plan_events", 20)))]:
             write_scanner_event(private_root, scanner_event_from_intake(event, mode="live"))
+    _write_loop_status(
+        private_root,
+        stage="discovery",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"intake_events": len(events)},
+    )
     snapshot, discovery_info = _discovery(args, private_root, apply)
+    _write_loop_status(
+        private_root,
+        stage="coordinator",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"intake_events": len(events)},
+    )
     out = run_coordinator_cycle(
         tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
         families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider,
@@ -405,6 +645,13 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
     )
     out["discovery"] = discovery_info
     if args.run_paper:
+        _write_loop_status(
+            private_root,
+            stage="paper_runtime",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
         from src.research_lab.paper_runtime import run_paper_cycle
         paper = run_paper_cycle(private_root, apply=apply, limit=args.max_paper_cards)
         out["paper"] = {
@@ -419,6 +666,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         tf_limit = int(getattr(args, "true_forward_max_candidates", 20))
         if tf_limit > 0:
             try:
+                _write_loop_status(
+                    private_root,
+                    stage="true_forward",
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    details={"max_candidates": tf_limit},
+                )
                 from src.research_lab import true_forward
                 true_forward.register(private_root, max_candidates=tf_limit)
                 tf_res = true_forward.collect_once(private_root, max_candidates=tf_limit)
@@ -437,6 +692,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 _pfr_db = _pfr_db if _pfr_db.as_posix() not in ("", ".") else None
                 if _pfr_db is not None:
                     try:
+                        _write_loop_status(
+                            private_root,
+                            stage="ready_strategy_catalog",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                            details={"pfr_db_path": str(_pfr_db)},
+                        )
                         from src.research_lab.ready_strategy_catalog import build_ready_strategy_catalog
                         out["ready_strategy_catalog"] = build_ready_strategy_catalog(private_root, _pfr_db)
                     except Exception as exc:  # noqa: BLE001 - catalog must not break the cycle
@@ -447,29 +710,79 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 paper_provider = OkxPublicMarketDataProvider(
                     timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
                 )
+                paper_timeframes = _parse_csv(
+                    getattr(args, "paper_signals_timeframes", ""),
+                    default=("15m", "1h", "4h"),
+                )
+                _write_loop_status(
+                    private_root,
+                    stage="paper_signals",
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    details={
+                        "timeframes": list(paper_timeframes),
+                        "max_pfr_scan": int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+                        "max_pfr_fetches": int(getattr(args, "paper_signals_max_pfr_fetches", 8)),
+                        "max_live_fetches": int(getattr(args, "paper_signals_max_live_fetches", 12)),
+                        "max_network_fetches": int(getattr(args, "paper_signals_max_network_fetches", 16)),
+                    },
+                )
                 out["paper_signals"] = paper_cycle.run_cycle(
-                    private_root, mode="live", timeframes=("15m", "1h"),
+                    private_root, mode="live", timeframes=paper_timeframes,
                     max_new=int(getattr(args, "paper_signals_max_new", 5)), apply=True,
                     pfr_db_path=_pfr_db, provider=paper_provider,
                     max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
+                    max_pfr_fetches=int(getattr(args, "paper_signals_max_pfr_fetches", 8)),
                     pfr_reserved_new=int(getattr(args, "paper_signals_pfr_reserved", 0)),
-                    max_observe=getattr(args, "paper_signals_max_observe", None))
+                    max_observe=getattr(args, "paper_signals_max_observe", None),
+                    max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
+                    max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)))
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="main_paper_bridge",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.main_paper_bridge import export_main_paper_instructions
                     out["main_paper_bridge"] = export_main_paper_instructions(private_root)
                 except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_bridge", "error": str(exc)})
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="main_paper_consumer",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.main_paper_consumer import consume_main_paper_instructions
                     out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
                 except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="main_paper_runtime_queue",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.main_paper_runtime_adapter import build_main_paper_runtime_queue
                     out["main_paper_runtime_queue"] = build_main_paper_runtime_queue(private_root)
                 except Exception as exc:  # noqa: BLE001 - runtime queue must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="main_paper_runtime_observation",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                        details={"limit": int(getattr(args, "main_paper_runtime_limit", 50))},
+                    )
                     from src.research_lab.main_paper_runtime import observe_main_paper_runtime
                     runtime_limit = int(getattr(args, "main_paper_runtime_limit", 50))
                     out["main_paper_runtime_observation"] = observe_main_paper_runtime(
@@ -484,23 +797,60 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         "error": str(exc),
                     })
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="main_paper_trade_ledger",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
+                    from src.research_lab.main_paper_trade_ledger import build_main_paper_trade_ledger
+                    out["main_paper_trade_ledger"] = build_main_paper_trade_ledger(private_root)
+                except Exception as exc:  # noqa: BLE001 - paper trade ledger must not break the cycle
+                    out.setdefault("errors", []).append({"where": "main_paper_trade_ledger", "error": str(exc)})
+                try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_telegram_preview",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
                     out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
                 except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_telegram_delivery",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.paper_telegram_sender import send_paper_telegram_previews
+                    delivery_config = _paper_telegram_delivery_config(args, apply=apply)
                     out["paper_telegram_delivery"] = send_paper_telegram_previews(
                         private_root,
-                        apply=False,
-                        paper_chat_configured=False,
-                        paper_chat_ids_count=0,
-                        recipient_ids=[],
-                        send_text=None,
+                        limit=int(getattr(args, "paper_telegram_limit", 20)),
+                        apply=bool(delivery_config["apply"]),
+                        paper_chat_configured=bool(delivery_config["configured"]),
+                        paper_chat_ids_count=len(delivery_config["ids"]),
+                        recipient_ids=delivery_config["ids"],
+                        send_text=delivery_config["send_text"],
                     )
+                    if delivery_config.get("config_error"):
+                        out["paper_telegram_delivery"]["config_error"] = delivery_config["config_error"]
                 except Exception as exc:  # noqa: BLE001 - delivery audit must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_delivery", "error": str(exc)})
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_signal_training_export",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.paper_signals.training_export import export_training_rows
                     out["paper_signal_training_export"] = export_training_rows(private_root)
                 except Exception as exc:  # noqa: BLE001 - training export must not break the cycle
@@ -509,6 +859,13 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         "error": str(exc),
                     })
                 try:
+                    _write_loop_status(
+                        private_root,
+                        stage="product_signal_training_export",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
                     from src.research_lab.product_signal_training import export_product_signal_training
                     out["product_signal_training_export"] = export_product_signal_training(private_root)
                 except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
@@ -516,13 +873,40 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         "where": "product_signal_training_export",
                         "error": str(exc),
                     })
+                if getattr(args, "run_journal_export", False):
+                    try:
+                        _write_loop_status(
+                            private_root,
+                            stage="journal_export",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                        )
+                        out["journal_export"] = _run_journal_export_stage(private_root, apply)
+                    except Exception as exc:  # noqa: BLE001 - journal export must not break the cycle
+                        out.setdefault("errors", []).append({"where": "journal_export", "error": str(exc)})
                 if getattr(args, "run_calculator_advisor", False):
                     try:
+                        _write_loop_status(
+                            private_root,
+                            stage="calculator_advisor",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                            details={"max_calls": int(getattr(args, "calculator_advisor_max_calls", 1))},
+                        )
                         out["calculator_advisor"] = _run_calculator_advisor_stage(args, private_root, apply)
                     except Exception as exc:  # noqa: BLE001 - advisory stage must not break the cycle
                         out.setdefault("errors", []).append({"where": "calculator_advisor", "error": str(exc)})
                 if getattr(args, "run_agent_role_reviews", False):
                     try:
+                        _write_loop_status(
+                            private_root,
+                            stage="agent_role_reviews",
+                            apply=apply,
+                            loop=loop,
+                            cycle_started_at=cycle_started_at,
+                        )
                         from argparse import Namespace
                         from scripts.strategy_lab.agent_role_review_cycle import run_cycle as run_role_review_cycle
                         out["agent_role_reviews"] = run_role_review_cycle(Namespace(
@@ -545,13 +929,37 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:
+        _write_loop_status(
+            private_root,
+            stage="farm_journal",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
         from src.research_lab import farm_journal
         farm_journal.log_cycle(private_root, ts=time.time(), mode="apply", result=out,
                                stages=stages, discovery=discovery_info)
         for e in out.get("errors") or []:
             farm_journal.log_error(private_root, where=e.get("where", "cycle"),
                                    error=e.get("error", ""), ts=time.time())
+    _write_loop_status(
+        private_root,
+        stage="storage_maintenance",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+    )
     _maybe_storage_maintain(private_root, apply)
+    _write_loop_status(
+        private_root,
+        stage="cycle_complete",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={
+            "last_summary": _cycle_summary(out),
+        },
+    )
     return out
 
 
@@ -611,16 +1019,38 @@ def main() -> None:
                          "(requires --run-paper-signals; OFF by default — must be explicit)")
     ap.add_argument("--paper-signals-max-pfr-scan", type=int, default=30,
                     help="max PFR records inspected by --run-paper-signals per farm cycle")
+    ap.add_argument("--paper-signals-max-pfr-fetches", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES", "8")),
+                    help="max PFR candle fetch attempts per paper-signal cycle")
     ap.add_argument("--paper-signals-pfr-reserved", type=int, default=0,
                     help=("reserve this many new paper-watch card slots for PFR records when "
                           "--pfr-db-path is provided"))
     ap.add_argument("--paper-signals-max-observe", type=int, default=50,
                     help=("max active paper signals observed by --run-paper-signals per cycle "
                           "(set 0 for smoke checks)"))
+    ap.add_argument("--paper-signals-max-live-fetches", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES", "12")),
+                    help="max live-mover candle fetch attempts per paper-signal cycle")
+    ap.add_argument("--paper-signals-max-network-fetches", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES", "16")),
+                    help="max observe+live candle fetch attempts per paper-signal cycle")
     ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
                     help="per-request public OKX timeout used by --run-paper-signals")
+    ap.add_argument("--paper-signals-timeframes", default="15m,1h,4h",
+                    help="comma-separated paper-signal timeframes; default includes validator-heavy 4h PFR")
     ap.add_argument("--main-paper-runtime-limit", type=int, default=50,
                     help="max main-paper runtime queue items observed per --run-paper-signals cycle")
+    ap.add_argument("--send-paper-telegram", action="store_true",
+                    default=_env_flag("STRATEGY_LAB_PAPER_TELEGRAM_SEND"),
+                    help=("opt-in network delivery of validated paper Telegram previews to active "
+                          "subscription users; default is dry-run/preview only"))
+    ap.add_argument("--run-journal-export", action="store_true",
+                    default=_env_flag("STRATEGY_LAB_RUN_JOURNAL_EXPORT"),
+                    help=("rebuild scripts/journal.xlsx after paper/training export; private fills are "
+                          "forced off inside the farm loop"))
+    ap.add_argument("--paper-telegram-limit", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_TELEGRAM_SEND_LIMIT", "20")),
+                    help="max paper Telegram previews delivered/audited per cycle")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")
@@ -654,7 +1084,8 @@ def main() -> None:
 
     print(f"farm_loop mode={'APPLY' if apply else 'DRY-RUN'} run={'loop' if args.loop else 'once'} "
           f"private_root={args.private_root}")
-    print("safety: paper-only; public OKX market data only; no orders / .env / AUTO_TRADE / private endpoints")
+    print("safety: paper-only; public OKX market data; no orders / AUTO_TRADE / private endpoints; "
+          "Telegram send is explicit opt-in")
     _print_stages(_stage_status(args, apply), apply)
 
     profiles = load_timeframe_profiles()
@@ -671,10 +1102,27 @@ def main() -> None:
         lock_path = private_root / "state" / "farm_loop.lock"
         if args.loop and lock_path.exists():
             age = time.time() - lock_path.stat().st_mtime
-            if age < 2 * max(60, args.sleep_seconds):
-                print(f"ABORT: another farm_loop appears active (lock {lock_path}, age {age:.0f}s); "
-                      f"stop it or delete the lock to override.")
+            try:
+                lock_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                lock_pid = 0
+            if lock_pid and not _pid_is_alive(lock_pid):
+                print(f"  lock: removed stale farm_loop lock from dead pid={lock_pid}")
+                lock_path.unlink(missing_ok=True)
+            elif not lock_pid and age >= 2 * max(60, args.sleep_seconds):
+                print(f"  lock: removed stale unreadable farm_loop lock age={age:.0f}s")
+                lock_path.unlink(missing_ok=True)
+            elif not lock_pid:
+                print(f"ABORT: another farm_loop lock exists but pid is unreadable "
+                      f"(lock {lock_path}, age {age:.0f}s); stop it or delete the lock to override.")
                 return
+            elif age < 2 * max(60, args.sleep_seconds):
+                print(f"ABORT: another farm_loop appears active (lock {lock_path}, pid={lock_pid}, "
+                      f"age {age:.0f}s); stop it or delete the lock to override.")
+                return
+            else:
+                print(f"  lock: removed stale farm_loop lock pid={lock_pid} age={age:.0f}s")
+                lock_path.unlink(missing_ok=True)
         if args.loop:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             lock_path.write_text(str(os.getpid()), encoding="utf-8")
@@ -709,7 +1157,17 @@ def main() -> None:
             prev_sig = sig
             if apply and lock_path is not None:
                 lock_path.write_text(str(os.getpid()), encoding="utf-8")  # keep the lock fresh
-            time.sleep(max(1, args.sleep_seconds))
+                _write_loop_status(
+                    private_root,
+                    stage="sleep",
+                    apply=apply,
+                    loop=True,
+                    cycle_started_at=time.time(),
+                    details={"sleep_seconds": args.sleep_seconds},
+                )
+            if not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
+                print(f"stop-file present ({args.stop_file}) - exiting loop")
+                break
     except KeyboardInterrupt:
         print("\ninterrupted - graceful stop")
     finally:

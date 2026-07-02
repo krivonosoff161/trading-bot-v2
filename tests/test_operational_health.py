@@ -3,7 +3,41 @@ import os
 from pathlib import Path
 
 from scripts.strategy_lab import operational_health as H
+from src.research_lab.paper_signals.contract import PaperActionSignal
+from src.research_lab.paper_signals.store import append_signal, update_signal
+from src.research_lab.paper_signals.training_export import export_training_rows
 from src.research_lab.product_signal_training import export_product_signal_training
+
+
+def _paper_signal(signal_id: str, *, status: str) -> PaperActionSignal:
+    return PaperActionSignal(
+        signal_id=signal_id,
+        source="farm",
+        symbol="A_USDT_SWAP",
+        okx_inst_id="A-USDT-SWAP",
+        timeframe="15m",
+        side="long",
+        setup_family="early_tp_tactical",
+        entry_zone=[100.0, 101.0],
+        stop_loss=98.0,
+        invalidation_rule="close below local support",
+        take_profit_plan=[{"label": "tp1", "price": 105.0, "size_frac": 0.5}],
+        max_hold_bars=12,
+        max_hold_minutes=180,
+        reason_now="fresh pullback",
+        status=status,
+        created_at=1000.0,
+        expires_at=2000.0,
+        ref_price=100.5,
+        risk_pct=2.5,
+        boundary_ts=900,
+        data_fingerprint=f"fp_{signal_id}",
+        dedup_key=f"A|15m|{signal_id}",
+        validator_context={
+            "ready_strategy_id": "ready_1",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+        },
+    )
 
 
 def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch):
@@ -313,6 +347,245 @@ def test_operational_health_warns_when_paper_training_export_is_stale(tmp_path, 
     assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
 
 
+def test_operational_health_does_not_mark_training_stale_for_active_paper_updates(tmp_path, monkeypatch):
+    terminal = _paper_signal("terminal_1", status="reviewed")
+    terminal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, terminal)
+    summary = export_training_rows(tmp_path)
+    assert summary["rows"] == 1
+
+    active = _paper_signal("active_1", status="armed")
+    append_signal(tmp_path, active)
+    paper = tmp_path / "state" / "derived" / "paper_signals.jsonl"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    os.utime(training, (1000, 1000))
+    os.utime(paper, (1005, 1005))
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["freshness_mode"] == "terminal_hash"
+    assert freshness["source_terminal_rows"] == 1
+    assert freshness["snapshot_source_terminal_rows"] == 1
+    assert freshness["stale_vs_source"] is False
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
+
+
+def test_operational_health_treats_recent_terminal_updates_as_in_motion(tmp_path, monkeypatch):
+    terminal = _paper_signal("terminal_1", status="reviewed")
+    terminal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, terminal)
+    export_training_rows(tmp_path)
+
+    terminal.outcome = {"result": "stop", "net_pct": -1.0}
+    terminal.review = {"diagnosis": "wrong_direction"}
+    update_signal(tmp_path, terminal)
+    paper = tmp_path / "state" / "derived" / "paper_signals.jsonl"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    os.utime(training, (1000, 1000))
+    os.utime(paper, (1005, 1005))
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["freshness_mode"] == "terminal_hash"
+    assert freshness["terminal_hash_mismatch"] is True
+    assert freshness["in_motion"] is True
+    assert freshness["stale_vs_source"] is False
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
+
+
+def test_operational_health_treats_recent_negative_delta_terminal_mismatch_as_in_motion(
+    tmp_path, monkeypatch
+):
+    terminal = _paper_signal("terminal_1", status="reviewed")
+    terminal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, terminal)
+    export_training_rows(tmp_path)
+
+    terminal.outcome = {"result": "stop", "net_pct": -1.0}
+    terminal.review = {"diagnosis": "wrong_direction"}
+    update_signal(tmp_path, terminal)
+    paper = tmp_path / "state" / "derived" / "paper_signals.jsonl"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    os.utime(paper, (1000, 1000))
+    os.utime(training, (1005, 1005))
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["age_delta_seconds"] == -5.0
+    assert freshness["terminal_hash_mismatch"] is True
+    assert freshness["in_motion"] is True
+    assert freshness["stale_vs_source"] is False
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
+
+
+def test_operational_health_warns_on_old_terminal_hash_mismatch(tmp_path, monkeypatch):
+    terminal = _paper_signal("terminal_1", status="reviewed")
+    terminal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, terminal)
+    export_training_rows(tmp_path)
+
+    terminal.outcome = {"result": "stop", "net_pct": -1.0}
+    terminal.review = {"diagnosis": "wrong_direction"}
+    update_signal(tmp_path, terminal)
+    paper = tmp_path / "state" / "derived" / "paper_signals.jsonl"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    os.utime(training, (1000, 1000))
+    os.utime(paper, (2000, 2000))
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["terminal_hash_mismatch"] is True
+    assert freshness["in_motion"] is False
+    assert freshness["stale_vs_source"] is True
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "warn"
+
+
+def test_operational_health_treats_live_farm_loop_terminal_mismatch_as_in_motion(
+    tmp_path, monkeypatch
+):
+    terminal = _paper_signal("terminal_1", status="reviewed")
+    terminal.outcome = {"result": "take", "net_pct": 1.0}
+    terminal.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, terminal)
+    export_training_rows(tmp_path)
+
+    terminal.outcome = {"result": "stop", "net_pct": -1.0}
+    terminal.review = {"diagnosis": "wrong_direction"}
+    update_signal(tmp_path, terminal)
+    lock = tmp_path / "state" / "farm_loop.lock"
+    lock.write_text("12345", encoding="utf-8")
+    paper = tmp_path / "state" / "derived" / "paper_signals.jsonl"
+    training = tmp_path / "state" / "derived" / "paper_signal_training.jsonl"
+    os.utime(training, (1000, 1000))
+    os.utime(paper, (2500, 2500))
+    monkeypatch.setattr(H, "_pid_is_alive", lambda pid: pid == 12345)
+
+    monkeypatch.delenv("AUTO_TRADE", raising=False)
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    freshness = report["training_data"]["paper_signal_training_freshness"]
+    assert freshness["age_delta_seconds"] == 1500.0
+    assert freshness["active_farm_loop"]["pid_alive"] is True
+    assert report["active_farm_loop"]["pid"] == 12345
+    assert report["active_farm_loop"]["pid_alive"] is True
+    assert freshness["terminal_hash_mismatch"] is True
+    assert freshness["in_motion"] is True
+    assert freshness["stale_vs_source"] is False
+    assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
+
+
+def test_operational_health_reports_farm_loop_runtime_status(tmp_path, monkeypatch):
+    status = tmp_path / "state" / "farm_loop_status.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 12345,
+                "stage": "paper_signals",
+                "updated_at": 2000.0,
+                "cycle_started_at": 1900.0,
+                "cycle_age_seconds": 100.0,
+                "loop": True,
+                "paper_only": True,
+                "execution_allowed": False,
+                "details": {"timeframes": ["15m", "1h", "4h"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(H.time, "time", lambda: 2010.0)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    runtime = report["farm_loop_runtime_status"]
+    assert runtime["exists"] is True
+    assert runtime["stage"] == "paper_signals"
+    assert runtime["pid"] == 12345
+    assert runtime["updated_age_seconds"] == 10.0
+    assert runtime["cycle_age_seconds"] == 100.0
+    assert runtime["details"] == {"timeframes": ["15m", "1h", "4h"]}
+    assert runtime["paper_only"] is True
+    assert runtime["execution_allowed"] is False
+    gate = report["readiness"]["farm_loop_process_current"]
+    assert gate["status"] == "warn"
+    assert "not currently running" in gate["message"]
+
+
+def test_operational_health_reports_fresh_farm_loop_process(tmp_path, monkeypatch):
+    lock = tmp_path / "state" / "farm_loop.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("12345", encoding="utf-8")
+    status = tmp_path / "state" / "farm_loop_status.json"
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 12345,
+                "stage": "sleep",
+                "updated_at": 2000.0,
+                "cycle_age_seconds": 10.0,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(H, "_pid_is_alive", lambda pid: pid == 12345)
+    monkeypatch.setattr(H.time, "time", lambda: 2010.0)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    gate = report["readiness"]["farm_loop_process_current"]
+    assert gate["status"] == "pass"
+    assert "running" in gate["message"]
+
+
+def test_operational_health_exposes_stale_farm_loop_process_action(tmp_path, monkeypatch):
+    lock = tmp_path / "state" / "farm_loop.lock"
+    lock.parent.mkdir(parents=True)
+    lock.write_text("12345", encoding="utf-8")
+    status = tmp_path / "state" / "farm_loop_status.json"
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 12345,
+                "stage": "paper_signals",
+                "updated_at": 1000.0,
+                "cycle_age_seconds": 10.0,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(H, "_pid_is_alive", lambda pid: False)
+    monkeypatch.setattr(H.time, "time", lambda: 5000.0)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "state" / "strategy_lab.sqlite")
+
+    gate = report["readiness"]["farm_loop_process_current"]
+    assert gate["status"] == "warn"
+    assert "status heartbeat is stale" in gate["message"]
+    assert "strategy_lab_farm_full_cycle_loop.bat" in gate["action"]
+    assert "farm_loop_process_current" in {
+        item["name"] for item in report["operator_next_actions"]["rebuild_actions"]
+    }
+
+
 def test_excel_journal_freshness_tracks_training_export(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -586,6 +859,37 @@ def test_operational_health_reports_main_instruction_view(tmp_path, monkeypatch)
     assert report["readiness"]["main_instruction_view_available"]["status"] == "pass"
 
 
+def test_operational_health_reports_main_instruction_skip_reasons(tmp_path, monkeypatch):
+    view = tmp_path / "state" / "derived" / "main_paper_instructions.json"
+    view.parent.mkdir(parents=True)
+    view.write_text(
+        json.dumps({
+            "instructions": 0,
+            "active_source_signals": 2,
+            "skipped_unvalidated": 2,
+            "skip_reasons": {"missing_ready_strategy_id": 2},
+            "skipped_examples": [
+                {
+                    "signal_id": "sig_1",
+                    "symbol": "BICO_USDT_SWAP",
+                    "timeframe": "1h",
+                    "family": "early_tp_tactical",
+                    "reason": "missing_ready_strategy_id",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=tmp_path / "missing.sqlite")
+
+    instructions = report["paper_chain"]["instructions"]
+    assert instructions["instructions"] == 0
+    assert instructions["skip_reasons"] == {"missing_ready_strategy_id": 2}
+    assert instructions["skipped_examples"][0]["symbol"] == "BICO_USDT_SWAP"
+
+
 def test_operational_health_reports_main_paper_consumer_view(tmp_path, monkeypatch):
     view = tmp_path / "state" / "derived" / "main_paper_consumed.json"
     view.parent.mkdir(parents=True)
@@ -757,6 +1061,49 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
     assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "pass"
+
+
+def test_operational_health_treats_empty_pfr_trigger_cycle_as_ready_idle(tmp_path, monkeypatch):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    pfr = tmp_path / "state" / "strategy_lab.sqlite"
+    pfr.parent.mkdir(parents=True, exist_ok=True)
+    pfr.write_bytes(b"sqlite")
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps({"schema": "PaperSignalTrainingRow.v1", "paper_only": True}) + "\n",
+        encoding="utf-8",
+    )
+    (derived / "main_paper_instructions.json").write_text(
+        json.dumps({"instructions": 0, "skip_reasons": {"missing_ready_strategy_id": 10}, "items": []}),
+        encoding="utf-8",
+    )
+    (tmp_path / "state" / "farm_loop_status.json").write_text(
+        json.dumps({
+            "schema": "FarmLoopStatus.v1",
+            "pid": 0,
+            "stage": "cycle_complete",
+            "paper_only": True,
+            "execution_allowed": False,
+            "details": {
+                "last_summary": {
+                    "pfr_counts": {
+                        "pfr_unique_setups": 11,
+                        "pfr_rejected:no_breakout": 6,
+                        "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+                    },
+                    "main_paper_bridge": {"instructions": 0},
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    report = H.collect(private_root=tmp_path, pfr_db_path=pfr)
+
+    gate = report["readiness"]["ready_for_visible_paper_research_loop"]
+    assert gate["status"] == "pass"
+    assert "no live entry trigger" in gate["message"]
 
 
 def test_operational_health_blocks_enabled_unconfigured_lab_llm(tmp_path, monkeypatch):
