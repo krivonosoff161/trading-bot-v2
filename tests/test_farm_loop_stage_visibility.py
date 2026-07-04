@@ -275,8 +275,9 @@ class TestCycleLogStages:
 
     def test_smoke_caps_skip_forward_and_new_paper_generation(self, tmp_path, monkeypatch) -> None:
         from src.research_lab.paper_signals import cycle as paper_cycle
+        from src.research_lab.providers import okx_public
 
-        seen: dict[str, int] = {}
+        seen: dict[str, object] = {}
 
         def fake_cycle(*_args, **kwargs):
             seen["max_new"] = kwargs["max_new"]
@@ -287,6 +288,10 @@ class TestCycleLogStages:
             seen["max_live_fetches"] = kwargs["max_live_fetches"]
             seen["max_network_fetches"] = kwargs["max_network_fetches"]
             seen["timeframes"] = kwargs["timeframes"]
+            seen["paper_provider_direct_http"] = (
+                getattr(getattr(kwargs["provider"], "fallback", None), "http_get", None)
+                is okx_public._httpx_get_direct
+            )
             return {"generated": 0, "pfr_counts": {}, "state": {}, "gate_counts": {}}
 
         coordinator_seen: dict[str, int] = {}
@@ -306,9 +311,20 @@ class TestCycleLogStages:
         monkeypatch.setattr(farm_loop, "_providers", lambda *_a, **_k: (None, None, None))
         monkeypatch.setattr(farm_loop, "_read_intake", lambda *_a, **_k: [])
         monkeypatch.setattr(farm_loop, "_discovery", lambda *_a, **_k: (None, {"status": "smoke"}))
+        monkeypatch.setattr(farm_loop, "_refresh_live_universe", lambda *_a, **_k: {"status": "smoke"})
         monkeypatch.setattr(farm_loop, "_maybe_storage_maintain", lambda *_a, **_k: None)
         monkeypatch.setattr(farm_loop, "run_coordinator_cycle", fake_coordinator)
         monkeypatch.setattr(paper_cycle, "run_cycle", fake_cycle)
+
+        class FakeOkxProvider:
+            name = "fake-okx"
+            configured = True
+
+            def __init__(self, *, timeout, http_get=None) -> None:
+                self.timeout = timeout
+                self.http_get = http_get
+
+        monkeypatch.setattr(okx_public, "OkxPublicMarketDataProvider", FakeOkxProvider)
 
         args = Namespace(
             max_plan_events=0,
@@ -378,6 +394,7 @@ class TestCycleLogStages:
             "max_live_fetches": 0,
             "max_network_fetches": 0,
             "timeframes": ("15m", "1h", "4h"),
+            "paper_provider_direct_http": True,
         }
         assert out["main_paper_runtime_queue"]["queued"] == 0
         assert out["main_paper_runtime_queue"]["execution_allowed"] is False

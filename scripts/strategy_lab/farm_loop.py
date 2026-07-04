@@ -814,7 +814,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             # generate new). Crash-isolated; paper/research-only, never an order.
             try:
                 from src.research_lab.paper_signals import cycle as paper_cycle
-                from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
+                from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider, _httpx_get_direct
                 _pfr_db = Path(getattr(args, "pfr_db_path", "") or "")
                 _pfr_db = _pfr_db if _pfr_db.as_posix() not in ("", ".") else None
                 if _pfr_db is not None:
@@ -847,7 +847,8 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 )
                 out["live_universe"] = _refresh_live_universe(args, private_root, apply)
                 paper_provider = OkxPublicMarketDataProvider(
-                    timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
+                    timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0)),
+                    http_get=_httpx_get_direct,
                 )
                 try:
                     from src.research_lab.providers.local_first import LocalFirstMarketDataProvider
