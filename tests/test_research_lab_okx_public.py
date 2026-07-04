@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import json
-import time
 import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
+import httpx
 import pytest
 
 from src.research_lab.market_data_provider import get_provider
@@ -92,29 +91,32 @@ def test_network_error_raises_marketdataerror():
         _provider(boom).fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + MINUTE)
 
 
-def test_default_http_get_enforces_total_read_timeout(monkeypatch):
-    class SlowChunkedResponse:
-        def __init__(self):
-            self.remaining = [b'{"code":"0"', b',"data":[]}', b""]
+def test_default_http_get_bounds_httpx_connect_read_timeout(monkeypatch):
+    def fake_get(_url, *, headers, timeout):
+        assert headers["User-Agent"]
+        assert isinstance(timeout, httpx.Timeout)
+        raise httpx.ConnectTimeout("handshake timeout")
 
-        def __enter__(self):
-            return self
+    monkeypatch.setattr(httpx, "get", fake_get)
 
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _size):
-            time.sleep(0.06)
-            return self.remaining.pop(0)
-
-    def fake_urlopen(_request, timeout):
-        assert timeout == 0.1
-        return SlowChunkedResponse()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-
-    with pytest.raises(TimeoutError):
+    with pytest.raises(httpx.ConnectTimeout):
         _default_http_get("https://www.okx.com/api/v5/market/history-candles", 0.1)
+
+
+def test_default_http_get_parses_json_response(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": "0", "data": []}
+
+    monkeypatch.setattr(httpx, "get", lambda *_args, **_kwargs: FakeResponse())
+
+    assert _default_http_get("https://www.okx.com/api/v5/market/history-candles", 0.1) == {
+        "code": "0",
+        "data": [],
+    }
 
 
 def test_api_error_code_raises():

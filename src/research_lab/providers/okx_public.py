@@ -18,10 +18,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Callable
+
+import httpx
 
 OKX_BASE_URL = "https://www.okx.com"
 HISTORY_CANDLES_PATH = "/api/v5/market/history-candles"
@@ -60,23 +60,14 @@ def to_inst_id(symbol: str) -> str:
 
 
 def _default_http_get(url: str, timeout: float) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed public OKX host
-        return json.loads(_read_with_deadline(resp, timeout).decode("utf-8"))
-
-
-def _read_with_deadline(resp: Any, timeout: float) -> bytes:
-    deadline = time.monotonic() + max(0.1, float(timeout))
-    chunks: list[bytes] = []
-    while True:
-        if time.monotonic() >= deadline:
-            raise TimeoutError("okx-public read timed out")
-        chunk = resp.read(65536)
-        if not chunk:
-            return b"".join(chunks)
-        chunks.append(chunk)
-        if time.monotonic() >= deadline:
-            raise TimeoutError("okx-public read timed out")
+    timeout = max(0.1, float(timeout))
+    response = httpx.get(
+        url,
+        headers={"User-Agent": _USER_AGENT},
+        timeout=httpx.Timeout(timeout, connect=timeout, read=timeout, write=timeout, pool=timeout),
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def _resolve_timeframe(timeframe: str) -> tuple[str, int]:
@@ -152,7 +143,7 @@ class OkxPublicMarketDataProvider:
         url = f"{self.base_url}{HISTORY_CANDLES_PATH}?{query}"
         try:
             payload = self._http_get(url, self.timeout)
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
+        except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
             raise MarketDataError(f"okx-public request failed: {type(exc).__name__}") from exc
         except json.JSONDecodeError as exc:
             raise MarketDataError("okx-public returned invalid JSON") from exc
