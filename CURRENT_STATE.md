@@ -2,6 +2,18 @@
 
 Updated: 2026-07-03
 
+> **Update 2026-07-04 - paper-product operator entrypoint.**
+> The current user-facing paper mode is now explicit:
+> `bat\paper_product_control_room.bat`. It wraps the canonical Strategy Lab control
+> room with product cadence defaults (`farm=180s`, `status=120s`) and keeps Telegram
+> network sends off by default. If reviewed paper cards should be delivered to active
+> subscribers, use the separate explicit wrapper
+> `bat\paper_product_control_room_send.bat`; this only enables the downstream paper
+> Telegram sender and still does not enable `AUTO_TRADE`, old `main.py`, order paths,
+> or private exchange endpoints. `python scripts/project_snapshot.py` now also prints
+> a `PAPER PRODUCT` line over private aggregate snapshots, so a quiet old
+> `MAIN SIGNALS` log no longer hides an active farm/PFR/main-paper paper chain.
+
 > **Update 2026-07-03 - running, but only as paper/research backbone.**
 > The canonical visible farm loop is alive (`python pid=18900`, stage `sleep`) on
 > `feature/calc-farm` at `7bbc65c feat: harden farm loop observability`.
@@ -158,6 +170,11 @@ Important active files — calculation farm (current core):
 - `scripts/strategy_lab/farm_status_report.py` - operator picture. Use `--fast`
   for visible status monitors; run the full report without `--fast` only for manual
   audit/drilldown because it rebuilds heavier derived research views.
+- `bat/paper_product_control_room.bat` - preferred product-facing paper launcher:
+  farm/PFR/main-paper/status with faster visible cadence and Telegram dry-run by
+  default.
+- `bat/paper_product_control_room_send.bat` - explicit opt-in wrapper for sending
+  already validated paper Telegram cards to active subscribers.
 - `bat/strategy_lab_farm_full_cycle_loop.bat` - visible full-cycle operator wrapper.
 - `bat/strategy_lab_control_room.bat` - visible control room for farm loop,
   dashboard, private graph viewer, and status monitor windows.
@@ -235,8 +252,11 @@ Farm (current core) — after a bounded cycle:
 ```bash
 python -m scripts.strategy_lab.farm_loop --once --dry-run          # plan only, writes nothing
 python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-validation --run-paper --enrich-oi
+bat\paper_product_control_room.bat                                # preferred visible paper-product mode; Telegram dry-run
+bat\paper_product_control_room_send.bat                           # explicit subscriber paper-card send mode
 bat\strategy_lab_farm_full_cycle_loop.bat                         # visible continuous farm/validation/paper/PFR-watch loop
 bat\strategy_lab_control_room.bat                                 # visible farm + dashboard + graph + status windows
+python scripts/project_snapshot.py                                # quick git/process/main + paper-product aggregate snapshot
 python -m scripts.strategy_lab.farm_status_report --fast           # visible status: tasks, blocked/deferred, paper/PFR/main-paper
 python -m scripts.strategy_lab.farm_status_report                  # full audit/drilldown; slower on a large private DB
 ```

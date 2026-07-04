@@ -18,6 +18,28 @@ def test_control_room_starts_visible_strategy_lab_surfaces():
     assert text.count('start "Strategy Lab -') >= 4
 
 
+def test_paper_product_control_room_wraps_canonical_control_room_with_product_cadence():
+    text = _read("paper_product_control_room.bat")
+
+    assert "strategy_lab_control_room.bat" in text
+    assert "STRATEGY_LAB_FARM_SLEEP_SECONDS=180" in text
+    assert "STRATEGY_LAB_STATUS_SLEEP_SECONDS=120" in text
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND=0" in text
+    assert "old main.py" in text
+    assert "AUTO_TRADE" in text
+    assert "place_order" not in text.lower()
+    assert "main.py" in text
+
+
+def test_paper_product_send_launcher_requires_explicit_wrapper():
+    text = _read("paper_product_control_room_send.bat")
+
+    assert "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM=1" in text
+    assert "paper_product_control_room.bat" in text
+    assert "AUTO_TRADE" in text
+    assert "private exchange endpoints" in text
+
+
 def test_control_room_starts_paper_sender_only_when_explicitly_enabled():
     text = _read("strategy_lab_control_room.bat")
     sender = _read("strategy_lab_paper_telegram_sender_loop.bat")

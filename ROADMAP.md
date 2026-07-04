@@ -7,6 +7,15 @@ documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
 
+> **Update 2026-07-04 - product paper mode before live-main revival.**
+> The next practical step is to operate the existing farm/PFR/main-paper chain as a
+> visible paper product through `bat\paper_product_control_room.bat`, not through
+> `start_all.bat` or old `main.py`. This gives continuous computation, validation,
+> paper runtime observation, card preview, and status visibility while keeping
+> `execution_allowed=false`. A separate `main_paper_executor` contract remains the next
+> deeper build for richer "what if opened" semantics; it must be reviewed before any
+> old main-like execution behavior is revived.
+
 > **Update 2026-07-03 - next work is not "more loop"; it is the safe main-paper
 > executor.** The paper/research backbone is running and health-green. The gap is product
 > semantics: the user expects a main-style paper executor that behaves like "what if we
