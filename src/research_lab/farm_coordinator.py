@@ -37,6 +37,7 @@ from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
+from src.research_lab.tail_diagnostics import load_universe_symbols
 from src.research_lab.validation_feedback import load_feedback_queue
 
 DEFAULT_FAMILIES = ("momentum_breakout", "mean_reversion_fade", "bb_volume_fade")
@@ -46,6 +47,7 @@ _COUNTER_KEYS = (
     "planned_skipped", "prepared_ok", "prepared_deferred", "prepared_blocked",
     "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
     "oi_marked_unmeasured",
+    "prepare_provider_error_parked",
     "unblocked", "sweeps_materialized",
     "sweeps_deduped", "sweeps_skipped_memory", "sweeps_deprioritized",
     "runs_completed", "runs_failed", "classified",
@@ -177,6 +179,36 @@ def _unblock(tasks: FarmTasksDB, data_state_fn: Callable, counters: dict[str, in
         if _gate_clear(task, data_state_fn):
             tasks.requeue_task(task["task_id"], reason="gate_cleared", now=now)
             _bump(counters, "unblocked")
+
+
+def _park_terminal_prepare_provider_errors(
+    tasks: FarmTasksDB,
+    *,
+    private_root: Path,
+    counters: dict[str, int],
+    now: float,
+) -> None:
+    """Turn non-actionable provider-error prepare tails into terminal skipped tasks.
+
+    A missing or empty live universe is not authoritative, so those rows remain
+    blocked for bounded retry/operator review. When the universe is present and a
+    symbol is absent from it, no candles will arrive; keeping it active only makes
+    the farm look broken.
+    """
+    universe = load_universe_symbols(Path(private_root))
+    if not universe:
+        return
+    for task in tasks.tasks_in_state("blocked", task_type="prepare_data"):
+        if str(task.get("machine_reason") or "") != "prepare_backoff:provider_error":
+            continue
+        symbol = _norm(str(task.get("symbol") or ""))
+        if symbol and symbol not in universe:
+            tasks.skip_task(
+                int(task["task_id"]),
+                reason="parked:no_instrument_or_delisted",
+                now=now,
+            )
+            _bump(counters, "prepare_provider_error_parked")
 
 
 _REC_PRIORITY = {"high": 40, "normal": 70, "low": 100}
@@ -610,6 +642,7 @@ def run_coordinator_cycle(
     fresh = tasks.unconsumed_events(limit=max_plan_events)
     new_tasks = _plan_events(tasks, fresh, families, data_state_fn, counters, now, gate_index)
     _unblock(tasks, data_state_fn, counters, now)
+    _park_terminal_prepare_provider_errors(tasks, private_root=private_root, counters=counters, now=now)
 
     conn = None
     if apply:

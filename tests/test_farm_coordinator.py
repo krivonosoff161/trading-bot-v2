@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Coordinator cycle: planning, OI block/unblock, anti-saturation pivot (no real compute)."""
+import json
 import sys
 from pathlib import Path
 
@@ -88,6 +89,69 @@ def test_pivot_blocked_when_no_work(tmp_path):
     out = run_coordinator_cycle(tasks, private_root=tmp_path, profiles=PROFILES, policy=POLICY,
                                 intake_events=[], data_state_fn=_usable_state(), apply=False, now=1000.0)
     assert out["pivot"] == "blocked:no_eligible_tasks"
+    tasks.close()
+
+
+def test_delisted_provider_error_prepare_tail_is_parked(tmp_path):
+    discovery = tmp_path / "discovery"
+    discovery.mkdir()
+    (discovery / "live_universe.json").write_text(
+        json.dumps({"detail": {"core": [{"symbol": "BTC_USDT_SWAP"}]}}),
+        encoding="utf-8",
+    )
+    tasks = FarmTasksDB(":memory:")
+    tid, _ = tasks.enqueue_task(
+        task_type="prepare_data",
+        task_key="prepare::GEOD_USDT_SWAP::1h",
+        state="blocked",
+        symbol="GEOD_USDT_SWAP",
+        timeframe="1h",
+        machine_reason="prepare_backoff:provider_error",
+        now=900.0,
+    )
+    out = run_coordinator_cycle(
+        tasks,
+        private_root=tmp_path,
+        profiles=PROFILES,
+        policy=POLICY,
+        intake_events=[],
+        data_state_fn=_usable_state(),
+        apply=False,
+        now=1000.0,
+    )
+    parked = tasks.get_task(tid)
+    assert out["counters"]["prepare_provider_error_parked"] == 1
+    assert parked["state"] == "skipped"
+    assert parked["machine_reason"] == "parked:no_instrument_or_delisted"
+    assert not tasks.tasks_in_state("blocked", task_type="prepare_data")
+    tasks.close()
+
+
+def test_provider_error_prepare_tail_stays_blocked_without_authoritative_universe(tmp_path):
+    tasks = FarmTasksDB(":memory:")
+    tid, _ = tasks.enqueue_task(
+        task_type="prepare_data",
+        task_key="prepare::GEOD_USDT_SWAP::1h",
+        state="blocked",
+        symbol="GEOD_USDT_SWAP",
+        timeframe="1h",
+        machine_reason="prepare_backoff:provider_error",
+        now=900.0,
+    )
+    out = run_coordinator_cycle(
+        tasks,
+        private_root=tmp_path,
+        profiles=PROFILES,
+        policy=POLICY,
+        intake_events=[],
+        data_state_fn=_usable_state(),
+        apply=False,
+        now=1000.0,
+    )
+    blocked = tasks.get_task(tid)
+    assert out["counters"]["prepare_provider_error_parked"] == 0
+    assert blocked["state"] == "blocked"
+    assert blocked["machine_reason"] == "prepare_backoff:provider_error"
     tasks.close()
 
 
