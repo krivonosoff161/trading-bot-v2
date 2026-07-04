@@ -62,7 +62,21 @@ def to_inst_id(symbol: str) -> str:
 def _default_http_get(url: str, timeout: float) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as resp:  # noqa: S310 - fixed public OKX host
-        return json.loads(resp.read().decode("utf-8"))
+        return json.loads(_read_with_deadline(resp, timeout).decode("utf-8"))
+
+
+def _read_with_deadline(resp: Any, timeout: float) -> bytes:
+    deadline = time.monotonic() + max(0.1, float(timeout))
+    chunks: list[bytes] = []
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("okx-public read timed out")
+        chunk = resp.read(65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("okx-public read timed out")
 
 
 def _resolve_timeframe(timeframe: str) -> tuple[str, int]:
