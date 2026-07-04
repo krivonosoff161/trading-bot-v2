@@ -159,6 +159,15 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         }),
         encoding="utf-8",
     )
+    (derived / "paper_product_quality_report.json").write_text(
+        json.dumps({
+            "schema": "paper_product_quality_report.v1",
+            "operator_action": "fix_promotion_gap_missing_ready_strategy_id",
+            "quality_labels": {"candidate_watch": 1, "needs_review": 2},
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
 
     status = project_snapshot.paper_product_status(tmp_path)
 
@@ -182,5 +191,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["training_by_result"] == {"take": 2, "expired_no_entry": 1, "stop": 1}
     assert status["training_by_family"] == {"early_tp_tactical": 3, "continuation": 1}
     assert status["training_by_diagnosis"] == {"good_signal": 2, "wrong_direction": 1}
+    assert status["quality_operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
+    assert status["quality_labels"] == {"needs_review": 2, "candidate_watch": 1}
+    assert status["quality_report_exists"] is True
     assert status["execution_allowed"] is False
     assert "items" not in status

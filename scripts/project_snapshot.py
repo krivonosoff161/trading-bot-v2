@@ -355,6 +355,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
+    quality = _read_json(derived / "paper_product_quality_report.json")
     sent_keys = _sent_key_summary(root)
 
     active = (
@@ -407,6 +408,9 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_by_result": _top_counts(training.get("by_result") or {}),
         "training_by_family": _top_counts(training.get("by_family") or {}),
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
+        "quality_operator_action": str(quality.get("operator_action") or ""),
+        "quality_labels": _top_counts(quality.get("quality_labels") or {}),
+        "quality_report_exists": bool(quality),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
     }
@@ -470,6 +474,12 @@ def _print_paper_product_status() -> None:
             "                "
             f"bridge_skip={st['bridge_skip_reasons']} "
             f"diagnosis={st['training_by_diagnosis']}"
+        )
+    if st["quality_report_exists"]:
+        print(
+            "                "
+            f"quality_action={st['quality_operator_action']} "
+            f"quality_labels={st['quality_labels']}"
         )
 
 
