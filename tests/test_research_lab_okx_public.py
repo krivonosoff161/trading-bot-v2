@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
 import json
+import time
 import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from src.research_lab.market_data_provider import get_provider
 from src.research_lab.providers.okx_public import (
     MarketDataError,
     OkxPublicMarketDataProvider,
+    _default_http_get,
     to_inst_id,
 )
 
@@ -87,6 +90,31 @@ def test_network_error_raises_marketdataerror():
         raise urllib.error.URLError("no network")
     with pytest.raises(MarketDataError):
         _provider(boom).fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + MINUTE)
+
+
+def test_default_http_get_enforces_total_read_timeout(monkeypatch):
+    class SlowChunkedResponse:
+        def __init__(self):
+            self.remaining = [b'{"code":"0"', b',"data":[]}', b""]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            time.sleep(0.06)
+            return self.remaining.pop(0)
+
+    def fake_urlopen(_request, timeout):
+        assert timeout == 0.1
+        return SlowChunkedResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(TimeoutError):
+        _default_http_get("https://www.okx.com/api/v5/market/history-candles", 0.1)
 
 
 def test_api_error_code_raises():
