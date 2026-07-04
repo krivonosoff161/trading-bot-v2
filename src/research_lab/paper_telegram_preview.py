@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,10 @@ def _jsonl_path(private_root: Path) -> Path:
 
 def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_preview.json"
+
+
+def _card_ledger_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_telegram_card_ledger.json"
 
 
 def _card_hash(text: str) -> str:
@@ -369,6 +374,53 @@ def _load_paper_signal_candidates(path: Path) -> tuple[list[dict[str, Any]], Pat
     return candidates, source_path
 
 
+def _load_card_ledger(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    items = data.get("items") or []
+    return {
+        str(item.get("telegram_card_id")): dict(item)
+        for item in items
+        if isinstance(item, dict) and str(item.get("telegram_card_id") or "")
+    }
+
+
+def _write_card_ledger(private_root: Path, previews: list[PaperTelegramPreview]) -> dict[str, Any]:
+    path = _card_ledger_path(private_root)
+    now = time.time()
+    ledger = _load_card_ledger(path)
+    for preview in previews:
+        item = preview.to_dict()
+        item["last_seen_at"] = now
+        ledger[preview.telegram_card_id] = item
+    items = sorted(
+        ledger.values(),
+        key=lambda item: (str(item.get("source_signal_id") or ""), str(item.get("telegram_card_id") or "")),
+    )
+    signal_ids = {
+        str(item.get("source_signal_id") or "")
+        for item in items
+        if str(item.get("source_signal_id") or "")
+    }
+    summary = {
+        "schema": "paper_telegram_card_ledger.v1",
+        "items": items,
+        "cards": len(items),
+        "signals": len(signal_ids),
+        "paper_only": True,
+        "execution_allowed": False,
+        "sends_network": False,
+        "snapshot_path": str(path),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
 def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict[str, Any]:
     rows, source_path = _load_records(_trade_snapshot_path(private_root))
     source_schema = "main_paper_trade_ledger.v1"
@@ -421,6 +473,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for preview in previews:
             fh.write(json.dumps(preview.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+    ledger_summary = _write_card_ledger(Path(private_root), previews)
 
     invalid = sum(1 for preview in previews if preview.problems)
     summary = {
@@ -440,6 +493,9 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "execution_allowed": False,
         "sends_network": False,
         "card_template_version": CARD_TEMPLATE_VERSION,
+        "card_ledger_path": ledger_summary["snapshot_path"],
+        "card_ledger_cards": ledger_summary["cards"],
+        "card_ledger_signals": ledger_summary["signals"],
     }
     out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary

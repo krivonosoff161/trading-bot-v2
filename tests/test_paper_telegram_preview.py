@@ -229,6 +229,27 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     assert "Risk:" in text
 
 
+def test_preview_writes_durable_card_ledger(tmp_path):
+    _write_paper_signal_snapshot(tmp_path, [_paper_signal_row(signal_id="sig_one")])
+    first = build_paper_telegram_preview(tmp_path)
+    ledger_path = Path(first["card_ledger_path"])
+    first_ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+
+    assert first["card_ledger_cards"] == 1
+    assert first_ledger["schema"] == "paper_telegram_card_ledger.v1"
+    assert first_ledger["items"][0]["source_signal_id"] == "sig_one"
+    assert first_ledger["items"][0]["paper_only"] is True
+    assert first_ledger["items"][0]["execution_allowed"] is False
+
+    _write_paper_signal_snapshot(tmp_path, [_paper_signal_row(signal_id="sig_two")])
+    second = build_paper_telegram_preview(tmp_path)
+    second_ledger = json.loads(Path(second["card_ledger_path"]).read_text(encoding="utf-8"))
+
+    assert second["rendered"] == 1
+    assert second["card_ledger_cards"] == 2
+    assert {item["source_signal_id"] for item in second_ledger["items"]} == {"sig_one", "sig_two"}
+
+
 def test_preview_prefers_strict_main_paper_over_candidate_fallback(tmp_path):
     _write_trade_snapshot(tmp_path, [_trade_record()])
     _write_paper_signal_snapshot(tmp_path, [_paper_signal_row()])
