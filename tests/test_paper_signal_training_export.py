@@ -108,6 +108,52 @@ def test_export_training_rows_links_telegram_preview(tmp_path):
     assert rows[0]["final_card_hash"]
 
 
+def test_export_training_rows_links_durable_card_ledger(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / "paper_telegram_card_ledger.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_card_ledger.v1",
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "telegram_card_id": "tgcard_old",
+                        "text": "old sent paper card",
+                        "paper_only": True,
+                        "execution_allowed": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (derived / "paper_telegram_preview.json").write_text(
+        json.dumps(
+            {
+                "items": [
+                    {
+                        "source_signal_id": "other_signal",
+                        "telegram_card_id": "tgcard_current",
+                        "text": "current card for another signal",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["telegram_card_id"] == "tgcard_old"
+    assert rows[0]["final_card_text"] == "old sent paper card"
+
+
 def test_export_training_rows_links_main_paper_trade(tmp_path):
     sig = _signal(status="reviewed")
     sig.outcome = {"result": "take", "net_pct": 1.0}
