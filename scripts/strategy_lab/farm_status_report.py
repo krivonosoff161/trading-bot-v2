@@ -19,6 +19,7 @@ research views from many JSON artifacts and is intended for audit/drilldown.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import sqlite3
@@ -63,6 +64,13 @@ def _connect_for_report(db_path: Path) -> tuple[sqlite3.Connection, str | None]:
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
     try:
         os.kill(pid, 0)
     except (OSError, SystemError, ValueError):
