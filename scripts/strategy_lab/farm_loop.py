@@ -1132,8 +1132,9 @@ def main() -> None:
                     default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES", "12")),
                     help="max live-mover candle fetch attempts per paper-signal cycle")
     ap.add_argument("--paper-signals-max-network-fetches", type=int,
-                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES", "16")),
-                    help="max observe+live candle fetch attempts per paper-signal cycle")
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES", "44")),
+                    help=("max observe+live+PFR candle fetch attempts per paper-signal cycle; "
+                          "default matches the visible launcher caps 20+12+12"))
     ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
                     help="per-request public OKX timeout used by --run-paper-signals")
     ap.add_argument("--paper-signals-timeframes", default="15m,1h,4h",
