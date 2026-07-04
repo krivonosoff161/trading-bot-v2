@@ -314,8 +314,8 @@ def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
     _write_quality_report(
         tmp_path,
         [
-            {"family": "continuation", "quality_label": "needs_review", "rows": 100},
-            {"family": "early_tp_tactical", "quality_label": "mixed", "rows": 80},
+            {"family": "continuation", "quality_label": "mixed", "rows": 100},
+            {"family": "early_tp_tactical", "quality_label": "candidate_watch", "rows": 80},
         ],
     )
     _write_product_trade_snapshot(
@@ -342,6 +342,67 @@ def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["source_signal_id"] == "sig_better"
     assert data["items"][1]["source_signal_id"] == "sig_bad"
+
+
+def test_preview_quality_gate_skips_weak_product_rows_for_subscribers(tmp_path):
+    _write_quality_report(
+        tmp_path,
+        [
+            {"family": "continuation", "quality_label": "needs_review", "rows": 100},
+            {"family": "early_tp_tactical", "quality_label": "mixed", "rows": 80},
+        ],
+    )
+    _write_product_trade_snapshot(
+        tmp_path,
+        [
+            _product_trade_record(
+                paper_trade_id="paper_bad",
+                source_signal_id="sig_bad",
+                setup_family="continuation",
+            ),
+            _product_trade_record(
+                paper_trade_id="paper_ok",
+                source_signal_id="sig_ok",
+                setup_family="early_tp_tactical",
+            ),
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["records_read"] == 2
+    assert summary["rendered"] == 1
+    assert summary["skipped_quality_gate"] == 1
+    assert summary["quality_gate_reasons"] == {"quality_label:needs_review": 1}
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert [item["source_signal_id"] for item in data["items"]] == ["sig_ok"]
+
+
+def test_preview_quality_gate_allows_live_ready_product_rows(tmp_path):
+    _write_quality_report(
+        tmp_path,
+        [{"family": "continuation", "quality_label": "needs_review", "rows": 100}],
+    )
+    _write_product_trade_snapshot(
+        tmp_path,
+        [
+            _product_trade_record(
+                source_signal_id="sig_live_ready",
+                setup_family="continuation",
+                live_ready=True,
+                live_block_reason="",
+                ready_strategy_id="ready_1",
+                source_validation_verdict="PAPER_FORWARD_READY",
+            ),
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["rendered"] == 1
+    assert summary["skipped_quality_gate"] == 0
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["source_signal_id"] == "sig_live_ready"
 
 
 def test_preview_skips_non_actionable_product_trades(tmp_path):
