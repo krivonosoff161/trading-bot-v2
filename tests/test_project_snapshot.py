@@ -57,15 +57,19 @@ def test_bot_status_counts_only_relevant_processes() -> None:
 
 
 def test_bot_status_recovers_farm_loop_from_fresh_status(tmp_path, monkeypatch) -> None:
+    now = time.time()
     state = tmp_path / "state"
     state.mkdir()
     (state / "farm_loop_status.json").write_text(
         json.dumps({
             "pid": 12345,
             "stage": "sleep",
-            "updated_at": time.time(),
+            "updated_at": now,
+            "cycle_started_at": now - 12,
             "paper_only": True,
             "execution_allowed": False,
+            "loop": True,
+            "details": {"sleep_seconds": 600},
         }),
         encoding="utf-8",
     )
@@ -77,6 +81,41 @@ def test_bot_status_recovers_farm_loop_from_fresh_status(tmp_path, monkeypatch) 
 
     assert report["by_kind"] == {"canonical_farm_paper_loop": 1}
     assert report["relevant"][0]["pid"] == 12345
+    assert report["farm_status"]["stage"] == "sleep"
+    assert report["farm_status"]["paper_only"] is True
+    assert report["farm_status"]["execution_allowed"] is False
+    assert report["farm_status"]["details"] == {"sleep_seconds": 600}
+
+
+def test_farm_loop_status_snapshot_reports_stage_freshness(tmp_path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "farm_loop_status.json").write_text(
+        json.dumps({
+            "pid": 123,
+            "stage": "paper_signals",
+            "updated_at": 1_000.0,
+            "cycle_started_at": 900.0,
+            "loop": True,
+            "paper_only": True,
+            "execution_allowed": False,
+            "details": {"max_pfr_scan": 30},
+        }),
+        encoding="utf-8",
+    )
+
+    status = project_snapshot._farm_loop_status_snapshot(tmp_path, now=1_050.0)
+
+    assert status == {
+        "pid": 123,
+        "stage": "paper_signals",
+        "updated_age_seconds": 50,
+        "cycle_age_seconds": 150,
+        "loop": True,
+        "paper_only": True,
+        "execution_allowed": False,
+        "details": {"max_pfr_scan": 30},
+    }
 
 
 def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -> None:

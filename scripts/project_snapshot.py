@@ -108,6 +108,28 @@ def _private_root() -> Path:
     )
 
 
+def _farm_loop_status_snapshot(private_root: Path | None = None, *, now: float | None = None) -> dict[str, Any]:
+    root = private_root or _private_root()
+    status_path = root / "state" / "farm_loop_status.json"
+    current = time.time() if now is None else now
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    updated_at = float(data.get("updated_at") or 0.0)
+    cycle_started_at = float(data.get("cycle_started_at") or 0.0)
+    return {
+        "pid": int(data.get("pid") or 0),
+        "stage": str(data.get("stage") or ""),
+        "updated_age_seconds": max(0, int(current - updated_at)) if updated_at else 0,
+        "cycle_age_seconds": max(0, int(current - cycle_started_at)) if cycle_started_at else 0,
+        "loop": bool(data.get("loop")),
+        "paper_only": bool(data.get("paper_only")),
+        "execution_allowed": bool(data.get("execution_allowed")),
+        "details": data.get("details") if isinstance(data.get("details"), dict) else {},
+    }
+
+
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -133,15 +155,12 @@ def _pid_exists(pid: int) -> bool:
 
 def _farm_loop_status_fallback() -> list[dict[str, Any]]:
     """Recover the canonical farm loop from its heartbeat when WMI returns no rows."""
-    status_path = _private_root() / "state" / "farm_loop_status.json"
-    try:
-        data = json.loads(status_path.read_text(encoding="utf-8"))
-    except Exception:
+    data = _farm_loop_status_snapshot()
+    if not data:
         return []
 
     pid = int(data.get("pid") or 0)
-    updated_at = float(data.get("updated_at") or 0.0)
-    if not pid or time.time() - updated_at > 900 or not _pid_exists(pid):
+    if not pid or int(data.get("updated_age_seconds") or 0) > 900 or not _pid_exists(pid):
         return []
 
     return [{
@@ -198,6 +217,7 @@ def bot_status(processes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         "relevant": relevant,
         "ignored_python": ignored,
         "by_kind": dict(sorted(by_kind.items())),
+        "farm_status": _farm_loop_status_snapshot() if processes is None else {},
     }
 
 
@@ -427,6 +447,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
 def _print_process_status() -> None:
     report = bot_status()
     relevant = report["relevant"]
+    farm_status = report.get("farm_status") or {}
     if relevant:
         kinds = ", ".join(f"{k}={v}" for k, v in report["by_kind"].items())
         print(f" BOT:  RUNNING relevant={len(relevant)} ({kinds})")
@@ -436,6 +457,17 @@ def _print_process_status() -> None:
         ignored = report["ignored_python"]
         suffix = f" (ignored unrelated python={ignored})" if ignored else ""
         print(f" BOT:  no relevant trading process found{suffix}")
+    if farm_status:
+        details = farm_status.get("details") or {}
+        sleep_suffix = f" sleep={details.get('sleep_seconds')}s" if details.get("sleep_seconds") else ""
+        print(
+            "       "
+            f"farm_stage={farm_status.get('stage') or '?'} "
+            f"status_updated_ago={farm_status.get('updated_age_seconds', 0)}s "
+            f"cycle_age={farm_status.get('cycle_age_seconds', 0)}s "
+            f"loop={farm_status.get('loop')} paper_only={farm_status.get('paper_only')} "
+            f"execution_allowed={farm_status.get('execution_allowed')}{sleep_suffix}"
+        )
 
 
 def _print_paper_product_status() -> None:
