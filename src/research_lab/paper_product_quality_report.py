@@ -162,6 +162,21 @@ def _top_counts(raw: Any, *, limit: int = 6) -> dict[str, int]:
     return dict(pairs[:limit])
 
 
+def _pfr_live_trigger_reasons(pfr_counts: dict[str, Any], gate_counts: dict[str, Any]) -> dict[str, int]:
+    reasons: dict[str, int] = {}
+    for key, value in pfr_counts.items():
+        key_text = str(key)
+        if key_text.startswith(("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder")):
+            reasons[key_text] = int(value or 0)
+    for key, value in gate_counts.items():
+        key_text = str(key)
+        if key_text in {"network_fetch_limit_reached", "stale_data"} or key_text.startswith(
+            ("pfr_fetch_", "pfr_dedup_", "pfr_tf_")
+        ):
+            reasons[key_text] = reasons.get(key_text, 0) + int(value or 0)
+    return _top_counts(reasons, limit=12)
+
+
 def _delivery_int(delivery: dict[str, Any], primary: str, fallback: str) -> int:
     return int(delivery.get(primary, delivery.get(fallback) or 0) or 0)
 
@@ -231,6 +246,7 @@ def _pfr_funnel(
         "last_cycle_observed": int(last_cycle.get("observed") or 0) if last_cycle else 0,
         "last_cycle_pfr_counts": _top_counts(pfr_counts),
         "last_cycle_gate_counts": _top_counts(gate_counts),
+        "live_trigger_reasons": _pfr_live_trigger_reasons(pfr_counts, gate_counts),
     }
 
 
@@ -238,15 +254,10 @@ def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
     catalog_ready = int(pfr_funnel.get("catalog_ready") or 0)
     bridge_instructions = int(pfr_funnel.get("bridge_instructions") or 0)
     generated = int(pfr_funnel.get("last_cycle_generated") or 0)
-    pfr_counts = pfr_funnel.get("last_cycle_pfr_counts") if isinstance(
-        pfr_funnel.get("last_cycle_pfr_counts"),
+    trigger_reasons = pfr_funnel.get("live_trigger_reasons") if isinstance(
+        pfr_funnel.get("live_trigger_reasons"),
         dict,
     ) else {}
-    trigger_reasons = {
-        str(key): int(value or 0)
-        for key, value in pfr_counts.items()
-        if str(key).startswith(("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder"))
-    }
     if catalog_ready <= 0:
         state = "no_pfr_catalog_ready"
     elif bridge_instructions > 0:
@@ -262,7 +273,7 @@ def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
         "catalog_ready": catalog_ready,
         "bridge_instructions": bridge_instructions,
         "last_cycle_generated": generated,
-        "top_reasons": _top_counts(trigger_reasons),
+        "top_reasons": _top_counts(trigger_reasons, limit=12),
     }
 
 

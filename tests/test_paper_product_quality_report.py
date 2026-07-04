@@ -96,11 +96,16 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
                 "generated": 0,
                 "observed": 3,
                 "pfr_counts": {
+                    "pfr_records_loaded": 53,
                     "pfr_passed_quality": 43,
+                    "pfr_duplicate_setup_variant": 32,
+                    "pfr_unique_setups": 11,
+                    "pfr_rejected_quality": 10,
                     "pfr_rejected:no_breakout": 6,
                     "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+                    "pfr_reserved_slots": 2,
                 },
-                "gate_counts": {"dedup_active": 3},
+                "gate_counts": {"stale_data": 4, "dedup_active": 3, "network_fetch_limit_reached": 1},
             },
         },
     )
@@ -165,9 +170,18 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["pfr_funnel"]["bridge_instructions"] == 0
     assert summary["pfr_funnel"]["bridge_skip_reasons"] == {"missing_ready_strategy_id": 3}
     assert summary["pfr_funnel"]["last_cycle_pfr_counts"] == {
+        "pfr_records_loaded": 53,
         "pfr_passed_quality": 43,
+        "pfr_duplicate_setup_variant": 32,
+        "pfr_unique_setups": 11,
+        "pfr_rejected_quality": 10,
+        "pfr_rejected:no_breakout": 6,
+    }
+    assert summary["pfr_funnel"]["live_trigger_reasons"] == {
         "pfr_rejected:no_breakout": 6,
         "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+        "stale_data": 4,
+        "network_fetch_limit_reached": 1,
     }
     assert summary["pfr_trigger_state"] == {
         "state": "waiting_for_live_trigger",
@@ -177,6 +191,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "top_reasons": {
             "pfr_rejected:no_breakout": 6,
             "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+            "stale_data": 4,
+            "network_fetch_limit_reached": 1,
         },
     }
     assert summary["active_signal_lifecycle"] == {
