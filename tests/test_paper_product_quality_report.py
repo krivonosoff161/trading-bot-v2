@@ -180,6 +180,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["pfr_funnel"]["live_trigger_reasons"] == {
         "pfr_rejected:no_breakout": 6,
         "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+    }
+    assert summary["pfr_funnel"]["cycle_resource_reasons"] == {
         "stale_data": 4,
         "network_fetch_limit_reached": 1,
     }
@@ -191,8 +193,6 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "top_reasons": {
             "pfr_rejected:no_breakout": 6,
             "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
-            "stale_data": 4,
-            "network_fetch_limit_reached": 1,
         },
     }
     assert summary["active_signal_lifecycle"] == {
