@@ -1,6 +1,6 @@
 # Farm Runbook - Active Operator Path
 
-Status: **ACTIVE**. Last updated: 2026-07-03.
+Status: **ACTIVE**. Last updated: 2026-07-04.
 
 Current handoff:
 [`session_handoff_2026-07-03.md`](session_handoff_2026-07-03.md).
@@ -21,6 +21,36 @@ The current verified runtime is:
 
 This is the correct safety state for collection. It is **not** yet the final product
 behavior the user wants from a main-style paper executor.
+
+## Product Paper Delivery Update - 2026-07-04
+
+The paper-product path now has an explicit subscriber-card fallback. The preview order is:
+
+1. `main_paper_trades.json` - strict main-paper trade ledger cards.
+2. `main_paper_consumed.json` - strict accepted paper-watch cards.
+3. `paper_signals.json` - active farm candidates only when the strict sources are empty.
+
+The fallback only renders rows with `status=opened_paper` or `status=armed`. It is for
+visible paper research delivery, not execution. Every card must keep:
+
+- `research-only, not an order`
+- `paper_only=true`
+- `execution_allowed=false`
+- no old `main.py`
+- no private account or order endpoint
+- no Telegram network send during preview
+
+Verified private-state smoke on 2026-07-04:
+
+```text
+paper_telegram_preview read=8 rendered=8 invalid=0 sends_network=False
+paper_telegram_sender mode=dry-run read=8 eligible=8 sent=0 skipped=0 duplicates=0 errors=0 configured=True targets=4 sends_network=False
+```
+
+This fixes the operator-visible "bot is running but Telegram is silent" failure when the
+strict main-paper bridge has no current validator/PFR rows but the farm has active paper
+candidates. It still does not prove edge. Run it for a week, collect paper outcomes, then
+tune the families and filters from the training export.
 
 The next reviewed build should add a separate `main_paper_executor` contract for
 "what if we opened this trade?" behavior. It must compute and record pseudo-trades and
@@ -212,6 +242,13 @@ be treated as their executor.
   sets only the paper Telegram send opt-in for validated preview cards and active
   subscribers. It does not enable `AUTO_TRADE`, old `main.py`, order paths, private OKX
   account endpoints, or legacy product execution.
+- **Manual dry-run check before sending:**
+  `python -m scripts.strategy_lab.paper_telegram_preview --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"`
+  then
+  `python -m scripts.strategy_lab.paper_telegram_sender --private-root "%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"`.
+  Expected product-ready state is `rendered>0`, `invalid=0`, `eligible>0`, and
+  `sends_network=False`. Add real sending only through the send wrapper or the sender
+  CLI `--send` after reviewing that preview.
 - **Core:** `python -m scripts.strategy_lab.farm_loop`
   (brain DB: `state/farm_tasks.sqlite`).
 - **Visible one-click wrapper:** `bat\strategy_lab_farm_full_cycle_loop.bat`.

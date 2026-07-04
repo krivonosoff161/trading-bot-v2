@@ -13,6 +13,16 @@ Updated: 2026-07-03
 > or private exchange endpoints. `python scripts/project_snapshot.py` now also prints
 > a `PAPER PRODUCT` line over private aggregate snapshots, so a quiet old
 > `MAIN SIGNALS` log no longer hides an active farm/PFR/main-paper paper chain.
+>
+> **Update 2026-07-04 - active farm candidate Telegram fallback.**
+> The paper Telegram preview now has a product fallback: if the strict
+> `main_paper_trades` and `main_paper_consumed` artifacts are empty, active
+> `paper_signals.json` rows with `status=opened_paper` or `status=armed` render as
+> subscriber-facing paper candidate cards. The fallback keeps the same boundaries:
+> `paper_only=true`, `execution_allowed=false`, no old `main.py`, no order path, and
+> no Telegram network call during preview. On the current private Strategy Lab state
+> the fallback rendered `8` cards with `invalid=0`; dry-run sender reported
+> `eligible=8`, `targets=4`, `sends_network=false`.
 
 > **Update 2026-07-03 - running, but only as paper/research backbone.**
 > The canonical visible farm loop is alive (`python pid=18900`, stage `sleep`) on
@@ -29,10 +39,11 @@ Updated: 2026-07-03
 >
 > **Important mismatch:** the user expected a main-style "what if we opened this?"
 > paper executor that makes forecasts, writes pseudo-trades, and later records outcomes.
-> The current code is stricter: only validator/PFR-backed rows with a ready strategy id
-> are allowed into the main-paper watch queue. Broad research paper signals are retained
-> for training/research and are not subscriber/main cards. The next product step is a
-> reviewed `main_paper_executor` contract, not wiring old `main.py` into the farm.
+> The strict main-paper watch queue still accepts only validator/PFR-backed rows with a
+> ready strategy id. For product visibility, active farm paper candidates can now be
+> rendered into explicit paper Telegram cards when that strict queue is empty. The deeper
+> next product step remains a reviewed `main_paper_executor` contract, not wiring old
+> `main.py` into the farm.
 
 > **Update 2026-06-27 - visible paper/research loop acceptance.**
 > `operational_health` now has a single aggregate gate:
@@ -124,6 +135,7 @@ bat\strategy_lab_farm_full_cycle_loop.bat
      -> main_paper_runtime_queue
      -> main_paper_runtime_observation
      -> paper_telegram_preview
+        (strict main-paper cards first; active farm candidate cards only as paper fallback)
      -> paper_signal_training export -> scripts/journal.xlsx / Paper Watch sheet
      (paper-only contract audit, not consumed by live main)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl

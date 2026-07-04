@@ -12,9 +12,11 @@ documents are preserved as history, but they no longer define the active work.
 > visible paper product through `bat\paper_product_control_room.bat`, not through
 > `start_all.bat` or old `main.py`. This gives continuous computation, validation,
 > paper runtime observation, card preview, and status visibility while keeping
-> `execution_allowed=false`. A separate `main_paper_executor` contract remains the next
-> deeper build for richer "what if opened" semantics; it must be reviewed before any
-> old main-like execution behavior is revived.
+> `execution_allowed=false`. When the strict main-paper queue is empty, active farm
+> paper candidates may now render as explicit paper Telegram cards, so subscribers can
+> see research candidates while outcomes accumulate. A separate `main_paper_executor`
+> contract remains the next deeper build for richer "what if opened" semantics; it must
+> be reviewed before any old main-like execution behavior is revived.
 
 > **Update 2026-07-03 - next work is not "more loop"; it is the safe main-paper
 > executor.** The paper/research backbone is running and health-green. The gap is product
