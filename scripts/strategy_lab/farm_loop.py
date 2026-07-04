@@ -771,6 +771,14 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 paper_provider = OkxPublicMarketDataProvider(
                     timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
                 )
+                try:
+                    from src.research_lab.providers.local_first import LocalFirstMarketDataProvider
+                    paper_provider = LocalFirstMarketDataProvider(private_root, paper_provider)
+                except Exception as exc:  # noqa: BLE001 - cache wrapper must not break public fallback
+                    out.setdefault("errors", []).append({
+                        "where": "local_first_market_data_provider",
+                        "error": str(exc),
+                    })
                 paper_timeframes = _parse_csv(
                     getattr(args, "paper_signals_timeframes", ""),
                     default=("15m", "1h", "4h"),
