@@ -67,6 +67,9 @@ def _iso_from_epoch(ts: float) -> str:
 
 
 def _entry_midpoint(sig: PaperActionSignal) -> float:
+    trigger = str(sig.validator_context.get("entry_trigger") or "limit_pullback")
+    if trigger == "breakout_stop" and len(sig.entry_zone) == 2:
+        return float(sig.entry_zone[1] if sig.side == "long" else sig.entry_zone[0])
     return midpoint(sig.entry_zone)
 
 
@@ -123,6 +126,9 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
             "setup_id": str(sig.validator_context.get("setup_id") or ""),
             "candidate_id": str(sig.validator_context.get("candidate_id") or ""),
             "source_validation_verdict": str(sig.validator_context.get("source_validation_verdict") or ""),
+            "entry_trigger": str(sig.validator_context.get("entry_trigger") or "limit_pullback"),
+            "pretrigger": bool(sig.validator_context.get("pretrigger")),
+            "trigger_gap_pct": sig.validator_context.get("trigger_gap_pct"),
             "dedup_key": sig.dedup_key,
             "mode": sig.mode,
             "exit_mode": sig.exit_mode,

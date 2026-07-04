@@ -7,6 +7,16 @@ documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
 
+> **Update 2026-07-04 - strict PFR calibration watch before live readiness.**
+> Broad farm paper cards are useful for product visibility, but they are not live-ready
+> and must not be promoted directly. The strict main-paper path stays gated by
+> `ready_strategy_id + PAPER_FORWARD_READY`. To make that strict path observable rather
+> than mostly empty, PFR-ready strategies may create paper-only pre-trigger watch cards
+> when they are close to a validated breakout trigger. Those cards use explicit
+> `entry_trigger=breakout_stop` semantics, so they do not fill as ordinary pullback
+> limits. Exact PFR triggers keep priority; pre-trigger watches only fill unused paper
+> capacity. This is calibration/observation, not live permission.
+
 > **Update 2026-07-04 - product paper mode before live-main revival.**
 > The next practical step is to operate the existing farm/PFR/main-paper chain as a
 > visible paper product through `bat\paper_product_control_room.bat`, not through
