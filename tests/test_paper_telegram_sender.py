@@ -41,47 +41,47 @@ def _write_preview_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
-def _write_quality_report(root: Path) -> None:
+def _write_quality_report(root: Path, **overrides) -> None:
     path = root / "state" / "derived" / "paper_product_quality_report.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema": "paper_product_quality_report.v1",
+        "operator_action": "strict_main_waiting_for_active_pfr_candidates",
+        "active_trades": 12,
+        "active_live_ready": 0,
+        "quality_labels": {"mixed": 1, "needs_review": 4},
+        "training_rows": 1393,
+        "training_by_result": {"take": 184, "stop": 371},
+        "pfr_trigger_state": {
+            "state": "waiting_for_live_trigger",
+            "catalog_ready": 43,
+            "bridge_instructions": 0,
+            "last_cycle_generated": 0,
+            "top_reasons": {"pfr_rejected:no_breakout": 6},
+        },
+        "pfr_funnel": {
+            "near_trigger_counts": {"pfr_near_trigger:fade_gap_gt_2pct": 5},
+            "cycle_resource_reasons": {"network_fetch_limit_reached": 1},
+        },
+        "active_signal_lifecycle": {
+            "active": 12,
+            "by_status": {"armed": 10, "opened_paper": 2},
+            "by_outcome_result": {"pending": 12},
+            "pending_outcomes": 12,
+            "active_without_outcome": 0,
+            "oldest_age_hours": 22.5,
+            "next_expiry_hours": 0.5,
+            "overdue_expiry": 0,
+            "age_buckets": {"le_24h": 12},
+            "expiry_buckets": {"le_1h": 1, "le_3h": 4, "le_24h": 7},
+            "terminal_training_backlog": 0,
+        },
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    data.update(overrides)
     path.write_text(
-        json.dumps(
-            {
-                "schema": "paper_product_quality_report.v1",
-                "operator_action": "strict_main_waiting_for_active_pfr_candidates",
-                "active_trades": 12,
-                "active_live_ready": 0,
-                "quality_labels": {"mixed": 1, "needs_review": 4},
-                "training_by_result": {"take": 184, "stop": 371},
-                "pfr_trigger_state": {
-                    "state": "waiting_for_live_trigger",
-                    "catalog_ready": 43,
-                    "bridge_instructions": 0,
-                    "last_cycle_generated": 0,
-                    "top_reasons": {"pfr_rejected:no_breakout": 6},
-                },
-                "pfr_funnel": {
-                    "near_trigger_counts": {"pfr_near_trigger:fade_gap_gt_2pct": 5},
-                    "cycle_resource_reasons": {"network_fetch_limit_reached": 1},
-                },
-                "active_signal_lifecycle": {
-                    "active": 12,
-                    "by_status": {"armed": 10, "opened_paper": 2},
-                    "by_outcome_result": {"pending": 12},
-                    "pending_outcomes": 12,
-                    "active_without_outcome": 0,
-                    "oldest_age_hours": 22.5,
-                    "next_expiry_hours": 0.5,
-                    "overdue_expiry": 0,
-                    "age_buckets": {"le_24h": 12},
-                    "expiry_buckets": {"le_1h": 1, "le_3h": 4, "le_24h": 7},
-                    "terminal_training_backlog": 0,
-                },
-                "paper_only": True,
-                "execution_allowed": False,
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(data, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -151,8 +151,8 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert data["items"][0]["message_id"] == 101
     assert data["items"][0]["destination"] == "personal_bot"
     assert data["items"][0]["recipient_hash"]
-    assert "111" not in json.dumps(data, ensure_ascii=False)
-    assert "222" not in json.dumps(data, ensure_ascii=False)
+    assert "recipient_id" not in data["items"][0]
+    assert all(item["recipient_hash"] not in {"111", "222"} for item in data["items"])
 
 
 def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
@@ -238,6 +238,125 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert "execution_allowed=false" in calls[1][1]
 
 
+def test_sender_status_digest_deduplicates_unchanged_state_in_same_bucket(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    _write_quality_report(tmp_path)
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+    third = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+
+    assert second["status_digest_sent_messages"] == 1
+    assert third["sent"] == 0
+    assert third["status_digest_reason"] == "all_cards_duplicate"
+    assert third["status_digest_sent_messages"] == 0
+    assert third["status_digest_duplicate_messages"] == 1
+    assert len(calls) == 2
+
+
+def test_sender_status_digest_sends_when_material_state_changes_in_same_bucket(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    _write_quality_report(tmp_path)
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+    sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+    _write_quality_report(
+        tmp_path,
+        active_trades=9,
+        training_rows=1396,
+        training_by_result={"take": 184, "stop": 371, "expired_no_entry": 3},
+        active_signal_lifecycle={
+            "active": 9,
+            "by_status": {"armed": 8, "opened_paper": 1},
+            "by_outcome_result": {"pending": 9},
+            "pending_outcomes": 9,
+            "active_without_outcome": 0,
+            "oldest_age_hours": 22.5,
+            "next_expiry_hours": 0.5,
+            "overdue_expiry": 0,
+            "age_buckets": {"le_24h": 9},
+            "expiry_buckets": {"le_1h": 1, "le_3h": 3, "le_24h": 5},
+            "terminal_training_backlog": 0,
+        },
+    )
+    third = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+
+    assert third["status_digest_reason"] == "all_cards_duplicate"
+    assert third["status_digest_sent_messages"] == 1
+    assert len(calls) == 3
+    assert "pending=<code>9</code>" in calls[2][1]
+    assert "expired_no_entry" in calls[2][1]
+    data = json.loads(Path(third["snapshot_path"]).read_text(encoding="utf-8"))
+    digest_items = [item for item in data["items"] if item["source_signal_id"] == "paper_status_digest"]
+    assert digest_items[0]["preview_id"].startswith("paper_status_digest_")
+    assert "recipient_id" not in digest_items[0]
+    assert digest_items[0]["recipient_hash"] != "111"
+
+
 def test_sender_status_digest_when_quality_gate_leaves_no_cards(tmp_path):
     derived = tmp_path / "state" / "derived"
     derived.mkdir(parents=True)
@@ -281,7 +400,8 @@ def test_sender_status_digest_when_quality_gate_leaves_no_cards(tmp_path):
     assert "waiting_for_live_trigger" in calls[0][1]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["source_signal_id"] == "paper_status_digest"
-    assert "111" not in json.dumps(data, ensure_ascii=False)
+    assert "recipient_id" not in data["items"][0]
+    assert data["items"][0]["recipient_hash"] != "111"
 
 
 def test_sender_separates_unique_cards_from_recipient_messages(tmp_path):
