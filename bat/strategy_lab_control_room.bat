@@ -9,7 +9,9 @@ rem Visible Strategy Lab operator control room.
 rem Opens separate visible windows for the canonical paper/research farm loop,
 rem dashboard, private graph viewer, and periodic status. No hidden services.
 rem Paper/research only: no AUTO_TRADE, no orders, no private endpoints.
-rem Optional paper Telegram delivery is controlled by STRATEGY_LAB_PAPER_TELEGRAM_SEND=1.
+rem Optional paper Telegram delivery is owned by the farm full-cycle loop when
+rem STRATEGY_LAB_PAPER_TELEGRAM_SEND=1. Do not start the standalone sender loop
+rem beside this control room; it is a manual fallback only.
 
 if "%TRADING_BOT_RESEARCH_ROOT%"=="" (
   set "TRADING_BOT_RESEARCH_ROOT=%USERPROFILE%\github_projects\trading-bot-research\strategy-lab"
@@ -34,7 +36,7 @@ echo   1. Farm Full Cycle Loop
 echo   2. Dashboard server at http://127.0.0.1:8765
 echo   3. Private graph viewer build/open
 echo   4. Periodic farm status monitor
-if /I "%STRATEGY_LAB_PAPER_TELEGRAM_SEND%"=="1" echo   5. Paper Telegram sender loop for active subscribers
+if /I "%STRATEGY_LAB_PAPER_TELEGRAM_SEND%"=="1" echo      Telegram paper delivery runs inside Farm Full Cycle Loop
 echo.
 echo Stop farm loop: bat\strategy_lab_farm_full_cycle_stop.bat
 echo Preflight: python -m scripts.strategy_lab.operational_health --fail-on-blocked
@@ -62,11 +64,6 @@ start "Strategy Lab - Graph Viewer" cmd /k "cd /d ""%CD%"" && bat\strategy_lab_g
 timeout /t 1 /nobreak >nul
 
 start "Strategy Lab - Status Monitor" cmd /k "cd /d ""%CD%"" && bat\strategy_lab_status_monitor.bat"
-
-if /I "%STRATEGY_LAB_PAPER_TELEGRAM_SEND%"=="1" (
-  timeout /t 1 /nobreak >nul
-  start "Strategy Lab - Paper Telegram Sender" cmd /k "cd /d ""%CD%"" && bat\strategy_lab_paper_telegram_sender_loop.bat"
-)
 
 echo Control room windows started.
 echo If a window reports an error, keep it open and inspect the message.
