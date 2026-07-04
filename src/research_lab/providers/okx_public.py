@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import multiprocessing as mp
+import queue
 import time
 import urllib.parse
 from typing import Any, Callable
@@ -32,6 +34,7 @@ MAX_PAGES = 20             # hard stop: no infinite pagination
 # (never silently truncated). The lab's requirement windows are far smaller (<=360).
 MAX_WINDOW_BARS = MAX_PAGES * PAGE_LIMIT  # 2000
 DEFAULT_TIMEOUT = 10.0
+DEFAULT_PROCESS_GRACE_SECONDS = 1.0
 DEFAULT_SLEEP_SECONDS = 0.2
 _USER_AGENT = "strategy-lab-research/1.0 (+public-market-data)"
 
@@ -59,7 +62,16 @@ def to_inst_id(symbol: str) -> str:
     return str(symbol).strip().upper().replace("_", "-")
 
 
-def _default_http_get(url: str, timeout: float) -> Any:
+def _default_http_get(
+    url: str,
+    timeout: float,
+    *,
+    worker: Callable[[str, float, Any], None] | None = None,
+) -> Any:
+    return _httpx_get_with_hard_deadline(url, timeout, worker=worker or _httpx_get_worker)
+
+
+def _httpx_get_direct(url: str, timeout: float) -> Any:
     timeout = max(0.1, float(timeout))
     response = httpx.get(
         url,
@@ -68,6 +80,49 @@ def _default_http_get(url: str, timeout: float) -> Any:
     )
     response.raise_for_status()
     return response.json()
+
+
+def _httpx_get_worker(url: str, timeout: float, out_queue: Any) -> None:
+    try:
+        out_queue.put(("ok", _httpx_get_direct(url, timeout)))
+    except Exception as exc:  # noqa: BLE001 - serialized back to parent process
+        out_queue.put(("error", type(exc).__name__, str(exc)[:500]))
+
+
+def _httpx_get_with_hard_deadline(
+    url: str,
+    timeout: float,
+    *,
+    worker: Callable[[str, float, Any], None] = _httpx_get_worker,
+) -> Any:
+    """Run one public HTTP fetch in a killable child process.
+
+    Some Windows/TLS paths can stall below Python's socket timeout during the
+    handshake. The paper farm is long-running, so a single public market-data
+    call must be disposable instead of holding the main loop.
+    """
+    timeout = max(0.1, float(timeout))
+    ctx = mp.get_context("spawn")
+    out_queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(target=worker, args=(url, timeout, out_queue))
+    proc.daemon = True
+    proc.start()
+    proc.join(timeout + DEFAULT_PROCESS_GRACE_SECONDS)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(0.5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(0.5)
+        raise TimeoutError("okx-public process deadline exceeded")
+    try:
+        status, *payload = out_queue.get_nowait()
+    except queue.Empty as exc:
+        raise RuntimeError(f"okx-public worker exited without payload code={proc.exitcode}") from exc
+    if status == "ok":
+        return payload[0]
+    err_name = payload[0] if payload else "Error"
+    raise RuntimeError(f"okx-public worker failed: {err_name}")
 
 
 def _resolve_timeframe(timeframe: str) -> tuple[str, int]:
@@ -143,7 +198,7 @@ class OkxPublicMarketDataProvider:
         url = f"{self.base_url}{HISTORY_CANDLES_PATH}?{query}"
         try:
             payload = self._http_get(url, self.timeout)
-        except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
+        except (httpx.HTTPError, OSError, RuntimeError, TimeoutError, ValueError) as exc:
             raise MarketDataError(f"okx-public request failed: {type(exc).__name__}") from exc
         except json.JSONDecodeError as exc:
             raise MarketDataError("okx-public returned invalid JSON") from exc
