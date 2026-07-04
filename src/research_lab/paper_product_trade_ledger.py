@@ -22,6 +22,7 @@ from src.research_lab.trade_math import midpoint
 SCHEMA = "PaperProductTrade.v1"
 SUMMARY_SCHEMA = "paper_product_trade_ledger.v1"
 PRODUCT_STATUSES = {"armed", "opened_paper", "closed_paper", "expired", "invalidated", "reviewed"}
+ACTIVE_PRODUCT_STATUSES = {"armed", "opened_paper"}
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,13 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         "trades": len(trades),
         "live_ready": sum(1 for trade in trades if trade.live_ready),
         "live_blocked": sum(1 for trade in trades if not trade.live_ready),
+        "active_trades": sum(1 for trade in trades if trade.status in ACTIVE_PRODUCT_STATUSES),
+        "active_live_ready": sum(
+            1 for trade in trades if trade.status in ACTIVE_PRODUCT_STATUSES and trade.live_ready
+        ),
+        "active_live_blocked": sum(
+            1 for trade in trades if trade.status in ACTIVE_PRODUCT_STATUSES and not trade.live_ready
+        ),
         "invalid": invalid,
         "invalid_reasons": invalid_reasons,
         "by_status": by_status,
