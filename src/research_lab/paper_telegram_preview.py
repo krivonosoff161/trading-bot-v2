@@ -56,6 +56,7 @@ QUALITY_LABEL_RANK = {
     "needs_review": 3,
     "weak_after_costs": 4,
 }
+SUBSCRIBER_QUALITY_LABELS = frozenset({"candidate_watch", "mixed"})
 
 
 @dataclass(frozen=True)
@@ -433,6 +434,17 @@ def _product_preview_rank(row: dict[str, Any], family_quality: dict[str, dict[st
     )
 
 
+def _subscriber_quality_problem(row: dict[str, Any], family_quality: dict[str, dict[str, Any]]) -> str:
+    if bool(row.get("live_ready")):
+        return ""
+    family = str(row.get("setup_family") or "")
+    quality = family_quality.get(family) or {}
+    label = str(quality.get("quality_label") or "sample_too_small")
+    if label in SUBSCRIBER_QUALITY_LABELS:
+        return ""
+    return f"quality_label:{label}"
+
+
 def _rank_product_preview_rows(private_root: Path, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
     family_quality = _family_quality(private_root)
     if not family_quality:
@@ -530,8 +542,12 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
     previews: list[PaperTelegramPreview] = []
     skipped_rejected = 0
     skipped_non_actionable = 0
+    skipped_quality_gate = 0
+    quality_gate_reasons: dict[str, int] = {}
     quality_ranked = False
+    family_quality: dict[str, dict[str, Any]] = {}
     if source_schema == "paper_product_trade_ledger.v1":
+        family_quality = _family_quality(Path(private_root))
         rows, quality_ranked = _rank_product_preview_rows(Path(private_root), rows)
     for row in rows:
         if source_schema == "main_paper_consumer.v1" and row.get("consumer_status") != "accepted_for_paper_watch":
@@ -545,6 +561,12 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         ):
             skipped_non_actionable += 1
             continue
+        if source_schema == "paper_product_trade_ledger.v1" and quality_ranked:
+            problem = _subscriber_quality_problem(row, family_quality)
+            if problem:
+                skipped_quality_gate += 1
+                quality_gate_reasons[problem] = quality_gate_reasons.get(problem, 0) + 1
+                continue
         if source_schema == "paper_signals.v1" and str(row.get("status") or "") not in ACTIONABLE_PAPER_SIGNAL_STATUSES:
             skipped_non_actionable += 1
             continue
@@ -590,6 +612,8 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "invalid": invalid,
         "skipped_rejected": skipped_rejected,
         "skipped_non_actionable": skipped_non_actionable,
+        "skipped_quality_gate": skipped_quality_gate,
+        "quality_gate_reasons": quality_gate_reasons,
         "quality_ranked": quality_ranked,
         "items": [preview.to_dict() for preview in previews],
         "jsonl_path": str(out_jsonl),
