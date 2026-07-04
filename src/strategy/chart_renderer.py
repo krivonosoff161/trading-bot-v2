@@ -139,6 +139,7 @@ def render_chart(
         matplotlib.use("Agg")
         import matplotlib.patches as mpatches
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
         from PIL import Image
     except ImportError as e:
         print(f"WARNING: Missing library for chart: {e}")
@@ -255,13 +256,37 @@ def render_chart(
             continue
         price = float(src[key])
         ax.axhline(y=price, color=col, linestyle=ls, linewidth=0.9, alpha=0.85, zorder=5)
-        ax.text(n_show - 1, price, f"  {label}: {_fmt_price(symbol, price)}", color=col, fontsize=7, va="bottom", ha="right")
+        ax.text(
+            n_show - 1,
+            price,
+            f"  {label}: {_fmt_price(symbol, price)}",
+            color=col,
+            fontsize=7,
+            va="bottom",
+            ha="right",
+            clip_on=True,
+        )
 
     entry_price = src.get("entry_price")
-    if entry_price and direction and entry_signal in ("ENTRY", "WAIT"):
+    try:
+        entry_price = float(entry_price) if entry_price is not None else None
+    except (TypeError, ValueError):
+        entry_price = None
+    if entry_price is not None and direction and entry_signal in ("ENTRY", "WAIT"):
         dir_text = "ВХОД LONG ▲" if direction == "buy" else "ВХОД SHORT ▼"
         ecol = "#00E676" if direction == "buy" else "#FF5252"
         ax.axhline(y=entry_price, color=ecol, linestyle="-", linewidth=1.2, alpha=0.9, zorder=6)
+        ax.scatter(
+            [n_show - 1],
+            [entry_price],
+            s=38,
+            marker="o",
+            color=ecol,
+            edgecolors=bg,
+            linewidths=1.0,
+            zorder=9,
+            clip_on=True,
+        )
         ax.text(
             n_show // 2,
             entry_price,
@@ -272,6 +297,7 @@ def render_chart(
             va="bottom",
             ha="center",
             zorder=8,
+            clip_on=True,
             bbox=dict(boxstyle="round,pad=0.2", facecolor=bg, edgecolor=ecol, alpha=0.9),
         )
 
@@ -293,14 +319,31 @@ def render_chart(
         vol_sma = np.convolve(volumes, np.ones(20) / 20, mode="valid")
         ax_vol.plot(range(19, n_show), vol_sma, color="#888", linewidth=0.9)
 
-    all_prices = lows_c + highs_c
+    level_prices = []
+    for key in ("entry_price", "sl", "tp1", "tp2"):
+        if src.get(key) is None:
+            continue
+        try:
+            level_prices.append(float(src[key]))
+        except (TypeError, ValueError):
+            continue
+    all_prices = lows_c + highs_c + level_prices
     y_min = float(np.percentile(all_prices, 2))
     y_max = float(np.percentile(all_prices, 98))
+    if level_prices:
+        y_min = min(y_min, min(level_prices))
+        y_max = max(y_max, max(level_prices))
     margin = (y_max - y_min) * 0.06
     ax.set_xlim(-0.8, n_show + 9)
     ax.set_ylim(y_min - margin, y_max + margin)
     ax.yaxis.tick_right()
     ax_vol.yaxis.tick_right()
+    ax_vol.yaxis.set_major_formatter(
+        FuncFormatter(
+            lambda value, _pos: f"{value / 1_000_000:.1f}M" if abs(value) >= 1_000_000 else f"{value / 1_000:.0f}K"
+        )
+    )
+    ax_vol.yaxis.get_offset_text().set_visible(False)
     ax.tick_params(colors="#666", labelsize=7)
     ax_vol.tick_params(colors="#555", labelsize=6, left=False, right=True, labelleft=False, labelright=True)
 
@@ -337,9 +380,9 @@ def render_chart(
             bbox=dict(boxstyle="round,pad=0.3", facecolor=bg, edgecolor=badge_col, alpha=0.9),
         )
 
-    plt.tight_layout(pad=0.4)
+    fig.subplots_adjust(left=0.06, right=0.94, top=0.91, bottom=0.11, hspace=0.07)
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=130, facecolor=bg, bbox_inches="tight")
+    plt.savefig(buf, format="png", dpi=130, facecolor=bg)
     plt.close(fig)
     buf.seek(0)
     Image.open(buf).convert("RGB").save(output_path, quality=92)

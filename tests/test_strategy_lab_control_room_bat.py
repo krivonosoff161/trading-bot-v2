@@ -35,6 +35,7 @@ def test_paper_product_send_launcher_requires_explicit_wrapper():
     text = _read("paper_product_control_room_send.bat")
 
     assert "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM=1" in text
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES=1" in text
     assert "paper_product_control_room.bat" in text
     assert "AUTO_TRADE" in text
     assert "private exchange endpoints" in text

@@ -182,6 +182,32 @@ def _write_paper_signal_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
+def _write_market_data(root: Path, symbol: str = "BTC_USDT_SWAP", timeframe: str = "1h", rows: int = 80) -> Path:
+    step = {
+        "15m": 15 * 60_000,
+        "1h": 60 * 60_000,
+        "4h": 4 * 60 * 60_000,
+    }.get(timeframe, 60 * 60_000)
+    start = 1_780_000_000_000
+    candles = []
+    for idx in range(rows):
+        price = 100.0 + idx * 0.1
+        candles.append(
+            {
+                "ts": start + idx * step,
+                "open": price,
+                "high": price + 0.4,
+                "low": price - 0.3,
+                "close": price + 0.15,
+                "vol": 1000 + idx,
+            }
+        )
+    path = root / "market_data" / timeframe / f"{symbol}_{start}_{start + (rows - 1) * step}_{timeframe}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(candles, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def _paper_signal_row(**overrides):
     row = {
         "signal_id": "BTC_USDT_SWAP_1h_early_tp_tactical_abc",
@@ -314,6 +340,59 @@ def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     assert "missing_ready_strategy_id" in text
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
+
+
+def test_preview_builds_legacy_style_chart_card_from_prepared_candles(tmp_path):
+    _write_market_data(tmp_path)
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record(source_signal_id="sig_product")])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["charts_available"] == 1
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    chart_path = Path(item["chart_path"])
+    assert chart_path.parent.name == "paper_telegram_base_charts"
+    assert chart_path.exists()
+    assert chart_path == tmp_path / "state" / "derived" / "paper_telegram_base_charts" / "sig_product.png"
+
+
+def test_preview_fetches_public_chart_when_prepared_candles_are_stale(monkeypatch, tmp_path):
+    _write_market_data(tmp_path)
+    created_at = "2026-07-04T20:37:57+00:00"
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record(source_signal_id="sig_product", created_at=created_at)])
+    monkeypatch.setenv("STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES", "1")
+    calls = []
+
+    class FakeProvider:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+            calls.append((symbol, timeframe, start_ts, end_ts))
+            step = 60 * 60_000
+            base = end_ts - 79 * step
+            return [
+                {
+                    "ts": base + idx * step,
+                    "open": 100.0 + idx * 0.1,
+                    "high": 101.0 + idx * 0.1,
+                    "low": 99.5 + idx * 0.1,
+                    "close": 100.4 + idx * 0.1,
+                    "vol": 1000 + idx,
+                }
+                for idx in range(80)
+            ]
+
+    monkeypatch.setattr("src.research_lab.paper_telegram_preview.OkxPublicMarketDataProvider", FakeProvider)
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert calls
+    assert calls[0][0] == "BTC_USDT_SWAP"
+    assert calls[0][1] == "1h"
+    assert summary["charts_available"] == 1
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    assert Path(item["chart_path"]).parent.name == "paper_telegram_base_charts"
 
 
 def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
