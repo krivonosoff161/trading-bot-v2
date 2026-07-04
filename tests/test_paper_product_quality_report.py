@@ -105,6 +105,18 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         },
     )
     _write_json(
+        derived / "paper_signals.json",
+        {
+            "schema": "paper_signals.v1",
+            "active": [
+                {"status": "armed", "outcome": {"result": "pending_arm"}},
+                {"status": "opened_paper", "outcome": {"result": "pending_open"}},
+                {"status": "armed", "outcome": {}},
+                {"status": "reviewed", "outcome": {"result": "take"}},
+            ],
+        },
+    )
+    _write_json(
         derived / "paper_telegram_sent_keys.json",
         {"schema": "paper_telegram_sent_keys.v1", "sent_keys": ["card1:user1", "card2:user1"]},
     )
@@ -167,6 +179,14 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
             "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
         },
     }
+    assert summary["active_signal_lifecycle"] == {
+        "active": 3,
+        "by_status": {"armed": 2, "opened_paper": 1},
+        "by_outcome_result": {"pending_arm": 1, "pending_open": 1},
+        "pending_outcomes": 2,
+        "active_without_outcome": 1,
+        "terminal_training_backlog": 0,
+    }
     assert summary["families"][0]["family"] == "early_tp_tactical"
     assert summary["families"][0]["rows"] == 22
     assert summary["families"][0]["quality_label"] == "candidate_watch"
@@ -176,6 +196,7 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert "private text must not be copied" not in raw
     markdown = (derived / "paper_product_quality_report.md").read_text(encoding="utf-8")
     assert "live-trigger state: waiting_for_live_trigger" in markdown
+    assert "pending active outcomes: 2" in markdown
 
 
 def test_quality_report_flags_missing_pfr_context_as_fix_needed(tmp_path):

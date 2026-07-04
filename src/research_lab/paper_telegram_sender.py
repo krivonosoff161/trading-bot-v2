@@ -223,6 +223,10 @@ def _status_digest_preview(
     quality = _load_quality_report(private_root)
     pfr_state = quality.get("pfr_trigger_state") if isinstance(quality.get("pfr_trigger_state"), dict) else {}
     pfr_reasons = pfr_state.get("top_reasons") if isinstance(pfr_state.get("top_reasons"), dict) else {}
+    lifecycle = quality.get("active_signal_lifecycle") if isinstance(
+        quality.get("active_signal_lifecycle"),
+        dict,
+    ) else {}
     bucket_seconds = max(1, int(interval_hours)) * 3600
     bucket = int(now // bucket_seconds)
     quality_labels = quality.get("quality_labels") or {}
@@ -239,6 +243,8 @@ def _status_digest_preview(
             f"<b>Action:</b> <code>{quality.get('operator_action') or 'monitor'}</code>",
             f"<b>Active paper:</b> <code>{quality.get('active_trades', 0)}</code> "
             f"live_ready=<code>{quality.get('active_live_ready', 0)}</code>",
+            f"<b>Lifecycle:</b> pending=<code>{lifecycle.get('pending_outcomes', 0)}</code> "
+            f"states=<code>{json.dumps(lifecycle.get('by_outcome_result') or {}, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>PFR:</b> state=<code>{pfr_state.get('state') or 'unknown'}</code> "
             f"catalog_ready=<code>{pfr_state.get('catalog_ready', 0)}</code> "
             f"generated=<code>{pfr_state.get('last_cycle_generated', 0)}</code>",

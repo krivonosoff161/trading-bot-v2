@@ -15,6 +15,7 @@ from typing import Any
 SUMMARY_SCHEMA = "paper_product_quality_report.v1"
 MIN_FAMILY_SAMPLE = 20
 ACTIVE_PRODUCT_STATUSES = {"armed", "opened_paper"}
+PENDING_OUTCOME_RESULTS = {"pending", "pending_arm", "pending_open"}
 
 
 @dataclass
@@ -180,6 +181,35 @@ def _active_live_blockers(product_trades: dict[str, Any]) -> dict[str, int]:
     return _top_counts(counts)
 
 
+def _active_signal_lifecycle(paper_signals: dict[str, Any]) -> dict[str, Any]:
+    active_rows = [
+        row
+        for row in paper_signals.get("active") or []
+        if isinstance(row, dict) and str(row.get("status") or "") in ACTIVE_PRODUCT_STATUSES
+    ]
+    by_status: dict[str, int] = {}
+    by_outcome_result: dict[str, int] = {}
+    no_outcome = 0
+    for row in active_rows:
+        status = str(row.get("status") or "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+        outcome = row.get("outcome") if isinstance(row.get("outcome"), dict) else {}
+        result = str(outcome.get("result") or "")
+        if result:
+            by_outcome_result[result] = by_outcome_result.get(result, 0) + 1
+        else:
+            no_outcome += 1
+    pending = sum(count for result, count in by_outcome_result.items() if result in PENDING_OUTCOME_RESULTS)
+    return {
+        "active": len(active_rows),
+        "by_status": _top_counts(by_status),
+        "by_outcome_result": _top_counts(by_outcome_result),
+        "pending_outcomes": pending,
+        "active_without_outcome": no_outcome,
+        "terminal_training_backlog": 0,
+    }
+
+
 def _pfr_funnel(
     *,
     ready_catalog: dict[str, Any],
@@ -301,6 +331,9 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- active by family: {summary['active_by_family']}",
         f"- top live blockers: {summary['active_live_blockers']}",
         f"- total live blockers: {summary['total_live_blockers']}",
+        f"- active lifecycle status: {summary['active_signal_lifecycle']['by_status']}",
+        f"- active outcome states: {summary['active_signal_lifecycle']['by_outcome_result']}",
+        f"- pending active outcomes: {summary['active_signal_lifecycle']['pending_outcomes']}",
         "",
         "## Strict PFR Funnel",
         "",
@@ -364,6 +397,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
     bridge = _read_json(derived / "main_paper_instructions.json")
     ready_catalog = _read_json(derived / "ready_strategy_catalog.json")
     paper_status = _read_json(derived / "paper_signals_status.json")
+    paper_signals = _read_json(derived / "paper_signals.json")
     training_summary = _read_json(derived / "paper_signal_training.json")
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
     sent = _sent_key_summary(private_root)
@@ -423,6 +457,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "telegram": telegram,
         "pfr_funnel": pfr_funnel,
         "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
+        "active_signal_lifecycle": _active_signal_lifecycle(paper_signals),
         "operator_action": _operator_action(
             delivery=delivery,
             product_trades=product_trades,
