@@ -557,7 +557,12 @@ class TestPFRDedup:
 
 def test_near_trigger_buckets_are_counted_without_changing_rejection_reason():
     rows = [
-        _row({**_MBR_ROW_DICT, "candidate_id": "MBR_FLAT", "symbol": "FLAT1_USDT_SWAP"}),
+        _row({
+            **_MBR_ROW_DICT,
+            "candidate_id": "MBR_FLAT",
+            "symbol": "FLAT1_USDT_SWAP",
+            "params": {**_MBR_PARAMS, "threshold_pct": 3.0},
+        }),
         _row({**_MRF_ROW_DICT, "candidate_id": "MRF_FLAT", "symbol": "FLAT2_USDT_SWAP"}),
     ]
     calls: list[str] = []
@@ -586,8 +591,43 @@ def test_near_trigger_buckets_are_counted_without_changing_rejection_reason():
     assert len(calls) == 2
     assert sc["pfr_rejected:no_breakout"] == 1
     assert sc["pfr_rejected:no_fade_signal:move_pct_threshold=8.0"] == 1
-    assert sc["pfr_near_trigger:breakout_gap_le_0_25pct"] == 1
+    assert sc["pfr_near_trigger:breakout_gap_gt_2pct"] == 1
     assert sc["pfr_near_trigger:fade_gap_gt_2pct"] == 1
+
+
+def test_near_trigger_breakout_generates_pretrigger_watch():
+    rows = [_row({**_MBR_ROW_DICT, "candidate_id": "MBR_NEAR", "symbol": "NEAR_USDT_SWAP"})]
+
+    class Provider:
+        def fetch_ohlcv(self, *_args):
+            return _flat_candles()
+
+    sc: dict = {}
+    sigs = pfr_bridge.generate_pfr_signals(
+        rows,
+        provider=Provider(),
+        now=1e6,
+        mode="live",
+        active_dedup=set(),
+        active_setup_ids=set(),
+        recent_fingerprints=set(),
+        max_pfr=1,
+        max_pfr_fetches=1,
+        timeframes=("4h",),
+        status_counts=sc,
+    )
+
+    assert len(sigs) == 1
+    sig, _candles = sigs[0]
+    assert sig.source == "pfr_farm"
+    assert sig.setup_family == "momentum_breakout"
+    assert sig.validator_context["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    assert sig.validator_context["ready_strategy_id"]
+    assert sig.validator_context["entry_trigger"] == "breakout_stop"
+    assert sig.validator_context["pretrigger"] is True
+    assert sig.validator_context["trigger_gap_pct"] <= 1.0
+    assert sc["pfr_generated"] == 1
+    assert sc["pfr_generated_pretrigger"] == 1
 
 
 class TestPFRBridgeNoBoundaryViolation:

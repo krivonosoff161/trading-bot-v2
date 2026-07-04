@@ -43,6 +43,8 @@ DEFAULT_QUALITY_POLICY: dict[str, float | int] = {
 
 _MIN_RR = 2.0   # minimum risk-reward required (matches param_schemas.executable_params_ready)
 _FETCH_WINDOW_BARS = 1500
+_PRETRIGGER_BREAKOUT_MAX_GAP_PCT = 1.0
+_PRETRIGGER_ENTRY_BAND_PCT = 0.2
 
 
 # ── canonical DB helpers ──────────────────────────────────────────────────────
@@ -154,6 +156,136 @@ def _missing_params(family: str, params: dict) -> list[str]:
     return [k for k in _REQUIRED_PARAMS.get(family, frozenset()) if params.get(k) is None]
 
 
+def _common_validator_context(row: dict[str, Any], symbol: str, tf: str) -> dict[str, Any]:
+    return {
+        "setup_id": row["setup_id"],
+        "ready_strategy_id": _ready_strategy_id(row),
+        "candidate_id": str(row["candidate_id"]),
+        "run_id": str(row.get("run_id") or ""),
+        "params_hash": row["params_hash"],
+        "source_validation_verdict": str(row.get("hard_status") or ""),
+        "family": row["family"],
+        "timeframe": tf,
+        "symbol": symbol,
+        "pfr_avg_net_pct": row.get("avg_net_pct"),
+        "pfr_win_rate": row.get("win_rate"),
+        "pfr_n_trades": row.get("n_trades"),
+    }
+
+
+def _breakout_pretrigger(
+    row: dict[str, Any],
+    candles: list[dict[str, Any]],
+    *,
+    lookback: int,
+    threshold_pct: float,
+    stop_pct: float,
+    take_pct: float,
+    hold_bars: int,
+    now: float,
+    boundary_ts: int,
+    mode: str,
+) -> tuple[PaperActionSignal | None, str]:
+    idx = len(candles) - 1
+    high = window_high(candles, idx, lookback)
+    low = window_low(candles, idx, lookback)
+    price = float(candles[-1]["close"])
+    if high is None or low is None or price <= 0:
+        return None, "no_breakout"
+
+    long_trigger = float(high) * (1 + threshold_pct / 100)
+    short_trigger = float(low) * (1 - threshold_pct / 100)
+    long_gap = max(0.0, (long_trigger - price) / price * 100)
+    short_gap = max(0.0, (price - short_trigger) / price * 100)
+    side = "long" if long_gap <= short_gap else "short"
+    gap_pct = min(long_gap, short_gap)
+    if gap_pct > _PRETRIGGER_BREAKOUT_MAX_GAP_PCT:
+        return None, "no_breakout"
+
+    symbol = str(row["symbol"])
+    inst = symbol.replace("_", "-")
+    tf = str(row["timeframe"])
+    tf_min = TF_MINUTES.get(tf, 15)
+    trigger = long_trigger if side == "long" else short_trigger
+    band = max(abs(trigger) * (_PRETRIGGER_ENTRY_BAND_PCT / 100), abs(price) * 0.001)
+
+    if side == "long":
+        entry_lo = _round(trigger, price)
+        entry_hi = _round(trigger + band, price)
+        if entry_lo >= entry_hi:
+            entry_hi = _round(trigger * 1.002, price)
+        stop = _round(entry_lo * (1 - stop_pct / 100), price)
+        tp_price = _round(entry_hi * (1 + take_pct / 100), price)
+        risk = entry_lo - stop
+        level_label = "high"
+    else:
+        entry_hi = _round(trigger, price)
+        entry_lo = _round(trigger - band, price)
+        if entry_lo >= entry_hi:
+            entry_lo = _round(trigger * 0.998, price)
+        stop = _round(entry_hi * (1 + stop_pct / 100), price)
+        tp_price = _round(entry_lo * (1 - take_pct / 100), price)
+        risk = stop - entry_hi
+        level_label = "low"
+
+    if risk <= 0:
+        return None, "non_positive_risk"
+    risk_pct = round(risk / price * 100, 3)
+    if risk_pct > MAX_RISK_PCT:
+        return None, f"risk_too_wide_{risk_pct}pct"
+
+    fp = fingerprint(candles)
+    validator_context = {
+        **_common_validator_context(row, symbol, tf),
+        "entry_trigger": "breakout_stop",
+        "pretrigger": True,
+        "trigger_price": _round(trigger, price),
+        "trigger_gap_pct": round(gap_pct, 4),
+        "pretrigger_max_gap_pct": _PRETRIGGER_BREAKOUT_MAX_GAP_PCT,
+    }
+    sig = PaperActionSignal(
+        signal_id=f"{symbol}_{tf}_momentum_breakout_pretrigger_{fp}",
+        source="pfr_farm",
+        symbol=symbol,
+        okx_inst_id=inst,
+        timeframe=tf,
+        side=side,
+        setup_family="momentum_breakout",
+        entry_zone=[entry_lo, entry_hi],
+        stop_loss=stop,
+        invalidation_rule=(
+            f"pre-trigger breakout watch invalidated if {lookback}-bar {level_label} "
+            f"trigger={trigger:.4f} is not crossed within {ARM_WINDOW_BARS} bars"
+        ),
+        take_profit_plan=[{"label": "tp1", "price": tp_price, "size_frac": 1.0}],
+        max_hold_bars=hold_bars,
+        max_hold_minutes=hold_bars * tf_min,
+        reason_now=(
+            f"PFR momentum_breakout pre-trigger: {side} is {gap_pct:.3f}% from "
+            f"{lookback}-bar {level_label} trigger={trigger:.4f}; fill only on breakout-stop; "
+            f"farm WR={row.get('win_rate', 0):.0%} n={row.get('n_trades', 0)}"
+        ),
+        risk_notes=(
+            "paper-only PFR pre-trigger watch; fill requires breakout-stop trigger; "
+            "farm backtest != live forward; no order path; NOT an edge claim"
+        ),
+        validator_context=validator_context,
+        status="armed",
+        created_at=now,
+        expires_at=now + ARM_WINDOW_BARS * tf_min * 60,
+        ref_price=price,
+        risk_pct=risk_pct,
+        boundary_ts=boundary_ts,
+        data_fingerprint=fp,
+        dedup_key=f"{symbol}|{tf}|momentum_breakout",
+        mode=mode,
+    )
+    ok, problems = validate_signal(sig)
+    if not ok:
+        return None, "failed_validate:" + ";".join(problems)
+    return sig, "ok_pretrigger"
+
+
 # ── signal builders ───────────────────────────────────────────────────────────
 
 def build_pfr_momentum_breakout(
@@ -195,7 +327,18 @@ def build_pfr_momentum_breakout(
 
     det = _detect_mbr(candles, len(candles) - 1, lookback=lookback, threshold_pct=threshold_pct)
     if det is None:
-        return None, "no_breakout"
+        return _breakout_pretrigger(
+            row,
+            candles,
+            lookback=lookback,
+            threshold_pct=threshold_pct,
+            stop_pct=stop_pct,
+            take_pct=take_pct,
+            hold_bars=hold_bars,
+            now=now,
+            boundary_ts=boundary_ts,
+            mode=mode,
+        )
 
     side = det["side"]
     ref_level = det["ref_level"]
@@ -258,20 +401,7 @@ def build_pfr_momentum_breakout(
             "paper-only forward watch; farm backtest != live forward; no order path; "
             "NOT an edge or profitable-strategy claim"
         ),
-        validator_context={
-            "setup_id": row["setup_id"],
-            "ready_strategy_id": _ready_strategy_id(row),
-            "candidate_id": str(row["candidate_id"]),
-            "run_id": str(row.get("run_id") or ""),
-            "params_hash": row["params_hash"],
-            "source_validation_verdict": str(row.get("hard_status") or ""),
-            "family": row["family"],
-            "timeframe": tf,
-            "symbol": symbol,
-            "pfr_avg_net_pct": row.get("avg_net_pct"),
-            "pfr_win_rate": row.get("win_rate"),
-            "pfr_n_trades": row.get("n_trades"),
-        },
+        validator_context=_common_validator_context(row, symbol, tf),
         status="armed",
         created_at=now,
         expires_at=now + ARM_WINDOW_BARS * tf_min * 60,
@@ -393,20 +523,7 @@ def build_pfr_mean_reversion_fade(
             "paper-only forward watch; farm backtest != live forward; no order path; "
             "NOT an edge or profitable-strategy claim"
         ),
-        validator_context={
-            "setup_id": row["setup_id"],
-            "ready_strategy_id": _ready_strategy_id(row),
-            "candidate_id": str(row["candidate_id"]),
-            "run_id": str(row.get("run_id") or ""),
-            "params_hash": row["params_hash"],
-            "source_validation_verdict": str(row.get("hard_status") or ""),
-            "family": row["family"],
-            "timeframe": tf,
-            "symbol": symbol,
-            "pfr_avg_net_pct": row.get("avg_net_pct"),
-            "pfr_win_rate": row.get("win_rate"),
-            "pfr_n_trades": row.get("n_trades"),
-        },
+        validator_context=_common_validator_context(row, symbol, tf),
         status="armed",
         created_at=now,
         expires_at=now + ARM_WINDOW_BARS * tf_min * 60,
@@ -534,6 +651,7 @@ def generate_pfr_signals(
     sc: dict[str, int] = status_counts if status_counts is not None else {}
     tf_set = set(timeframes)
     generated: list[tuple[PaperActionSignal, list[dict]]] = []
+    pretrigger_candidates: list[tuple[PaperActionSignal, list[dict], str]] = []
     pfr_scanned = 0
     pfr_fetches = 0
     diverse_records, duplicate_variants = _diverse_records(records)
@@ -611,8 +729,29 @@ def generate_pfr_signals(
                 sc[near_key] = sc.get(near_key, 0) + 1
             continue
 
+        if reason == "ok_pretrigger":
+            pretrigger_candidates.append((sig, candles, setup_id))
+            sc["pfr_pretrigger_candidate"] = sc.get("pfr_pretrigger_candidate", 0) + 1
+            continue
+
         sc["pfr_generated"] = sc.get("pfr_generated", 0) + 1
         active_dedup.add(dedup_key)
+        active_setup_ids.add(setup_id)
+        generated.append((sig, candles))
+
+    for sig, candles, setup_id in pretrigger_candidates:
+        if len(generated) >= max_pfr:
+            sc["pfr_pretrigger_deferred_by_exact_cap"] = sc.get("pfr_pretrigger_deferred_by_exact_cap", 0) + 1
+            continue
+        if sig.dedup_key in active_dedup:
+            sc["pfr_pretrigger_dedup_active_key"] = sc.get("pfr_pretrigger_dedup_active_key", 0) + 1
+            continue
+        if setup_id and setup_id in active_setup_ids:
+            sc["pfr_pretrigger_dedup_setup_id"] = sc.get("pfr_pretrigger_dedup_setup_id", 0) + 1
+            continue
+        sc["pfr_generated"] = sc.get("pfr_generated", 0) + 1
+        sc["pfr_generated_pretrigger"] = sc.get("pfr_generated_pretrigger", 0) + 1
+        active_dedup.add(sig.dedup_key)
         active_setup_ids.add(setup_id)
         generated.append((sig, candles))
 

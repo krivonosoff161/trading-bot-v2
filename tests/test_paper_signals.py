@@ -136,6 +136,34 @@ class TestLifecycle:
         s = lane.observe(self._sig(), candles)
         assert s.status == "closed_paper" and s.outcome["result"] == "stop"
 
+    def test_breakout_stop_long_does_not_fill_on_pullback(self):
+        s = self._sig()
+        s.entry_zone = [101.0, 101.2]
+        s.stop_loss = 98.0
+        s.take_profit_plan = [{"label": "tp1", "price": 105.0, "size_frac": 1.0}]
+        s.validator_context = {"entry_trigger": "breakout_stop"}
+        candles = [
+            {"ts": 900_000, "open": 100.0, "high": 100.8, "low": 99.0, "close": 100.5},
+            {"ts": 1_800_000, "open": 100.5, "high": 100.9, "low": 99.4, "close": 100.7},
+        ]
+        out = lane.observe(s, candles)
+        assert out.status == "armed"
+        assert out.outcome["result"] == "pending_arm"
+
+    def test_breakout_stop_long_fills_only_after_trigger_cross(self):
+        s = self._sig()
+        s.entry_zone = [101.0, 101.2]
+        s.stop_loss = 98.0
+        s.take_profit_plan = [{"label": "tp1", "price": 105.0, "size_frac": 1.0}]
+        s.validator_context = {"entry_trigger": "breakout_stop"}
+        candles = [
+            {"ts": 900_000, "open": 100.0, "high": 100.8, "low": 99.0, "close": 100.5},
+            {"ts": 1_800_000, "open": 100.5, "high": 101.3, "low": 100.4, "close": 101.1},
+        ]
+        out = lane.observe(s, candles)
+        assert out.status == "opened_paper"
+        assert out.outcome["entry"] == 101.2
+
 
 class TestReview:
     def test_diagnoses(self):
