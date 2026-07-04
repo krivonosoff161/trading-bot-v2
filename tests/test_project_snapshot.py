@@ -114,6 +114,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
             "active_trades": 1,
             "active_live_ready": 0,
             "active_live_blocked": 1,
+            "active_by_source": {"farm": 1},
+            "active_by_family": {"continuation": 1},
             "by_status": {"armed": 1, "reviewed": 2},
             "by_live_block": {"missing_ready_strategy_id": 1},
             "execution_allowed": False,
@@ -181,6 +183,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["product_active_trades"] == 1
     assert status["product_active_live_ready"] == 0
     assert status["product_active_live_blocked"] == 1
+    assert status["product_active_by_source"] == {"farm": 1}
+    assert status["product_active_by_family"] == {"continuation": 1}
     assert status["delivery_dry_run"] is True
     assert status["sends_network"] is False
     assert status["delivery_duplicates"] == 1

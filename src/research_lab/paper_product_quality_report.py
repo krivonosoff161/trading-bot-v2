@@ -171,12 +171,23 @@ def _operator_action(
     if int(product_trades.get("active_trades") or 0) == 0:
         return "wait_for_new_active_paper_candidates"
     if int(product_trades.get("active_live_ready") or 0) == 0:
+        active_sources = product_trades.get("active_by_source") or {}
+        if active_blockers.get("missing_ready_strategy_id") and _only_research_sources(active_sources):
+            return "strict_main_waiting_for_active_pfr_candidates"
         if active_blockers.get("missing_ready_strategy_id"):
-            return "fix_promotion_gap_missing_ready_strategy_id"
+            return "fix_pfr_context_missing_ready_strategy_id"
         return "inspect_active_live_blockers"
     if int(delivery.get("sent") or 0) == 0 and int(delivery.get("duplicates") or 0) > 0:
         return "no_new_telegram_cards_duplicates_only"
     return "collect_outcomes"
+
+
+def _only_research_sources(active_sources: Any) -> bool:
+    if not isinstance(active_sources, dict) or not active_sources:
+        return False
+    research_sources = {"farm", "scanner", "manual", "tactical"}
+    present = {str(source) for source, count in active_sources.items() if int(count or 0) > 0}
+    return bool(present) and present.issubset(research_sources)
 
 
 def _family_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -206,6 +217,8 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- active paper trades: {summary['active_trades']}",
         f"- active live-ready: {summary['active_live_ready']}",
         f"- active live-blocked: {summary['active_live_blocked']}",
+        f"- active by source: {summary['active_by_source']}",
+        f"- active by family: {summary['active_by_family']}",
         f"- top live blockers: {summary['active_live_blockers']}",
         "",
         "## Telegram",
@@ -288,6 +301,8 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "active_live_ready": int(product_trades.get("active_live_ready") or 0),
         "active_live_blocked": int(product_trades.get("active_live_blocked") or 0),
         "active_live_blockers": active_blockers,
+        "active_by_source": _top_counts(product_trades.get("active_by_source") or {}),
+        "active_by_family": _top_counts(product_trades.get("active_by_family") or {}),
         "training_rows": int(training_summary.get("rows") or len(training_rows)),
         "training_terminal_only": bool(training_summary.get("terminal_only", True)),
         "training_by_result": _top_counts(training_summary.get("by_result") or {}),

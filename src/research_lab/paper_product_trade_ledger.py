@@ -153,10 +153,15 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
 
     by_status: dict[str, int] = {}
     by_family: dict[str, int] = {}
+    active_by_source: dict[str, int] = {}
+    active_by_family: dict[str, int] = {}
     by_live_block: dict[str, int] = {}
     for trade in trades:
         by_status[trade.status] = by_status.get(trade.status, 0) + 1
         by_family[trade.setup_family] = by_family.get(trade.setup_family, 0) + 1
+        if trade.status in ACTIVE_PRODUCT_STATUSES:
+            active_by_source[trade.source] = active_by_source.get(trade.source, 0) + 1
+            active_by_family[trade.setup_family] = active_by_family.get(trade.setup_family, 0) + 1
         if trade.live_block_reason:
             by_live_block[trade.live_block_reason] = by_live_block.get(trade.live_block_reason, 0) + 1
 
@@ -186,6 +191,8 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         "invalid_reasons": invalid_reasons,
         "by_status": by_status,
         "by_family": by_family,
+        "active_by_source": active_by_source,
+        "active_by_family": active_by_family,
         "by_live_block": by_live_block,
         "paper_only": True,
         "execution_allowed": False,
