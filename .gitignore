@@ -16,6 +16,15 @@ venv/
 env/
 .venv/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.hypothesis/
+.tox/
+build/
+dist/
+*.egg-info/
 
 # Logs
 logs/
@@ -67,6 +76,14 @@ scripts/signal_log_notrade.jsonl
 data/scout/*.sqlite
 data/scout/*.sqlite-*
 data/scout/*.sqlite.bak-*
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-*
+*.tmp
+*.bak
+*.bak-*
 
 # Video analysis artifacts
 docs/video_research_catalog.md
@@ -81,7 +98,6 @@ scripts/subscriptions.json
 docs/1.png
 docs/2.png
 docs/112.jpg
-.gitignore
 docs/1115.jpg
 docs/12345.png
 docs/йцуке.png
@@ -114,6 +130,10 @@ docs/статисика.csv
 .codex-remote-attachments/
 .agents/
 AGENTS.md
+**/private_root/
+**/leak_scan.json
+**/path_trace.json
+canary_runs/
 
 # Personal / non-source binaries (untracked 20.05 — kept locally, not shipped)
 обучение/
