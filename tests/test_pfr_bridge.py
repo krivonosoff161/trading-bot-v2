@@ -555,6 +555,41 @@ class TestPFRDedup:
 
 # ── Category 6: AST boundary — pfr_bridge has no forbidden imports ────────────
 
+def test_near_trigger_buckets_are_counted_without_changing_rejection_reason():
+    rows = [
+        _row({**_MBR_ROW_DICT, "candidate_id": "MBR_FLAT", "symbol": "FLAT1_USDT_SWAP"}),
+        _row({**_MRF_ROW_DICT, "candidate_id": "MRF_FLAT", "symbol": "FLAT2_USDT_SWAP"}),
+    ]
+    calls: list[str] = []
+
+    class Provider:
+        def fetch_ohlcv(self, symbol, tf, start, end):
+            calls.append(symbol)
+            return _flat_candles()
+
+    sc: dict = {}
+    sigs = pfr_bridge.generate_pfr_signals(
+        rows,
+        provider=Provider(),
+        now=1e6,
+        mode="live",
+        active_dedup=set(),
+        active_setup_ids=set(),
+        recent_fingerprints=set(),
+        max_pfr=2,
+        max_pfr_fetches=2,
+        timeframes=("1h", "4h"),
+        status_counts=sc,
+    )
+
+    assert sigs == []
+    assert len(calls) == 2
+    assert sc["pfr_rejected:no_breakout"] == 1
+    assert sc["pfr_rejected:no_fade_signal:move_pct_threshold=8.0"] == 1
+    assert sc["pfr_near_trigger:breakout_gap_le_0_25pct"] == 1
+    assert sc["pfr_near_trigger:fade_gap_gt_2pct"] == 1
+
+
 class TestPFRBridgeNoBoundaryViolation:
     def test_pfr_bridge_no_forbidden_imports(self):
         """pfr_bridge.py must not import any live-order / credential modules."""

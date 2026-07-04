@@ -103,6 +103,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
                     "pfr_rejected_quality": 10,
                     "pfr_rejected:no_breakout": 6,
                     "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+                    "pfr_near_trigger:breakout_gap_le_0_5pct": 4,
+                    "pfr_near_trigger:fade_gap_gt_2pct": 5,
                     "pfr_reserved_slots": 2,
                 },
                 "gate_counts": {"stale_data": 4, "dedup_active": 3, "network_fetch_limit_reached": 1},
@@ -180,6 +182,10 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["pfr_funnel"]["live_trigger_reasons"] == {
         "pfr_rejected:no_breakout": 6,
         "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+    }
+    assert summary["pfr_funnel"]["near_trigger_counts"] == {
+        "pfr_near_trigger:fade_gap_gt_2pct": 5,
+        "pfr_near_trigger:breakout_gap_le_0_5pct": 4,
     }
     assert summary["pfr_funnel"]["cycle_resource_reasons"] == {
         "stale_data": 4,
