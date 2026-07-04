@@ -52,8 +52,7 @@ def _refs_hash(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _card_refs(private_root: Path) -> dict[str, dict[str, Any]]:
-    path = private_root / "state" / "derived" / "paper_telegram_preview.json"
+def _card_refs_from_snapshot(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
     try:
@@ -65,6 +64,18 @@ def _card_refs(private_root: Path) -> dict[str, dict[str, Any]]:
         sid = str(item.get("source_signal_id") or "")
         if sid:
             refs[sid] = item
+    return refs
+
+
+def _card_refs(private_root: Path) -> dict[str, dict[str, Any]]:
+    """Resolve paper signal -> human card from durable ledger plus current preview.
+
+    The current preview is a small moving window. The ledger preserves older private
+    cards so reviewed outcomes can still link to what subscribers actually saw.
+    """
+    derived = private_root / "state" / "derived"
+    refs = _card_refs_from_snapshot(derived / "paper_telegram_card_ledger.json")
+    refs.update(_card_refs_from_snapshot(derived / "paper_telegram_preview.json"))
     return refs
 
 
