@@ -43,10 +43,13 @@ def test_paper_product_send_launcher_requires_explicit_wrapper():
 
 def test_control_room_keeps_paper_sender_single_writer_inside_farm_loop():
     text = _read("strategy_lab_control_room.bat")
+    loop = _read("strategy_lab_farm_full_cycle_loop.bat")
     sender = _read("strategy_lab_paper_telegram_sender_loop.bat")
 
     assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND" in text
     assert "Telegram paper delivery runs inside Farm Full Cycle Loop" in text
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND_ARG=--send-paper-telegram" in loop
+    assert "%STRATEGY_LAB_PAPER_TELEGRAM_SEND_ARG%" in loop
     assert "start \"Strategy Lab - Paper Telegram Sender\"" not in text
     assert "&& bat\\strategy_lab_paper_telegram_sender_loop.bat" not in text
     assert "manual fallback only" in text
