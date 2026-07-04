@@ -204,6 +204,38 @@ def _pfr_funnel(
     }
 
 
+def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
+    catalog_ready = int(pfr_funnel.get("catalog_ready") or 0)
+    bridge_instructions = int(pfr_funnel.get("bridge_instructions") or 0)
+    generated = int(pfr_funnel.get("last_cycle_generated") or 0)
+    pfr_counts = pfr_funnel.get("last_cycle_pfr_counts") if isinstance(
+        pfr_funnel.get("last_cycle_pfr_counts"),
+        dict,
+    ) else {}
+    trigger_reasons = {
+        str(key): int(value or 0)
+        for key, value in pfr_counts.items()
+        if str(key).startswith(("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder"))
+    }
+    if catalog_ready <= 0:
+        state = "no_pfr_catalog_ready"
+    elif bridge_instructions > 0:
+        state = "main_paper_has_pfr_instructions"
+    elif generated > 0:
+        state = "pfr_generated_waiting_downstream"
+    elif trigger_reasons:
+        state = "waiting_for_live_trigger"
+    else:
+        state = "pfr_catalog_ready_waiting_for_cycle"
+    return {
+        "state": state,
+        "catalog_ready": catalog_ready,
+        "bridge_instructions": bridge_instructions,
+        "last_cycle_generated": generated,
+        "top_reasons": _top_counts(trigger_reasons),
+    }
+
+
 def _operator_action(
     *,
     delivery: dict[str, Any],
@@ -280,6 +312,8 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- strict instructions: {summary['pfr_funnel']['bridge_instructions']}",
         f"- bridge skip reasons: {summary['pfr_funnel']['bridge_skip_reasons']}",
         f"- last PFR counts: {summary['pfr_funnel']['last_cycle_pfr_counts']}",
+        f"- live-trigger state: {summary['pfr_trigger_state']['state']}",
+        f"- live-trigger top reasons: {summary['pfr_trigger_state']['top_reasons']}",
         "",
         "## Telegram",
         "",
@@ -388,6 +422,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "families": families,
         "telegram": telegram,
         "pfr_funnel": pfr_funnel,
+        "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
         "operator_action": _operator_action(
             delivery=delivery,
             product_trades=product_trades,

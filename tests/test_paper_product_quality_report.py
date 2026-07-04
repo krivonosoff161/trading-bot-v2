@@ -157,6 +157,16 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "pfr_rejected:no_breakout": 6,
         "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
     }
+    assert summary["pfr_trigger_state"] == {
+        "state": "waiting_for_live_trigger",
+        "catalog_ready": 43,
+        "bridge_instructions": 0,
+        "last_cycle_generated": 0,
+        "top_reasons": {
+            "pfr_rejected:no_breakout": 6,
+            "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,
+        },
+    }
     assert summary["families"][0]["family"] == "early_tp_tactical"
     assert summary["families"][0]["rows"] == 22
     assert summary["families"][0]["quality_label"] == "candidate_watch"
@@ -164,6 +174,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     raw = (derived / "paper_product_quality_report.json").read_text(encoding="utf-8")
     assert "private_signal" not in raw
     assert "private text must not be copied" not in raw
+    markdown = (derived / "paper_product_quality_report.md").read_text(encoding="utf-8")
+    assert "live-trigger state: waiting_for_live_trigger" in markdown
 
 
 def test_quality_report_flags_missing_pfr_context_as_fix_needed(tmp_path):

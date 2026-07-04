@@ -221,6 +221,8 @@ def _status_digest_preview(
     interval_hours: int,
 ) -> dict[str, Any]:
     quality = _load_quality_report(private_root)
+    pfr_state = quality.get("pfr_trigger_state") if isinstance(quality.get("pfr_trigger_state"), dict) else {}
+    pfr_reasons = pfr_state.get("top_reasons") if isinstance(pfr_state.get("top_reasons"), dict) else {}
     bucket_seconds = max(1, int(interval_hours)) * 3600
     bucket = int(now // bucket_seconds)
     quality_labels = quality.get("quality_labels") or {}
@@ -237,6 +239,10 @@ def _status_digest_preview(
             f"<b>Action:</b> <code>{quality.get('operator_action') or 'monitor'}</code>",
             f"<b>Active paper:</b> <code>{quality.get('active_trades', 0)}</code> "
             f"live_ready=<code>{quality.get('active_live_ready', 0)}</code>",
+            f"<b>PFR:</b> state=<code>{pfr_state.get('state') or 'unknown'}</code> "
+            f"catalog_ready=<code>{pfr_state.get('catalog_ready', 0)}</code> "
+            f"generated=<code>{pfr_state.get('last_cycle_generated', 0)}</code>",
+            f"<b>PFR reasons:</b> <code>{json.dumps(pfr_reasons, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>Quality:</b> <code>{json.dumps(quality_labels, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>Outcomes:</b> <code>{json.dumps(outcomes, ensure_ascii=False, sort_keys=True)}</code>",
             "",
