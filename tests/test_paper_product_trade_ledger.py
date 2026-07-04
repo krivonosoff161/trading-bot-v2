@@ -47,6 +47,8 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert summary["active_trades"] == 1
     assert summary["active_live_ready"] == 0
     assert summary["active_live_blocked"] == 1
+    assert summary["active_by_source"] == {"farm": 1}
+    assert summary["active_by_family"] == {"early_tp_tactical": 1}
     assert summary["by_live_block"] == {"missing_ready_strategy_id": 1}
     assert summary["paper_only"] is True
     assert summary["execution_allowed"] is False

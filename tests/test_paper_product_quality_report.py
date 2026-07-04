@@ -25,6 +25,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
             "active_trades": 3,
             "active_live_ready": 0,
             "active_live_blocked": 3,
+            "active_by_source": {"farm": 3},
+            "active_by_family": {"early_tp_tactical": 3},
             "by_live_block": {"missing_ready_strategy_id": 25},
             "items": [{"source_signal_id": "private_signal"}],
         },
@@ -76,7 +78,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["schema"] == "paper_product_quality_report.v1"
     assert summary["active_trades"] == 3
     assert summary["active_live_ready"] == 0
-    assert summary["operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
+    assert summary["operator_action"] == "strict_main_waiting_for_active_pfr_candidates"
+    assert summary["active_by_source"] == {"farm": 3}
     assert summary["telegram"]["sent_previews_total"] == 2
     assert summary["families"][0]["family"] == "early_tp_tactical"
     assert summary["families"][0]["rows"] == 22
@@ -85,6 +88,26 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     raw = (derived / "paper_product_quality_report.json").read_text(encoding="utf-8")
     assert "private_signal" not in raw
     assert "private text must not be copied" not in raw
+
+
+def test_quality_report_flags_missing_pfr_context_as_fix_needed(tmp_path):
+    derived = tmp_path / "state" / "derived"
+    _write_json(
+        derived / "paper_product_trades.json",
+        {
+            "schema": "paper_product_trade_ledger.v1",
+            "trades": 1,
+            "active_trades": 1,
+            "active_live_ready": 0,
+            "active_live_blocked": 1,
+            "active_by_source": {"pfr_farm": 1},
+            "by_live_block": {"missing_ready_strategy_id": 1},
+        },
+    )
+
+    summary = build_paper_product_quality_report(tmp_path)
+
+    assert summary["operator_action"] == "fix_pfr_context_missing_ready_strategy_id"
 
 
 def test_quality_report_has_no_live_order_or_telegram_imports():
