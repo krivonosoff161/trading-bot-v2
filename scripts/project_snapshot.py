@@ -303,6 +303,69 @@ def signal_stats(days: int = 7) -> dict[str, Any]:
     }
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
+    """Small operator view over the current paper-product chain.
+
+    This intentionally reads only aggregate snapshot fields from the private root.
+    Signal text, raw model output, secrets, and private fills stay out of the public
+    snapshot output.
+    """
+    root = private_root or _private_root()
+    derived = root / "state" / "derived"
+
+    paper = _read_json(derived / "paper_signals.json")
+    bridge = _read_json(derived / "main_paper_instructions.json")
+    consumer = _read_json(derived / "main_paper_consumed.json")
+    queue = _read_json(derived / "main_paper_runtime_queue.json")
+    observation = _read_json(derived / "main_paper_runtime_observation.json")
+    trades = _read_json(derived / "main_paper_trades.json")
+    preview = _read_json(derived / "paper_telegram_preview.json")
+    delivery = _read_json(derived / "paper_telegram_delivery.json")
+
+    active = (
+        int(paper.get("total") or 0) > 0
+        or int(bridge.get("instructions") or 0) > 0
+        or int(trades.get("trades") or 0) > 0
+    )
+    execution_allowed = any(
+        bool(row.get("execution_allowed"))
+        for row in (bridge, consumer, queue, observation, trades, preview, delivery)
+        if row
+    )
+    return {
+        "active": active,
+        "private_root": str(root),
+        "paper_total": int(paper.get("total") or 0),
+        "paper_by_status": paper.get("by_status") or {},
+        "instructions": int(bridge.get("instructions") or 0),
+        "skipped_unvalidated": int(bridge.get("skipped_unvalidated") or 0),
+        "accepted": int(consumer.get("accepted") or 0),
+        "rejected": int(consumer.get("rejected") or 0),
+        "queued": int(queue.get("queued") or 0),
+        "observed": int(observation.get("observed") or 0),
+        "reviewed": int(observation.get("reviewed") or 0),
+        "pending": int(observation.get("pending") or 0),
+        "provider_error": int(observation.get("provider_error") or 0),
+        "trades": int(trades.get("trades") or 0),
+        "trade_status": trades.get("by_status") or {},
+        "preview_rendered": int(preview.get("rendered") or 0),
+        "delivery_eligible": int(delivery.get("eligible") or 0),
+        "delivery_sent": int(delivery.get("sent") or 0),
+        "delivery_dry_run": bool(delivery.get("dry_run", True)),
+        "delivery_configured": bool(delivery.get("configured")),
+        "sends_network": bool(delivery.get("sends_network")),
+        "execution_allowed": execution_allowed,
+    }
+
+
 def _print_process_status() -> None:
     report = bot_status()
     relevant = report["relevant"]
@@ -315,6 +378,31 @@ def _print_process_status() -> None:
         ignored = report["ignored_python"]
         suffix = f" (ignored unrelated python={ignored})" if ignored else ""
         print(f" BOT:  no relevant trading process found{suffix}")
+
+
+def _print_paper_product_status() -> None:
+    st = paper_product_status()
+    if not st["active"]:
+        print(" PAPER PRODUCT: no private paper artifacts found")
+        return
+
+    print(
+        " PAPER PRODUCT: "
+        f"paper={st['paper_total']} {st['paper_by_status']} | "
+        f"main-paper instructions={st['instructions']} accepted={st['accepted']} "
+        f"queued={st['queued']} observed={st['observed']} "
+        f"trades={st['trades']} {st['trade_status']} | "
+        f"tg preview={st['preview_rendered']} eligible={st['delivery_eligible']} "
+        f"sent={st['delivery_sent']}"
+    )
+    print(
+        "                "
+        f"telegram={'send' if st['sends_network'] else 'dry-run'} "
+        f"configured={st['delivery_configured']} "
+        f"execution_allowed={st['execution_allowed']} "
+        f"provider_error={st['provider_error']} "
+        f"skipped_unvalidated={st['skipped_unvalidated']}"
+    )
 
 
 def main() -> None:
@@ -336,6 +424,7 @@ def main() -> None:
             print(f"       {line}")
 
     _print_process_status()
+    _print_paper_product_status()
     print(f" LOG:  {last_log_line()}")
 
     st = signal_stats(days=7)

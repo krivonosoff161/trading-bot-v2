@@ -203,6 +203,15 @@ be treated as their executor.
 
 ## Active Path
 
+- **Product-facing paper room:** `bat\paper_product_control_room.bat`. Use this when
+  the expected behavior is "the bot is visibly working and producing paper-product
+  artifacts/cards." It delegates to the canonical control room, uses a faster visible
+  cadence by default (`farm=180s`, `status=120s`), and keeps Telegram network sending
+  off unless explicitly requested.
+- **Explicit paper-card delivery:** `bat\paper_product_control_room_send.bat`. This
+  sets only the paper Telegram send opt-in for validated preview cards and active
+  subscribers. It does not enable `AUTO_TRADE`, old `main.py`, order paths, private OKX
+  account endpoints, or legacy product execution.
 - **Core:** `python -m scripts.strategy_lab.farm_loop`
   (brain DB: `state/farm_tasks.sqlite`).
 - **Visible one-click wrapper:** `bat\strategy_lab_farm_full_cycle_loop.bat`.
@@ -233,6 +242,8 @@ The names are easy to confuse, so treat this as the operator truth table:
 
 | Command | Current role | Use for farm/PFR/paper? |
 |---|---|---|
+| `bat\paper_product_control_room.bat` | Product-facing paper room with farm/PFR/main-paper/status and Telegram dry-run by default | Yes, preferred paper-product start |
+| `bat\paper_product_control_room_send.bat` | Explicit opt-in paper-card sender mode for active subscribers | Yes, only after preview/delivery review |
 | `bat\strategy_lab_control_room.bat` | Opens visible farm loop, dashboard, graph, and status windows | Yes, preferred long-run operator start |
 | `bat\strategy_lab_farm_full_cycle_loop.bat` | Runs the canonical full-cycle `farm_loop` in one visible window | Yes |
 | `bat\strategy_lab_farm_full_cycle_stop.bat` | Writes the clean stop-file for the canonical wrapper | Yes |
@@ -264,6 +275,13 @@ Latest bounded wiring audit:
 [`farm_paper_cycle_smoke_2026-06-27.md`](farm_paper_cycle_smoke_2026-06-27.md).
 
 ```bash
+# Preferred visible paper-product room. Opens farm/PFR/main-paper/status surfaces
+# with Telegram delivery in dry-run mode by default.
+bat\paper_product_control_room.bat
+
+# Explicit paper-card delivery mode for active subscribers after preview review.
+bat\paper_product_control_room_send.bat
+
 # Plan only, writes nothing.
 python -m scripts.strategy_lab.farm_loop --once --dry-run
 
