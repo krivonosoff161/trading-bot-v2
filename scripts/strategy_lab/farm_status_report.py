@@ -408,6 +408,11 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["paper_telegram_delivery"] = json.loads(pd_path.read_text(encoding="utf-8")) if pd_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["paper_telegram_delivery"] = {}
+        try:  # Aggregate paper-product quality digest; raw private rows stay in the derived report.
+            pq_path = db_path.parent.parent / "state" / "derived" / "paper_product_quality_report.json"
+            report["paper_product_quality"] = json.loads(pq_path.read_text(encoding="utf-8")) if pq_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["paper_product_quality"] = {}
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
@@ -592,6 +597,29 @@ def _print(report: dict) -> None:
               f"errors={ptd.get('errors', 0)} dry_run={ptd.get('dry_run')} "
               f"sends_network={ptd.get('sends_network')} "
               "(audit only; no order path)")
+    pq = report.get("paper_product_quality") or {}
+    if pq.get("schema") == "paper_product_quality_report.v1":
+        print("  paper product quality: "
+              f"action={pq.get('operator_action') or 'unknown'} "
+              f"active={pq.get('active_trades', 0)} "
+              f"active_live_ready={pq.get('active_live_ready', 0)} "
+              f"active_live_blocked={pq.get('active_live_blocked', 0)} "
+              f"labels={pq.get('quality_labels') or {}} "
+              f"training_rows={pq.get('training_rows', 0)} "
+              f"results={pq.get('training_by_result') or {}} "
+              "(aggregate only)")
+        families = pq.get("families") if isinstance(pq.get("families"), list) else []
+        preview: list[str] = []
+        for item in families[:3]:
+            if not isinstance(item, dict):
+                continue
+            preview.append(
+                f"{item.get('family')}:{item.get('quality_label')} "
+                f"rows={item.get('rows', 0)} take_rate={item.get('take_rate', 0)} "
+                f"avg_net_r={item.get('avg_net_r', 0)}"
+            )
+        if preview:
+            print(f"    paper family quality: {'; '.join(preview)}")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "
