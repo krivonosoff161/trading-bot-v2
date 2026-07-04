@@ -18,7 +18,7 @@ load_dotenv(ROOT / ".env")
 from scripts.subscriptions import list_delivery_users  # noqa: E402
 from src.research_lab.paper_telegram_sender import send_paper_telegram_previews  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
-from src.utils.telegram import bot_token, send_message_to  # noqa: E402
+from src.utils.telegram import bot_token, send_message_to, send_photo_to  # noqa: E402
 
 
 def main() -> None:
@@ -41,6 +41,10 @@ def main() -> None:
     async def _send_text(chat_id: str, text: str) -> int | None:
         return await send_message_to(chat_id, text)
 
+    async def _send_photo(chat_id: str, path: str) -> int | None:
+        await send_photo_to(chat_id, path)
+        return None
+
     summary = send_paper_telegram_previews(
         args.private_root,
         limit=args.limit,
@@ -49,6 +53,7 @@ def main() -> None:
         paper_chat_ids_count=len(ids),
         recipient_ids=ids,
         send_text=_send_text if args.send and configured else None,
+        send_photo=_send_photo if args.send and configured else None,
     )
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
@@ -58,6 +63,7 @@ def main() -> None:
         f"paper_telegram_sender mode={mode} read={summary['records_read']} "
         f"eligible={summary['eligible']} sent={summary['sent']} skipped={summary['skipped']} "
         f"duplicates={summary['duplicates']} errors={summary['errors']} "
+        f"charts={summary['chart_sent_messages']}/{summary['chart_available_messages']} "
         f"configured={summary['configured']} targets={summary['targets']} "
         f"sends_network={summary['sends_network']}"
     )

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import textwrap
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -71,6 +72,7 @@ class PaperTelegramPreview:
     setup_family: str
     consumer_status: str
     text: str
+    chart_path: str = ""
     problems: list[str] = field(default_factory=list)
     card_template_version: str = CARD_TEMPLATE_VERSION
     paper_only: bool = True
@@ -115,6 +117,139 @@ def _snapshot_path(private_root: Path) -> Path:
 
 def _card_ledger_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_card_ledger.json"
+
+
+def _paper_review_chart_path(private_root: Path, source_signal_id: str) -> Path | None:
+    if not source_signal_id:
+        return None
+    safe_id = source_signal_id.replace("/", "_").replace("\\", "_")
+    path = Path(private_root) / "state" / "derived" / "paper_reviews" / f"{safe_id}.png"
+    return path if path.exists() else None
+
+
+def _telegram_card_image_path(private_root: Path, source_signal_id: str) -> Path:
+    safe_id = source_signal_id.replace("/", "_").replace("\\", "_") or "unknown"
+    return Path(private_root) / "state" / "derived" / "paper_telegram_cards" / f"{safe_id}.png"
+
+
+def _font(size: int):
+    try:
+        from PIL import ImageFont
+
+        for candidate in ("arial.ttf", "DejaVuSans.ttf"):
+            try:
+                return ImageFont.truetype(candidate, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+    except ImportError:
+        return None
+
+
+def _draw_wrapped(draw: Any, xy: tuple[int, int], text: str, *, font: Any, fill: str, width: int) -> int:
+    x, y = xy
+    for raw_line in str(text).splitlines() or [""]:
+        for line in textwrap.wrap(raw_line, width=width) or [""]:
+            draw.text((x, y), line, font=font, fill=fill)
+            y += 19
+    return y
+
+
+def _record_targets_for_card(record: dict[str, Any]) -> str:
+    if record.get("schema") == "PaperSignalCandidate.v1":
+        return _paper_signal_targets(record)
+    if record.get("signal_contract"):
+        return _targets_from_contract(dict(record.get("signal_contract") or {}))
+    return _targets_from_plan(list(record.get("take_profit_plan") or []))
+
+
+def _record_entry_for_card(record: dict[str, Any]) -> str:
+    if record.get("schema") == "PaperSignalCandidate.v1":
+        return _entry_from_zone(record)
+    if record.get("signal_contract"):
+        return _fmt_price((record.get("signal_contract") or {}).get("entry"))
+    return _fmt_price(record.get("entry"))
+
+
+def _record_stop_for_card(record: dict[str, Any]) -> str:
+    if record.get("schema") == "PaperSignalCandidate.v1":
+        return _fmt_price(record.get("stop_loss"))
+    if record.get("signal_contract"):
+        return _fmt_price((record.get("signal_contract") or {}).get("stop"))
+    return _fmt_price(record.get("stop"))
+
+
+def _record_hold_for_card(record: dict[str, Any]) -> str:
+    value = record.get("max_hold_min") or record.get("max_hold_minutes")
+    if not value and record.get("signal_contract"):
+        value = (record.get("signal_contract") or {}).get("max_hold_min")
+    return str(value or "n/a")
+
+
+def _render_telegram_card_image(private_root: Path, record: dict[str, Any], source_signal_id: str) -> str:
+    base_chart = _paper_review_chart_path(private_root, source_signal_id)
+    if base_chart is None:
+        return ""
+    out_path = _telegram_card_image_path(private_root, source_signal_id)
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return str(base_chart)
+    try:
+        chart = Image.open(base_chart).convert("RGB")
+    except OSError:
+        return str(base_chart)
+
+    panel_w = 430
+    padding = 18
+    width = chart.width + panel_w
+    height = max(chart.height, 360)
+    canvas = Image.new("RGB", (width, height), "#0b0d14")
+    canvas.paste(chart, (0, (height - chart.height) // 2))
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle((chart.width, 0, width, height), fill="#111827")
+    draw.line((chart.width, 0, chart.width, height), fill="#334155", width=2)
+
+    title_font = _font(20)
+    body_font = _font(15)
+    small_font = _font(13)
+    if title_font is None or body_font is None or small_font is None:
+        return str(base_chart)
+
+    pair = str(record.get("okx_inst_id") or record.get("pair") or record.get("symbol") or "unknown").replace("_", "-")
+    timeframe = str(record.get("timeframe") or "unknown")
+    side = _side_label(str(record.get("side") or "unknown"))
+    family = _family_label(str(record.get("setup_family") or "unknown"))
+    status = _status_label(str(record.get("consumer_status") or record.get("status") or "armed"))
+    reason = _reason_label(str(record.get("reason_now") or "paper candidate"))
+
+    x = chart.width + padding
+    y = padding
+    draw.text((x, y), "Бумажный сигнал", font=title_font, fill="#f8fafc")
+    y += 31
+    y = _draw_wrapped(draw, (x, y), f"{pair} · {timeframe} · {side}", font=body_font, fill="#93c5fd", width=42)
+    y += 10
+    for label, value, color in (
+        ("Идея", family, "#e5e7eb"),
+        ("Вход", _record_entry_for_card(record), "#bfdbfe"),
+        ("Стоп", _record_stop_for_card(record), "#fecaca"),
+        ("Цель", _record_targets_for_card(record), "#bbf7d0"),
+        ("Держать", f"{_record_hold_for_card(record)} мин", "#fde68a"),
+        ("Статус", status, "#e5e7eb"),
+    ):
+        draw.text((x, y), f"{label}: ", font=body_font, fill="#94a3b8")
+        y = _draw_wrapped(draw, (x + 86, y), value, font=body_font, fill=color, width=30)
+        y += 4
+    y += 4
+    draw.text((x, y), "Почему сейчас:", font=body_font, fill="#94a3b8")
+    y += 22
+    y = _draw_wrapped(draw, (x, y), reason, font=small_font, fill="#cbd5e1", width=48)
+
+    footer = "Paper-режим. Не ордер. Автоисполнение выключено."
+    _draw_wrapped(draw, (x, height - 46), footer, font=small_font, fill="#94a3b8", width=48)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path, quality=92)
+    return str(out_path)
 
 
 def _card_hash(text: str) -> str:
@@ -577,18 +712,20 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         preview_id = f"preview_{row.get('instruction_id') or row.get('paper_trade_id') or len(previews)}"
         if source_schema == "paper_signals.v1":
             preview_id = f"preview_candidate_{row.get('signal_id') or len(previews)}"
+        source_signal_id = str(row.get("source_signal_id") or row.get("signal_id") or "")
         previews.append(
             PaperTelegramPreview(
-                telegram_card_id=f"tgcard_{row.get('source_signal_id') or preview_id}_{_card_hash(text)}",
+                telegram_card_id=f"tgcard_{source_signal_id or preview_id}_{_card_hash(text)}",
                 preview_id=preview_id,
                 instruction_id=str(row.get("instruction_id") or ""),
-                source_signal_id=str(row.get("source_signal_id") or row.get("signal_id") or ""),
+                source_signal_id=source_signal_id,
                 pair=str(row.get("okx_inst_id") or row.get("pair") or row.get("symbol") or ""),
                 timeframe=str(row.get("timeframe") or ""),
                 side=str(row.get("side") or ""),
                 setup_family=str(row.get("setup_family") or ""),
                 consumer_status=str(row.get("consumer_status") or row.get("status") or ""),
                 text=text,
+                chart_path=_render_telegram_card_image(Path(private_root), row, source_signal_id),
                 problems=problems,
             )
         )
@@ -610,6 +747,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "records_read": len(rows),
         "rendered": len(previews),
         "invalid": invalid,
+        "charts_available": sum(1 for preview in previews if preview.chart_path),
         "skipped_rejected": skipped_rejected,
         "skipped_non_actionable": skipped_non_actionable,
         "skipped_quality_gate": skipped_quality_gate,
