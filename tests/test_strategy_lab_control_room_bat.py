@@ -40,12 +40,15 @@ def test_paper_product_send_launcher_requires_explicit_wrapper():
     assert "private exchange endpoints" in text
 
 
-def test_control_room_starts_paper_sender_only_when_explicitly_enabled():
+def test_control_room_keeps_paper_sender_single_writer_inside_farm_loop():
     text = _read("strategy_lab_control_room.bat")
     sender = _read("strategy_lab_paper_telegram_sender_loop.bat")
 
     assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND" in text
-    assert "strategy_lab_paper_telegram_sender_loop.bat" in text
+    assert "Telegram paper delivery runs inside Farm Full Cycle Loop" in text
+    assert "start \"Strategy Lab - Paper Telegram Sender\"" not in text
+    assert "&& bat\\strategy_lab_paper_telegram_sender_loop.bat" not in text
+    assert "manual fallback only" in text
     assert "scripts.strategy_lab.paper_telegram_sender" in sender
     assert "--send" in sender
     assert "active subscription users" in sender
