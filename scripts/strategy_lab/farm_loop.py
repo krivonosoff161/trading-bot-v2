@@ -283,6 +283,16 @@ def _print_cycle(out: dict) -> None:
             f"by_status={trade_ledger.get('by_status') or {}} "
             f"execution_allowed={trade_ledger.get('execution_allowed')}"
         )
+    product_ledger = out.get("paper_product_trade_ledger") or {}
+    if product_ledger:
+        print(
+            "  paper_product_trade_ledger: "
+            f"trades={product_ledger.get('trades', 0)} "
+            f"live_ready={product_ledger.get('live_ready', 0)} "
+            f"live_blocked={product_ledger.get('live_blocked', 0)} "
+            f"by_status={product_ledger.get('by_status') or {}} "
+            f"execution_allowed={product_ledger.get('execution_allowed')}"
+        )
     tp = out.get("paper_telegram_preview") or {}
     if tp:
         print(
@@ -370,6 +380,11 @@ def _cycle_summary(out: dict) -> dict:
             "observed": (out.get("main_paper_runtime_observation") or {}).get("observed", 0),
             "provider_error": (out.get("main_paper_runtime_observation") or {}).get("provider_error", 0),
         },
+        "paper_product_trades": {
+            "trades": (out.get("paper_product_trade_ledger") or {}).get("trades", 0),
+            "live_ready": (out.get("paper_product_trade_ledger") or {}).get("live_ready", 0),
+            "live_blocked": (out.get("paper_product_trade_ledger") or {}).get("live_blocked", 0),
+        },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),
             "delivery_sent": (out.get("paper_telegram_delivery") or {}).get("sent", 0),
@@ -394,6 +409,7 @@ def _cycle_signature(out: dict) -> tuple:
     main_runtime_queue = tuple(sorted((out.get("main_paper_runtime_queue") or {}).items()))
     main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
     main_trade_ledger = tuple(sorted((out.get("main_paper_trade_ledger") or {}).items()))
+    product_trade_ledger = tuple(sorted((out.get("paper_product_trade_ledger") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
@@ -403,7 +419,8 @@ def _cycle_signature(out: dict) -> tuple:
     ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
-        main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, telegram_preview,
+        main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, product_trade_ledger,
+        telegram_preview,
         telegram_delivery, training_export, product_training_export, calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
@@ -808,6 +825,18 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["main_paper_trade_ledger"] = build_main_paper_trade_ledger(private_root)
                 except Exception as exc:  # noqa: BLE001 - paper trade ledger must not break the cycle
                     out.setdefault("errors", []).append({"where": "main_paper_trade_ledger", "error": str(exc)})
+                try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_product_trade_ledger",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
+                    from src.research_lab.paper_product_trade_ledger import build_paper_product_trade_ledger
+                    out["paper_product_trade_ledger"] = build_paper_product_trade_ledger(private_root)
+                except Exception as exc:  # noqa: BLE001 - product ledger must not break the cycle
+                    out.setdefault("errors", []).append({"where": "paper_product_trade_ledger", "error": str(exc)})
                 try:
                     _write_loop_status(
                         private_root,
