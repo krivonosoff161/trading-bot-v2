@@ -391,6 +391,8 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "product_active_trades": int(product_trades.get("active_trades") or 0),
         "product_active_live_ready": int(product_trades.get("active_live_ready") or 0),
         "product_active_live_blocked": int(product_trades.get("active_live_blocked") or 0),
+        "product_active_by_source": _top_counts(product_trades.get("active_by_source") or {}),
+        "product_active_by_family": _top_counts(product_trades.get("active_by_family") or {}),
         "product_trade_status": product_trades.get("by_status") or {},
         "product_live_block": _top_counts(product_trades.get("by_live_block") or {}),
         "preview_rendered": int(preview.get("rendered") or 0),
@@ -464,6 +466,12 @@ def _print_paper_product_status() -> None:
         f"active_live_blocked={st['product_active_live_blocked']} "
         f"live_block={st['product_live_block']}"
     )
+    if st["product_active_by_source"]:
+        print(
+            "                "
+            f"active_source={st['product_active_by_source']} "
+            f"active_family={st['product_active_by_family']}"
+        )
     print(
         "                "
         f"outcomes rows={st['training_rows']} result={st['training_by_result']} "
