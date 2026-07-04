@@ -272,6 +272,7 @@ class TestCycleLogStages:
         assert out["paper_telegram_delivery"]["dry_run"] is True
         assert out["paper_telegram_delivery"]["sends_network"] is False
         assert out["paper_telegram_delivery"]["execution_allowed"] is False
+        assert out["paper_telegram_preview"]["skipped_quality_gate"] == 0
         assert out["paper_signal_training_export"]["rows"] == 0
         assert out["paper_signal_training_export"]["terminal_only"] is True
         assert out["paper_signal_training_export"]["paper_only"] is True
