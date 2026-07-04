@@ -629,6 +629,11 @@ def _print(report: dict) -> None:
                   f"pending={lifecycle.get('pending_outcomes', 0)} "
                   f"by_status={lifecycle.get('by_status') or {}} "
                   f"outcomes={lifecycle.get('by_outcome_result') or {}}")
+            print("    paper active timing: "
+                  f"oldest_h={lifecycle.get('oldest_age_hours', 0)} "
+                  f"next_expiry_h={lifecycle.get('next_expiry_hours')} "
+                  f"overdue={lifecycle.get('overdue_expiry', 0)} "
+                  f"expiry_buckets={lifecycle.get('expiry_buckets') or {}}")
         pfr_state = pq.get("pfr_trigger_state") if isinstance(pq.get("pfr_trigger_state"), dict) else {}
         if pfr_state:
             print("    PFR live-trigger state: "

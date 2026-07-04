@@ -152,6 +152,10 @@ def test_status_report_collect(tmp_path):
                     "by_outcome_result": {"pending": 12},
                     "pending_outcomes": 12,
                     "active_without_outcome": 0,
+                    "oldest_age_hours": 22.5,
+                    "next_expiry_hours": 0.5,
+                    "overdue_expiry": 0,
+                    "expiry_buckets": {"le_1h": 1, "le_3h": 4, "le_24h": 7},
                     "terminal_training_backlog": 0,
                 },
                 "families": [
@@ -393,6 +397,10 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
                     "by_outcome_result": {"pending": 12},
                     "pending_outcomes": 12,
                     "active_without_outcome": 0,
+                    "oldest_age_hours": 22.5,
+                    "next_expiry_hours": 0.5,
+                    "overdue_expiry": 0,
+                    "expiry_buckets": {"le_1h": 1, "le_3h": 4, "le_24h": 7},
                     "terminal_training_backlog": 0,
                 },
                 "families": [
@@ -418,7 +426,9 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
     assert "training_rows=1393" in out
     assert "early_tp_tactical:mixed" in out
     assert "paper active lifecycle:" in out
+    assert "paper active timing:" in out
     assert "pending=12" in out
+    assert "next_expiry_h=0.5" in out
     assert "PFR live-trigger state:" in out
     assert "state=waiting_for_live_trigger" in out
     assert "pfr_rejected:no_breakout" in out

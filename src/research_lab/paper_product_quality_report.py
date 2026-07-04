@@ -8,6 +8,7 @@ recipient ids, secrets, fills, or order instructions.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -208,7 +209,23 @@ def _active_live_blockers(product_trades: dict[str, Any]) -> dict[str, int]:
     return _top_counts(counts)
 
 
-def _active_signal_lifecycle(paper_signals: dict[str, Any]) -> dict[str, Any]:
+def _hour_bucket(hours: float) -> str:
+    if hours < 0:
+        return "overdue"
+    if hours <= 1:
+        return "le_1h"
+    if hours <= 3:
+        return "le_3h"
+    if hours <= 6:
+        return "le_6h"
+    if hours <= 12:
+        return "le_12h"
+    if hours <= 24:
+        return "le_24h"
+    return "gt_24h"
+
+
+def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> dict[str, Any]:
     active_rows = [
         row
         for row in paper_signals.get("active") or []
@@ -216,6 +233,11 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any]) -> dict[str, Any]:
     ]
     by_status: dict[str, int] = {}
     by_outcome_result: dict[str, int] = {}
+    age_buckets: dict[str, int] = {}
+    expiry_buckets: dict[str, int] = {}
+    overdue_expiry = 0
+    next_expiry_hours: float | None = None
+    oldest_age_hours = 0.0
     no_outcome = 0
     for row in active_rows:
         status = str(row.get("status") or "unknown")
@@ -226,6 +248,21 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any]) -> dict[str, Any]:
             by_outcome_result[result] = by_outcome_result.get(result, 0) + 1
         else:
             no_outcome += 1
+        created_at = _float_or_none(row.get("created_at"))
+        if created_at is not None:
+            age_hours = max(0.0, (now - created_at) / 3600)
+            oldest_age_hours = max(oldest_age_hours, age_hours)
+            age_bucket = _hour_bucket(age_hours)
+            age_buckets[age_bucket] = age_buckets.get(age_bucket, 0) + 1
+        expires_at = _float_or_none(row.get("expires_at"))
+        if expires_at is not None:
+            expiry_hours = (expires_at - now) / 3600
+            expiry_bucket = _hour_bucket(expiry_hours)
+            expiry_buckets[expiry_bucket] = expiry_buckets.get(expiry_bucket, 0) + 1
+            if expiry_hours < 0:
+                overdue_expiry += 1
+            elif next_expiry_hours is None or expiry_hours < next_expiry_hours:
+                next_expiry_hours = expiry_hours
     pending = sum(count for result, count in by_outcome_result.items() if result in PENDING_OUTCOME_RESULTS)
     return {
         "active": len(active_rows),
@@ -233,6 +270,11 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any]) -> dict[str, Any]:
         "by_outcome_result": _top_counts(by_outcome_result),
         "pending_outcomes": pending,
         "active_without_outcome": no_outcome,
+        "oldest_age_hours": round(oldest_age_hours, 2),
+        "next_expiry_hours": round(next_expiry_hours, 2) if next_expiry_hours is not None else None,
+        "overdue_expiry": overdue_expiry,
+        "age_buckets": _top_counts(age_buckets),
+        "expiry_buckets": _top_counts(expiry_buckets),
         "terminal_training_backlog": 0,
     }
 
@@ -359,6 +401,9 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- active lifecycle status: {summary['active_signal_lifecycle']['by_status']}",
         f"- active outcome states: {summary['active_signal_lifecycle']['by_outcome_result']}",
         f"- pending active outcomes: {summary['active_signal_lifecycle']['pending_outcomes']}",
+        f"- oldest active age hours: {summary['active_signal_lifecycle']['oldest_age_hours']}",
+        f"- next active expiry hours: {summary['active_signal_lifecycle']['next_expiry_hours']}",
+        f"- active expiry buckets: {summary['active_signal_lifecycle']['expiry_buckets']}",
         "",
         "## Strict PFR Funnel",
         "",
@@ -415,8 +460,9 @@ def _render_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
+def build_paper_product_quality_report(private_root: Path, *, now: float | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
+    now = time.time() if now is None else now
     derived = private_root / "state" / "derived"
     product_trades = _read_json(derived / "paper_product_trades.json")
     preview = _read_json(derived / "paper_telegram_preview.json")
@@ -484,7 +530,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "telegram": telegram,
         "pfr_funnel": pfr_funnel,
         "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
-        "active_signal_lifecycle": _active_signal_lifecycle(paper_signals),
+        "active_signal_lifecycle": _active_signal_lifecycle(paper_signals, now=now),
         "operator_action": _operator_action(
             delivery=delivery,
             product_trades=product_trades,

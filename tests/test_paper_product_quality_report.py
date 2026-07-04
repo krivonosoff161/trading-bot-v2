@@ -116,9 +116,24 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         {
             "schema": "paper_signals.v1",
             "active": [
-                {"status": "armed", "outcome": {"result": "pending_arm"}},
-                {"status": "opened_paper", "outcome": {"result": "pending_open"}},
-                {"status": "armed", "outcome": {}},
+                {
+                    "status": "armed",
+                    "created_at": 1_000.0,
+                    "expires_at": 11_800.0,
+                    "outcome": {"result": "pending_arm"},
+                },
+                {
+                    "status": "opened_paper",
+                    "created_at": 6_400.0,
+                    "expires_at": 17_200.0,
+                    "outcome": {"result": "pending_open"},
+                },
+                {
+                    "status": "armed",
+                    "created_at": 9_000.0,
+                    "expires_at": 9_500.0,
+                    "outcome": {},
+                },
                 {"status": "reviewed", "outcome": {"result": "take"}},
             ],
         },
@@ -152,7 +167,7 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         )
     _append_jsonl(derived / "paper_signal_training.jsonl", rows)
 
-    summary = build_paper_product_quality_report(tmp_path)
+    summary = build_paper_product_quality_report(tmp_path, now=10_000.0)
 
     assert summary["schema"] == "paper_product_quality_report.v1"
     assert summary["active_trades"] == 3
@@ -207,6 +222,11 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "by_outcome_result": {"pending_arm": 1, "pending_open": 1},
         "pending_outcomes": 2,
         "active_without_outcome": 1,
+        "oldest_age_hours": 2.5,
+        "next_expiry_hours": 0.5,
+        "overdue_expiry": 1,
+        "age_buckets": {"le_1h": 2, "le_3h": 1},
+        "expiry_buckets": {"le_1h": 1, "le_3h": 1, "overdue": 1},
         "terminal_training_backlog": 0,
     }
     assert summary["families"][0]["family"] == "early_tp_tactical"
@@ -219,6 +239,7 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     markdown = (derived / "paper_product_quality_report.md").read_text(encoding="utf-8")
     assert "live-trigger state: waiting_for_live_trigger" in markdown
     assert "pending active outcomes: 2" in markdown
+    assert "next active expiry hours: 0.5" in markdown
 
 
 def test_quality_report_flags_missing_pfr_context_as_fix_needed(tmp_path):
