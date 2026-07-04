@@ -146,6 +146,14 @@ def test_status_report_collect(tmp_path):
                     "last_cycle_generated": 0,
                     "top_reasons": {"pfr_rejected:no_breakout": 6},
                 },
+                "active_signal_lifecycle": {
+                    "active": 12,
+                    "by_status": {"armed": 10, "opened_paper": 2},
+                    "by_outcome_result": {"pending": 12},
+                    "pending_outcomes": 12,
+                    "active_without_outcome": 0,
+                    "terminal_training_backlog": 0,
+                },
                 "families": [
                     {
                         "family": "early_tp_tactical",
@@ -379,6 +387,14 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
                     "last_cycle_generated": 0,
                     "top_reasons": {"pfr_rejected:no_breakout": 6},
                 },
+                "active_signal_lifecycle": {
+                    "active": 12,
+                    "by_status": {"armed": 10, "opened_paper": 2},
+                    "by_outcome_result": {"pending": 12},
+                    "pending_outcomes": 12,
+                    "active_without_outcome": 0,
+                    "terminal_training_backlog": 0,
+                },
                 "families": [
                     {
                         "family": "early_tp_tactical",
@@ -401,6 +417,8 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
     assert "active=12" in out
     assert "training_rows=1393" in out
     assert "early_tp_tactical:mixed" in out
+    assert "paper active lifecycle:" in out
+    assert "pending=12" in out
     assert "PFR live-trigger state:" in out
     assert "state=waiting_for_live_trigger" in out
     assert "pfr_rejected:no_breakout" in out

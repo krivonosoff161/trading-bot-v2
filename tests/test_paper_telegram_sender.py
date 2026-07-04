@@ -60,6 +60,14 @@ def _write_quality_report(root: Path) -> None:
                     "last_cycle_generated": 0,
                     "top_reasons": {"pfr_rejected:no_breakout": 6},
                 },
+                "active_signal_lifecycle": {
+                    "active": 12,
+                    "by_status": {"armed": 10, "opened_paper": 2},
+                    "by_outcome_result": {"pending": 12},
+                    "pending_outcomes": 12,
+                    "active_without_outcome": 0,
+                    "terminal_training_backlog": 0,
+                },
                 "paper_only": True,
                 "execution_allowed": False,
             },
@@ -208,6 +216,7 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert len(calls) == 2
     assert "Paper bot status" in calls[1][1]
     assert "all_cards_duplicate" in calls[1][1]
+    assert "pending=<code>12</code>" in calls[1][1]
     assert "waiting_for_live_trigger" in calls[1][1]
     assert "pfr_rejected:no_breakout" in calls[1][1]
     assert "research-only, not an order" in calls[1][1]

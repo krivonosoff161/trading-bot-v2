@@ -622,6 +622,13 @@ def _print(report: dict) -> None:
             )
         if preview:
             print(f"    paper family quality: {'; '.join(preview)}")
+        lifecycle = pq.get("active_signal_lifecycle") if isinstance(pq.get("active_signal_lifecycle"), dict) else {}
+        if lifecycle:
+            print("    paper active lifecycle: "
+                  f"active={lifecycle.get('active', 0)} "
+                  f"pending={lifecycle.get('pending_outcomes', 0)} "
+                  f"by_status={lifecycle.get('by_status') or {}} "
+                  f"outcomes={lifecycle.get('by_outcome_result') or {}}")
         pfr_state = pq.get("pfr_trigger_state") if isinstance(pq.get("pfr_trigger_state"), dict) else {}
         if pfr_state:
             print("    PFR live-trigger state: "
