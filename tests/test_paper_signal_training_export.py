@@ -313,7 +313,7 @@ def test_export_training_rows_skips_unchanged_terminal_source(tmp_path, monkeypa
         raise AssertionError("unchanged training export should not rewrite lineage")
 
     monkeypatch.setattr(
-        "src.research_lab.paper_signals.training_export.write_cycle_link",
+        "src.research_lab.paper_signals.training_export.write_cycle_links",
         fail_if_rebuilt,
     )
     second = export_training_rows(tmp_path)

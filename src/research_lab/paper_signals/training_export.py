@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.lineage_contract import write_cycle_link
+from src.research_lab.lineage_contract import write_cycle_links
 from src.research_lab.paper_signals import store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import first_tp, geometry, midpoint
@@ -304,9 +304,9 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
         )
         for sig in signals
     ]
-    for row in rows:
-        write_cycle_link(
-            private_root,
+    write_cycle_links(
+        private_root,
+        [
             {
                 "scanner_event_id": row["scanner_event_id"],
                 "data_packet_id": row["data_packet_id"],
@@ -327,8 +327,10 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
                 "timeframe": row["timeframe"],
                 "setup_family": row["family"],
                 "mode": row["mode"],
-            },
-        )
+            }
+            for row in rows
+        ],
+    )
 
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with out_jsonl.open("w", encoding="utf-8") as fh:
