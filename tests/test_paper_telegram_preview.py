@@ -296,13 +296,19 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
 def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     _write_product_trade_snapshot(tmp_path, [_product_trade_record()])
     _write_paper_signal_snapshot(tmp_path, [_paper_signal_row(signal_id="raw_candidate")])
+    chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_product.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
 
     summary = build_paper_telegram_preview(tmp_path)
 
     assert summary["source_schema"] == "paper_product_trade_ledger.v1"
     assert summary["records_read"] == 1
     assert summary["rendered"] == 1
+    assert summary["charts_available"] == 1
     text = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]["text"]
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    assert item["chart_path"] == str(chart_path)
     assert "Paper product: BTC-USDT-SWAP" in text
     assert "Live-ready:" in text
     assert "missing_ready_strategy_id" in text
