@@ -53,6 +53,13 @@ def _write_quality_report(root: Path) -> None:
                 "active_live_ready": 0,
                 "quality_labels": {"mixed": 1, "needs_review": 4},
                 "training_by_result": {"take": 184, "stop": 371},
+                "pfr_trigger_state": {
+                    "state": "waiting_for_live_trigger",
+                    "catalog_ready": 43,
+                    "bridge_instructions": 0,
+                    "last_cycle_generated": 0,
+                    "top_reasons": {"pfr_rejected:no_breakout": 6},
+                },
                 "paper_only": True,
                 "execution_allowed": False,
             },
@@ -201,6 +208,8 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert len(calls) == 2
     assert "Paper bot status" in calls[1][1]
     assert "all_cards_duplicate" in calls[1][1]
+    assert "waiting_for_live_trigger" in calls[1][1]
+    assert "pfr_rejected:no_breakout" in calls[1][1]
     assert "research-only, not an order" in calls[1][1]
     assert "execution_allowed=false" in calls[1][1]
 
@@ -245,6 +254,7 @@ def test_sender_status_digest_when_quality_gate_leaves_no_cards(tmp_path):
     assert summary["status_digest_reason"] == "quality_gate_no_cards"
     assert summary["status_digest_sent_messages"] == 1
     assert "quality_gate_no_cards" in calls[0][1]
+    assert "waiting_for_live_trigger" in calls[0][1]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["source_signal_id"] == "paper_status_digest"
     assert "111" not in json.dumps(data, ensure_ascii=False)
