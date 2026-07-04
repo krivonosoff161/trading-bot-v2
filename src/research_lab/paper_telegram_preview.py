@@ -449,8 +449,6 @@ def _trade_text(record: dict[str, Any]) -> str:
     side = html.escape(_side_label(str(record.get("side") or "unknown")))
     family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
     status = html.escape(_status_label(str(record.get("status") or "queued")))
-    setup_id = html.escape(str(record.get("ready_strategy_id") or "n/a"))
-    signal_id = html.escape(str(record.get("source_signal_id") or "unknown"))
     targets = _targets_from_plan(list(record.get("take_profit_plan") or []))
     outcome = dict(record.get("outcome") or {})
     result_line = ""
@@ -472,8 +470,6 @@ def _trade_text(record: dict[str, Any]) -> str:
             f"<b>{LABEL_MAX_HOLD}:</b> <code>{html.escape(str(record.get('max_hold_min') or 'n/a'))} \u043c\u0438\u043d</code>",
             "",
             f"<b>{LABEL_STATUS}:</b> {status}",
-            f"<b>ID \u0441\u0435\u0442\u0430\u043f\u0430:</b> <code>{setup_id}</code>",
-            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             result_line,
             "",
             f"<i>{EXECUTION_OFF}</i>",
@@ -487,10 +483,7 @@ def _product_trade_text(record: dict[str, Any]) -> str:
     side = html.escape(_side_label(str(record.get("side") or "unknown")))
     family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
     status = html.escape(_status_label(str(record.get("status") or "armed")))
-    signal_id = html.escape(str(record.get("source_signal_id") or "unknown"))
     reason = html.escape(_reason_label(str(record.get("reason_now") or "paper product candidate")))
-    live_ready = "\u0434\u0430" if bool(record.get("live_ready")) else "\u043d\u0435\u0442"
-    live_block = html.escape(str(record.get("live_block_reason") or "none"))
     return "\n".join(
         [
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
@@ -505,8 +498,6 @@ def _product_trade_text(record: dict[str, Any]) -> str:
             "",
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {status}",
-            f"<b>\u041a \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0439 \u0442\u043e\u0440\u0433\u043e\u0432\u043b\u0435:</b> <code>{live_ready}</code> \u0431\u043b\u043e\u043a=<code>{live_block}</code>",
-            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
@@ -534,11 +525,8 @@ def _paper_signal_text(record: dict[str, Any]) -> str:
     side = html.escape(_side_label(str(record.get("side") or "unknown")))
     family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
     status = html.escape(_status_label(str(record.get("status") or "armed")))
-    source = html.escape(str(record.get("source") or "farm"))
-    signal_id = html.escape(str(record.get("signal_id") or "unknown"))
     reason = html.escape(_reason_label(str(record.get("reason_now") or "farm paper candidate")))
     risk = html.escape(str(record.get("risk_pct") or "n/a"))
-    validation = html.escape(str((record.get("validator_context") or {}).get("hard_status") or "not_hard_validated"))
     return "\n".join(
         [
             f"<b>\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442 \u0444\u0435\u0440\u043c\u044b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
@@ -553,10 +541,7 @@ def _paper_signal_text(record: dict[str, Any]) -> str:
             "",
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {status}",
-            f"<b>{LABEL_SOURCE}:</b> <code>{source}</code>",
-            f"<b>\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430:</b> <code>{validation}</code>",
             f"<b>\u0420\u0438\u0441\u043a:</b> <code>{risk}%</code>",
-            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
@@ -571,10 +556,7 @@ def _consumer_text(record: dict[str, Any]) -> str:
     side = html.escape(_side_label(str(record.get("side") or "unknown")))
     timeframe = html.escape(str(record.get("timeframe") or "unknown"))
     reason = html.escape(_reason_label(str(meta.get("reason_now") or "paper-watch candidate")))
-    source = html.escape(str(record.get("source_signal_id") or "unknown"))
-    source_name = html.escape(str(contract.get("source") or meta.get("source") or "paper_lane"))
     source_status = str(meta.get("source_validation_verdict") or record.get("source_status") or "armed")
-    setup_id = html.escape(str(meta.get("ready_strategy_id") or meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
     return "\n".join(
         [
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
@@ -589,9 +571,6 @@ def _consumer_text(record: dict[str, Any]) -> str:
             "",
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {html.escape(_status_label(source_status))}",
-            f"<b>{LABEL_SOURCE}:</b> <code>{source_name}</code>",
-            f"<b>ID \u0441\u0435\u0442\u0430\u043f\u0430:</b> <code>{setup_id}</code>",
-            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{source}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
