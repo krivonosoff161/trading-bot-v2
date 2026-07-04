@@ -184,6 +184,18 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
     def _leg(px):
         return (px - entry_px if long_ else entry_px - px) / entry_px * 100
 
+    def _fills_entry(high: float, low: float) -> bool:
+        trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
+        if trigger == "breakout_stop":
+            return high >= hi if long_ else low <= lo
+        return low <= lo if long_ else high >= hi
+
+    def _entry_price() -> float:
+        trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
+        if trigger == "breakout_stop":
+            return hi if long_ else lo
+        return lo if long_ else hi
+
     for i, c in enumerate(new):
         h, lov, cl = float(c["high"]), float(c["low"]), float(c["close"])
         if not opened:
@@ -193,9 +205,10 @@ def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActio
                 sig.outcome = {"result": "expired_no_entry", "bars_waited": i,
                                "ran_away": fav_wait >= (sig.risk_pct or 99)}
                 return sig
-            filled = lov <= lo if long_ else h >= hi   # limit-pullback fill
+            filled = _fills_entry(h, lov)
             if filled:
-                opened, entry_px, open_i = True, (lo if long_ else hi), i
+                entry_px = _entry_price()
+                opened, open_i = True, i
                 eff_stop = sig.stop_loss
                 sig.status = "opened_paper"
             continue

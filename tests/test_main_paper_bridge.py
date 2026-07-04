@@ -73,10 +73,29 @@ def test_instruction_from_signal_reuses_signal_contract_shape():
     assert item.signal_contract["metadata"]["dedup_key"] == "BTC|1h|early|armed|"
     assert item.signal_contract["metadata"]["mode"] == "live"
     assert item.signal_contract["metadata"]["exit_mode"] == "partial_be"
+    assert item.signal_contract["metadata"]["entry_trigger"] == "limit_pullback"
+    assert item.signal_contract["metadata"]["pretrigger"] is False
 
 
 def test_instruction_from_signal_ignores_terminal_reviews():
     assert instruction_from_signal(_sig("reviewed")) is None
+
+
+def test_instruction_from_breakout_stop_uses_stop_entry_price():
+    sig = _sig("armed")
+    sig.entry_zone = [101.0, 101.2]
+    sig.validator_context["entry_trigger"] = "breakout_stop"
+    sig.validator_context["pretrigger"] = True
+    sig.validator_context["trigger_gap_pct"] = 0.25
+
+    item = instruction_from_signal(sig)
+
+    assert item is not None
+    assert item.entry == 101.2
+    assert item.signal_contract["entry"] == 101.2
+    assert item.signal_contract["metadata"]["entry_trigger"] == "breakout_stop"
+    assert item.signal_contract["metadata"]["pretrigger"] is True
+    assert item.signal_contract["metadata"]["trigger_gap_pct"] == 0.25
 
 
 def test_export_main_paper_instructions_rebuilds_private_view(tmp_path):
