@@ -111,6 +111,23 @@ def test_status_report_collect(tmp_path):
         }),
         encoding="utf-8",
     )
+    (derived / "paper_telegram_delivery.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_delivery.v1",
+                "eligible_cards": 3,
+                "targets": 4,
+                "sent_messages": 0,
+                "sent_cards": 0,
+                "duplicate_messages": 12,
+                "duplicate_cards": 3,
+                "errors": 0,
+                "dry_run": False,
+                "sends_network": True,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     report = collect(default_db_path(tmp_path))
     assert report["exists"] is True
@@ -120,6 +137,8 @@ def test_status_report_collect(tmp_path):
     assert report["by_timeframe"].get("1h") == 2
     assert report["main_paper_runtime_observation"]["observed"] == 2
     assert report["main_paper_runtime_observation"]["execution_allowed"] is False
+    assert report["paper_telegram_delivery"]["eligible_cards"] == 3
+    assert report["paper_telegram_delivery"]["sends_network"] is True
     ready = {r["symbol"] for r in report["ready_for_validation"]}
     assert "BTC_USDT_SWAP" in ready
 
@@ -223,6 +242,41 @@ def test_status_report_paused_work_mentions_running_loop(tmp_path, capsys):
     assert "COMPLETION: PAUSED_WITH_WORK" in out
     assert "loop running stage=sleep" in out
     assert "loop stopped with claimable work" not in out
+
+
+def test_status_report_prints_paper_telegram_delivery(tmp_path, capsys):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    import_run_dir(conn, tmp_path, _write_run(tmp_path))
+    conn.commit()
+    conn.close()
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_telegram_delivery.json").write_text(
+        json.dumps(
+            {
+                "eligible_cards": 3,
+                "targets": 4,
+                "sent_messages": 0,
+                "sent_cards": 0,
+                "duplicate_messages": 12,
+                "duplicate_cards": 3,
+                "errors": 0,
+                "dry_run": False,
+                "sends_network": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _print(collect(default_db_path(tmp_path), fast=True))
+    out = capsys.readouterr().out
+
+    assert "paper Telegram delivery:" in out
+    assert "eligible_cards=3" in out
+    assert "duplicate_messages=12" in out
+    assert "errors=0" in out
+    assert "sends_network=True" in out
 
 
 def test_status_report_missing_db(tmp_path):
