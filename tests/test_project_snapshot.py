@@ -106,6 +106,20 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         json.dumps({"trades": 1, "by_status": {"armed": 1}, "execution_allowed": False}),
         encoding="utf-8",
     )
+    (derived / "paper_product_trades.json").write_text(
+        json.dumps({
+            "trades": 3,
+            "live_ready": 2,
+            "live_blocked": 1,
+            "active_trades": 1,
+            "active_live_ready": 0,
+            "active_live_blocked": 1,
+            "by_status": {"armed": 1, "reviewed": 2},
+            "by_live_block": {"missing_ready_strategy_id": 1},
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
     (derived / "paper_telegram_preview.json").write_text(
         json.dumps({"rendered": 1, "execution_allowed": False}),
         encoding="utf-8",
@@ -153,6 +167,11 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["instructions"] == 1
     assert status["queued"] == 1
     assert status["trades"] == 1
+    assert status["product_trades"] == 3
+    assert status["product_live_ready"] == 2
+    assert status["product_active_trades"] == 1
+    assert status["product_active_live_ready"] == 0
+    assert status["product_active_live_blocked"] == 1
     assert status["delivery_dry_run"] is True
     assert status["sends_network"] is False
     assert status["delivery_duplicates"] == 1
