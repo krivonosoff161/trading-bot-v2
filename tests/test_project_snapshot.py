@@ -218,6 +218,14 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
             "schema": "paper_product_quality_report.v1",
             "operator_action": "fix_promotion_gap_missing_ready_strategy_id",
             "quality_labels": {"candidate_watch": 1, "needs_review": 2},
+            "active_signal_lifecycle": {
+                "active": 3,
+                "pending_outcomes": 2,
+                "oldest_age_hours": 22.5,
+                "next_expiry_hours": 0.5,
+                "overdue_expiry": 0,
+                "expiry_buckets": {"le_1h": 1, "le_3h": 2},
+            },
             "pfr_funnel": {
                 "catalog_ready": 43,
                 "catalog_rejected_quality": 10,
@@ -262,6 +270,14 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["training_by_diagnosis"] == {"good_signal": 2, "wrong_direction": 1}
     assert status["quality_operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
     assert status["quality_labels"] == {"needs_review": 2, "candidate_watch": 1}
+    assert status["active_lifecycle"] == {
+        "active": 3,
+        "pending_outcomes": 2,
+        "oldest_age_hours": 22.5,
+        "next_expiry_hours": 0.5,
+        "overdue_expiry": 0,
+        "expiry_buckets": {"le_1h": 1, "le_3h": 2},
+    }
     assert status["pfr_funnel"] == {
         "catalog_ready": 43,
         "catalog_rejected_quality": 10,
