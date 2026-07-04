@@ -134,9 +134,17 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     (derived / "paper_telegram_delivery.json").write_text(
         json.dumps({
             "eligible": 1,
+            "eligible_cards": 1,
             "sent": 0,
+            "sent_messages": 0,
+            "sent_cards": 0,
             "duplicates": 1,
+            "duplicate_messages": 1,
+            "duplicate_cards": 1,
             "errors": 0,
+            "error_messages": 0,
+            "error_cards": 0,
+            "target_recipients": 2,
             "dry_run": True,
             "configured": True,
             "sends_network": False,
@@ -195,6 +203,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["preview_skipped_quality_gate"] == 2
     assert status["preview_quality_gate_reasons"] == {"quality_label:needs_review": 2}
     assert status["delivery_duplicates"] == 1
+    assert status["delivery_duplicate_cards"] == 1
+    assert status["delivery_targets"] == 2
     assert status["cumulative_sent_keys"] == 3
     assert status["cumulative_sent_previews"] == 2
     assert status["cumulative_sent_recipients"] == 2

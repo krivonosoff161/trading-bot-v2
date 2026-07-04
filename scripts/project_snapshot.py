@@ -398,10 +398,14 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "preview_rendered": int(preview.get("rendered") or 0),
         "preview_skipped_quality_gate": int(preview.get("skipped_quality_gate") or 0),
         "preview_quality_gate_reasons": _top_counts(preview.get("quality_gate_reasons") or {}),
-        "delivery_eligible": int(delivery.get("eligible") or 0),
-        "delivery_sent": int(delivery.get("sent") or 0),
-        "delivery_duplicates": int(delivery.get("duplicates") or 0),
-        "delivery_errors": int(delivery.get("errors") or 0),
+        "delivery_eligible": int(delivery.get("eligible_cards", delivery.get("eligible") or 0) or 0),
+        "delivery_sent": int(delivery.get("sent_messages", delivery.get("sent") or 0) or 0),
+        "delivery_sent_cards": int(delivery.get("sent_cards") or 0),
+        "delivery_duplicates": int(delivery.get("duplicate_messages", delivery.get("duplicates") or 0) or 0),
+        "delivery_duplicate_cards": int(delivery.get("duplicate_cards") or 0),
+        "delivery_errors": int(delivery.get("error_messages", delivery.get("errors") or 0) or 0),
+        "delivery_error_cards": int(delivery.get("error_cards") or 0),
+        "delivery_targets": int(delivery.get("target_recipients", delivery.get("targets") or 0) or 0),
         "delivery_dry_run": bool(delivery.get("dry_run", True)),
         "delivery_configured": bool(delivery.get("configured")),
         "sends_network": bool(delivery.get("sends_network")),
@@ -447,17 +451,20 @@ def _print_paper_product_status() -> None:
         f"queued={st['queued']} observed={st['observed']} "
         f"strict_trades={st['trades']} {st['trade_status']} "
         f"product_trades={st['product_trades']} {st['product_trade_status']} | "
-        f"tg preview={st['preview_rendered']} eligible={st['delivery_eligible']} "
-        f"last_sent={st['delivery_sent']} sent_total={st['cumulative_sent_previews']}"
+        f"tg preview={st['preview_rendered']} eligible_cards={st['delivery_eligible']} "
+        f"last_sent_messages={st['delivery_sent']} last_sent_cards={st['delivery_sent_cards']} "
+        f"sent_cards_total={st['cumulative_sent_previews']}"
     )
     print(
         "                "
         f"telegram={'send' if st['sends_network'] else 'dry-run'} "
         f"configured={st['delivery_configured']} "
+        f"targets={st['delivery_targets']} "
         f"execution_allowed={st['execution_allowed']} "
         f"provider_error={st['provider_error']} "
         f"skipped_unvalidated={st['skipped_unvalidated']} "
-        f"delivery_errors={st['delivery_errors']} duplicates={st['delivery_duplicates']}"
+        f"delivery_errors={st['delivery_errors']} error_cards={st['delivery_error_cards']} "
+        f"duplicate_messages={st['delivery_duplicates']} duplicate_cards={st['delivery_duplicate_cards']}"
     )
     if st["preview_skipped_quality_gate"]:
         print(

@@ -197,6 +197,10 @@ def _delivery_from_preview(
     )
 
 
+def _unique_preview_count(deliveries: list[PaperTelegramDelivery], status: str) -> int:
+    return len({delivery.preview_id for delivery in deliveries if delivery.status == status and delivery.preview_id})
+
+
 def send_paper_telegram_previews(
     private_root: Path,
     *,
@@ -247,6 +251,10 @@ def send_paper_telegram_previews(
         for delivery in deliveries:
             fh.write(json.dumps(delivery.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
 
+    sent_messages = sum(1 for delivery in deliveries if delivery.status == "sent")
+    duplicate_messages = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
+    skipped_messages = sum(1 for delivery in deliveries if delivery.status.startswith("skipped"))
+    error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": source.get("schema", ""),
@@ -254,17 +262,27 @@ def send_paper_telegram_previews(
         "source_path": str(source_path) if source_path else "",
         "records_read": len(items),
         "eligible": len(accepted),
+        "eligible_cards": len(accepted),
         "invalid_preview": invalid,
         "dry_run": not apply,
         "configured": bool(paper_chat_configured),
         "chat_env": DEFAULT_DELIVERY_TARGET,
         "chat_ids_count": int(paper_chat_ids_count),
         "targets": len(recipient_ids),
+        "target_recipients": len(recipient_ids),
+        "potential_messages": len(accepted) * len(recipient_ids),
         "delivery_target": "active_subscription_users",
-        "sent": sum(1 for delivery in deliveries if delivery.status == "sent"),
-        "duplicates": sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate"),
-        "skipped": sum(1 for delivery in deliveries if delivery.status.startswith("skipped")),
-        "errors": sum(1 for delivery in deliveries if delivery.status == "error"),
+        "sent": sent_messages,
+        "sent_messages": sent_messages,
+        "sent_cards": _unique_preview_count(deliveries, "sent"),
+        "duplicates": duplicate_messages,
+        "duplicate_messages": duplicate_messages,
+        "duplicate_cards": _unique_preview_count(deliveries, "skipped_duplicate"),
+        "skipped": skipped_messages,
+        "skipped_messages": skipped_messages,
+        "errors": error_messages,
+        "error_messages": error_messages,
+        "error_cards": _unique_preview_count(deliveries, "error"),
         "paper_only": True,
         "execution_allowed": False,
         "sends_network": bool(apply and paper_chat_configured and send_text is not None and recipient_ids),
