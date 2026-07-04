@@ -76,6 +76,35 @@ class TestPrintWarning:
         out = capsys.readouterr().out
         assert "WARNING" not in out
 
+    def test_cycle_print_separates_delivery_cards_from_messages(self, capsys) -> None:
+        farm_loop._print_cycle({
+            "pivot": "work_available",
+            "active_tasks": 1,
+            "counters": {},
+            "status": {},
+            "paper_telegram_delivery": {
+                "eligible_cards": 3,
+                "target_recipients": 2,
+                "sent_messages": 4,
+                "sent_cards": 2,
+                "duplicate_messages": 2,
+                "duplicate_cards": 1,
+                "skipped_messages": 0,
+                "error_messages": 0,
+                "dry_run": False,
+                "sends_network": True,
+            },
+        })
+
+        out = capsys.readouterr().out
+
+        assert "eligible_cards=3" in out
+        assert "targets=2" in out
+        assert "sent_messages=4" in out
+        assert "sent_cards=2" in out
+        assert "duplicate_messages=2" in out
+        assert "duplicate_cards=1" in out
+
 
 class TestCycleLogStages:
     def test_paper_telegram_config_default_is_dry_run(self) -> None:

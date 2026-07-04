@@ -92,6 +92,11 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert summary["sends_network"] is True
     assert summary["targets"] == 2
     assert summary["sent"] == 2
+    assert summary["eligible_cards"] == 1
+    assert summary["target_recipients"] == 2
+    assert summary["potential_messages"] == 2
+    assert summary["sent_messages"] == 2
+    assert summary["sent_cards"] == 1
     assert calls == [
         ("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
         ("222", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
@@ -134,6 +139,40 @@ def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
     assert second["sent"] == 0
     assert second["duplicates"] == 1
     assert len(calls) == 1
+
+
+def test_sender_separates_unique_cards_from_recipient_messages(tmp_path):
+    _write_preview_snapshot(
+        tmp_path,
+        [
+            _preview(preview_id="preview_1", instruction_id="mainpaper_1"),
+            _preview(preview_id="preview_2", instruction_id="mainpaper_2"),
+        ],
+    )
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=2,
+        recipient_ids=["111", "222"],
+        send_text=fake_send,
+    )
+
+    assert summary["eligible"] == 2
+    assert summary["eligible_cards"] == 2
+    assert summary["targets"] == 2
+    assert summary["target_recipients"] == 2
+    assert summary["potential_messages"] == 4
+    assert summary["sent"] == 4
+    assert summary["sent_messages"] == 4
+    assert summary["sent_cards"] == 2
+    assert len(calls) == 4
 
 
 def test_sender_rejects_invalid_preview(tmp_path):

@@ -308,8 +308,14 @@ def _print_cycle(out: dict) -> None:
     if td:
         print(
             "  paper_telegram_delivery: "
-            f"eligible={td.get('eligible', 0)} sent={td.get('sent', 0)} "
-            f"skipped={td.get('skipped', 0)} errors={td.get('errors', 0)} "
+            f"eligible_cards={td.get('eligible_cards', td.get('eligible', 0))} "
+            f"targets={td.get('target_recipients', td.get('targets', 0))} "
+            f"sent_messages={td.get('sent_messages', td.get('sent', 0))} "
+            f"sent_cards={td.get('sent_cards', 0)} "
+            f"duplicate_messages={td.get('duplicate_messages', td.get('duplicates', 0))} "
+            f"duplicate_cards={td.get('duplicate_cards', 0)} "
+            f"skipped_messages={td.get('skipped_messages', td.get('skipped', 0))} "
+            f"errors={td.get('error_messages', td.get('errors', 0))} "
             f"dry_run={td.get('dry_run')} sends_network={td.get('sends_network')}"
         )
     train = out.get("paper_signal_training_export") or {}
@@ -408,8 +414,19 @@ def _cycle_summary(out: dict) -> dict:
             "preview_quality_skip_reasons": (
                 (out.get("paper_telegram_preview") or {}).get("quality_gate_reasons") or {}
             ),
-            "delivery_sent": (out.get("paper_telegram_delivery") or {}).get("sent", 0),
-            "delivery_errors": (out.get("paper_telegram_delivery") or {}).get("errors", 0),
+            "delivery_sent_messages": (
+                (out.get("paper_telegram_delivery") or {}).get(
+                    "sent_messages",
+                    (out.get("paper_telegram_delivery") or {}).get("sent", 0),
+                )
+            ),
+            "delivery_sent_cards": (out.get("paper_telegram_delivery") or {}).get("sent_cards", 0),
+            "delivery_errors": (
+                (out.get("paper_telegram_delivery") or {}).get(
+                    "error_messages",
+                    (out.get("paper_telegram_delivery") or {}).get("errors", 0),
+                )
+            ),
         },
         "calculator_advisor": {
             "processed": (out.get("calculator_advisor") or {}).get("processed", 0),
