@@ -107,6 +107,91 @@ class TestPrintWarning:
 
 
 class TestCycleLogStages:
+    def test_live_universe_refresh_skips_fresh_snapshot(self, tmp_path, monkeypatch) -> None:
+        from src.research_lab import live_universe_selector
+
+        now = 1000.0
+        discovery = tmp_path / "discovery"
+        discovery.mkdir()
+        (discovery / "live_universe.json").write_text(
+            json.dumps({
+                "schema": "live_universe.v1",
+                "generated_at": now - 60,
+                "detail": {"fresh_movers": [{"symbol": "AAA_USDT_SWAP"}]},
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            live_universe_selector,
+            "run",
+            lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("fresh snapshot must not refresh")),
+        )
+
+        out = farm_loop._refresh_live_universe(
+            Namespace(live_universe_ttl_seconds=900, live_universe_top_n=12, no_live_universe_refresh=False),
+            tmp_path,
+            apply=True,
+            now=now,
+        )
+
+        assert out["status"] == "fresh"
+        assert out["refreshed"] is False
+        assert out["count"] == 1
+
+    def test_live_universe_refresh_updates_stale_snapshot(self, tmp_path, monkeypatch) -> None:
+        from src.research_lab import live_universe_selector
+
+        now = 10_000.0
+        discovery = tmp_path / "discovery"
+        discovery.mkdir()
+        (discovery / "live_universe.json").write_text(
+            json.dumps({
+                "schema": "live_universe.v1",
+                "generated_at": now - 10_000,
+                "detail": {"fresh_movers": [{"symbol": "OLD_USDT_SWAP"}]},
+            }),
+            encoding="utf-8",
+        )
+
+        def fake_run(_root, *, top_n_per_group, now):
+            assert top_n_per_group == 12
+            return {
+                "selected": {"fresh_movers": [{"symbol": "NEW_USDT_SWAP"}]},
+                "intake_events": [{"event_id": "e1"}],
+                "tickers_seen": 321,
+            }
+
+        def fake_write_snapshot(root, result, *, generated_at):
+            (Path(root) / "discovery" / "live_universe.json").write_text(
+                json.dumps({
+                    "schema": "live_universe.v1",
+                    "generated_at": generated_at,
+                    "detail": result["selected"],
+                }),
+                encoding="utf-8",
+            )
+
+        monkeypatch.setattr(live_universe_selector, "run", fake_run)
+        monkeypatch.setattr(live_universe_selector, "write_snapshot", fake_write_snapshot)
+        monkeypatch.setattr(
+            live_universe_selector,
+            "apply_intake",
+            lambda *_a, **_k: {"registered": 1, "duplicate": 0},
+        )
+
+        out = farm_loop._refresh_live_universe(
+            Namespace(live_universe_ttl_seconds=900, live_universe_top_n=12, no_live_universe_refresh=False),
+            tmp_path,
+            apply=True,
+            now=now,
+        )
+
+        assert out["status"] == "refreshed"
+        assert out["refreshed"] is True
+        assert out["count"] == 1
+        assert out["tickers_seen"] == 321
+        assert out["registered"] == 1
+
     def test_paper_telegram_config_default_is_dry_run(self) -> None:
         cfg = farm_loop._paper_telegram_delivery_config(
             Namespace(send_paper_telegram=False),
@@ -318,15 +403,20 @@ class TestCycleLogStages:
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES=12" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES=44" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES=12" in bat
+        assert "STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS=900" in bat
+        assert "STRATEGY_LAB_LIVE_UNIVERSE_TOP_N=12" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT=3" in bat
         assert "STRATEGY_LAB_FARM_MAX_VALIDATIONS=10" in bat
         assert "live_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%" in bat
         assert "network_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%" in bat
         assert "pfr_fetches=%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%" in bat
+        assert "live universe: ttl=%STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS%s" in bat
         assert "'--paper-signals-max-observe','%STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE%'" in bat
         assert "'--paper-signals-max-live-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%'" in bat
         assert "'--paper-signals-max-network-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%'" in bat
         assert "'--paper-signals-max-pfr-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%'" in bat
+        assert "'--live-universe-ttl-seconds','%STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS%'" in bat
+        assert "'--live-universe-top-n','%STRATEGY_LAB_LIVE_UNIVERSE_TOP_N%'" in bat
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat

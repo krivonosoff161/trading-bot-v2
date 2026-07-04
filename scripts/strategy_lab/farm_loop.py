@@ -176,6 +176,70 @@ def _discovery(args, private_root: Path, apply: bool):
     return snap, {"status": status, "age_seconds": age, "count": int(snap.get("count") or 0)}
 
 
+def _live_universe_snapshot_info(private_root: Path, now: float) -> dict:
+    path = Path(private_root) / "discovery" / "live_universe.json"
+    if not path.exists():
+        return {"status": "missing", "age_seconds": None, "count": 0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "invalid", "age_seconds": None, "count": 0}
+    generated_at = data.get("generated_at")
+    age_seconds: int | None = None
+    try:
+        age_seconds = max(0, int(float(now) - float(generated_at)))
+    except (TypeError, ValueError):
+        age_seconds = None
+    count = sum(len(rows or []) for rows in (data.get("detail") or {}).values())
+    return {"status": "loaded", "age_seconds": age_seconds, "count": int(count)}
+
+
+def _refresh_live_universe(args, private_root: Path, apply: bool, *, now: float | None = None) -> dict:
+    """Refresh the movement-ranked paper-signal universe when stale.
+
+    The regular discovery snapshot tracks which instruments exist. Paper signals use a separate
+    movement-ranked live_universe snapshot; if that goes stale, the paper lane burns fetch budget on
+    dead/no-data symbols. This refresh uses only the public OKX tickers endpoint.
+    """
+    now = time.time() if now is None else now
+    ttl = int(getattr(args, "live_universe_ttl_seconds", 15 * 60))
+    info = _live_universe_snapshot_info(private_root, now)
+    age = info.get("age_seconds")
+    is_fresh = age is not None and age < ttl and info.get("count", 0) > 0
+    if is_fresh:
+        return {**info, "status": "fresh", "refreshed": False, "ttl_seconds": ttl}
+    if not apply or getattr(args, "no_live_universe_refresh", False):
+        status = "stale_no_refresh" if info.get("count", 0) else info["status"]
+        return {**info, "status": status, "refreshed": False, "ttl_seconds": ttl}
+    try:
+        from src.research_lab.live_universe_selector import apply_intake, run, write_snapshot
+        top_n = int(getattr(args, "live_universe_top_n", 12))
+        result = run(private_root, top_n_per_group=top_n, now=now)
+        write_snapshot(private_root, result, generated_at=now)
+        applied = apply_intake(private_root, result.get("intake_events") or [], now=now)
+        selected = result.get("selected") or {}
+        count = sum(len(rows or []) for rows in selected.values())
+        return {
+            "status": "refreshed",
+            "refreshed": True,
+            "ttl_seconds": ttl,
+            "age_seconds": 0,
+            "count": int(count),
+            "tickers_seen": int(result.get("tickers_seen") or 0),
+            "intake_events": len(result.get("intake_events") or []),
+            "registered": int(applied.get("registered") or 0),
+            "duplicate": int(applied.get("duplicate") or 0),
+        }
+    except Exception as exc:  # noqa: BLE001 - stale refresh must not kill the farm
+        return {
+            **info,
+            "status": f"refresh_failed:{type(exc).__name__}",
+            "refreshed": False,
+            "ttl_seconds": ttl,
+            "error": str(exc)[:160],
+        }
+
+
 def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
     if not apply:
         return
@@ -770,6 +834,18 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                             "where": "ready_strategy_catalog",
                             "error": str(exc),
                         })
+                _write_loop_status(
+                    private_root,
+                    stage="live_universe_refresh",
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    details={
+                        "ttl_seconds": int(getattr(args, "live_universe_ttl_seconds", 15 * 60)),
+                        "top_n": int(getattr(args, "live_universe_top_n", 12)),
+                    },
+                )
+                out["live_universe"] = _refresh_live_universe(args, private_root, apply)
                 paper_provider = OkxPublicMarketDataProvider(
                     timeout=float(getattr(args, "paper_signals_fetch_timeout", 10.0))
                 )
@@ -1139,6 +1215,15 @@ def main() -> None:
                     help="per-request public OKX timeout used by --run-paper-signals")
     ap.add_argument("--paper-signals-timeframes", default="15m,1h,4h",
                     help="comma-separated paper-signal timeframes; default includes validator-heavy 4h PFR")
+    ap.add_argument("--live-universe-ttl-seconds", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS", str(15 * 60))),
+                    help=("treat discovery/live_universe.json as fresh for this many seconds before "
+                          "refreshing the movement-ranked paper-signal universe"))
+    ap.add_argument("--live-universe-top-n", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_LIVE_UNIVERSE_TOP_N", "12")),
+                    help="top symbols per live-universe group used to feed paper-signal generation")
+    ap.add_argument("--no-live-universe-refresh", action="store_true",
+                    help="never auto-refresh discovery/live_universe.json before paper-signal generation")
     ap.add_argument("--main-paper-runtime-limit", type=int, default=50,
                     help="max main-paper runtime queue items observed per --run-paper-signals cycle")
     ap.add_argument("--send-paper-telegram", action="store_true",
