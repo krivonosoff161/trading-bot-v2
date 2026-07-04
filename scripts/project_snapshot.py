@@ -547,6 +547,12 @@ def _print_paper_product_status() -> None:
                 f"pfr_skip={pfr.get('bridge_skip_reasons') or {}} "
                 f"last_pfr={pfr.get('last_cycle_pfr_counts') or {}}"
             )
+            if pfr.get("near_trigger_counts") or pfr.get("cycle_resource_reasons"):
+                print(
+                    "                "
+                    f"pfr_near={pfr.get('near_trigger_counts') or {}} "
+                    f"cycle_blockers={pfr.get('cycle_resource_reasons') or {}}"
+                )
 
 
 def main() -> None:

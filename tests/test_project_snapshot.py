@@ -224,6 +224,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
                 "bridge_instructions": 0,
                 "bridge_skip_reasons": {"missing_ready_strategy_id": 1},
                 "last_cycle_pfr_counts": {"pfr_rejected:no_breakout": 6},
+                "near_trigger_counts": {"pfr_near_trigger:breakout_gap_le_1pct": 1},
+                "cycle_resource_reasons": {"stale_data": 1},
             },
             "execution_allowed": False,
         }),
@@ -266,6 +268,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         "bridge_instructions": 0,
         "bridge_skip_reasons": {"missing_ready_strategy_id": 1},
         "last_cycle_pfr_counts": {"pfr_rejected:no_breakout": 6},
+        "near_trigger_counts": {"pfr_near_trigger:breakout_gap_le_1pct": 1},
+        "cycle_resource_reasons": {"stale_data": 1},
     }
     assert status["quality_report_exists"] is True
     assert status["execution_allowed"] is False
