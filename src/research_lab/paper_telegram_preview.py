@@ -49,6 +49,13 @@ MOJIBAKE_MARKERS = (
 NON_ACTIONABLE_TRADE_STATUSES = frozenset({"provider_error", "no_data", "pending_clock", "invalid"})
 ACTIONABLE_PAPER_SIGNAL_STATUSES = frozenset({"armed", "opened_paper"})
 ACTIONABLE_PRODUCT_TRADE_STATUSES = ACTIONABLE_PAPER_SIGNAL_STATUSES
+QUALITY_LABEL_RANK = {
+    "candidate_watch": 0,
+    "mixed": 1,
+    "sample_too_small": 2,
+    "needs_review": 3,
+    "weak_after_costs": 4,
+}
 
 
 @dataclass(frozen=True)
@@ -392,6 +399,47 @@ def _load_records(path: Path) -> tuple[list[dict[str, Any]], Path | None]:
     return list(data.get("items") or []), path
 
 
+def _quality_report_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
+
+
+def _family_quality(private_root: Path) -> dict[str, dict[str, Any]]:
+    path = _quality_report_path(private_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in data.get("families") or []:
+        if isinstance(item, dict) and str(item.get("family") or ""):
+            out[str(item["family"])] = item
+    return out
+
+
+def _product_preview_rank(row: dict[str, Any], family_quality: dict[str, dict[str, Any]]) -> tuple[Any, ...]:
+    family = str(row.get("setup_family") or "")
+    quality = family_quality.get(family) or {}
+    label = str(quality.get("quality_label") or "sample_too_small")
+    return (
+        0 if bool(row.get("live_ready")) else 1,
+        QUALITY_LABEL_RANK.get(label, 9),
+        0 if str(row.get("status") or "") == "opened_paper" else 1,
+        -int(quality.get("rows") or 0),
+        str(row.get("timeframe") or ""),
+        family,
+        str(row.get("source_signal_id") or ""),
+    )
+
+
+def _rank_product_preview_rows(private_root: Path, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    family_quality = _family_quality(private_root)
+    if not family_quality:
+        return rows, False
+    return sorted(rows, key=lambda row: _product_preview_rank(row, family_quality)), True
+
+
 def _load_paper_signal_candidates(path: Path) -> tuple[list[dict[str, Any]], Path | None]:
     if not path.exists():
         return [], None
@@ -482,6 +530,9 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
     previews: list[PaperTelegramPreview] = []
     skipped_rejected = 0
     skipped_non_actionable = 0
+    quality_ranked = False
+    if source_schema == "paper_product_trade_ledger.v1":
+        rows, quality_ranked = _rank_product_preview_rows(Path(private_root), rows)
     for row in rows:
         if source_schema == "main_paper_consumer.v1" and row.get("consumer_status") != "accepted_for_paper_watch":
             skipped_rejected += 1
@@ -539,6 +590,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "invalid": invalid,
         "skipped_rejected": skipped_rejected,
         "skipped_non_actionable": skipped_non_actionable,
+        "quality_ranked": quality_ranked,
         "items": [preview.to_dict() for preview in previews],
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),

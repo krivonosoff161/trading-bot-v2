@@ -147,6 +147,23 @@ def _write_product_trade_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
+def _write_quality_report(root: Path, families: list[dict]) -> None:
+    path = root / "state" / "derived" / "paper_product_quality_report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_quality_report.v1",
+                "families": families,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_paper_signal_snapshot(root: Path, rows: list[dict]) -> None:
     path = root / "state" / "derived" / "paper_signals.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +308,40 @@ def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     assert "missing_ready_strategy_id" in text
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
+
+
+def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
+    _write_quality_report(
+        tmp_path,
+        [
+            {"family": "continuation", "quality_label": "needs_review", "rows": 100},
+            {"family": "early_tp_tactical", "quality_label": "mixed", "rows": 80},
+        ],
+    )
+    _write_product_trade_snapshot(
+        tmp_path,
+        [
+            _product_trade_record(
+                paper_trade_id="paper_bad",
+                source_signal_id="sig_bad",
+                setup_family="continuation",
+            ),
+            _product_trade_record(
+                paper_trade_id="paper_better",
+                source_signal_id="sig_better",
+                setup_family="early_tp_tactical",
+            ),
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_product_trade_ledger.v1"
+    assert summary["quality_ranked"] is True
+    assert summary["rendered"] == 2
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["source_signal_id"] == "sig_better"
+    assert data["items"][1]["source_signal_id"] == "sig_bad"
 
 
 def test_preview_skips_non_actionable_product_trades(tmp_path):
