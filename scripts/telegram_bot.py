@@ -757,22 +757,6 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             _sym = snap.get("symbol", symbol)
             summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
-        if summary_text:
-            summary_message_id = await send_message_to(chat_id, summary_text)
-            try:
-                record_message_audit(
-                    chat_id=chat_id,
-                    direction="outgoing",
-                    mode="manual_analysis",
-                    event="client_summary",
-                    text=summary_text,
-                    symbol=symbol,
-                    delivery_status="sent" if summary_message_id is not None else "skipped_no_token",
-                    message_id=summary_message_id,
-                )
-            except Exception:
-                pass
-
         if png_path.exists():
             await send_photo_to(chat_id, str(png_path))
             try:
@@ -791,6 +775,22 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
         # Disclaimer + feedback buttons — for ENTRY and WAIT signals
+        if summary_text:
+            summary_message_id = await send_message_to(chat_id, summary_text)
+            try:
+                record_message_audit(
+                    chat_id=chat_id,
+                    direction="outgoing",
+                    mode="manual_analysis",
+                    event="client_summary",
+                    text=summary_text,
+                    symbol=symbol,
+                    delivery_status="sent" if summary_message_id is not None else "skipped_no_token",
+                    message_id=summary_message_id,
+                )
+            except Exception:
+                pass
+
         snap = json.loads(snap_path.read_text(encoding="utf-8"))
         ctx = snap.get("llm_context", {})
         try:
