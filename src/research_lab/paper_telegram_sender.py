@@ -228,6 +228,10 @@ def _status_digest_preview(
         pfr_funnel.get("cycle_resource_reasons"),
         dict,
     ) else {}
+    near_reasons = pfr_funnel.get("near_trigger_counts") if isinstance(
+        pfr_funnel.get("near_trigger_counts"),
+        dict,
+    ) else {}
     lifecycle = quality.get("active_signal_lifecycle") if isinstance(
         quality.get("active_signal_lifecycle"),
         dict,
@@ -254,6 +258,7 @@ def _status_digest_preview(
             f"catalog_ready=<code>{pfr_state.get('catalog_ready', 0)}</code> "
             f"generated=<code>{pfr_state.get('last_cycle_generated', 0)}</code>",
             f"<b>PFR reasons:</b> <code>{json.dumps(pfr_reasons, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>PFR near:</b> <code>{json.dumps(near_reasons, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>Cycle blockers:</b> <code>{json.dumps(cycle_reasons, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>Quality:</b> <code>{json.dumps(quality_labels, ensure_ascii=False, sort_keys=True)}</code>",
             f"<b>Outcomes:</b> <code>{json.dumps(outcomes, ensure_ascii=False, sort_keys=True)}</code>",
