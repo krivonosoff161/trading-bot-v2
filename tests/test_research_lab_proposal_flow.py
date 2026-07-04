@@ -22,7 +22,7 @@ def test_import_llm_proposals_handles_valid_and_invalid(tmp_path, monkeypatch):
             "requested_timeframe": "15m",
             "setup_family": "momentum_breakout",
             "symbols": ["SOL_USDT_SWAP"],
-            "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+            "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
             "max_variants": 6,
         },
         {"created_by": "llm_review", "hypothesis": "no family here"},  # invalid: missing setup_family
@@ -32,7 +32,7 @@ def test_import_llm_proposals_handles_valid_and_invalid(tmp_path, monkeypatch):
             "requested_timeframe": "15m",
             "setup_family": "momentum_breakout",
             "symbols": ["SOL_USDT_SWAP"],
-            "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+            "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
         },
     ]
     f = tmp_path / "llm_out.json"
@@ -65,7 +65,7 @@ def _validated(pid):
         "requested_timeframe": "15m",
         "setup_family": "momentum_breakout",
         "symbols": ["SOL_USDT_SWAP"],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+        "parameter_grid": {"momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
         "status": VALIDATED,
         "created_at": "2026-06-13T00:00:00+00:00",
     })

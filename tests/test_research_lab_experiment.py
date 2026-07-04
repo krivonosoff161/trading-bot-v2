@@ -59,6 +59,13 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert (out_dir / "llm_review_pack.json").exists()
     assert (out_dir / "llm_review_prompt.md").exists()
     assert "Strategy Lab Run" in (out_dir / "summary.md").read_text(encoding="utf-8")
+    payload = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert "trades" in payload["results"][0]
+    assert payload["results"][0]["trades_stored"] == len(payload["results"][0]["trades"])
+    assert payload["results"][0]["params"]["stop_pct"] > 0
+    assert payload["results"][0]["params"]["take_pct"] > 0
+    review_pack = json.loads((out_dir / "llm_review_pack.json").read_text(encoding="utf-8"))
+    assert "trades" not in review_pack["top_results"][0]
     vault = tmp_path / "private" / "obsidian-vault"
     assert (vault / "Runs").exists()
     assert list((vault / "Candidates").glob("*.md"))
@@ -78,6 +85,7 @@ def test_run_outputs_include_validation_and_registry(tmp_path):
                 {"lookback": 5, "threshold_pct": 0, "hold_bars": 2, "stop_pct": 5, "take_pct": 10}
             ],
         },
+        plan_meta={"group": "core_market", "timeframe_role": "intraday"},
         min_trades=1,
     )
 
@@ -89,11 +97,14 @@ def test_run_outputs_include_validation_and_registry(tmp_path):
     assert "regime_breakdown" in results[0].metrics
     csv_text = (out_dir / "candidates.csv").read_text(encoding="utf-8")
     assert "validation_status" in csv_text
+    metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["plan_meta"]["group"] == "core_market"
     registry_file = tmp_path / "private" / "candidate-registry" / "candidates.jsonl"
     assert registry_file.exists()
     entry = json.loads(registry_file.read_text(encoding="utf-8").splitlines()[0])
     assert entry["experiment_id"] == "unit_validation"
     assert entry["validation_status"] == results[0].validation_status
+    assert entry["plan_group"] == "core_market"
     pack = json.loads((out_dir / "llm_review_pack.json").read_text(encoding="utf-8"))
     assert pack["schema"] == "strategy_lab_llm_review_pack.v2"
     assert "validation_counts" in pack
@@ -323,6 +334,7 @@ def test_experiment_spec_loads_from_json(tmp_path):
                 "families": ["momentum_breakout"],
                 "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
                 "filters": {"volatility": ["medium", "high"]},
+                "plan_meta": {"group": "core_market", "timeframe_role": "intraday"},
             }
         ),
         encoding="utf-8",
@@ -333,3 +345,4 @@ def test_experiment_spec_loads_from_json(tmp_path):
     assert spec.experiment_id == "x"
     assert spec.parameter_grid["momentum_breakout"][0]["lookback"] == 3
     assert spec.filters == {"volatility": ["medium", "high"]}
+    assert spec.plan_meta["group"] == "core_market"

@@ -43,6 +43,7 @@ for _path_text in (_HB_ENV, str(_HB_VENDOR)):
         sys.path.insert(0, str(_path))
 
 try:
+    import backtest_sanity as _bs
     from backtest_sanity import (
         apply_costs,
         bootstrap_ci,
@@ -54,18 +55,70 @@ try:
     )
 
     _HAS_BACKTEST_SANITY = True
+    _BACKTEST_SANITY_PATH = getattr(_bs, "__file__", "")
 except ImportError:
     _HAS_BACKTEST_SANITY = False
+    _BACKTEST_SANITY_PATH = ""
 
 
 REPORTS_DIR = "hard_validation/reports"
 VERDICTS_DIR = "hard_validation/verdicts"
 
 
+class BridgeUnavailableError(RuntimeError):
+    """honest-backtest is not importable and degraded validation is not allowed.
+
+    Raised so that a missing/broken statistical engine fails LOUD instead of
+    masquerading as an ordinary ``NEEDS_MORE_DATA`` verdict. The vendored copy
+    lives at ``vendor/honest-backtest/src`` (see ``vendor/honest-backtest/VENDOR.md``).
+    """
+
+
+def _allow_degraded() -> bool:
+    """True only when the operator explicitly opts into degraded validation."""
+    value = os.environ.get("STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _missing_components() -> list[str]:
+    missing = []
+    if not _HAS_NUMPY:
+        missing.append("numpy")
+    if not _HAS_BACKTEST_SANITY:
+        missing.append("backtest-sanity")
+    return missing
+
+
+def ensure_bridge_available(*, strict: bool | None = None) -> None:
+    """Fail loud when the honest-backtest engine is unavailable.
+
+    By default (``strict=None``) this raises ``BridgeUnavailableError`` unless
+    ``STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION`` is set, so a clean checkout without
+    numpy/backtest_sanity cannot silently turn every candidate into NEEDS_MORE_DATA.
+    """
+    if _HAS_NUMPY and _HAS_BACKTEST_SANITY:
+        return
+    if strict is None:
+        strict = not _allow_degraded()
+    if strict:
+        missing = ", ".join(_missing_components())
+        raise BridgeUnavailableError(
+            f"honest-backtest bridge unavailable: missing {missing}. "
+            "Expected vendored copy at vendor/honest-backtest/src "
+            "(see vendor/honest-backtest/VENDOR.md); or pip install numpy. "
+            "Set STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION=1 to allow a degraded "
+            "NEEDS_MORE_DATA fallback instead of failing."
+        )
+
+
 def bridge_available() -> dict[str, Any]:
     return {
         "numpy": _HAS_NUMPY,
         "backtest_sanity": _HAS_BACKTEST_SANITY,
+        "available": _HAS_NUMPY and _HAS_BACKTEST_SANITY,
+        "degraded_allowed": _allow_degraded(),
+        "source": _BACKTEST_SANITY_PATH,
+        "vendored": "vendor" in _BACKTEST_SANITY_PATH.replace("\\", "/").lower(),
     }
 
 
@@ -79,6 +132,7 @@ def run_validation(
 
     Returns a summary dict with the verdict and report paths.
     """
+    ensure_bridge_available()
     if not _HAS_NUMPY or not _HAS_BACKTEST_SANITY:
         result = _bridge_unavailable(candidate)
         if not dry_run:
@@ -115,12 +169,19 @@ def run_validation_batch(
     *,
     dry_run: bool = True,
     limit: int = 50,
+    candidate_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run validation on all request files in a directory."""
+    ensure_bridge_available()
     if not requests_dir.exists():
         return {"total": 0, "validated": 0, "errors": 0}
 
-    request_files = sorted(requests_dir.glob("*.json"))[:limit]
+    if candidate_ids:
+        wanted = [str(cid) for cid in candidate_ids if str(cid)]
+        request_files = [requests_dir / f"{cid}.json" for cid in wanted]
+        request_files = [p for p in request_files if p.exists()]
+    else:
+        request_files = sorted(requests_dir.glob("*.json"))[:limit]
     results = []
     for rf in request_files:
         try:
@@ -184,6 +245,25 @@ def _extract_returns(candidate: CandidateForValidation) -> list[float]:
     return returns
 
 
+def _n_trials(candidate: CandidateForValidation) -> int:
+    """Number of parameter variants the candidate was selected from (>=1).
+
+    This is the multiple-testing trial count used to deflate significance: picking the
+    best of N variants inflates apparent significance, so a deeper sweep is penalized.
+    """
+    m = candidate.metrics or {}
+    runtime = m.get("runtime") if isinstance(m.get("runtime"), dict) else {}
+    for value in (runtime.get("n_variants_evaluated"), m.get("n_variants_evaluated"),
+                  m.get("variant_count"), m.get("n_trials")):
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            continue
+        if n >= 1:
+            return n
+    return 1
+
+
 def _run_all_checks(
     candidate: CandidateForValidation,
     returns: list[float],
@@ -191,7 +271,7 @@ def _run_all_checks(
     checks = []
     checks.append(_check_costs(candidate, returns))
     checks.append(_check_splits(returns))
-    checks.append(_check_significance(returns))
+    checks.append(_check_significance(returns, n_trials=_n_trials(candidate)))
     checks.append(_check_robustness(returns))
     checks.append(_check_overfit(candidate, returns))
     checks.append(_check_forward_readiness(candidate))
@@ -258,24 +338,34 @@ def _check_splits(returns: list[float]) -> dict[str, Any]:
     }
 
 
-def _check_significance(returns: list[float]) -> dict[str, Any]:
+def _check_significance(returns: list[float], n_trials: int = 1) -> dict[str, Any]:
     arr = _np.asarray(returns, dtype=float)
     boot = bootstrap_ci(arr, n_boot=1000, seed=42)
     perm = permutation_test(arr, n_perm=1000, seed=42)
+    p_raw = float(perm["p_value"])
+    n = max(1, int(n_trials))
+    # Sidak family-wise adjustment for selecting the best of n variants: a deeper sweep
+    # needs a stronger raw p to stay significant.
+    p_adj = 1.0 - (1.0 - p_raw) ** n if n > 1 else p_raw
+    p_adj = min(1.0, max(0.0, p_adj))
     ci_above_zero = boot[1] > 0
-    p_ok = perm["p_value"] < 0.10
-    passed = ci_above_zero or p_ok
+    # Stricter than before: require BOTH a positive bootstrap lower bound AND an
+    # adjusted-significant permutation p (was an OR with a loose p<0.10).
+    passed = bool(ci_above_zero and p_adj < 0.05)
     return {
         "check_name": "significance",
         "passed": passed,
         "details": {
             "bootstrap_ci": [boot[1], boot[2]],
-            "permutation_p": perm["p_value"],
+            "permutation_p": p_raw,
+            "permutation_p_adjusted": p_adj,
+            "n_trials": n,
             "point_estimate": boot[0],
         },
         "message": (
             f"Bootstrap CI [{boot[1]:.4f}, {boot[2]:.4f}], "
-            f"permutation p={perm['p_value']:.4f}"
+            f"permutation p={p_raw:.4f} (adj {p_adj:.4f} over {n} trials); "
+            "pass needs CI>0 AND adj-p<0.05"
         ),
     }
 

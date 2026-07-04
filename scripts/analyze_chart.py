@@ -21,14 +21,11 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent.parent))
 load_dotenv()
 
-from src.exchange.okx_client import OKXClient
-from src.strategy.chart_renderer import generate_chart_png
-from src.strategy.signal_engine import (
-    _PAIR_PARAMS,
-    _PAIR_PARAMS_DEFAULT,
+from src.exchange.okx_client import OKXClient  # noqa: E402
+from src.strategy.chart_renderer import generate_chart_png  # noqa: E402
+from src.strategy.signal_engine import (  # noqa: E402
     _format_telegram,
     _json_safe,
-    _mode_cfg,
     build_analysis_snapshot,
     compute_signal,
     confirm_label,
@@ -60,6 +57,41 @@ def _safe_print(text: str = "") -> None:
         encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
         sys.stdout.buffer.write((str(text) + "\n").encode(encoding, errors="replace"))
         sys.stdout.buffer.flush()
+
+
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def should_use_llm_for_delivery(snapshot: dict) -> bool:
+    """Return whether manual analysis should spend an LLM call for the card."""
+    ctx = snapshot.get("llm_context", {}) if isinstance(snapshot, dict) else {}
+    entry_signal = str(ctx.get("entry_signal") or "").upper()
+    if entry_signal == "NO_TRADE":
+        return _env_enabled("PRODUCT_ANALYZER_LLM_FOR_NO_TRADE", default=False)
+    return True
+
+
+def manual_chart_plan(result: object) -> dict[str, object]:
+    """Document the chart/decision timeframes used by the legacy analyzer.
+
+    The current main analyzer computes entry, stop, and take-profit levels from
+    the 15m execution frame. 5m is only a trigger confirmation frame; 1H/4H are
+    context/veto frames. Rendering a 1H/4H chart for this engine would make the
+    levels look cleaner but less truthful.
+    """
+    trade_style = str(getattr(result, "trade_style", "") or "NO_TRADE")
+    return {
+        "primary_timeframe": "15m",
+        "trigger_timeframe": "5m",
+        "context_timeframes": ["1H", "4H"],
+        "render_label": "15m execution",
+        "trade_style": trade_style,
+        "reason": "legacy_main_engine_levels_are_15m; 1H/4H_are_context_veto_frames",
+    }
 
 
 async def run(
@@ -143,7 +175,9 @@ async def run(
     png_path = run_dir / f"{symbol}_chart.png"
     report_path.write_text(result.report_text + "\n", encoding="utf-8")
 
+    chart_plan = manual_chart_plan(result)
     snapshot = build_analysis_snapshot(symbol, captured_at_iso, result, open_interest=oi)
+    snapshot["chart_plan"] = chart_plan
     snap_path.write_text(json.dumps(_json_safe(snapshot), indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nSaved: {report_path}")
     print(f"Saved: {snap_path}")
@@ -164,19 +198,23 @@ async def run(
         entry_signal=result.entry_signal,
         direction=result.side,
         trade_style=result.trade_style,
+        tf_label=str(chart_plan["render_label"]),
     )
 
-    # Analyzer is a descriptive second-opinion product, not a trade gate:
-    # generate the client read for EVERY verdict (NO_TRADE has its own РЕЖИМ 3 template).
-    # Scout market backdrop is woven in for live captures only (stale for historical charts).
-    from src.utils.llm_formatter import generate_client_text
+    # Analyzer is a descriptive second-opinion product, not a trade gate.
+    # NO_TRADE uses the deterministic engine template by default to avoid slow/costly LLM calls.
+    llm_text = None
+    if should_use_llm_for_delivery(snapshot):
+        from src.utils.llm_formatter import generate_client_text
 
-    llm_image = str(png_path) if png_path.exists() else image_path
-    market_context = load_scout_bundle() if is_live else None
-    llm_text = await generate_client_text(
-        symbol, captured_at_iso, snapshot, llm_image,
-        client_summary=None, market_context=market_context,
-    )
+        llm_image = str(png_path) if png_path.exists() else image_path
+        market_context = load_scout_bundle() if is_live else None
+        llm_text = await generate_client_text(
+            symbol, captured_at_iso, snapshot, llm_image,
+            client_summary=None, market_context=market_context,
+        )
+    else:
+        print("LLM formatter skipped: NO_TRADE template path")
 
     delivery_text = llm_text if llm_text else result.engine_summary
     summary_path = run_dir / f"{symbol}_client_summary.txt"

@@ -11,7 +11,6 @@ import asyncio
 import json
 import os
 import sys
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,8 +28,6 @@ try:
 except ImportError:
     print("openpyxl не установлен: pip install openpyxl")
     sys.exit(1)
-
-from src.exchange.okx_client import OKXClient
 
 _ROOT               = Path(__file__).resolve().parent.parent
 SIGNAL_LOG          = _ROOT / "logs" / "signals" / "signal_log.jsonl"
@@ -61,6 +58,18 @@ ARCHIVE_DIRS        = [
 
 # Data roots для single-file лоадеров: живые logs/ (новое) + reset-архив (история).
 _DATA_ROOTS = [_ROOT / "logs", RESET_ARCHIVE]
+
+
+def _private_research_root() -> Path:
+    """Private Strategy Lab root for derived paper artifacts."""
+    return Path(os.getenv(
+        "TRADING_BOT_RESEARCH_ROOT",
+        str(Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"),
+    )).expanduser()
+
+
+def _paper_signal_training_path() -> Path:
+    return _private_research_root() / "state" / "derived" / "paper_signal_training.jsonl"
 
 
 def _jsonl_multi(rel: str) -> list:
@@ -116,6 +125,41 @@ def _load_jsonl(path: Path) -> list:
     return out
 
 
+def _load_paper_watch() -> list:
+    """Load derived paper-watch outcomes from the private research root.
+
+    This is intentionally a read-only JSONL loader. It does not use exchange clients,
+    account endpoints, Telegram, or LLM providers.
+    """
+    rows = []
+    for row in _load_jsonl(_paper_signal_training_path()):
+        if row.get("schema") != "PaperSignalTrainingRow.v1":
+            continue
+        rows.append({
+            "created_at": row.get("created_at", ""),
+            "symbol": row.get("symbol", ""),
+            "okx_inst_id": row.get("okx_inst_id", ""),
+            "timeframe": row.get("timeframe", ""),
+            "family": row.get("family", ""),
+            "side": row.get("side", ""),
+            "exit_mode": row.get("exit_mode", ""),
+            "status": row.get("status", ""),
+            "result": row.get("result", ""),
+            "net_pct": row.get("net_pct"),
+            "net_r": row.get("net_r"),
+            "mfe_pct": row.get("mfe_pct"),
+            "mae_pct": row.get("mae_pct"),
+            "capture": row.get("capture"),
+            "diagnosis": row.get("diagnosis", ""),
+            "risk_pct": row.get("risk_pct"),
+            "max_hold_minutes": row.get("max_hold_minutes"),
+            "source": row.get("source", ""),
+            "paper_only": bool(row.get("paper_only")),
+        })
+    rows.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return rows
+
+
 def _fmt_dt(ts_ms) -> str:
     if not ts_ms:
         return ""
@@ -157,8 +201,10 @@ def _dash_hdr(ws, row: int, col_start: int, cols: list) -> None:
 
 def _dw(ws, row: int, col: int, value, fill=None, font=None) -> None:
     cell = ws.cell(row=row, column=col, value=value)
-    if fill: cell.fill = fill
-    if font: cell.font = font
+    if fill:
+        cell.fill = fill
+    if font:
+        cell.font = font
 
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
@@ -173,7 +219,8 @@ def _load_screener() -> list:
     signal_files = [SIGNAL_LOG]
     label_files = [SIGNAL_LABELS]
     for d in ARCHIVE_DIRS:
-        if not d.exists(): continue
+        if not d.exists():
+            continue
         for p in d.glob("signal_log*.jsonl"):
             signal_files.append(p)
         for p in d.glob("signal_labels*.jsonl"):
@@ -232,7 +279,9 @@ def _calc_r_to_tp(entry, sl, tp, side: str):
     if entry is None or sl is None or tp is None:
         return None
     try:
-        entry = float(entry); sl = float(sl); tp = float(tp)
+        entry = float(entry)
+        sl = float(sl)
+        tp = float(tp)
     except (TypeError, ValueError):
         return None
     sl_dist = abs(entry - sl)
@@ -257,7 +306,8 @@ COST_PCT_RT = FEE_TAKER_PCT + FEE_MAKER_PCT + ENTRY_SLIP_PCT  # 0.10% round-trip
 def _cost_r(entry, sl) -> float:
     """Round-trip execution cost expressed in R (fraction of SL distance)."""
     try:
-        entry = float(entry); sl = float(sl)
+        entry = float(entry)
+        sl = float(sl)
     except (TypeError, ValueError):
         return 0.0
     if entry == 0:
@@ -273,7 +323,9 @@ def _r_from_exit(entry, sl, exit_price, side: str):
     if entry is None or sl is None or exit_price is None:
         return None
     try:
-        entry = float(entry); sl = float(sl); exit_price = float(exit_price)
+        entry = float(entry)
+        sl = float(sl)
+        exit_price = float(exit_price)
     except (TypeError, ValueError):
         return None
     sl_dist = abs(entry - sl)
@@ -350,13 +402,15 @@ def _load_pump() -> list:
     label_files  = [PUMP_LABELS_LOG]
     # Archive
     for d in [_ROOT / "logs_archive" / "09.05.2026" / "pump", RESET_ARCHIVE / "pump"]:
-        if not d.exists(): continue
+        if not d.exists():
+            continue
         for p in d.glob("pump_signals*.jsonl"):
             signal_files.append(p)
         for p in d.glob("pump_labels*.jsonl"):
             label_files.append(p)
     for d in [_ROOT / "logs_archive" / "pump"]:
-        if not d.exists(): continue
+        if not d.exists():
+            continue
         for p in d.glob("pump_signals*.jsonl"):
             signal_files.append(p)
 
@@ -364,7 +418,8 @@ def _load_pump() -> list:
     entries: dict = {}
     for f in signal_files:
         for r in _load_jsonl(f):
-            if r.get("type") != "ENTRY": continue
+            if r.get("type") != "ENTRY":
+                continue
             sid = r.get("signal_id", "")
             if sid and sid not in entries:
                 entries[sid] = r
@@ -518,13 +573,16 @@ def _load_all_simulator_signals() -> list:
 
 
 async def _fetch_positions_async() -> list:
+    if os.getenv("JOURNAL_ENABLE_PRIVATE_FILLS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        print("Ручные: private OKX fills skipped (set JOURNAL_ENABLE_PRIVATE_FILLS=1 to opt in)")
+        return []
     api_key    = os.getenv("OKX_API_KEY", "")
     secret_key = os.getenv("OKX_SECRET_KEY", "")
     passphrase = os.getenv("OKX_PASSPHRASE", "")
     is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1"
     if not api_key:
         return []
-    client = OKXClient(api_key, secret_key, passphrase, is_demo=is_demo)
+    client = _create_okx_client(api_key, secret_key, passphrase, is_demo=is_demo)
     try:
         inst_ids: set = set()
         after = None
@@ -552,6 +610,12 @@ async def _fetch_positions_async() -> list:
         return positions
     finally:
         await client.close()
+
+
+def _create_okx_client(api_key: str, secret_key: str, passphrase: str, *, is_demo: bool):
+    from src.exchange.okx_client import OKXClient
+
+    return OKXClient(api_key, secret_key, passphrase, is_demo=is_demo)
 
 
 def _load_real() -> list:
@@ -619,13 +683,13 @@ def _build_screener(wb, rows: list) -> None:
     # Summary block using Excel formulas — live, always up to date
     sr = len(rows) + 3
     summary = [
-        ("Всего сигналов", f"=COUNTA(A2:A10000)"),
-        ("TP",             f'=COUNTIF(J2:J10000,"TP")'),
-        ("SL",             f'=COUNTIF(J2:J10000,"SL")'),
-        ("TIME_EXIT",      f'=COUNTIF(J2:J10000,"TIME_EXIT")'),
-        ("WR% (TP vs SL)", f'=IF(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL")=0,"",'
-                           f'ROUND(COUNTIF(J2:J10000,"TP")/(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL"))*100,1))'),
-        ("Avg R",          f'=IF(COUNTA(K2:K10000)=0,"",ROUND(AVERAGE(K2:K10000),2))'),
+        ("Всего сигналов", "=COUNTA(A2:A10000)"),
+        ("TP",             '=COUNTIF(J2:J10000,"TP")'),
+        ("SL",             '=COUNTIF(J2:J10000,"SL")'),
+        ("TIME_EXIT",      '=COUNTIF(J2:J10000,"TIME_EXIT")'),
+        ("WR% (TP vs SL)", '=IF(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL")=0,"",'
+                           'ROUND(COUNTIF(J2:J10000,"TP")/(COUNTIF(J2:J10000,"TP")+COUNTIF(J2:J10000,"SL"))*100,1))'),
+        ("Avg R",          '=IF(COUNTA(K2:K10000)=0,"",ROUND(AVERAGE(K2:K10000),2))'),
     ]
     for i, (lbl, val) in enumerate(summary):
         ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
@@ -891,7 +955,6 @@ def _build_pump(wb, rows: list) -> None:
     n = len(rows)
     if n:
         n_tp   = sum(1 for r in rows if r["outcome"] == "TP")
-        n_sl   = sum(1 for r in rows if r["outcome"] == "SL")
         wr     = n_tp / n * 100
         wins   = [r["net_pnl"] for r in rows if r["outcome"] == "TP"  and r["net_pnl"] is not None]
         losses = [abs(r["net_pnl"]) for r in rows if r["outcome"] == "SL" and r["net_pnl"] is not None]
@@ -1014,14 +1077,14 @@ def _build_real(wb, rows: list) -> None:
     # Summary block — Excel formulas, column G=net_pnl$, I=hold_min
     sr = max(len(rows), 1) + 3
     summary = [
-        ("Всего позиций",   f"=COUNTA(A2:A10000)"),
-        ("Побед",           f'=COUNTIF(G2:G10000,">0")'),
-        ("Потерь",          f'=COUNTIF(G2:G10000,"<0")'),
-        ("NET P&L$",        f"=ROUND(SUM(G2:G10000),2)"),
-        ("Прибыль$",        f'=ROUND(SUMIF(G2:G10000,">0",G2:G10000),2)'),
-        ("Убыток$",         f'=ROUND(SUMIF(G2:G10000,"<0",G2:G10000),2)'),
-        ("Avg hold WIN(мин)",  f'=ROUND(AVERAGEIF(G2:G10000,">0",I2:I10000),0)'),
-        ("Avg hold LOSS(мин)", f'=ROUND(AVERAGEIF(G2:G10000,"<0",I2:I10000),0)'),
+        ("Всего позиций",   "=COUNTA(A2:A10000)"),
+        ("Побед",           '=COUNTIF(G2:G10000,">0")'),
+        ("Потерь",          '=COUNTIF(G2:G10000,"<0")'),
+        ("NET P&L$",        "=ROUND(SUM(G2:G10000),2)"),
+        ("Прибыль$",        '=ROUND(SUMIF(G2:G10000,">0",G2:G10000),2)'),
+        ("Убыток$",         '=ROUND(SUMIF(G2:G10000,"<0",G2:G10000),2)'),
+        ("Avg hold WIN(мин)",  '=ROUND(AVERAGEIF(G2:G10000,">0",I2:I10000),0)'),
+        ("Avg hold LOSS(мин)", '=ROUND(AVERAGEIF(G2:G10000,"<0",I2:I10000),0)'),
     ]
     for i, (lbl, val) in enumerate(summary):
         ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
@@ -1223,9 +1286,11 @@ def _agg_by_day(rows: list, value_key: str) -> tuple[list, list, list]:
     by_day: dict[str, float] = {}
     for row in rows:
         dt = row.get("dt")
-        if not dt: continue
+        if not dt:
+            continue
         val = row.get(value_key)
-        if val is None: continue
+        if val is None:
+            continue
         try:
             val = float(val)
         except (TypeError, ValueError):
@@ -1396,7 +1461,8 @@ def _build_charts(wb, main_ws_rows: list, bb_fade_rows: list, pump_rows: list) -
         for r in pump_rows:
             h = r.get("hour")
             o = r.get("outcome")
-            if h is None or o not in ("TP", "SL"): continue
+            if h is None or o not in ("TP", "SL"):
+                continue
             hour_stats[h][o] += 1
 
         bar_row = 80
@@ -1429,6 +1495,75 @@ def _build_charts(wb, main_ws_rows: list, bb_fade_rows: list, pump_rows: list) -
     _set_widths(ws, [20] + [10]*9 + [4] + [20] + [10]*8)
 
 
+def _build_paper_watch(wb, rows: list) -> None:
+    """Paper-watch outcomes from the private Strategy Lab derived export."""
+    ws = wb.create_sheet("Paper Watch")
+    _hdr(ws, 1, [
+        "Created", "Symbol", "OKX", "TF", "Family", "Side", "Exit mode", "Status",
+        "Result", "Net %", "Net R", "MFE %", "MAE %", "Capture", "Diagnosis",
+        "Risk %", "Hold min", "Source", "Paper only",
+    ])
+    for r, row in enumerate(rows, 2):
+        vals = [
+            row["created_at"], row["symbol"], row["okx_inst_id"], row["timeframe"],
+            row["family"], row["side"], row["exit_mode"], row["status"],
+            row["result"], row["net_pct"], row["net_r"], row["mfe_pct"],
+            row["mae_pct"], row["capture"], row["diagnosis"], row["risk_pct"],
+            row["max_hold_minutes"], row["source"], row["paper_only"],
+        ]
+        for c, val in enumerate(vals, 1):
+            cell = ws.cell(row=r, column=c, value=val)
+            if c in (10, 11) and isinstance(val, (int, float)):
+                if val > 0:
+                    cell.fill = F_TP
+                elif val < 0:
+                    cell.fill = F_SL
+
+    sr = len(rows) + 3
+    summary = [
+        ("Rows", len(rows)),
+        ("Positive net", f'=COUNTIF(J2:J{max(sr - 2, 2)},">0")'),
+        ("Negative net", f'=COUNTIF(J2:J{max(sr - 2, 2)},"<0")'),
+        ("Avg net %", f'=IF(COUNTA(J2:J{max(sr - 2, 2)})=0,"",ROUND(AVERAGE(J2:J{max(sr - 2, 2)}),3))'),
+        ("Avg net R", f'=IF(COUNTA(K2:K{max(sr - 2, 2)})=0,"",ROUND(AVERAGE(K2:K{max(sr - 2, 2)}),3))'),
+    ]
+    for i, (lbl, val) in enumerate(summary):
+        ws.cell(row=sr + i, column=1, value=lbl).fill = F_SUM
+        ws.cell(row=sr + i, column=1).font = FONT_BOLD
+        ws.cell(row=sr + i, column=2, value=val).fill = F_SUM
+
+    family_start = sr
+    ws.cell(row=family_start, column=4, value="Family").fill = F_SUM
+    ws.cell(row=family_start, column=5, value="Count").fill = F_SUM
+    by_family: dict[str, int] = {}
+    by_diag: dict[str, int] = {}
+    by_result: dict[str, int] = {}
+    for row in rows:
+        by_family[row["family"]] = by_family.get(row["family"], 0) + 1
+        by_diag[row["diagnosis"]] = by_diag.get(row["diagnosis"], 0) + 1
+        by_result[row["result"]] = by_result.get(row["result"], 0) + 1
+    for i, (name, count) in enumerate(sorted(by_family.items(), key=lambda kv: (-kv[1], kv[0]))[:20], 1):
+        ws.cell(row=family_start + i, column=4, value=name)
+        ws.cell(row=family_start + i, column=5, value=count)
+
+    diag_start = sr
+    ws.cell(row=diag_start, column=7, value="Diagnosis").fill = F_SUM
+    ws.cell(row=diag_start, column=8, value="Count").fill = F_SUM
+    for i, (name, count) in enumerate(sorted(by_diag.items(), key=lambda kv: (-kv[1], kv[0]))[:20], 1):
+        ws.cell(row=diag_start + i, column=7, value=name)
+        ws.cell(row=diag_start + i, column=8, value=count)
+
+    result_start = sr
+    ws.cell(row=result_start, column=10, value="Result").fill = F_SUM
+    ws.cell(row=result_start, column=11, value="Count").fill = F_SUM
+    for i, (name, count) in enumerate(sorted(by_result.items(), key=lambda kv: (-kv[1], kv[0]))[:20], 1):
+        ws.cell(row=result_start + i, column=10, value=name)
+        ws.cell(row=result_start + i, column=11, value=count)
+
+    _set_widths(ws, [20, 12, 18, 7, 22, 8, 14, 14, 12, 9, 8, 8, 8, 8, 20, 8, 9, 12, 10])
+    ws.freeze_panes = "A2"
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def build() -> None:
@@ -1440,6 +1575,7 @@ def build() -> None:
     impulse   = _load_impulse()
     main_impulse = _load_main_impulse()
     real      = _load_real()
+    paper_watch = _load_paper_watch()
 
     wb = openpyxl.Workbook()
     _build_screener(wb, screener)
@@ -1452,6 +1588,7 @@ def build() -> None:
     _build_real(wb, real)
     _build_dashboard(wb)
     _build_charts(wb, main_ws, bb_fade, pump)
+    _build_paper_watch(wb, paper_watch)
 
     wb.save(JOURNAL_PATH)
     n_labeled = sum(1 for r in screener if r["outcome"])

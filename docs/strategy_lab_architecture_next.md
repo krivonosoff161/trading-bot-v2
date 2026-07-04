@@ -1,8 +1,6 @@
 # Strategy Lab — Next Architecture (foundation pass)
 
-Date: 2026-06-13. Status: foundation modules built and tested, **not yet wired
-into the worker/runner**. This document describes the direction and the pieces
-that now exist; it makes no profitability claims.
+Date: 2026-06-13. Status: **HISTORICAL / SUPERSEDED** by the active `farm_loop` lifecycle. See `docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`, and `docs/farm_ownership_map.md` for the current operator path. This document describes an earlier foundation pass and makes no profitability claims.
 
 ## Why
 

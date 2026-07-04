@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.candidate_registry import registry_path, registry_summary  # noqa: E402
+from src.research_lab.farm_cockpit import build_cockpit  # noqa: E402
 from src.research_lab.llm_provider import today_usage  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.proposal_store import load_proposals, proposals_path, rejection_reason_counts, status_counts  # noqa: E402
@@ -84,6 +85,7 @@ def generate_morning_report(private_root: Path) -> dict:
     loop = loop_summary(loop_report)
 
     snapshot = dashboard_snapshot(default_db_path(private_root))
+    cockpit = build_cockpit(private_root)
     queue_counts = snapshot.get("queue_counts") or {}
     candidates = snapshot.get("candidates") or []
     usage = today_usage(private_root)
@@ -173,6 +175,10 @@ def generate_morning_report(private_root: Path) -> dict:
             "reports": _count_files(private_root, "setup_library/reports", "*.md"),
             "index": _count_jsonl_rows(private_root, "setup_library", "setup_index.jsonl"),
         },
+        "farm_core": {
+            "lifecycle": (cockpit.get("lifecycle") or {}),
+            "results": (cockpit.get("results") or {}),
+        },
         "proposal_reject_reasons": prop_reject_reasons,
         "stale_hints": stale,
         "stop_hint": stop_hint,
@@ -242,6 +248,16 @@ def _print_report(report: dict) -> None:
           f"verdicts={hv['verdicts']}, feedback={hv['feedback']}")
     sl = report["setup_library"]
     print(f"Setup library: cards={sl['cards']}, reports={sl['reports']}, index={sl['index']}")
+    fc = report.get("farm_core") or {}
+    lc = fc.get("lifecycle") or {}
+    rs = fc.get("results") or {}
+    if lc.get("available"):
+        print(f"Farm core: unique={lc.get('unique_candidates', 0)}, "
+              f"tasks={_fmt_counts(lc.get('by_state'))}, "
+              f"hard={_fmt_counts(lc.get('validation'))}, "
+              f"paper={_fmt_counts(lc.get('paper_status'))}")
+        print(f"Paper outcomes: {rs.get('paper_outcomes', 0)} "
+              f"(farm paper status: {_fmt_counts(rs.get('paper_status'))})")
     if report.get("proposal_reject_reasons"):
         print(f"  Rejection reasons: {_fmt_counts(report['proposal_reject_reasons'])}")
 

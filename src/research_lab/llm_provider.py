@@ -17,6 +17,7 @@ Env (all optional; default = no network / export-only):
 - STRATEGY_LAB_LLM_API_KEY_ENV  (NAME of the env var holding the key; default STRATEGY_LAB_LLM_API_KEY)
 - STRATEGY_LAB_LLM_MODEL_CHEAP
 - STRATEGY_LAB_LLM_TIMEOUT (seconds), STRATEGY_LAB_LLM_RATE_RUB_PER_1K
+- STRATEGY_LAB_OLLAMA_NUM_CTX, STRATEGY_LAB_OLLAMA_NUM_PREDICT
 If the STRATEGY_LAB_* provider fields are absent, the lab may reuse scanner-style
 aliases (LLM_PROVIDER, ALIBABA_BASE_URL, ALIBABA_API_KEY, LLM_CHEAP_MODEL), but
 only after STRATEGY_LAB_LLM_ENABLED=1 is explicitly set.
@@ -44,6 +45,8 @@ ENV_API_KEY_ENV = "STRATEGY_LAB_LLM_API_KEY_ENV"
 ENV_MODEL_CHEAP = "STRATEGY_LAB_LLM_MODEL_CHEAP"
 ENV_TIMEOUT = "STRATEGY_LAB_LLM_TIMEOUT"
 ENV_RATE = "STRATEGY_LAB_LLM_RATE_RUB_PER_1K"
+ENV_OLLAMA_NUM_CTX = "STRATEGY_LAB_OLLAMA_NUM_CTX"
+ENV_OLLAMA_NUM_PREDICT = "STRATEGY_LAB_OLLAMA_NUM_PREDICT"
 DEFAULT_API_KEY_ENV = "STRATEGY_LAB_LLM_API_KEY"
 SCANNER_ENV_PROVIDER = "LLM_PROVIDER"
 SCANNER_ENV_ALIBABA_BASE_URL = "ALIBABA_BASE_URL"
@@ -54,6 +57,8 @@ OPENAI_COMPATIBLE = {"alibaba", "qwen", "openai-compatible", "openai"}
 LOCAL_OLLAMA = {"ollama", "ollama-local"}
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_OLLAMA_TIMEOUT = 120.0
+DEFAULT_OLLAMA_NUM_CTX = 2048
+DEFAULT_OLLAMA_NUM_PREDICT = 192
 DEFAULT_RATE_RUB_PER_1K = 0.5  # fallback cost model, mirrors the scanner's RUB style
 _USER_AGENT = "strategy-lab-research/1.0 (+llm-proposals)"
 
@@ -190,12 +195,16 @@ class OllamaProposalProvider:
         base_url: str,
         model: str,
         timeout: float = DEFAULT_TIMEOUT,
+        num_ctx: int = DEFAULT_OLLAMA_NUM_CTX,
+        num_predict: int = DEFAULT_OLLAMA_NUM_PREDICT,
         http_post: HttpPost | None = None,
     ):
         self.configured = bool(base_url and model)
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._model = model
         self._timeout = float(timeout)
+        self._num_ctx = max(512, int(num_ctx))
+        self._num_predict = max(32, int(num_predict))
         self._http_post = http_post or _default_http_post
 
     def generate(self, system: str, user: str) -> tuple[str, LLMUsage]:
@@ -207,6 +216,10 @@ class OllamaProposalProvider:
             "stream": False,
             "temperature": 0,
             "response_format": {"type": "json_object"},
+            "options": {
+                "num_ctx": self._num_ctx,
+                "num_predict": self._num_predict,
+            },
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
         try:
@@ -296,6 +309,8 @@ def load_provider(
             base_url=base_url,
             model=model,
             timeout=float(env.get(ENV_TIMEOUT, DEFAULT_OLLAMA_TIMEOUT) or DEFAULT_OLLAMA_TIMEOUT),
+            num_ctx=int(float(env.get(ENV_OLLAMA_NUM_CTX, DEFAULT_OLLAMA_NUM_CTX) or DEFAULT_OLLAMA_NUM_CTX)),
+            num_predict=int(float(env.get(ENV_OLLAMA_NUM_PREDICT, DEFAULT_OLLAMA_NUM_PREDICT) or DEFAULT_OLLAMA_NUM_PREDICT)),
             http_post=http_post,
         )
     return NullProposalProvider()

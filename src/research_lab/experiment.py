@@ -35,6 +35,28 @@ GPU_SUPPORTED_SIMULATION_MODES = ("fixed_sl_tp_hold_long_short",)
 
 COST_STRESS_MULT = 1.5  # validator stress: costs scaled by this factor
 
+# A family's required_data token -> (candle field that proves it's present, NEEDS status).
+# When a required field is absent on every bar, the family is data-starved: it is
+# classified NEEDS_<...>_DATA instead of being presented as an active (and rejected) edge.
+_REQUIRED_DATA_FIELD = {
+    "oi": ("oi", "NEEDS_OI_DATA"),
+    "funding": ("funding", "NEEDS_FLOW_DATA"),
+    "microstructure": ("obi_top5", "NEEDS_MICRO_DATA"),
+}
+
+
+def missing_required_data(family: str, candles: list[dict[str, Any]]) -> str | None:
+    """NEEDS_<...>_DATA status if the family needs a candle field that is absent, else None."""
+    try:
+        required = get_strategy(family).required_data
+    except ValueError:
+        return None
+    for token in required:
+        field_name, status = _REQUIRED_DATA_FIELD.get(token, (None, None))
+        if field_name and not any(c.get(field_name) is not None for c in candles):
+            return status
+    return None
+
 
 @dataclass(frozen=True)
 class ExperimentSpec:
@@ -51,6 +73,7 @@ class ExperimentSpec:
     filters: dict[str, list[str]] = field(default_factory=dict)
     regime_params: dict[str, Any] = field(default_factory=dict)
     event_context: dict[str, Any] = field(default_factory=dict)
+    plan_meta: dict[str, Any] = field(default_factory=dict)
     timeframe: str = "1d"
     backend: str = "cpu"
 
@@ -71,6 +94,7 @@ class ExperimentSpec:
             filters={str(k): [str(x) for x in v] for k, v in (data.get("filters") or {}).items()},
             regime_params=dict(data.get("regime_params") or {}),
             event_context=dict(data.get("event_context") or {}),
+            plan_meta=dict(data.get("plan_meta") or {}),
             timeframe=str(data.get("timeframe") or "1d"),
             backend=str(data.get("backend") or "cpu"),
         )
@@ -85,11 +109,17 @@ class RunResult:
     metrics: dict[str, Any]
     decision: str
     reasons: list[str]
+    trades: list[dict[str, Any]] = field(default_factory=list)
     validation_status: str = ""
     validation_reasons: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     next_action: str = ""
     regime_summary: dict[str, Any] = field(default_factory=dict)
+
+
+# Optional flow/microstructure fields carried through to the feature layer when the
+# prepared file was enriched (e.g. by enrich_flow_data / the loop's funding enricher).
+_OPTIONAL_CANDLE_FIELDS = ("funding", "oi", "index_px", "obi_top5", "spread_bps", "trade_delta_100")
 
 
 def load_candles(path: Path) -> list[dict[str, float | int | str]]:
@@ -99,19 +129,25 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
         if not isinstance(row, dict):
             continue
         try:
-            out.append(
-                {
-                    "ts": int(row["ts"]),
-                    "date": str(row.get("date") or ""),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "vol": float(row.get("vol") or 0.0),
-                }
-            )
+            candle: dict[str, float | int | str] = {
+                "ts": int(row["ts"]),
+                "date": str(row.get("date") or ""),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "vol": float(row.get("vol") or 0.0),
+            }
         except (KeyError, TypeError, ValueError):
             continue
+        for flow_field in _OPTIONAL_CANDLE_FIELDS:
+            value = row.get(flow_field)
+            if value is not None:
+                try:
+                    candle[flow_field] = float(value)
+                except (TypeError, ValueError):
+                    pass
+        out.append(candle)
     return sorted(out, key=lambda r: int(r["ts"]))
 
 
@@ -257,8 +293,10 @@ def finalize_trade(
     direction = 1 if side == "long" else -1
     ret_pct = direction * (exit_price / entry - 1) * 100
     net_pct = ret_pct - cost_pct * 100
-    mfe_pct, mae_pct = _trade_excursions(candles, idx, actual_exit_idx, entry, side)
+    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(candles, idx, actual_exit_idx, entry, side)
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
+    bars_held = int(actual_exit_idx - idx)
+    adverse_first = mae_off < mfe_off
     return {
         "entry_ts": candles[idx]["ts"],
         "exit_ts": candles[actual_exit_idx]["ts"],
@@ -272,7 +310,53 @@ def finalize_trade(
         "mfe_pct": round(mfe_pct, 4),
         "mae_pct": round(mae_pct, 4),
         "capture_of_mfe": capture,
+        # Trade-path instrumentation (descriptive; computed over the ALREADY-decided hold
+        # window, so it never changes the exit decision and adds no look-ahead).
+        "bars_held": bars_held,
+        "time_to_mfe": int(mfe_off),
+        "time_to_mae": int(mae_off),
+        "tp_before_sl": True if outcome == "take" else (False if outcome == "stop" else None),
+        "bars_to_tp": bars_held if outcome == "take" else None,
+        "bars_to_sl": bars_held if outcome == "stop" else None,
+        "adverse_before_favorable": bool(adverse_first),
+        "path_quality": _path_quality(mfe_pct, capture, adverse_first),
     }
+
+
+def _path_quality(mfe_pct: float, capture: float, adverse_before_favorable: bool) -> str:
+    """One-word path label for the outcome-memory drill (wrong_exit = 'gave_back')."""
+    if mfe_pct <= 0:
+        return "no_move"
+    if capture >= 0.7:
+        return "clean_capture"
+    if capture < 0.3:
+        return "gave_back"          # the move happened but the exit gave it back (wrong_exit)
+    return "heat_first" if adverse_before_favorable else "partial"
+
+
+def _trade_path(
+    candles: list[dict[str, Any]],
+    entry_idx: int,
+    exit_idx: int,
+    entry: float,
+    side: str,
+) -> tuple[float, float, int, int]:
+    """MFE/MAE magnitude (pct of entry) AND the bar offset where each occurred, over the
+    realized hold window [entry_idx, exit_idx]. Descriptive only — no look-ahead beyond the
+    already-decided exit. Returns (mfe_pct, mae_pct, mfe_bar_offset, mae_bar_offset)."""
+    hi = lo = None
+    hi_off = lo_off = 0
+    for off, j in enumerate(range(entry_idx, exit_idx + 1)):
+        h, low = float(candles[j]["high"]), float(candles[j]["low"])
+        if hi is None or h > hi:
+            hi, hi_off = h, off
+        if lo is None or low < lo:
+            lo, lo_off = low, off
+    if side == "long":
+        favorable, adverse, fav_off, adv_off = (hi - entry) / entry * 100, (entry - lo) / entry * 100, hi_off, lo_off
+    else:
+        favorable, adverse, fav_off, adv_off = (entry - lo) / entry * 100, (hi - entry) / entry * 100, lo_off, hi_off
+    return max(0.0, favorable), max(0.0, adverse), fav_off, adv_off
 
 
 def _trade_excursions(
@@ -282,14 +366,9 @@ def _trade_excursions(
     entry: float,
     side: str,
 ) -> tuple[float, float]:
-    """Max favorable / adverse excursion (pct of entry) over the realized hold window."""
-    hi = max(float(candles[j]["high"]) for j in range(entry_idx, exit_idx + 1))
-    lo = min(float(candles[j]["low"]) for j in range(entry_idx, exit_idx + 1))
-    if side == "long":
-        favorable, adverse = (hi - entry) / entry * 100, (entry - lo) / entry * 100
-    else:
-        favorable, adverse = (entry - lo) / entry * 100, (hi - entry) / entry * 100
-    return max(0.0, favorable), max(0.0, adverse)
+    """Backward-compatible (mfe, mae) magnitudes; ``_trade_path`` is the timed version."""
+    mfe, mae, _fav, _adv = _trade_path(candles, entry_idx, exit_idx, entry, side)
+    return mfe, mae
 
 
 def _entry_timing_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
@@ -488,10 +567,25 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         # spec carries no explicit timeframe, derive it from the candle spacing
         # instead of leaving it blank (the old behavior that produced "unknown").
         file_tf = tf or _derive_timeframe(candles)
+        needs = missing_required_data(family, candles)
+        if needs is not None:
+            zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
+            zero["data_file_label"] = path.name
+            zero["data_file_timeframe"] = file_tf or ""
+            results.append(RunResult(
+                run_id=stable_run_id(symbol, family, {}), symbol=symbol, family=family,
+                params={}, metrics=zero, decision=needs, reasons=["missing_required_data"],
+                trades=[],
+                validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
+                next_action="provide the required OI/funding/microstructure data, then re-run",
+                regime_summary={}))
+            continue
         gpu_family = use_gpu and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
             cpu_fallback_families.add(family)
-        for params in spec.parameter_grid.get(family, []):
+        strategy_defaults = dict(get_strategy(family).parameter_defaults)
+        for raw_params in spec.parameter_grid.get(family, []):
+            params = {**strategy_defaults, **dict(raw_params or {})}
             if gpu_family:
                 signals = gpu_kernels.generate_signals_vectorized(candles, family, params, xp=xp)
                 accelerated_signal_runs += 1
@@ -540,6 +634,7 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
                     metrics=metrics,
                     decision=decision,
                     reasons=reasons,
+                    trades=trades,
                     validation_status=validation.status,
                     validation_reasons=validation.reasons,
                     risk_flags=validation.risk_flags,
@@ -550,11 +645,11 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
             if spec.max_runs and len(results) >= spec.max_runs:
                 _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                                        accelerated_simulation_runs, cpu_fallback_families,
-                                       sim_fallback_reasons)
+                                       sim_fallback_reasons, n_variants=len(results))
                 return results
     _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                            accelerated_simulation_runs, cpu_fallback_families,
-                           sim_fallback_reasons)
+                           sim_fallback_reasons, n_variants=len(results))
     return results
 
 
@@ -565,9 +660,13 @@ def _finalize_runtime_meta(
     accelerated_simulation_runs: int,
     cpu_fallback_families: set[str],
     sim_fallback_reasons: set[str],
+    n_variants: int = 0,
 ) -> None:
     if runtime_meta is None:
         return
+    # How many parameter variants were evaluated in this sweep — the multiple-testing
+    # trial count the validator uses to deflate significance (Phase 1.2).
+    runtime_meta["n_variants_evaluated"] = int(n_variants)
     runtime_meta["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
     # accelerated_runs kept as the signal-run count for backward compatibility.
     runtime_meta["accelerated_runs"] = accelerated_signal_runs

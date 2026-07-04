@@ -13,7 +13,9 @@ from src.research_lab.hard_validation_export import (
     _deduplicate,
     _filter_entries,
     export_requests,
+    validation_id_for_unique_candidate,
 )
+from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 
 
 def _make_entry(
@@ -166,6 +168,87 @@ class TestBuildCandidate:
             assert len(c.equity_curve) == 3
             assert c.timeframe == "15m"
 
+    def test_build_candidate_preserves_unique_candidate_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            run_dir = private / "experiments" / "completed" / "20260614_000000_exp-001"
+            run_dir.mkdir(parents=True)
+            metrics = {
+                "results": [{
+                    "run_id": "raw-1",
+                    "symbol": "BTC_USDT_SWAP",
+                    "family": "trend",
+                    "params": {"ma_window": 20},
+                    "metrics": {"n_trades": 4, "data_file_timeframe": "1h"},
+                    "trades": [{"entry_ts": 1, "exit_ts": 2, "net_pct": 1.0}],
+                }],
+            }
+            (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+            entry = {
+                **_make_entry(candidate_id="fv-1", artifact_label="20260614_000000_exp-001"),
+                "source_candidate_id": "raw-1",
+                "uc_key": "BTC::1h::trend::ph::fp",
+                "params_hash": "ph",
+                "data_fingerprint": "fp",
+                "timeframe": "1h",
+            }
+            c = _build_candidate(entry, private)
+            assert c is not None
+            assert c.metrics["uc_key"] == "BTC::1h::trend::ph::fp"
+            assert c.metrics["source_candidate_id"] == "raw-1"
+            assert c.metrics["data_fingerprint"] == "fp"
+
+    def test_build_candidate_rebuilds_trades_for_legacy_aggregate_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            data_dir = private / "market_data" / "1h"
+            data_dir.mkdir(parents=True)
+            label = "ABC_USDT_SWAP_legacy_1h.json"
+            rows = []
+            for i in range(80):
+                price = 100.0 + i * 1.0
+                rows.append({
+                    "ts": 1_700_000_000_000 + i * 3_600_000,
+                    "open": price,
+                    "high": price + 0.2,
+                    "low": price - 0.2,
+                    "close": price + 0.4,
+                    "vol": 1000.0,
+                })
+            (data_dir / label).write_text(json.dumps(rows), encoding="utf-8")
+            run_dir = private / "experiments" / "completed" / "legacy_run"
+            run_dir.mkdir(parents=True)
+            metrics = {
+                "filters": {},
+                "fees_bps": 7.0,
+                "slippage_bps": 3.0,
+                "timeframe": "1h",
+                "results": [{
+                    "run_id": "raw-legacy",
+                    "symbol": "ABC_USDT_SWAP",
+                    "family": "momentum_breakout",
+                    "params": {"lookback": 5, "hold_bars": 2, "stop_pct": 2, "take_pct": 4},
+                    "metrics": {
+                        "n_trades": 10,
+                        "data_file_label": label,
+                        "data_file_timeframe": "1h",
+                    },
+                }],
+            }
+            (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+            entry = _make_entry(
+                candidate_id="fv-legacy",
+                symbol="ABC_USDT_SWAP",
+                strategy_id="momentum_breakout",
+                artifact_label="legacy_run",
+            )
+            entry["params"] = {}
+            c = _build_candidate(entry, private)
+            assert c is not None
+            assert c.params["stop_pct"] == 2
+            assert len(c.trades) >= 3
+            assert c.data_window["n_bars"] == len(c.trades)
+
 
 class TestEquityCurve:
     def test_empty_trades(self) -> None:
@@ -278,3 +361,57 @@ class TestExportRequests:
             req_dir = private / "hard_validation" / "requests"
             files = list(req_dir.glob("*.json"))
             assert len(files) == 1
+
+    def test_farm_tasks_unique_candidates_are_canonical_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            db = FarmTasksDB(tasks_db_path(private))
+            uc_key = "BTC::1h::trend::ph::fp"
+            db.upsert_unique_candidate({
+                "uc_key": uc_key,
+                "symbol": "BTC_USDT_SWAP",
+                "timeframe": "1h",
+                "family": "trend",
+                "params_hash": "ph",
+                "data_fingerprint": "fp",
+                "decision": "PROMOTE_FOR_PRESSURE_TEST",
+                "validation_status": "FORWARD_PAPER",
+                "hard_status": "",
+                "candidate_id": "raw-candidate",
+                "run_dir_label": "",
+                "n_trades": 12,
+                "avg_net_pct": 0.4,
+            })
+            db.close()
+            summary = export_requests(private, dry_run=False, source="auto")
+            vid = validation_id_for_unique_candidate({"uc_key": uc_key})
+            assert summary["source"] == "farm_tasks"
+            assert summary["exported_ids"] == [vid]
+            req = json.loads((private / "hard_validation" / "requests" / f"{vid}.json").read_text())
+            assert req["candidate_id"] == vid
+            assert req["metrics"]["source_candidate_id"] == "raw-candidate"
+            assert req["metrics"]["uc_key"] == uc_key
+
+    def test_farm_tasks_validation_id_prevents_candidate_id_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            db = FarmTasksDB(tasks_db_path(private))
+            for tf, fp in (("1h", "fp1"), ("4h", "fp2")):
+                uc_key = f"BTC::{tf}::trend::ph::{fp}"
+                db.upsert_unique_candidate({
+                    "uc_key": uc_key,
+                    "symbol": "BTC_USDT_SWAP",
+                    "timeframe": tf,
+                    "family": "trend",
+                    "params_hash": "ph",
+                    "data_fingerprint": fp,
+                    "decision": "PROMOTE_FOR_PRESSURE_TEST",
+                    "validation_status": "FORWARD_PAPER",
+                    "hard_status": "",
+                    "candidate_id": "same-raw-id",
+                    "run_dir_label": "",
+                })
+            db.close()
+            summary = export_requests(private, dry_run=False, source="farm_tasks", limit=10)
+            assert summary["exported"] == 2
+            assert len(set(summary["exported_ids"])) == 2

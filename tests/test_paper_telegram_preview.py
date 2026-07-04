@@ -1,0 +1,233 @@
+import ast
+import json
+from pathlib import Path
+
+from src.research_lab.paper_telegram_preview import (
+    MAX_MESSAGE_CHARS,
+    build_paper_telegram_preview,
+    render_preview_text,
+    validate_preview,
+)
+
+DOT = "\u00b7"
+IDEA = "\u0418\u0434\u0435\u044f:"
+ENTRY = "\u0412\u0445\u043e\u0434:"
+STOP = "\u0421\u0442\u043e\u043f:"
+SOURCE = "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a:"
+HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435"
+
+
+def _consumer_record(**overrides):
+    row = {
+        "consumer_id": "consumer_mainpaper_sig",
+        "instruction_id": "mainpaper_sig",
+        "source_signal_id": "sig",
+        "pair": "BTC_USDT_SWAP",
+        "okx_inst_id": "BTC-USDT-SWAP",
+        "timeframe": "1h",
+        "side": "long",
+        "setup_family": "early_tp_tactical",
+        "source_status": "armed",
+        "consumer_status": "accepted_for_paper_watch",
+        "problems": [],
+        "paper_only": True,
+        "execution_allowed": False,
+        "signal_contract": {
+            "pair": "BTC-USDT-SWAP",
+            "side": "long",
+            "entry": 100.5,
+            "stop": 95.0,
+            "max_hold_min": 600,
+            "exit_rule": {
+                "type": "scaled",
+                "params": {
+                    "targets": [
+                        {"label": "tp1", "price": 110.0, "size_frac": 0.5},
+                        {"label": "tp2", "price": 120.0, "size_frac": 0.5},
+                    ]
+                },
+            },
+            "follow": {"be_at_R": 1.0, "trail": {}},
+            "regime": "paper_watch",
+            "analyzer_id": "paper_signals.early_tp_tactical",
+            "snapshot_id": "abc123",
+            "ts": "2026-06-26T00:00:00+00:00",
+            "metadata": {
+                "reason_now": "safe <reason> & no order",
+                "ready_strategy_id": "ready_abc",
+                "source_validation_verdict": "PAPER_FORWARD_READY",
+                "execution_allowed": False,
+                "paper_only": True,
+            },
+        },
+    }
+    row.update(overrides)
+    return row
+
+
+def _trade_record(**overrides):
+    row = {
+        "schema": "MainPaperTrade.v1",
+        "paper_trade_id": "papertrade_1",
+        "runtime_id": "runtime_1",
+        "instruction_id": "mainpaper_sig",
+        "source_signal_id": "sig",
+        "ready_strategy_id": "ready_abc",
+        "source_validation_verdict": "PAPER_FORWARD_READY",
+        "okx_inst_id": "BTC-USDT-SWAP",
+        "timeframe": "1h",
+        "side": "long",
+        "setup_family": "early_tp_tactical",
+        "entry": 100.5,
+        "entry_zone": [100.0, 101.0],
+        "stop": 95.0,
+        "take_profit_plan": [
+            {"label": "tp1", "price": 110.0, "size_frac": 0.5},
+            {"label": "tp2", "price": 120.0, "size_frac": 0.5},
+        ],
+        "max_hold_min": 600,
+        "max_hold_bars": 10,
+        "status": "queued",
+        "outcome": {},
+        "review": {},
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    row.update(overrides)
+    return row
+
+
+def _write_consumer_snapshot(root: Path, rows: list[dict]) -> None:
+    path = root / "state" / "derived" / "main_paper_consumed.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "main_paper_consumer.v1",
+                "instructions_read": len(rows),
+                "accepted": sum(row.get("consumer_status") == "accepted_for_paper_watch" for row in rows),
+                "rejected": sum(row.get("consumer_status") != "accepted_for_paper_watch" for row in rows),
+                "items": rows,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_trade_snapshot(root: Path, rows: list[dict]) -> None:
+    path = root / "state" / "derived" / "main_paper_trades.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "main_paper_trade_ledger.v1",
+                "trades": len(rows),
+                "items": rows,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_preview_prefers_main_paper_trade_cards(tmp_path):
+    _write_consumer_snapshot(tmp_path, [_consumer_record()])
+    _write_trade_snapshot(tmp_path, [_trade_record()])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "main_paper_trade_ledger.v1"
+    assert summary["records_read"] == 1
+    assert summary["rendered"] == 1
+    assert summary["invalid"] == 0
+    assert summary["sends_network"] is False
+    assert summary["card_template_version"] == "paper_telegram_card_v4_main_trade_ru"
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    text = data["items"][0]["text"]
+    assert f"Main paper: BTC-USDT-SWAP {DOT} 1h {DOT} LONG" in text
+    assert IDEA in text
+    assert ENTRY in text
+    assert STOP in text
+    assert SOURCE not in text
+    assert HUMAN_DISCLAIMER in text
+    assert "ready_abc" in text
+    assert "research-only, not an order" in text
+    assert "execution_allowed=false" in text
+    assert not any(marker in text for marker in ("\u0420\u00a0", "\u0420\u040f", "\u0420\u2019", "\u0456\u201a"))
+
+
+def test_preview_skips_provider_error_trade_cards(tmp_path):
+    _write_consumer_snapshot(tmp_path, [_consumer_record()])
+    _write_trade_snapshot(tmp_path, [_trade_record(status="provider_error")])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "main_paper_trade_ledger.v1"
+    assert summary["records_read"] == 1
+    assert summary["rendered"] == 0
+    assert summary["skipped_non_actionable"] == 1
+
+
+def test_preview_falls_back_to_consumer_rows(tmp_path):
+    _write_consumer_snapshot(
+        tmp_path,
+        [
+            _consumer_record(consumer_status="rejected_contract", problems=["bad_schema"]),
+            _consumer_record(instruction_id="mainpaper_ok"),
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "main_paper_consumer.v1"
+    assert summary["records_read"] == 2
+    assert summary["rendered"] == 1
+    assert summary["skipped_rejected"] == 1
+
+
+def test_preview_validation_catches_bad_authority_and_length():
+    row = _trade_record(execution_allowed=True)
+    text = render_preview_text(row) + ("x" * (MAX_MESSAGE_CHARS + 1))
+
+    problems = validate_preview(row, text)
+
+    assert "execution_allowed_not_false" in problems
+    assert "telegram_message_too_long" in problems
+
+
+def test_preview_validation_catches_mojibake_text():
+    row = _trade_record()
+    problems = validate_preview(row, "Paper-\u0420\u00a0\u0420\u2019\u0456\u201a")
+
+    assert "mojibake_text" in problems
+
+
+def test_preview_writes_empty_snapshot_when_sources_missing(tmp_path):
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_exists"] is False
+    assert summary["records_read"] == 0
+    assert summary["rendered"] == 0
+    assert Path(summary["snapshot_path"]).exists()
+
+
+def test_paper_telegram_preview_has_no_sender_imports():
+    path = Path("src/research_lab/paper_telegram_preview.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    forbidden = {
+        "src.utils.telegram",
+        "aiohttp",
+        "requests",
+        "src.exchange",
+        "scripts.auto_execute",
+        "dotenv",
+        "hmac",
+    }
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not (imported & forbidden)

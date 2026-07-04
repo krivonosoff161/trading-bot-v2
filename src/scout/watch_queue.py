@@ -169,6 +169,18 @@ def _write_rows(rows: list[dict[str, Any]], path: Path = WATCH_QUEUE) -> None:
     os.replace(tmp, path)
 
 
+# Volatile audit fields must not, on their own, count as a change. `updated_at` is
+# stamped with now() on every build_watch_record() call, so comparing the whole record
+# would make idempotency depend on wall-clock: two upserts of the same row straddling a
+# 1-second boundary would falsely report "changed" (the watch_queue test flake). Compare
+# substantive content only; updated_at is carried along when a real change is written.
+_VOLATILE_FIELDS = ("updated_at",)
+
+
+def _substantive(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in record.items() if k not in _VOLATILE_FIELDS}
+
+
 def upsert_watch(row: dict[str, Any], path: Path = WATCH_QUEUE) -> tuple[str, bool]:
     record = build_watch_record(row)
     if record is None:
@@ -177,7 +189,7 @@ def upsert_watch(row: dict[str, Any], path: Path = WATCH_QUEUE) -> tuple[str, bo
     for idx, existing in enumerate(rows):
         if existing.get("watch_id") == record["watch_id"]:
             candidate = {**existing, **record, "created_at": existing.get("created_at") or record["created_at"]}
-            if candidate != existing:
+            if _substantive(candidate) != _substantive(existing):
                 rows[idx] = candidate
                 _write_rows(rows, path)
                 return str(record["watch_id"]), True

@@ -1,0 +1,145 @@
+# Farm Ownership Map
+
+Status: **ACTIVE**. Last updated: 2026-06-27.
+
+Purpose: after `farm_loop` + `farm_tasks.sqlite` became the calculation farm's core,
+this map records which loops are active, diagnostic, or legacy. Nothing here gives the
+farm permission to touch the old money path.
+
+## Databases
+
+| DB | Role |
+|----|------|
+| `state/farm_tasks.sqlite` | **Brain**: typed lifecycle, scheduling, reasons, fingerprints. |
+| `state/strategy_lab.sqlite` | **Compute queue**: proven sweep queue drained by the worker. |
+| `state/scanner_farm_loop.sqlite` | Legacy checkpoint for the superseded scanner-farm loop. |
+
+## Ownership Matrix
+
+| Entry point | Role | Notes |
+|---|---|---|
+| `scripts/strategy_lab/farm_loop.py` | **CORE** | Current continuous self-deciding lifecycle. |
+| `bat\strategy_lab_control_room.bat` | **CORE OPERATOR ROOM** | Opens visible farm loop, dashboard, graph viewer, and status windows. Preferred operator start for long paper/research runs. |
+| `bat\strategy_lab_farm_full_cycle_loop.bat` | **CORE WRAPPER** | Visible operator path: farm -> worker -> validation -> paper; caps active paper-signal observation by default. |
+| `bat\strategy_lab_farm_full_cycle_stop.bat` | **CORE WRAPPER** | Clean stop-file for the wrapper above. |
+| `scripts/strategy_lab/worker_once.py` | **CORE EXECUTOR** | Single-job compute executor. Must not delete. |
+| `scripts/strategy_lab/worker_loop.py` | **KEEP / OFF DEFAULT** | Standalone compute daemon; not a lifecycle brain. |
+| `scripts/strategy_lab/scanner_farm_loop.py` | **ARCHIVE-LEGACY** | Flat scanner-watch -> sweep queue path; superseded by the brain. `main()` aborts unless `--i-understand-legacy` (0.7), so it cannot accidentally double-queue alongside `farm_loop`. |
+| `scripts/strategy_lab/universe_farm_loop.py` | **ARCHIVE-LEGACY** | Cursor-based universe grind; absorbed by `discovery_refill`. `main()` aborts unless `--i-understand-legacy` (0.7). |
+| `scripts/strategy_lab/research_loop.py` / `research_cycle.py` / `research_session.py` | **ADVISORY LANE** | LLM proposal/review lane. The model is a JSON-only hypothesis advisor, not the farm controller. |
+| `src/research_lab/feedback_followup.py` | **CORE PLANNER** | Deterministic bounded follow-up planner; consumed by `farm_loop` via `schedule_followup`. |
+| `scripts/strategy_lab/generate_event_sweeps.py` | **KEEP / OFF DEFAULT** | Price-event sweep generator; `--from-scanner` is legacy bridge. |
+| `scripts/strategy_lab/apply_feedback_recommendations.py` | **KEEP / MANUAL DIAGNOSTIC** | Manual follow-up bridge; canonical automation now goes through `farm_loop`. |
+| `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic. |
+| `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
+| `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
+| `bat\strategy_lab_start.bat` | **LEGACY LAB WRAPPER** | Older standalone queue/dashboard/worker start. Kept for diagnostics; not the canonical farm/PFR/paper loop. |
+| `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`; any legacy auto-execute path requires `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` plus `AUTO_TRADE`. |
+| `start_all.bat` | **LEGACY/FROZEN PRODUCT STACK** | Historical multi-window scanner/engine launcher. Do not use as the current farm/PFR/paper control path. |
+| `scripts/ws/ws_main_screener.py` | **SEPARATE SCANNER SURFACE** | Public-market scanner + Telegram/LLM reporting surface. It can notify humans, but it is not the farm trigger owner and not a farm/PFR executor. |
+| `scripts/ws/ws_scanner.py` | **LEGACY / DIAGNOSTIC** | Older scanner surface that imports the OKX client. Keep out of the canonical farm/PFR/paper path. |
+| `scripts/analyze_chart.py` | **MANUAL PRODUCT ANALYZER** | Generates local chart/report output and can optionally send Telegram; not a farm/PFR runtime. |
+| `scripts/run_latest_analysis.py` | **EXECUTION-ADJACENT MANUAL TOOL** | Interactive wrapper that can reach `scripts.auto_execute` only behind `AUTO_TRADE` plus explicit `RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE=1`; never use as the farm/PFR launcher. |
+
+## Main Engine Boundary
+
+The old live/paper runners are closed as trading engines. They must not be imported, run,
+or wired into farm/paper/operator paths. Useful math can be copied or re-derived inside
+`research_lab`, then tested through the farm.
+
+Current paper handoff stops at the rebuildable main-paper instruction, consumer, queue,
+runtime-observation, and preview artifacts. That proves the paper lifecycle and operator
+surface. It does not authorize the old live `main.py` to execute farm/PFR instructions.
+
+`python -m scripts.strategy_lab.operational_health` is the machine-checkable version of
+this map. Before a long run, it must show:
+
+- `readiness.canonical_launch_surface = pass`;
+- `readiness.legacy_live_runtime_isolated = pass`;
+- `paper_data_flow.current_owner = scripts.strategy_lab.farm_loop with --run-paper-signals`;
+- `paper_data_flow.old_main_py_consumes_farm_pfr = false`;
+- `paper_data_flow.execution_allowed = false`.
+- `telegram_delivery_flow.farm_core_sends_telegram = false`;
+- `telegram_delivery_flow.paper_sends_telegram_by_default = false`;
+- `readiness.telegram_delivery_ownership = pass`.
+
+Forbidden as farm imports:
+
+- `main.py`
+- `scripts/auto_execute.py`
+- `scripts/run_latest_analysis.py`
+- `src/exchange/okx_client.py`
+- `src/data/*_engine.py`
+- Telegram modules / credentials
+- `.env` / config money path
+
+This is enforced by the farm boundary tests.
+
+## Telegram And LLM Surface Boundary
+
+Telegram is split into operator surfaces, not a single trading brain:
+
+| Surface | Role | Farm authority |
+|---|---|---|
+| `paper_telegram_preview` | Offline cards from accepted paper instructions | None; no network send by default |
+| `scripts/ws/ws_main_screener.py` | Scanner/news/Telegram intake and reporting | None; upstream context only |
+| `start.bat` / `scripts.telegram_bot` | Product/analyzer bot surface | None; not Strategy Lab farm; old auto-execute hook requires explicit Telegram opt-in plus `AUTO_TRADE` |
+| `scripts.analyze_chart` | Manual chart/report analyzer | None by default; optional Telegram send only when explicitly requested |
+| `scripts.run_latest_analysis` | Interactive manual analyzer wrapper | None for farm; can reach `AUTO_TRADE`-gated auto-execute only after explicit manual wrapper opt-in in the old product path |
+| `scripts/ws/ws_scanner.py` | Legacy scanner path using the OKX client | None; diagnostic/history only |
+
+LLM ownership is also split:
+
+- `src.utils.llm_client` is the scanner/advisory provider router
+  (`LLM_PROVIDER=alibaba|yandex`, role-specific models).
+- `src.utils.llm_formatter` is the older Yandex-only chart/text formatter route used
+  by the Telegram/chart analyzer surface. It does not follow `LLM_PROVIDER`.
+- `src.research_lab.llm_provider` is the Strategy Lab advisory provider gate, disabled
+  by default unless `STRATEGY_LAB_LLM_ENABLED` is set and configured.
+
+None of these LLM/Telegram surfaces can promote a setup, bypass PFR validation, or enable
+orders. The machine-check is `telegram_delivery_flow` in `operational_health`.
+
+## Strategy Logic: Closed Engine, Open Hypothesis
+
+| Pattern | Baseline in lab | Still-open research hypotheses |
+|---|---|---|
+| BB / volume fade | `strategies/bb_fade.py` | `not_thrust`, `slope_fading`, entry-quality filters. |
+| FVG | `strategies/fvg_family.py`, `features/fvg.py` | Gap quality, mitigation depth, displacement variants. |
+| Fractal / swing | `strategies/fractal_family.py`, `features/structure.py` | Sweep/retest geometry, multi-pivot structure. |
+| Pump / impulse | `strategies/pump_dump.py` | Event detectors, MFE/MAE, pair-risk, continuation geometry. |
+| Main `compute_signal` | `strategies/regime_family.py` | Regime labels, lag/freshness, DRIFT both-side behavior, late-entry filters. |
+
+"Ported" means a baseline seed exists, not that the idea is exhausted.
+
+## Manual Research Intake
+
+Trader notes, screenshots, and manual calculations are first-class hypothesis sources,
+but they never promote directly to candidates/main.
+
+```text
+manual note / screenshot / calc
+  -> structured hypothesis card / spec
+  -> dry-run validation
+  -> farm research task
+  -> classify -> honest validation -> setup card
+  -> paper only if PAPER_FORWARD_READY
+```
+
+## LLM Calculator Boundary
+
+The weak/local LLM calculator is advisory only:
+
+- may review aggregate packs and propose draft hypotheses;
+- must return bounded JSON;
+- cannot start/stop processes;
+- cannot enqueue outside deterministic validation gates;
+- cannot promote paper/live status;
+- cannot touch `.env`, order paths, Telegram, or old main engine.
+
+Code and validators decide what enters the farm.
+
+LLM proposals pass through the same parameter authority as human/CLI proposals:
+unknown keys, wrong ranges, missing executable exits, or reward/risk below 1:2 are
+rejected. Repeated contract failures are counted and should disable the model for the
+current run rather than letting it steer the farm.

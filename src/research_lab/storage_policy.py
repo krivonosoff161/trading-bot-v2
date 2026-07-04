@@ -123,6 +123,50 @@ def rotate_if_large(path: Path, *, max_mb: float | None = None, archive_root: Pa
             "size_mb": round(size_mb, 3), "applied": apply}
 
 
+def prune_event_specs(private_root: Path, *, keep: int = 500, apply: bool = False) -> dict:
+    """Bound plans/event_specs/*.json — keep the newest ``keep`` files, drop older.
+
+    One spec file is written per materialized sweep; on a continuous loop this would
+    grow unbounded, so we cap it. Returns how many were (or would be) removed.
+    """
+    spec_dir = Path(private_root) / "plans" / "event_specs"
+    if not spec_dir.exists():
+        return {"present": 0, "removed": 0, "applied": apply}
+    files = sorted(spec_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    stale = files[keep:]
+    removed = 0
+    for path in stale:
+        if apply:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        else:
+            removed += 1
+    return {"present": len(files), "removed": removed, "applied": apply}
+
+
+def bound_farm_artifacts(private_root: Path, *, keep_specs: int = 500,
+                         keep_terminal: int = 5000, apply: bool = False) -> dict:
+    """Bound the continuous-farm growth surfaces: event specs + terminal task history."""
+    specs = prune_event_specs(private_root, keep=keep_specs, apply=apply)
+    tasks_pruned = 0
+    try:
+        from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+        db_path = tasks_db_path(private_root)
+        if db_path.exists():
+            db = FarmTasksDB(db_path)
+            tasks_pruned = db.prune_terminal_tasks(keep=keep_terminal, apply=apply)
+            uc_pruned = db.prune_unique_candidates(keep=keep_terminal, apply=apply)
+            db.close()
+            return {"event_specs": specs, "terminal_tasks_pruned": tasks_pruned,
+                    "unique_candidates_pruned": uc_pruned}
+    except Exception as exc:  # noqa: BLE001 - hygiene must never break a cycle
+        return {"event_specs": specs, "terminal_tasks_pruned": 0, "error": type(exc).__name__}
+    return {"event_specs": specs, "terminal_tasks_pruned": tasks_pruned, "unique_candidates_pruned": 0}
+
+
 def maintain(log_paths: list[Path] | None = None, *, apply: bool = True) -> dict:
     """One maintenance pass: rotate oversized append-only logs + LRU-bound the hot cache.
 

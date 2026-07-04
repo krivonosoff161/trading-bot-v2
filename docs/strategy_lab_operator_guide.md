@@ -1,6 +1,6 @@
 # Strategy Lab -- Operator Guide
 
-Date: 2026-06-13. How to run the local research machine safely. It produces
+Date: 2026-06-27. How to run the local research machine safely. It produces
 research labels and candidates, **not** profitability claims. No live trading,
 no `.env`/secrets, no automatic LLM spend.
 
@@ -71,15 +71,37 @@ See [strategy_lab_architecture_next.md](strategy_lab_architecture_next.md).
 
 ## Safe start
 
-Normal operator start is one command:
+Current normal operator start is one command:
+
+```bash
+bat\strategy_lab_control_room.bat
+```
+
+This opens the current paper/research control room: farm full-cycle loop, dashboard,
+graph viewer, and status monitor in visible windows. It is the preferred start for the
+farm -> validation -> paper/PFR -> paper-watch lifecycle.
+
+If you only need the farm loop window, use:
+
+```bash
+bat\strategy_lab_farm_full_cycle_loop.bat
+```
+
+Stop it with:
+
+```bash
+bat\strategy_lab_farm_full_cycle_stop.bat
+```
+
+Legacy standalone lab start:
 
 ```bash
 bat\strategy_lab_start.bat
 ```
 
-Default behavior: sync the private state DB, queue a bounded `core_market / 1d`
-research plan, open the dashboard, and start one throttled worker loop. The
-dashboard opens at `http://127.0.0.1:8765`.
+This older wrapper syncs the private state DB, queues a bounded research plan,
+opens the dashboard, and starts one throttled worker loop. Keep it for diagnostics or
+old queue repair; do not use it as the current farm/PFR/paper lifecycle.
 
 Optional overrides before running the bat:
 
@@ -128,7 +150,10 @@ trades, or write to the public repo.
 
 | Need | Command |
 |---|---|
-| Start dashboard + worker | `bat\strategy_lab_start.bat` |
+| Start visible current control room | `bat\strategy_lab_control_room.bat` |
+| Start canonical farm/validation/paper loop | `bat\strategy_lab_farm_full_cycle_loop.bat` |
+| Stop canonical farm loop cleanly | `bat\strategy_lab_farm_full_cycle_stop.bat` |
+| Start legacy dashboard + standalone worker | `bat\strategy_lab_start.bat` |
 | See everything at a glance | `bat\strategy_lab_status.bat` |
 | Export LLM review pack (no API) | `bat\strategy_lab_export_pack.bat` |
 | Preview next proposals (dry-run) | `bat\strategy_lab_proposals_dry_run.bat` |
@@ -154,8 +179,9 @@ trades, or write to the public repo.
 | Stop old dashboard/worker windows | `bat\strategy_lab_stop_notes.bat` |
 
 **Morning:** run `strategy_lab_status.bat` to see worker state, queue, latest
-verdicts, candidates, proposals and the private-root location; then
-`strategy_lab_start.bat` if the worker is not running.
+verdicts, candidates, proposals and the private-root location. Start
+`strategy_lab_farm_full_cycle_loop.bat` when you want the canonical continuous
+farm -> validation -> paper loop.
 
 **During the day:** `strategy_lab_proposals_dry_run.bat` to preview follow-ups,
 then apply explicitly only when you agree:

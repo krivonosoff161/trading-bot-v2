@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.research_lab.strategies._helpers import Candle, closes, rsi_at, sma, vols
+from src.research_lab.strategies.detectors import detect_mean_reversion_fade
 
 
 def signals_mean_reversion_fade(candles: list[Candle], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -13,15 +14,9 @@ def signals_mean_reversion_fade(candles: list[Candle], params: dict[str, Any]) -
     move_pct = float(params.get("move_pct", 8.0))
     signals = []
     for idx in range(lookback, len(candles) - 1):
-        base = float(candles[idx - lookback]["close"])
-        close = float(candles[idx]["close"])
-        if base <= 0:
-            continue
-        move = (close / base - 1) * 100
-        if move >= move_pct:
-            signals.append({"idx": idx + 1, "side": "short", "reason": "fade_up_move"})
-        elif move <= -move_pct:
-            signals.append({"idx": idx + 1, "side": "long", "reason": "fade_down_move"})
+        det = detect_mean_reversion_fade(candles, idx, lookback=lookback, move_pct=move_pct)
+        if det:
+            signals.append({"idx": idx + 1, "side": det["side"], "reason": det["reason"]})
     return signals
 
 

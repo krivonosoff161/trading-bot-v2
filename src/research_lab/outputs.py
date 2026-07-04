@@ -21,6 +21,7 @@ from src.research_lab.reducer import reduce_results
 
 VALIDATION_ORDER = ["FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE", "REJECT"]
 REGISTRY_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
+MAX_STORED_TRADES_PER_RESULT = 2000
 
 
 def write_run_outputs(
@@ -44,9 +45,10 @@ def write_run_outputs(
         "requested_backend": spec.backend,
         "runtime": dict(runtime_meta or {}),
         "filters": spec.filters,
+        "plan_meta": dict(spec.plan_meta or {}),
         "fees_bps": spec.fees_bps,
         "slippage_bps": spec.slippage_bps,
-        "results": [result_dict(r) for r in results],
+        "results": [result_dict(r, include_trades=True) for r in results],
     }
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     _write_candidates_csv(run_dir / "candidates.csv", results)
@@ -78,8 +80,8 @@ def write_run_outputs(
     return run_dir
 
 
-def result_dict(result: RunResult) -> dict[str, Any]:
-    return {
+def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str, Any]:
+    out = {
         "run_id": result.run_id,
         "symbol": result.symbol,
         "family": result.family,
@@ -93,6 +95,12 @@ def result_dict(result: RunResult) -> dict[str, Any]:
         "next_action": result.next_action,
         "regime_summary": result.regime_summary,
     }
+    if include_trades:
+        trades = list(result.trades or [])[:MAX_STORED_TRADES_PER_RESULT]
+        out["trades"] = trades
+        out["trades_stored"] = len(trades)
+        out["trades_truncated"] = max(0, len(result.trades or []) - len(trades))
+    return out
 
 
 def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:

@@ -2,11 +2,40 @@
 
 Сюда записываем всё что "хорошая идея но не сейчас".
 
+> **⚠️ Центр сместился (17-18.06.2026).** Текущее ядро проекта — **универсальная расчётная
+> ферма** (`farm_loop`, см. `docs/farm_loop_lifecycle.md`). Сканер — upstream intake.
+> Блоки «🔔 НАПОМИНАНИЯ / ТЕКУЩЕЕ» ниже (датированные 05.xx–06.0x, инфо-эдж сканер,
+> форвард-логгер) — **исторический контекст**, не текущая фаза. Актуальные farm-задачи —
+> в разделе «Calculation farm — backlog» ниже и в `ROADMAP.md` (трек F1).
+
 **Правило ревью:** Claude проверяет этот список каждые 2-3 дня в начале сессии.
 
 **Последнее ревью:** 2026-05-31 — инфо-эдж охота (рой 33 агента + Codex + Claude) = **0 выживших**, путь = ФОРВАРД paper-логгер; продукт-анализатор связан со скаутами, Telegram живой. Каноны `research/docs/info_edge_CONSOLIDATED_verdict_2026-05-31.md`, память [[project_info_edge_scanner_2026-05-31]].
 
 **Ревью 2026-05-28 (ночь):** два глубоких мульти-агентных аудита (execution + весь research-корпус). **Хедлайн cycle-1 ЗАВЫШЕН** (эдж тонкий, съедается издержками = sub-cost; числа держать НЕ как факт). Корпус в основном чист (баг лейблера не растиражирован, охота дисциплинированнее лейблера), но ~половина выводов под вопросом со смещением ПРОТИВ стратегий → риск **закопанных эджей** (главный кандидат — polarity-flip). Фиксы лейблера/журнала спроектированы, НЕ внедрены. Бота не трогаем (10-дн заморозка до ~07.06). Каноны `research/docs/{execution_audit,corpus_methodology_audit}_2026-05-28.md`.
+
+---
+
+## 🧪 Calculation farm — backlog (ТЕКУЩАЯ ФАЗА)
+
+- **Manual research intake (канал, не хоронить ручные идеи):** заметки трейдера /
+  скриншоты / ручные расчёты → **структурированная hypothesis card / spec** (символ,
+  таймфрейм, family/feature, правило, обоснование) → **dry-run validation** → farm research
+  task **только после детерминированной валидации**. Прямого промоута в candidate/main НЕТ.
+  Реализация: hypothesis-card схема + `--dry-run` прогон; деталь в `docs/farm_ownership_map.md`.
+- **Извлечь как research-гипотезы (не live-импорт)** из закрытых движков: BB `not_thrust`/
+  `slope_fading`/entry-quality; FVG/fractal gap+sweep geometry (seed не исчерпан);
+  pump/impulse event-detectors + MFE/MAE + pair-risk + continuation/geometry; main
+  `compute_signal` — только изолированные: regime labels, lag/freshness, DRIFT both-side,
+  style geometry, late-entry filters. Все — через farm dry-run→validation.
+- **DONE 2026-06-19: visible farm_loop `.bat` path.** Canonical operator wrapper:
+  `bat\strategy_lab_farm_full_cycle_loop.bat`; stop wrapper:
+  `bat\strategy_lab_farm_full_cycle_stop.bat`. Legacy `strategy_lab_start` /
+  `universe_farm_loop` / `scanner_farm_loop` stay diagnostic/off-default.
+- **Microstructure data source** (obi_top5/trade_delta/spread_bps) — сейчас честный
+  `NEEDS_MICRO_DATA` (нет keyless публичного провайдера). DEFERRED до источника.
+- **Discovery ranking by movers** (сейчас классификация, не volume-movers) + GPU-кернелы
+  для остальных семей.
 
 ---
 

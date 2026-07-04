@@ -227,7 +227,8 @@ def test_queue_readiness_gate_skips_not_ready(tmp_path, monkeypatch):
     p = coerce_proposal({
         "proposal_id": "p1", "created_by": "rule_based", "hypothesis": "h",
         "requested_timeframe": "1d", "setup_family": "momentum_breakout",
-        "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {"momentum_breakout": [{"lookback": 20}]},
+        "symbols": ["BTC_USDT_SWAP"], "parameter_grid": {
+            "momentum_breakout": [{"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16}]},
         "status": VALIDATED, "created_at": "2026-06-13T00:00:00+00:00",
     })
     upsert_proposals(proposals_path(tmp_path), [p])

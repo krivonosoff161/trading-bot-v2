@@ -1,13 +1,61 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-06-11
+Updated: 2026-07-03
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
 
-The active project is an **info-edge scanner** for market events, plus a
+> **Update 2026-07-03 - next work is not "more loop"; it is the safe main-paper
+> executor.** The paper/research backbone is running and health-green. The gap is product
+> semantics: the user expects a main-style paper executor that behaves like "what if we
+> opened the trade", records the pseudo-trade and outcome, and produces readable
+> subscriber cards. Current code only observes validator/PFR-backed paper rows through
+> a strict `watch_paper` queue. Therefore the next roadmap item is to design and build a
+> separate reviewed `main_paper_executor` / card contract that consumes only validated
+> setups, uses shared deterministic math for levels and risk, allows LLM advice only
+> through bounded schemas, writes trade/outcome/training rows, and keeps
+> `execution_allowed=false`. Do not connect old live `main.py` directly.
+
+> **Update 2026-06-27 - revival acceptance gate.** The current work is not to revive
+> the old live engine. The active target is one visible paper/research operator cycle:
+> farm -> validation/PFR -> paper signals -> main-paper instruction/consumer/runtime
+> observation -> offline Telegram preview -> journal/training export. The machine
+> gate is `operational_health.readiness.ready_for_visible_paper_research_loop`. It must
+> pass before a long run is considered clean. `main.py`, `start_all.bat`, and
+> `ws_scanner.py` remain legacy/diagnostic unless a separate reviewed paper-only port is
+> built.
+
+> **Update 2026-06-19 - canonical farm/paper loop.** The current center of
+> `trading-bot-v2` is `farm_loop` over `farm_tasks.sqlite`, paper/research only:
+> OKX universe intake -> data planning -> prepare/enrich -> sweeps -> classification
+> into `unique_candidates` -> hard validation -> stamp-back -> `setup_library` cards
+> -> gated `paper_loop` outcomes. The scanner is upstream intake, not the center.
+> Visible full-cycle wrapper: `bat\strategy_lab_farm_full_cycle_loop.bat`.
+> Current next work: richer paper promotion/demotion metrics, discovery ranking by
+> movers, more GPU kernels, and a future microstructure provider.
+
+> **Update 2026-06-18 — center shifted.** The current center of `trading-bot-v2` is the
+> **universe-driven calculation farm** (paper/research only): a continuous research
+> lifecycle (`farm_loop` → `farm_coordinator` → `farm_tasks.sqlite`) that grinds the OKX
+> universe, fetches data (candles + public funding/OI), runs strategy sweeps, classifies,
+> and hands candidates to honest validation. The **scanner below is now one upstream
+> intake source**, not the primary product. Canonical:
+> [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
+> [docs/farm_runbook.md](docs/farm_runbook.md).
+>
+> ### Calculation Farm track (current direction)
+> - Done: continuous lifecycle, fingerprint re-arm (no `already_queued` spin), public OI
+>   loader (`NEEDS_OI_DATA` is now a managed data task), auto honest-validation stamp-back,
+>   structured farm logs, bounded storage.
+> - Next: microstructure provider (currently honest `NEEDS_MICRO_DATA`), discovery ranking by
+>   movers, GPU kernels for more families.
+
+The scanner track below remains valid but **secondary** (it feeds the farm).
+
+The active scanner sub-system is an **info-edge scanner** for market events, plus a
 paper-only confirmation bridge toward technical analysis. It is not an
 auto-trading bot.
 
@@ -78,9 +126,33 @@ Known current problems:
 
 ## Near-Term Roadmap
 
-### v0.6 - Calibration And Telegram Hygiene
+### F1 - Calculation Farm (current core, primary track)
 
-Goal: make the current scanner easier to judge and less noisy.
+Goal: the universe-driven research farm is the active core; everything below (scanner
+v0.6+) is now a **support track** that feeds it. Canonical:
+[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
+
+Done:
+
+- continuous self-deciding lifecycle (`farm_loop` → `farm_coordinator` → `farm_tasks.sqlite`);
+- fingerprint-based re-arm — no `already_queued` spin; defer/block carry machine reasons;
+- public keyless OI loader → `NEEDS_OI_DATA` is a managed data task that auto-unblocks
+  `run_sweep` (microstructure stays an honest `NEEDS_MICRO_DATA`, no public provider);
+- hard-validation export from `unique_candidates`, fingerprint-level stamp-back,
+  automatic `setup_library` cards, minimal paper outcome feedback, structured farm
+  logs, bounded storage.
+
+Next:
+
+- richer paper promotion/demotion metrics;
+- discovery ranking by movers; GPU kernels for more families;
+- manual-hypothesis intake channel (trader notes → structured spec → dry-run → farm task);
+- microstructure data source (currently deferred).
+
+### v0.6 - Calibration And Telegram Hygiene (scanner support track)
+
+Goal: make the upstream scanner intake easier to judge and less noisy. The scanner is no
+longer the project center; it is one intake source for the farm.
 
 Tasks:
 

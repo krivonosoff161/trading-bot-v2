@@ -39,14 +39,17 @@ from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: 
 from scripts.analysis.feedback import (  # noqa: E402
     save_entry, update_entry, pending_reminders, pending_for_chat, load_entries,
 )
-from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES  # noqa: E402
+from scripts.premium_prompts import PREMIUM_CATEGORY_NAMES, PREMIUM_PROMPT_VERSION  # noqa: E402
 from scripts.subscriptions import is_subscribed, add_user, remove_user, list_users, get_status, mark_reminded  # noqa: E402
-from src.utils.llm_formatter import generate_premium_analysis  # noqa: E402
+from src.utils.llm_formatter import generate_premium_analysis, premium_vision_status  # noqa: E402
+from src.utils.signal_event_log import record_manual_analysis_event, record_signal_event  # noqa: E402
+from src.utils.telegram_audit import record_message_audit  # noqa: E402
 from src.utils.telegram import send_message_to, send_photo_to  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
+ALLOW_AUTO_EXECUTE_ENV = "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"
 
 TEMP_DIR    = Path(__file__).parent / "tg_temp"
 USERS_ROOT  = ROOT / "logs" / "users"
@@ -78,6 +81,10 @@ WELCOME_TEXT = (
 CHAT_LINK  = "https://t.me/+B9T_L7VHdpkwZjZi"
 ADMIN_LINK = "https://t.me/Krivonosoff"
 
+
+def _auto_execute_opt_in() -> bool:
+    return os.getenv(ALLOW_AUTO_EXECUTE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 START_TEXT = """\
 Привет 👋
 
@@ -103,10 +110,124 @@ _premium_state: dict[str, str] = {}
 
 # Persistent bottom keyboard — set once on /start, stays in chat forever
 _MAIN_REPLY_KB = {
-    "keyboard":        [[{"text": "🔍 Анализ"}]],
+    "keyboard": [
+        [{"text": "🔍 Анализ"}, {"text": "⭐ VIP"}],
+        [{"text": "💡 Обучение"}],
+    ],
     "resize_keyboard": True,
-    "persistent":      True,
+    "persistent": True,
 }
+
+_MAJOR_PAIRS = {"BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"}
+_MEME_HINTS = ("DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF", "MEME", "PUMP")
+_PAIR_CATEGORY_LIMIT = 24
+
+
+def _is_superadmin(chat_id: str) -> bool:
+    entry = get_status(str(chat_id))
+    return bool(entry and entry.get("plan") == "superadmin")
+
+
+def _strategy_lab_private_root() -> Path:
+    configured = os.getenv("STRATEGY_LAB_PRIVATE_ROOT") or os.getenv("TRADING_BOT_RESEARCH_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
+
+
+def _format_farm_status_for_admin(cockpit: dict) -> str:
+    activity = cockpit.get("farm_activity") or {}
+    lifecycle = cockpit.get("lifecycle") or {}
+    paper_pnl = cockpit.get("paper_pnl") or {}
+    readiness = cockpit.get("data_readiness") or {}
+    safety = cockpit.get("safety") or {}
+
+    by_state = lifecycle.get("by_state") or {}
+    validation = lifecycle.get("validation") or {}
+    paper_status = lifecycle.get("paper_status") or {}
+    prepared = readiness.get("prepared_files_by_timeframe") or {}
+
+    heartbeat = "OK" if activity.get("heartbeat_ok") else "STALE"
+    available = "yes" if activity.get("available") else "no"
+    live = "NO" if safety.get("live_trading") is False else "CHECK"
+    age = activity.get("last_cycle_age_seconds")
+    age_text = f"{int(age)}s ago" if isinstance(age, (int, float)) else "n/a"
+    discovery = activity.get("discovery") or {}
+
+    lines = [
+        "📡 Статус фермы (read-only)",
+        "",
+        f"Loop: {available}, heartbeat={heartbeat}, last={age_text}",
+        f"Pivot: {activity.get('last_pivot') or 'n/a'} / mode={activity.get('last_mode') or 'n/a'}",
+        f"Tasks: queued={by_state.get('queued', 0)} running={by_state.get('running', 0)} "
+        f"completed={by_state.get('completed', 0)} blocked={by_state.get('blocked', 0)}",
+        f"Validation: PFR={validation.get('PAPER_FORWARD_READY', 0)} "
+        f"REGIME={validation.get('REGIME_ONLY', 0)} COSTS={validation.get('FAILED_COSTS', 0)} "
+        f"OOS={validation.get('FAILED_OOS', 0)}",
+        f"Paper: recorded={paper_status.get('PAPER_RECORDED', 0)} "
+        f"trades={paper_pnl.get('n_trades', 0)} net={paper_pnl.get('net_sum_pct', 0)}%",
+        f"Data: 15m={prepared.get('15m', 0)} 1h={prepared.get('1h', 0)} "
+        f"4h={prepared.get('4h', 0)} 1d={prepared.get('1d', 0)}",
+        f"Discovery: {discovery.get('status') or 'n/a'} count={discovery.get('count', 0)}",
+        "",
+        f"Safety: read_only={safety.get('read_only') is True}, live_trading={live}",
+    ]
+    recent_errors = activity.get("recent_errors") or []
+    if recent_errors:
+        lines.extend(["", "Recent errors:"])
+        for item in recent_errors[:3]:
+            lines.append(f"- {str(item)[:160]}")
+    return "\n".join(lines)
+
+
+async def _send_admin_farm_status(chat_id: str) -> None:
+    if not _is_superadmin(chat_id):
+        await _send(chat_id, "Админ-статус фермы доступен только superadmin.")
+        return
+    try:
+        from src.research_lab.farm_cockpit import build_cockpit
+
+        cockpit = build_cockpit(_strategy_lab_private_root())
+        await _send(chat_id, _format_farm_status_for_admin(cockpit))
+    except Exception as exc:
+        await _send(chat_id, f"Не удалось прочитать статус фермы: {type(exc).__name__}: {exc}")
+
+
+def _normalize_manual_symbol(text: str) -> str | None:
+    raw = (text or "").strip().upper()
+    raw = raw.replace("_", "-").replace("/", "-")
+    if raw.endswith("-SWAP"):
+        raw = raw[:-5]
+    if re.fullmatch(r"[A-Z0-9]{2,16}", raw):
+        raw = f"{raw}-USDT"
+    if not re.fullmatch(r"[A-Z0-9]{2,16}-[A-Z0-9]{2,8}", raw):
+        return None
+    return raw
+
+
+def _analysis_categories(pairs: list[str] | None = None) -> dict[str, list[str]]:
+    universe = pairs if pairs is not None else _load_universe_pairs()
+    clean: list[str] = []
+    for pair in universe:
+        normalized = _normalize_manual_symbol(str(pair))
+        if normalized and normalized not in clean:
+            clean.append(normalized)
+
+    majors = [pair for pair in clean if pair in _MAJOR_PAIRS]
+    alt_meme = [
+        pair
+        for pair in clean
+        if pair not in _MAJOR_PAIRS or any(hint in pair for hint in _MEME_HINTS)
+    ]
+    return {
+        "movers": clean[:_PAIR_CATEGORY_LIMIT],
+        "majors": majors[:_PAIR_CATEGORY_LIMIT],
+        "alts": alt_meme[:_PAIR_CATEGORY_LIMIT],
+    }
+
+
+def _pairs_for_category(category: str) -> list[str]:
+    return _analysis_categories().get(category, [])
 
 # Persistent HTTP session — one per bot lifetime, not per request
 _SESSION: aiohttp.ClientSession | None = None
@@ -172,10 +293,27 @@ async def _get_session() -> aiohttp.ClientSession:
 
 
 async def _tg(method: str, http_timeout: int = 10, **params) -> dict:
+    audit_mode = params.pop("_audit_mode", "telegram_bot")
+    audit_event = params.pop("_audit_event", method)
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     s = await _get_session()
     async with s.post(url, json=params, timeout=aiohttp.ClientTimeout(total=http_timeout)) as resp:
-        return await resp.json()
+        result = await resp.json()
+    if method == "sendMessage" and params.get("chat_id"):
+        try:
+            record_message_audit(
+                chat_id=str(params.get("chat_id")),
+                direction="outgoing",
+                mode=audit_mode,
+                event=audit_event,
+                text=str(params.get("text") or ""),
+                status="ok" if result.get("ok", True) else "telegram_error",
+                delivery_status="sent" if result.get("ok", True) else "error",
+                message_id=result.get("result", {}).get("message_id"),
+            )
+        except Exception:
+            pass
+    return result
 
 
 async def _send(chat_id: str, text: str) -> None:
@@ -202,35 +340,98 @@ def _load_universe_pairs() -> list[str]:
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
 
 
-async def _send_pair_keyboard(chat_id: str, extra_note: str = "", welcome: bool = False) -> None:
+async def _send_pair_keyboard(
+    chat_id: str,
+    extra_note: str = "",
+    welcome: bool = False,
+    *,
+    pairs: list[str] | None = None,
+    title: str = "Выбери пару или введи свою:",
+) -> None:
     parts = []
     if welcome:
         parts.append(WELCOME_TEXT)
     if extra_note:
         parts.append(extra_note)
     parts.append(TRANSPARENCY_NOTE)
-    pairs = _load_universe_pairs()
+    pairs = pairs if pairs is not None else _load_universe_pairs()
     # 3 per row
     pair_rows = [[{"text": p, "callback_data": p} for p in pairs[i:i+3]] for i in range(0, len(pairs), 3)]
-    buttons = pair_rows + [[{"text": "Другая пара", "callback_data": "__manual__"}, {"text": "💡 Совет", "callback_data": "__edu__"}]]
+    buttons = pair_rows + [
+        [
+            {"text": "Другая пара", "callback_data": "__manual__"},
+            {"text": "Назад", "callback_data": "__start_analysis__"},
+        ],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}],
+    ]
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="\n".join(parts) + "\n\nВыбери пару или введи свою:",
+        text="\n".join(parts) + f"\n\n{title}",
+        reply_markup={"inline_keyboard": buttons},
+    )
+
+
+async def _send_analysis_categories(chat_id: str) -> None:
+    categories = _analysis_categories()
+    buttons = [
+        [{"text": f"🔥 Сейчас в движении ({len(categories['movers'])})", "callback_data": "paircat:movers"}],
+        [{"text": f"₿ Majors ({len(categories['majors'])})", "callback_data": "paircat:majors"}],
+        [{"text": f"⚡ Alts / Meme ({len(categories['alts'])})", "callback_data": "paircat:alts"}],
+        [{"text": "Ввести пару вручную", "callback_data": "__manual__"}],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}, {"text": "⭐ VIP", "callback_data": "__premium__"}],
+    ]
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=(
+            "Выбери источник анализа. Решение и уровни считает код по OKX-данным; "
+            "LLM только объясняет карточку."
+        ),
         reply_markup={"inline_keyboard": buttons},
     )
 
 
 async def _send_main_menu(chat_id: str) -> None:
     """Top-level menu: OKX crypto scanner or Premium screenshot analysis."""
+    buttons = [
+        [{"text": "📊 Анализ пары", "callback_data": "__start_analysis__"}],
+        [{"text": "⭐ VIP — анализ скрина", "callback_data": "__premium__"}],
+        [{"text": "💡 Обучение", "callback_data": "__edu__"}],
+    ]
+    if _is_superadmin(chat_id):
+        buttons.append([{"text": "🛠 Админ", "callback_data": "__admin__"}])
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="Выберите тип анализа:",
-        reply_markup={"inline_keyboard": [
-            [{"text": "📊 Анализ пары",              "callback_data": "__start_analysis__"}],
-            [{"text": "⭐ Premium — анализ скрина",  "callback_data": "__premium__"}],
-        ]},
+        text="Выберите режим:",
+        reply_markup={"inline_keyboard": buttons},
+    )
+
+
+async def _send_admin_panel(chat_id: str) -> None:
+    if not _is_superadmin(chat_id):
+        await _send(chat_id, "Админ-панель доступна только superadmin.")
+        return
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text=(
+            "Админ-панель\n\n"
+            "/users - список пользователей\n"
+            "/add <chat_id> [days] - выдать доступ\n"
+            "/addsuper <chat_id> - выдать superadmin\n"
+            "/del <chat_id> - удалить доступ\n\n"
+            "Команды меняют только подписки Telegram-бота. Торговые действия здесь недоступны."
+        ),
+    )
+
+
+    await _tg(
+        "sendMessage",
+        chat_id=chat_id,
+        text="Admin read-only tools:",
+        reply_markup={"inline_keyboard": [[{"text": "📡 Статус фермы", "callback_data": "__farm_status__"}]]},
     )
 
 
@@ -261,23 +462,64 @@ async def _send_premium_categories(chat_id: str) -> None:
 async def _run_premium_analysis(chat_id: str, image_path: str, category: str) -> None:
     """Send screenshot to Gemma 3 27B IT and deliver analysis to user."""
     cat_name = PREMIUM_CATEGORY_NAMES.get(category, category)
+    user_dir = USERS_ROOT / str(chat_id)
+    premium_dir = user_dir / "premium"
+    saved_image = premium_dir / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H-%M-%S')}_{category}.png"
+    premium_status: dict = {}
+    result = ""
     try:
         await _send(chat_id, f"⭐ Анализирую {cat_name}... ⏳")
-        result = await generate_premium_analysis(category, Path(image_path).read_bytes())
+        image_bytes = Path(image_path).read_bytes()
+        premium_dir.mkdir(parents=True, exist_ok=True)
+        saved_image.write_bytes(image_bytes)
+        result = await generate_premium_analysis(category, image_bytes) or ""
         if result:
             await _send(chat_id, result)
         else:
-            await _send(chat_id, "Не удалось получить анализ. Попробуй позже.")
+            premium_status = premium_vision_status()
+            reason = "provider_blocked" if premium_status.get("configured") else "provider_not_configured"
+            print(f"Premium vision unavailable: {reason} status={premium_status}")
+            await _send(
+                chat_id,
+                "VIP-анализ скрина временно недоступен: vision-провайдер не прошёл проверку. "
+                "Обычный анализ пары и обучение работают. Попробуй позже после переключения/настройки модели.",
+            )
         try:
-            user_dir = USERS_ROOT / str(chat_id)
             user_dir.mkdir(parents=True, exist_ok=True)
+            if not premium_status:
+                premium_status = premium_vision_status()
             record = {
                 "ts":       datetime.now(timezone.utc).isoformat(),
                 "category": category,
-                "response": result or "",
+                "prompt_version": PREMIUM_PROMPT_VERSION,
+                "image_ref": str(saved_image),
+                "provider": premium_status.get("provider"),
+                "model": premium_status.get("model_label"),
+                "status": "ok" if result else "provider_unavailable",
+                "response": result,
             }
             with open(user_dir / "premium_log.jsonl", "a", encoding="utf-8") as lf:
                 lf.write(json.dumps(record, ensure_ascii=False) + "\n")
+            record_signal_event(
+                source="vip_screenshot",
+                mode="vision_analysis",
+                decision="ANALYSIS" if result else "PROVIDER_UNAVAILABLE",
+                chat_id=str(chat_id),
+                provider=premium_status.get("provider"),
+                model=premium_status.get("model_label"),
+                prompt_version=PREMIUM_PROMPT_VERSION,
+                artifacts={
+                    "image": str(saved_image),
+                    "premium_log": str(user_dir / "premium_log.jsonl"),
+                },
+                status="recorded" if result else "provider_unavailable",
+                extra={
+                    "category": category,
+                    "provider_scope": premium_status.get("provider_scope"),
+                    "execution_authority": False,
+                    "telegram_send_authority": False,
+                },
+            )
         except Exception as _le:
             print(f"[premium_log] error: {_le}")
     except Exception:
@@ -502,6 +744,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
 
         # Read LLM-generated summary if available, else reconstruct from snapshot
         summary_text = None
+        summary_message_id = None
         summary_file = run_dir / f"{symbol}_client_summary.txt"
         if summary_file.exists():
             import html as _html
@@ -515,16 +758,56 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
         if summary_text:
-            await send_message_to(chat_id, summary_text)
+            summary_message_id = await send_message_to(chat_id, summary_text)
+            try:
+                record_message_audit(
+                    chat_id=chat_id,
+                    direction="outgoing",
+                    mode="manual_analysis",
+                    event="client_summary",
+                    text=summary_text,
+                    symbol=symbol,
+                    delivery_status="sent" if summary_message_id is not None else "skipped_no_token",
+                    message_id=summary_message_id,
+                )
+            except Exception:
+                pass
 
         if png_path.exists():
             await send_photo_to(chat_id, str(png_path))
+            try:
+                record_message_audit(
+                    chat_id=chat_id,
+                    direction="outgoing",
+                    mode="manual_analysis",
+                    event="chart_photo",
+                    text=png_path.name,
+                    symbol=symbol,
+                    delivery_status="sent_or_noop",
+                )
+            except Exception:
+                pass
         else:
             await _send(chat_id, "Изображение не создано — возможно, скрин не был передан в engine.")
 
         # Disclaimer + feedback buttons — for ENTRY and WAIT signals
         snap = json.loads(snap_path.read_text(encoding="utf-8"))
         ctx = snap.get("llm_context", {})
+        try:
+            record_manual_analysis_event(
+                chat_id=str(chat_id),
+                symbol=symbol,
+                captured_at=captured_at,
+                snapshot=snap,
+                run_dir=run_dir,
+                summary_path=summary_file if summary_file.exists() else None,
+                chart_path=png_path if png_path.exists() else None,
+                report_path=run_dir / f"{symbol}_report.md",
+                snapshot_path=snap_path,
+                message_id=summary_message_id,
+            )
+        except Exception as _event_error:
+            print(f"[signal_event/manual] error | symbol={symbol} err={_event_error}")
         entry_signal = ctx.get("entry_signal", "")
         if entry_signal == "ENTRY":
             try:
@@ -637,6 +920,17 @@ async def _start_analysis(chat_id: str, symbol: str) -> None:
 
 async def _handle_image(msg: dict, file_id: str) -> None:
     chat_id = str(msg["chat"]["id"])
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="image",
+            event="photo_upload",
+            text=msg.get("caption") or "",
+            extra={"has_file_id": bool(file_id)},
+        )
+    except Exception:
+        pass
     if not is_subscribed(chat_id):
         await _tg(
             "sendMessage",
@@ -698,6 +992,16 @@ async def _handle_image(msg: dict, file_id: str) -> None:
 async def _handle_callback(cbq: dict) -> None:
     chat_id = str(cbq["message"]["chat"]["id"])
     data    = cbq.get("data", "")
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="callback",
+            event=str(data),
+            text=str(data),
+        )
+    except Exception:
+        pass
 
     if not is_subscribed(chat_id):
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
@@ -708,10 +1012,20 @@ async def _handle_callback(cbq: dict) -> None:
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         _state[chat_id] = {"status": "awaiting_symbol", "image_path": None,
                            "started_at": time.time(), "msg_date": int(time.time())}
-        await _send_pair_keyboard(chat_id)
+        await _send_analysis_categories(chat_id)
+        return
+
+    if data == "__admin__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        await _send_admin_panel(chat_id)
         return
 
     # ── Premium: show category menu ────────────────────────────────────────
+    if data == "__farm_status__":
+        await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
+        await _send_admin_farm_status(chat_id)
+        return
+
     if data == "__premium__":
         await _tg("answerCallbackQuery", callback_query_id=cbq["id"])
         await _send_premium_categories(chat_id)
@@ -795,8 +1109,22 @@ async def _handle_callback(cbq: dict) -> None:
 
     if data == "__manual__":
         await _send(chat_id, "Напиши тикер пары в формате BTC-USDT, например AVAX-USDT.")
+    elif data.startswith("paircat:"):
+        category = data.split(":", 1)[1]
+        pairs = _pairs_for_category(category)
+        if not pairs:
+            await _send(chat_id, "В этой категории сейчас нет активных пар. Выбери другую или введи пару вручную.")
+            return
+        titles = {
+            "movers": "Сейчас в движении:",
+            "majors": "Основные пары:",
+            "alts": "Альты / мемы:",
+        }
+        await _send_pair_keyboard(chat_id, pairs=pairs, title=titles.get(category, "Выбери пару:"))
     else:
-        await _start_analysis(chat_id, data)
+        symbol = _normalize_manual_symbol(data)
+        if symbol:
+            await _start_analysis(chat_id, symbol)
 
 
 async def _handle_text(msg: dict) -> None:
@@ -804,6 +1132,16 @@ async def _handle_text(msg: dict) -> None:
     text = msg.get("text", "").strip()
     if not text:
         return
+    try:
+        record_message_audit(
+            chat_id=chat_id,
+            direction="incoming",
+            mode="text",
+            event="message",
+            text=text,
+        )
+    except Exception:
+        pass
 
     # ── /start — show banner to everyone, no access check ────────────────────
     if text == "/start":
@@ -818,7 +1156,7 @@ async def _handle_text(msg: dict) -> None:
             await _tg(
                 "sendMessage",
                 chat_id=chat_id,
-                text="Нажми «🔍 Анализ» внизу чтобы начать.",
+                text="Нажми кнопку внизу: «🔍 Анализ», «⭐ VIP» или «💡 Обучение».",
                 reply_markup={"inline_keyboard": [
                     [{"text": "💬 Чат сообщества", "url": CHAT_LINK}],
                 ]},
@@ -928,9 +1266,8 @@ async def _handle_text(msg: dict) -> None:
             _reset(chat_id)
             await _send(chat_id, "Время вышло. Напиши «Анализ» чтобы начать заново.")
             return
-        # Validate format: letters/digits, dash, letters/digits (e.g. BTC-USDT)
-        symbol = text.upper()
-        if re.match(r"^[A-Z0-9]+-[A-Z0-9]+$", symbol):
+        symbol = _normalize_manual_symbol(text)
+        if symbol:
             await _start_analysis(chat_id, symbol)
         else:
             await _send(chat_id, "Не понял. Напиши в формате BTC-USDT и попробуй снова.")
@@ -947,14 +1284,20 @@ async def _handle_text(msg: dict) -> None:
         asyncio.create_task(_run_edu(chat_id, text))
         return
 
-    # idle — "анализ" (or bottom keyboard button) → show main menu
-    if "анализ" in text.lower():
+    normalized_text = text.lower()
+    if "vip" in normalized_text or "premium" in normalized_text:
+        await _send_premium_categories(chat_id)
+    elif "обуч" in normalized_text or "совет" in normalized_text:
+        _reset(chat_id)
+        _state[chat_id] = {"status": "edu_awaiting", "started_at": time.time()}
+        await _send(chat_id, "Напиши вопрос по торговле или рискам — отвечу простыми словами.")
+    elif "анализ" in normalized_text:
         await _send_main_menu(chat_id)
     else:
         await _tg(
             "sendMessage",
             chat_id=chat_id,
-            text="Нажми кнопку «🔍 Анализ» внизу чтобы начать.",
+            text="Нажми кнопку внизу: «🔍 Анализ», «⭐ VIP» или «💡 Обучение».",
             reply_markup=_MAIN_REPLY_KB,
         )
 
@@ -1056,8 +1399,6 @@ async def _scanner_loop() -> None:
     while True:
       try:
         now  = datetime.now(timezone.utc)
-        hour = now.hour
-
         # No night block — scanner runs 24/7, disclaimer added to client summary
         msk_str = f"{(now.hour+3)%24:02d}:{now.minute:02d} МСК"
         _scan_log(f"── Цикл сканирования {msk_str} ──────────────────")
@@ -1114,12 +1455,15 @@ async def _scanner_loop() -> None:
                     )
                 except Exception as _e:
                     _scan_log(f"  [signal_log] ошибка записи: {_e}")
-                # Auto-execute on operator demo account
-                try:
-                    from scripts.auto_execute import execute_signal
-                    await execute_signal(result)
-                except Exception:
-                    pass
+                # Auto-execute on operator demo account is an explicit legacy opt-in.
+                # AUTO_TRADE alone is not enough to import or call the money path.
+                if _auto_execute_opt_in():
+                    try:
+                        from scripts.auto_execute import AUTO_TRADE, execute_signal
+                        if AUTO_TRADE:
+                            await execute_signal(result)
+                    except Exception:
+                        pass
             else:
                 # Log NO_TRADE tick for live funnel analysis
                 try:
@@ -1152,9 +1496,12 @@ async def _scanner_loop() -> None:
                     _arr  = "↗️" if fade_hint == "LONG" else "↘️"
                     _band = "нижней" if fade_hint == "LONG" else "верхней"
                     def _fp(v):
-                        if v is None: return "?"
-                        if v >= 1000: return f"{v:.1f}"
-                        if v >= 10:   return f"{v:.3f}"
+                        if v is None:
+                            return "?"
+                        if v >= 1000:
+                            return f"{v:.1f}"
+                        if v >= 10:
+                            return f"{v:.3f}"
                         return f"{v:.5f}"
                     _until = result.get("expiry_time", "")
                     fade_msg = (
@@ -1215,12 +1562,15 @@ async def _scanner_loop() -> None:
 
             last_signal[pair] = signal
 
-        # Check timeouts on auto-positions
-        try:
-            from scripts.auto_execute import check_and_close_timeouts
-            await check_and_close_timeouts()
-        except Exception:
-            pass
+        # Check timeouts on legacy auto-positions only when the same explicit
+        # legacy opt-in is set. AUTO_TRADE alone is not a Telegram-bot trigger.
+        if _auto_execute_opt_in():
+            try:
+                from scripts.auto_execute import AUTO_TRADE, check_and_close_timeouts
+                if AUTO_TRADE:
+                    await check_and_close_timeouts()
+            except Exception:
+                pass
 
         # Sleep until next :00/:15/:30/:45
         now      = datetime.now(timezone.utc)

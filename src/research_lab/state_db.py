@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -91,9 +91,86 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_spec_active
             ON queue(spec_path)
             WHERE status IN ('queued', 'running');
+
+        -- Schema v3 (additive): a richer per-candidate result row for the
+        -- universe farm + a per-run backend/runtime ledger. New tables only, so
+        -- existing DBs gain them empty on next init_db (no destructive migration).
+        CREATE TABLE IF NOT EXISTS farm_results (
+            run_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            asset_group TEXT NOT NULL DEFAULT '',
+            timeframe TEXT NOT NULL DEFAULT '',
+            family TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            validation_status TEXT NOT NULL DEFAULT '',
+            backend TEXT NOT NULL DEFAULT '',
+            n_trades INTEGER NOT NULL DEFAULT 0,
+            win_rate REAL NOT NULL DEFAULT 0,
+            avg_net_pct REAL NOT NULL DEFAULT 0,
+            test_avg_net_pct REAL NOT NULL DEFAULT 0,
+            profit_factor REAL NOT NULL DEFAULT 0,
+            data_file TEXT NOT NULL DEFAULT '',
+            data_quality TEXT NOT NULL DEFAULT '',
+            next_action TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT '',
+            -- schema v4: richer decision-machine tracking
+            max_drawdown_pct REAL NOT NULL DEFAULT 0,
+            gpu_signal_supported INTEGER NOT NULL DEFAULT 0,
+            hard_status TEXT NOT NULL DEFAULT '',
+            validation_exported INTEGER NOT NULL DEFAULT 0,
+            paper_status TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (run_id, candidate_id),
+            FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_farm_results_group_family
+            ON farm_results(asset_group, family);
+        CREATE INDEX IF NOT EXISTS idx_farm_results_decision ON farm_results(decision);
+
+        CREATE TABLE IF NOT EXISTS runtime_stats (
+            run_id TEXT PRIMARY KEY,
+            requested_backend TEXT NOT NULL DEFAULT '',
+            effective_backend TEXT NOT NULL DEFAULT '',
+            signal_backend TEXT NOT NULL DEFAULT '',
+            simulation_backend TEXT NOT NULL DEFAULT '',
+            gpu_available INTEGER NOT NULL DEFAULT 0,
+            fallback_reason TEXT NOT NULL DEFAULT '',
+            accelerated_runs INTEGER NOT NULL DEFAULT 0,
+            elapsed_ms REAL NOT NULL DEFAULT 0,
+            timeframe TEXT NOT NULL DEFAULT '',
+            n_results INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS paper_outcomes (
+            trade_id TEXT PRIMARY KEY,
+            setup_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            family TEXT NOT NULL,
+            direction TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            outcome TEXT NOT NULL DEFAULT '',
+            opened_at TEXT NOT NULL DEFAULT '',
+            closed_at TEXT NOT NULL DEFAULT '',
+            net_pct REAL NOT NULL DEFAULT 0,
+            r_multiple REAL NOT NULL DEFAULT 0,
+            data_fingerprint TEXT NOT NULL DEFAULT '',
+            params_hash TEXT NOT NULL DEFAULT '',
+            recorded_at TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_paper_outcomes_candidate
+            ON paper_outcomes(candidate_id, recorded_at);
         """
     )
     _migrate_candidate_columns(conn)
+    _migrate_farm_results_columns(conn)
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
@@ -107,6 +184,23 @@ def _migrate_candidate_columns(conn: sqlite3.Connection) -> None:
     for column in ("validation_status", "validation_reasons", "next_action"):
         if column not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
+
+def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
+    """Schema v3 -> v4: add decision-machine columns to a pre-existing farm_results."""
+    if not list(conn.execute("PRAGMA table_info(farm_results)")):
+        return  # table created fresh with v4 columns already
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(farm_results)")}
+    additions = {
+        "max_drawdown_pct": "REAL NOT NULL DEFAULT 0",
+        "gpu_signal_supported": "INTEGER NOT NULL DEFAULT 0",
+        "hard_status": "TEXT NOT NULL DEFAULT ''",
+        "validation_exported": "INTEGER NOT NULL DEFAULT 0",
+        "paper_status": "TEXT NOT NULL DEFAULT ''",
+    }
+    for column, decl in additions.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE farm_results ADD COLUMN {column} {decl}")
 
 
 def import_completed_runs(private_root: Path, db_path: Path | None = None) -> dict[str, int]:
@@ -197,6 +291,8 @@ def import_run_dir(conn: sqlite3.Connection, private_root: Path, run_dir: Path) 
                 str(row.get("next_action") or ""),
             ),
         )
+    _import_farm_results(conn, run_id, payload, rows)
+    _import_runtime_stats(conn, run_id, payload, len(rows))
     return len(rows)
 
 
@@ -468,6 +564,131 @@ def _decision_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
         decision = str(row.get("decision") or "UNKNOWN")
         counts[decision] = counts.get(decision, 0) + 1
     return counts
+
+
+def _group_map() -> dict[str, str]:
+    """symbol -> universe group (best effort; '' for all if universe unavailable)."""
+    try:
+        from src.research_lab.universe import load_universe
+        uni = load_universe()
+        return {sym: group for group, members in uni.groups.items() for sym in members}
+    except Exception:
+        return {}
+
+
+def _norm_symbol(symbol: str) -> str:
+    return str(symbol).replace("-", "_").replace("/", "_").upper()
+
+
+def _row_metric(row: dict[str, Any], key: str) -> Any:
+    """Read a metric from a metrics.json row (nested) or a candidates.csv row (flat)."""
+    metrics = row.get("metrics")
+    if isinstance(metrics, dict) and key in metrics:
+        return metrics[key]
+    return row.get(key)
+
+
+def _data_quality(n_trades: int, min_trades: int) -> str:
+    if n_trades <= 0:
+        return "no_trades"
+    if min_trades and n_trades < min_trades:
+        return "thin"
+    return "ok"
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _import_farm_results(
+    conn: sqlite3.Connection, run_id: str, payload: dict[str, Any], rows: list[dict[str, Any]]
+) -> None:
+    """Richer per-candidate result rows (group/timeframe/backend/data_quality)."""
+    from src.research_lab.gpu_runtime import GPU_SUPPORTED_FAMILIES
+    runtime = (payload.get("runtime") if isinstance(payload, dict) else {}) or {}
+    backend = str(runtime.get("effective_backend") or runtime.get("signal_backend") or "")
+    created_at = str((payload or {}).get("created_at") or utc_now())
+    top_tf = str((payload or {}).get("timeframe") or "")
+    plan_meta = (payload.get("plan_meta") if isinstance(payload, dict) else {}) or {}
+    planned_group = str(plan_meta.get("group") or "") if isinstance(plan_meta, dict) else ""
+    group_map = _group_map()
+    conn.execute("DELETE FROM farm_results WHERE run_id = ?", (run_id,))
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        family = str(row.get("family") or "")
+        n_trades = _as_int(_row_metric(row, "n_trades"))
+        min_trades = _as_int(_row_metric(row, "min_trades"))
+        conn.execute(
+            """
+            INSERT INTO farm_results(
+                run_id, candidate_id, symbol, asset_group, timeframe, family, decision,
+                validation_status, backend, n_trades, win_rate, avg_net_pct,
+                test_avg_net_pct, profit_factor, data_file, data_quality, next_action, created_at,
+                max_drawdown_pct, gpu_signal_supported
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                run_id,
+                str(row.get("run_id") or row.get("candidate_id") or ""),
+                symbol,
+                planned_group or group_map.get(_norm_symbol(symbol), ""),
+                str(_row_metric(row, "data_file_timeframe") or top_tf or ""),
+                family,
+                str(row.get("decision") or "UNKNOWN"),
+                str(row.get("validation_status") or ""),
+                backend,
+                n_trades,
+                _as_float(_row_metric(row, "win_rate")),
+                _as_float(_row_metric(row, "avg_net_pct")),
+                _as_float(_row_metric(row, "test_avg_net_pct")),
+                _as_float(_row_metric(row, "profit_factor")),
+                str(_row_metric(row, "data_file_label") or ""),
+                _data_quality(n_trades, min_trades),
+                str(row.get("next_action") or ""),
+                created_at,
+                _as_float(_row_metric(row, "max_drawdown_pct")),
+                1 if family in GPU_SUPPORTED_FAMILIES else 0,
+            ),
+        )
+
+
+def _import_runtime_stats(
+    conn: sqlite3.Connection, run_id: str, payload: dict[str, Any], n_results: int
+) -> None:
+    """Per-run backend/runtime ledger so the status report can show CPU/GPU split."""
+    runtime = (payload.get("runtime") if isinstance(payload, dict) else {}) or {}
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO runtime_stats(
+            run_id, requested_backend, effective_backend, signal_backend, simulation_backend,
+            gpu_available, fallback_reason, accelerated_runs, elapsed_ms, timeframe, n_results, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            run_id,
+            str(runtime.get("requested_backend") or (payload or {}).get("requested_backend") or ""),
+            str(runtime.get("effective_backend") or ""),
+            str(runtime.get("signal_backend") or ""),
+            str(runtime.get("simulation_backend") or ""),
+            1 if runtime.get("gpu_available") else 0,
+            str(runtime.get("fallback_reason") or runtime.get("simulation_fallback_reason") or ""),
+            _as_int(runtime.get("accelerated_runs")),
+            _as_float(runtime.get("elapsed_ms")),
+            str((payload or {}).get("timeframe") or ""),
+            _as_int(n_results),
+            str((payload or {}).get("created_at") or utc_now()),
+        ),
+    )
 
 
 def _reasons_text(row: dict[str, Any]) -> str:
