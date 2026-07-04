@@ -316,6 +316,8 @@ def _print_cycle(out: dict) -> None:
             f"duplicate_cards={td.get('duplicate_cards', 0)} "
             f"skipped_messages={td.get('skipped_messages', td.get('skipped', 0))} "
             f"errors={td.get('error_messages', td.get('errors', 0))} "
+            f"status_digest_sent={td.get('status_digest_sent_messages', 0)} "
+            f"status_digest_reason={td.get('status_digest_reason') or '-'} "
             f"dry_run={td.get('dry_run')} sends_network={td.get('sends_network')}"
         )
     train = out.get("paper_signal_training_export") or {}
@@ -919,6 +921,8 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         paper_chat_ids_count=len(delivery_config["ids"]),
                         recipient_ids=delivery_config["ids"],
                         send_text=delivery_config["send_text"],
+                        status_digest=bool(getattr(args, "paper_telegram_status_digest", False)),
+                        status_digest_interval_hours=int(getattr(args, "paper_telegram_status_digest_hours", 12)),
                     )
                     if delivery_config.get("config_error"):
                         out["paper_telegram_delivery"]["config_error"] = delivery_config["config_error"]
@@ -1147,6 +1151,13 @@ def main() -> None:
     ap.add_argument("--paper-telegram-limit", type=int,
                     default=int(os.getenv("STRATEGY_LAB_PAPER_TELEGRAM_SEND_LIMIT", "20")),
                     help="max paper Telegram previews delivered/audited per cycle")
+    ap.add_argument("--paper-telegram-status-digest", action="store_true",
+                    default=_env_flag("STRATEGY_LAB_PAPER_TELEGRAM_STATUS_DIGEST"),
+                    help=("when paper Telegram sending is enabled, send a bounded status digest if "
+                          "no new card was sent because cards are duplicate or quality-gated"))
+    ap.add_argument("--paper-telegram-status-digest-hours", type=int,
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_TELEGRAM_STATUS_DIGEST_HOURS", "12")),
+                    help="dedup bucket size for paper Telegram status digest")
     ap.add_argument("--enrich-funding", action="store_true", help="enable public funding enrichment tasks")
     ap.add_argument("--enrich-oi", action="store_true", help="enable public open-interest enrichment tasks")
     ap.add_argument("--backend", choices=["cpu", "auto", "gpu"], default="auto")

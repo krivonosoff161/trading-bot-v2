@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -19,6 +20,7 @@ from typing import Any, Awaitable, Callable
 SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
 DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
+REQUIRED_DISCLAIMER = "research-only, not an order"
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,10 @@ def _sent_keys_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_sent_keys.json"
 
 
+def _quality_report_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
+
+
 def _load_sent_keys(private_root: Path) -> set[str]:
     path = _sent_keys_path(private_root)
     if not path.exists():
@@ -116,9 +122,20 @@ def _valid_preview(item: dict[str, Any]) -> tuple[bool, str]:
         return False, "preview_has_problems"
     if not str(item.get("text") or "").strip():
         return False, "missing_text"
-    if "research-only, not an order" not in str(item.get("text") or ""):
+    if REQUIRED_DISCLAIMER not in str(item.get("text") or ""):
         return False, "missing_research_disclaimer"
     return True, ""
+
+
+def _load_quality_report(private_root: Path) -> dict[str, Any]:
+    path = _quality_report_path(private_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 async def _send_items(
@@ -174,6 +191,75 @@ def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
     return f"{str(item.get('preview_id') or '')}:{_recipient_hash(recipient_id)}"
 
 
+def _status_digest_reason(
+    *,
+    source: dict[str, Any],
+    accepted: list[dict[str, Any]],
+    deliveries: list[PaperTelegramDelivery],
+    recipient_count: int,
+) -> str:
+    if not source:
+        return ""
+    sent = sum(1 for delivery in deliveries if delivery.status == "sent")
+    duplicates = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
+    if accepted and sent == 0 and recipient_count > 0 and duplicates >= len(accepted) * recipient_count:
+        return "all_cards_duplicate"
+    if not accepted and int(source.get("records_read") or 0) > 0:
+        if int(source.get("skipped_quality_gate") or 0) > 0:
+            return "quality_gate_no_cards"
+        if int(source.get("skipped_non_actionable") or 0) > 0:
+            return "non_actionable_no_cards"
+    return ""
+
+
+def _status_digest_preview(
+    private_root: Path,
+    *,
+    source: dict[str, Any],
+    reason: str,
+    now: float,
+    interval_hours: int,
+) -> dict[str, Any]:
+    quality = _load_quality_report(private_root)
+    bucket_seconds = max(1, int(interval_hours)) * 3600
+    bucket = int(now // bucket_seconds)
+    quality_labels = quality.get("quality_labels") or {}
+    outcomes = quality.get("training_by_result") or {}
+    text = "\n".join(
+        [
+            "<b>Paper bot status</b>",
+            REQUIRED_DISCLAIMER,
+            "execution_allowed=false",
+            "",
+            f"<b>Reason:</b> <code>{reason}</code>",
+            f"<b>Preview:</b> rendered=<code>{source.get('rendered', 0)}</code> "
+            f"quality_skip=<code>{source.get('skipped_quality_gate', 0)}</code>",
+            f"<b>Action:</b> <code>{quality.get('operator_action') or 'monitor'}</code>",
+            f"<b>Active paper:</b> <code>{quality.get('active_trades', 0)}</code> "
+            f"live_ready=<code>{quality.get('active_live_ready', 0)}</code>",
+            f"<b>Quality:</b> <code>{json.dumps(quality_labels, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Outcomes:</b> <code>{json.dumps(outcomes, ensure_ascii=False, sort_keys=True)}</code>",
+            "",
+            "<i>No new subscriber card was sent in this cycle; the paper loop is still running.</i>",
+        ]
+    )
+    return {
+        "schema": "PaperTelegramPreview.v1",
+        "preview_id": f"paper_status_digest_{bucket}",
+        "instruction_id": "",
+        "source_signal_id": "paper_status_digest",
+        "pair": "PAPER-STATUS",
+        "timeframe": "digest",
+        "side": "none",
+        "setup_family": "paper_status",
+        "consumer_status": "status_digest",
+        "text": text,
+        "problems": [],
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
 def _delivery_from_preview(
     item: dict[str, Any],
     *,
@@ -210,6 +296,9 @@ def send_paper_telegram_previews(
     paper_chat_ids_count: int = 0,
     recipient_ids: list[str] | None = None,
     send_text: Callable[[str, str], Awaitable[int | None]] | None = None,
+    status_digest: bool = False,
+    status_digest_interval_hours: int = 12,
+    now: float | None = None,
 ) -> dict[str, Any]:
     """Dry-run or send validated paper previews to active subscriber bot chats.
 
@@ -223,6 +312,7 @@ def send_paper_telegram_previews(
     sent_keys = _load_sent_keys(private_root)
     accepted: list[dict[str, Any]] = []
     deliveries: list[PaperTelegramDelivery] = []
+    status_digest_reason = ""
     invalid = 0
     for item in items:
         ok, problem = _valid_preview(item)
@@ -242,6 +332,21 @@ def send_paper_telegram_previews(
         )
     else:
         deliveries.extend(asyncio.run(_send_items(accepted, recipient_ids, send_text, sent_keys)))
+        status_digest_reason = _status_digest_reason(
+            source=source,
+            accepted=accepted,
+            deliveries=deliveries,
+            recipient_count=len(recipient_ids),
+        )
+        if status_digest and status_digest_reason:
+            digest_item = _status_digest_preview(
+                Path(private_root),
+                source=source,
+                reason=status_digest_reason,
+                now=time.time() if now is None else now,
+                interval_hours=status_digest_interval_hours,
+            )
+            deliveries.extend(asyncio.run(_send_items([digest_item], recipient_ids, send_text, sent_keys)))
         _save_sent_keys(private_root, sent_keys)
 
     out_jsonl = _delivery_jsonl_path(private_root)
@@ -255,6 +360,16 @@ def send_paper_telegram_previews(
     duplicate_messages = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
     skipped_messages = sum(1 for delivery in deliveries if delivery.status.startswith("skipped"))
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
+    digest_messages = sum(
+        1
+        for delivery in deliveries
+        if delivery.source_signal_id == "paper_status_digest" and delivery.status == "sent"
+    )
+    digest_duplicates = sum(
+        1
+        for delivery in deliveries
+        if delivery.source_signal_id == "paper_status_digest" and delivery.status == "skipped_duplicate"
+    )
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": source.get("schema", ""),
@@ -283,6 +398,10 @@ def send_paper_telegram_previews(
         "errors": error_messages,
         "error_messages": error_messages,
         "error_cards": _unique_preview_count(deliveries, "error"),
+        "status_digest_enabled": bool(status_digest),
+        "status_digest_reason": status_digest_reason,
+        "status_digest_sent_messages": digest_messages,
+        "status_digest_duplicate_messages": digest_duplicates,
         "paper_only": True,
         "execution_allowed": False,
         "sends_network": bool(apply and paper_chat_configured and send_text is not None and recipient_ids),
