@@ -234,14 +234,55 @@ def test_status_report_paused_work_mentions_running_loop(tmp_path, capsys):
 
     report = collect(default_db_path(tmp_path), fast=True)
     report["farm_loop_status"]["active"] = True
-    report["farm_loop_status"]["age_seconds"] = 20
-    report["farm_loop_status"]["fresh"] = True
 
     _print(report)
     out = capsys.readouterr().out
     assert "COMPLETION: PAUSED_WITH_WORK" in out
     assert "loop running stage=sleep" in out
     assert "loop stopped with claimable work" not in out
+
+
+def test_status_report_dead_pid_does_not_look_running(tmp_path, capsys, monkeypatch):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    conn.close()
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    try:
+        tasks.enqueue_task(
+            task_type="run_sweep",
+            task_key="sweep:btc",
+            symbol="BTC_USDT_SWAP",
+            timeframe="1h",
+            family="momentum_breakout",
+            now=1000.0,
+        )
+    finally:
+        tasks.close()
+    status = tmp_path / "state" / "farm_loop_status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 123,
+                "stage": "sleep",
+                "updated_at": farm_status_report.time.time(),
+                "loop": True,
+                "paper_only": True,
+                "execution_allowed": False,
+                "details": {"sleep_seconds": 120},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(farm_status_report, "_pid_is_alive", lambda _pid: False)
+
+    _print(collect(default_db_path(tmp_path), fast=True))
+    out = capsys.readouterr().out
+
+    assert "COMPLETION: PAUSED_WITH_WORK" in out
+    assert "loop running stage=sleep" not in out
+    assert "loop stopped with claimable work" in out
 
 
 def test_status_report_prints_paper_telegram_delivery(tmp_path, capsys):

@@ -129,9 +129,10 @@ def _farm_loop_status(private_root: Path, *, now: float | None = None) -> dict[s
     pid = int(data.get("pid") or 0)
     fresh = bool(updated_at and age_seconds is not None and age_seconds <= freshness_limit)
     pid_alive = _pid_is_alive(pid)
+    active = bool(data.get("loop") and (pid_alive or (pid <= 0 and fresh)))
     return {
         "available": True,
-        "active": bool(data.get("loop") and (fresh or pid_alive)),
+        "active": active,
         "fresh": fresh,
         "age_seconds": age_seconds,
         "stage": data.get("stage"),
