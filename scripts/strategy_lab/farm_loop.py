@@ -325,6 +325,16 @@ def _print_cycle(out: dict) -> None:
             f"rows={product_train.get('rows', 0)} source_rows={product_train.get('source_rows', 0)} "
             f"paper_only={product_train.get('paper_only')}"
         )
+    quality = out.get("paper_product_quality_report") or {}
+    if quality:
+        print(
+            "  paper_product_quality_report: "
+            f"rows={quality.get('training_rows', 0)} active={quality.get('active_trades', 0)} "
+            f"active_live_ready={quality.get('active_live_ready', 0)} "
+            f"action={quality.get('operator_action')} "
+            f"families={len(quality.get('families') or [])} "
+            f"execution_allowed={quality.get('execution_allowed')}"
+        )
     journal_export = out.get("journal_export") or {}
     if journal_export:
         print(
@@ -401,6 +411,11 @@ def _cycle_summary(out: dict) -> dict:
             "accepted": (out.get("calculator_advisor") or {}).get("accepted", 0),
             "blocked": (out.get("calculator_advisor") or {}).get("blocked", 0),
         },
+        "paper_product_quality": {
+            "operator_action": (out.get("paper_product_quality_report") or {}).get("operator_action", ""),
+            "families": len((out.get("paper_product_quality_report") or {}).get("families") or []),
+            "quality_labels": (out.get("paper_product_quality_report") or {}).get("quality_labels") or {},
+        },
     }
 
 
@@ -420,6 +435,7 @@ def _cycle_signature(out: dict) -> tuple:
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
     product_training_export = tuple(sorted((out.get("product_signal_training_export") or {}).items()))
+    product_quality = tuple(sorted((out.get("paper_product_quality_report") or {}).items()))
     calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
     agent_role_reviews = tuple(sorted((out.get("agent_role_reviews") or {}).items()))
     ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
@@ -427,7 +443,7 @@ def _cycle_signature(out: dict) -> tuple:
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, product_trade_ledger,
         telegram_preview,
-        telegram_delivery, training_export, product_training_export, calculator_advisor,
+        telegram_delivery, training_export, product_training_export, product_quality, calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
@@ -906,6 +922,21 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
                     out.setdefault("errors", []).append({
                         "where": "product_signal_training_export",
+                        "error": str(exc),
+                    })
+                try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_product_quality_report",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
+                    from src.research_lab.paper_product_quality_report import build_paper_product_quality_report
+                    out["paper_product_quality_report"] = build_paper_product_quality_report(private_root)
+                except Exception as exc:  # noqa: BLE001 - aggregate report must not break the cycle
+                    out.setdefault("errors", []).append({
+                        "where": "paper_product_quality_report",
                         "error": str(exc),
                     })
                 if getattr(args, "run_journal_export", False):
