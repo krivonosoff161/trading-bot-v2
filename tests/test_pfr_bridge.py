@@ -603,6 +603,7 @@ def test_near_trigger_breakout_generates_pretrigger_watch():
             return _flat_candles()
 
     sc: dict = {}
+    gap_samples: list[dict] = []
     sigs = pfr_bridge.generate_pfr_signals(
         rows,
         provider=Provider(),
@@ -615,6 +616,7 @@ def test_near_trigger_breakout_generates_pretrigger_watch():
         max_pfr_fetches=1,
         timeframes=("4h",),
         status_counts=sc,
+        gap_samples=gap_samples,
     )
 
     assert len(sigs) == 1
@@ -628,6 +630,10 @@ def test_near_trigger_breakout_generates_pretrigger_watch():
     assert sig.validator_context["trigger_gap_pct"] <= 1.0
     assert sc["pfr_generated"] == 1
     assert sc["pfr_generated_pretrigger"] == 1
+    assert len(gap_samples) == 1
+    assert gap_samples[0]["schema"] == "PFRGapSample.v1"
+    assert gap_samples[0]["bucket"].startswith("breakout_")
+    assert gap_samples[0]["selection_state"] == "pretrigger_selected"
 
 
 class TestPFRBridgeNoBoundaryViolation:
@@ -673,8 +679,15 @@ class TestPFRCycleIntegration:
         )
         sigs = store.load_signals(tmp_path)
         pfr_sigs = [s for s in sigs if s.source == "pfr_farm"]
+        telemetry = tmp_path / "state" / "derived" / "pfr_gap_telemetry.jsonl"
         assert rep["pfr_counts"].get("pfr_records_loaded", 0) >= 1
         assert len(pfr_sigs) >= 1
+        assert rep["pfr_gap_samples"] >= 1
+        assert telemetry.exists()
+        row = json.loads(telemetry.read_text(encoding="utf-8").splitlines()[-1])
+        assert row["schema"] == "PFRGapTelemetryCycle.v1"
+        assert row["summary"]["samples"] >= 1
+        assert row["all_research_only"] is True
         # Identity fields must be preserved in validator_context
         s = pfr_sigs[0]
         assert s.validator_context.get("setup_id") == "setup-C1"

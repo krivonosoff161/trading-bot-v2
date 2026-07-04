@@ -38,6 +38,10 @@ def _status_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_signals_status.json"
 
 
+def _pfr_gap_telemetry_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "pfr_gap_telemetry.jsonl"
+
+
 def record_memory(private_root: Path, sig: PaperActionSignal) -> None:
     """Append a terminal outcome as a learning row (research-only knowledge, not edge)."""
     row = {"ts": round(sig.created_at, 1), "dedup_key": sig.dedup_key, "symbol": sig.symbol,
@@ -355,6 +359,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
 
     # (3) PFR lane - bounded separate source, runs after movers so dedup is shared
     pfr_counts: dict[str, int] = {}
+    pfr_gap_samples: list[dict[str, Any]] = []
     if pfr_db_path is not None and len(new_sigs) < max_new:
         if pfr_reserved:
             pfr_counts["pfr_reserved_slots"] = pfr_reserved
@@ -394,6 +399,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             status_counts=pfr_counts,
             max_pfr_scan=max_pfr_scan,
             max_pfr_fetches=max_pfr_fetches,
+            gap_samples=pfr_gap_samples,
         )
         new_sigs.extend(pfr_sigs)
         # gate_counts merged for single report surface
@@ -409,6 +415,8 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             if sig.status in TERMINAL:
                 record_memory(private_root, sig)
         store.write_state_snapshot(private_root)
+        if pfr_gap_samples:
+            _append_pfr_gap_telemetry(private_root, pfr_gap_samples, pfr_counts, now)
 
     report = {"mode": mode, "apply": apply, "observed": observed, "closed": closed,
               "generated": len(new_sigs), "gate_counts": gate_counts,
@@ -419,12 +427,39 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               "pipeline_counts": _pipeline_counts(gate_counts, generated=len(new_sigs), observed=observed),
               "resource_caps": default_caps().to_dict(),
               "pfr_counts": pfr_counts,
+              "pfr_gap_samples": len(pfr_gap_samples),
               "max_pfr_fetches": max_pfr_fetches,
               "state": store.current_state_view(private_root)["by_status"] if apply else {},
               "new_cards": [s.signal_id for s, _ in new_sigs]}
     if apply:
         _write_status(private_root, report, now)
     return report
+
+
+def _append_pfr_gap_telemetry(
+    private_root: Path,
+    samples: list[dict[str, Any]],
+    pfr_counts: dict[str, int],
+    now: float,
+) -> Path:
+    selected = sum(1 for sample in samples if str(sample.get("selection_state") or "").endswith("_selected"))
+    payload = {
+        "schema": "PFRGapTelemetryCycle.v1",
+        "updated_at": round(now, 1),
+        "summary": {
+            "samples": len(samples),
+            "selected": selected,
+            "counts": dict(pfr_counts),
+        },
+        "samples": samples,
+        "all_research_only": True,
+        "disclaimer": "private calibration telemetry; PFR watch only; NOT orders",
+    }
+    path = _pfr_gap_telemetry_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    return path
 
 
 def _pipeline_counts(gate_counts: dict[str, int], *, generated: int, observed: int) -> dict[str, Any]:
