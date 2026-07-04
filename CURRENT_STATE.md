@@ -1,6 +1,26 @@
 # Current State
 
-Updated: 2026-06-27
+Updated: 2026-07-03
+
+> **Update 2026-07-03 - running, but only as paper/research backbone.**
+> The canonical visible farm loop is alive (`python pid=18900`, stage `sleep`) on
+> `feature/calc-farm` at `7bbc65c feat: harden farm loop observability`.
+> `operational_health` has no blocking gates and reports the visible
+> farm/PFR/paper/main-paper/journal cycle as assembled. The verified mode is still
+> `paper_only=true`, `execution_allowed=false`, `AUTO_TRADE=false`. The current chain
+> is validator-backed paper observation, not old-main live execution:
+> `farm_loop -> validation/PFR -> paper_signals -> main_paper_bridge ->
+> main_paper_consumer -> main_adaptive_policy -> main_paper_runtime_queue ->
+> main_paper_runtime_observation -> main_paper_trade_ledger -> Telegram preview/audit
+> -> training export -> journal`. See
+> [docs/session_handoff_2026-07-03.md](docs/session_handoff_2026-07-03.md).
+>
+> **Important mismatch:** the user expected a main-style "what if we opened this?"
+> paper executor that makes forecasts, writes pseudo-trades, and later records outcomes.
+> The current code is stricter: only validator/PFR-backed rows with a ready strategy id
+> are allowed into the main-paper watch queue. Broad research paper signals are retained
+> for training/research and are not subscriber/main cards. The next product step is a
+> reviewed `main_paper_executor` contract, not wiring old `main.py` into the farm.
 
 > **Update 2026-06-27 - visible paper/research loop acceptance.**
 > `operational_health` now has a single aggregate gate:

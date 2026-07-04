@@ -1,6 +1,30 @@
 # Farm Runbook - Active Operator Path
 
-Status: **ACTIVE**. Last updated: 2026-06-27.
+Status: **ACTIVE**. Last updated: 2026-07-03.
+
+Current handoff:
+[`session_handoff_2026-07-03.md`](session_handoff_2026-07-03.md).
+
+## Current Reality Check - 2026-07-03
+
+The project can be running and still not mean that the old main trading engine is active.
+The current verified runtime is:
+
+- canonical farm loop: running
+- process: `python pid=18900`
+- mode: `paper_only=true`
+- execution: `execution_allowed=false`
+- `AUTO_TRADE=false`
+- old live `main.py`: isolated
+- subscriber/main cards: only validator/PFR-backed rows may pass the main-paper bridge
+- broad research paper signals: kept for training/research, not sent as main cards
+
+This is the correct safety state for collection. It is **not** yet the final product
+behavior the user wants from a main-style paper executor.
+
+The next reviewed build should add a separate `main_paper_executor` contract for
+"what if we opened this trade?" behavior. It must compute and record pseudo-trades and
+outcomes while staying paper-only. Do not wire the farm directly into old `main.py`.
 
 Current revival audit:
 [`trading_cycle_revival_audit_2026-06-27.md`](trading_cycle_revival_audit_2026-06-27.md).

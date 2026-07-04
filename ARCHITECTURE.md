@@ -1,8 +1,19 @@
 # Architecture
 
-Updated: 2026-06-27
+Updated: 2026-07-03
 
 ## Boundary
+
+> **Update 2026-07-03 - main-paper watcher vs main-style executor.** The active runtime
+> is health-green as a paper/research backbone, but it is not yet the user's expected
+> main-paper product. The current main-compatible path is a validator-backed watcher:
+> `paper_signals/PFR -> main_paper_bridge -> main_paper_consumer ->
+> main_adaptive_policy -> main_paper_runtime_queue -> main_paper_runtime_observation ->
+> main_paper_trade_ledger`. It writes paper lifecycle/training data with
+> `execution_allowed=false`. It does not make the old `main.py` consume farm outputs, and
+> it does not let broad unvalidated farm paper signals become subscriber trading cards.
+> A future "what if opened" main-paper executor must be a separate reviewed contract,
+> not a direct revival of old `main.py`.
 
 > **Update 2026-06-27 - paper/main/Telegram ownership.** The active architecture now
 > has a rebuildable paper handoff after the farm: paper signals/PFR ->
@@ -27,6 +38,12 @@ The project has three contours:
 3. **Frozen/reference:** old WebSocket Main/TA and paper engines (confirmation/risk/level
    context only; their useful strategy logic is already ported into research_lab families).
 
+Current fourth surface:
+
+4. **Paper product bridge:** `main_paper_*` modules. These are not live execution. They
+   translate validator-backed paper rows into a watch queue, observation ledger, readable
+   Telegram previews/audits, and training rows.
+
 Neither the scanner nor the farm may place orders. The farm is fully isolated from the
 money path (no `.env`/`AUTO_TRADE`/orders/private endpoints/Telegram), enforced by an AST
 import test over the farm modules.
@@ -50,6 +67,25 @@ intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery snapshot)
   -> pivot (work_available / advanced_lifecycle / discovery_refill / blocked:no_eligible_tasks)
   -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
 ```
+
+## Current Paper Product Flow
+
+This is the running post-farm paper path:
+
+```text
+paper_signals / PFR-ready rows
+  -> main_paper_bridge              (requires validator/PFR-ready strategy identity)
+  -> main_paper_consumer            (contract validation, paper-only)
+  -> main_adaptive_policy           (bounded profile labels, no price authority)
+  -> main_paper_runtime_queue       (runtime_action=watch_paper)
+  -> main_paper_runtime_observation (public candles, pending/reviewed/provider-error)
+  -> main_paper_trade_ledger        (paper pseudo-trade lifecycle)
+  -> paper_telegram_preview         (human card preview/audit)
+  -> paper_signal_training_export   (training rows)
+```
+
+The current path is deliberately stricter than a raw main scan. It refuses broad research
+signals when they have no `ready_strategy_id`; those rows stay in research/training.
 
 ## Scanner Intake Flow (upstream source, not the center)
 

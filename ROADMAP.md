@@ -1,11 +1,22 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-06-27
+Updated: 2026-07-03
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
+
+> **Update 2026-07-03 - next work is not "more loop"; it is the safe main-paper
+> executor.** The paper/research backbone is running and health-green. The gap is product
+> semantics: the user expects a main-style paper executor that behaves like "what if we
+> opened the trade", records the pseudo-trade and outcome, and produces readable
+> subscriber cards. Current code only observes validator/PFR-backed paper rows through
+> a strict `watch_paper` queue. Therefore the next roadmap item is to design and build a
+> separate reviewed `main_paper_executor` / card contract that consumes only validated
+> setups, uses shared deterministic math for levels and risk, allows LLM advice only
+> through bounded schemas, writes trade/outcome/training rows, and keeps
+> `execution_allowed=false`. Do not connect old live `main.py` directly.
 
 > **Update 2026-06-27 - revival acceptance gate.** The current work is not to revive
 > the old live engine. The active target is one visible paper/research operator cycle:

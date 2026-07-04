@@ -1,13 +1,32 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-06-19
+Updated: 2026-07-03
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
 
 ## Current State
 
-Current center: the calculation farm, not the scanner.
+Current center: the calculation farm plus the validator-backed main-paper watcher,
+not the scanner and not old live `main.py`.
+
+Read first:
+
+- `CURRENT_STATE.md`
+- `ARCHITECTURE.md`
+- `ROADMAP.md`
+- `docs/farm_runbook.md`
+- `docs/session_handoff_2026-07-03.md`
+
+Current verified runtime:
+
+- branch/head: `feature/calc-farm`, `7bbc65c feat: harden farm loop observability`
+- canonical loop: running as `python pid=18900`
+- mode: `paper_only=true`
+- execution: `execution_allowed=false`
+- `AUTO_TRADE=false`
+- old `main.py`: isolated
+- health: no blocking gates, `ready_for_visible_paper_research_loop=pass`
 
 Canonical flow:
 
@@ -20,18 +39,59 @@ farm_loop
   -> hard validation from unique_candidates
   -> stamp-back into farm_results + unique_candidates
   -> setup_library cards
-  -> paper_loop only for paper_forward_ready cards
-  -> paper_trades.jsonl + paper_outcomes
+  -> paper_signals / PFR bridge
+  -> main_paper_bridge
+  -> main_paper_consumer
+  -> main_adaptive_policy
+  -> main_paper_runtime_queue
+  -> main_paper_runtime_observation
+  -> main_paper_trade_ledger
+  -> paper_telegram_preview / paper_telegram_delivery audit
+  -> paper_signal_training_export + journal
 ```
 
 This file is local handoff context, not the canonical architecture. For current
 truth read `CURRENT_STATE.md`, `ARCHITECTURE.md`, `README.md`,
 `docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`,
-`docs/farm_ownership_map.md`, and `docs/paper_runtime_design.md`.
+`docs/farm_ownership_map.md`, `docs/paper_runtime_design.md`, and
+`docs/session_handoff_2026-07-03.md`.
 
 The scanner is still active as an upstream intake source, but it is not the
 operational center. Old `universe_farm_loop` / `scanner_farm_loop` paths are
 legacy unless a task explicitly asks to inspect them.
+
+## Critical Product Gap
+
+The user expected a main-style paper executor:
+
+```text
+"what if we opened this?"
+  -> main computes/records pseudo-position
+  -> human Telegram card
+  -> later outcome/training row
+```
+
+The current system is stricter:
+
+```text
+validator/PFR-backed paper rows only
+  -> watch_paper queue
+  -> public-candle observation
+  -> ledger/training
+```
+
+Broad farm paper signals are retained as research/training data and do **not** become
+subscriber/main cards unless they have a validator-backed `ready_strategy_id`.
+
+Next build target, if the user continues this thread:
+
+- design and implement a separate reviewed `main_paper_executor` contract;
+- keep `execution_allowed=false`;
+- use shared deterministic trade math for entry/SL/TP/RR/risk/outcome;
+- allow LLM only as bounded advisor/explainer, not price/permission authority;
+- write pseudo-trade lifecycle and outcome rows;
+- render human-readable subscriber cards;
+- do **not** wire farm outputs directly into old live/order-capable `main.py`.
 
 ## Active Safety Boundary
 
@@ -60,16 +120,16 @@ python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --run-valid
 python -m scripts.strategy_lab.farm_status_report
 python -m scripts.strategy_lab.paper_loop --once --dry-run
 python -m scripts.strategy_lab.status
+python -m scripts.strategy_lab.operational_health --private-root C:\Users\krivo\github_projects\trading-bot-research\strategy-lab --pfr-db-path C:\Users\krivo\github_projects\trading-bot-research\strategy-lab\state\strategy_lab.sqlite --json
 ```
 
 ## Next Design Work
 
-- richer paper promotion/demotion criteria;
-- one-click operator switch from legacy loops to `farm_loop`;
-- discovery ranking by movers;
-- more GPU kernels for strategy families;
-- microstructure provider when a real public/keyless or explicitly approved data
-  source exists.
+- reviewed `main_paper_executor` for main-style paper pseudo-trades and readable cards;
+- validator/PFR-to-main strategy catalog semantics;
+- clearer Telegram subscriber card ownership;
+- LLM role routing for scanner/farm/validator/main-product surfaces;
+- richer paper promotion/demotion criteria after the executor emits reliable outcomes.
 
 ## Historical Scanner Handoff Below
 
