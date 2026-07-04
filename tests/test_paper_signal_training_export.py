@@ -186,6 +186,39 @@ def test_export_training_rows_links_main_paper_trade(tmp_path):
     assert rows[0]["main_paper_status"] == "closed_take"
 
 
+def test_export_training_rows_links_product_trade_when_main_trade_missing(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+    trades = tmp_path / "state" / "derived" / "paper_product_trades.json"
+    trades.parent.mkdir(parents=True, exist_ok=True)
+    trades.write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_trade_ledger.v1",
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "paper_trade_id": "paperproducttrade_1",
+                        "paper_product_trade_id": "paperproducttrade_1",
+                        "status": "reviewed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["paper_trade_id"] == "paperproducttrade_1"
+    assert rows[0]["paper_product_trade_id"] == "paperproducttrade_1"
+    assert rows[0]["main_paper_runtime_id"] == ""
+    assert rows[0]["main_paper_status"] == "reviewed"
+
+
 def test_export_training_rows_links_calculator_advice(tmp_path):
     sig = _signal(status="reviewed")
     sig.feature_packet_id = "fp1"
