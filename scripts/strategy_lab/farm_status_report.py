@@ -394,6 +394,11 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["paper_telegram_preview"] = {}
+        try:  # Telegram delivery audit for paper cards; reading this never sends.
+            pd_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_delivery.json"
+            report["paper_telegram_delivery"] = json.loads(pd_path.read_text(encoding="utf-8")) if pd_path.exists() else {}
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["paper_telegram_delivery"] = {}
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
@@ -566,6 +571,18 @@ def _print(report: dict) -> None:
               f"rendered={pt.get('rendered', 0)} invalid={pt.get('invalid', 0)} "
               f"sends_network={pt.get('sends_network')} "
               "(offline cards; no Telegram API call)")
+    ptd = report.get("paper_telegram_delivery") or {}
+    if ptd.get("eligible_cards") is not None or ptd.get("eligible") is not None:
+        eligible = ptd.get("eligible_cards", ptd.get("eligible", 0))
+        print("  paper Telegram delivery: "
+              f"eligible_cards={eligible} targets={ptd.get('targets', 0)} "
+              f"sent_messages={ptd.get('sent_messages', ptd.get('sent', 0))} "
+              f"sent_cards={ptd.get('sent_cards', 0)} "
+              f"duplicate_messages={ptd.get('duplicate_messages', ptd.get('duplicates', 0))} "
+              f"duplicate_cards={ptd.get('duplicate_cards', 0)} "
+              f"errors={ptd.get('errors', 0)} dry_run={ptd.get('dry_run')} "
+              f"sends_network={ptd.get('sends_network')} "
+              "(audit only; no order path)")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "
