@@ -25,6 +25,7 @@ from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.pipeline_policy import add_reason, default_caps, new_stage_counts
 
 REGEN_TTL_SECONDS = 3600        # do not regenerate the same dedup_key within this window
+FETCH_WINDOW_BARS = 220         # enough for ATR/trend/lifecycle, bounded so OKX paging stays cheap
 TERMINAL = ("closed_paper", "expired", "reviewed", "invalidated")
 ACTIVE = ("candidate", "armed", "opened_paper")
 
@@ -68,7 +69,7 @@ def load_memory(private_root: Path) -> list[dict[str, Any]]:
 def _fetch(provider, symbol: str, tf: str, now_ms: int) -> list[dict[str, Any]]:
     bars_ms = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}.get(tf, 900_000)
     try:
-        return provider.fetch_ohlcv(symbol, tf, now_ms - 1500 * bars_ms, now_ms)
+        return provider.fetch_ohlcv(symbol, tf, now_ms - FETCH_WINDOW_BARS * bars_ms, now_ms)
     except Exception:  # noqa: BLE001 - network must not crash a cycle
         return []
 
