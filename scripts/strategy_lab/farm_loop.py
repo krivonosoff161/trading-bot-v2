@@ -301,6 +301,7 @@ def _print_cycle(out: dict) -> None:
         print(
             "  paper_telegram_preview: "
             f"rendered={tp.get('rendered', 0)} invalid={tp.get('invalid', 0)} "
+            f"quality_skip={tp.get('skipped_quality_gate', 0)} "
             f"sends_network={tp.get('sends_network')}"
         )
     td = out.get("paper_telegram_delivery") or {}
@@ -403,6 +404,10 @@ def _cycle_summary(out: dict) -> dict:
         },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),
+            "preview_quality_skip": (out.get("paper_telegram_preview") or {}).get("skipped_quality_gate", 0),
+            "preview_quality_skip_reasons": (
+                (out.get("paper_telegram_preview") or {}).get("quality_gate_reasons") or {}
+            ),
             "delivery_sent": (out.get("paper_telegram_delivery") or {}).get("sent", 0),
             "delivery_errors": (out.get("paper_telegram_delivery") or {}).get("errors", 0),
         },

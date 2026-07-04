@@ -123,7 +123,12 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         encoding="utf-8",
     )
     (derived / "paper_telegram_preview.json").write_text(
-        json.dumps({"rendered": 1, "execution_allowed": False}),
+        json.dumps({
+            "rendered": 1,
+            "skipped_quality_gate": 2,
+            "quality_gate_reasons": {"quality_label:needs_review": 2},
+            "execution_allowed": False,
+        }),
         encoding="utf-8",
     )
     (derived / "paper_telegram_delivery.json").write_text(
@@ -187,6 +192,8 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["product_active_by_family"] == {"continuation": 1}
     assert status["delivery_dry_run"] is True
     assert status["sends_network"] is False
+    assert status["preview_skipped_quality_gate"] == 2
+    assert status["preview_quality_gate_reasons"] == {"quality_label:needs_review": 2}
     assert status["delivery_duplicates"] == 1
     assert status["cumulative_sent_keys"] == 3
     assert status["cumulative_sent_previews"] == 2
