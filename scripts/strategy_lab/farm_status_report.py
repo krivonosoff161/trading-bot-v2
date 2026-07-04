@@ -622,6 +622,13 @@ def _print(report: dict) -> None:
             )
         if preview:
             print(f"    paper family quality: {'; '.join(preview)}")
+        pfr_state = pq.get("pfr_trigger_state") if isinstance(pq.get("pfr_trigger_state"), dict) else {}
+        if pfr_state:
+            print("    PFR live-trigger state: "
+                  f"state={pfr_state.get('state') or 'unknown'} "
+                  f"catalog_ready={pfr_state.get('catalog_ready', 0)} "
+                  f"generated={pfr_state.get('last_cycle_generated', 0)} "
+                  f"reasons={pfr_state.get('top_reasons') or {}}")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "

@@ -139,6 +139,13 @@ def test_status_report_collect(tmp_path):
                 "quality_labels": {"needs_review": 4, "mixed": 1},
                 "training_rows": 1393,
                 "training_by_result": {"take": 184, "stop": 371},
+                "pfr_trigger_state": {
+                    "state": "waiting_for_live_trigger",
+                    "catalog_ready": 43,
+                    "bridge_instructions": 0,
+                    "last_cycle_generated": 0,
+                    "top_reasons": {"pfr_rejected:no_breakout": 6},
+                },
                 "families": [
                     {
                         "family": "early_tp_tactical",
@@ -365,6 +372,13 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
                 "quality_labels": {"needs_review": 4, "mixed": 1},
                 "training_rows": 1393,
                 "training_by_result": {"take": 184, "stop": 371},
+                "pfr_trigger_state": {
+                    "state": "waiting_for_live_trigger",
+                    "catalog_ready": 43,
+                    "bridge_instructions": 0,
+                    "last_cycle_generated": 0,
+                    "top_reasons": {"pfr_rejected:no_breakout": 6},
+                },
                 "families": [
                     {
                         "family": "early_tp_tactical",
@@ -387,6 +401,9 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
     assert "active=12" in out
     assert "training_rows=1393" in out
     assert "early_tp_tactical:mixed" in out
+    assert "PFR live-trigger state:" in out
+    assert "state=waiting_for_live_trigger" in out
+    assert "pfr_rejected:no_breakout" in out
 
 
 def test_status_report_missing_db(tmp_path):
