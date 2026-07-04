@@ -70,6 +70,11 @@ def _write_quality_report(root: Path) -> None:
                     "by_outcome_result": {"pending": 12},
                     "pending_outcomes": 12,
                     "active_without_outcome": 0,
+                    "oldest_age_hours": 22.5,
+                    "next_expiry_hours": 0.5,
+                    "overdue_expiry": 0,
+                    "age_buckets": {"le_24h": 12},
+                    "expiry_buckets": {"le_1h": 1, "le_3h": 4, "le_24h": 7},
                     "terminal_training_backlog": 0,
                 },
                 "paper_only": True,
@@ -221,6 +226,8 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert "Paper bot status" in calls[1][1]
     assert "all_cards_duplicate" in calls[1][1]
     assert "pending=<code>12</code>" in calls[1][1]
+    assert "oldest_h=<code>22.5</code>" in calls[1][1]
+    assert "next_expiry_h=<code>0.5</code>" in calls[1][1]
     assert "waiting_for_live_trigger" in calls[1][1]
     assert "pfr_rejected:no_breakout" in calls[1][1]
     assert "PFR near" in calls[1][1]
