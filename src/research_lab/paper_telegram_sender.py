@@ -171,15 +171,15 @@ async def _send_items(
             status = "sent"
             chart_sent = False
             try:
-                message_id = await send_text(recipient_id, str(item.get("text") or ""))
-                if message_id is None:
-                    status = "skipped_no_token"
-                    problem = "telegram_token_not_configured"
-                elif chart_path and send_photo is not None:
+                if chart_path and send_photo is not None:
                     await send_photo(recipient_id, str(chart_path))
                     chart_sent = True
                 elif chart_path and send_photo is None:
                     chart_problem = "photo_transport_not_configured"
+                message_id = await send_text(recipient_id, str(item.get("text") or ""))
+                if message_id is None:
+                    status = "skipped_no_token"
+                    problem = "telegram_token_not_configured"
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
                 status = "error"
                 problem = type(exc).__name__
@@ -216,6 +216,7 @@ def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | N
         path = Path(raw).resolve()
         allowed_roots = (
             (Path(private_root) / "state" / "derived" / "paper_reviews").resolve(),
+            (Path(private_root) / "state" / "derived" / "paper_telegram_base_charts").resolve(),
             (Path(private_root) / "state" / "derived" / "paper_telegram_cards").resolve(),
         )
     except OSError:

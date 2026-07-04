@@ -9,6 +9,7 @@ rem Still paper-only: it does not enable AUTO_TRADE, order paths, old main.py, o
 rem private exchange endpoints.
 
 set "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM=1"
+set "STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES=1"
 call bat\paper_product_control_room.bat
 set "RC=%ERRORLEVEL%"
 endlocal
