@@ -6,7 +6,7 @@ from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
 from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
 from src.research_lab.human_feedback import create_feedback, feedback_summary, record_feedback
 from src.research_lab.lineage_backfill import build_lineage_backfill
-from src.research_lab.lineage_contract import scanner_event_from_intake, write_cycle_link
+from src.research_lab.lineage_contract import scanner_event_from_intake, write_cycle_link, write_cycle_links
 from src.research_lab.llm_provider import LLMUsage
 from src.research_lab.market_data_packet import build_market_data_packet, write_market_data_packet
 from src.research_lab.paper_signals.contract import PaperActionSignal
@@ -336,6 +336,26 @@ def test_cycle_link_write_is_idempotent(tmp_path):
     lines = (tmp_path / "state" / "lineage" / "cycle_links.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert "lineage_link_id" in lines[0]
+
+
+def test_cycle_link_batch_write_is_idempotent(tmp_path):
+    row = {
+        "scanner_event_id": "se1",
+        "data_packet_id": "mdp1",
+        "feature_packet_id": "fp1",
+        "paper_signal_id": "sig1",
+        "source": "farm",
+        "symbol": "BTC_USDT_SWAP",
+        "timeframe": "15m",
+    }
+    second = {**row, "paper_signal_id": "sig2"}
+
+    write_cycle_links(tmp_path, [row, row, second])
+    write_cycle_links(tmp_path, [row, second])
+
+    lines = (tmp_path / "state" / "lineage" / "cycle_links.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert all("lineage_link_id" in line for line in lines)
 
 
 def test_farm_loop_calculator_stage_records_disabled_state(tmp_path):

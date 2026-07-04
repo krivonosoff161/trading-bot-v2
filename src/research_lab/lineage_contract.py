@@ -232,11 +232,11 @@ def write_scanner_event(private_root: Path, event: ScannerEvent) -> Path:
 
 
 def write_cycle_link(private_root: Path, row: dict[str, Any]) -> Path:
-    path = cycle_links_path(private_root)
-    link_id = _lineage_link_id(row)
-    if link_id in _existing_link_ids(path):
-        return path
-    payload = {
+    return write_cycle_links(private_root, [row])
+
+
+def _cycle_link_payload(row: dict[str, Any], *, link_id: str) -> dict[str, Any]:
+    return {
         "schema": CYCLE_LINK_SCHEMA,
         "lineage_link_id": link_id,
         "linked_at": utc_now(),
@@ -244,7 +244,33 @@ def write_cycle_link(private_root: Path, row: dict[str, Any]) -> Path:
         "execution_allowed": False,
         **row,
     }
-    return append_jsonl(path, payload)
+
+
+def write_cycle_links(private_root: Path, rows: list[dict[str, Any]]) -> Path:
+    """Append unique lineage links, reading the existing JSONL index once.
+
+    Paper training exports can contain thousands of rows. Calling the single-row
+    writer in a loop rescans ``cycle_links.jsonl`` for every row, which turns an
+    idempotent export into quadratic JSON parsing. This batch path preserves the
+    same link ids and append-only contract while keeping one existing-id pass per
+    export.
+    """
+    path = cycle_links_path(private_root)
+    existing = _existing_link_ids(path)
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        link_id = _lineage_link_id(row)
+        if link_id in existing:
+            continue
+        existing.add(link_id)
+        pending.append(_cycle_link_payload(row, link_id=link_id))
+    if not pending:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for payload in pending:
+            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    return path
 
 
 def load_jsonl_counts(path: Path, *, key: str | None = None) -> dict[str, Any]:
