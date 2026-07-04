@@ -283,7 +283,7 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert STOP in text
     assert SOURCE not in text
     assert HUMAN_DISCLAIMER in text
-    assert "ready_abc" in text
+    assert "ready_abc" not in text
     assert "Бумажный режим: это не ордер." in text
     assert "Автоисполнение выключено." in text
     assert "research-only, not an order" not in text
@@ -314,8 +314,8 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     text = first["text"]
     assert first["source_signal_id"] == "opened_first"
     assert "Кандидат фермы: BTC-USDT-SWAP" in text
-    assert "Проверка:" in text
-    assert "not_hard_validated" in text
+    assert "Проверка:" not in text
+    assert "not_hard_validated" not in text
     assert "Бумажный режим: это не ордер." in text
     assert "Автоисполнение выключено." in text
     assert "Риск:" in text
@@ -340,12 +340,13 @@ def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
     assert item["chart_path"] == str(chart_path)
     assert "Бумажный сигнал: BTC-USDT-SWAP" in text
-    assert "К реальной торговле:" in text
-    assert "missing_ready_strategy_id" in text
+    assert "К реальной торговле:" not in text
+    assert "missing_ready_strategy_id" not in text
     assert "Бумажный режим: это не ордер." in text
     assert "Автоисполнение выключено." in text
     assert "Paper product:" not in text
     assert "Live-ready:" not in text
+    assert "ID сигнала" not in text
     assert "research-only, not an order" not in text
     assert "execution_allowed=false" not in text
 

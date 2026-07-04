@@ -275,29 +275,29 @@ def render_chart(
     if entry_price is not None and direction and entry_signal in ("ENTRY", "WAIT"):
         dir_text = "ВХОД LONG ▲" if direction == "buy" else "ВХОД SHORT ▼"
         ecol = "#00E676" if direction == "buy" else "#FF5252"
-        ax.axhline(y=entry_price, color=ecol, linestyle="-", linewidth=1.2, alpha=0.9, zorder=6)
+        ax.axhline(y=entry_price, color=ecol, linestyle="-", linewidth=2.0, alpha=0.95, zorder=7)
         ax.scatter(
             [n_show - 1],
             [entry_price],
-            s=38,
+            s=58,
             marker="o",
             color=ecol,
             edgecolors=bg,
-            linewidths=1.0,
-            zorder=9,
+            linewidths=1.4,
+            zorder=10,
             clip_on=True,
         )
         ax.text(
-            n_show // 2,
+            n_show + 0.6,
             entry_price,
             f"  {dir_text}: {_fmt_price(symbol, entry_price)}",
             color=ecol,
-            fontsize=8,
+            fontsize=8.5,
             fontweight="bold",
-            va="bottom",
-            ha="center",
-            zorder=8,
-            clip_on=True,
+            va="center",
+            ha="left",
+            zorder=11,
+            clip_on=False,
             bbox=dict(boxstyle="round,pad=0.2", facecolor=bg, edgecolor=ecol, alpha=0.9),
         )
 
