@@ -76,3 +76,59 @@ def test_bot_status_recovers_farm_loop_from_fresh_status(tmp_path, monkeypatch) 
 
     assert report["by_kind"] == {"canonical_farm_paper_loop": 1}
     assert report["relevant"][0]["pid"] == 12345
+
+
+def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -> None:
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_signals.json").write_text(
+        json.dumps({"total": 3, "by_status": {"armed": 2, "reviewed": 1}}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_instructions.json").write_text(
+        json.dumps({"instructions": 1, "skipped_unvalidated": 2, "execution_allowed": False}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_consumed.json").write_text(
+        json.dumps({"accepted": 1, "rejected": 0, "execution_allowed": False}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_runtime_queue.json").write_text(
+        json.dumps({"queued": 1, "execution_allowed": False, "items": [{"secret_like": "not surfaced"}]}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_runtime_observation.json").write_text(
+        json.dumps({"observed": 1, "reviewed": 0, "pending": 1, "provider_error": 0}),
+        encoding="utf-8",
+    )
+    (derived / "main_paper_trades.json").write_text(
+        json.dumps({"trades": 1, "by_status": {"armed": 1}, "execution_allowed": False}),
+        encoding="utf-8",
+    )
+    (derived / "paper_telegram_preview.json").write_text(
+        json.dumps({"rendered": 1, "execution_allowed": False}),
+        encoding="utf-8",
+    )
+    (derived / "paper_telegram_delivery.json").write_text(
+        json.dumps({
+            "eligible": 1,
+            "sent": 0,
+            "dry_run": True,
+            "configured": True,
+            "sends_network": False,
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
+
+    status = project_snapshot.paper_product_status(tmp_path)
+
+    assert status["active"] is True
+    assert status["paper_total"] == 3
+    assert status["instructions"] == 1
+    assert status["queued"] == 1
+    assert status["trades"] == 1
+    assert status["delivery_dry_run"] is True
+    assert status["sends_network"] is False
+    assert status["execution_allowed"] is False
+    assert "items" not in status
