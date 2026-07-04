@@ -60,6 +60,9 @@ def _write_quality_report(root: Path) -> None:
                     "last_cycle_generated": 0,
                     "top_reasons": {"pfr_rejected:no_breakout": 6},
                 },
+                "pfr_funnel": {
+                    "cycle_resource_reasons": {"network_fetch_limit_reached": 1},
+                },
                 "active_signal_lifecycle": {
                     "active": 12,
                     "by_status": {"armed": 10, "opened_paper": 2},
@@ -219,6 +222,8 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert "pending=<code>12</code>" in calls[1][1]
     assert "waiting_for_live_trigger" in calls[1][1]
     assert "pfr_rejected:no_breakout" in calls[1][1]
+    assert "Cycle blockers" in calls[1][1]
+    assert "network_fetch_limit_reached" in calls[1][1]
     assert "research-only, not an order" in calls[1][1]
     assert "execution_allowed=false" in calls[1][1]
 

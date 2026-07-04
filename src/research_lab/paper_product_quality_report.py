@@ -162,16 +162,21 @@ def _top_counts(raw: Any, *, limit: int = 6) -> dict[str, int]:
     return dict(pairs[:limit])
 
 
-def _pfr_live_trigger_reasons(pfr_counts: dict[str, Any], gate_counts: dict[str, Any]) -> dict[str, int]:
+def _pfr_live_trigger_reasons(pfr_counts: dict[str, Any]) -> dict[str, int]:
     reasons: dict[str, int] = {}
     for key, value in pfr_counts.items():
         key_text = str(key)
         if key_text.startswith(("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder")):
             reasons[key_text] = int(value or 0)
+    return _top_counts(reasons, limit=12)
+
+
+def _cycle_resource_reasons(gate_counts: dict[str, Any]) -> dict[str, int]:
+    reasons: dict[str, int] = {}
     for key, value in gate_counts.items():
         key_text = str(key)
         if key_text in {"network_fetch_limit_reached", "stale_data"} or key_text.startswith(
-            ("pfr_fetch_", "pfr_dedup_", "pfr_tf_")
+            ("observe_network_fetch_limit_reached", "live_fetch_limit_reached")
         ):
             reasons[key_text] = reasons.get(key_text, 0) + int(value or 0)
     return _top_counts(reasons, limit=12)
@@ -246,7 +251,8 @@ def _pfr_funnel(
         "last_cycle_observed": int(last_cycle.get("observed") or 0) if last_cycle else 0,
         "last_cycle_pfr_counts": _top_counts(pfr_counts),
         "last_cycle_gate_counts": _top_counts(gate_counts),
-        "live_trigger_reasons": _pfr_live_trigger_reasons(pfr_counts, gate_counts),
+        "live_trigger_reasons": _pfr_live_trigger_reasons(pfr_counts),
+        "cycle_resource_reasons": _cycle_resource_reasons(gate_counts),
     }
 
 
@@ -358,6 +364,7 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- last PFR counts: {summary['pfr_funnel']['last_cycle_pfr_counts']}",
         f"- live-trigger state: {summary['pfr_trigger_state']['state']}",
         f"- live-trigger top reasons: {summary['pfr_trigger_state']['top_reasons']}",
+        f"- cycle resource/data reasons: {summary['pfr_funnel']['cycle_resource_reasons']}",
         "",
         "## Telegram",
         "",
