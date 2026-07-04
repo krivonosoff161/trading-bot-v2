@@ -254,6 +254,9 @@ def _status_digest_preview(
             f"live_ready=<code>{quality.get('active_live_ready', 0)}</code>",
             f"<b>Lifecycle:</b> pending=<code>{lifecycle.get('pending_outcomes', 0)}</code> "
             f"states=<code>{json.dumps(lifecycle.get('by_outcome_result') or {}, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Timing:</b> oldest_h=<code>{lifecycle.get('oldest_age_hours', 0)}</code> "
+            f"next_expiry_h=<code>{lifecycle.get('next_expiry_hours')}</code> "
+            f"overdue=<code>{lifecycle.get('overdue_expiry', 0)}</code>",
             f"<b>PFR:</b> state=<code>{pfr_state.get('state') or 'unknown'}</code> "
             f"catalog_ready=<code>{pfr_state.get('catalog_ready', 0)}</code> "
             f"generated=<code>{pfr_state.get('last_cycle_generated', 0)}</code>",
