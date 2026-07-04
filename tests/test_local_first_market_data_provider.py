@@ -59,3 +59,22 @@ def test_local_first_provider_falls_back_when_cache_is_too_short(tmp_path):
 
     assert fallback.calls == 1
     assert out == [_row(0, 200.0)]
+
+
+def test_local_first_provider_falls_back_when_cache_is_stale(tmp_path):
+    rows = [_row(i * 60_000, 100.0 + i) for i in range(30)]
+    write_candles(
+        rows,
+        symbol="LAB_USDT_SWAP",
+        start_ts=0,
+        end_ts=29 * 60_000,
+        timeframe="15m",
+        data_dir=market_data_dir(tmp_path, "15m"),
+    )
+    fallback = FallbackProvider()
+    provider = LocalFirstMarketDataProvider(tmp_path, fallback, min_rows=20, max_stale_bars=3)
+
+    out = provider.fetch_ohlcv("LAB_USDT_SWAP", "15m", 0, 10 * 15 * 60_000)
+
+    assert fallback.calls == 1
+    assert out == [_row(0, 200.0)]
