@@ -17,7 +17,7 @@ from typing import Any
 
 SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
-CARD_TEMPLATE_VERSION = "paper_telegram_card_v4_main_trade_ru"
+CARD_TEMPLATE_VERSION = "paper_telegram_card_v5_candidate_ru"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "research-only, not an order"
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435, \u043d\u0435 \u043e\u0440\u0434\u0435\u0440 \u0438 \u043d\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u043a \u0432\u0445\u043e\u0434\u0443."
@@ -46,6 +46,7 @@ MOJIBAKE_MARKERS = (
 )
 
 NON_ACTIONABLE_TRADE_STATUSES = frozenset({"provider_error", "no_data", "pending_clock", "invalid"})
+ACTIONABLE_PAPER_SIGNAL_STATUSES = frozenset({"armed", "opened_paper"})
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,10 @@ def _consumer_snapshot_path(private_root: Path) -> Path:
 
 def _trade_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_trades.json"
+
+
+def _paper_signal_snapshot_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_signals.json"
 
 
 def _jsonl_path(private_root: Path) -> Path:
@@ -214,6 +219,56 @@ def _trade_text(record: dict[str, Any]) -> str:
     )
 
 
+def _entry_from_zone(record: dict[str, Any]) -> str:
+    zone = record.get("entry_zone") or []
+    if isinstance(zone, list) and len(zone) >= 2:
+        return f"{_fmt_price(zone[0])}..{_fmt_price(zone[1])}"
+    return _fmt_price(record.get("ref_price"))
+
+
+def _paper_signal_targets(record: dict[str, Any]) -> str:
+    plan = record.get("take_profit_plan") or []
+    if isinstance(plan, list):
+        return _targets_from_plan([item for item in plan if isinstance(item, dict)])
+    return "n/a"
+
+
+def _paper_signal_text(record: dict[str, Any]) -> str:
+    symbol = str(record.get("okx_inst_id") or record.get("symbol") or "unknown").replace("_", "-")
+    pair = html.escape(symbol)
+    timeframe = html.escape(str(record.get("timeframe") or "unknown"))
+    side = html.escape(_side_label(str(record.get("side") or "unknown")))
+    family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
+    status = html.escape(_status_label(str(record.get("status") or "armed")))
+    source = html.escape(str(record.get("source") or "farm"))
+    signal_id = html.escape(str(record.get("signal_id") or "unknown"))
+    reason = html.escape(_reason_label(str(record.get("reason_now") or "farm paper candidate")))
+    risk = html.escape(str(record.get("risk_pct") or "n/a"))
+    validation = html.escape(str((record.get("validator_context") or {}).get("hard_status") or "not_hard_validated"))
+    return "\n".join(
+        [
+            f"<b>Farm paper candidate: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            HUMAN_DISCLAIMER,
+            f"<code>{REQUIRED_DISCLAIMER}</code>",
+            "",
+            f"<b>{LABEL_IDEA}:</b> {family}",
+            f"<b>{LABEL_ENTRY}:</b> <code>{_entry_from_zone(record)}</code>",
+            f"<b>{LABEL_STOP}:</b> <code>{_fmt_price(record.get('stop_loss'))}</code>",
+            f"<b>{LABEL_TARGETS}:</b> <code>{_paper_signal_targets(record)}</code>",
+            f"<b>{LABEL_MAX_HOLD}:</b> <code>{html.escape(str(record.get('max_hold_minutes') or 'n/a'))} \u043c\u0438\u043d</code>",
+            "",
+            f"<b>{LABEL_REASON}:</b> {reason}",
+            f"<b>{LABEL_STATUS}:</b> {status}",
+            f"<b>{LABEL_SOURCE}:</b> <code>{source}</code>",
+            f"<b>Validation:</b> <code>{validation}</code>",
+            f"<b>Risk:</b> <code>{risk}%</code>",
+            f"<b>Signal:</b> <code>{signal_id}</code>",
+            "",
+            f"<i>{EXECUTION_OFF}</i>",
+        ]
+    )
+
+
 def _consumer_text(record: dict[str, Any]) -> str:
     contract = dict(record.get("signal_contract") or {})
     meta = dict(contract.get("metadata") or {})
@@ -252,13 +307,16 @@ def _consumer_text(record: dict[str, Any]) -> str:
 def render_preview_text(record: dict[str, Any]) -> str:
     if record.get("schema") == "MainPaperTrade.v1":
         return _trade_text(record)
+    if record.get("schema") == "PaperSignalCandidate.v1":
+        return _paper_signal_text(record)
     return _consumer_text(record)
 
 
 def validate_preview(record: dict[str, Any], text: str) -> list[str]:
     problems: list[str] = []
     is_trade = record.get("schema") == "MainPaperTrade.v1"
-    if not is_trade and record.get("consumer_status") != "accepted_for_paper_watch":
+    is_candidate = record.get("schema") == "PaperSignalCandidate.v1"
+    if not is_trade and not is_candidate and record.get("consumer_status") != "accepted_for_paper_watch":
         problems.append("consumer_not_accepted")
     if record.get("paper_only") is not True:
         problems.append("paper_only_not_true")
@@ -284,12 +342,42 @@ def _load_records(path: Path) -> tuple[list[dict[str, Any]], Path | None]:
     return list(data.get("items") or []), path
 
 
+def _load_paper_signal_candidates(path: Path) -> tuple[list[dict[str, Any]], Path | None]:
+    if not path.exists():
+        return [], None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    raw_rows = data.get("active") or data.get("items") or []
+    rows = [row for row in raw_rows if isinstance(row, dict)]
+    source_path = path
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("status") or "") not in ACTIONABLE_PAPER_SIGNAL_STATUSES:
+            continue
+        candidate = dict(row)
+        candidate["schema"] = "PaperSignalCandidate.v1"
+        candidate.setdefault("paper_only", True)
+        candidate.setdefault("execution_allowed", False)
+        candidates.append(candidate)
+    candidates.sort(
+        key=lambda row: (
+            0 if str(row.get("status") or "") == "opened_paper" else 1,
+            str(row.get("timeframe") or ""),
+            str(row.get("setup_family") or ""),
+            str(row.get("signal_id") or ""),
+        )
+    )
+    return candidates, source_path
+
+
 def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict[str, Any]:
     rows, source_path = _load_records(_trade_snapshot_path(private_root))
     source_schema = "main_paper_trade_ledger.v1"
     if not rows:
         rows, source_path = _load_records(_consumer_snapshot_path(private_root))
         source_schema = "main_paper_consumer.v1"
+    if not rows:
+        rows, source_path = _load_paper_signal_candidates(_paper_signal_snapshot_path(private_root))
+        source_schema = "paper_signals.v1"
 
     previews: list[PaperTelegramPreview] = []
     skipped_rejected = 0
@@ -301,18 +389,23 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         if source_schema == "main_paper_trade_ledger.v1" and str(row.get("status") or "") in NON_ACTIONABLE_TRADE_STATUSES:
             skipped_non_actionable += 1
             continue
+        if source_schema == "paper_signals.v1" and str(row.get("status") or "") not in ACTIONABLE_PAPER_SIGNAL_STATUSES:
+            skipped_non_actionable += 1
+            continue
         if len(previews) >= limit:
             break
         text = render_preview_text(row)
         problems = validate_preview(row, text)
         preview_id = f"preview_{row.get('instruction_id') or row.get('paper_trade_id') or len(previews)}"
+        if source_schema == "paper_signals.v1":
+            preview_id = f"preview_candidate_{row.get('signal_id') or len(previews)}"
         previews.append(
             PaperTelegramPreview(
                 telegram_card_id=f"tgcard_{row.get('source_signal_id') or preview_id}_{_card_hash(text)}",
                 preview_id=preview_id,
                 instruction_id=str(row.get("instruction_id") or ""),
-                source_signal_id=str(row.get("source_signal_id") or ""),
-                pair=str(row.get("okx_inst_id") or row.get("pair") or ""),
+                source_signal_id=str(row.get("source_signal_id") or row.get("signal_id") or ""),
+                pair=str(row.get("okx_inst_id") or row.get("pair") or row.get("symbol") or ""),
                 timeframe=str(row.get("timeframe") or ""),
                 side=str(row.get("side") or ""),
                 setup_family=str(row.get("setup_family") or ""),

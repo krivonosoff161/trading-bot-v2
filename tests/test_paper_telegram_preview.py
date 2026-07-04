@@ -131,6 +131,48 @@ def _write_trade_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
+def _write_paper_signal_snapshot(root: Path, rows: list[dict]) -> None:
+    path = root / "state" / "derived" / "paper_signals.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_signals.v1",
+                "total": len(rows),
+                "active": rows,
+                "by_status": {},
+                "all_research_only": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _paper_signal_row(**overrides):
+    row = {
+        "signal_id": "BTC_USDT_SWAP_1h_early_tp_tactical_abc",
+        "symbol": "BTC_USDT_SWAP",
+        "okx_inst_id": "BTC-USDT-SWAP",
+        "timeframe": "1h",
+        "side": "long",
+        "setup_family": "early_tp_tactical",
+        "status": "armed",
+        "source": "farm",
+        "entry_zone": [100.0, 101.0],
+        "stop_loss": 98.0,
+        "take_profit_plan": [{"label": "tp1", "price": 103.0, "size_frac": 1.0}],
+        "max_hold_minutes": 120,
+        "reason_now": "tactical early-TP scalp; fast in/out",
+        "risk_pct": 1.98,
+        "paper_only": True,
+        "execution_allowed": False,
+        "validator_context": {},
+    }
+    row.update(overrides)
+    return row
+
+
 def test_preview_prefers_main_paper_trade_cards(tmp_path):
     _write_consumer_snapshot(tmp_path, [_consumer_record()])
     _write_trade_snapshot(tmp_path, [_trade_record()])
@@ -142,7 +184,7 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert summary["rendered"] == 1
     assert summary["invalid"] == 0
     assert summary["sends_network"] is False
-    assert summary["card_template_version"] == "paper_telegram_card_v4_main_trade_ru"
+    assert summary["card_template_version"] == "paper_telegram_card_v5_candidate_ru"
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     text = data["items"][0]["text"]
     assert f"Main paper: BTC-USDT-SWAP {DOT} 1h {DOT} LONG" in text
@@ -155,6 +197,46 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
     assert not any(marker in text for marker in ("\u0420\u00a0", "\u0420\u040f", "\u0420\u2019", "\u0456\u201a"))
+
+
+def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
+    _write_paper_signal_snapshot(
+        tmp_path,
+        [
+            _paper_signal_row(status="reviewed", signal_id="reviewed_skip"),
+            _paper_signal_row(status="armed"),
+            _paper_signal_row(status="opened_paper", signal_id="opened_first"),
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_signals.v1"
+    assert summary["source_exists"] is True
+    assert summary["records_read"] == 2
+    assert summary["rendered"] == 2
+    assert summary["invalid"] == 0
+    assert summary["sends_network"] is False
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    first = data["items"][0]
+    text = first["text"]
+    assert first["source_signal_id"] == "opened_first"
+    assert "Farm paper candidate: BTC-USDT-SWAP" in text
+    assert "Validation:" in text
+    assert "not_hard_validated" in text
+    assert "research-only, not an order" in text
+    assert "execution_allowed=false" in text
+    assert "Risk:" in text
+
+
+def test_preview_prefers_strict_main_paper_over_candidate_fallback(tmp_path):
+    _write_trade_snapshot(tmp_path, [_trade_record()])
+    _write_paper_signal_snapshot(tmp_path, [_paper_signal_row()])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "main_paper_trade_ledger.v1"
+    assert summary["rendered"] == 1
 
 
 def test_preview_skips_provider_error_trade_cards(tmp_path):
