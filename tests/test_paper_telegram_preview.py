@@ -131,6 +131,22 @@ def _write_trade_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
+def _write_product_trade_snapshot(root: Path, rows: list[dict]) -> None:
+    path = root / "state" / "derived" / "paper_product_trades.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_trade_ledger.v1",
+                "trades": len(rows),
+                "items": rows,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_paper_signal_snapshot(root: Path, rows: list[dict]) -> None:
     path = root / "state" / "derived" / "paper_signals.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +184,37 @@ def _paper_signal_row(**overrides):
         "paper_only": True,
         "execution_allowed": False,
         "validator_context": {},
+    }
+    row.update(overrides)
+    return row
+
+
+def _product_trade_record(**overrides):
+    row = {
+        "schema": "PaperProductTrade.v1",
+        "paper_trade_id": "paperproducttrade_1",
+        "paper_product_trade_id": "paperproducttrade_1",
+        "source_signal_id": "sig_product",
+        "ready_strategy_id": "",
+        "source_validation_verdict": "",
+        "live_ready": False,
+        "live_block_reason": "missing_ready_strategy_id",
+        "okx_inst_id": "BTC-USDT-SWAP",
+        "timeframe": "1h",
+        "side": "long",
+        "setup_family": "early_tp_tactical",
+        "entry": 100.5,
+        "entry_zone": [100.0, 101.0],
+        "stop": 98.0,
+        "take_profit_plan": [{"label": "tp1", "price": 103.0, "size_frac": 1.0}],
+        "max_hold_min": 120,
+        "max_hold_bars": 8,
+        "status": "armed",
+        "signal_status": "armed",
+        "source": "farm",
+        "reason_now": "tactical early-TP scalp; fast in/out",
+        "paper_only": True,
+        "execution_allowed": False,
     }
     row.update(overrides)
     return row
@@ -227,6 +274,33 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     assert "research-only, not an order" in text
     assert "execution_allowed=false" in text
     assert "Risk:" in text
+
+
+def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record()])
+    _write_paper_signal_snapshot(tmp_path, [_paper_signal_row(signal_id="raw_candidate")])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_product_trade_ledger.v1"
+    assert summary["records_read"] == 1
+    assert summary["rendered"] == 1
+    text = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]["text"]
+    assert "Paper product: BTC-USDT-SWAP" in text
+    assert "Live-ready:" in text
+    assert "missing_ready_strategy_id" in text
+    assert "research-only, not an order" in text
+    assert "execution_allowed=false" in text
+
+
+def test_preview_skips_non_actionable_product_trades(tmp_path):
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record(status="reviewed")])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_product_trade_ledger.v1"
+    assert summary["rendered"] == 0
+    assert summary["skipped_non_actionable"] == 1
 
 
 def test_preview_writes_durable_card_ledger(tmp_path):

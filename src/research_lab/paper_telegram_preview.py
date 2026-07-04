@@ -48,6 +48,7 @@ MOJIBAKE_MARKERS = (
 
 NON_ACTIONABLE_TRADE_STATUSES = frozenset({"provider_error", "no_data", "pending_clock", "invalid"})
 ACTIONABLE_PAPER_SIGNAL_STATUSES = frozenset({"armed", "opened_paper"})
+ACTIONABLE_PRODUCT_TRADE_STATUSES = ACTIONABLE_PAPER_SIGNAL_STATUSES
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,10 @@ def _consumer_snapshot_path(private_root: Path) -> Path:
 
 def _trade_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_trades.json"
+
+
+def _product_trade_snapshot_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_product_trades.json"
 
 
 def _paper_signal_snapshot_path(private_root: Path) -> Path:
@@ -224,6 +229,38 @@ def _trade_text(record: dict[str, Any]) -> str:
     )
 
 
+def _product_trade_text(record: dict[str, Any]) -> str:
+    pair = html.escape(str(record.get("okx_inst_id") or "unknown"))
+    timeframe = html.escape(str(record.get("timeframe") or "unknown"))
+    side = html.escape(_side_label(str(record.get("side") or "unknown")))
+    family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
+    status = html.escape(_status_label(str(record.get("status") or "armed")))
+    signal_id = html.escape(str(record.get("source_signal_id") or "unknown"))
+    reason = html.escape(_reason_label(str(record.get("reason_now") or "paper product candidate")))
+    live_ready = "yes" if bool(record.get("live_ready")) else "no"
+    live_block = html.escape(str(record.get("live_block_reason") or "none"))
+    return "\n".join(
+        [
+            f"<b>Paper product: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            HUMAN_DISCLAIMER,
+            f"<code>{REQUIRED_DISCLAIMER}</code>",
+            "",
+            f"<b>{LABEL_IDEA}:</b> {family}",
+            f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(record.get('entry'))}</code>",
+            f"<b>{LABEL_STOP}:</b> <code>{_fmt_price(record.get('stop'))}</code>",
+            f"<b>{LABEL_TARGETS}:</b> <code>{_targets_from_plan(list(record.get('take_profit_plan') or []))}</code>",
+            f"<b>{LABEL_MAX_HOLD}:</b> <code>{html.escape(str(record.get('max_hold_min') or 'n/a'))} \u043c\u0438\u043d</code>",
+            "",
+            f"<b>{LABEL_REASON}:</b> {reason}",
+            f"<b>{LABEL_STATUS}:</b> {status}",
+            f"<b>Live-ready:</b> <code>{live_ready}</code> block=<code>{live_block}</code>",
+            f"<b>Signal:</b> <code>{signal_id}</code>",
+            "",
+            f"<i>{EXECUTION_OFF}</i>",
+        ]
+    )
+
+
 def _entry_from_zone(record: dict[str, Any]) -> str:
     zone = record.get("entry_zone") or []
     if isinstance(zone, list) and len(zone) >= 2:
@@ -312,6 +349,8 @@ def _consumer_text(record: dict[str, Any]) -> str:
 def render_preview_text(record: dict[str, Any]) -> str:
     if record.get("schema") == "MainPaperTrade.v1":
         return _trade_text(record)
+    if record.get("schema") == "PaperProductTrade.v1":
+        return _product_trade_text(record)
     if record.get("schema") == "PaperSignalCandidate.v1":
         return _paper_signal_text(record)
     return _consumer_text(record)
@@ -320,8 +359,14 @@ def render_preview_text(record: dict[str, Any]) -> str:
 def validate_preview(record: dict[str, Any], text: str) -> list[str]:
     problems: list[str] = []
     is_trade = record.get("schema") == "MainPaperTrade.v1"
+    is_product_trade = record.get("schema") == "PaperProductTrade.v1"
     is_candidate = record.get("schema") == "PaperSignalCandidate.v1"
-    if not is_trade and not is_candidate and record.get("consumer_status") != "accepted_for_paper_watch":
+    if (
+        not is_trade
+        and not is_product_trade
+        and not is_candidate
+        and record.get("consumer_status") != "accepted_for_paper_watch"
+    ):
         problems.append("consumer_not_accepted")
     if record.get("paper_only") is not True:
         problems.append("paper_only_not_true")
@@ -425,6 +470,9 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
     rows, source_path = _load_records(_trade_snapshot_path(private_root))
     source_schema = "main_paper_trade_ledger.v1"
     if not rows:
+        rows, source_path = _load_records(_product_trade_snapshot_path(private_root))
+        source_schema = "paper_product_trade_ledger.v1"
+    if not rows:
         rows, source_path = _load_records(_consumer_snapshot_path(private_root))
         source_schema = "main_paper_consumer.v1"
     if not rows:
@@ -439,6 +487,11 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
             skipped_rejected += 1
             continue
         if source_schema == "main_paper_trade_ledger.v1" and str(row.get("status") or "") in NON_ACTIONABLE_TRADE_STATUSES:
+            skipped_non_actionable += 1
+            continue
+        if source_schema == "paper_product_trade_ledger.v1" and (
+            str(row.get("status") or "") not in ACTIONABLE_PRODUCT_TRADE_STATUSES
+        ):
             skipped_non_actionable += 1
             continue
         if source_schema == "paper_signals.v1" and str(row.get("status") or "") not in ACTIONABLE_PAPER_SIGNAL_STATUSES:

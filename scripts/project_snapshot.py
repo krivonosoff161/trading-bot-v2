@@ -351,6 +351,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     queue = _read_json(derived / "main_paper_runtime_queue.json")
     observation = _read_json(derived / "main_paper_runtime_observation.json")
     trades = _read_json(derived / "main_paper_trades.json")
+    product_trades = _read_json(derived / "paper_product_trades.json")
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
@@ -360,10 +361,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         int(paper.get("total") or 0) > 0
         or int(bridge.get("instructions") or 0) > 0
         or int(trades.get("trades") or 0) > 0
+        or int(product_trades.get("trades") or 0) > 0
     )
     execution_allowed = any(
         bool(row.get("execution_allowed"))
-        for row in (bridge, consumer, queue, observation, trades, preview, delivery)
+        for row in (bridge, consumer, queue, observation, trades, product_trades, preview, delivery)
         if row
     )
     return {
@@ -382,6 +384,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "provider_error": int(observation.get("provider_error") or 0),
         "trades": int(trades.get("trades") or 0),
         "trade_status": trades.get("by_status") or {},
+        "product_trades": int(product_trades.get("trades") or 0),
+        "product_live_ready": int(product_trades.get("live_ready") or 0),
+        "product_live_blocked": int(product_trades.get("live_blocked") or 0),
+        "product_trade_status": product_trades.get("by_status") or {},
+        "product_live_block": _top_counts(product_trades.get("by_live_block") or {}),
         "preview_rendered": int(preview.get("rendered") or 0),
         "delivery_eligible": int(delivery.get("eligible") or 0),
         "delivery_sent": int(delivery.get("sent") or 0),
@@ -427,7 +434,8 @@ def _print_paper_product_status() -> None:
         f"paper={st['paper_total']} {st['paper_by_status']} | "
         f"main-paper instructions={st['instructions']} accepted={st['accepted']} "
         f"queued={st['queued']} observed={st['observed']} "
-        f"trades={st['trades']} {st['trade_status']} | "
+        f"strict_trades={st['trades']} {st['trade_status']} "
+        f"product_trades={st['product_trades']} {st['product_trade_status']} | "
         f"tg preview={st['preview_rendered']} eligible={st['delivery_eligible']} "
         f"last_sent={st['delivery_sent']} sent_total={st['cumulative_sent_previews']}"
     )
@@ -439,6 +447,12 @@ def _print_paper_product_status() -> None:
         f"provider_error={st['provider_error']} "
         f"skipped_unvalidated={st['skipped_unvalidated']} "
         f"delivery_errors={st['delivery_errors']} duplicates={st['delivery_duplicates']}"
+    )
+    print(
+        "                "
+        f"product_live_ready={st['product_live_ready']} "
+        f"product_live_blocked={st['product_live_blocked']} "
+        f"live_block={st['product_live_block']}"
     )
     print(
         "                "

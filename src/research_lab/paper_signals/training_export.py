@@ -80,18 +80,19 @@ def _card_refs(private_root: Path) -> dict[str, dict[str, Any]]:
 
 
 def _trade_refs(private_root: Path) -> dict[str, dict[str, Any]]:
-    path = private_root / "state" / "derived" / "main_paper_trades.json"
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
     refs: dict[str, dict[str, Any]] = {}
-    for item in data.get("items") or []:
-        sid = str(item.get("source_signal_id") or "")
-        if sid:
-            refs[sid] = item
+    for name in ("paper_product_trades.json", "main_paper_trades.json"):
+        path = private_root / "state" / "derived" / name
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for item in data.get("items") or []:
+            sid = str(item.get("source_signal_id") or "")
+            if sid:
+                refs[sid] = item
     return refs
 
 
@@ -182,6 +183,7 @@ def training_row(
         "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
         "telegram_card_id": str(card.get("telegram_card_id") or ""),
         "paper_trade_id": str(trade.get("paper_trade_id") or ""),
+        "paper_product_trade_id": str(trade.get("paper_product_trade_id") or ""),
         "main_paper_status": str(trade.get("status") or ""),
         "main_paper_runtime_id": str(trade.get("runtime_id") or ""),
         "outcome_id": f"outcome_{sig.signal_id}" if sig.status in TERMINAL_STATUSES else "",
