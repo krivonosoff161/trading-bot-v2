@@ -155,16 +155,56 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert all(item["recipient_hash"] not in {"111", "222"} for item in data["items"])
 
 
-def test_sender_sends_private_review_chart_after_text(tmp_path):
+def test_sender_sends_private_review_chart_before_text(tmp_path):
     chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
     chart_path.parent.mkdir(parents=True, exist_ok=True)
     chart_path.write_bytes(b"fake-png")
     _write_preview_snapshot(tmp_path, [_preview(chart_path=str(chart_path))])
     text_calls = []
     photo_calls = []
+    events = []
 
     async def fake_send(chat_id, text):
+        events.append(("text", chat_id))
         text_calls.append((chat_id, text))
+        return 101
+
+    async def fake_photo(chat_id, path):
+        events.append(("photo", chat_id))
+        photo_calls.append((chat_id, path))
+        return 201
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        send_photo=fake_photo,
+    )
+
+    assert summary["sent"] == 1
+    assert summary["chart_available_messages"] == 1
+    assert summary["chart_sent_messages"] == 1
+    assert events == [("photo", "111"), ("text", "111")]
+    assert text_calls == [("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false")]
+    assert photo_calls == [("111", str(chart_path.resolve()))]
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["chart_available"] is True
+    assert data["items"][0]["chart_sent"] is True
+    assert data["items"][0]["chart_problem"] == ""
+    assert "recipient_id" not in data["items"][0]
+
+
+def test_sender_sends_private_legacy_base_chart(tmp_path):
+    chart_path = tmp_path / "state" / "derived" / "paper_telegram_base_charts" / "sig_1.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
+    _write_preview_snapshot(tmp_path, [_preview(chart_path=str(chart_path))])
+    photo_calls = []
+
+    async def fake_send(chat_id, text):
         return 101
 
     async def fake_photo(chat_id, path):
@@ -184,13 +224,7 @@ def test_sender_sends_private_review_chart_after_text(tmp_path):
     assert summary["sent"] == 1
     assert summary["chart_available_messages"] == 1
     assert summary["chart_sent_messages"] == 1
-    assert text_calls == [("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false")]
     assert photo_calls == [("111", str(chart_path.resolve()))]
-    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
-    assert data["items"][0]["chart_available"] is True
-    assert data["items"][0]["chart_sent"] is True
-    assert data["items"][0]["chart_problem"] == ""
-    assert "recipient_id" not in data["items"][0]
 
 
 def test_sender_refuses_chart_outside_private_reviews(tmp_path):
