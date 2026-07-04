@@ -396,6 +396,8 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "product_trade_status": product_trades.get("by_status") or {},
         "product_live_block": _top_counts(product_trades.get("by_live_block") or {}),
         "preview_rendered": int(preview.get("rendered") or 0),
+        "preview_skipped_quality_gate": int(preview.get("skipped_quality_gate") or 0),
+        "preview_quality_gate_reasons": _top_counts(preview.get("quality_gate_reasons") or {}),
         "delivery_eligible": int(delivery.get("eligible") or 0),
         "delivery_sent": int(delivery.get("sent") or 0),
         "delivery_duplicates": int(delivery.get("duplicates") or 0),
@@ -457,6 +459,12 @@ def _print_paper_product_status() -> None:
         f"skipped_unvalidated={st['skipped_unvalidated']} "
         f"delivery_errors={st['delivery_errors']} duplicates={st['delivery_duplicates']}"
     )
+    if st["preview_skipped_quality_gate"]:
+        print(
+            "                "
+            f"preview_quality_skip={st['preview_skipped_quality_gate']} "
+            f"quality_skip_reasons={st['preview_quality_gate_reasons']}"
+        )
     print(
         "                "
         f"product_live_ready={st['product_live_ready']} "
