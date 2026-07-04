@@ -19,6 +19,7 @@ from src.research_lab.paper_signals.lane import (
     ARM_WINDOW_BARS, MAX_RISK_PCT, TF_MINUTES,
     _atr, _round, fingerprint,
 )
+from src.research_lab.strategies._helpers import window_high, window_low
 from src.research_lab.strategies.detectors import (
     detect_mean_reversion_fade as _detect_mrf,
     detect_momentum_breakout as _detect_mbr,
@@ -457,6 +458,53 @@ def _diverse_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
 
 # ── PFR generation (called from cycle.run_cycle) ──────────────────────────────
 
+def _gap_bucket(gap_pct: float) -> str:
+    if gap_pct <= 0.25:
+        return "gap_le_0_25pct"
+    if gap_pct <= 0.5:
+        return "gap_le_0_5pct"
+    if gap_pct <= 1.0:
+        return "gap_le_1pct"
+    if gap_pct <= 2.0:
+        return "gap_le_2pct"
+    return "gap_gt_2pct"
+
+
+def _near_trigger_bucket(row: dict[str, Any], candles: list[dict[str, Any]], reason: str) -> str:
+    params = row.get("params") or {}
+    family = str(row.get("family") or "")
+    idx = len(candles) - 1
+    if family == "momentum_breakout" and reason == "no_breakout":
+        lookback = int(params.get("lookback") or 0)
+        threshold_pct = float(params.get("threshold_pct") or 0.0)
+        if lookback <= 0 or idx < lookback:
+            return ""
+        high = window_high(candles, idx, lookback)
+        low = window_low(candles, idx, lookback)
+        close = float(candles[idx]["close"])
+        if high is None or low is None or close <= 0:
+            return ""
+        long_trigger = float(high) * (1 + threshold_pct / 100)
+        short_trigger = float(low) * (1 - threshold_pct / 100)
+        long_gap = max(0.0, (long_trigger - close) / close * 100)
+        short_gap = max(0.0, (close - short_trigger) / close * 100)
+        return "breakout_" + _gap_bucket(min(long_gap, short_gap))
+
+    if family == "mean_reversion_fade" and reason.startswith("no_fade_signal"):
+        lookback = int(params.get("lookback") or 0)
+        move_pct = float(params.get("move_pct") or 0.0)
+        if lookback <= 0 or move_pct <= 0 or idx - lookback < 0:
+            return ""
+        base = float(candles[idx - lookback]["close"])
+        close = float(candles[idx]["close"])
+        if base <= 0:
+            return ""
+        move = abs((close / base - 1) * 100)
+        return "fade_" + _gap_bucket(max(0.0, move_pct - move))
+
+    return ""
+
+
 def generate_pfr_signals(
     records: list[dict[str, Any]],
     *,
@@ -557,6 +605,10 @@ def generate_pfr_signals(
         if sig is None:
             reason_key = f"pfr_rejected:{reason[:50]}"
             sc[reason_key] = sc.get(reason_key, 0) + 1
+            near_bucket = _near_trigger_bucket(row, candles, reason)
+            if near_bucket:
+                near_key = f"pfr_near_trigger:{near_bucket}"
+                sc[near_key] = sc.get(near_key, 0) + 1
             continue
 
         sc["pfr_generated"] = sc.get("pfr_generated", 0) + 1

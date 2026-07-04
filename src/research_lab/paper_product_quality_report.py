@@ -182,6 +182,13 @@ def _cycle_resource_reasons(gate_counts: dict[str, Any]) -> dict[str, int]:
     return _top_counts(reasons, limit=12)
 
 
+def _pfr_near_trigger_counts(pfr_counts: dict[str, Any]) -> dict[str, int]:
+    return _top_counts(
+        {str(key): int(value or 0) for key, value in pfr_counts.items() if str(key).startswith("pfr_near_trigger:")},
+        limit=12,
+    )
+
+
 def _delivery_int(delivery: dict[str, Any], primary: str, fallback: str) -> int:
     return int(delivery.get(primary, delivery.get(fallback) or 0) or 0)
 
@@ -252,6 +259,7 @@ def _pfr_funnel(
         "last_cycle_pfr_counts": _top_counts(pfr_counts),
         "last_cycle_gate_counts": _top_counts(gate_counts),
         "live_trigger_reasons": _pfr_live_trigger_reasons(pfr_counts),
+        "near_trigger_counts": _pfr_near_trigger_counts(pfr_counts),
         "cycle_resource_reasons": _cycle_resource_reasons(gate_counts),
     }
 
@@ -364,6 +372,7 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- last PFR counts: {summary['pfr_funnel']['last_cycle_pfr_counts']}",
         f"- live-trigger state: {summary['pfr_trigger_state']['state']}",
         f"- live-trigger top reasons: {summary['pfr_trigger_state']['top_reasons']}",
+        f"- near-trigger buckets: {summary['pfr_funnel']['near_trigger_counts']}",
         f"- cycle resource/data reasons: {summary['pfr_funnel']['cycle_resource_reasons']}",
         "",
         "## Telegram",

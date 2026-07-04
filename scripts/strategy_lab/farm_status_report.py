@@ -637,6 +637,9 @@ def _print(report: dict) -> None:
                   f"generated={pfr_state.get('last_cycle_generated', 0)} "
                   f"reasons={pfr_state.get('top_reasons') or {}}")
         pfr_funnel = pq.get("pfr_funnel") if isinstance(pq.get("pfr_funnel"), dict) else {}
+        near_reasons = pfr_funnel.get("near_trigger_counts") if isinstance(pfr_funnel, dict) else {}
+        if near_reasons:
+            print(f"    PFR near-trigger buckets: {near_reasons}")
         resource_reasons = pfr_funnel.get("cycle_resource_reasons") if isinstance(pfr_funnel, dict) else {}
         if resource_reasons:
             print(f"    cycle resource/data blockers: {resource_reasons}")
