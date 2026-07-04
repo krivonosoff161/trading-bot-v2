@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import time
 import urllib.error
 import urllib.parse
 from pathlib import Path
@@ -13,11 +14,21 @@ from src.research_lab.providers.okx_public import (
     MarketDataError,
     OkxPublicMarketDataProvider,
     _default_http_get,
+    _httpx_get_direct,
+    _httpx_get_with_hard_deadline,
     to_inst_id,
 )
 
 MINUTE = 60_000
 START = 1_700_000_000_000
+
+
+def _ok_worker_success(_url, _timeout, out_queue):
+    out_queue.put(("ok", {"code": "0", "data": []}))
+
+
+def _slow_worker(_url, _timeout, _out_queue):
+    time.sleep(5)
 
 
 def _okx_row(ts, o="100", h="101", lo="99", c="100", vol="10", confirm="1"):
@@ -91,7 +102,7 @@ def test_network_error_raises_marketdataerror():
         _provider(boom).fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + MINUTE)
 
 
-def test_default_http_get_bounds_httpx_connect_read_timeout(monkeypatch):
+def test_httpx_direct_bounds_connect_read_timeout(monkeypatch):
     def fake_get(_url, *, headers, timeout):
         assert headers["User-Agent"]
         assert isinstance(timeout, httpx.Timeout)
@@ -100,7 +111,7 @@ def test_default_http_get_bounds_httpx_connect_read_timeout(monkeypatch):
     monkeypatch.setattr(httpx, "get", fake_get)
 
     with pytest.raises(httpx.ConnectTimeout):
-        _default_http_get("https://www.okx.com/api/v5/market/history-candles", 0.1)
+        _httpx_get_direct("https://www.okx.com/api/v5/market/history-candles", 0.1)
 
 
 def test_default_http_get_parses_json_response(monkeypatch):
@@ -113,10 +124,29 @@ def test_default_http_get_parses_json_response(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", lambda *_args, **_kwargs: FakeResponse())
 
-    assert _default_http_get("https://www.okx.com/api/v5/market/history-candles", 0.1) == {
+    assert _httpx_get_direct("https://www.okx.com/api/v5/market/history-candles", 0.1) == {
         "code": "0",
         "data": [],
     }
+
+
+def test_default_http_get_accepts_worker_payload():
+    assert _default_http_get(
+        "https://www.okx.com/api/v5/market/history-candles",
+        0.1,
+        worker=_ok_worker_success,
+    ) == {"code": "0", "data": []}
+
+
+def test_default_http_get_kills_stuck_worker():
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        _httpx_get_with_hard_deadline(
+            "https://www.okx.com/api/v5/market/history-candles",
+            0.1,
+            worker=_slow_worker,
+        )
+    assert time.monotonic() - started < 3
 
 
 def test_api_error_code_raises():
