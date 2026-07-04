@@ -24,11 +24,12 @@ def test_bot_status_ignores_unrelated_python() -> None:
         [
             {"ProcessId": 1, "CommandLine": "python scripts/project_snapshot.py"},
             {"ProcessId": 2, "CommandLine": "python -m pytest tests/test_x.py"},
+            {"ProcessId": 3, "CommandLine": "python -m pytest tests/test_paper_telegram_sender.py -q"},
         ]
     )
 
     assert report["relevant"] == []
-    assert report["ignored_python"] == 2
+    assert report["ignored_python"] == 3
     assert report["by_kind"] == {}
 
 
@@ -113,9 +114,33 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         json.dumps({
             "eligible": 1,
             "sent": 0,
+            "duplicates": 1,
+            "errors": 0,
             "dry_run": True,
             "configured": True,
             "sends_network": False,
+            "execution_allowed": False,
+        }),
+        encoding="utf-8",
+    )
+    (derived / "paper_telegram_sent_keys.json").write_text(
+        json.dumps({
+            "schema": "paper_telegram_sent_keys.v1",
+            "sent_keys": [
+                "preview_1:recipient_a",
+                "preview_1:recipient_b",
+                "preview_2:recipient_a",
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (derived / "paper_signal_training.json").write_text(
+        json.dumps({
+            "schema": "paper_signal_training_export.v2",
+            "rows": 4,
+            "by_result": {"take": 2, "stop": 1, "expired_no_entry": 1},
+            "by_family": {"early_tp_tactical": 3, "continuation": 1},
+            "by_diagnosis": {"good_signal": 2, "wrong_direction": 1},
             "execution_allowed": False,
         }),
         encoding="utf-8",
@@ -130,5 +155,13 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["trades"] == 1
     assert status["delivery_dry_run"] is True
     assert status["sends_network"] is False
+    assert status["delivery_duplicates"] == 1
+    assert status["cumulative_sent_keys"] == 3
+    assert status["cumulative_sent_previews"] == 2
+    assert status["cumulative_sent_recipients"] == 2
+    assert status["training_rows"] == 4
+    assert status["training_by_result"] == {"take": 2, "expired_no_entry": 1, "stop": 1}
+    assert status["training_by_family"] == {"early_tp_tactical": 3, "continuation": 1}
+    assert status["training_by_diagnosis"] == {"good_signal": 2, "wrong_direction": 1}
     assert status["execution_allowed"] is False
     assert "items" not in status
