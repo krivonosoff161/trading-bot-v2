@@ -120,7 +120,7 @@ def test_telegram_admin_panel_exposes_read_only_farm_status(monkeypatch):
 
     rendered = str(calls)
     assert "__farm_status__" in rendered
-    assert "Admin read-only tools" in rendered
+    assert "Админ-инструменты: только просмотр." in rendered
 
 
 def test_telegram_admin_farm_status_text_is_read_only():
@@ -146,8 +146,8 @@ def test_telegram_admin_farm_status_text_is_read_only():
         }
     )
 
-    assert "read-only" in text
-    assert "live_trading=NO" in text
+    assert "только чтение" in text
+    assert "живая_торговля=нет" in text
     assert "queued=3" in text
     assert "PFR=2" in text
 

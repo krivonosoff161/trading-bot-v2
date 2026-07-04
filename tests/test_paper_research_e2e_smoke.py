@@ -80,7 +80,7 @@ def test_e2e_smoke_verifies_private_artifact_chain(tmp_path, monkeypatch):
                 "items": [
                     {
                         "text": "<b>Paper-сетап: BTC · 15m · long</b>\n"
-                        "<i>Автоисполнение выключено: execution_allowed=false</i>"
+                        "<i>Автоисполнение выключено.</i>"
                     }
                 ]
             },
