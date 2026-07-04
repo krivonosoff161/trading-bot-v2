@@ -595,6 +595,8 @@ def _print(report: dict) -> None:
               f"duplicate_messages={ptd.get('duplicate_messages', ptd.get('duplicates', 0))} "
               f"duplicate_cards={ptd.get('duplicate_cards', 0)} "
               f"errors={ptd.get('errors', 0)} dry_run={ptd.get('dry_run')} "
+              f"status_digest_sent={ptd.get('status_digest_sent_messages', 0)} "
+              f"status_digest_reason={ptd.get('status_digest_reason') or '-'} "
               f"sends_network={ptd.get('sends_network')} "
               "(audit only; no order path)")
     pq = report.get("paper_product_quality") or {}

@@ -41,6 +41,27 @@ def _write_preview_snapshot(root: Path, rows: list[dict]) -> None:
     )
 
 
+def _write_quality_report(root: Path) -> None:
+    path = root / "state" / "derived" / "paper_product_quality_report.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_quality_report.v1",
+                "operator_action": "strict_main_waiting_for_active_pfr_candidates",
+                "active_trades": 12,
+                "active_live_ready": 0,
+                "quality_labels": {"mixed": 1, "needs_review": 4},
+                "training_by_result": {"take": 184, "stop": 371},
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_sender_dry_run_never_calls_telegram(tmp_path):
     _write_preview_snapshot(tmp_path, [_preview()])
 
@@ -139,6 +160,94 @@ def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
     assert second["sent"] == 0
     assert second["duplicates"] == 1
     assert len(calls) == 1
+
+
+def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    _write_quality_report(tmp_path)
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+
+    assert first["sent"] == 1
+    assert first["status_digest_sent_messages"] == 0
+    assert second["sent"] == 1
+    assert second["duplicates"] == 1
+    assert second["status_digest_reason"] == "all_cards_duplicate"
+    assert second["status_digest_sent_messages"] == 1
+    assert len(calls) == 2
+    assert "Paper bot status" in calls[1][1]
+    assert "all_cards_duplicate" in calls[1][1]
+    assert "research-only, not an order" in calls[1][1]
+    assert "execution_allowed=false" in calls[1][1]
+
+
+def test_sender_status_digest_when_quality_gate_leaves_no_cards(tmp_path):
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_telegram_preview.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_preview.v1",
+                "records_read": 2,
+                "rendered": 0,
+                "skipped_quality_gate": 2,
+                "quality_gate_reasons": {"quality_label:needs_review": 2},
+                "items": [],
+                "sends_network": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_quality_report(tmp_path)
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 200 + len(calls)
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        status_digest=True,
+        now=1_800_000_000.0,
+    )
+
+    assert summary["eligible"] == 0
+    assert summary["sent"] == 1
+    assert summary["status_digest_reason"] == "quality_gate_no_cards"
+    assert summary["status_digest_sent_messages"] == 1
+    assert "quality_gate_no_cards" in calls[0][1]
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["source_signal_id"] == "paper_status_digest"
+    assert "111" not in json.dumps(data, ensure_ascii=False)
 
 
 def test_sender_separates_unique_cards_from_recipient_messages(tmp_path):
