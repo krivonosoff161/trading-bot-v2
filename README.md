@@ -1,9 +1,13 @@
 # Trading Bot V2
 
 Research project for market-data and news-driven trading infrastructure around OKX
-crypto futures. The current active work is not live auto-trading. It is an
-`info-edge scanner`: a paper-only event pipeline that collects market/news events,
-routes them by asset and layer, records decisions, and later measures outcomes.
+crypto futures. The current active work is not live auto-trading. The active core is the
+**universe-driven calculation farm** (`python -m scripts.strategy_lab.farm_loop`): a
+paper-only, self-deciding research lifecycle that grinds the OKX universe, fetches data
+(candles + public funding/OI), runs strategy sweeps, classifies, hands candidates to
+honest validation, writes setup cards, and can feed the gated paper runtime. The
+`info-edge scanner` (`src/scout/`) is now an **upstream intake
+source** that feeds the farm, not the center.
 
 > **Status:** research / paper / demo only. No profitability is claimed. This is
 > not financial advice, not a signal service, and not a promise of future returns.
@@ -11,12 +15,24 @@ routes them by asset and layer, records decisions, and later measures outcomes.
 
 ## Current Direction
 
-The project has two separate contours:
+> **Update 2026-06-19 — center is the calculation farm.** The current research core is the
+> **universe-driven calculation farm**: a continuous, self-deciding lifecycle
+> (`scripts/strategy_lab/farm_loop.py` → `farm_coordinator` → `state/farm_tasks.sqlite`)
+> that grinds the OKX universe, fetches data (candles + public funding/OI), runs strategy
+> sweeps, classifies, hands candidates to honest validation, writes setup cards, and feeds
+> `paper_loop` only from `paper_forward_ready` cards — paper/research only.
+> Canonical docs: [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
+> [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
+> [docs/farm_runbook.md](docs/farm_runbook.md).
+
+The project has three contours:
 
 | Contour | Status | Purpose |
 |---|---|---|
-| `src/scout/` info-edge scanner | active | News/event intake, layer routing, agent review, Telegram cards, forward outcome journal |
-| Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies and reusable utilities; not the current development focus |
+| Calculation farm (`research_lab` + `scripts/strategy_lab`) | **active core** | Continuous research lifecycle: intake → plan → prepare/enrich → sweep → classify → validation. |
+| Paper runtime (`paper_loop`) | active gated follower | Reads only hard-validated setup cards; writes paper journal/outcome aggregates. |
+| `src/scout/` info-edge scanner | active (upstream intake) | News/event intake; its `WATCH/GO` rows feed the farm. One intake source, no longer the center. |
+| Old WebSocket trading engines | frozen/reference | Historical paper/demo strategies; useful logic already ported into research_lab families. |
 
 The active scanner is being calibrated. It already writes a useful dataset, and
 the first hygiene pass is in place: `NO_GO` stays in logs by default, while only
@@ -183,17 +199,38 @@ Stop it with `bat\strategy_lab_graceful_stop.bat` or Ctrl+C in the window.
 python scripts/strategy_lab/run_experiment.py --spec configs/strategy_lab/l2_smoke.json
 ```
 
-One-command local start:
+Continuous calculation farm (current core, paper/research only):
+
+```bash
+python -m scripts.strategy_lab.farm_loop --once --dry-run                       # plan only
+python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
+python -m scripts.strategy_lab.farm_status_report                               # operator picture
+```
+
+See [docs/farm_runbook.md](docs/farm_runbook.md) for loop/validation flags, stop/restart,
+and where artifacts are written.
+
+Current visible operator start:
+
+```bash
+bat\strategy_lab_control_room.bat
+```
+
+This opens the canonical paper/research control room in visible windows: farm full-cycle
+loop, dashboard, graph viewer, and periodic status. The underlying farm loop is still
+paper/research only: public OKX market data, no `.env`, no `AUTO_TRADE`, no private
+account endpoints, and no order execution. Use
+`bat\strategy_lab_farm_full_cycle_stop.bat` for a clean stop.
+
+Legacy local lab start (kept for diagnostics/history; not the current full-cycle path):
 
 ```bash
 bat\strategy_lab_start.bat
 ```
 
-This is the normal operator entrypoint. By default it syncs the private state
-DB, queues a bounded `core_market / 1d` research plan, opens the local
-dashboard, and starts the one-worker queue loop. The worker processes one job at
-a time and is throttled by `configs/strategy_lab/resource_policy.yaml`, so the
-desktop is not flooded.
+This older entrypoint syncs the private state DB, queues a bounded research plan,
+opens the local dashboard, and starts a standalone worker loop. Do not use it as the
+main farm/PFR/paper lifecycle while the current `farm_loop` control room exists.
 
 Optional overrides before running the bat:
 
@@ -223,8 +260,9 @@ MAE/MFE), and a validated coarse-sweep spec that gates 1m/heavy jobs.
 The resource policy is now enforced at runtime (not only the schema): the worker
 throttles by `min_seconds_between_jobs` / `max_jobs_per_hour`, caps per-job
 variants by `max_variants_per_job`, defaults to `quiet_desktop`, and treats
-`night_mode` as opt-in. `bat\strategy_lab_start.bat` wraps the safe default
-chain. For diagnostics, generate bounded jobs from a universe group + timeframe,
+`night_mode` as opt-in. `bat\strategy_lab_start.bat` wraps the older standalone
+lab queue; the current full-cycle operator path is `bat\strategy_lab_control_room.bat`.
+For diagnostics, generate bounded jobs from a universe group + timeframe,
 then dry-run or apply manually:
 
 ```bash
@@ -364,10 +402,10 @@ bat\strategy_lab_demo_all.bat
 This syncs state, queues `configs/strategy_lab/l2_smoke.json`, runs one queued
 job, and opens the dashboard.
 
-For continuous local research, prefer `bat\strategy_lab_start.bat` or, if the
-queue is already prepared, `bat\strategy_lab_worker_loop.bat`. The older
-`bat\strategy_lab_loop.bat` is a legacy fixed-spec loop kept for manual
-diagnostics.
+For continuous local research, prefer `bat\strategy_lab_control_room.bat` or
+`bat\strategy_lab_farm_full_cycle_loop.bat`. Use `bat\strategy_lab_start.bat` only
+for the older standalone lab queue. The older `bat\strategy_lab_loop.bat` is a
+legacy fixed-spec loop kept for manual diagnostics.
 
 Local read-only dashboard:
 
@@ -427,12 +465,15 @@ trading-bot-v2/
 
 ## Documentation
 
-Read these first:
+Read these first (calculation farm = current active core):
 
+- [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md) - the canonical continuous research cycle (`farm_loop`).
+- [docs/farm_ownership_map.md](docs/farm_ownership_map.md) - which loop owns what; legacy/archive paths.
+- [docs/farm_runbook.md](docs/farm_runbook.md) - how to operate the farm (run/stop/restart, storage).
 - [CURRENT_STATE.md](CURRENT_STATE.md) - short operational status.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - current project boundaries.
-- [ROADMAP.md](ROADMAP.md) - current development sequence.
-- [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design and as-built notes.
+- [ROADMAP.md](ROADMAP.md) - current development sequence (Farm track first).
+- [SCANNER_SPEC.md](SCANNER_SPEC.md) - scanner design (now an upstream **intake source**, not the center).
 - [docs/scanner_llm_operations_2026-06-12.md](docs/scanner_llm_operations_2026-06-12.md) - LLM budget, scanner/main/strategy-lab operating plan.
 - [docs/scanner_source_onboarding_2026-06-11.md](docs/scanner_source_onboarding_2026-06-11.md) - current one-source-per-layer experiment.
 - [docs/scanner_ta_confirmation_contract.md](docs/scanner_ta_confirmation_contract.md) - scanner-to-TA bridge contract.

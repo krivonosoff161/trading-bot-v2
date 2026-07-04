@@ -7,17 +7,30 @@ import csv
 import datetime as dt
 import glob
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import registry_path, registry_summary
 from src.research_lab.data_prepare import read_market_data_prepare_report, read_prepare_report
 from src.research_lab.event_microscope import plan_microscope
+from src.research_lab.farm_cockpit import build_cockpit
+from src.research_lab.feature_packet import packet_index_path as feature_packet_index_path
+from src.research_lab.human_feedback import feedback_summary
+from src.research_lab.agent_role_registry import role_registry_summary
+from src.research_lab.lineage_contract import cycle_links_path, load_jsonl_counts, scanner_events_path
+from src.research_lab.lineage_backfill import summary_path as backfill_summary_path
+from src.research_lab.llm_role_reviews import review_summary as llm_role_review_summary
 from src.research_lab.llm_review_sender import daily_cap, env_enabled
 from src.research_lab.llm_proposals import load_llm_loop_config
 from src.research_lab.llm_provider import today_usage
+from src.research_lab.market_data_packet import packet_index_path as market_data_packet_index_path
 from src.research_lab.paths import one_minute_glob
+from src.research_lab.pipeline_policy import default_caps
 from src.research_lab.prepare_workflow import load_prepare_workflow_config
+from src.research_lab.prompt_registry import prompt_registry_summary
+from src.research_lab.provider_routes import provider_route_summary
+from src.research_lab.ready_strategy_catalog import catalog_snapshot_path
 from src.research_lab.research_cycle import cycle_summary, read_cycle_report
 from src.research_lab.research_loop import loop_summary, read_loop_report
 from src.research_lab.research_session import read_session_report, session_summary
@@ -35,10 +48,12 @@ from src.research_lab.runtime_policy import (
 from src.research_lab.state_db import dashboard_snapshot, default_db_path
 from src.research_lab.timeframes import load_timeframe_profiles
 from src.research_lab.universe import load_universe
+from src.research_lab.validator_taxonomy import taxonomy_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 SCOUT_BUDGET_LOG = ROOT / "logs" / "scout" / "llm_budget.jsonl"
+DEFAULT_MAX_COMPLETED_RUNS = 100
 
 
 def resolve_allowed_path(path: Path, allowed_roots: list[Path]) -> Path:
@@ -58,11 +73,32 @@ def private_root_from_env(value: str | None = None) -> Path:
     return Path(raw).expanduser() if raw.strip() else DEFAULT_PRIVATE_ROOT
 
 
+def dashboard_max_completed_runs(env_value: str | None = None) -> int:
+    raw = env_value if env_value is not None else ""
+    if not raw.strip():
+        return DEFAULT_MAX_COMPLETED_RUNS
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_COMPLETED_RUNS
+    return max(1, parsed)
+
+
 def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str, Any]:
     private_root = private_root.expanduser().resolve()
     completed_root = private_root / "experiments" / "completed"
-    runs = load_completed_runs(completed_root, private_root)
+    max_runs = dashboard_max_completed_runs(os.getenv("STRATEGY_LAB_DASHBOARD_MAX_RUNS"))
+    runs = load_completed_runs(completed_root, private_root, limit=max_runs)
     state_db = dashboard_snapshot(default_db_path(private_root))
+    totals = aggregate_runs(runs)
+    db_totals = state_db.get("totals") or {}
+    if db_totals:
+        totals = {
+            **totals,
+            "run_count": db_totals.get("run_count", totals.get("run_count", 0)),
+            "candidate_count": db_totals.get("candidate_count", totals.get("candidate_count", 0)),
+            "loaded_run_count": len(runs),
+        }
     return {
         "schema": "strategy_lab_dashboard.v1",
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -88,8 +124,23 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
         "next_run": next_run_hint(private_root),
         "runs": runs,
         "latest_run": runs[0] if runs else None,
-        "totals": aggregate_runs(runs),
+        "totals": totals,
+        "farm_cockpit": build_cockpit(private_root),
         "llm_cost": load_llm_cost_summary(SCOUT_BUDGET_LOG),
+        "lineage": load_lineage_summary(private_root),
+        "pipeline_policy": load_pipeline_policy_summary(),
+        "provider_routes": provider_route_summary(),
+        "agent_roles": role_registry_summary(),
+        "llm_role_reviews": llm_role_review_summary(private_root),
+        "provider_bench": load_provider_bench_summary(private_root),
+        "agent_role_review_cycle": load_agent_role_review_cycle_summary(private_root),
+        "vip_vision_smoke": load_vip_vision_smoke_summary(private_root),
+        "prompt_registry": prompt_registry_summary(),
+        "validator_taxonomy": taxonomy_summary(private_root),
+        "ready_strategy_catalog": load_ready_strategy_catalog_summary(private_root),
+        "product_signal_training": load_product_signal_training_summary(private_root),
+        "human_feedback": feedback_summary(private_root),
+        "lineage_backfill": load_backfill_summary(private_root),
         "safety": {
             "bind_host": "127.0.0.1",
             "mode": "read_only",
@@ -100,12 +151,180 @@ def load_dashboard_state(private_root: Path = DEFAULT_PRIVATE_ROOT) -> dict[str,
     }
 
 
-def load_completed_runs(completed_root: Path, private_root: Path) -> list[dict[str, Any]]:
+def load_provider_bench_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "provider_bench" / "agent_role_provider_bench_summary.json"
+    if not path.exists():
+        return {
+            "schema": "ProviderBenchSummary.v1",
+            "exists": False,
+            "rows": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "private_path_label": "strategy-lab/reports/provider_bench/agent_role_provider_bench.jsonl",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "ProviderBenchSummary.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_agent_role_review_cycle_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "agent_role_review_cycle" / "summary.json"
+    if not path.exists():
+        return {
+            "schema": "AgentRoleReviewCycleSummary.v1",
+            "exists": False,
+            "reviews": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "private_path_label": "strategy-lab/reports/agent_role_review_cycle/summary.json",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "AgentRoleReviewCycleSummary.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_ready_strategy_catalog_summary(private_root: Path) -> dict[str, Any]:
+    path = catalog_snapshot_path(private_root)
+    if not path.exists():
+        return {
+            "schema": "ready_strategy_catalog.v1",
+            "exists": False,
+            "records_loaded": 0,
+            "ready": 0,
+            "rejected_quality": 0,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "ready_strategy_catalog.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True, "items": []}
+
+
+def load_product_signal_training_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "state" / "derived" / "product_signal_training.json"
+    if not path.exists():
+        return {
+            "schema": "product_signal_training_export.v1",
+            "exists": False,
+            "rows": 0,
+            "source_rows": 0,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "product_signal_training_export.v1", "exists": True, "error": "read_failed"}
+    return {**data, "exists": True, "items": []}
+
+
+def load_vip_vision_smoke_summary(private_root: Path) -> dict[str, Any]:
+    path = private_root / "reports" / "provider_bench" / "vip_vision_provider_smoke.json"
+    if not path.exists():
+        return {
+            "schema": "VipVisionProviderSmoke.v1",
+            "exists": False,
+            "configured": False,
+            "called_provider": False,
+            "has_result": False,
+            "private_path_label": "strategy-lab/reports/provider_bench/vip_vision_provider_smoke.json",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "VipVisionProviderSmoke.v1", "exists": True, "error": "read_failed"}
+    public = {key: data.get(key) for key in (
+        "schema",
+        "configured",
+        "provider",
+        "model_label",
+        "provider_scope",
+        "called_provider",
+        "has_result",
+        "result_chars",
+        "error",
+        "private_path_label",
+        "paper_only",
+        "execution_allowed",
+    )}
+    return {**public, "exists": True}
+
+
+def load_pipeline_policy_summary() -> dict[str, Any]:
+    caps = default_caps().to_dict()
+    return {
+        "schema": "PipelinePolicySummary.v1",
+        "caps": caps,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def load_backfill_summary(private_root: Path) -> dict[str, Any]:
+    path = backfill_summary_path(private_root)
+    if not path.exists():
+        return {
+            "schema": "LineageBackfillSummary.v1",
+            "rows": 0,
+            "exists": False,
+            "mapping_label": "strategy-lab/state/lineage/backfill_mapping.jsonl",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"schema": "LineageBackfillSummary.v1", "rows": 0, "exists": True, "error": "read_failed"}
+    return {**data, "exists": True}
+
+
+def load_lineage_summary(private_root: Path) -> dict[str, Any]:
+    """Public-safe counts for the full paper/research lineage backbone."""
+    events = load_jsonl_counts(scanner_events_path(private_root), key="source")
+    data_packets = load_jsonl_counts(market_data_packet_index_path(private_root), key="timeframe")
+    feature_packets = load_jsonl_counts(feature_packet_index_path(private_root), key="timeframe")
+    links = load_jsonl_counts(cycle_links_path(private_root), key="source")
+    advice = load_jsonl_counts(private_root / "state" / "llm_advice" / "calculator_advice.jsonl", key="accepted")
+    return {
+        "schema": "strategy_lab_lineage_summary.v1",
+        "scanner_events": events,
+        "data_packets": data_packets,
+        "feature_packets": feature_packets,
+        "cycle_links": links,
+        "calculator_advice": advice,
+        "paper_only": True,
+        "execution_allowed": False,
+        "labels": {
+            "scanner_events": "strategy-lab/state/lineage/scanner_events.jsonl",
+            "data_packets": "strategy-lab/state/lineage/data_packets.jsonl",
+            "feature_packets": "strategy-lab/state/lineage/feature_packets.jsonl",
+            "cycle_links": "strategy-lab/state/lineage/cycle_links.jsonl",
+            "calculator_advice": "strategy-lab/state/llm_advice/calculator_advice.jsonl",
+        },
+    }
+
+
+def load_completed_runs(completed_root: Path, private_root: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
     completed_root = resolve_allowed_path(completed_root, [private_root])
     if not completed_root.exists():
         return []
     runs = []
-    for run_dir in sorted([p for p in completed_root.iterdir() if p.is_dir()], reverse=True):
+    run_dirs = sorted([p for p in completed_root.iterdir() if p.is_dir()], reverse=True)
+    if limit is not None:
+        run_dirs = run_dirs[: max(1, int(limit))]
+    for run_dir in run_dirs:
         try:
             run_dir = resolve_allowed_path(run_dir, [completed_root])
         except ValueError:

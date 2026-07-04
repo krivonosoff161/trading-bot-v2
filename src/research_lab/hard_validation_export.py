@@ -10,12 +10,23 @@ No network. No LLM. No live trading.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import load_entries
+from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.data_inventory import normalize_timeframe, timeframe_from_filename
+from src.research_lab.experiment import (
+    annotate_signals_with_regime,
+    filter_signals,
+    generate_signals,
+    load_candles,
+    simulate_trades,
+)
+from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.hard_validation_contract import (
     CandidateForValidation,
     CONTRACT_VERSION,
@@ -35,13 +46,27 @@ def export_requests(
     include_regime_specific: bool = False,
     since: str | None = None,
     candidate_id: str | None = None,
+    source: str = "auto",
+    uc_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     """Find eligible candidates and write validation request files.
 
     Returns a summary dict with counts.
     """
-    registry_file = private_root / "candidate-registry" / "candidates.jsonl"
-    entries = load_entries(registry_file)
+    if source not in {"auto", "farm_tasks", "legacy_registry"}:
+        raise ValueError("source must be one of: auto, farm_tasks, legacy_registry")
+    source_used = "legacy_registry"
+    entries: list[dict[str, Any]] = []
+    if source in {"auto", "farm_tasks"}:
+        entries = _load_farm_unique_entries(private_root, uc_keys=uc_keys)
+        if entries:
+            source_used = "farm_tasks"
+        elif source == "farm_tasks":
+            source_used = "farm_tasks"
+    if not entries and source in {"auto", "legacy_registry"}:
+        registry_file = private_root / "candidate-registry" / "candidates.jsonl"
+        entries = load_entries(registry_file)
+        source_used = "legacy_registry"
     eligible = _filter_entries(
         entries,
         status_filter=status_filter,
@@ -53,9 +78,12 @@ def export_requests(
     eligible = eligible[:limit]
 
     summary: dict[str, Any] = {
-        "total_registry": len(entries),
+        "source": source_used,
+        "total_registry": len(entries) if source_used == "legacy_registry" else 0,
+        "total_unique_candidates": len(entries) if source_used == "farm_tasks" else 0,
         "eligible_found": len(eligible),
         "exported": 0,
+        "exported_ids": [],
         "skipped_no_artifact": 0,
         "dry_run": dry_run,
     }
@@ -74,8 +102,86 @@ def export_requests(
         req_path = out_dir / f"{candidate.candidate_id}.json"
         write_json(req_path, candidate.to_dict())
         summary["exported"] += 1
+        summary["exported_ids"].append(candidate.candidate_id)
 
     return summary
+
+
+def validation_id_for_unique_candidate(row: dict[str, Any]) -> str:
+    """Stable hard-validation id for one unique candidate row.
+
+    Raw candidate IDs are not globally unique in the farm: the same result ID can
+    appear under different timeframes or data fingerprints. The validation layer
+    writes files keyed by candidate_id, so it needs a fingerprint-level ID.
+    """
+    uc_key = str(row.get("uc_key") or "")
+    if not uc_key:
+        uc_key = "::".join(
+            str(row.get(k) or "")
+            for k in ("symbol", "timeframe", "family", "params_hash", "data_fingerprint")
+        )
+    digest = hashlib.sha1(uc_key.encode("utf-8")).hexdigest()[:12]
+    return f"fv_{digest}"
+
+
+def _load_farm_unique_entries(private_root: Path, *, uc_keys: list[str] | None = None) -> list[dict[str, Any]]:
+    db = tasks_db_path(Path(private_root))
+    if not db.exists():
+        return []
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        where = "WHERE validation_status IN ('FORWARD_PAPER', 'REGIME_SPECIFIC')"
+        params: list[Any] = []
+        if uc_keys:
+            marks = ",".join("?" for _ in uc_keys)
+            where += f" AND uc_key IN ({marks})"
+            params.extend(uc_keys)
+        rows = conn.execute(
+            f"""SELECT * FROM unique_candidates {where}
+                ORDER BY updated_at DESC LIMIT 5000""",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_entry_from_unique_candidate(dict(r)) for r in rows]
+
+
+def _entry_from_unique_candidate(row: dict[str, Any]) -> dict[str, Any]:
+    run_dir_label = str(row.get("run_dir_label") or "")
+    run_id = Path(run_dir_label.replace("\\", "/")).name if run_dir_label else ""
+    validation_id = validation_id_for_unique_candidate(row)
+    try:
+        params = json.loads(row.get("params_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        params = {}
+    metrics_summary = {
+        "n_trades": int(row.get("n_trades") or 0),
+        "avg_net_pct": float(row.get("avg_net_pct") or 0.0),
+        "source_candidate_id": str(row.get("candidate_id") or ""),
+        "uc_key": str(row.get("uc_key") or ""),
+        "params_hash": str(row.get("params_hash") or ""),
+        "data_fingerprint": str(row.get("data_fingerprint") or ""),
+    }
+    return {
+        "candidate_id": validation_id,
+        "source_candidate_id": str(row.get("candidate_id") or ""),
+        "uc_key": str(row.get("uc_key") or ""),
+        "experiment_id": run_id,
+        "artifact_label": run_dir_label,
+        "symbol": str(row.get("symbol") or ""),
+        "timeframe": str(row.get("timeframe") or ""),
+        "strategy_id": str(row.get("family") or ""),
+        "params_hash": str(row.get("params_hash") or ""),
+        "data_fingerprint": str(row.get("data_fingerprint") or ""),
+        "params": params if isinstance(params, dict) else {},
+        "metrics_summary": metrics_summary,
+        "decision": str(row.get("decision") or ""),
+        "validation_status": str(row.get("validation_status") or ""),
+        "validation_reasons": [],
+        "risk_flags": [],
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
 
 
 def _filter_entries(
@@ -116,6 +222,9 @@ def _deduplicate(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(e.get("candidate_id") or ""),
             str(e.get("symbol") or ""),
             str(e.get("strategy_id") or ""),
+            str(e.get("timeframe") or ""),
+            str(e.get("params_hash") or ""),
+            str(e.get("data_fingerprint") or ""),
         )
         if key not in seen:
             seen[key] = e
@@ -149,7 +258,7 @@ def _build_candidate(
         normalized_symbol=str(entry.get("symbol", "").replace("-", "_")),
         timeframe=_recover_timeframe(metrics, entry),
         strategy_id=str(entry.get("strategy_id") or ""),
-        params=dict(entry.get("params") or {}),
+        params=dict(entry.get("params") or metrics.pop("_params", {}) or {}),
         filters=filters,
         fees_bps=fees_bps,
         slippage_bps=slippage_bps,
@@ -220,23 +329,91 @@ def _load_experiment_metrics(
         }
         results = data.get("results") or []
         candidate_id = str(entry.get("candidate_id") or "")
+        source_candidate_id = str(entry.get("source_candidate_id") or "")
+        wanted_params_hash = str(entry.get("params_hash") or "")
+        wanted_symbol = str(entry.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        wanted_family = str(entry.get("strategy_id") or "")
         for r in results:
-            if str(r.get("run_id") or "") == candidate_id:
-                out = dict(r.get("metrics") or {})
-                out["_trades"] = list(r.get("_trades") or r.get("trades") or [])
-                out.update(context)
-                return out
-        if results:
-            first = dict(results[0].get("metrics") or {})
-            first["_trades"] = list(
-                results[0].get("_trades")
-                or results[0].get("trades")
-                or []
+            row_id = str(r.get("run_id") or r.get("candidate_id") or "")
+            row_symbol = str(r.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+            row_family = str(r.get("family") or "")
+            row_params_hash = params_hash(r.get("params") or {})
+            exact_id = row_id == candidate_id or (source_candidate_id and row_id == source_candidate_id)
+            exact_hash = wanted_params_hash and row_params_hash == wanted_params_hash
+            exact_scope = (
+                (not wanted_symbol or row_symbol == wanted_symbol)
+                and (not wanted_family or row_family == wanted_family)
             )
+            if exact_scope and (exact_id or exact_hash):
+                out = dict(r.get("metrics") or {})
+                out.update(context)
+                out["_params"] = _params_from_result(r)
+                trades = list(r.get("_trades") or r.get("trades") or [])
+                if not trades and int(out.get("n_trades") or 0) > 0:
+                    trades = _rebuild_trades_from_result(private_root, r, out, context)
+                out["_trades"] = trades
+                out["source_candidate_id"] = row_id
+                out["uc_key"] = str(entry.get("uc_key") or "")
+                if entry.get("data_fingerprint"):
+                    out["data_fingerprint"] = str(entry.get("data_fingerprint") or "")
+                return out
+        if results and not entry.get("uc_key"):
+            first = dict(results[0].get("metrics") or {})
             first.update(context)
+            first["_params"] = _params_from_result(results[0])
+            trades = list(results[0].get("_trades") or results[0].get("trades") or [])
+            if not trades and int(first.get("n_trades") or 0) > 0:
+                trades = _rebuild_trades_from_result(private_root, results[0], first, context)
+            first["_trades"] = trades
             return first
 
     return dict(entry.get("metrics_summary") or {})
+
+
+def _params_from_result(row: dict[str, Any]) -> dict[str, Any]:
+    return dict(row.get("params") or {})
+
+
+def _rebuild_trades_from_result(
+    private_root: Path,
+    row: dict[str, Any],
+    metrics: dict[str, Any],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Backward-compatible trade-series recovery for old run artifacts.
+
+    Early farm artifacts stored aggregate metrics but not the per-trade series that
+    hard validation needs. Rebuild the same deterministic CPU simulation from the
+    recorded params, family, filters and candle file label instead of degrading those
+    old candidates to NEEDS_MORE_DATA forever.
+    """
+    label = str(metrics.get("data_file_label") or "")
+    if not label:
+        return []
+    tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
+    candidates = []
+    if tf:
+        candidates.append(Path(private_root) / "market_data" / tf / label)
+    candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
+        return []
+    try:
+        candles = load_candles(path)
+        family = str(row.get("family") or "")
+        params = dict(row.get("params") or {})
+        signals = generate_signals(candles, family, params)
+        signals = annotate_signals_with_regime(candles, signals, {})
+        signals = filter_signals(signals, dict(context.get("_filters") or {}))
+        return simulate_trades(
+            candles,
+            signals,
+            params,
+            fees_bps=float(context.get("_fees_bps") or 7.0),
+            slippage_bps=float(context.get("_slippage_bps") or 3.0),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 def _build_equity_curve(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:

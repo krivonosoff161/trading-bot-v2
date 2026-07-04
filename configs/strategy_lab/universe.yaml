@@ -29,6 +29,11 @@ groups:
     - COIN_USDT_SWAP
     - MSTR_USDT_SWAP
     - PLTR_USDT_SWAP
+  # Tactical BTC/ETH focus group — the two deepest perps, swept with finer family
+  # coverage (regime / vwap / fvg / oi). Members are also in core_market.
+  btc_eth_tactical:
+    - BTC_USDT_SWAP
+    - ETH_USDT_SWAP
 
 # Relation hints. Each relation type maps a symbol to the symbols it tends to
 # track. Same-group "peers" are derived automatically from `groups` above and do

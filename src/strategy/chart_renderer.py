@@ -211,10 +211,10 @@ def render_chart(
     ax.set_facecolor(bg)
     ax_vol.set_facecolor(bg)
 
-    for i, (o, h, l, c) in enumerate(zip(opens, highs_c, lows_c, closes)):
+    for i, (o, h, low, c) in enumerate(zip(opens, highs_c, lows_c, closes)):
         col = "#26a69a" if c >= o else "#ef5350"
-        ax.plot([i, i], [l, h], color=col, linewidth=0.7, zorder=2)
-        body_h = max(abs(c - o), (h - l) * 0.015)
+        ax.plot([i, i], [low, h], color=col, linewidth=0.7, zorder=2)
+        body_h = max(abs(c - o), (h - low) * 0.015)
         ax.add_patch(mpatches.Rectangle((i - 0.35, min(c, o)), 0.7, body_h, facecolor=col, edgecolor=col, linewidth=0))
 
     for arr, col, label in [(ema20_slice, "#2196F3", "EMA20"), (ema50_slice, "#FF9800", "EMA50")]:
@@ -360,6 +360,7 @@ def generate_chart_png(
     entry_signal: str = None,
     direction: str = None,
     trade_style: str = None,
+    tf_label: str = "15m",
 ) -> None:
     render_chart(
         symbol=symbol,
@@ -371,4 +372,5 @@ def generate_chart_png(
         entry_signal=entry_signal,
         direction=direction,
         trade_style=trade_style,
+        tf_label=tf_label,
     )

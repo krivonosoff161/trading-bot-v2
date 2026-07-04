@@ -24,7 +24,8 @@ def _seed_candidates(tmp_path, n=3):
     symbols = ["BTC_USDT_SWAP", "ETH_USDT_SWAP", "SOL_USDT_SWAP"]
     rows = [{
         "candidate_id": f"c{i}", "symbol": symbols[i % len(symbols)],
-        "strategy_id": "momentum_breakout", "params": {"lookback": 20, "hold_bars": 5},
+        "strategy_id": "momentum_breakout",
+        "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
         "validation_status": "FORWARD_PAPER",
         "metrics_summary": {"n_trades": 25, "avg_net_pct": 1.0, "test_avg_net_pct": 0.8,
                             "profit_factor": 1.3, "entry_timing": {"avg_capture_ratio": 0.4}},

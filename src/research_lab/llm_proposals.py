@@ -32,6 +32,7 @@ KNOWN_PROVIDERS = ("alibaba", "qwen", "openai-compatible", "ollama")
 DEFAULT_MAX_CANDIDATES = 8
 DEFAULT_MAX_REVIEWS = 3
 _HARD_ITEM_CAP = 200
+DEFAULT_CONTRACT_FAILURE_THRESHOLD = 3
 
 _DENY_KEYS = {
     "code", "shell", "exec", "eval", "command", "cmd", "script",
@@ -50,6 +51,13 @@ _REJECT_MAP = {
     "output_boundary_violation": "unsafe_field",
     "missing_hypothesis": "missing_rationale",
     "not_compilable": "malformed_json",
+    "known_bad_in_memory": "known_bad_in_memory",
+    "wrong_horizon": "wrong_horizon",
+}
+_CONTRACT_FAILURE_REASONS = {
+    "malformed_json", "json_parse_error", "wrong_top_level_shape",
+    "missing_proposals_array", "unsafe_field", "unknown_strategy_family",
+    "unknown_timeframe", "variants_too_large", "missing_rationale",
 }
 
 NullProposalSender = NullReviewSender
@@ -141,6 +149,7 @@ def build_proposal_prompt(
     universe: Universe,
     profiles: TimeframeProfiles,
     max_candidates: int,
+    memory_digest: str = "",
 ) -> tuple[str, str]:
     families = ", ".join(strategy_ids())
     tfs = ", ".join(allowed_timeframes(profiles))
@@ -164,23 +173,39 @@ def build_proposal_prompt(
         ]
     }
     system = (
-        "You are a research dispatcher for a local backtesting lab. You only propose "
-        "bounded experiment candidates as strict JSON. You never run code, never trade, "
-        "never make profitability claims. Output a JSON object with exactly one top-level "
-        "key: proposals. Do not output prose, markdown, code fences, XML tags, or comments. "
+        "You are a weak local model used only as an advisory research dispatcher for a "
+        "local backtesting lab. You are not the controller of the farm. You only propose "
+        "bounded experiment candidates as strict JSON; deterministic code validates every "
+        "candidate before anything can be queued. You never run code, never start or stop "
+        "processes, never change files or configs, never trade, never promote paper/live "
+        "status, and never make profitability claims. Output a JSON object with exactly "
+        "one top-level key: proposals. Do not output prose, markdown, code fences, XML "
+        "tags, comments, reasoning traces, or alternative formats. "
         "Every proposal must include setup_family, requested_timeframe, symbols, "
         "parameter_grid, hypothesis, expected_validation, risk_flags, and max_variants. "
         f"setup_family must be one of the known families. requested_timeframe must be one of: {tfs}. "
         "parameter_grid must be keyed by setup_family and contain a short list of parameter "
-        "objects. Do not include code, shell, order, account, key, or live-trading fields. "
-        "Keep each proposal small: one to two symbols and one to four grid variants."
+        "objects. hypothesis must name the market behavior being tested, not a trading "
+        "recommendation. expected_validation must name a reject/observe/pass condition "
+        "for the validator. Do not include code, shell, order, account, key, secret, path, "
+        "Telegram, main-engine, paper-promotion, or live-trading fields. Keep each proposal "
+        "small: one to two symbols and one to four grid variants."
     )
+    memory_block = (f"\n{memory_digest}\n" if memory_digest else "")
     user = (
         f"Known families: {families}\n"
         f"Allowed timeframes: {tfs}\n"
         f"Known symbols (subset): {symbols}\n"
-        f"Propose at most {max_candidates} bounded candidates as JSON.\n\n"
-        f"Exact response shape example:\n{json.dumps(example, ensure_ascii=False, sort_keys=True)}\n\n"
+        f"Propose at most {max_candidates} bounded candidates as JSON.\n"
+        "Treat paper trading as downstream evidence only: PAPER_FORWARD_READY can only be "
+        "assigned by hard validation, never by you.\n"
+        "Prefer proposals that explain a current failure mode: too few trades, late entry, "
+        "fragility, poor MFE/MAE, regime mismatch, missing OI/funding context, or repeated "
+        "validator rejection.\n"
+        "Do NOT re-propose a setup the outcome memory marks confirmed_bad — propose a DIFFERENT "
+        "angle (exit model, timeframe horizon, regime, OI context) instead.\n"
+        f"{memory_block}"
+        f"\nExact response shape example:\n{json.dumps(example, ensure_ascii=False, sort_keys=True)}\n\n"
         f"Recent lab state to react to:\n{summary}\n"
     )
     return system, user
@@ -283,9 +308,21 @@ class LLMProposalBatch:
             out[item["reason"]] = out.get(item["reason"], 0) + 1
         return out
 
+    def contract_failures(self) -> int:
+        return sum(1 for item in self.rejected if item["reason"] in _CONTRACT_FAILURE_REASONS)
+
+    def should_disable_for_run(self, *, threshold: int = DEFAULT_CONTRACT_FAILURE_THRESHOLD) -> bool:
+        return self.contract_failures() >= max(1, int(threshold))
+
     def to_summary(self) -> dict[str, Any]:
-        return {"validated": len(self.validated), "rejected": len(self.rejected),
-                "reject_reasons": self.reject_reasons()}
+        failures = self.contract_failures()
+        return {
+            "validated": len(self.validated),
+            "rejected": len(self.rejected),
+            "reject_reasons": self.reject_reasons(),
+            "contract_failures": failures,
+            "disable_for_run": failures >= DEFAULT_CONTRACT_FAILURE_THRESHOLD,
+        }
 
 
 def _has_unsafe_field(item: dict[str, Any]) -> bool:
@@ -342,6 +379,7 @@ def validate_llm_candidates(
     resource_policy: ResourcePolicy,
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    memory_index=None,
 ) -> LLMProposalBatch:
     validated: list[Proposal] = []
     rejected: list[dict[str, str]] = []
@@ -368,7 +406,8 @@ def validate_llm_candidates(
             continue
         seen_ids.add(proposal.proposal_id)
         marked = validate_and_mark(
-            proposal, universe=universe, timeframe_profiles=timeframe_profiles, resource_policy=resource_policy,
+            proposal, universe=universe, timeframe_profiles=timeframe_profiles,
+            resource_policy=resource_policy, memory_index=memory_index,
         )
         if marked.status == VALIDATED:
             if len(validated) < max(0, int(max_candidates)):
@@ -391,9 +430,11 @@ def generate_proposals_via_llm(
     resource_policy: ResourcePolicy,
     created_at: str,
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
+    memory_index=None,
+    memory_digest: str = "",
 ):
     system, user = build_proposal_prompt(summary, universe=universe, profiles=timeframe_profiles,
-                                         max_candidates=max_candidates)
+                                         max_candidates=max_candidates, memory_digest=memory_digest)
     text, usage = provider.generate(system, user)
     try:
         items = parse_llm_proposals(text)
@@ -405,6 +446,7 @@ def generate_proposals_via_llm(
     batch = validate_llm_candidates(
         items, universe=universe, timeframe_profiles=timeframe_profiles,
         resource_policy=resource_policy, created_at=created_at, max_candidates=max_candidates,
+        memory_index=memory_index,
     )
     return batch, usage
 

@@ -1,11 +1,25 @@
-# bat/ — пакетные файлы (.bat)
+# bat/ - Batch Entry Points
 
-Редко используемые управляющие батники проекта. Пути починены под запуск из этой подпапки
-(`cd /d %~dp0..` → рабочая директория = корень проекта).
+Batch files in this folder are operator shortcuts. They assume the working directory is
+the repository root (`cd /d %~dp0\..`).
 
-**Часто используемые остаются в КОРНЕ** для удобства (привычка трейдера):
-`start.bat` · `stop.bat` · `update_journal.bat` · `clear_cache.bat`.
+## Current Canonical Strategy Lab Path
 
-Сюда переезжают редкие: `start_all` · `start_scanner` · `start_tape` · `start_telegram_bot` · `analyze_latest` · `collect_logs`.
+- `strategy_lab_farm_full_cycle_loop.bat` - visible continuous farm cycle:
+  scanner/watch intake -> farm lifecycle -> compute worker -> hard validation -> paper
+  runtime plus PFR-backed paper-signal watch lane.
+- `strategy_lab_farm_full_cycle_stop.bat` - writes the stop-file for the loop above.
+- `strategy_lab_control_room.bat` - opens visible farm, dashboard, graph, and status
+  monitor windows for operator runs.
+- `strategy_lab_status_monitor.bat` - read-only periodic status loop; exits when the
+  farm stop-file appears.
+- `strategy_lab_status.bat` - read-only operator status.
 
-См. `ARCHITECTURE.md` / `REFACTOR_PLAN.md`.
+The canonical path is paper/research only: no `.env`, no `AUTO_TRADE`, no orders, no
+private exchange endpoints, no Telegram.
+
+## Legacy / Diagnostic
+
+Older research/universe/scanner-farm batch files remain for diagnostics and historical
+comparison. Do not use them as the default operator path unless a task explicitly asks for
+that legacy lane.

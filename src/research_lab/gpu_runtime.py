@@ -29,7 +29,11 @@ AUTO = "auto"
 
 # Strategy families whose numeric signal core has a GPU-accelerated kernel.
 # Everything else runs on the CPU scalar path (documented support matrix).
-GPU_SUPPORTED_FAMILIES = ("momentum_breakout",)
+# Each entry is parity-tested (scalar == vectorized) before being listed here.
+# Deliberately NOT listed: volatility_squeeze_breakout_v2 — its ATR-percentile gate is
+# a sequential Wilder recurrence (not data-parallel), so a kernel would add risk with
+# no real speedup; it stays on the CPU signal path with an honest cpu_fallback record.
+GPU_SUPPORTED_FAMILIES = ("momentum_breakout", "range_volume_breakout", "pump_dump_scalp")
 
 
 @dataclass(frozen=True)

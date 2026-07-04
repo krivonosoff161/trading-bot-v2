@@ -46,8 +46,8 @@ def _provider(http_get=None):
     )
 
 
-def test_supported_timeframes_are_1m_15m_1h_4h_1d():
-    assert set(SUPPORTED_TIMEFRAMES) == {"1m", "15m", "1h", "4h", "1d"}
+def test_supported_timeframes_are_1m_5m_15m_1h_4h_1d():
+    assert set(SUPPORTED_TIMEFRAMES) == {"1m", "5m", "15m", "1h", "4h", "1d"}
 
 
 def test_resolve_timeframe_returns_correct_bar_and_interval():
@@ -67,7 +67,7 @@ def test_resolve_timeframe_returns_correct_bar_and_interval():
 
 def test_unsupported_timeframe_raises():
     with pytest.raises(ValueError, match="supports"):
-        _resolve_timeframe("5m")
+        _resolve_timeframe("3m")
 
 
 def test_okx_bar_parameter_in_request_url():

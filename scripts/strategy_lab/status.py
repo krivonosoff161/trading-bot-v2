@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.dashboard_state import load_dashboard_state  # noqa: E402
+from src.research_lab.paper_readiness import summarize_paper_readiness  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 
 
@@ -58,11 +59,19 @@ def _count_jsonl_rows(root: Path, rel: str, filename: str) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
+    ap.add_argument("--private-root", default=None)
     args = ap.parse_args()
 
-    root = Path(args.private_root).expanduser()
-    configured = "configured (env)" if os.getenv("TRADING_BOT_RESEARCH_ROOT") else "default"
+    env_root = os.getenv("TRADING_BOT_RESEARCH_ROOT")
+    if args.private_root:
+        root = Path(args.private_root).expanduser()
+        configured = "configured (--private-root)"
+    elif env_root:
+        root = Path(env_root).expanduser()
+        configured = "configured (env)"
+    else:
+        root = DEFAULT_PRIVATE_ROOT
+        configured = "default"
     exists = "exists" if root.exists() else "NOT created yet"
 
     state = load_dashboard_state(root)
@@ -80,6 +89,7 @@ def main() -> None:
     session = state.get("last_session") or {}
     loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
+    farm_cockpit = state.get("farm_cockpit") or {}
 
     print("Strategy Lab status")
     print("-" * 48)
@@ -113,6 +123,33 @@ def main() -> None:
         f"reports: {_count_files(root, 'setup_library/reports', '*.md')}, "
         f"index rows: {_count_jsonl_rows(root, 'setup_library', 'setup_index.jsonl')}"
     )
+    paper_ready = summarize_paper_readiness(root, check_local_data=False)
+    blockers = paper_ready.get("blocked_reasons") or {}
+    blocker_text = " ".join(f"{k}={v}" for k, v in list(blockers.items())[:4]) or "none"
+    print(
+        "Paper ready  : "
+        f"checked={paper_ready.get('checked_cards', 0)}, "
+        f"ready={paper_ready.get('paper_forward_ready', 0)}, "
+        f"plan_ready={paper_ready.get('plan_ready', 0)}; "
+        f"blocked={blocker_text}"
+    )
+    lifecycle = farm_cockpit.get("lifecycle") or {}
+    results = farm_cockpit.get("results") or {}
+    if lifecycle.get("available"):
+        print(
+            "Farm core    : "
+            f"tasks {_fmt_counts(lifecycle.get('by_state'))}; "
+            f"unique={lifecycle.get('unique_candidates', 0)}; "
+            f"hard={_fmt_counts(lifecycle.get('validation'))}; "
+            f"paper={_fmt_counts(lifecycle.get('paper_status'))}"
+        )
+        print(
+            "Paper loop   : "
+            f"outcomes={results.get('paper_outcomes', 0)}; "
+            f"farm paper={_fmt_counts(results.get('paper_status'))}"
+        )
+    else:
+        print("Farm core    : not initialized (run farm_loop --once --dry-run/apply)")
     if cycle.get("available"):
         print(f"Research cyc : last {cycle.get('mode')} (proposals queued: {cycle.get('proposals_queued', 0)}, "
               f"data missing: {cycle.get('data_missing', 0)}, worker done: {cycle.get('worker_completed', 0)}, "

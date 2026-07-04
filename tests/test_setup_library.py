@@ -24,7 +24,7 @@ def _make_report_dict(
         "source_run_id": "run-abc",
         "symbol": "BTC-USDT-SWAP",
         "timeframe": "15m",
-        "strategy_id": "trend",
+        "strategy_id": "momentum_breakout",
         "verdict": {
             "candidate_id": "c-001",
             "hard_status": hard_status,
@@ -37,7 +37,7 @@ def _make_report_dict(
 
 def _make_candidate_dict() -> dict:
     return {
-        "params": {"ma_window": 20},
+        "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
         "filters": {"min_vol_ratio": 1.0},
         "data_window": {"start_ts": 0, "end_ts": 1000, "n_bars": 50},
         "lite_status": "FORWARD_PAPER",
@@ -53,14 +53,15 @@ class TestBuildSetupCard:
         assert card.candidate_id == "c-001"
         assert card.hard_status == "PAPER_FORWARD_READY"
         assert card.main_engine_ready is False
-        assert card.paper_forward_ready is True
+        assert card.paper_forward_ready is False
 
     def test_with_candidate(self) -> None:
         report = _make_report_dict()
         candidate = _make_candidate_dict()
         card = build_setup_card(report, candidate)
-        assert card.params == {"ma_window": 20}
+        assert card.params["lookback"] == 20
         assert card.regime_tags == ["trending"]
+        assert card.paper_forward_ready is True
 
     def test_main_engine_ready_always_false(self) -> None:
         report = _make_report_dict()
@@ -100,7 +101,7 @@ class TestWriteSetupLibrary:
             lib_dir = Path(td) / "setup_library"
             assert (lib_dir / "by_symbol" / "BTC-USDT-SWAP").exists()
             assert (lib_dir / "by_timeframe" / "15m").exists()
-            assert (lib_dir / "by_strategy" / "trend").exists()
+            assert (lib_dir / "by_strategy" / "momentum_breakout").exists()
 
     def test_no_absolute_paths_in_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:

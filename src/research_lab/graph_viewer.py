@@ -26,6 +26,13 @@ TYPE_COLOR = {
     "verdict": "#334155",
     "reason": "#b45309",
     "regime": "#0369a1",
+    "event": "#0f766e",
+    "data_packet": "#2563eb",
+    "feature_packet": "#7c3aed",
+    "validation": "#b45309",
+    "paper_signal": "#16a34a",
+    "outcome": "#ef4444",
+    "training": "#64748b",
 }
 
 
@@ -139,6 +146,92 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
     }
 
 
+def build_lineage_graph_data(rows: list[dict[str, Any]], *, max_links: int = 500) -> dict[str, Any]:
+    """Build a compact graph from LineageLink rows.
+
+    Shape: asset -> event -> data packet -> feature packet -> candidate/setup ->
+    validation -> paper signal -> outcome/training.
+    """
+    selected = rows[-max_links:]
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+
+    def add_node(node_id: str, label: str, kind: str, **extra: Any) -> None:
+        if not node_id or node_id.endswith(":"):
+            return
+        if node_id in nodes:
+            return
+        nodes[node_id] = {
+            "id": node_id,
+            "label": label,
+            "kind": kind,
+            "color": extra.pop("color", TYPE_COLOR.get(kind, "#475569")),
+            **extra,
+        }
+
+    def add_edge(source: str, target: str, relation: str, weight: float = 1.0) -> None:
+        if source in nodes and target in nodes:
+            edges.append({"source": source, "target": target, "relation": relation, "weight": weight})
+
+    by_source: dict[str, int] = {}
+    for row in selected:
+        symbol = str(row.get("instrument") or row.get("symbol") or "unknown").upper()
+        source = str(row.get("source") or "unknown")
+        by_source[source] = by_source.get(source, 0) + 1
+        event_id = str(row.get("scanner_event_id") or "")
+        data_id = str(row.get("data_packet_id") or "")
+        feature_id = str(row.get("feature_packet_id") or "")
+        setup_id = str(row.get("setup_candidate_id") or "")
+        validation_id = str(row.get("validation_id") or "")
+        signal_id = str(row.get("paper_signal_id") or "")
+        outcome_id = str(row.get("outcome_id") or "")
+        training_id = str(row.get("training_row_id") or "")
+
+        asset_node = f"asset:{symbol}"
+        event_node = f"event:{event_id}"
+        data_node = f"data_packet:{data_id}"
+        feature_node = f"feature_packet:{feature_id}"
+        setup_node = f"setup:{setup_id}"
+        validation_node = f"validation:{validation_id}"
+        signal_node = f"paper_signal:{signal_id}"
+        outcome_node = f"outcome:{outcome_id}"
+        training_node = f"training:{training_id}"
+
+        add_node(asset_node, symbol, "symbol")
+        add_node(event_node, event_id[:18], "event", source=source)
+        add_node(data_node, data_id[:18], "data_packet", timeframe=row.get("timeframe"))
+        add_node(feature_node, feature_id[:18], "feature_packet", family=row.get("setup_family"))
+        add_node(setup_node, setup_id[:18], "candidate")
+        add_node(validation_node, validation_id[:18], "validation")
+        add_node(signal_node, signal_id[:18], "paper_signal")
+        add_node(outcome_node, outcome_id[:18], "outcome")
+        add_node(training_node, training_id[:18], "training")
+
+        add_edge(asset_node, event_node, "event", 1.8)
+        add_edge(event_node, data_node, "data", 1.6)
+        add_edge(data_node, feature_node, "features", 1.5)
+        add_edge(feature_node, setup_node, "setup", 1.2)
+        add_edge(setup_node, validation_node, "validation", 1.1)
+        add_edge(validation_node, signal_node, "paper", 1.2)
+        add_edge(feature_node, signal_node, "paper", 0.8)
+        add_edge(signal_node, outcome_node, "outcome", 1.0)
+        add_edge(outcome_node, training_node, "training", 1.0)
+
+    return {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "summary": {
+            "links": len(selected),
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "by_source": by_source,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    }
+
+
 def write_graph_viewer(
     private_root: Path,
     entries: list[dict[str, Any]],
@@ -159,6 +252,46 @@ def write_graph_viewer(
         "nodes": len(data["nodes"]),
         "edges": len(data["edges"]),
         "candidates": data["summary"]["candidates"],
+    }
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def write_lineage_graph_viewer(
+    private_root: Path,
+    *,
+    max_links: int = 500,
+    allow_public_output: bool = False,
+) -> dict[str, Any]:
+    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    out_dir = graph_viewer_dir(private_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows = _load_jsonl(private_root / "state" / "lineage" / "cycle_links.jsonl")
+    data = build_lineage_graph_data(rows, max_links=max_links)
+    out_file = out_dir / "lineage.html"
+    out_file.write_text(_html(data), encoding="utf-8", newline="\n")
+    return {
+        "viewer_file": str(out_file),
+        "viewer_label": "strategy-lab/graph-viewer/lineage.html",
+        "nodes": len(data["nodes"]),
+        "edges": len(data["edges"]),
+        "links": data["summary"]["links"],
+        "paper_only": True,
+        "execution_allowed": False,
     }
 
 

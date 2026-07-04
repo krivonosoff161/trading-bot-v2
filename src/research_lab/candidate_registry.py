@@ -37,6 +37,7 @@ def build_entry(
     """Build a registry entry from a RunResult-like object."""
     created = created_at or dt.datetime.now(dt.timezone.utc).isoformat()
     status = getattr(result, "validation_status", "") or "OBSERVE"
+    plan_meta = dict(getattr(spec, "plan_meta", {}) or {}) if spec is not None else {}
     return {
         "schema": SCHEMA,
         "candidate_id": result.run_id,
@@ -48,6 +49,8 @@ def build_entry(
             getattr(spec, "timeframe", "")
             or str((getattr(result, "metrics", {}) or {}).get("data_file_timeframe") or "")
         ),
+        "plan_group": str(plan_meta.get("group") or ""),
+        "plan_meta": plan_meta,
         "filters": dict(getattr(spec, "filters", {}) or {}),
         "fees_bps": float(getattr(spec, "fees_bps", 7.0)) if spec is not None else 7.0,
         "slippage_bps": float(getattr(spec, "slippage_bps", 3.0)) if spec is not None else 3.0,

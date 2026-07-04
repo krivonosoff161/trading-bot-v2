@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -219,14 +220,35 @@ class TestBuildVerdict:
 
 
 class TestRunValidation:
-    def test_bridge_unavailable(self) -> None:
-        with patch(
-            "src.research_lab.honest_backtest_bridge._HAS_BACKTEST_SANITY",
-            False,
+    def test_bridge_unavailable_fails_loud_by_default(self) -> None:
+        # Phase 0.1: missing engine must raise, not silently degrade.
+        import pytest
+
+        from src.research_lab.honest_backtest_bridge import BridgeUnavailableError
+
+        with patch.dict("os.environ", {}, clear=False) as _env:
+            os.environ.pop("STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION", None)
+            with patch(
+                "src.research_lab.honest_backtest_bridge._HAS_BACKTEST_SANITY",
+                False,
+            ):
+                c = _make_candidate()
+                with pytest.raises(BridgeUnavailableError):
+                    run_validation(c, Path("/tmp"), dry_run=True)
+
+    def test_bridge_unavailable_degraded_opt_in(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"STRATEGY_LAB_ALLOW_DEGRADED_VALIDATION": "1"},
+            clear=False,
         ):
-            c = _make_candidate()
-            result = run_validation(c, Path("/tmp"), dry_run=True)
-            assert result.get("bridge_unavailable") is True
+            with patch(
+                "src.research_lab.honest_backtest_bridge._HAS_BACKTEST_SANITY",
+                False,
+            ):
+                c = _make_candidate()
+                result = run_validation(c, Path("/tmp"), dry_run=True)
+                assert result.get("bridge_unavailable") is True
 
     def test_dry_run_no_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:

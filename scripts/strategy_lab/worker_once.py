@@ -143,10 +143,33 @@ def run_worker_once(
         job_id = int(job["job_id"])
         try:
             spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
+            write_worker_status(
+                status_path,
+                status="running",
+                job_id=job_id,
+                spec_path=str(job["spec_path"]),
+                experiment_id=spec.experiment_id,
+                symbols=len(spec.symbols),
+                families=len(spec.families),
+                max_runs=spec.max_runs,
+                mode=policy.mode,
+            )
+            if verbose:
+                print(
+                    f"started job_id={job_id} experiment={spec.experiment_id} "
+                    f"symbols={len(spec.symbols)} families={len(spec.families)} "
+                    f"max_runs={spec.max_runs or 'unlimited'} mode={policy.mode}",
+                    flush=True,
+                )
             cap, capped = effective_variant_cap(policy, spec.max_runs)
             if capped:
                 if verbose:
-                    print(f"variant cap applied job_id={job_id} max_runs={spec.max_runs or 'unlimited'} -> {cap} mode={policy.mode}")
+                    print(
+                        f"variant cap applied job_id={job_id} "
+                        f"max_runs={spec.max_runs or 'unlimited'} -> {cap} "
+                        f"mode={policy.mode}",
+                        flush=True,
+                    )
                 spec = dataclasses.replace(spec, max_runs=cap)
             runtime_meta: dict = {}
             results = evaluate_spec(spec, runtime_meta)

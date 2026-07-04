@@ -70,6 +70,27 @@ def test_watch_queue_is_idempotent_and_side_normalized(tmp_path):
     assert rows[0]["asset"]["okx_inst"] == "ZEC-USDT-SWAP"
 
 
+def test_watch_queue_idempotent_across_second_boundary(tmp_path, monkeypatch):
+    """Regression: idempotency must not depend on wall-clock. Force now_iso() to advance
+    between the two upserts (the real flake: two calls straddling a 1-second boundary).
+    Only the volatile updated_at differs, so the second upsert must still report unchanged."""
+    path = tmp_path / "watch_queue.jsonl"
+    row = _row("WATCH", "long")
+
+    clock = iter(["2026-06-11T10:00:00Z", "2026-06-11T10:00:01Z", "2026-06-11T10:00:02Z"])
+    monkeypatch.setattr(WQ, "now_iso", lambda: next(clock))
+
+    first = WQ.upsert_watch(row, path=path)
+    second = WQ.upsert_watch(row, path=path)
+
+    assert first == (f"watch_{row['card_id']}", True)
+    assert second == (f"watch_{row['card_id']}", False)  # was flaky: updated_at advanced
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    # the stored row keeps the original updated_at (no rewrite on a no-op upsert)
+    assert rows[0]["updated_at"] == "2026-06-11T10:00:00Z"
+
+
 def test_open_watches_filters_symbol_and_expiry(tmp_path):
     path = tmp_path / "watch_queue.jsonl"
     row = _row("WATCH", "long")

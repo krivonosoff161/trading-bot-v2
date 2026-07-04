@@ -96,11 +96,21 @@ def render_html(state: dict) -> str:
     last_loop = state.get("last_loop") or {}
     llm_loop = state.get("llm_loop") or {}
     queue_capacity = state.get("queue_capacity") or {}
+    farm_cockpit = state.get("farm_cockpit") or {}
+    lineage = state.get("lineage") or {}
+    ready_catalog = state.get("ready_strategy_catalog") or {}
+    pipeline_policy = state.get("pipeline_policy") or {}
+    provider_routes = state.get("provider_routes") or {}
+    prompt_registry = state.get("prompt_registry") or {}
+    validator_taxonomy = state.get("validator_taxonomy") or {}
+    human_feedback = state.get("human_feedback") or {}
+    lineage_backfill = state.get("lineage_backfill") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30">
   <title>Strategy Research Lab</title>
   <style>
     :root {{ color-scheme: dark; --bg:#0f1115; --panel:#171b22; --line:#2a313c; --text:#e8edf2; --muted:#9ba7b4; --accent:#62b6ff; --ok:#4dd18b; --warn:#f0c05a; --bad:#ff7575; }}
@@ -160,6 +170,26 @@ def render_html(state: dict) -> str:
   <section class="section card">
     <h2>Research Summary</h2>
     {research_summary_html(latest, next_run, obsidian_notes)}
+  </section>
+
+  <section class="section card">
+    <h2>Calculation Farm Cockpit</h2>
+    {farm_cockpit_html(farm_cockpit)}
+  </section>
+
+  <section class="section card">
+    <h2>Paper Research Lineage</h2>
+    {lineage_html(lineage)}
+  </section>
+
+  <section class="section card">
+    <h2>Ready Strategy Catalog</h2>
+    {ready_strategy_catalog_html(ready_catalog)}
+  </section>
+
+  <section class="section card">
+    <h2>Pipeline Safety</h2>
+    {pipeline_safety_html(pipeline_policy, provider_routes, prompt_registry, validator_taxonomy, human_feedback, lineage_backfill)}
   </section>
 
   <section class="section card">
@@ -225,6 +255,115 @@ def metric_card(label: str, value: object, cls: str = "") -> str:
     return f'<div class="card"><div class="muted">{esc(label)}</div><div class="{klass}">{esc(value)}</div></div>'
 
 
+def lineage_html(lineage: dict) -> str:
+    if not lineage:
+        return '<p class="muted">No lineage summary loaded.</p>'
+    events = lineage.get("scanner_events") or {}
+    data_packets = lineage.get("data_packets") or {}
+    feature_packets = lineage.get("feature_packets") or {}
+    links = lineage.get("cycle_links") or {}
+    advice = lineage.get("calculator_advice") or {}
+    labels = lineage.get("labels") or {}
+    rows = [
+        ("scanner events", events.get("rows", 0), events.get("by_key", {}), labels.get("scanner_events", "")),
+        ("data packets", data_packets.get("rows", 0), data_packets.get("by_key", {}), labels.get("data_packets", "")),
+        ("feature packets", feature_packets.get("rows", 0), feature_packets.get("by_key", {}), labels.get("feature_packets", "")),
+        ("cycle links", links.get("rows", 0), links.get("by_key", {}), labels.get("cycle_links", "")),
+        ("calculator advice", advice.get("rows", 0), advice.get("by_key", {}), labels.get("calculator_advice", "")),
+    ]
+    body = "".join(
+        "<tr>"
+        f"<td>{esc(name)}</td><td>{esc(count)}</td><td>{esc(json.dumps(by_key, ensure_ascii=False, sort_keys=True))}</td>"
+        f"<td class=\"path\">{esc(label)}</td>"
+        "</tr>"
+        for name, count, by_key, label in rows
+    )
+    return (
+        "<table><tr><th>artifact</th><th>rows</th><th>breakdown</th><th>private label</th></tr>"
+        f"{body}</table>"
+        '<p class="muted">paper_only=true · execution_allowed=false · raw packets stay under private root</p>'
+    )
+
+
+def ready_strategy_catalog_html(catalog: dict) -> str:
+    if not catalog:
+        return '<p class="muted">No ready strategy catalog loaded.</p>'
+    family_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((catalog.get("ready_by_family") or {}).items())
+    )
+    tf_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((catalog.get("ready_by_timeframe") or {}).items())
+    )
+    return (
+        "<p>"
+        f"exists={esc(catalog.get('exists', False))} · "
+        f"loaded={esc(catalog.get('records_loaded', 0))} · "
+        f"ready={esc(catalog.get('ready', 0))} · "
+        f"rejected_quality={esc(catalog.get('rejected_quality', 0))} · "
+        f"execution_allowed={esc(catalog.get('execution_allowed'))}"
+        "</p>"
+        "<h3>Ready by family</h3>"
+        f"<table><tr><th>family</th><th>ready</th></tr>{family_rows}</table>"
+        "<h3>Ready by timeframe</h3>"
+        f"<table><tr><th>timeframe</th><th>ready</th></tr>{tf_rows}</table>"
+        '<p class="muted">Only hard-validator PFR rows that pass quality policy enter this catalog.</p>'
+    )
+
+
+def pipeline_safety_html(
+    policy: dict,
+    routes: dict,
+    prompts: dict,
+    validator: dict,
+    feedback: dict,
+    backfill: dict,
+) -> str:
+    caps = policy.get("caps") or {}
+    cap_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in caps.items()
+    )
+    route_rows = "".join(
+        "<tr>"
+        f"<td>{esc(row.get('surface'))}</td><td>{esc(row.get('provider'))}</td>"
+        f"<td>{esc(row.get('model'))}</td><td>{esc(row.get('prompt_version'))}</td>"
+        f"<td>{esc(row.get('fallback'))}</td>"
+        f"<td>{esc(row.get('active'))}</td>"
+        "</tr>"
+        for row in (routes.get("routes") or [])
+    )
+    prompt_rows = "".join(
+        "<tr>"
+        f"<td>{esc(row.get('surface'))}</td><td>{esc(row.get('role'))}</td>"
+        f"<td>{esc(row.get('version'))}</td><td>{esc(row.get('prompt_hash'))}</td>"
+        f"<td>{esc(row.get('schema_gate'))}</td>"
+        f"<td>{esc(', '.join(row.get('forbidden') or []))}</td>"
+        "</tr>"
+        for row in (prompts.get("rows") or [])
+    )
+    validator_rows = "".join(
+        f"<tr><td>{esc(k)}</td><td>{esc(v)}</td></tr>"
+        for k, v in sorted((validator.get("by_class") or {}).items())
+    )
+    return (
+        "<h3>Caps</h3>"
+        f"<table><tr><th>cap</th><th>value</th></tr>{cap_rows}</table>"
+        "<h3>Provider Routes</h3>"
+        "<table><tr><th>surface</th><th>provider</th><th>model</th><th>prompt</th><th>fallback</th><th>active</th></tr>"
+        f"{route_rows}</table>"
+        "<h3>Prompt Registry</h3>"
+        "<table><tr><th>surface</th><th>role</th><th>version</th><th>hash</th><th>gate</th><th>forbidden</th></tr>"
+        f"{prompt_rows}</table>"
+        "<h3>Validator Taxonomy</h3>"
+        f"<table><tr><th>class</th><th>rows</th></tr>{validator_rows}</table>"
+        f"<p>feedback rows: {esc(feedback.get('rows', 0))} · {esc(json.dumps(feedback.get('by_label') or {}, ensure_ascii=False, sort_keys=True))}</p>"
+        f"<p>backfill rows: {esc(backfill.get('rows', 0))} · exists={esc(backfill.get('exists', False))}</p>"
+        '<p class="muted">Provider status exposes no keys. Feedback does not change validator verdicts.</p>'
+    )
+
+
 def latest_run_html(run: dict) -> str:
     if not run:
         return '<p class="muted">No completed runs found.</p>'
@@ -276,6 +415,117 @@ def queue_table(rows_in: list[dict]) -> str:
         )
     rows.append("</tbody></table>")
     return "\n".join(rows)
+
+
+def farm_cockpit_html(cockpit: dict) -> str:
+    if not cockpit:
+        return '<p class="muted">Calculation farm cockpit not available yet.</p>'
+    loop = cockpit.get("loop_state") or {}
+    data = cockpit.get("data_readiness") or {}
+    gpu = cockpit.get("gpu_cpu") or {}
+    results = cockpit.get("results") or {}
+    universe = cockpit.get("universe_coverage") or {}
+    prepared = data.get("prepared_files_by_timeframe") or {}
+    funding = data.get("funding_enrich_status") or {}
+    prepared_line = " - ".join(f"{esc(tf)}: {esc(n)}" for tf, n in sorted(prepared.items())) or "none"
+    funding_line = " - ".join(f"{esc(k)}: {esc(v)}" for k, v in sorted(funding.items())) or "none"
+    needs_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("needs_data") or {}).items())
+    ) or "none"
+    by_group_line = " - ".join(
+        f"{esc(k or 'unknown')}: {esc(v)}" for k, v in sorted((results.get("by_group") or {}).items())
+    ) or "none"
+    hard_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("hard_status") or {}).items())
+    ) or "none"
+    paper_line = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((results.get("paper_status") or {}).items())
+    ) or "none"
+    lifecycle = cockpit.get("lifecycle") or {}
+    lc_validation = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((lifecycle.get("validation") or {}).items())
+    ) or "none"
+    lc_paper = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((lifecycle.get("paper_status") or {}).items())
+    ) or "none"
+    backend_rows = gpu.get("backends") or []
+    backend_html = backend_table(backend_rows) if backend_rows else '<p class="muted">No runtime backend rows yet.</p>'
+    discovered = universe.get("discovered") or {}
+    manual = universe.get("manual") or {}
+    discovered_sizes = " - ".join(
+        f"{esc(k)}: {esc(v)}" for k, v in sorted((discovered.get("group_sizes") or {}).items())
+    ) or "none"
+    activity = cockpit.get("farm_activity") or {}
+    pnl = cockpit.get("paper_pnl") or {}
+    if activity.get("available"):
+        hb = "ALIVE" if activity.get("heartbeat_ok") else "STALE/IDLE"
+        skipped = ", ".join(activity.get("skipped_stages") or []) or "none"
+        disc = activity.get("discovery") or {}
+        errs = activity.get("recent_errors") or []
+        err_html = ("".join(
+            f"<li>{esc(e.get('where'))}: {esc(e.get('error'))}</li>" for e in errs)
+            if errs else "<li class='muted'>none</li>")
+        activity_html = (
+            f"<p><b>farm heartbeat: {hb}</b> - last cycle {esc(activity.get('last_cycle_age_seconds'))}s ago "
+            f"(pivot={esc(activity.get('last_pivot'))}, mode={esc(activity.get('last_mode'))})</p>"
+            f"<p>skipped active stages: {esc(skipped)} - discovery: {esc(disc.get('status', 'unknown'))} "
+            f"(age={esc(disc.get('age_seconds'))}s)</p>"
+            f"<p>recent errors ({esc(activity.get('error_count', 0))}):</p><ul>{err_html}</ul>"
+        )
+    else:
+        activity_html = '<p class="muted">farm activity log not available yet (run the loop in apply mode).</p>'
+    if pnl.get("available"):
+        pnl_html = (
+            f"<p><b>paper P&amp;L (research, not profit):</b> trades={esc(pnl.get('n_trades'))} - "
+            f"win_rate={esc(pnl.get('win_rate'))} - avg_net={esc(pnl.get('avg_net_pct'))}% - "
+            f"net_sum={esc(pnl.get('net_sum_pct'))}% - avg_R={esc(pnl.get('avg_r_multiple'))} "
+            f"({esc(pnl.get('wins'))}W/{esc(pnl.get('losses'))}L)</p>"
+        )
+    else:
+        pnl_html = '<p class="muted">no paper outcomes recorded yet.</p>'
+    return "\n".join([
+        activity_html,
+        pnl_html,
+        f"<p>loop cursor: {esc(loop.get('refill_cursor', 0))} - "
+        f"backoff symbols: {esc(loop.get('refill_backoff_symbols', 0))}</p>",
+        f"<p>prepared candle files: {prepared_line}</p>",
+        f"<p>funding enrich: {funding_line} - OI slot files: {esc(data.get('oi_slot_files', 0))}</p>",
+        f"<p>farm results: symbols={esc(results.get('unique_symbols', 0))} - "
+        f"exported to hard validation={esc(results.get('exported', 0))} - hard status: {hard_line}</p>",
+        f"<p>lifecycle unique: {esc(lifecycle.get('unique_candidates', 0))} - "
+        f"hard status: {lc_validation} - paper status: {lc_paper}</p>",
+        f"<p>paper outcomes: {esc(results.get('paper_outcomes', 0))} - farm paper status: {paper_line}</p>",
+        f"<p>needs data: {needs_line}</p>",
+        f"<p>results by plan group: {by_group_line}</p>",
+        f"<p>GPU signal-supported result rows: {esc(gpu.get('gpu_signal_rows', 0))}</p>",
+        backend_html,
+        f"<p>manual universe: {esc(manual.get('groups', 0))} groups / {esc(manual.get('symbols', 0))} symbols</p>",
+        f"<p>OKX discovery: {esc(discovered.get('count', 0))} symbols "
+        f"(generated {esc(discovered.get('generated_at', ''))}) - {discovered_sizes}</p>",
+        f"<p>processed symbols: {esc(universe.get('symbols_processed', 0))} - "
+        f"discovered not yet processed: {esc(universe.get('discovered_not_yet_processed', 0))}</p>",
+    ])
+
+
+def backend_table(rows_in: list[dict]) -> str:
+    rows = [
+        "<table><thead><tr><th>Effective</th><th>Signal</th><th>Simulation</th>"
+        "<th>GPU runs</th><th>Runs</th></tr></thead><tbody>"
+    ]
+    for row in rows_in:
+        rows.append(
+            "<tr>"
+            f"<td>{esc(row.get('effective_backend', ''))}</td>"
+            f"<td>{esc(row.get('signal_backend', ''))}</td>"
+            f"<td>{esc(row.get('simulation_backend', ''))}</td>"
+            f"<td>{esc(row.get('gpu_runs', 0))}</td>"
+            f"<td>{esc(row.get('runs', 0))}</td>"
+            "</tr>"
+        )
+    rows.append("</tbody></table>")
+    return "\n".join(rows)
+
+
 def candidates_table(candidates: list[dict]) -> str:
     if not candidates:
         return '<p class="muted">No candidates in latest run.</p>'
