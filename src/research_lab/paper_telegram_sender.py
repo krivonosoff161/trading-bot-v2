@@ -212,6 +212,58 @@ def _status_digest_reason(
     return ""
 
 
+def _status_digest_state(
+    *,
+    source: dict[str, Any],
+    quality: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    pfr_state = quality.get("pfr_trigger_state") if isinstance(quality.get("pfr_trigger_state"), dict) else {}
+    pfr_funnel = quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {}
+    lifecycle = quality.get("active_signal_lifecycle") if isinstance(
+        quality.get("active_signal_lifecycle"),
+        dict,
+    ) else {}
+    return {
+        "reason": reason,
+        "source": {
+            "records_read": int(source.get("records_read") or 0),
+            "rendered": int(source.get("rendered") or 0),
+            "skipped_quality_gate": int(source.get("skipped_quality_gate") or 0),
+            "skipped_non_actionable": int(source.get("skipped_non_actionable") or 0),
+        },
+        "quality": {
+            "operator_action": str(quality.get("operator_action") or ""),
+            "active_trades": int(quality.get("active_trades") or 0),
+            "active_live_ready": int(quality.get("active_live_ready") or 0),
+            "quality_labels": quality.get("quality_labels") or {},
+            "training_rows": int(quality.get("training_rows") or 0),
+            "training_by_result": quality.get("training_by_result") or {},
+        },
+        "lifecycle": {
+            "active": int(lifecycle.get("active") or 0),
+            "by_status": lifecycle.get("by_status") or {},
+            "by_outcome_result": lifecycle.get("by_outcome_result") or {},
+            "pending_outcomes": int(lifecycle.get("pending_outcomes") or 0),
+            "overdue_expiry": int(lifecycle.get("overdue_expiry") or 0),
+            "terminal_training_backlog": int(lifecycle.get("terminal_training_backlog") or 0),
+        },
+        "pfr": {
+            "state": str(pfr_state.get("state") or ""),
+            "catalog_ready": int(pfr_state.get("catalog_ready") or 0),
+            "last_cycle_generated": int(pfr_state.get("last_cycle_generated") or 0),
+            "top_reasons": pfr_state.get("top_reasons") or {},
+            "near_trigger_counts": pfr_funnel.get("near_trigger_counts") or {},
+            "cycle_resource_reasons": pfr_funnel.get("cycle_resource_reasons") or {},
+        },
+    }
+
+
+def _status_digest_fingerprint(state: dict[str, Any]) -> str:
+    encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
 def _status_digest_preview(
     private_root: Path,
     *,
@@ -238,6 +290,8 @@ def _status_digest_preview(
     ) else {}
     bucket_seconds = max(1, int(interval_hours)) * 3600
     bucket = int(now // bucket_seconds)
+    state = _status_digest_state(source=source, quality=quality, reason=reason)
+    state_hash = _status_digest_fingerprint(state)
     quality_labels = quality.get("quality_labels") or {}
     outcomes = quality.get("training_by_result") or {}
     text = "\n".join(
@@ -271,7 +325,7 @@ def _status_digest_preview(
     )
     return {
         "schema": "PaperTelegramPreview.v1",
-        "preview_id": f"paper_status_digest_{bucket}",
+        "preview_id": f"paper_status_digest_{bucket}_{state_hash}",
         "instruction_id": "",
         "source_signal_id": "paper_status_digest",
         "pair": "PAPER-STATUS",
