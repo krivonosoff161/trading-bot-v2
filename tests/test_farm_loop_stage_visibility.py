@@ -316,7 +316,7 @@ class TestCycleLogStages:
 
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE=20" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES=12" in bat
-        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES=16" in bat
+        assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES=44" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES=12" in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_FETCH_TIMEOUT=3" in bat
         assert "STRATEGY_LAB_FARM_MAX_VALIDATIONS=10" in bat
@@ -342,6 +342,21 @@ class TestCycleLogStages:
         assert "'--agent-role-provider','%STRATEGY_LAB_AGENT_ROLE_PROVIDER%'" in bat
         assert "Tee-Object" not in bat
         assert "Add-Content -Path '%LOG_FILE%' -Value $line -Encoding UTF8" in bat
+
+    def test_visible_full_cycle_network_cap_covers_paper_signal_lanes(self) -> None:
+        bat = Path("bat/strategy_lab_farm_full_cycle_loop.bat").read_text(encoding="utf-8")
+
+        def default_int(name: str) -> int:
+            marker = f"set \"{name}="
+            line = next(item for item in bat.splitlines() if marker in item)
+            return int(line.split(marker, 1)[1].split("\"", 1)[0])
+
+        observe = default_int("STRATEGY_LAB_PAPER_SIGNALS_MAX_OBSERVE")
+        live = default_int("STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES")
+        pfr = default_int("STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES")
+        network = default_int("STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES")
+
+        assert network >= observe + live + pfr
 
     def test_journal_export_forces_private_fills_off_and_restores_env(self, monkeypatch, tmp_path) -> None:
         import scripts.build_journal as journal
