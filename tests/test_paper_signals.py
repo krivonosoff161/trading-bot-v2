@@ -165,6 +165,15 @@ class _CountingEmptyProvider:
         return []
 
 
+class _RecordingEmptyProvider:
+    def __init__(self):
+        self.calls = []
+
+    def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+        self.calls.append((symbol, timeframe, start_ts, end_ts))
+        return []
+
+
 def _seed_universe(root: Path):
     d = root / "discovery"
     d.mkdir(parents=True, exist_ok=True)
@@ -233,6 +242,28 @@ class TestCycle:
         assert rep["network_fetches"] == 3
         assert rep["max_network_fetches"] == 3
         assert rep["gate_counts"]["live_fetch_limit_reached"] == 1
+
+    def test_fetch_window_is_bounded_for_live_candidates(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_universe(tmp_path)
+        prov = _RecordingEmptyProvider()
+        now = 10_000_000.0
+
+        cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("15m",),
+            provider=prov,
+            apply=False,
+            now=now,
+            max_live_fetches=1,
+            max_network_fetches=1,
+        )
+
+        assert len(prov.calls) == 1
+        _symbol, timeframe, start_ts, end_ts = prov.calls[0]
+        assert timeframe == "15m"
+        assert end_ts - start_ts == cycle.FETCH_WINDOW_BARS * 900_000
 
     def test_memory_roundtrip_and_learn_known_bad(self, tmp_path):
         from src.research_lab.paper_signals import cycle
