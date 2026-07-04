@@ -438,6 +438,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
+        "active_lifecycle": (
+            quality.get("active_signal_lifecycle")
+            if isinstance(quality.get("active_signal_lifecycle"), dict)
+            else {}
+        ),
         "pfr_funnel": quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {},
         "quality_report_exists": bool(quality),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
@@ -538,6 +543,15 @@ def _print_paper_product_status() -> None:
             f"quality_action={st['quality_operator_action']} "
             f"quality_labels={st['quality_labels']}"
         )
+        lifecycle = st["active_lifecycle"]
+        if lifecycle:
+            print(
+                "                "
+                f"active_timing=oldest_h:{lifecycle.get('oldest_age_hours', 0)} "
+                f"next_expiry_h:{lifecycle.get('next_expiry_hours')} "
+                f"overdue:{lifecycle.get('overdue_expiry', 0)} "
+                f"expiry:{lifecycle.get('expiry_buckets') or {}}"
+            )
         if pfr:
             print(
                 "                "
