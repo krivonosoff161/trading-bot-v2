@@ -290,6 +290,9 @@ def _print_cycle(out: dict) -> None:
             f"trades={product_ledger.get('trades', 0)} "
             f"live_ready={product_ledger.get('live_ready', 0)} "
             f"live_blocked={product_ledger.get('live_blocked', 0)} "
+            f"active={product_ledger.get('active_trades', 0)} "
+            f"active_live_ready={product_ledger.get('active_live_ready', 0)} "
+            f"active_live_blocked={product_ledger.get('active_live_blocked', 0)} "
             f"by_status={product_ledger.get('by_status') or {}} "
             f"execution_allowed={product_ledger.get('execution_allowed')}"
         )
@@ -384,6 +387,9 @@ def _cycle_summary(out: dict) -> dict:
             "trades": (out.get("paper_product_trade_ledger") or {}).get("trades", 0),
             "live_ready": (out.get("paper_product_trade_ledger") or {}).get("live_ready", 0),
             "live_blocked": (out.get("paper_product_trade_ledger") or {}).get("live_blocked", 0),
+            "active_trades": (out.get("paper_product_trade_ledger") or {}).get("active_trades", 0),
+            "active_live_ready": (out.get("paper_product_trade_ledger") or {}).get("active_live_ready", 0),
+            "active_live_blocked": (out.get("paper_product_trade_ledger") or {}).get("active_live_blocked", 0),
         },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),

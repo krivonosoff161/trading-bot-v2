@@ -44,6 +44,9 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert summary["trades"] == 1
     assert summary["live_ready"] == 0
     assert summary["live_blocked"] == 1
+    assert summary["active_trades"] == 1
+    assert summary["active_live_ready"] == 0
+    assert summary["active_live_blocked"] == 1
     assert summary["by_live_block"] == {"missing_ready_strategy_id": 1}
     assert summary["paper_only"] is True
     assert summary["execution_allowed"] is False
@@ -73,6 +76,8 @@ def test_product_trade_ledger_marks_pfr_rows_as_live_ready_shadow(tmp_path):
     assert summary["trades"] == 1
     assert summary["live_ready"] == 1
     assert summary["live_blocked"] == 0
+    assert summary["active_live_ready"] == 1
+    assert summary["active_live_blocked"] == 0
     assert summary["items"][0]["ready_strategy_id"] == "ready_1"
     assert summary["items"][0]["live_block_reason"] == ""
 
@@ -90,6 +95,9 @@ def test_product_trade_ledger_links_terminal_outcome(tmp_path):
     summary = build_paper_product_trade_ledger(tmp_path)
 
     assert summary["by_status"] == {"reviewed": 1}
+    assert summary["active_trades"] == 0
+    assert summary["active_live_ready"] == 0
+    assert summary["active_live_blocked"] == 0
     assert summary["items"][0]["outcome"]["result"] == "take"
     assert summary["items"][0]["review"]["diagnosis"] == "good_signal"
 
