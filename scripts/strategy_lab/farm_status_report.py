@@ -23,6 +23,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,34 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _connect_readonly(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _connect_for_report(db_path: Path) -> tuple[sqlite3.Connection, str | None]:
+    conn = _connect(db_path)
+    try:
+        init_db(conn)  # migration-safe: upgrade old DBs, non-destructive
+        return conn, None
+    except sqlite3.OperationalError as exc:
+        conn.close()
+        if "locked" not in str(exc).lower():
+            raise
+        return _connect_readonly(db_path), "database_locked_readonly"
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (OSError, SystemError, ValueError):
+        return False
+    return True
 
 
 def _label(value) -> str:
@@ -82,6 +111,39 @@ def _flow_coverage(db_path: Path) -> dict:
     return {"tracked": True, "funding": counts}
 
 
+def _farm_loop_status(private_root: Path, *, now: float | None = None) -> dict[str, object]:
+    """Read the loop heartbeat so operator text does not imply a running loop stopped."""
+    path = private_root / "state" / "farm_loop_status.json"
+    if not path.exists():
+        return {"available": False}
+    now = time.time() if now is None else now
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"available": False, "error": "unreadable"}
+    updated_at = float(data.get("updated_at") or 0.0)
+    details = data.get("details") if isinstance(data.get("details"), dict) else {}
+    sleep_seconds = int(details.get("sleep_seconds") or 0)
+    freshness_limit = max((sleep_seconds * 3) + 60, 180)
+    age_seconds = max(0, int(now - updated_at)) if updated_at else None
+    pid = int(data.get("pid") or 0)
+    fresh = bool(updated_at and age_seconds is not None and age_seconds <= freshness_limit)
+    pid_alive = _pid_is_alive(pid)
+    return {
+        "available": True,
+        "active": bool(data.get("loop") and (fresh or pid_alive)),
+        "fresh": fresh,
+        "age_seconds": age_seconds,
+        "stage": data.get("stage"),
+        "loop": bool(data.get("loop")),
+        "paper_only": data.get("paper_only"),
+        "execution_allowed": data.get("execution_allowed"),
+        "sleep_seconds": sleep_seconds,
+        "pid": pid,
+        "pid_alive": pid_alive,
+    }
+
+
 def _ready_for_validation(conn: sqlite3.Connection) -> list[dict]:
     """Deduped FORWARD_PAPER/REGIME_SPECIFIC candidates, latest per (symbol, family, tf)."""
     if _has_rows(conn, "farm_results"):
@@ -106,13 +168,13 @@ def _skipped_fast() -> dict[str, object]:
 def collect(db_path: Path, *, fast: bool = False) -> dict:
     if not db_path.exists():
         return {"exists": False, "db": str(db_path)}
-    conn = _connect(db_path)
-    init_db(conn)  # migration-safe: upgrade old DBs (adds v3 tables), non-destructive
+    conn, migration_note = _connect_for_report(db_path)
     try:
         unique_table = "farm_results" if _has_rows(conn, "farm_results") else "candidates"
         report: dict = {
             "exists": True,
             "report_mode": "fast" if fast else "full",
+            "migration_note": migration_note,
             "schema_version": int(_scalar(conn, "SELECT value FROM meta WHERE key='schema_version'", 0)),
             "totals": {
                 "runs": int(_scalar(conn, "SELECT COUNT(*) FROM runs")),
@@ -268,6 +330,7 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["last_cycle"] = cycles[-1] if cycles else None
         except Exception:  # noqa: BLE001 - optional log read must not break status
             report["last_cycle"] = None
+        report["farm_loop_status"] = _farm_loop_status(db_path.parent.parent)
         try:  # completion verdict + two-DB reconciliation (read-only, T2)
             from src.research_lab.farm_reconcile import completion_verdict, reconcile_dbs
             report["completion"] = completion_verdict(db_path.parent.parent)
@@ -416,9 +479,18 @@ def _print(report: dict) -> None:
         rs = comp.get("reasons") or {}
         line = f"  COMPLETION: {comp.get('state')}"
         if comp.get("state") != "DRAINED":
+            loop_status = report.get("farm_loop_status") or {}
+            loop_running = bool(loop_status.get("active"))
+            if loop_running:
+                loop_hint = (
+                    f" (loop running stage={loop_status.get('stage')}, "
+                    f"heartbeat_age={loop_status.get('age_seconds')}s; worker will continue draining)"
+                )
+            else:
+                loop_hint = " (loop stopped with claimable work; run farm_loop --apply --run-worker to drain)"
             line += (f" - eligible_now={rs.get('eligible_now', 0)} running={rs.get('running', 0)} "
                      f"deferred_future={rs.get('deferred_future', 0)} blocked={sum((rs.get('blocked') or {}).values())}"
-                     " (loop stopped with claimable work; run farm_loop --apply --run-worker to drain)")
+                     f"{loop_hint}")
         print(line)
     rc = report.get("reconcile") or {}
     for name, info in (rc.get("orphans") or {}).items():

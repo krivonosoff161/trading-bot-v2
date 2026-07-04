@@ -9,7 +9,9 @@ import sys
 import types
 from pathlib import Path
 
-from scripts.strategy_lab.farm_status_report import collect
+import scripts.strategy_lab.farm_status_report as farm_status_report
+from scripts.strategy_lab.farm_status_report import _print, collect
+from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 from src.research_lab.state_db import connect, default_db_path, import_run_dir, init_db
 
 
@@ -156,6 +158,71 @@ def test_status_report_fast_skips_heavy_derived_rebuilds(tmp_path, monkeypatch):
     assert report["knowledge_base"]["skipped"] == "fast_mode"
     assert report["handoff"]["paper_outcomes"] == 0
     assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
+
+
+def test_status_report_falls_back_to_readonly_when_db_locked(tmp_path, monkeypatch):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    import_run_dir(conn, tmp_path, _write_run(tmp_path))
+    conn.commit()
+    conn.close()
+
+    def _locked(_conn):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(farm_status_report, "init_db", _locked)
+
+    report = collect(default_db_path(tmp_path), fast=True)
+
+    assert report["exists"] is True
+    assert report["migration_note"] == "database_locked_readonly"
+    assert report["totals"]["farm_results"] == 2
+
+
+def test_status_report_paused_work_mentions_running_loop(tmp_path, capsys):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    conn.close()
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    try:
+        tasks.enqueue_task(
+            task_type="run_sweep",
+            task_key="sweep:btc",
+            symbol="BTC_USDT_SWAP",
+            timeframe="1h",
+            family="momentum_breakout",
+            now=1000.0,
+        )
+    finally:
+        tasks.close()
+    status = tmp_path / "state" / "farm_loop_status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 123,
+                "stage": "sleep",
+                "updated_at": 1100.0,
+                "loop": True,
+                "paper_only": True,
+                "execution_allowed": False,
+                "details": {"sleep_seconds": 120},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = collect(default_db_path(tmp_path), fast=True)
+    report["farm_loop_status"]["active"] = True
+    report["farm_loop_status"]["age_seconds"] = 20
+    report["farm_loop_status"]["fresh"] = True
+
+    _print(report)
+    out = capsys.readouterr().out
+    assert "COMPLETION: PAUSED_WITH_WORK" in out
+    assert "loop running stage=sleep" in out
+    assert "loop stopped with claimable work" not in out
 
 
 def test_status_report_missing_db(tmp_path):
