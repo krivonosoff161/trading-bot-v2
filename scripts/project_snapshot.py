@@ -438,6 +438,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
+        "pfr_funnel": quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {},
         "quality_report_exists": bool(quality),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
@@ -531,11 +532,21 @@ def _print_paper_product_status() -> None:
             f"diagnosis={st['training_by_diagnosis']}"
         )
     if st["quality_report_exists"]:
+        pfr = st["pfr_funnel"]
         print(
             "                "
             f"quality_action={st['quality_operator_action']} "
             f"quality_labels={st['quality_labels']}"
         )
+        if pfr:
+            print(
+                "                "
+                f"pfr_ready={pfr.get('catalog_ready', 0)} "
+                f"pfr_rejected={pfr.get('catalog_rejected_quality', 0)} "
+                f"strict_instructions={pfr.get('bridge_instructions', 0)} "
+                f"pfr_skip={pfr.get('bridge_skip_reasons') or {}} "
+                f"last_pfr={pfr.get('last_cycle_pfr_counts') or {}}"
+            )
 
 
 def main() -> None:

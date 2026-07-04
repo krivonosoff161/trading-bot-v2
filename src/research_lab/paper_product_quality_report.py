@@ -14,6 +14,7 @@ from typing import Any
 
 SUMMARY_SCHEMA = "paper_product_quality_report.v1"
 MIN_FAMILY_SAMPLE = 20
+ACTIVE_PRODUCT_STATUSES = {"armed", "opened_paper"}
 
 
 @dataclass
@@ -160,13 +161,56 @@ def _top_counts(raw: Any, *, limit: int = 6) -> dict[str, int]:
     return dict(pairs[:limit])
 
 
+def _delivery_int(delivery: dict[str, Any], primary: str, fallback: str) -> int:
+    return int(delivery.get(primary, delivery.get(fallback) or 0) or 0)
+
+
+def _active_live_blockers(product_trades: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in product_trades.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") not in ACTIVE_PRODUCT_STATUSES:
+            continue
+        reason = str(row.get("live_block_reason") or "").strip()
+        if reason:
+            counts[reason] = counts.get(reason, 0) + 1
+    if not counts and int(product_trades.get("active_live_blocked") or 0) > 0:
+        return _top_counts(product_trades.get("by_live_block") or {})
+    return _top_counts(counts)
+
+
+def _pfr_funnel(
+    *,
+    ready_catalog: dict[str, Any],
+    bridge: dict[str, Any],
+    paper_status: dict[str, Any],
+) -> dict[str, Any]:
+    last_cycle = paper_status.get("last_cycle") if isinstance(paper_status.get("last_cycle"), dict) else {}
+    pfr_counts = last_cycle.get("pfr_counts") if isinstance(last_cycle.get("pfr_counts"), dict) else {}
+    gate_counts = last_cycle.get("gate_counts") if isinstance(last_cycle.get("gate_counts"), dict) else {}
+    return {
+        "catalog_ready": int(ready_catalog.get("ready") or 0),
+        "catalog_rejected_quality": int(ready_catalog.get("rejected_quality") or 0),
+        "catalog_ready_by_family": _top_counts(ready_catalog.get("ready_by_family") or {}),
+        "catalog_ready_by_timeframe": _top_counts(ready_catalog.get("ready_by_timeframe") or {}),
+        "bridge_active_source_signals": int(bridge.get("active_source_signals") or 0),
+        "bridge_instructions": int(bridge.get("instructions") or 0),
+        "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
+        "last_cycle_generated": int(last_cycle.get("generated") or 0) if last_cycle else 0,
+        "last_cycle_observed": int(last_cycle.get("observed") or 0) if last_cycle else 0,
+        "last_cycle_pfr_counts": _top_counts(pfr_counts),
+        "last_cycle_gate_counts": _top_counts(gate_counts),
+    }
+
+
 def _operator_action(
     *,
     delivery: dict[str, Any],
     product_trades: dict[str, Any],
     active_blockers: dict[str, int],
 ) -> str:
-    if int(delivery.get("errors") or 0) > 0:
+    if _delivery_int(delivery, "error_messages", "errors") > 0:
         return "fix_telegram_delivery_errors"
     if int(product_trades.get("active_trades") or 0) == 0:
         return "wait_for_new_active_paper_candidates"
@@ -177,7 +221,11 @@ def _operator_action(
         if active_blockers.get("missing_ready_strategy_id"):
             return "fix_pfr_context_missing_ready_strategy_id"
         return "inspect_active_live_blockers"
-    if int(delivery.get("sent") or 0) == 0 and int(delivery.get("duplicates") or 0) > 0:
+    if _delivery_int(delivery, "sent_messages", "sent") == 0 and _delivery_int(
+        delivery,
+        "duplicate_messages",
+        "duplicates",
+    ) > 0:
         return "no_new_telegram_cards_duplicates_only"
     return "collect_outcomes"
 
@@ -220,14 +268,29 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- active by source: {summary['active_by_source']}",
         f"- active by family: {summary['active_by_family']}",
         f"- top live blockers: {summary['active_live_blockers']}",
+        f"- total live blockers: {summary['total_live_blockers']}",
+        "",
+        "## Strict PFR Funnel",
+        "",
+        f"- ready catalog: {summary['pfr_funnel']['catalog_ready']} ready / "
+        f"{summary['pfr_funnel']['catalog_rejected_quality']} rejected-quality",
+        f"- ready by family: {summary['pfr_funnel']['catalog_ready_by_family']}",
+        f"- ready by timeframe: {summary['pfr_funnel']['catalog_ready_by_timeframe']}",
+        f"- active source signals: {summary['pfr_funnel']['bridge_active_source_signals']}",
+        f"- strict instructions: {summary['pfr_funnel']['bridge_instructions']}",
+        f"- bridge skip reasons: {summary['pfr_funnel']['bridge_skip_reasons']}",
+        f"- last PFR counts: {summary['pfr_funnel']['last_cycle_pfr_counts']}",
         "",
         "## Telegram",
         "",
         f"- preview rendered: {summary['telegram']['preview_rendered']}",
-        f"- eligible this cycle: {summary['telegram']['eligible']}",
-        f"- sent this cycle: {summary['telegram']['sent']}",
-        f"- duplicate skips this cycle: {summary['telegram']['duplicates']}",
-        f"- delivery errors: {summary['telegram']['errors']}",
+        f"- eligible cards this cycle: {summary['telegram']['eligible_cards']}",
+        f"- target recipients: {summary['telegram']['target_recipients']}",
+        f"- sent messages this cycle: {summary['telegram']['sent_messages']}",
+        f"- sent cards this cycle: {summary['telegram']['sent_cards']}",
+        f"- duplicate messages this cycle: {summary['telegram']['duplicate_messages']}",
+        f"- duplicate cards this cycle: {summary['telegram']['duplicate_cards']}",
+        f"- delivery errors: {summary['telegram']['error_messages']}",
         f"- cumulative sent previews: {summary['telegram']['sent_previews_total']}",
         "",
         "## Operator Action",
@@ -264,11 +327,16 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
     product_trades = _read_json(derived / "paper_product_trades.json")
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
+    bridge = _read_json(derived / "main_paper_instructions.json")
+    ready_catalog = _read_json(derived / "ready_strategy_catalog.json")
+    paper_status = _read_json(derived / "paper_signals_status.json")
     training_summary = _read_json(derived / "paper_signal_training.json")
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
     sent = _sent_key_summary(private_root)
 
-    active_blockers = _top_counts(product_trades.get("by_live_block") or {})
+    active_blockers = _active_live_blockers(product_trades)
+    total_blockers = _top_counts(product_trades.get("by_live_block") or {})
+    pfr_funnel = _pfr_funnel(ready_catalog=ready_catalog, bridge=bridge, paper_status=paper_status)
     families = _family_stats(training_rows)
     quality_labels: dict[str, int] = {}
     for family in families:
@@ -278,9 +346,18 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
     telegram = {
         "preview_rendered": int(preview.get("rendered") or 0),
         "eligible": int(delivery.get("eligible") or 0),
+        "eligible_cards": _delivery_int(delivery, "eligible_cards", "eligible"),
+        "target_recipients": _delivery_int(delivery, "target_recipients", "targets"),
+        "potential_messages": int(delivery.get("potential_messages") or 0),
         "sent": int(delivery.get("sent") or 0),
+        "sent_messages": _delivery_int(delivery, "sent_messages", "sent"),
+        "sent_cards": int(delivery.get("sent_cards") or 0),
         "duplicates": int(delivery.get("duplicates") or 0),
+        "duplicate_messages": _delivery_int(delivery, "duplicate_messages", "duplicates"),
+        "duplicate_cards": int(delivery.get("duplicate_cards") or 0),
         "errors": int(delivery.get("errors") or 0),
+        "error_messages": _delivery_int(delivery, "error_messages", "errors"),
+        "error_cards": int(delivery.get("error_cards") or 0),
         "configured": bool(delivery.get("configured")),
         "sends_network": bool(delivery.get("sends_network")),
         "sent_keys_total": sent["sent_key_count"],
@@ -301,6 +378,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "active_live_ready": int(product_trades.get("active_live_ready") or 0),
         "active_live_blocked": int(product_trades.get("active_live_blocked") or 0),
         "active_live_blockers": active_blockers,
+        "total_live_blockers": total_blockers,
         "active_by_source": _top_counts(product_trades.get("active_by_source") or {}),
         "active_by_family": _top_counts(product_trades.get("active_by_family") or {}),
         "training_rows": int(training_summary.get("rows") or len(training_rows)),
@@ -309,6 +387,7 @@ def build_paper_product_quality_report(private_root: Path) -> dict[str, Any]:
         "quality_labels": dict(sorted(quality_labels.items())),
         "families": families,
         "telegram": telegram,
+        "pfr_funnel": pfr_funnel,
         "operator_action": _operator_action(
             delivery=delivery,
             product_trades=product_trades,
