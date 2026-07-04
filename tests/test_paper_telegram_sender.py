@@ -26,7 +26,7 @@ def _preview(**overrides):
 
 def _write_preview_snapshot(root: Path, rows: list[dict]) -> None:
     path = root / "state" / "derived" / "paper_telegram_preview.json"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
@@ -153,6 +153,77 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert data["items"][0]["recipient_hash"]
     assert "recipient_id" not in data["items"][0]
     assert all(item["recipient_hash"] not in {"111", "222"} for item in data["items"])
+
+
+def test_sender_sends_private_review_chart_after_text(tmp_path):
+    chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
+    _write_preview_snapshot(tmp_path, [_preview(chart_path=str(chart_path))])
+    text_calls = []
+    photo_calls = []
+
+    async def fake_send(chat_id, text):
+        text_calls.append((chat_id, text))
+        return 101
+
+    async def fake_photo(chat_id, path):
+        photo_calls.append((chat_id, path))
+        return 201
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        send_photo=fake_photo,
+    )
+
+    assert summary["sent"] == 1
+    assert summary["chart_available_messages"] == 1
+    assert summary["chart_sent_messages"] == 1
+    assert text_calls == [("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false")]
+    assert photo_calls == [("111", str(chart_path.resolve()))]
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["chart_available"] is True
+    assert data["items"][0]["chart_sent"] is True
+    assert data["items"][0]["chart_problem"] == ""
+    assert "recipient_id" not in data["items"][0]
+
+
+def test_sender_refuses_chart_outside_private_reviews(tmp_path):
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"fake-png")
+    _write_preview_snapshot(tmp_path, [_preview(chart_path=str(outside))])
+    photo_calls = []
+
+    async def fake_send(chat_id, text):
+        return 101
+
+    async def fake_photo(chat_id, path):
+        photo_calls.append((chat_id, path))
+        return 201
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        send_photo=fake_photo,
+    )
+
+    assert summary["sent"] == 1
+    assert summary["chart_available_messages"] == 0
+    assert summary["chart_sent_messages"] == 0
+    assert photo_calls == []
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["chart_available"] is False
+    assert data["items"][0]["chart_sent"] is False
+    assert data["items"][0]["chart_problem"] == "chart_outside_private_reviews"
 
 
 def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):

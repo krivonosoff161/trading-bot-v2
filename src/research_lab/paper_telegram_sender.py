@@ -37,6 +37,9 @@ class PaperTelegramDelivery:
     problem: str = ""
     destination: str = "personal_bot"
     recipient_hash: str = ""
+    chart_available: bool = False
+    chart_sent: bool = False
+    chart_problem: str = ""
     paper_only: bool = True
     execution_allowed: bool = False
     chat_env: str = DEFAULT_DELIVERY_TARGET
@@ -142,12 +145,15 @@ async def _send_items(
     items: list[dict[str, Any]],
     recipient_ids: list[str],
     send_text: Callable[[str, str], Awaitable[int | None]],
+    send_photo: Callable[[str, str], Awaitable[int | None]] | None,
     sent_keys: set[str],
+    private_root: Path,
 ) -> list[PaperTelegramDelivery]:
     deliveries: list[PaperTelegramDelivery] = []
     for item in items:
         for recipient_id in recipient_ids:
             delivery_key = _delivery_key(item, recipient_id)
+            chart_path, chart_problem = _safe_chart_path(item, private_root)
             if delivery_key in sent_keys:
                 deliveries.append(
                     _delivery_from_preview(
@@ -155,17 +161,25 @@ async def _send_items(
                         status="skipped_duplicate",
                         problem="already_sent_to_recipient",
                         recipient_id=recipient_id,
+                        chart_available=bool(chart_path),
+                        chart_problem=chart_problem,
                     )
                 )
                 continue
             message_id: int | None = None
             problem = ""
             status = "sent"
+            chart_sent = False
             try:
                 message_id = await send_text(recipient_id, str(item.get("text") or ""))
                 if message_id is None:
                     status = "skipped_no_token"
                     problem = "telegram_token_not_configured"
+                elif chart_path and send_photo is not None:
+                    await send_photo(recipient_id, str(chart_path))
+                    chart_sent = True
+                elif chart_path and send_photo is None:
+                    chart_problem = "photo_transport_not_configured"
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
                 status = "error"
                 problem = type(exc).__name__
@@ -176,6 +190,9 @@ async def _send_items(
                     message_id=message_id,
                     problem=problem,
                     recipient_id=recipient_id,
+                    chart_available=bool(chart_path),
+                    chart_sent=chart_sent,
+                    chart_problem=chart_problem,
                 )
             )
             if status == "sent":
@@ -189,6 +206,35 @@ def _recipient_hash(recipient_id: str) -> str:
 
 def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
     return f"{str(item.get('preview_id') or '')}:{_recipient_hash(recipient_id)}"
+
+
+def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | None, str]:
+    raw = str(item.get("chart_path") or "").strip()
+    if not raw:
+        return None, ""
+    try:
+        path = Path(raw).resolve()
+        allowed_roots = (
+            (Path(private_root) / "state" / "derived" / "paper_reviews").resolve(),
+            (Path(private_root) / "state" / "derived" / "paper_telegram_cards").resolve(),
+        )
+    except OSError:
+        return None, "invalid_chart_path"
+    if path.suffix.lower() != ".png":
+        return None, "chart_not_png"
+    if not path.exists():
+        return None, "chart_missing"
+    if not any(_is_relative_to(path, allowed_root) for allowed_root in allowed_roots):
+        return None, "chart_outside_private_reviews"
+    return path, ""
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _status_digest_reason(
@@ -347,6 +393,9 @@ def _delivery_from_preview(
     message_id: int | None = None,
     problem: str = "",
     recipient_id: str = "",
+    chart_available: bool = False,
+    chart_sent: bool = False,
+    chart_problem: str = "",
 ) -> PaperTelegramDelivery:
     return PaperTelegramDelivery(
         preview_id=str(item.get("preview_id") or ""),
@@ -360,6 +409,9 @@ def _delivery_from_preview(
         message_id=message_id,
         problem=problem,
         recipient_hash=_recipient_hash(recipient_id),
+        chart_available=chart_available,
+        chart_sent=chart_sent,
+        chart_problem=chart_problem,
     )
 
 
@@ -376,6 +428,7 @@ def send_paper_telegram_previews(
     paper_chat_ids_count: int = 0,
     recipient_ids: list[str] | None = None,
     send_text: Callable[[str, str], Awaitable[int | None]] | None = None,
+    send_photo: Callable[[str, str], Awaitable[int | None]] | None = None,
     status_digest: bool = False,
     status_digest_interval_hours: int = 12,
     now: float | None = None,
@@ -404,14 +457,22 @@ def send_paper_telegram_previews(
             accepted.append(item)
 
     if not apply:
-        deliveries.extend(_delivery_from_preview(item, status="dry_run") for item in accepted)
+        deliveries.extend(
+            _delivery_from_preview(
+                item,
+                status="dry_run",
+                chart_available=bool(_safe_chart_path(item, Path(private_root))[0]),
+                chart_problem=_safe_chart_path(item, Path(private_root))[1],
+            )
+            for item in accepted
+        )
     elif not paper_chat_configured or send_text is None or not recipient_ids:
         deliveries.extend(
             _delivery_from_preview(item, status="skipped_no_subscribers", problem="paper_subscribers_not_configured")
             for item in accepted
         )
     else:
-        deliveries.extend(asyncio.run(_send_items(accepted, recipient_ids, send_text, sent_keys)))
+        deliveries.extend(asyncio.run(_send_items(accepted, recipient_ids, send_text, send_photo, sent_keys, Path(private_root))))
         status_digest_reason = _status_digest_reason(
             source=source,
             accepted=accepted,
@@ -426,7 +487,9 @@ def send_paper_telegram_previews(
                 now=time.time() if now is None else now,
                 interval_hours=status_digest_interval_hours,
             )
-            deliveries.extend(asyncio.run(_send_items([digest_item], recipient_ids, send_text, sent_keys)))
+            deliveries.extend(
+                asyncio.run(_send_items([digest_item], recipient_ids, send_text, send_photo, sent_keys, Path(private_root)))
+            )
         _save_sent_keys(private_root, sent_keys)
 
     out_jsonl = _delivery_jsonl_path(private_root)
@@ -440,6 +503,8 @@ def send_paper_telegram_previews(
     duplicate_messages = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
     skipped_messages = sum(1 for delivery in deliveries if delivery.status.startswith("skipped"))
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
+    chart_available_messages = sum(1 for delivery in deliveries if delivery.chart_available)
+    chart_sent_messages = sum(1 for delivery in deliveries if delivery.chart_sent)
     digest_messages = sum(
         1
         for delivery in deliveries
@@ -470,6 +535,8 @@ def send_paper_telegram_previews(
         "sent": sent_messages,
         "sent_messages": sent_messages,
         "sent_cards": _unique_preview_count(deliveries, "sent"),
+        "chart_available_messages": chart_available_messages,
+        "chart_sent_messages": chart_sent_messages,
         "duplicates": duplicate_messages,
         "duplicate_messages": duplicate_messages,
         "duplicate_cards": _unique_preview_count(deliveries, "skipped_duplicate"),
