@@ -338,6 +338,31 @@ def test_manual_analyzer_chart_plan_documents_execution_tf():
     assert "legacy_main_engine_levels_are_15m" in plan["reason"]
 
 
+def test_manual_analyzer_fallback_summary_is_user_facing():
+    from scripts import analyze_chart
+
+    class Result:
+        symbol = "HBAR-USDT"
+        entry_signal = "NO_TRADE"
+        side = None
+        regime = "TRENDING"
+        drop_reason = "conditions_not_met"
+        max_hold_min = None
+        entry_price = None
+        sl_price = None
+        tp1_price = None
+        tp2_price = None
+
+    text = analyze_chart._manual_delivery_text(Result())
+
+    assert "HBAR-USDT" in text
+    assert "Статус: сделки нет" in text
+    assert "Что делать: не открывать сделку" in text
+    assert "Это аналитика, не ордер" in text
+    assert "ENGINE SUMMARY" not in text
+    assert "Entry signal" not in text
+
+
 def test_chart_formatter_shared_router_opt_in_uses_text_adapter(monkeypatch):
     calls = []
 

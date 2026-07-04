@@ -94,6 +94,77 @@ def manual_chart_plan(result: object) -> dict[str, object]:
     }
 
 
+def _manual_delivery_text(result: object) -> str:
+    status_map = {
+        "ENTRY": "вход сформирован",
+        "WAIT": "ждем подтверждение",
+        "NO_TRADE": "сделки нет",
+    }
+    side_map = {"buy": "LONG", "sell": "SHORT", None: "нет направления"}
+    regime_map = {
+        "TRENDING": "тренд",
+        "DRIFT": "медленный дрейф",
+        "RANGING": "диапазон",
+        "CHOPPY": "пила",
+    }
+    reason_map = {
+        "conditions_not_met": "условия входа не собраны",
+        "funding_warn": "есть предупреждение по funding",
+        "funding_block": "funding блокирует вход",
+        "oi_weak": "движение не подтверждено открытым интересом",
+        "vwap_veto": "цена не прошла фильтр VWAP",
+        "missing_levels": "нет надежных уровней входа/стопа/цели",
+        "four_h_conflict": "старший таймфрейм конфликтует с идеей",
+        "strong_4h_veto": "4h-контекст против сделки",
+        "perp_div_short_veto": "perp-дивергенция против short",
+        "drift_adx1h_veto": "слабый 1h-импульс для drift-сценария",
+    }
+
+    def price(value: object) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):.8g}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    symbol = str(getattr(result, "symbol", "") or "UNKNOWN")
+    signal = str(getattr(result, "entry_signal", "") or "NO_TRADE")
+    side = getattr(result, "side", None)
+    regime = str(getattr(result, "regime", "") or "UNKNOWN")
+    reason = str(getattr(result, "drop_reason", "") or "conditions_not_met")
+    max_hold = getattr(result, "max_hold_min", None)
+
+    lines = [
+        f"{symbol}",
+        f"Статус: {status_map.get(signal, signal)}",
+        f"Направление: {side_map.get(side, str(side or 'нет направления'))}",
+        f"Рынок: {regime_map.get(regime, regime)}",
+        "",
+    ]
+    if signal in {"ENTRY", "WAIT"}:
+        lines.extend(
+            [
+                f"Вход: {price(getattr(result, 'entry_price', None))}",
+                f"Стоп: {price(getattr(result, 'sl_price', None))}",
+                f"Цель 1: {price(getattr(result, 'tp1_price', None))}",
+                f"Цель 2: {price(getattr(result, 'tp2_price', None))}",
+                f"Макс. удержание: {max_hold or 'n/a'} мин",
+                "",
+                "Что делать: проверять руками; это не команда к входу.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Что делать: не открывать сделку по этому анализу.",
+                f"Почему: {reason_map.get(reason, reason)}.",
+            ]
+        )
+    lines.extend(["", "Это аналитика, не ордер и не инвест-рекомендация."])
+    return "\n".join(lines)
+
+
 async def run(
     symbol: str,
     captured_at_iso: str,
@@ -216,7 +287,7 @@ async def run(
     else:
         print("LLM formatter skipped: NO_TRADE template path")
 
-    delivery_text = llm_text if llm_text else result.engine_summary
+    delivery_text = llm_text if llm_text else _manual_delivery_text(result)
     summary_path = run_dir / f"{symbol}_client_summary.txt"
     summary_path.write_text(delivery_text, encoding="utf-8")
     print(f"Saved: {summary_path}")
