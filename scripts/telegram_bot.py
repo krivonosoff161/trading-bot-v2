@@ -147,34 +147,34 @@ def _format_farm_status_for_admin(cockpit: dict) -> str:
     paper_status = lifecycle.get("paper_status") or {}
     prepared = readiness.get("prepared_files_by_timeframe") or {}
 
-    heartbeat = "OK" if activity.get("heartbeat_ok") else "STALE"
-    available = "yes" if activity.get("available") else "no"
-    live = "NO" if safety.get("live_trading") is False else "CHECK"
+    heartbeat = "норма" if activity.get("heartbeat_ok") else "устарел"
+    available = "да" if activity.get("available") else "нет"
+    live = "нет" if safety.get("live_trading") is False else "проверить"
     age = activity.get("last_cycle_age_seconds")
-    age_text = f"{int(age)}s ago" if isinstance(age, (int, float)) else "n/a"
+    age_text = f"{int(age)} сек назад" if isinstance(age, (int, float)) else "n/a"
     discovery = activity.get("discovery") or {}
 
     lines = [
-        "📡 Статус фермы (read-only)",
+        "📡 Статус фермы (только чтение)",
         "",
-        f"Loop: {available}, heartbeat={heartbeat}, last={age_text}",
-        f"Pivot: {activity.get('last_pivot') or 'n/a'} / mode={activity.get('last_mode') or 'n/a'}",
-        f"Tasks: queued={by_state.get('queued', 0)} running={by_state.get('running', 0)} "
+        f"Цикл: {available}, пульс={heartbeat}, последний={age_text}",
+        f"Опорный рынок: {activity.get('last_pivot') or 'n/a'} / режим={activity.get('last_mode') or 'n/a'}",
+        f"Задачи: queued={by_state.get('queued', 0)} running={by_state.get('running', 0)} "
         f"completed={by_state.get('completed', 0)} blocked={by_state.get('blocked', 0)}",
-        f"Validation: PFR={validation.get('PAPER_FORWARD_READY', 0)} "
+        f"Валидация: PFR={validation.get('PAPER_FORWARD_READY', 0)} "
         f"REGIME={validation.get('REGIME_ONLY', 0)} COSTS={validation.get('FAILED_COSTS', 0)} "
         f"OOS={validation.get('FAILED_OOS', 0)}",
-        f"Paper: recorded={paper_status.get('PAPER_RECORDED', 0)} "
+        f"Paper: записано={paper_status.get('PAPER_RECORDED', 0)} "
         f"trades={paper_pnl.get('n_trades', 0)} net={paper_pnl.get('net_sum_pct', 0)}%",
-        f"Data: 15m={prepared.get('15m', 0)} 1h={prepared.get('1h', 0)} "
+        f"Данные: 15m={prepared.get('15m', 0)} 1h={prepared.get('1h', 0)} "
         f"4h={prepared.get('4h', 0)} 1d={prepared.get('1d', 0)}",
-        f"Discovery: {discovery.get('status') or 'n/a'} count={discovery.get('count', 0)}",
+        f"Поиск рынков: {discovery.get('status') or 'n/a'} count={discovery.get('count', 0)}",
         "",
-        f"Safety: read_only={safety.get('read_only') is True}, live_trading={live}",
+        f"Безопасность: только_чтение={safety.get('read_only') is True}, живая_торговля={live}",
     ]
     recent_errors = activity.get("recent_errors") or []
     if recent_errors:
-        lines.extend(["", "Recent errors:"])
+        lines.extend(["", "Последние ошибки:"])
         for item in recent_errors[:3]:
             lines.append(f"- {str(item)[:160]}")
     return "\n".join(lines)
@@ -430,7 +430,7 @@ async def _send_admin_panel(chat_id: str) -> None:
     await _tg(
         "sendMessage",
         chat_id=chat_id,
-        text="Admin read-only tools:",
+        text="Админ-инструменты: только просмотр.",
         reply_markup={"inline_keyboard": [[{"text": "📡 Статус фермы", "callback_data": "__farm_status__"}]]},
     )
 

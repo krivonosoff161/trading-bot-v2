@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
 DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
-REQUIRED_DISCLAIMER = "research-only, not an order"
+REQUIRED_DISCLAIMER = "Бумажный режим: это не ордер."
 
 
 @dataclass(frozen=True)
@@ -343,31 +343,31 @@ def _status_digest_preview(
     outcomes = quality.get("training_by_result") or {}
     text = "\n".join(
         [
-            "<b>Paper bot status</b>",
+            "<b>Статус paper-бота</b>",
             REQUIRED_DISCLAIMER,
-            "execution_allowed=false",
+            "Автоисполнение выключено.",
             "",
-            f"<b>Reason:</b> <code>{reason}</code>",
-            f"<b>Preview:</b> rendered=<code>{source.get('rendered', 0)}</code> "
+            f"<b>Причина:</b> <code>{reason}</code>",
+            f"<b>Превью:</b> rendered=<code>{source.get('rendered', 0)}</code> "
             f"quality_skip=<code>{source.get('skipped_quality_gate', 0)}</code>",
-            f"<b>Action:</b> <code>{quality.get('operator_action') or 'monitor'}</code>",
-            f"<b>Active paper:</b> <code>{quality.get('active_trades', 0)}</code> "
+            f"<b>Действие:</b> <code>{quality.get('operator_action') or 'monitor'}</code>",
+            f"<b>Активные paper-наблюдения:</b> <code>{quality.get('active_trades', 0)}</code> "
             f"live_ready=<code>{quality.get('active_live_ready', 0)}</code>",
-            f"<b>Lifecycle:</b> pending=<code>{lifecycle.get('pending_outcomes', 0)}</code> "
+            f"<b>Жизненный цикл:</b> pending=<code>{lifecycle.get('pending_outcomes', 0)}</code> "
             f"states=<code>{json.dumps(lifecycle.get('by_outcome_result') or {}, ensure_ascii=False, sort_keys=True)}</code>",
-            f"<b>Timing:</b> oldest_h=<code>{lifecycle.get('oldest_age_hours', 0)}</code> "
+            f"<b>Время:</b> oldest_h=<code>{lifecycle.get('oldest_age_hours', 0)}</code> "
             f"next_expiry_h=<code>{lifecycle.get('next_expiry_hours')}</code> "
             f"overdue=<code>{lifecycle.get('overdue_expiry', 0)}</code>",
             f"<b>PFR:</b> state=<code>{pfr_state.get('state') or 'unknown'}</code> "
             f"catalog_ready=<code>{pfr_state.get('catalog_ready', 0)}</code> "
             f"generated=<code>{pfr_state.get('last_cycle_generated', 0)}</code>",
-            f"<b>PFR reasons:</b> <code>{json.dumps(pfr_reasons, ensure_ascii=False, sort_keys=True)}</code>",
-            f"<b>PFR near:</b> <code>{json.dumps(near_reasons, ensure_ascii=False, sort_keys=True)}</code>",
-            f"<b>Cycle blockers:</b> <code>{json.dumps(cycle_reasons, ensure_ascii=False, sort_keys=True)}</code>",
-            f"<b>Quality:</b> <code>{json.dumps(quality_labels, ensure_ascii=False, sort_keys=True)}</code>",
-            f"<b>Outcomes:</b> <code>{json.dumps(outcomes, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Причины PFR:</b> <code>{json.dumps(pfr_reasons, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>PFR рядом со входом:</b> <code>{json.dumps(near_reasons, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Блокеры цикла:</b> <code>{json.dumps(cycle_reasons, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Качество:</b> <code>{json.dumps(quality_labels, ensure_ascii=False, sort_keys=True)}</code>",
+            f"<b>Исходы:</b> <code>{json.dumps(outcomes, ensure_ascii=False, sort_keys=True)}</code>",
             "",
-            "<i>No new subscriber card was sent in this cycle; the paper loop is still running.</i>",
+            "<i>В этом цикле не было новой карточки для подписчиков; paper-контур продолжает работать.</i>",
         ]
     )
     return {

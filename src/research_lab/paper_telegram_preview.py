@@ -28,7 +28,7 @@ SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
 CARD_TEMPLATE_VERSION = "paper_telegram_card_v5_candidate_ru"
 MAX_MESSAGE_CHARS = 4096
-REQUIRED_DISCLAIMER = "research-only, not an order"
+REQUIRED_DISCLAIMER = "\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c: \u044d\u0442\u043e \u043d\u0435 \u043e\u0440\u0434\u0435\u0440."
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435, \u043d\u0435 \u043e\u0440\u0434\u0435\u0440 \u0438 \u043d\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u043a \u0432\u0445\u043e\u0434\u0443."
 
 LABEL_IDEA = "\u0418\u0434\u0435\u044f"
@@ -40,7 +40,7 @@ LABEL_STATUS = "\u0421\u0442\u0430\u0442\u0443\u0441"
 LABEL_OUTCOME = "\u0418\u0441\u0445\u043e\u0434"
 LABEL_REASON = "\u041f\u043e\u0447\u0435\u043c\u0443 \u0441\u0435\u0439\u0447\u0430\u0441"
 LABEL_SOURCE = "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a"
-EXECUTION_OFF = "\u0410\u0432\u0442\u043e\u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e: execution_allowed=false"
+EXECUTION_OFF = "\u0410\u0432\u0442\u043e\u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e."
 
 MOJIBAKE_MARKERS = (
     "\u0420\u00a0",
@@ -461,7 +461,7 @@ def _trade_text(record: dict[str, Any]) -> str:
         )
     return "\n".join(
         [
-            f"<b>Main paper: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             "",
@@ -472,8 +472,8 @@ def _trade_text(record: dict[str, Any]) -> str:
             f"<b>{LABEL_MAX_HOLD}:</b> <code>{html.escape(str(record.get('max_hold_min') or 'n/a'))} \u043c\u0438\u043d</code>",
             "",
             f"<b>{LABEL_STATUS}:</b> {status}",
-            f"<b>Setup:</b> <code>{setup_id}</code>",
-            f"<b>Signal:</b> <code>{signal_id}</code>",
+            f"<b>ID \u0441\u0435\u0442\u0430\u043f\u0430:</b> <code>{setup_id}</code>",
+            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             result_line,
             "",
             f"<i>{EXECUTION_OFF}</i>",
@@ -489,11 +489,11 @@ def _product_trade_text(record: dict[str, Any]) -> str:
     status = html.escape(_status_label(str(record.get("status") or "armed")))
     signal_id = html.escape(str(record.get("source_signal_id") or "unknown"))
     reason = html.escape(_reason_label(str(record.get("reason_now") or "paper product candidate")))
-    live_ready = "yes" if bool(record.get("live_ready")) else "no"
+    live_ready = "\u0434\u0430" if bool(record.get("live_ready")) else "\u043d\u0435\u0442"
     live_block = html.escape(str(record.get("live_block_reason") or "none"))
     return "\n".join(
         [
-            f"<b>Paper product: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             "",
@@ -505,8 +505,8 @@ def _product_trade_text(record: dict[str, Any]) -> str:
             "",
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {status}",
-            f"<b>Live-ready:</b> <code>{live_ready}</code> block=<code>{live_block}</code>",
-            f"<b>Signal:</b> <code>{signal_id}</code>",
+            f"<b>\u041a \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u0439 \u0442\u043e\u0440\u0433\u043e\u0432\u043b\u0435:</b> <code>{live_ready}</code> \u0431\u043b\u043e\u043a=<code>{live_block}</code>",
+            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
@@ -541,7 +541,7 @@ def _paper_signal_text(record: dict[str, Any]) -> str:
     validation = html.escape(str((record.get("validator_context") or {}).get("hard_status") or "not_hard_validated"))
     return "\n".join(
         [
-            f"<b>Farm paper candidate: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            f"<b>\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442 \u0444\u0435\u0440\u043c\u044b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             "",
@@ -554,9 +554,9 @@ def _paper_signal_text(record: dict[str, Any]) -> str:
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {status}",
             f"<b>{LABEL_SOURCE}:</b> <code>{source}</code>",
-            f"<b>Validation:</b> <code>{validation}</code>",
-            f"<b>Risk:</b> <code>{risk}%</code>",
-            f"<b>Signal:</b> <code>{signal_id}</code>",
+            f"<b>\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430:</b> <code>{validation}</code>",
+            f"<b>\u0420\u0438\u0441\u043a:</b> <code>{risk}%</code>",
+            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{signal_id}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
@@ -577,7 +577,7 @@ def _consumer_text(record: dict[str, Any]) -> str:
     setup_id = html.escape(str(meta.get("ready_strategy_id") or meta.get("setup_id") or meta.get("candidate_id") or "n/a"))
     return "\n".join(
         [
-            f"<b>Main paper: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
+            f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             "",
@@ -590,8 +590,8 @@ def _consumer_text(record: dict[str, Any]) -> str:
             f"<b>{LABEL_REASON}:</b> {reason}",
             f"<b>{LABEL_STATUS}:</b> {html.escape(_status_label(source_status))}",
             f"<b>{LABEL_SOURCE}:</b> <code>{source_name}</code>",
-            f"<b>Setup:</b> <code>{setup_id}</code>",
-            f"<b>Signal:</b> <code>{source}</code>",
+            f"<b>ID \u0441\u0435\u0442\u0430\u043f\u0430:</b> <code>{setup_id}</code>",
+            f"<b>ID \u0441\u0438\u0433\u043d\u0430\u043b\u0430:</b> <code>{source}</code>",
             "",
             f"<i>{EXECUTION_OFF}</i>",
         ]
@@ -628,7 +628,7 @@ def validate_preview(record: dict[str, Any], text: str) -> list[str]:
         problems.append("telegram_message_too_long")
     if REQUIRED_DISCLAIMER not in text:
         problems.append("missing_research_disclaimer")
-    if "execution_allowed=false" not in text:
+    if EXECUTION_OFF not in text:
         problems.append("missing_execution_boundary")
     if "<script" in text.lower():
         problems.append("unsafe_html")

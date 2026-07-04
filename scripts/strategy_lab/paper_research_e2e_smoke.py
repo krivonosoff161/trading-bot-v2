@@ -252,7 +252,8 @@ def _telegram_card_check(path: Path) -> dict[str, Any]:
         for item in data.get("items") or []:
             rows += 1
             text = str(item.get("text") or "")
-            if "Paper-сетап:" not in text or "execution_allowed=false" not in text:
+            has_title = "Бумажный сигнал:" in text or "Кандидат фермы:" in text or "Paper-сетап:" in text
+            if not has_title or "Автоисполнение выключено." not in text:
                 bad += 1
             if any(marker in text for marker in ("СЃ", "С‚", "Р°", "Рµ", "вЂ", "Â")):
                 bad += 1

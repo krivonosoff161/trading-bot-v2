@@ -15,7 +15,7 @@ def _preview(**overrides):
         "side": "long",
         "setup_family": "early_tp_tactical",
         "consumer_status": "accepted_for_paper_watch",
-        "text": "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false",
+        "text": "<b>Бумажный сигнал</b>\nБумажный режим: это не ордер.\nАвтоисполнение выключено.",
         "problems": [],
         "paper_only": True,
         "execution_allowed": False,
@@ -143,8 +143,8 @@ def test_sender_uses_injected_subscriber_transport(tmp_path):
     assert summary["sent_messages"] == 2
     assert summary["sent_cards"] == 1
     assert calls == [
-        ("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
-        ("222", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false"),
+        ("111", "<b>Бумажный сигнал</b>\nБумажный режим: это не ордер.\nАвтоисполнение выключено."),
+        ("222", "<b>Бумажный сигнал</b>\nБумажный режим: это не ордер.\nАвтоисполнение выключено."),
     ]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["chat_env"] == "SUBSCRIPTION_USERS"
@@ -188,7 +188,9 @@ def test_sender_sends_private_review_chart_before_text(tmp_path):
     assert summary["chart_available_messages"] == 1
     assert summary["chart_sent_messages"] == 1
     assert events == [("photo", "111"), ("text", "111")]
-    assert text_calls == [("111", "<b>PAPER WATCH</b>\nresearch-only, not an order\nexecution_allowed=false")]
+    assert text_calls == [
+        ("111", "<b>Бумажный сигнал</b>\nБумажный режим: это не ордер.\nАвтоисполнение выключено.")
+    ]
     assert photo_calls == [("111", str(chart_path.resolve()))]
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["chart_available"] is True
@@ -328,19 +330,21 @@ def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     assert second["status_digest_reason"] == "all_cards_duplicate"
     assert second["status_digest_sent_messages"] == 1
     assert len(calls) == 2
-    assert "Paper bot status" in calls[1][1]
+    assert "Статус paper-бота" in calls[1][1]
     assert "all_cards_duplicate" in calls[1][1]
     assert "pending=<code>12</code>" in calls[1][1]
     assert "oldest_h=<code>22.5</code>" in calls[1][1]
     assert "next_expiry_h=<code>0.5</code>" in calls[1][1]
     assert "waiting_for_live_trigger" in calls[1][1]
     assert "pfr_rejected:no_breakout" in calls[1][1]
-    assert "PFR near" in calls[1][1]
+    assert "PFR рядом со входом" in calls[1][1]
     assert "pfr_near_trigger:fade_gap_gt_2pct" in calls[1][1]
-    assert "Cycle blockers" in calls[1][1]
+    assert "Блокеры цикла" in calls[1][1]
     assert "network_fetch_limit_reached" in calls[1][1]
-    assert "research-only, not an order" in calls[1][1]
-    assert "execution_allowed=false" in calls[1][1]
+    assert "Бумажный режим: это не ордер." in calls[1][1]
+    assert "Автоисполнение выключено." in calls[1][1]
+    assert "research-only, not an order" not in calls[1][1]
+    assert "execution_allowed=false" not in calls[1][1]
 
 
 def test_sender_status_digest_deduplicates_unchanged_state_in_same_bucket(tmp_path):
