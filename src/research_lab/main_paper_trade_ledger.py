@@ -206,4 +206,3 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
     }
     out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
-

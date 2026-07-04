@@ -69,4 +69,3 @@ def test_main_adaptive_policy_has_no_live_order_imports():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     assert not (imported & forbidden)
-

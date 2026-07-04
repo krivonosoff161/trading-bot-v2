@@ -138,4 +138,3 @@ Result:
 
 No `.env`, `AUTO_TRADE`, live/private order path, or legacy live executor was
 enabled.
-

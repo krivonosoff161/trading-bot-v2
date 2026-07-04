@@ -238,4 +238,3 @@ def write_policy_artifacts(private_root: Path, policies: list[MainAdaptivePolicy
         encoding="utf-8",
     )
     return summary
-

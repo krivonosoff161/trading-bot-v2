@@ -71,4 +71,3 @@ def record_message_audit(
     with audit_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
     return audit_path
-

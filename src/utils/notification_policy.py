@@ -88,4 +88,3 @@ def decide_notification(
         destination="none",
         reason="unknown_event_type",
     )
-

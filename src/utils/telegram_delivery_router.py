@@ -83,4 +83,3 @@ async def deliver_notification(
         "delivered": sum(1 for r in rows if r["status"] == "sent"),
         "rows": rows,
     }
-

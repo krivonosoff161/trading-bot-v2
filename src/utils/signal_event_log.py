@@ -199,4 +199,3 @@ def record_manual_analysis_event(
         },
         path=path,
     )
-
