@@ -636,6 +636,10 @@ def _print(report: dict) -> None:
                   f"catalog_ready={pfr_state.get('catalog_ready', 0)} "
                   f"generated={pfr_state.get('last_cycle_generated', 0)} "
                   f"reasons={pfr_state.get('top_reasons') or {}}")
+        pfr_funnel = pq.get("pfr_funnel") if isinstance(pq.get("pfr_funnel"), dict) else {}
+        resource_reasons = pfr_funnel.get("cycle_resource_reasons") if isinstance(pfr_funnel, dict) else {}
+        if resource_reasons:
+            print(f"    cycle resource/data blockers: {resource_reasons}")
     pfr_snap = report.get("pfr_bridge") or {}
     if pfr_snap.get("records_loaded") is not None:
         print(f"  PFR bridge: records_loaded={pfr_snap['records_loaded']} "
