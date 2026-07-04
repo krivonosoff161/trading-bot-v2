@@ -156,6 +156,8 @@ def _farm_loop_status_fallback() -> list[dict[str, Any]]:
 
 def classify_process(command_line: str) -> str | None:
     cmd = (command_line or "").lower().replace("/", "\\")
+    if "pytest" in cmd or "scripts\\project_snapshot.py" in cmd or "scripts.project_snapshot" in cmd:
+        return None
     if "scripts.strategy_lab.farm_loop" in cmd and "--run-paper-signals" in cmd:
         return "canonical_farm_paper_loop"
     if "scripts.strategy_lab.farm_loop" in cmd:
@@ -311,6 +313,28 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _top_counts(raw: Any, *, limit: int = 4) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    pairs = sorted(
+        ((str(key), int(value or 0)) for key, value in raw.items()),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return dict(pairs[:limit])
+
+
+def _sent_key_summary(private_root: Path) -> dict[str, int]:
+    data = _read_json(private_root / "state" / "derived" / "paper_telegram_sent_keys.json")
+    keys = [str(item) for item in data.get("sent_keys", []) if str(item)]
+    preview_ids = {key.rsplit(":", 1)[0] for key in keys if ":" in key}
+    recipient_hashes = {key.rsplit(":", 1)[1] for key in keys if ":" in key}
+    return {
+        "sent_key_count": len(keys),
+        "sent_preview_count": len(preview_ids),
+        "sent_recipient_count": len(recipient_hashes),
+    }
+
+
 def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     """Small operator view over the current paper-product chain.
 
@@ -329,6 +353,8 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     trades = _read_json(derived / "main_paper_trades.json")
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
+    training = _read_json(derived / "paper_signal_training.json")
+    sent_keys = _sent_key_summary(root)
 
     active = (
         int(paper.get("total") or 0) > 0
@@ -359,9 +385,19 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "preview_rendered": int(preview.get("rendered") or 0),
         "delivery_eligible": int(delivery.get("eligible") or 0),
         "delivery_sent": int(delivery.get("sent") or 0),
+        "delivery_duplicates": int(delivery.get("duplicates") or 0),
+        "delivery_errors": int(delivery.get("errors") or 0),
         "delivery_dry_run": bool(delivery.get("dry_run", True)),
         "delivery_configured": bool(delivery.get("configured")),
         "sends_network": bool(delivery.get("sends_network")),
+        "cumulative_sent_keys": sent_keys["sent_key_count"],
+        "cumulative_sent_previews": sent_keys["sent_preview_count"],
+        "cumulative_sent_recipients": sent_keys["sent_recipient_count"],
+        "training_rows": int(training.get("rows") or 0),
+        "training_by_result": _top_counts(training.get("by_result") or {}),
+        "training_by_family": _top_counts(training.get("by_family") or {}),
+        "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
+        "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
     }
 
@@ -393,7 +429,7 @@ def _print_paper_product_status() -> None:
         f"queued={st['queued']} observed={st['observed']} "
         f"trades={st['trades']} {st['trade_status']} | "
         f"tg preview={st['preview_rendered']} eligible={st['delivery_eligible']} "
-        f"sent={st['delivery_sent']}"
+        f"last_sent={st['delivery_sent']} sent_total={st['cumulative_sent_previews']}"
     )
     print(
         "                "
@@ -401,8 +437,20 @@ def _print_paper_product_status() -> None:
         f"configured={st['delivery_configured']} "
         f"execution_allowed={st['execution_allowed']} "
         f"provider_error={st['provider_error']} "
-        f"skipped_unvalidated={st['skipped_unvalidated']}"
+        f"skipped_unvalidated={st['skipped_unvalidated']} "
+        f"delivery_errors={st['delivery_errors']} duplicates={st['delivery_duplicates']}"
     )
+    print(
+        "                "
+        f"outcomes rows={st['training_rows']} result={st['training_by_result']} "
+        f"families={st['training_by_family']}"
+    )
+    if st["bridge_skip_reasons"] or st["training_by_diagnosis"]:
+        print(
+            "                "
+            f"bridge_skip={st['bridge_skip_reasons']} "
+            f"diagnosis={st['training_by_diagnosis']}"
+        )
 
 
 def main() -> None:
