@@ -622,6 +622,65 @@ def _near_trigger_bucket(row: dict[str, Any], candles: list[dict[str, Any]], rea
     return ""
 
 
+def _gap_sample(row: dict[str, Any], candles: list[dict[str, Any]], reason: str) -> dict[str, Any] | None:
+    params = row.get("params") or {}
+    family = str(row.get("family") or "")
+    idx = len(candles) - 1
+    base = {
+        "schema": "PFRGapSample.v1",
+        "symbol": str(row.get("symbol") or ""),
+        "timeframe": str(row.get("timeframe") or ""),
+        "family": family,
+        "setup_id": str(row.get("setup_id") or ""),
+        "ready_strategy_id": _ready_strategy_id(row),
+        "candidate_id": str(row.get("candidate_id") or ""),
+        "decision_reason": reason,
+    }
+    if family == "momentum_breakout":
+        lookback = int(params.get("lookback") or 0)
+        threshold_pct = float(params.get("threshold_pct") or 0.0)
+        if lookback <= 0 or idx < lookback:
+            return None
+        high = window_high(candles, idx, lookback)
+        low = window_low(candles, idx, lookback)
+        close = float(candles[idx]["close"])
+        if high is None or low is None or close <= 0:
+            return None
+        long_trigger = float(high) * (1 + threshold_pct / 100)
+        short_trigger = float(low) * (1 - threshold_pct / 100)
+        long_gap = max(0.0, (long_trigger - close) / close * 100)
+        short_gap = max(0.0, (close - short_trigger) / close * 100)
+        min_gap = min(long_gap, short_gap)
+        return {
+            **base,
+            "nearest_side": "long" if long_gap <= short_gap else "short",
+            "min_gap_pct": round(min_gap, 4),
+            "long_gap_pct": round(long_gap, 4),
+            "short_gap_pct": round(short_gap, 4),
+            "bucket": "breakout_" + _gap_bucket(min_gap),
+        }
+    if family == "mean_reversion_fade":
+        lookback = int(params.get("lookback") or 0)
+        move_pct = float(params.get("move_pct") or 0.0)
+        if lookback <= 0 or move_pct <= 0 or idx - lookback < 0:
+            return None
+        start = float(candles[idx - lookback]["close"])
+        close = float(candles[idx]["close"])
+        if start <= 0:
+            return None
+        move = (close / start - 1) * 100
+        gap = max(0.0, move_pct - abs(move))
+        return {
+            **base,
+            "nearest_side": "short" if move >= 0 else "long",
+            "min_gap_pct": round(gap, 4),
+            "move_abs_pct": round(abs(move), 4),
+            "move_threshold_pct": round(move_pct, 4),
+            "bucket": "fade_" + _gap_bucket(gap),
+        }
+    return None
+
+
 def generate_pfr_signals(
     records: list[dict[str, Any]],
     *,
@@ -636,6 +695,7 @@ def generate_pfr_signals(
     status_counts: dict[str, int] | None = None,
     max_pfr_scan: int = 30,
     max_pfr_fetches: int | None = 8,
+    gap_samples: list[dict[str, Any]] | None = None,
 ) -> list[tuple[PaperActionSignal, list[dict]]]:
     """Generate paper-watch signals from PFR records using live candles.
 
@@ -720,6 +780,10 @@ def generate_pfr_signals(
 
         boundary_ts = int(candles[-1]["ts"])
         sig, reason = builder(row, candles, now=now, boundary_ts=boundary_ts, mode=mode)
+        sample = _gap_sample(row, candles, reason)
+        if sample is not None and gap_samples is not None:
+            sample["selection_state"] = "rejected" if sig is None else reason
+            gap_samples.append(sample)
         if sig is None:
             reason_key = f"pfr_rejected:{reason[:50]}"
             sc[reason_key] = sc.get(reason_key, 0) + 1
@@ -730,25 +794,37 @@ def generate_pfr_signals(
             continue
 
         if reason == "ok_pretrigger":
-            pretrigger_candidates.append((sig, candles, setup_id))
+            if sample is not None:
+                sample["selection_state"] = "pretrigger_candidate"
+            pretrigger_candidates.append((sig, candles, setup_id, sample))
             sc["pfr_pretrigger_candidate"] = sc.get("pfr_pretrigger_candidate", 0) + 1
             continue
 
+        if sample is not None:
+            sample["selection_state"] = "exact_selected"
         sc["pfr_generated"] = sc.get("pfr_generated", 0) + 1
         active_dedup.add(dedup_key)
         active_setup_ids.add(setup_id)
         generated.append((sig, candles))
 
-    for sig, candles, setup_id in pretrigger_candidates:
+    for sig, candles, setup_id, sample in pretrigger_candidates:
         if len(generated) >= max_pfr:
             sc["pfr_pretrigger_deferred_by_exact_cap"] = sc.get("pfr_pretrigger_deferred_by_exact_cap", 0) + 1
+            if sample is not None:
+                sample["selection_state"] = "pretrigger_deferred_by_exact_cap"
             continue
         if sig.dedup_key in active_dedup:
             sc["pfr_pretrigger_dedup_active_key"] = sc.get("pfr_pretrigger_dedup_active_key", 0) + 1
+            if sample is not None:
+                sample["selection_state"] = "pretrigger_dedup_active_key"
             continue
         if setup_id and setup_id in active_setup_ids:
             sc["pfr_pretrigger_dedup_setup_id"] = sc.get("pfr_pretrigger_dedup_setup_id", 0) + 1
+            if sample is not None:
+                sample["selection_state"] = "pretrigger_dedup_setup_id"
             continue
+        if sample is not None:
+            sample["selection_state"] = "pretrigger_selected"
         sc["pfr_generated"] = sc.get("pfr_generated", 0) + 1
         sc["pfr_generated_pretrigger"] = sc.get("pfr_generated_pretrigger", 0) + 1
         active_dedup.add(sig.dedup_key)
