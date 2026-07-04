@@ -128,6 +128,30 @@ def test_status_report_collect(tmp_path):
         ),
         encoding="utf-8",
     )
+    (derived / "paper_product_quality_report.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_quality_report.v1",
+                "operator_action": "strict_main_waiting_for_active_pfr_candidates",
+                "active_trades": 12,
+                "active_live_ready": 0,
+                "active_live_blocked": 12,
+                "quality_labels": {"needs_review": 4, "mixed": 1},
+                "training_rows": 1393,
+                "training_by_result": {"take": 184, "stop": 371},
+                "families": [
+                    {
+                        "family": "early_tp_tactical",
+                        "quality_label": "mixed",
+                        "rows": 454,
+                        "take_rate": 0.5444,
+                        "avg_net_r": 0.1366,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     report = collect(default_db_path(tmp_path))
     assert report["exists"] is True
@@ -139,6 +163,8 @@ def test_status_report_collect(tmp_path):
     assert report["main_paper_runtime_observation"]["execution_allowed"] is False
     assert report["paper_telegram_delivery"]["eligible_cards"] == 3
     assert report["paper_telegram_delivery"]["sends_network"] is True
+    assert report["paper_product_quality"]["active_trades"] == 12
+    assert report["paper_product_quality"]["quality_labels"]["needs_review"] == 4
     ready = {r["symbol"] for r in report["ready_for_validation"]}
     assert "BTC_USDT_SWAP" in ready
 
@@ -318,6 +344,49 @@ def test_status_report_prints_paper_telegram_delivery(tmp_path, capsys):
     assert "duplicate_messages=12" in out
     assert "errors=0" in out
     assert "sends_network=True" in out
+
+
+def test_status_report_prints_paper_product_quality(tmp_path, capsys):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    import_run_dir(conn, tmp_path, _write_run(tmp_path))
+    conn.commit()
+    conn.close()
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_product_quality_report.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_quality_report.v1",
+                "operator_action": "strict_main_waiting_for_active_pfr_candidates",
+                "active_trades": 12,
+                "active_live_ready": 0,
+                "active_live_blocked": 12,
+                "quality_labels": {"needs_review": 4, "mixed": 1},
+                "training_rows": 1393,
+                "training_by_result": {"take": 184, "stop": 371},
+                "families": [
+                    {
+                        "family": "early_tp_tactical",
+                        "quality_label": "mixed",
+                        "rows": 454,
+                        "take_rate": 0.5444,
+                        "avg_net_r": 0.1366,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _print(collect(default_db_path(tmp_path), fast=True))
+    out = capsys.readouterr().out
+
+    assert "paper product quality:" in out
+    assert "action=strict_main_waiting_for_active_pfr_candidates" in out
+    assert "active=12" in out
+    assert "training_rows=1393" in out
+    assert "early_tp_tactical:mixed" in out
 
 
 def test_status_report_missing_db(tmp_path):
