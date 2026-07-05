@@ -139,6 +139,11 @@ The old WebSocket Main/TA engines remain frozen/reference (confirmation/risk/lev
 only); their useful strategy logic is already ported into research_lab families
 (see [docs/farm_ownership_map.md](docs/farm_ownership_map.md)).
 
+Portfolio-level documentation authority and public/private storage rules live in
+the [Documentation Contract](https://github.com/krivonosoff161/krivonosoff161/blob/main/docs/documentation-contract.md).
+This file is the current state for this repository; it does not publish private
+strategy calculations or raw runtime evidence.
+
 ## Active Runtime
 
 Primary farm path (current center):

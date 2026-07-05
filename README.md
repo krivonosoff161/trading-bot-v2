@@ -25,6 +25,12 @@ source** that feeds the farm, not the center.
 > [docs/farm_ownership_map.md](docs/farm_ownership_map.md),
 > [docs/farm_runbook.md](docs/farm_runbook.md).
 
+Portfolio-level documentation authority and public/private storage rules live in
+the [Documentation Contract](https://github.com/krivonosoff161/krivonosoff161/blob/main/docs/documentation-contract.md).
+This repository owns the public trading workbench architecture and paper/research
+runtime docs; private calculations, strategy edge, candidate rankings, and raw
+runtime state stay outside public Git.
+
 The project has three contours:
 
 | Contour | Status | Purpose |
