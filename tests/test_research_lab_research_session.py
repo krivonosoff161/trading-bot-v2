@@ -5,8 +5,10 @@ from argparse import Namespace
 
 from scripts.strategy_lab.research_session import run_session
 from src.research_lab.candidate_registry import registry_path
-from src.research_lab.paths import one_minute_data_dir
+from src.research_lab.paths import market_data_dir, one_minute_data_dir
 from src.research_lab.research_session import session_report_path, write_session_report
+
+DAY = 86_400_000
 
 
 def _args(tmp_path, **over):
@@ -33,6 +35,22 @@ def _seed_candidates(tmp_path, n=3):
         "next_review": "2026-07-01",
     } for i in range(n)]
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    for symbol in symbols:
+        _write_daily(market_data_dir(tmp_path, "1d") / f"{symbol}_120d_1d.json", n=120)
+
+
+def _write_daily(path, n):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{
+        "ts": 1_700_000_000_000 + i * DAY,
+        "date": f"d{i}",
+        "open": 100.0 + i,
+        "high": 101.0 + i,
+        "low": 99.0 + i,
+        "close": 100.5 + i,
+        "vol": 1000.0 + i,
+    } for i in range(n)]
+    path.write_text(json.dumps(rows), encoding="utf-8")
 
 
 def test_session_dry_run_writes_only_report(tmp_path):

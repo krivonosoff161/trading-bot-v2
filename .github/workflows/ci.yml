@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test ubuntu-latest / Python 3.11
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Check tracked private/runtime artifacts
+        run: python scripts/ci/check_tracked_artifacts.py
+
+      - name: Run non-live tests
+        env:
+          AUTO_TRADE: "false"
+        run: python -m pytest
