@@ -205,7 +205,11 @@ def _recipient_hash(recipient_id: str) -> str:
 
 
 def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
-    return f"{str(item.get('preview_id') or '')}:{_recipient_hash(recipient_id)}"
+    # ``preview_id`` is the signal identity. ``telegram_card_id`` also includes
+    # the rendered card content/version, so template fixes can be delivered once
+    # without disabling duplicate protection for unchanged cards.
+    item_key = str(item.get("telegram_card_id") or item.get("preview_id") or "")
+    return f"{item_key}:{_recipient_hash(recipient_id)}"
 
 
 def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | None, str]:

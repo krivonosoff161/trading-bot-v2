@@ -293,6 +293,49 @@ def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
     assert len(calls) == 1
 
 
+def test_sender_resends_when_card_template_changes_same_preview(tmp_path):
+    _write_preview_snapshot(
+        tmp_path,
+        [
+            _preview(
+                preview_id="preview_1",
+                telegram_card_id="tgcard_sig_1_clean_v2",
+            )
+        ],
+    )
+    sent_keys_path = tmp_path / "state" / "derived" / "paper_telegram_sent_keys.json"
+    sent_keys_path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_sent_keys.v1",
+                "sent_keys": ["preview_1:3febbb64d20fb6f9"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert summary["sent"] == 1
+    assert summary["duplicates"] == 0
+    assert len(calls) == 1
+    data = json.loads(sent_keys_path.read_text(encoding="utf-8"))
+    assert "preview_1:3febbb64d20fb6f9" in data["sent_keys"]
+    assert "tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in data["sent_keys"]
+
+
 def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
     _write_preview_snapshot(tmp_path, [_preview()])
     _write_quality_report(tmp_path)
