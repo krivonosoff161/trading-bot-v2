@@ -35,6 +35,41 @@ def test_review_role_rejects_trade_authority_fields():
     assert "forbidden field: execute" in problems
 
 
+def test_outcome_reviewer_accepts_learning_fields_but_not_authority():
+    ok, problems = validate_role_payload(
+        "outcome_reviewer",
+        {
+            "summary": "Loss gave back after favourable move.",
+            "review_kind": "loss",
+            "outcome_bucket": "gave_back",
+            "actionability": "retest_exit_or_capture",
+            "counterfactual_summary": "Earlier profit lock needs deterministic retest.",
+            "counterfactual_delta_class": "possible_loss_to_small_win",
+            "confidence_basis": "mfe_exceeded_mae",
+            "evidence_refs": ["training_s1"],
+            "learning_tags": ["exit_capture"],
+            "candidate_rule": "do not promote; retest exit dimension only",
+            "requires_retest": True,
+            "risk_to_good_trades": "may reduce upside if too early",
+            "confidence": 0.8,
+        },
+    )
+    assert ok is True
+    assert problems == []
+
+    ok, problems = validate_role_payload(
+        "outcome_reviewer",
+        {
+            "review_kind": "loss",
+            "paper_ready": True,
+            "execution_allowed": True,
+        },
+    )
+    assert ok is False
+    assert "forbidden field: paper_ready" in problems
+    assert "forbidden field: execution_allowed" in problems
+
+
 def test_review_payload_normalizes_provider_synonyms_without_bypassing_forbidden_fields():
     payload = normalize_review_payload(
         "validator_reviewer",

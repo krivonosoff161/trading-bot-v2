@@ -30,11 +30,15 @@ ROLE_TO_PATH = {
 ROLE_SYSTEM_PROMPTS = {
     "outcome_reviewer": (
         "You are an advisory paper-trading outcome reviewer. Return JSON only. "
-        "Classify why a completed paper setup won, lost, expired, or gave back. "
-        "You may suggest bounded next-test dimensions. You must not change entry, "
+        "Classify why a completed paper setup won, lost, expired, missed entry, "
+        "or gave back. Use the supplied OutcomeLearningCase review_kind and "
+        "outcome_bucket as hard context. You may suggest bounded next-test "
+        "dimensions and counterfactual hypotheses, but deterministic code must "
+        "test them later. You must not change entry, "
         "stop, take profit, side, validator verdict, paper_ready, order, size, or execution."
-        " Keep the object compact: summary, diagnosis, confidence, evidence, warnings, "
-        "next_test_dimensions. Confidence must be a number from 0 to 1."
+        " Keep the object compact: summary, review_kind, outcome_bucket, diagnosis, "
+        "confidence, evidence, warnings, next_test_dimensions, learning_tags, "
+        "actionability. Confidence must be a number from 0 to 1."
     ),
     "validator_reviewer": (
         "You are an advisory validator reviewer. Return JSON only. Explain why a "
@@ -109,8 +113,14 @@ def normalize_review_payload(role_id: str, payload: Mapping[str, Any]) -> dict[s
         normalized["next_test_dimensions"] = [normalized["next_test_dimensions"]]
     if "evidence" in normalized and isinstance(normalized["evidence"], str):
         normalized["evidence"] = [normalized["evidence"]]
+    if "evidence_refs" in normalized and isinstance(normalized["evidence_refs"], str):
+        normalized["evidence_refs"] = [normalized["evidence_refs"]]
     if "warnings" in normalized and isinstance(normalized["warnings"], str):
         normalized["warnings"] = [normalized["warnings"]]
+    if "learning_tags" in normalized and isinstance(normalized["learning_tags"], str):
+        normalized["learning_tags"] = [normalized["learning_tags"]]
+    if "memory_tags" in normalized and isinstance(normalized["memory_tags"], str):
+        normalized["memory_tags"] = [normalized["memory_tags"]]
     confidence = normalized.get("confidence")
     if isinstance(confidence, str):
         try:
@@ -124,6 +134,12 @@ def normalize_review_payload(role_id: str, payload: Mapping[str, Any]) -> dict[s
         for key in ("classification", "outcome", "outcome_classification"):
             if key in normalized and "diagnosis" not in normalized:
                 normalized["diagnosis"] = normalized.pop(key)
+        if "case_type" in normalized and "review_kind" not in normalized:
+            normalized["review_kind"] = normalized.pop("case_type")
+        if "bucket" in normalized and "outcome_bucket" not in normalized:
+            normalized["outcome_bucket"] = normalized.pop("bucket")
+        if "tags" in normalized and "learning_tags" not in normalized:
+            normalized["learning_tags"] = normalized.pop("tags")
     elif role_id == "validator_reviewer":
         if "classification" in normalized and "validator_class" not in normalized:
             normalized["validator_class"] = normalized.pop("classification")

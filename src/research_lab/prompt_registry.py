@@ -147,7 +147,7 @@ def prompt_contracts() -> list[PromptContract]:
             version="outcome_reviewer_v1",
             prompt_hash="role_registry_bound",
             purpose="Classify closed paper outcomes into learning labels and bounded next-test hints.",
-            input_contract="TrainingRow.v2 + computed outcome facts",
+            input_contract="OutcomeLearningCase.v1 + computed outcome facts",
             output_contract="OutcomeReview.v1 JSON object",
             forbidden=["entry", "stop", "take_profit", "side", "paper_ready", "validator_verdict", "execute"],
             schema_gate="src.research_lab.llm_role_reviews.validate_review_payload",

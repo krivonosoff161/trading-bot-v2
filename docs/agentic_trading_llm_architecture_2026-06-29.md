@@ -8,6 +8,14 @@ This is not a live-trading plan. The target is a self-improving paper/research
 system where deterministic code calculates and validates, while LLMs explain,
 classify, and suggest bounded follow-up tests.
 
+2026-07-05 implementation update: the first outcome-learning slice now exists.
+`OutcomeLearningCase.v1` routes terminal `TrainingRow.v2` outcomes into sanitized
+review packs for the existing advisory `outcome_reviewer`; accepted reviews are
+written privately to `state/llm_advice/outcome_reviews.jsonl`, and later
+`TrainingRow.v2` exports can link them back through `outcome_review_id` and
+learning labels. Retest/shadow/promotion automation is still future work and
+must reuse existing deterministic gates.
+
 ## Scope and Claim Level
 
 This document is a public-safe architecture map and implementation plan. It is

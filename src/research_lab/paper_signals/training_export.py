@@ -34,6 +34,7 @@ def _refs_hash(
     trades: dict[str, dict[str, Any]],
     advice_by_feature: dict[str, dict[str, Any]],
     policy_by_signal: dict[str, dict[str, Any]],
+    outcome_reviews_by_training: dict[str, dict[str, Any]],
 ) -> str:
     """Hash only refs that can affect exported rows for the selected signals."""
     payload: list[dict[str, Any]] = []
@@ -46,6 +47,7 @@ def _refs_hash(
                 "trade": trades.get(sig.signal_id) or {},
                 "advice": advice_by_feature.get(sig.feature_packet_id) or {},
                 "policy": policy_by_signal.get(sig.signal_id) or {},
+                "outcome_review": outcome_reviews_by_training.get(f"training_{sig.signal_id}") or {},
             }
         )
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -137,6 +139,33 @@ def _adaptive_policy_refs(private_root: Path) -> dict[str, dict[str, Any]]:
     return refs
 
 
+def _outcome_review_refs(private_root: Path) -> dict[str, dict[str, Any]]:
+    path = private_root / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    if not path.exists():
+        return {}
+    refs: dict[str, dict[str, Any]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return refs
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(row.get("role_id") or "") != "outcome_reviewer":
+            continue
+        source_ref = str(row.get("source_ref") or "")
+        if not source_ref:
+            continue
+        current = refs.get(source_ref)
+        if current is None or bool(row.get("accepted")) or not bool(current.get("accepted")):
+            refs[source_ref] = row
+    return refs
+
+
 def _hash_text(text: str) -> str:
     import hashlib
 
@@ -150,6 +179,7 @@ def training_row(
     paper_trade: dict[str, Any] | None = None,
     calculator_advice: dict[str, Any] | None = None,
     adaptive_policy: dict[str, Any] | None = None,
+    outcome_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     outcome = sig.outcome or {}
     review = sig.review or {}
@@ -159,6 +189,8 @@ def training_row(
     trade = paper_trade or {}
     advice = calculator_advice or {}
     policy = adaptive_policy or {}
+    review_ref = outcome_review or {}
+    review_payload = review_ref.get("payload") if isinstance(review_ref.get("payload"), dict) else {}
     card_text = str(card.get("text") or "")
     calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
@@ -233,6 +265,11 @@ def training_row(
         "adaptive_regime_hint": str(policy.get("regime_hint") or ""),
         "adaptive_policy_confidence": policy.get("confidence"),
         "adaptive_policy_reasons": list(policy.get("reason_codes") or []),
+        "outcome_review_id": str(review_ref.get("review_id") or ""),
+        "outcome_review_accepted": bool(review_ref.get("accepted")) if review_ref else False,
+        "outcome_learning_review_kind": str(review_payload.get("review_kind") or ""),
+        "outcome_learning_bucket": str(review_payload.get("outcome_bucket") or ""),
+        "outcome_learning_actionability": str(review_payload.get("actionability") or ""),
         "llm_provider": str(advice.get("provider") or ""),
         "llm_model": str(advice.get("model") or ""),
         "prompt_version": str(advice.get("prompt_version") or ""),
@@ -265,12 +302,14 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
     trades = _trade_refs(private_root)
     advice_by_feature = _calculator_refs(private_root)
     policy_by_signal = _adaptive_policy_refs(private_root)
+    outcome_reviews_by_training = _outcome_review_refs(private_root)
     export_refs_hash = _refs_hash(
         source_terminal,
         cards=cards,
         trades=trades,
         advice_by_feature=advice_by_feature,
         policy_by_signal=policy_by_signal,
+        outcome_reviews_by_training=outcome_reviews_by_training,
     )
     out_jsonl = private_root / "state" / "derived" / "paper_signal_training.jsonl"
     out_snapshot = private_root / "state" / "derived" / "paper_signal_training.json"
@@ -301,6 +340,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
             paper_trade=trades.get(sig.signal_id),
             calculator_advice=advice_by_feature.get(sig.feature_packet_id),
             adaptive_policy=policy_by_signal.get(sig.signal_id),
+            outcome_review=outcome_reviews_by_training.get(f"training_{sig.signal_id}"),
         )
         for sig in signals
     ]
@@ -318,6 +358,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
                 "telegram_card_id": row["telegram_card_id"],
                 "paper_trade_id": row["paper_trade_id"],
                 "outcome_id": row["outcome_id"],
+                "outcome_review_id": row["outcome_review_id"],
                 "training_row_id": row["training_row_id"],
                 "llm_interpretation_ref": row["llm_interpretation_ref"],
                 "adaptive_policy_id": row["adaptive_policy_id"],

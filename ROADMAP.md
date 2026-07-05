@@ -1,11 +1,23 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-07-03
+Updated: 2026-07-05
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
+
+> **Update 2026-07-05 - self-improvement track is now explicit.**
+> The next work is not a new trading brain. It is a closed paper/research
+> learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1
+> -> outcome_reviewer -> outcome_reviews.jsonl -> TrainingRow.v2 backlink ->
+> bounded retest/shadow/promotion gates`. The first implementation slice exists:
+> deterministic outcome routing, sanitized review packs, expanded outcome-review
+> contract fields, training-row backlinks, and outcome-review recommendations that
+> reuse the existing `feedback_followup` planner for bounded retests. Next slices
+> should reuse existing
+> `feedback_followup`, `setup_outcome_memory`, `shadow_forward`, and `true_forward`
+> instead of adding a parallel queue or second memory system.
 
 > **Update 2026-07-04 - strict PFR calibration watch before live readiness.**
 > Broad farm paper cards are useful for product visibility, but they are not live-ready

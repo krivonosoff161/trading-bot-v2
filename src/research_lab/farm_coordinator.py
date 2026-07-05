@@ -33,6 +33,7 @@ from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
+from src.research_lab.outcome_learning import build_outcome_review_recommendations
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
 from src.research_lab.strategy_registry import get_strategy
@@ -254,6 +255,7 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
 def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
                             now: float, limit: int) -> None:
     recs = fr.build_recommendations(load_feedback_queue(private_root), _load_setup_cards(private_root))
+    recs.extend(build_outcome_review_recommendations(private_root, max_recommendations=limit))
     for rec in recs[: max(0, int(limit))]:
         cid = rec.candidate_ids[0] if rec.candidate_ids else ""
         key = f"followup_schedule::{cid or rec.symbol}::{rec.strategy_id}::{rec.action}::{rec.hard_status}"

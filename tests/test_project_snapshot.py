@@ -213,6 +213,54 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         }),
         encoding="utf-8",
     )
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps({
+            "schema": "TrainingRow.v2",
+            "training_row_id": "training_s1",
+            "outcome_review_id": "llmr_1",
+            "outcome_learning_review_kind": "loss",
+            "outcome_learning_bucket": "gave_back",
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+        + "\n"
+        + json.dumps({
+            "schema": "TrainingRow.v2",
+            "training_row_id": "training_s2",
+            "outcome_review_id": "",
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+    llm_advice = tmp_path / "state" / "llm_advice"
+    llm_advice.mkdir(parents=True, exist_ok=True)
+    (llm_advice / "outcome_reviews.jsonl").write_text(
+        json.dumps({
+            "schema": "OutcomeReview.v1",
+            "review_id": "llmr_1",
+            "role_id": "outcome_reviewer",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {"review_kind": "loss", "outcome_bucket": "gave_back"},
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+        + "\n"
+        + json.dumps({
+            "schema": "OutcomeReview.v1",
+            "review_id": "llmr_2",
+            "role_id": "outcome_reviewer",
+            "source_ref": "training_s2",
+            "accepted": False,
+            "payload": {},
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+        + "\n",
+        encoding="utf-8",
+    )
     (derived / "paper_product_quality_report.json").write_text(
         json.dumps({
             "schema": "paper_product_quality_report.v1",
@@ -268,6 +316,12 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["training_by_result"] == {"take": 2, "expired_no_entry": 1, "stop": 1}
     assert status["training_by_family"] == {"early_tp_tactical": 3, "continuation": 1}
     assert status["training_by_diagnosis"] == {"good_signal": 2, "wrong_direction": 1}
+    assert status["outcome_review_rows"] == 2
+    assert status["outcome_review_accepted"] == 1
+    assert status["outcome_review_rejected"] == 1
+    assert status["training_outcome_review_linked"] == 1
+    assert status["training_learning_kind"] == {"loss": 1}
+    assert status["training_learning_bucket"] == {"gave_back": 1}
     assert status["quality_operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
     assert status["quality_labels"] == {"needs_review": 2, "candidate_watch": 1}
     assert status["active_lifecycle"] == {

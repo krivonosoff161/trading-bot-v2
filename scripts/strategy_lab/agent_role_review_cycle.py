@@ -37,6 +37,7 @@ from src.research_lab.llm_provider import (  # noqa: E402
     ProposalProvider,
 )
 from src.research_lab.llm_role_reviews import request_role_review, review_summary  # noqa: E402
+from src.research_lab.outcome_learning import build_outcome_review_pack, learning_summary  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
@@ -103,41 +104,8 @@ def _pick(row: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
     return {key: row[key] for key in keys if key in row}
 
 
-def _outcome_payload(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "schema": "TrainingRow.v2.review_input",
-        **_pick(
-            row,
-            (
-                "symbol",
-                "okx_inst_id",
-                "timeframe",
-                "family",
-                "side",
-                "mode",
-                "status",
-                "result",
-                "diagnosis",
-                "net_pct",
-                "net_r",
-                "gross_pct",
-                "mfe_pct",
-                "mae_pct",
-                "capture",
-                "risk_pct",
-                "fees_bps_round_trip",
-                "slippage_bps_round_trip",
-                "scanner_event_id",
-                "data_packet_id",
-                "feature_packet_id",
-                "calculator_advice_id",
-                "paper_signal_id",
-                "outcome_id",
-            ),
-        ),
-        "paper_only": True,
-        "execution_allowed": False,
-    }
+def _outcome_payload(row: dict[str, Any], peers: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    return build_outcome_review_pack(row, peers=peers)
 
 
 def _validator_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -221,7 +189,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
                 private_root,
                 role_id="outcome_reviewer",
                 source_ref=source_ref or f"outcome_{len(reviews)}",
-                source_payload=_outcome_payload(row),
+                source_payload=_outcome_payload(row, training_rows),
                 provider=provider,
             )
         )
@@ -262,6 +230,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             "validator": len(validator_rows),
             "sources": len(source_rows),
         },
+        "outcome_learning": learning_summary(training_rows),
         "reviews": len(reviews),
         "accepted": accepted,
         "rejected": len(reviews) - accepted,
