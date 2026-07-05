@@ -32,6 +32,26 @@ The new work does not create a second brain. It adds a review layer over the
 existing `TrainingRow.v2` export and uses the already bounded
 `outcome_reviewer` role.
 
+## Headless Operating Mode
+
+For long paper/product runs on the local machine, use:
+
+```bat
+bat\paper_product_headless_loop.bat
+```
+
+That wrapper runs the canonical farm full-cycle loop without opening the
+dashboard, graph viewer, or status-monitor window. It enables bounded
+outcome-learning reviews by default with small per-cycle caps, so the system can
+accumulate evidence and advisory review links without loading the machine with
+visual surfaces.
+
+Telegram delivery remains off in that default mode. Use
+`bat\paper_product_headless_send_loop.bat` only when reviewed paper cards should
+be delivered to active subscribers. Both wrappers keep the same boundary:
+paper/research only, no `AUTO_TRADE`, no old `main.py`, no orders, no private
+exchange endpoints, and no LLM authority over execution.
+
 ## New Closed-Loop Path
 
 ```text
@@ -130,7 +150,8 @@ Implemented in this slice:
 
 Next implementation steps:
 
-1. Let the next farm/training cycles accumulate linked `outcome_review_id` rows.
+1. Let the next headless farm/training cycles accumulate linked
+   `outcome_review_id` rows.
 2. Link source-trust reviews to outcome clusters for scanner/news quality.
 3. Add an explicit operator evidence report for `eligible_for_operator_review`
    cases without granting paper-ready or execution authority.
