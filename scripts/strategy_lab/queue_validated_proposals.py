@@ -28,7 +28,7 @@ from src.research_lab.data_readiness import (  # noqa: E402
     TOO_SHORT,
     assess_proposal,
 )
-from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, market_data_glob, resolve_private_root  # noqa: E402
 from src.research_lab.proposal_schema import QUEUED, VALIDATED  # noqa: E402
 from src.research_lab.proposal_store import (  # noqa: E402
     load_proposals,
@@ -94,7 +94,11 @@ def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
     counts_not_ready = {MISSING_DATA: 0, TOO_SHORT: 0, MALFORMED: 0}
     if require_data_ready:
         for p in validated_ready:
-            readiness = assess_proposal(p, private_root=private_root)
+            readiness = assess_proposal(
+                p,
+                data_glob=market_data_glob(private_root, p.requested_timeframe or "1d"),
+                private_root=private_root,
+            )
             if readiness.is_ready():
                 ready.append(p)
             else:
@@ -132,7 +136,11 @@ def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
             if pending + queued >= cap:
                 skipped_full += 1
                 continue
-            exp = compile_proposal(p, policy=policy)
+            exp = compile_proposal(
+                p,
+                policy=policy,
+                data_glob=market_data_glob(private_root, p.requested_timeframe or "1d"),
+            )
             spec_path = out_dir / f"{exp.experiment_id}.json"
             spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=priority)
