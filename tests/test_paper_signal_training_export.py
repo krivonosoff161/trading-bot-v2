@@ -293,6 +293,82 @@ def test_export_training_rows_links_adaptive_policy(tmp_path):
     assert rows[0]["adaptive_policy_reasons"] == ["forward_lead:early_tp_tactical"]
 
 
+def test_export_training_rows_links_outcome_review_when_available(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "stop", "net_pct": -0.8, "mfe_pct": 1.6}
+    sig.review = {"diagnosis": "bad_exit_gave_back"}
+    append_signal(tmp_path, sig)
+    reviews = tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    reviews.parent.mkdir(parents=True, exist_ok=True)
+    reviews.write_text(
+        json.dumps(
+            {
+                "schema": "OutcomeReview.v1",
+                "review_id": "llmr_1",
+                "role_id": "outcome_reviewer",
+                "source_ref": "training_s1",
+                "accepted": True,
+                "payload": {
+                    "review_kind": "loss",
+                    "outcome_bucket": "gave_back",
+                    "actionability": "retest_exit_or_capture",
+                    "diagnosis": "bad_exit_gave_back",
+                    "confidence": 0.7,
+                },
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["outcome_review_id"] == "llmr_1"
+    assert rows[0]["outcome_review_accepted"] is True
+    assert rows[0]["outcome_learning_review_kind"] == "loss"
+    assert rows[0]["outcome_learning_bucket"] == "gave_back"
+    assert rows[0]["outcome_learning_actionability"] == "retest_exit_or_capture"
+
+
+def test_export_training_rows_rebuilds_when_outcome_review_changes(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "stop", "net_pct": -0.8}
+    sig.review = {"diagnosis": "wrong_direction"}
+    append_signal(tmp_path, sig)
+
+    first = export_training_rows(tmp_path)
+    reviews = tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    reviews.parent.mkdir(parents=True, exist_ok=True)
+    reviews.write_text(
+        json.dumps(
+            {
+                "schema": "OutcomeReview.v1",
+                "review_id": "llmr_2",
+                "role_id": "outcome_reviewer",
+                "source_ref": "training_s1",
+                "accepted": True,
+                "payload": {"review_kind": "loss", "outcome_bucket": "loss", "confidence": 0.6},
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    second = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(second["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert first["source_terminal_hash"] == second["source_terminal_hash"]
+    assert first["export_refs_hash"] != second["export_refs_hash"]
+    assert second["skipped"] is False
+    assert rows[0]["outcome_review_id"] == "llmr_2"
+
+
 def test_export_training_rows_skips_active_by_default(tmp_path):
     append_signal(tmp_path, _signal(status="armed"))
 

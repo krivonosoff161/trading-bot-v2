@@ -333,6 +333,35 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _count_field(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key) or "")
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
 def _top_counts(raw: Any, *, limit: int = 4) -> dict[str, int]:
     if not isinstance(raw, dict):
         return {}
@@ -375,8 +404,12 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
+    training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
+    outcome_reviews = _read_jsonl(root / "state" / "llm_advice" / "outcome_reviews.jsonl")
     quality = _read_json(derived / "paper_product_quality_report.json")
     sent_keys = _sent_key_summary(root)
+    accepted_reviews = [row for row in outcome_reviews if bool(row.get("accepted"))]
+    linked_training = [row for row in training_rows if str(row.get("outcome_review_id") or "")]
 
     active = (
         int(paper.get("total") or 0) > 0
@@ -436,6 +469,12 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_by_result": _top_counts(training.get("by_result") or {}),
         "training_by_family": _top_counts(training.get("by_family") or {}),
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
+        "outcome_review_rows": len(outcome_reviews),
+        "outcome_review_accepted": len(accepted_reviews),
+        "outcome_review_rejected": max(0, len(outcome_reviews) - len(accepted_reviews)),
+        "training_outcome_review_linked": len(linked_training),
+        "training_learning_kind": _top_counts(_count_field(linked_training, "outcome_learning_review_kind")),
+        "training_learning_bucket": _top_counts(_count_field(linked_training, "outcome_learning_bucket")),
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
         "active_lifecycle": (
@@ -535,6 +574,14 @@ def _print_paper_product_status() -> None:
             "                "
             f"bridge_skip={st['bridge_skip_reasons']} "
             f"diagnosis={st['training_by_diagnosis']}"
+        )
+    if st["outcome_review_rows"] or st["training_outcome_review_linked"]:
+        print(
+            "                "
+            f"outcome_reviews rows={st['outcome_review_rows']} "
+            f"accepted={st['outcome_review_accepted']} rejected={st['outcome_review_rejected']} "
+            f"linked_training={st['training_outcome_review_linked']} "
+            f"kind={st['training_learning_kind']} bucket={st['training_learning_bucket']}"
         )
     if st["quality_report_exists"]:
         pfr = st["pfr_funnel"]

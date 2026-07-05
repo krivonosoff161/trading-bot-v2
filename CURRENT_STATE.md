@@ -1,6 +1,19 @@
 # Current State
 
-Updated: 2026-07-03
+Updated: 2026-07-05
+
+> **Update 2026-07-05 - outcome-learning loop starts closing the feedback cycle.**
+> Terminal paper outcomes now have a deterministic `OutcomeLearningCase.v1`
+> review layer. `agent_role_review_cycle` sends sanitized outcome cases to the
+> existing bounded `outcome_reviewer` role, and later `TrainingRow.v2` exports can
+> link the accepted advisory review back through `outcome_review_id`,
+> `outcome_learning_review_kind`, `outcome_learning_bucket`, and
+> `outcome_learning_actionability`. Accepted outcome reviews can also compile into
+> farm-level `Recommendation` objects and reuse the existing `feedback_followup`
+> path for bounded retest sweeps or no-queue notes. This is still paper/research only:
+> `execution_allowed=false`, no `.env`, no private exchange endpoints, no Telegram
+> send path, and no LLM authority over entry/stop/TP/side/validator verdict.
+> See [docs/outcome_learning_loop_2026-07-05.md](docs/outcome_learning_loop_2026-07-05.md).
 
 > **Update 2026-07-04 - paper-product operator entrypoint.**
 > The current user-facing paper mode is now explicit:

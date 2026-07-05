@@ -14,8 +14,12 @@ class _Provider:
         if role == "outcome_reviewer":
             payload = {
                 "summary": "Loss gave back after favourable move.",
+                "review_kind": "loss",
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
                 "diagnosis": "bad_exit_gave_back",
                 "confidence": 0.7,
+                "learning_tags": ["exit_capture"],
                 "next_test_dimensions": ["partial_be"],
             }
         elif role == "validator_reviewer":
@@ -55,6 +59,7 @@ def test_agent_role_review_cycle_uses_real_private_artifacts(monkeypatch, tmp_pa
                 "diagnosis": "bad_exit_gave_back",
                 "net_pct": -1.2,
                 "mfe_pct": 2.0,
+                "capture": 0.0,
                 "paper_only": True,
                 "execution_allowed": False,
             }
@@ -107,5 +112,7 @@ def test_agent_role_review_cycle_uses_real_private_artifacts(monkeypatch, tmp_pa
 
     assert summary["reviews"] == 3
     assert summary["accepted"] == 3
+    assert summary["outcome_learning"]["by_review_kind"]["loss"] == 1
+    assert summary["outcome_learning"]["by_outcome_bucket"]["gave_back"] == 1
     assert summary["execution_allowed"] is False
     assert (tmp_path / "reports" / "agent_role_review_cycle" / "summary.json").exists()

@@ -1,8 +1,17 @@
 # Architecture
 
-Updated: 2026-07-03
+Updated: 2026-07-05
 
 ## Boundary
+
+> **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
+> self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
+> `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
+> sanitized review packs for the existing `outcome_reviewer`, and writes advisory
+> reviews under the private Strategy Lab root. The next training export can link the
+> review back through `outcome_review_id`. This sidecar is not a promotion gate, not
+> a live executor, and not a second farm brain; it feeds bounded follow-up/retest
+> work only after deterministic code accepts a next step.
 
 > **Update 2026-07-03 - main-paper watcher vs main-style executor.** The active runtime
 > is health-green as a paper/research backbone, but it is not yet the user's expected
@@ -82,6 +91,10 @@ paper_signals / PFR-ready rows
   -> main_paper_trade_ledger        (paper pseudo-trade lifecycle)
   -> paper_telegram_preview         (human card preview/audit)
   -> paper_signal_training_export   (training rows)
+  -> OutcomeLearningCase.v1         (deterministic learning case)
+  -> outcome_reviewer               (advisory-only LLM review)
+  -> outcome_review_id backlink     (next TrainingRow.v2 export)
+  -> feedback_followup              (bounded retest planning; no second queue)
 ```
 
 The current path is deliberately stricter than a raw main scan. It refuses broad research
