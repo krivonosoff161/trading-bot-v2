@@ -1,0 +1,23 @@
+Trading Bot V2
+Copyright 2026 Dmitry Krivonosov
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this repository except in compliance with the License.
+A copy of the License is provided in the LICENSE file, or at
+http://www.apache.org/licenses/LICENSE-2.0
+
+Scope notice:
+
+This repository licenses the public paper-trading infrastructure, validation
+workflow code, documentation, tests, and public-safe examples that are committed
+to this repository.
+
+The License does not publish or grant rights to materials that are not committed
+to this repository, including private strategy research, private trading edge,
+candidate rankings, live parameters, private datasets, raw runtime state,
+exchange/API credentials, Telegram credentials, provider credentials, private
+paper/live trade rows, raw LLM prompts or responses, local research artifacts,
+or private operational dashboards.
+
+No profitability, investment performance, or suitability claim is granted or
+implied by this repository.
