@@ -225,3 +225,78 @@ def test_feedback_followup_becomes_typed_run_sweep_task(tmp_path):
     assert queued[0]["task_key"].startswith("run_sweep::followup::")
     assert '"origin": "feedback_followup"' in queued[0]["payload_json"]
     tasks.close()
+
+
+def test_outcome_review_followup_reuses_feedback_followup_path(tmp_path):
+    tasks = FarmTasksDB(":memory:")
+    tasks.upsert_unique_candidate({
+        "uc_key": "BTC::1h::momentum_breakout::ph::fp",
+        "symbol": "BTC", "timeframe": "1h", "family": "momentum_breakout",
+        "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
+        "validation_status": "FORWARD_PAPER", "hard_status": "PAPER_FORWARD_READY",
+        "candidate_id": "candidate_1",
+        "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
+    }, now=1.0)
+    derived = tmp_path / "state" / "derived"
+    llm_advice = tmp_path / "state" / "llm_advice"
+    derived.mkdir(parents=True, exist_ok=True)
+    llm_advice.mkdir(parents=True, exist_ok=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps(
+            {
+                "schema": "TrainingRow.v2",
+                "training_row_id": "training_s1",
+                "paper_signal_id": "s1",
+                "candidate_id": "candidate_1",
+                "symbol": "BTC",
+                "timeframe": "1h",
+                "family": "momentum_breakout",
+                "result": "stop",
+                "diagnosis": "bad_exit_gave_back",
+                "net_pct": -0.8,
+                "mfe_pct": 1.6,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (llm_advice / "outcome_reviews.jsonl").write_text(
+        json.dumps(
+            {
+                "schema": "OutcomeReview.v1",
+                "review_id": "llmr_1",
+                "role_id": "outcome_reviewer",
+                "source_ref": "training_s1",
+                "accepted": True,
+                "payload": {
+                    "summary": "Exit gave back positive MFE.",
+                    "review_kind": "loss",
+                    "outcome_bucket": "gave_back",
+                    "actionability": "retest_exit_or_capture",
+                    "confidence": 0.7,
+                },
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    out = run_coordinator_cycle(
+        tasks, private_root=tmp_path, profiles=PROFILES, policy=POLICY,
+        intake_events=[], data_state_fn=_usable_state(), apply=True, now=1000.0,
+        run_worker=False, run_validation=False, run_followups=True, max_followups=5,
+    )
+
+    assert out["counters"]["followups_scheduled"] == 1
+    assert out["counters"]["followup_sweeps_planned"] == 1
+    queued = tasks.tasks_in_state("queued", task_type="run_sweep")
+    assert len(queued) == 1
+    assert "origin" in queued[0]["payload_json"]
+    assert "feedback_followup" in queued[0]["payload_json"]
+    tasks.close()

@@ -59,6 +59,7 @@ def _lineage_link_id(row: dict[str, Any]) -> str:
         "paper_signal_id",
         "telegram_card_id",
         "outcome_id",
+        "outcome_review_id",
         "training_row_id",
         "source",
         "symbol",

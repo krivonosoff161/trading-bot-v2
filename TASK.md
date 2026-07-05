@@ -1,6 +1,6 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-07-03
+Updated: 2026-07-05
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
@@ -10,6 +10,12 @@ It is not the canonical architecture document.
 Current center: the calculation farm plus the validator-backed main-paper watcher,
 not the scanner and not old live `main.py`.
 
+New 2026-07-05 context: the first outcome-learning loop slice is in place. Terminal
+paper outcomes can be routed into deterministic `OutcomeLearningCase.v1` records,
+reviewed by the bounded `outcome_reviewer`, and linked back into later
+`TrainingRow.v2` exports through `outcome_review_id` and learning labels. This is
+advisory paper/research only; it is not a promotion gate and not live execution.
+
 Read first:
 
 - `CURRENT_STATE.md`
@@ -17,6 +23,7 @@ Read first:
 - `ROADMAP.md`
 - `docs/farm_runbook.md`
 - `docs/session_handoff_2026-07-03.md`
+- `docs/outcome_learning_loop_2026-07-05.md`
 
 Current verified runtime:
 
@@ -48,6 +55,9 @@ farm_loop
   -> main_paper_trade_ledger
   -> paper_telegram_preview / paper_telegram_delivery audit
   -> paper_signal_training_export + journal
+  -> OutcomeLearningCase.v1
+  -> outcome_reviewer advisory JSON
+  -> outcome_review_id backlink in TrainingRow.v2
 ```
 
 This file is local handoff context, not the canonical architecture. For current
@@ -83,7 +93,7 @@ validator/PFR-backed paper rows only
 Broad farm paper signals are retained as research/training data and do **not** become
 subscriber/main cards unless they have a validator-backed `ready_strategy_id`.
 
-Next build target, if the user continues this thread:
+Next product build target, if the user continues this thread:
 
 - design and implement a separate reviewed `main_paper_executor` contract;
 - keep `execution_allowed=false`;
@@ -92,6 +102,14 @@ Next build target, if the user continues this thread:
 - write pseudo-trade lifecycle and outcome rows;
 - render human-readable subscriber cards;
 - do **not** wire farm outputs directly into old live/order-capable `main.py`.
+
+Next learning-loop build target:
+
+- convert accepted outcome-review suggestions into bounded follow-up/retest plans;
+- reuse `feedback_followup.py`, `setup_outcome_memory.py`, `shadow_forward.py`, and
+  `true_forward.py`;
+- do not create a second farm brain, second memory system, or LLM-controlled
+  promotion path.
 
 ## Active Safety Boundary
 

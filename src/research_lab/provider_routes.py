@@ -113,7 +113,7 @@ def provider_route_table(environ: Mapping[str, str] | None = None) -> list[dict[
             "surface": "outcome_reviewer",
             "provider": "alibaba" if _has(env, "ALIBABA_API_KEY") else "disabled",
             "model": str(env.get("LLM_CHEAP_MODEL") or env.get("LLM_MODEL") or "qwen-plus"),
-            "input": "TrainingRow.v2 + deterministic outcome facts",
+            "input": "OutcomeLearningCase.v1 + deterministic outcome facts",
             "output": "OutcomeReview.v1",
             "cost_logging": "strategy-lab/state/llm_advice/outcome_reviews.jsonl + llm_usage",
             "fallback": "deterministic paper-signals diagnosis",
