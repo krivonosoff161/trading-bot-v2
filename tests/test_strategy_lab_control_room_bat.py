@@ -41,6 +41,37 @@ def test_paper_product_send_launcher_requires_explicit_wrapper():
     assert "private exchange endpoints" in text
 
 
+def test_paper_product_headless_loop_skips_dashboard_and_graph():
+    text = _read("paper_product_headless_loop.bat")
+
+    assert "strategy_lab_farm_full_cycle_loop.bat" in text
+    assert "strategy_lab_control_room.bat" not in text
+    assert "strategy_lab_dashboard.bat" not in text
+    assert "strategy_lab_graph_viewer.bat" not in text
+    assert "strategy_lab_status_monitor.bat" not in text
+    assert "dashboard=off" in text
+    assert "graph=off" in text
+    assert "STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=1" in text
+    assert "STRATEGY_LAB_AGENT_ROLE_MAX_OUTCOMES=2" in text
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_SEND=0" in text
+    assert "AUTO_TRADE" in text
+    assert "private endpoints" in text
+    assert "place_order" not in text.lower()
+
+
+def test_paper_product_headless_send_launcher_is_explicit():
+    text = _read("paper_product_headless_send_loop.bat")
+
+    assert "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM=1" in text
+    assert "STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES=1" in text
+    assert "paper_product_headless_loop.bat" in text
+    assert "strategy_lab_control_room.bat" not in text
+    assert "dashboard" in text
+    assert "graph-viewer" in text
+    assert "AUTO_TRADE" in text
+    assert "private exchange endpoints" in text
+
+
 def test_control_room_keeps_paper_sender_single_writer_inside_farm_loop():
     text = _read("strategy_lab_control_room.bat")
     loop = _read("strategy_lab_farm_full_cycle_loop.bat")
