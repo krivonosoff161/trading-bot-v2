@@ -106,24 +106,33 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
 
 
 async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
-                        parse_mode: str | None = None) -> None:
-    """Send a photo file to a specific chat_id. parse_mode optional (e.g. 'HTML')."""
+                        parse_mode: str | None = None) -> int | None:
+    """Send a photo file to a specific chat_id and return Telegram message_id."""
     token = bot_token()
     if not token:
-        return
+        return None
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    try:
-        async with aiohttp.ClientSession() as session:
-            data = aiohttp.FormData()
-            data.add_field("chat_id", chat_id)
-            data.add_field("caption", caption)
-            if parse_mode:
-                data.add_field("parse_mode", parse_mode)
-            with open(file_path, "rb") as f:
-                data.add_field("photo", f, filename=Path(file_path).name)
-                resp = await session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30))
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning("Telegram send_photo_to error | chat_id={} status={} body={}", chat_id, resp.status, body)
-    except Exception as e:
-        logger.warning("Telegram send_photo_to failed | {}", e)
+    async with aiohttp.ClientSession() as session:
+        data = aiohttp.FormData()
+        data.add_field("chat_id", chat_id)
+        data.add_field("caption", caption)
+        if parse_mode:
+            data.add_field("parse_mode", parse_mode)
+        with open(file_path, "rb") as f:
+            data.add_field("photo", f, filename=Path(file_path).name)
+            resp = await session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30))
+        body_text = await resp.text()
+        try:
+            import json as _json
+            body_json = _json.loads(body_text)
+        except Exception:
+            body_json = {}
+
+        if resp.status != 200:
+            raise RuntimeError(f"Telegram photo HTTP {resp.status}: {body_text[:200]}")
+        if body_json and not body_json.get("ok", True):
+            raise RuntimeError(f"Telegram photo ok=false: {body_text[:200]}")
+
+        msg_id = body_json.get("result", {}).get("message_id")
+        logger.info("Telegram photo sent | chat_id={} msg_id={}", chat_id, msg_id)
+        return msg_id

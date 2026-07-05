@@ -27,3 +27,11 @@ def test_send_message_to_noops_without_token(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
     assert asyncio.run(telegram.send_message_to("123", "hello")) is None
+
+
+def test_send_photo_to_noops_without_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    image = tmp_path / "chart.png"
+    image.write_bytes(b"fake-png")
+
+    assert asyncio.run(telegram.send_photo_to("123", str(image))) is None

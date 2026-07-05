@@ -74,7 +74,7 @@ from src.scout import pending_store as PS                        # noqa: E402
 from src.scout import watch_queue as WQ                          # noqa: E402
 from src.scout.price_provider import get_price as _get_price     # noqa: E402
 from src.utils import llm_budget_guard as LBG                    # noqa: E402
-from src.utils.telegram import send_message_to, send_photo_to    # noqa: E402
+from src.utils.telegram import chat_ids, send_message_to, send_photo_to    # noqa: E402
 from src.strategy.chart_renderer import render_chart             # noqa: E402  (чистый matplotlib, без ордер-движка)
 
 # ── Конфиг ───────────────────────────────────────────────────────────────────
@@ -93,6 +93,14 @@ SEEN_PATH = _ROOT / "logs" / "scout" / "scanner_seen.json"
 BUNDLE_PATH = _ROOT / "logs" / "scout" / "bundle_latest.json"
 TELEGRAM_DELIVERY_LOG = _ROOT / "logs" / "scout" / "telegram_delivery.jsonl"
 SCANNER_CHAT_ID = os.getenv("SCANNER_CHAT_ID", "").strip("'\"")
+
+
+def _scanner_chat_ids() -> list[str]:
+    """Notification channel targets: canonical env first, legacy scanner env as fallback."""
+    ids = chat_ids("TELEGRAM_NOTIFICATION_CHAT_ID") or chat_ids("SCANNER_CHAT_ID")
+    if ids:
+        return ids
+    return [SCANNER_CHAT_ID] if SCANNER_CHAT_ID else []
 
 # Активы/слои/материальность/источники — в config/*.yaml (читает router.py), не хардкод.
 ROUTER_VERSION = "v1"          # config-driven router (entities.yaml)
@@ -136,7 +144,8 @@ def write_telegram_delivery(event: dict) -> None:
         "verdict": event.get("verdict"),
         "source": event.get("source"),
         "send_channel": bool(event.get("send_channel")),
-        "has_chat_id": bool(SCANNER_CHAT_ID),
+        "has_chat_id": bool(_scanner_chat_ids()),
+        "target_count": len(_scanner_chat_ids()),
         "dry": bool(event.get("dry")),
         "status": event.get("status"),
         "reason": event.get("reason"),
@@ -1265,17 +1274,18 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     # NO_GO (chief или дешёвый) = журнал/датасет, в канал не идёт (SCANNER_SEND_NO_GO=true вернёт)
     sent = None
     send_allowed = bool(cid) and should_send_to_channel(verdict, bool(orch.get("send_channel")))
+    telegram_targets = _scanner_chat_ids()
     if not send_allowed:
         write_telegram_delivery({
             "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
             "send_channel": bool(orch.get("send_channel")), "dry": dry,
             "status": "skipped", "reason": "send_gate",
         })
-    elif not SCANNER_CHAT_ID:
+    elif not telegram_targets:
         write_telegram_delivery({
             "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
             "send_channel": bool(orch.get("send_channel")), "dry": dry,
-            "status": "skipped", "reason": "missing_scanner_chat_id",
+            "status": "skipped", "reason": "missing_notification_chat_id",
         })
     elif dry:
         write_telegram_delivery({
@@ -1286,22 +1296,32 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     else:
         chart_path = make_chart(inst, J.now_iso(), row) if inst else None
         try:
-            if chart_path:
-                await send_photo_to(SCANNER_CHAT_ID, chart_path, caption=format_caption(row), parse_mode="HTML")
-                message_id = await send_message_to(SCANNER_CHAT_ID, card)
+            sent_count = 0
+            for telegram_target in telegram_targets:
+                photo_message_id = None
+                if chart_path:
+                    photo_message_id = await send_photo_to(
+                        telegram_target,
+                        chart_path,
+                        caption=format_caption(row),
+                        parse_mode="HTML",
+                    )
+                message_id = await send_message_to(telegram_target, card)
+                delivery_status = "sent" if message_id is not None else "skipped"
+                delivery_reason = "photo_message" if chart_path else "message"
+                if message_id is None:
+                    delivery_reason = "telegram_token_not_configured"
+                if chart_path and photo_message_id is None and message_id is not None:
+                    delivery_status = "partial"
+                    delivery_reason = "photo_message_id_missing"
                 write_telegram_delivery({
                     "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
                     "send_channel": bool(orch.get("send_channel")), "dry": dry,
-                    "status": "sent", "reason": "photo_message", "message_id": message_id,
+                    "status": delivery_status, "reason": delivery_reason, "message_id": message_id,
                 })
-                sent = "photo+message"
-            else:
-                sent = await send_message_to(SCANNER_CHAT_ID, card)
-                write_telegram_delivery({
-                    "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
-                    "send_channel": bool(orch.get("send_channel")), "dry": dry,
-                    "status": "sent", "reason": "message", "message_id": sent,
-                })
+                if delivery_status in {"sent", "partial"}:
+                    sent_count += 1
+            sent = f"{'photo+' if chart_path else ''}message:{sent_count}/{len(telegram_targets)}"
         except Exception as e:
             print(f"  telegram: {e}")
             write_telegram_delivery({
@@ -1334,7 +1354,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
     carded: dict = {}                                            # кап карточек на актив за проход
     print(f"=== scanner_v0 {'(DRY-RUN)' if dry else ''} | {'BUFFER' if use_buffer else 'RSS+листинги'} | "
           f"{'OKX_DAY_TEST' if okx_day_test else 'NORMAL'} | "
-          f"telegram={'ON '+SCANNER_CHAT_ID if (SCANNER_CHAT_ID and not dry) else 'OFF (dry-доставка)'} ===")
+          f"telegram={'ON targets='+str(len(_scanner_chat_ids())) if (_scanner_chat_ids() and not dry) else 'OFF (dry-доставка)'} ===")
     print(f"рыночный фон: {mline or '—'}")
 
     try:

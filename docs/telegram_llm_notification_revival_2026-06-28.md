@@ -17,6 +17,31 @@ trading, `AUTO_TRADE`, private OKX endpoints, or order execution.
 `PAPER_SETUP` is subscriber-only by policy. It may contain calculated entry/stop/take
 context and must not be mirrored to a public channel as a full setup.
 
+## 2026-07-05 Delivery Hardening
+
+Two Telegram surfaces are intentionally separate:
+
+- **Paper setup delivery** sends reviewed paper cards to active bot subscribers only.
+  It may include entry/stop/target context, but it remains paper-only and never enables
+  execution.
+- **News / tokenomics notification delivery** is the public channel surface for `NEWS`,
+  `MARKET_SUMMARY`, `SCANNER_WATCH`, and `SCANNER_GO_PUBLIC_TEASER`. It is the right
+  place for market events, token-unlock context, and "what to watch" notes. It must not
+  publish full paper setups or private strategy calculations.
+
+The scanner notification channel now prefers `TELEGRAM_NOTIFICATION_CHAT_ID` and falls
+back to the legacy `SCANNER_CHAT_ID`. Delivery logs record only booleans/counts and
+message ids, not raw chat ids or tokens.
+
+Paper chart delivery is now fail-loud enough for operations:
+
+- `send_photo_to()` returns the Telegram photo `message_id` and raises on Telegram HTTP
+  or `ok=false` errors instead of silently logging and continuing.
+- `paper_telegram_sender` marks `chart_sent=true` only when the photo call returns a
+  message id.
+- `paper_telegram_sent_keys.json` is written atomically and refreshed after each
+  successful card delivery, reducing duplicate sends after a restart/crash window.
+
 ## New Components
 
 | File | Role |

@@ -199,6 +199,37 @@ def test_sender_sends_private_review_chart_before_text(tmp_path):
     assert "recipient_id" not in data["items"][0]
 
 
+def test_sender_does_not_mark_chart_sent_without_photo_message_id(tmp_path):
+    chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
+    _write_preview_snapshot(tmp_path, [_preview(chart_path=str(chart_path))])
+
+    async def fake_send(chat_id, text):
+        return 101
+
+    async def fake_photo(chat_id, path):
+        return None
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+        send_photo=fake_photo,
+    )
+
+    assert summary["sent"] == 1
+    assert summary["chart_available_messages"] == 1
+    assert summary["chart_sent_messages"] == 0
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["chart_available"] is True
+    assert data["items"][0]["chart_sent"] is False
+    assert data["items"][0]["chart_problem"] == "photo_message_id_missing"
+
+
 def test_sender_sends_private_legacy_base_chart(tmp_path):
     chart_path = tmp_path / "state" / "derived" / "paper_telegram_base_charts" / "sig_1.png"
     chart_path.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +322,33 @@ def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
     assert second["sent"] == 0
     assert second["duplicates"] == 1
     assert len(calls) == 1
+
+
+def test_sender_persists_sent_key_after_each_successful_delivery(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_sig_1_clean_v2")])
+    sent_keys_path = tmp_path / "state" / "derived" / "paper_telegram_sent_keys.json"
+    observed_after_first = []
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        if len(calls) == 2:
+            data = json.loads(sent_keys_path.read_text(encoding="utf-8"))
+            observed_after_first.extend(data["sent_keys"])
+        return 100 + len(calls)
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=2,
+        recipient_ids=["111", "222"],
+        send_text=fake_send,
+    )
+
+    assert summary["sent"] == 2
+    assert len(calls) == 2
+    assert "tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in observed_after_first
 
 
 def test_sender_resends_when_card_template_changes_same_preview(tmp_path):

@@ -217,6 +217,21 @@ def _patch_pipeline(monkeypatch, verdict, side="none"):
     return sent, journaled
 
 
+def test_scanner_notification_targets_prefer_canonical_env(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_NOTIFICATION_CHAT_ID", "10, 20")
+    monkeypatch.setenv("SCANNER_CHAT_ID", "30")
+
+    assert S._scanner_chat_ids() == ["10", "20"]
+
+
+def test_scanner_notification_targets_fallback_to_legacy_env(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_NOTIFICATION_CHAT_ID", raising=False)
+    monkeypatch.setenv("SCANNER_CHAT_ID", "30")
+    monkeypatch.setattr(S, "SCANNER_CHAT_ID", "")
+
+    assert S._scanner_chat_ids() == ["30"]
+
+
 def test_chief_no_go_journaled_but_not_sent(monkeypatch):
     monkeypatch.delenv("SCANNER_SEND_NO_GO", raising=False)
     sent, journaled = _patch_pipeline(monkeypatch, "NO_GO")

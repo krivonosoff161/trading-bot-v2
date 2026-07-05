@@ -95,7 +95,8 @@ def _load_sent_keys(private_root: Path) -> set[str]:
 def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
     path = _sent_keys_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(
         json.dumps(
             {"schema": "paper_telegram_sent_keys.v1", "sent_keys": sorted(sent_keys)},
             ensure_ascii=False,
@@ -104,6 +105,7 @@ def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
         ) + "\n",
         encoding="utf-8",
     )
+    tmp_path.replace(path)
 
 
 def _load_preview_items(private_root: Path) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
@@ -172,8 +174,11 @@ async def _send_items(
             chart_sent = False
             try:
                 if chart_path and send_photo is not None:
-                    await send_photo(recipient_id, str(chart_path))
-                    chart_sent = True
+                    photo_message_id = await send_photo(recipient_id, str(chart_path))
+                    if photo_message_id is None:
+                        chart_problem = "photo_message_id_missing"
+                    else:
+                        chart_sent = True
                 elif chart_path and send_photo is None:
                     chart_problem = "photo_transport_not_configured"
                 message_id = await send_text(recipient_id, str(item.get("text") or ""))
@@ -197,6 +202,7 @@ async def _send_items(
             )
             if status == "sent":
                 sent_keys.add(delivery_key)
+                _save_sent_keys(private_root, sent_keys)
     return deliveries
 
 

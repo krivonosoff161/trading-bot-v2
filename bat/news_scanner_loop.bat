@@ -17,6 +17,7 @@ echo  Mode:      BUFFER
 echo  Limit:     %SCANNER_LOOP_LIMIT% cards per pass
 echo  Outcomes:  %SCANNER_RUN_OUTCOMES% ^(limit %SCANNER_OUTCOME_LIMIT% mature cards per pass^)
 echo  Sleep:     %SCANNER_LOOP_SLEEP_SECONDS% seconds between passes
+echo  Telegram:  TELEGRAM_NOTIFICATION_CHAT_ID preferred, SCANNER_CHAT_ID fallback
 echo  Stop:      Ctrl+C in this window
 echo.
 echo  No order engine. No live trading.
