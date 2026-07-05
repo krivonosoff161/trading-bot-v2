@@ -31,6 +31,22 @@ This repository owns the public trading workbench architecture and paper/researc
 runtime docs; private calculations, strategy edge, candidate rankings, and raw
 runtime state stay outside public Git.
 
+## License and Scope
+
+The public code and documentation committed to this repository are licensed
+under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution
+and scope details.
+
+This license applies to the public paper-trading infrastructure, validation
+workflow code, tests, docs, and public-safe examples in this repository. It does
+not publish or license private strategy research, private trading edge, candidate
+rankings, live parameters, private datasets, raw runtime state, credentials,
+private paper/live trade rows, raw LLM prompts/responses, local research
+artifacts, or operational dashboards.
+
+This project is research / paper / demo infrastructure. It is not financial
+advice, not a signal service, and not a profitability claim.
+
 The project has three contours:
 
 | Contour | Status | Purpose |
