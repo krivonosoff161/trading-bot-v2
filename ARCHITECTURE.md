@@ -15,6 +15,15 @@ Updated: 2026-07-05
 > a second farm brain; it feeds bounded follow-up/retest work only after deterministic
 > code accepts a next step, and every gate stage keeps `execution_allowed=false`.
 
+> **Update 2026-07-05 - headless operator surface.** The low-load product-paper
+> entrypoint is `bat\paper_product_headless_loop.bat`. It wraps the same canonical
+> full-cycle farm loop used by the visible control room, but opens no dashboard,
+> graph viewer, or status-monitor window. It enables bounded outcome-learning
+> reviews by default and keeps Telegram delivery off unless the explicit
+> `bat\paper_product_headless_send_loop.bat` wrapper is used. This is an operator
+> surface change only; it does not create a new engine and does not alter the
+> paper-only/no-execution boundary.
+
 > **Update 2026-07-03 - main-paper watcher vs main-style executor.** The active runtime
 > is health-green as a paper/research backbone, but it is not yet the user's expected
 > main-paper product. The current main-compatible path is a validator-backed watcher:
@@ -102,6 +111,20 @@ paper_signals / PFR-ready rows
 
 The current path is deliberately stricter than a raw main scan. It refuses broad research
 signals when they have no `ready_strategy_id`; those rows stay in research/training.
+
+## Operator Entrypoints
+
+Use these as the current product-paper surfaces:
+
+| Entrypoint | Purpose | Windows | Telegram | Boundary |
+|---|---|---|---|---|
+| `bat\paper_product_headless_loop.bat` | Low-load long run for farm, paper runtime, training, and bounded outcome reviews | Farm loop only | Off by default | Paper/research only |
+| `bat\paper_product_headless_send_loop.bat` | Same low-load run, but explicitly sends reviewed paper cards to active subscribers | Farm loop only | On | Paper/research only |
+| `bat\paper_product_control_room.bat` | Visible operator room for manual observation | Farm, dashboard, graph, status | Off by default | Paper/research only |
+| `bat\paper_product_control_room_send.bat` | Visible operator room with explicit paper-card delivery | Farm, dashboard, graph, status | On | Paper/research only |
+
+None of these entrypoints enable `AUTO_TRADE`, call old `main.py`, place orders,
+or use private exchange endpoints.
 
 ## Scanner Intake Flow (upstream source, not the center)
 

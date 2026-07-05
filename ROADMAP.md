@@ -21,6 +21,17 @@ documents are preserved as history, but they no longer define the active work.
 > reusing existing `feedback_followup`, `setup_outcome_memory`, `shadow_forward`,
 > and `true_forward` instead of adding a parallel queue or second memory system.
 
+> **Update 2026-07-05 - headless product loop is the low-load operator mode.**
+> The visible control room remains useful for manual observation, but the normal
+> long-running product-paper mode on this machine should be
+> `bat\paper_product_headless_loop.bat`: farm full-cycle only, no dashboard, no
+> graph viewer, no status-monitor window, Telegram send off by default, bounded
+> outcome-learning reviews on. If paper cards need to be delivered to active
+> subscribers, use the explicit wrapper
+> `bat\paper_product_headless_send_loop.bat`. This does not change live readiness:
+> all paths remain `execution_allowed=false` and no old `main.py`/order path is
+> revived.
+
 > **Update 2026-07-04 - strict PFR calibration watch before live readiness.**
 > Broad farm paper cards are useful for product visibility, but they are not live-ready
 > and must not be promoted directly. The strict main-paper path stays gated by
@@ -176,10 +187,14 @@ Done:
 - hard-validation export from `unique_candidates`, fingerprint-level stamp-back,
   automatic `setup_library` cards, minimal paper outcome feedback, structured farm
   logs, bounded storage.
+- low-load headless product launcher over the canonical full-cycle loop, with
+  bounded outcome-learning reviews enabled and dashboard/graph/status windows off.
 
 Next:
 
 - richer paper promotion/demotion metrics;
+- accumulate headless paper-product cycles and review accepted outcome reviews
+  before changing strategy parameters;
 - discovery ranking by movers; GPU kernels for more families;
 - manual-hypothesis intake channel (trader notes → structured spec → dry-run → farm task);
 - microstructure data source (currently deferred).

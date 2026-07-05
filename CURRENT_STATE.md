@@ -2,6 +2,19 @@
 
 Updated: 2026-07-05
 
+> **Update 2026-07-05 - low-load headless paper-product loop.**
+> The project now has a low-load operator entrypoint:
+> `bat\paper_product_headless_loop.bat`. It runs only the canonical
+> `bat\strategy_lab_farm_full_cycle_loop.bat` with product cadence defaults and
+> does not open the dashboard, graph viewer, or status-monitor window. Bounded
+> outcome-learning reviews are enabled by default in this headless mode
+> (`STRATEGY_LAB_RUN_AGENT_ROLE_REVIEWS=1`, small per-cycle caps), but they remain
+> advisory: no `.env` edits, no `AUTO_TRADE`, no old `main.py`, no orders, no
+> private exchange endpoints, and no LLM authority over trade levels or execution.
+> Telegram delivery stays off by default; `bat\paper_product_headless_send_loop.bat`
+> is the explicit opt-in wrapper for sending reviewed paper cards to active
+> subscribers while keeping the same paper-only boundaries.
+
 > **Update 2026-07-05 - outcome-learning loop starts closing the feedback cycle.**
 > Terminal paper outcomes now have a deterministic `OutcomeLearningCase.v1`
 > review layer. `agent_role_review_cycle` sends sanitized outcome cases to the
@@ -211,6 +224,11 @@ Important active files — calculation farm (current core):
   default.
 - `bat/paper_product_control_room_send.bat` - explicit opt-in wrapper for sending
   already validated paper Telegram cards to active subscribers.
+- `bat/paper_product_headless_loop.bat` - low-load product paper launcher: farm
+  full-cycle only, no dashboard/graph/status windows, bounded outcome-learning
+  reviews enabled, Telegram delivery off by default.
+- `bat/paper_product_headless_send_loop.bat` - explicit opt-in headless wrapper
+  for sending reviewed paper Telegram cards to active subscribers.
 - `bat/strategy_lab_farm_full_cycle_loop.bat` - visible full-cycle operator wrapper.
 - `bat/strategy_lab_control_room.bat` - visible control room for farm loop,
   dashboard, private graph viewer, and status monitor windows.
