@@ -13,6 +13,12 @@ Updated: 2026-07-05
 > path for bounded retest sweeps or no-queue notes. This is still paper/research only:
 > `execution_allowed=false`, no `.env`, no private exchange endpoints, no Telegram
 > send path, and no LLM authority over entry/stop/TP/side/validator verdict.
+> The second slice adds `OutcomePromotionGate.v1`: accepted reviews are now
+> classified into `review_only`, `needs_retest`, `needs_shadow`,
+> `needs_true_forward`, `collect_true_forward`, `operator_review_only`, or
+> `eligible_for_operator_review`. This is a status/explanation gate only; even
+> a mature true-forward row plus ready-catalog evidence remains
+> `execution_allowed=false` and needs an operator decision.
 > See [docs/outcome_learning_loop_2026-07-05.md](docs/outcome_learning_loop_2026-07-05.md).
 
 > **Update 2026-07-04 - paper-product operator entrypoint.**

@@ -14,10 +14,12 @@ documents are preserved as history, but they no longer define the active work.
 > bounded retest/shadow/promotion gates`. The first implementation slice exists:
 > deterministic outcome routing, sanitized review packs, expanded outcome-review
 > contract fields, training-row backlinks, and outcome-review recommendations that
-> reuse the existing `feedback_followup` planner for bounded retests. Next slices
-> should reuse existing
-> `feedback_followup`, `setup_outcome_memory`, `shadow_forward`, and `true_forward`
-> instead of adding a parallel queue or second memory system.
+> reuse the existing `feedback_followup` planner for bounded retests. The second
+> slice adds `OutcomePromotionGate.v1`, a read-only gate view over accepted
+> reviews, `shadow_forward`, `true_forward`, and `ready_strategy_catalog`. Next
+> slices should add operator evidence reports and source-quality joins, still
+> reusing existing `feedback_followup`, `setup_outcome_memory`, `shadow_forward`,
+> and `true_forward` instead of adding a parallel queue or second memory system.
 
 > **Update 2026-07-04 - strict PFR calibration watch before live readiness.**
 > Broad farm paper cards are useful for product visibility, but they are not live-ready

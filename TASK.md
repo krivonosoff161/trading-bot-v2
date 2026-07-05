@@ -14,7 +14,11 @@ New 2026-07-05 context: the first outcome-learning loop slice is in place. Termi
 paper outcomes can be routed into deterministic `OutcomeLearningCase.v1` records,
 reviewed by the bounded `outcome_reviewer`, and linked back into later
 `TrainingRow.v2` exports through `outcome_review_id` and learning labels. This is
-advisory paper/research only; it is not a promotion gate and not live execution.
+advisory paper/research only and not live execution. The second slice adds
+`OutcomePromotionGate.v1`: accepted reviews are joined to existing
+`shadow_forward`, `true_forward`, and `ready_strategy_catalog` artifacts and
+classified into the next non-execution stage. The gate writes no trade state and
+keeps `execution_allowed=false`.
 
 Read first:
 
@@ -58,6 +62,7 @@ farm_loop
   -> OutcomeLearningCase.v1
   -> outcome_reviewer advisory JSON
   -> outcome_review_id backlink in TrainingRow.v2
+  -> outcome_promotion_gate status view
 ```
 
 This file is local handoff context, not the canonical architecture. For current
@@ -105,11 +110,13 @@ Next product build target, if the user continues this thread:
 
 Next learning-loop build target:
 
-- convert accepted outcome-review suggestions into bounded follow-up/retest plans;
-- reuse `feedback_followup.py`, `setup_outcome_memory.py`, `shadow_forward.py`, and
-  `true_forward.py`;
+- let the next runtime/training cycle accumulate linked `outcome_review_id` rows;
+- add an operator evidence report for `eligible_for_operator_review` cases;
+- link source-trust reviews to outcome clusters for scanner/news quality;
+- keep using `feedback_followup.py`, `setup_outcome_memory.py`,
+  `shadow_forward.py`, and `true_forward.py`;
 - do not create a second farm brain, second memory system, or LLM-controlled
-  promotion path.
+  promotion/execution path.
 
 ## Active Safety Boundary
 
