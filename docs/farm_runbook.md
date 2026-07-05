@@ -2,6 +2,11 @@
 
 Status: **ACTIVE**. Last updated: 2026-07-04.
 
+Portfolio-level documentation and public/private storage rules live in the
+[Documentation Contract](https://github.com/krivonosoff161/krivonosoff161/blob/main/docs/documentation-contract.md).
+This runbook is repository-local operator guidance; it must not be used to
+publish private calculations, strategy edge, raw paper rows, or credentials.
+
 Current handoff:
 [`session_handoff_2026-07-03.md`](session_handoff_2026-07-03.md).
 
