@@ -2,6 +2,17 @@
 
 Updated: 2026-07-05
 
+> **Update 2026-07-05 - Telegram chart/news delivery hardening.**
+> Paper setup chart delivery now requires a confirmed Telegram photo `message_id`;
+> photo HTTP/`ok=false` failures no longer disappear as log-only warnings. The paper
+> sender persists the sent-key ledger atomically after each successful card delivery,
+> reducing duplicate sends after restarts. Scanner/news notifications are explicitly
+> separated from subscriber paper cards: `TELEGRAM_NOTIFICATION_CHAT_ID` is the
+> preferred public notification channel for `NEWS`/market/tokenomics-style items, with
+> legacy `SCANNER_CHAT_ID` kept as fallback. Neither surface enables `AUTO_TRADE`,
+> old `main.py`, order paths, private exchange endpoints, or public publication of full
+> paper setup levels.
+
 > **Update 2026-07-05 - low-load headless paper-product loop.**
 > The project now has a low-load operator entrypoint:
 > `bat\paper_product_headless_loop.bat`. It runs only the canonical

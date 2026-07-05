@@ -91,6 +91,12 @@ becomes newer than the delivery snapshot, `operational_health` reports
 an operator treats Telegram status as reviewed. Delivery artifacts store recipient
 hashes, not raw chat ids.
 
+Current delivery hardening: chart photos are counted as sent only when Telegram returns
+a photo message id. HTTP/`ok=false` photo failures are surfaced as delivery errors
+instead of being silently treated as successful chart sends. The sent-key ledger is
+written atomically and refreshed after each successful card delivery, reducing duplicate
+subscriber sends after a process restart.
+
 Default mode is dry-run:
 
 ```bash
@@ -122,6 +128,12 @@ The scanner/analyzer Telegram code remains separate from the farm:
   router.
 - `src.utils.telegram` owns token/chat lookup and message sending for surfaces that are
   explicitly started by the operator.
+
+Scanner/news notifications are the public channel surface for market context and
+tokenomics-style items. The scanner prefers `TELEGRAM_NOTIFICATION_CHAT_ID` and falls
+back to the legacy `SCANNER_CHAT_ID`; logs expose only `target_count`/status, never raw
+chat ids. These notifications must not carry full paper setup levels or private strategy
+calculations.
 
 These paths can notify a human, but they must not enqueue farm tasks, consume PFR paper
 instructions, or execute orders.
