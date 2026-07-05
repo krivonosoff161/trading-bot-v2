@@ -44,6 +44,7 @@ terminal paper outcome
   -> next TrainingRow.v2 export links outcome_review_id
   -> accepted review compiles into a farm Recommendation
   -> existing feedback_followup path plans a bounded run_sweep or a note
+  -> OutcomePromotionGate.v1 explains the next non-execution stage
 ```
 
 The important change is the backlink:
@@ -90,6 +91,30 @@ human card text are intentionally not included in that pack.
 Promotion remains downstream of deterministic retests, hard validation, PFR,
 shadow/true-forward observation, and explicit operator review.
 
+## Promotion Gate View
+
+`src.research_lab.outcome_promotion_gate` is a read-only authority map over the
+learning artifacts. It does not enqueue tasks and does not write trade state. It
+joins accepted `outcome_reviewer` rows back to `TrainingRow.v2`, then checks the
+existing `shadow_forward.json`, `true_forward.json`, and
+`ready_strategy_catalog.json` artifacts.
+
+The gate stages are intentionally conservative:
+
+| Stage | Meaning |
+|---|---|
+| `review_only` | advisory note or cluster signal; do not spend follow-up compute yet |
+| `needs_retest` | accepted review needs a bounded deterministic retest |
+| `needs_shadow` | positive/preserve pattern needs a forward watch before trust |
+| `needs_true_forward` | shadow exists; pin and collect genuinely new bars |
+| `collect_true_forward` | true-forward is registered but not mature |
+| `operator_review_only` | true-forward matured, but this is evidence, not edge |
+| `eligible_for_operator_review` | true-forward matured and hard-ready catalog evidence exists; still no execution authority |
+
+Every stage keeps `paper_only=true` and `execution_allowed=false`. Even
+`eligible_for_operator_review` means "show the operator the evidence", not "trade
+or promote automatically".
+
 ## Next Implementation Steps
 
 Implemented in this slice:
@@ -100,11 +125,12 @@ Implemented in this slice:
 3. `TrainingRow.v2` backlink fields for accepted outcome reviews.
 4. Accepted outcome reviews can become bounded farm `Recommendation` objects and
    reuse the existing `feedback_followup.py` planner.
+5. `OutcomePromotionGate.v1` status view over accepted outcome reviews,
+   shadow-forward, true-forward, and the ready-strategy catalog.
 
 Next implementation steps:
 
-1. Add summary counters to status/reporting so the operator sees learning-case
-   distribution and rejected LLM reviews.
+1. Let the next farm/training cycles accumulate linked `outcome_review_id` rows.
 2. Link source-trust reviews to outcome clusters for scanner/news quality.
-3. Route promising retest candidates into existing shadow/true-forward registries
-   without granting paper-ready authority.
+3. Add an explicit operator evidence report for `eligible_for_operator_review`
+   cases without granting paper-ready or execution authority.

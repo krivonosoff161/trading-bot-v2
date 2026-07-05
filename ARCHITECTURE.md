@@ -9,9 +9,11 @@ Updated: 2026-07-05
 > `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
 > sanitized review packs for the existing `outcome_reviewer`, and writes advisory
 > reviews under the private Strategy Lab root. The next training export can link the
-> review back through `outcome_review_id`. This sidecar is not a promotion gate, not
-> a live executor, and not a second farm brain; it feeds bounded follow-up/retest
-> work only after deterministic code accepts a next step.
+> review back through `outcome_review_id`. `OutcomePromotionGate.v1` then explains
+> whether a case is only a review note, needs retest, needs shadow/true-forward, or
+> is ready for operator evidence review. This sidecar is not a live executor and not
+> a second farm brain; it feeds bounded follow-up/retest work only after deterministic
+> code accepts a next step, and every gate stage keeps `execution_allowed=false`.
 
 > **Update 2026-07-03 - main-paper watcher vs main-style executor.** The active runtime
 > is health-green as a paper/research backbone, but it is not yet the user's expected
@@ -95,6 +97,7 @@ paper_signals / PFR-ready rows
   -> outcome_reviewer               (advisory-only LLM review)
   -> outcome_review_id backlink     (next TrainingRow.v2 export)
   -> feedback_followup              (bounded retest planning; no second queue)
+  -> OutcomePromotionGate.v1        (review/retest/shadow/operator stage, no authority)
 ```
 
 The current path is deliberately stricter than a raw main scan. It refuses broad research

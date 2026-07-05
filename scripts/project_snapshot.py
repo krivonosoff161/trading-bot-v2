@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def git_status() -> tuple[str, bool, str]:
@@ -410,6 +412,12 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     sent_keys = _sent_key_summary(root)
     accepted_reviews = [row for row in outcome_reviews if bool(row.get("accepted"))]
     linked_training = [row for row in training_rows if str(row.get("outcome_review_id") or "")]
+    try:
+        from src.research_lab.outcome_promotion_gate import build_outcome_promotion_gate
+
+        outcome_gate = build_outcome_promotion_gate(root)
+    except Exception:
+        outcome_gate = {}
 
     active = (
         int(paper.get("total") or 0) > 0
@@ -475,6 +483,8 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_outcome_review_linked": len(linked_training),
         "training_learning_kind": _top_counts(_count_field(linked_training, "outcome_learning_review_kind")),
         "training_learning_bucket": _top_counts(_count_field(linked_training, "outcome_learning_bucket")),
+        "outcome_gate_verdicts": int(outcome_gate.get("verdicts") or 0),
+        "outcome_gate_by_stage": _top_counts(outcome_gate.get("by_stage") or {}, limit=8),
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
         "active_lifecycle": (
@@ -582,6 +592,13 @@ def _print_paper_product_status() -> None:
             f"accepted={st['outcome_review_accepted']} rejected={st['outcome_review_rejected']} "
             f"linked_training={st['training_outcome_review_linked']} "
             f"kind={st['training_learning_kind']} bucket={st['training_learning_bucket']}"
+        )
+    if st["outcome_gate_verdicts"]:
+        print(
+            "                "
+            f"outcome_gate verdicts={st['outcome_gate_verdicts']} "
+            f"stage={st['outcome_gate_by_stage']} "
+            "execution_allowed=False"
         )
     if st["quality_report_exists"]:
         pfr = st["pfr_funnel"]
