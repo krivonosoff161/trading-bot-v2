@@ -64,6 +64,7 @@ def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
             "configured": False,
             "ids": [],
             "send_text": None,
+            "send_photo": None,
         }
 
     try:
@@ -75,6 +76,7 @@ def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
             "configured": False,
             "ids": [],
             "send_text": None,
+            "send_photo": None,
             "config_error": type(exc).__name__,
         }
     return {
@@ -82,6 +84,7 @@ def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
         "configured": bool(config.get("configured")),
         "ids": list(config.get("ids") or []),
         "send_text": config.get("send_text"),
+        "send_photo": config.get("send_photo"),
     }
 
 
@@ -998,6 +1001,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         paper_chat_ids_count=len(delivery_config["ids"]),
                         recipient_ids=delivery_config["ids"],
                         send_text=delivery_config["send_text"],
+                        send_photo=delivery_config["send_photo"],
                         status_digest=bool(getattr(args, "paper_telegram_status_digest", False)),
                         status_digest_interval_hours=int(getattr(args, "paper_telegram_status_digest_hours", 12)),
                     )

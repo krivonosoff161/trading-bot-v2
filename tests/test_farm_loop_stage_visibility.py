@@ -239,7 +239,14 @@ class TestCycleLogStages:
                 {"chat_id": "333", "status": "superadmin"},
             ],
         )
+
+        async def fake_send_photo(chat_id: str, path: str) -> int:
+            assert chat_id == "111"
+            assert path == "chart.png"
+            return 43
+
         monkeypatch.setattr(telegram, "bot_token", lambda: "token")
+        monkeypatch.setattr(telegram, "send_photo_to", fake_send_photo)
         monkeypatch.setattr(paper_telegram_transport.aiohttp, "ClientSession", FakeSession)
 
         cfg = farm_loop._paper_telegram_delivery_config(
@@ -251,6 +258,7 @@ class TestCycleLogStages:
         assert cfg["configured"] is True
         assert cfg["ids"] == ["111", "333"]
         assert asyncio.run(cfg["send_text"]("111", "card")) == 42
+        assert asyncio.run(cfg["send_photo"]("111", "chart.png")) == 43
 
     def test_log_cycle_records_stages_and_skipped(self, tmp_path) -> None:
         stages = farm_loop._stage_status(_args(run_worker=True), apply=True)

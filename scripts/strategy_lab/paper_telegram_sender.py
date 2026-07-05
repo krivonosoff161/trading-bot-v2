@@ -42,8 +42,7 @@ def main() -> None:
         return await send_message_to(chat_id, text)
 
     async def _send_photo(chat_id: str, path: str) -> int | None:
-        await send_photo_to(chat_id, path)
-        return None
+        return await send_photo_to(chat_id, path)
 
     summary = send_paper_telegram_previews(
         args.private_root,

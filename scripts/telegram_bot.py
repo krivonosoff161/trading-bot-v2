@@ -758,7 +758,13 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
             summary_text = _format_telegram(f"{_sym} — {_sig}\nПодробный отчёт не найден, повторите анализ.")
 
         if png_path.exists():
-            await send_photo_to(chat_id, str(png_path))
+            photo_status = "sent"
+            try:
+                photo_message_id = await send_photo_to(chat_id, str(png_path))
+                if photo_message_id is None:
+                    photo_status = "skipped_no_token"
+            except Exception as exc:  # noqa: BLE001 - chart send must not suppress text analysis.
+                photo_status = f"error:{type(exc).__name__}"
             try:
                 record_message_audit(
                     chat_id=chat_id,
@@ -767,7 +773,7 @@ async def _run_analysis(chat_id: str, image_path: str, symbol: str, captured_at:
                     event="chart_photo",
                     text=png_path.name,
                     symbol=symbol,
-                    delivery_status="sent_or_noop",
+                    delivery_status=photo_status,
                 )
             except Exception:
                 pass
