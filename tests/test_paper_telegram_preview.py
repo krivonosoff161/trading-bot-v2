@@ -351,6 +351,44 @@ def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     assert "execution_allowed=false" not in text
 
 
+def test_preview_translates_fade_reason_for_subscribers(tmp_path):
+    _write_product_trade_snapshot(
+        tmp_path,
+        [
+            _product_trade_record(
+                reason_now="short fade exhaustion (run 3.55 ATR); tactical mean-revert",
+                setup_family="reversal_fade",
+            )
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["rendered"] == 1
+    text = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]["text"]
+    assert "fade exhaustion" not in text
+    assert "tactical mean-revert" not in text
+    assert "\u0434\u0432\u0438\u0436\u0435\u043d\u0438\u0435 \u0440\u0430\u0441\u0442\u044f\u043d\u0443\u043b\u043e\u0441\u044c" in text
+
+
+def test_preview_hides_unknown_raw_reason_for_subscribers(tmp_path):
+    _write_product_trade_snapshot(
+        tmp_path,
+        [
+            _product_trade_record(
+                reason_now="internal_queue_probe:abc_123",
+            )
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["rendered"] == 1
+    text = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]["text"]
+    assert "internal_queue_probe" not in text
+    assert "\u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f" in text
+
+
 def test_preview_builds_legacy_style_chart_card_from_prepared_candles(tmp_path):
     _write_market_data(tmp_path)
     _write_product_trade_snapshot(tmp_path, [_product_trade_record(source_signal_id="sig_product")])
