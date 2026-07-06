@@ -1,0 +1,49 @@
+"""Publish public news-channel posts or paper-bot stats.
+
+Default is dry-run. Use --send only when the operator intentionally wants a
+public Telegram message.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.scout.public_channel.publisher import publish_news_once, publish_stats_once  # noqa: E402
+
+
+async def _run(args: argparse.Namespace) -> dict:
+    load_dotenv()
+    if args.mode == "stats":
+        private_root = Path(args.private_root) if args.private_root else None
+        return await publish_stats_once(send=args.send, chat_env=args.chat_env, private_root=private_root)
+    return await publish_news_once(
+        limit=args.limit,
+        send=args.send,
+        use_llm=args.use_llm,
+        chat_env=args.chat_env,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["news", "stats"], default="news")
+    parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--use-llm", action="store_true", help="use configured LLM editor; default is deterministic")
+    parser.add_argument("--send", action="store_true", help="actually send to Telegram; default is dry-run")
+    parser.add_argument("--chat-env", default="SCANNER_CHAT_ID")
+    parser.add_argument("--private-root", default="")
+    args = parser.parse_args()
+    print(json.dumps(asyncio.run(_run(args)), ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

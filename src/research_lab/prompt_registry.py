@@ -13,6 +13,8 @@ from typing import Any
 from src.research_lab.calculator_advisor import PROMPT_VERSION as CALCULATOR_PROMPT_VERSION
 from src.research_lab.calculator_advisor import SYSTEM_PROMPT as CALCULATOR_SYSTEM_PROMPT
 from src.research_lab.paper_telegram_preview import CARD_TEMPLATE_VERSION
+from src.scout.public_channel.prompts import PROMPT_VERSION as PUBLIC_CHANNEL_PROMPT_VERSION
+from src.scout.public_channel.prompts import SYSTEM_PROMPT as PUBLIC_CHANNEL_SYSTEM_PROMPT
 
 SCHEMA = "PromptRegistry.v1"
 
@@ -140,6 +142,19 @@ def prompt_contracts() -> list[PromptContract]:
             schema_gate="scanner trigger policy + budget guard + watch queue contract",
             logging="logs/scout/llm_budget.jsonl + scanner journal/watch queue",
             provider_scope="src.utils.llm_client Alibaba/Yandex router",
+        ),
+        PromptContract(
+            surface="public_channel_editor",
+            role="Public News Editor LLM",
+            version=PUBLIC_CHANNEL_PROMPT_VERSION,
+            prompt_hash=prompt_hash(PUBLIC_CHANNEL_SYSTEM_PROMPT),
+            purpose="Turn public source events into Telegram channel posts without trade advice.",
+            input_contract="PublicChannelItem.v1",
+            output_contract="PublicChannelPost.v1 JSON object",
+            forbidden=["entry", "stop", "take_profit", "leverage", "buy", "sell", "execute"],
+            schema_gate="src.scout.public_channel.safety.validate_public_post",
+            logging="logs/scout/public_channel/publisher_audit.jsonl",
+            provider_scope="src.utils.llm_client Alibaba/Yandex router; deterministic fallback supported",
         ),
         PromptContract(
             surface="outcome_reviewer",
