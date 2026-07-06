@@ -7,6 +7,7 @@ from src.research_lab.paper_telegram_preview import (
     build_paper_telegram_preview,
     render_preview_text,
     validate_preview,
+    validation_tier,
 )
 
 DOT = "\u00b7"
@@ -15,6 +16,9 @@ ENTRY = "\u0412\u0445\u043e\u0434:"
 STOP = "\u0421\u0442\u043e\u043f:"
 SOURCE = "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a:"
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435"
+VALIDATION = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430:"
+VALIDATED_LABEL = "\u043f\u0440\u043e\u0448\u0435\u043b PFR/\u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044e"
+FARM_CALCULATED_LABEL = "\u0440\u0430\u0441\u0447\u0435\u0442\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b \u0444\u0435\u0440\u043c\u044b"
 
 
 def _consumer_record(**overrides):
@@ -263,6 +267,18 @@ def _product_trade_record(**overrides):
     return row
 
 
+def test_validation_tier_classifies_main_pfr_and_farm_rows():
+    assert validation_tier(_trade_record()) == "validated_pfr"
+    assert validation_tier(_consumer_record()) == "validated_pfr"
+    assert validation_tier(_product_trade_record()) == "farm_calculated"
+    assert validation_tier(_paper_signal_row()) == "farm_calculated"
+
+
+def test_validation_tier_classifies_research_retest_rows():
+    row = _paper_signal_row(source="research", origin="outcome_retest")
+    assert validation_tier(row) == "research_only"
+
+
 def test_preview_prefers_main_paper_trade_cards(tmp_path):
     _write_consumer_snapshot(tmp_path, [_consumer_record()])
     _write_trade_snapshot(tmp_path, [_trade_record()])
@@ -274,10 +290,15 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert summary["rendered"] == 1
     assert summary["invalid"] == 0
     assert summary["sends_network"] is False
-    assert summary["card_template_version"] == "paper_telegram_card_v5_candidate_ru"
+    assert summary["card_template_version"] == "paper_telegram_card_v6_validation_tier_ru"
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
-    text = data["items"][0]["text"]
+    item = data["items"][0]
+    text = item["text"]
+    assert item["validation_tier"] == "validated_pfr"
+    assert summary["by_validation_tier"] == {"validated_pfr": 1}
     assert f"Бумажный сигнал: BTC-USDT-SWAP {DOT} 1h {DOT} LONG" in text
+    assert VALIDATION in text
+    assert VALIDATED_LABEL in text
     assert IDEA in text
     assert ENTRY in text
     assert STOP in text
@@ -313,8 +334,11 @@ def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):
     first = data["items"][0]
     text = first["text"]
     assert first["source_signal_id"] == "opened_first"
+    assert first["validation_tier"] == "farm_calculated"
+    assert summary["by_validation_tier"] == {"farm_calculated": 2}
     assert "Кандидат фермы: BTC-USDT-SWAP" in text
-    assert "Проверка:" not in text
+    assert VALIDATION in text
+    assert FARM_CALCULATED_LABEL in text
     assert "not_hard_validated" not in text
     assert "Бумажный режим: это не ордер." in text
     assert "Автоисполнение выключено." in text
@@ -339,6 +363,8 @@ def test_preview_prefers_product_trade_ledger_before_raw_candidates(tmp_path):
     text = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]["text"]
     item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
     assert item["chart_path"] == str(chart_path)
+    assert item["validation_tier"] == "farm_calculated"
+    assert FARM_CALCULATED_LABEL in text
     assert "Бумажный сигнал: BTC-USDT-SWAP" in text
     assert "К реальной торговле:" not in text
     assert "missing_ready_strategy_id" not in text
@@ -535,6 +561,8 @@ def test_preview_quality_gate_allows_live_ready_product_rows(tmp_path):
     assert summary["skipped_quality_gate"] == 0
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["source_signal_id"] == "sig_live_ready"
+    assert data["items"][0]["validation_tier"] == "validated_pfr"
+    assert VALIDATED_LABEL in data["items"][0]["text"]
 
 
 def test_preview_skips_non_actionable_product_trades(tmp_path):
@@ -556,6 +584,7 @@ def test_preview_writes_durable_card_ledger(tmp_path):
     assert first["card_ledger_cards"] == 1
     assert first_ledger["schema"] == "paper_telegram_card_ledger.v1"
     assert first_ledger["items"][0]["source_signal_id"] == "sig_one"
+    assert first_ledger["items"][0]["validation_tier"] == "farm_calculated"
     assert first_ledger["items"][0]["paper_only"] is True
     assert first_ledger["items"][0]["execution_allowed"] is False
 
