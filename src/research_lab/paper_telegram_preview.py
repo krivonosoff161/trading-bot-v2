@@ -26,7 +26,7 @@ from src.strategy.chart_renderer import generate_chart_png
 
 SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
-CARD_TEMPLATE_VERSION = "paper_telegram_card_v5_candidate_ru"
+CARD_TEMPLATE_VERSION = "paper_telegram_card_v6_validation_tier_ru"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c: \u044d\u0442\u043e \u043d\u0435 \u043e\u0440\u0434\u0435\u0440."
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435, \u043d\u0435 \u043e\u0440\u0434\u0435\u0440 \u0438 \u043d\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u043a \u0432\u0445\u043e\u0434\u0443."
@@ -40,6 +40,7 @@ LABEL_STATUS = "\u0421\u0442\u0430\u0442\u0443\u0441"
 LABEL_OUTCOME = "\u0418\u0441\u0445\u043e\u0434"
 LABEL_REASON = "\u041f\u043e\u0447\u0435\u043c\u0443 \u0441\u0435\u0439\u0447\u0430\u0441"
 LABEL_SOURCE = "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a"
+LABEL_VALIDATION = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"
 EXECUTION_OFF = "\u0410\u0432\u0442\u043e\u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e."
 
 MOJIBAKE_MARKERS = (
@@ -65,6 +66,15 @@ QUALITY_LABEL_RANK = {
     "weak_after_costs": 4,
 }
 SUBSCRIBER_QUALITY_LABELS = frozenset({"candidate_watch", "mixed"})
+VALIDATED_TIER = "validated_pfr"
+FARM_CALCULATED_TIER = "farm_calculated"
+RESEARCH_ONLY_TIER = "research_only"
+VALIDATION_TIERS = frozenset({VALIDATED_TIER, FARM_CALCULATED_TIER, RESEARCH_ONLY_TIER})
+VALIDATION_TIER_LABELS = {
+    VALIDATED_TIER: "\u043f\u0440\u043e\u0448\u0435\u043b PFR/\u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044e",
+    FARM_CALCULATED_TIER: "\u0440\u0430\u0441\u0447\u0435\u0442\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b \u0444\u0435\u0440\u043c\u044b; \u043f\u043e\u043b\u043d\u044b\u0439 PFR \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d",
+    RESEARCH_ONLY_TIER: "\u0438\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u043e\u0435 \u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435",
+}
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,7 @@ class PaperTelegramPreview:
     side: str
     setup_family: str
     consumer_status: str
+    validation_tier: str
     text: str
     chart_path: str = ""
     problems: list[str] = field(default_factory=list)
@@ -93,6 +104,8 @@ class PaperTelegramPreview:
             raise ValueError("paper preview must never allow execution")
         if not self.paper_only:
             raise ValueError("paper preview must be paper_only")
+        if self.validation_tier not in VALIDATION_TIERS:
+            raise ValueError(f"unsupported validation tier {self.validation_tier!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -430,6 +443,42 @@ def _status_label(status: str) -> str:
     return labels.get(status, status or "unknown")
 
 
+def _metadata(record: dict[str, Any]) -> dict[str, Any]:
+    contract = record.get("signal_contract")
+    if isinstance(contract, dict):
+        meta = contract.get("metadata")
+        if isinstance(meta, dict):
+            return meta
+    context = record.get("validator_context")
+    return context if isinstance(context, dict) else {}
+
+
+def validation_tier(record: dict[str, Any]) -> str:
+    """Classify what the Telegram card is allowed to claim about validation."""
+    meta = _metadata(record)
+    ready_strategy_id = str(record.get("ready_strategy_id") or meta.get("ready_strategy_id") or "").strip()
+    verdict = str(
+        record.get("source_validation_verdict") or meta.get("source_validation_verdict") or ""
+    ).strip()
+    if bool(record.get("live_ready")) or (ready_strategy_id and verdict == "PAPER_FORWARD_READY"):
+        return VALIDATED_TIER
+
+    source = str(record.get("source") or "").strip()
+    schema = str(record.get("schema") or "").strip()
+    origin = str(record.get("origin") or "").strip()
+    if origin == "outcome_retest" or source in {"outcome_retest", "retest", "research"}:
+        return RESEARCH_ONLY_TIER
+    if schema in {"PaperProductTrade.v1", "PaperSignalCandidate.v1"} or source in {"farm", "pfr_farm"}:
+        return FARM_CALCULATED_TIER
+    return FARM_CALCULATED_TIER
+
+
+def _validation_line(record: dict[str, Any]) -> str:
+    tier = validation_tier(record)
+    label = VALIDATION_TIER_LABELS[tier]
+    return f"<b>{LABEL_VALIDATION}:</b> {html.escape(label)}"
+
+
 def _reason_label(reason: str) -> str:
     side = "LONG" if reason.startswith("long ") else "SHORT" if reason.startswith("short ") else ""
     normalized = reason.removeprefix("long ").removeprefix("short ").strip()
@@ -469,6 +518,7 @@ def _trade_text(record: dict[str, Any]) -> str:
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
+            _validation_line(record),
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(record.get('entry'))}</code>",
@@ -496,6 +546,7 @@ def _product_trade_text(record: dict[str, Any]) -> str:
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
+            _validation_line(record),
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(record.get('entry'))}</code>",
@@ -539,6 +590,7 @@ def _paper_signal_text(record: dict[str, Any]) -> str:
             f"<b>\u041a\u0430\u043d\u0434\u0438\u0434\u0430\u0442 \u0444\u0435\u0440\u043c\u044b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
+            _validation_line(record),
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_entry_from_zone(record)}</code>",
@@ -569,6 +621,7 @@ def _consumer_text(record: dict[str, Any]) -> str:
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
+            _validation_line(record),
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(contract.get('entry'))}</code>",
@@ -802,6 +855,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
             continue
         if len(previews) >= limit:
             break
+        tier = validation_tier(row)
         text = render_preview_text(row)
         problems = validate_preview(row, text)
         preview_id = f"preview_{row.get('instruction_id') or row.get('paper_trade_id') or len(previews)}"
@@ -819,6 +873,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
                 side=str(row.get("side") or ""),
                 setup_family=str(row.get("setup_family") or ""),
                 consumer_status=str(row.get("consumer_status") or row.get("status") or ""),
+                validation_tier=tier,
                 text=text,
                 chart_path=_render_telegram_card_image(Path(private_root), row, source_signal_id),
                 problems=problems,
@@ -834,6 +889,9 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
     ledger_summary = _write_card_ledger(Path(private_root), previews)
 
     invalid = sum(1 for preview in previews if preview.problems)
+    by_validation_tier: dict[str, int] = {}
+    for preview in previews:
+        by_validation_tier[preview.validation_tier] = by_validation_tier.get(preview.validation_tier, 0) + 1
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": source_schema,
@@ -848,6 +906,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "skipped_quality_gate": skipped_quality_gate,
         "quality_gate_reasons": quality_gate_reasons,
         "quality_ranked": quality_ranked,
+        "by_validation_tier": by_validation_tier,
         "items": [preview.to_dict() for preview in previews],
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
