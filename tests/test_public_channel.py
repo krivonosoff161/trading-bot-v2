@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import pytest
+import asyncio
 
 from src.scout.public_channel.collector import enrich_public_source_rows
 from src.scout.public_channel.contracts import item_from_source
@@ -108,8 +108,7 @@ def test_public_channel_enriches_rss_title_with_machine_doc(monkeypatch):
     assert row["public_machine_doc"]["schema"] == "PublicNewsMachineDoc.v1"
 
 
-@pytest.mark.asyncio
-async def test_llm_editor_cleans_field_labels_and_keeps_russian_card(monkeypatch):
+def test_llm_editor_cleans_field_labels_and_keeps_russian_card(monkeypatch):
     async def fake_call(*args, **kwargs):
         return (
             """
@@ -144,7 +143,7 @@ async def test_llm_editor_cleans_field_labels_and_keeps_russian_card(monkeypatch
     )
     assert item is not None
 
-    post, usage = await build_post(item, use_llm=True)
+    post, usage = asyncio.run(build_post(item, use_llm=True))
     text = format_telegram_html(post)
 
     assert usage["provider"] == "test"
