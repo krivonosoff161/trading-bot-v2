@@ -6,6 +6,7 @@ from src.scout.public_channel.collector import enrich_public_source_rows
 from src.scout.public_channel.contracts import item_from_source
 from src.scout.public_channel.editor import build_post, deterministic_post
 from src.scout.public_channel.safety import has_forbidden_advice, validate_public_post
+from src.scout.public_channel.storage import enqueue_items, read_queue, remove_queue_keys, write_queue
 from src.scout.public_channel.stats import format_public_stats_html
 from src.scout.public_channel.telegram_format import format_telegram_html
 
@@ -106,6 +107,51 @@ def test_public_channel_enriches_rss_title_with_machine_doc(monkeypatch):
     assert row["public_text_quality"] == "full"
     assert "protocol simplification" in row["text"]
     assert row["public_machine_doc"]["schema"] == "PublicNewsMachineDoc.v1"
+
+
+def test_public_channel_queue_skips_sent_and_updates_existing(tmp_path):
+    queue_path = tmp_path / "queue.json"
+    sent_path = tmp_path / "sent.json"
+    sent_path.write_text('{"sent_keys": ["sent-key"]}', encoding="utf-8")
+
+    first = enqueue_items(
+        [
+            {"key": "fresh-key", "title": "First", "source": "rss"},
+            {"key": "sent-key", "title": "Already sent", "source": "rss"},
+        ],
+        queue_path=queue_path,
+        sent_path=sent_path,
+    )
+    second = enqueue_items(
+        [{"key": "fresh-key", "title": "Updated", "source": "rss"}],
+        queue_path=queue_path,
+        sent_path=sent_path,
+    )
+
+    rows = read_queue(queue_path)
+    assert first["added"] == 1
+    assert first["skipped_sent"] == 1
+    assert second["updated"] == 1
+    assert len(rows) == 1
+    assert rows[0]["seen_count"] == 2
+    assert rows[0]["item"]["title"] == "Updated"
+
+
+def test_public_channel_queue_removes_published_keys(tmp_path):
+    queue_path = tmp_path / "queue.json"
+    write_queue(
+        [
+            {"key": "a", "first_seen": "2026-07-06T00:00:00Z", "item": {"key": "a"}},
+            {"key": "b", "first_seen": "2026-07-06T00:01:00Z", "item": {"key": "b"}},
+        ],
+        queue_path,
+    )
+
+    removed = remove_queue_keys({"a"}, queue_path)
+    rows = read_queue(queue_path)
+
+    assert removed == 1
+    assert [row["key"] for row in rows] == ["b"]
 
 
 def test_llm_editor_cleans_field_labels_and_keeps_russian_card(monkeypatch):

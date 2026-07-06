@@ -114,6 +114,18 @@ Actually send public news posts:
 python scripts/public_channel_publisher.py --mode news --limit 2 --use-llm --send
 ```
 
+Queue-only source collection:
+
+```bash
+python scripts/public_channel_publisher.py --mode collect
+```
+
+Publish from the existing queue without collecting sources first:
+
+```bash
+python scripts/public_channel_publisher.py --mode publish --limit 1 --use-llm --send
+```
+
 By default the public publisher routes to `SCANNER_CHAT_ID`, because this is the
 current public channel surface in this project. Override with `--chat-env` if the
 channel is moved to another environment variable.
@@ -130,8 +142,18 @@ Visible Windows loop:
 bat\public_news_loop.bat
 ```
 
-The loop uses `--use-llm`. If the provider is unavailable, the publisher falls
-back to deterministic public posts and records the usage/status in the audit log.
+The loop collects public source items every 5 minutes and publishes one queued
+item every 15 minutes. The queue lives under ignored runtime state:
+
+```text
+logs/scout/public_channel/news_queue.json
+```
+
+This split prevents a source lull from creating empty posting cycles. It also
+keeps Telegram cadence separate from source scanning cadence. The loop uses
+`--use-llm` for the publish step. If the provider is unavailable, the publisher
+falls back to deterministic public posts and records the usage/status in the
+audit log.
 
 ## Safety boundary
 
