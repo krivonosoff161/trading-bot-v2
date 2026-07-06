@@ -4,6 +4,7 @@ from src.research_lab.outcome_learning import (
     recommendations_from_outcome_reviews,
     learning_summary,
 )
+from src.research_lab.data_prepare import write_candles
 from src.research_lab.outcome_retest import build_outcome_retest_specs
 
 
@@ -27,6 +28,13 @@ def _row(**overrides):
         "exit_mode": "partial_be",
         "result": "stop",
         "diagnosis": "bad_exit_gave_back",
+        "boundary_ts": 1_700_000_000_000,
+        "observed_entry": 100.0,
+        "observed_exit": 98.0,
+        "bars_held": 6,
+        "reached_tp1": False,
+        "partial_done": False,
+        "banked_pct": 0.0,
         "net_pct": -0.8,
         "net_r": -0.4,
         "gross_pct": -0.7,
@@ -59,14 +67,54 @@ def test_outcome_review_pack_is_sanitized_for_llm_review():
     encoded = str(pack)
 
     assert pack["schema"] == "OutcomeLearningCase.v1.review_input"
+    assert pack["original_plan"]["entry_mid"] == 100.5
+    assert pack["original_plan"]["stop_loss"] == 98.0
+    assert pack["original_plan"]["tp1"] == 105.0
+    assert pack["observed_trade"]["observed_entry"] == 100.0
+    assert pack["observed_trade"]["observed_exit"] == 98.0
+    assert pack["observed_trade"]["observed_return_pct"] == -2.0
+    assert pack["market_context"]["status"] == "not_available"
     assert pack["hard_rules"]["llm_may_change_trade_numbers"] is False
-    assert "entry_mid" not in encoded
-    assert "entry_zone_low" not in encoded
-    assert "stop_loss" not in encoded
-    assert "tp1" not in encoded
+    assert pack["hard_rules"]["llm_may_read_trade_numbers"] is True
+    assert pack["hard_rules"]["llm_output_must_be_hypotheses_not_orders"] is True
     assert "final_card_text" not in encoded
     assert pack["paper_only"] is True
     assert pack["execution_allowed"] is False
+
+
+def test_outcome_review_pack_includes_private_candle_path_when_available(tmp_path):
+    row = _row()
+    tf_ms = 15 * 60_000
+    candles = []
+    start = int(row["boundary_ts"]) - 3 * tf_ms
+    for idx in range(70):
+        px = 100 + idx
+        candles.append(
+            {
+                "ts": start + idx * tf_ms,
+                "open": px,
+                "high": px + 1,
+                "low": px - 1,
+                "close": px + 0.5,
+                "vol": 1000 + idx,
+            }
+        )
+    write_candles(
+        candles,
+        symbol="A-USDT-SWAP",
+        start_ts=start,
+        end_ts=start + 69 * tf_ms,
+        timeframe="15m",
+        data_dir=tmp_path / "market_data" / "15m",
+    )
+
+    pack = build_outcome_review_pack(row, peers=[row], private_root=tmp_path)
+
+    assert pack["market_context"]["status"] == "available"
+    assert pack["market_context"]["source_label"].startswith("market_data/15m/")
+    assert pack["market_context"]["summary"]["status"] == "available"
+    assert pack["market_context"]["candles"]
+    assert pack["market_context"]["candles"][0]["close_vs_entry_pct"] is not None
 
 
 def test_outcome_learning_summary_counts_review_kinds():
@@ -141,7 +189,7 @@ def test_accepted_outcome_review_becomes_retest_spec():
                 "review_kind": "loss",
                 "outcome_bucket": "gave_back",
                 "actionability": "retest_exit_or_capture",
-                "next_test_dimensions": ["earlier_profit_lock"],
+                "counterfactual_tests": [{"dimension": "earlier_profit_lock"}],
                 "confidence": 0.7,
             },
         }
