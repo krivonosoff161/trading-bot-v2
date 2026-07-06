@@ -348,10 +348,10 @@ def test_sender_persists_sent_key_after_each_successful_delivery(tmp_path):
 
     assert summary["sent"] == 2
     assert len(calls) == 2
-    assert "tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in observed_after_first
+    assert "signal:sig_1:f6e0a1e2ac41945a" in observed_after_first
 
 
-def test_sender_resends_when_card_template_changes_same_preview(tmp_path):
+def test_sender_deduplicates_when_card_template_changes_same_signal(tmp_path):
     _write_preview_snapshot(
         tmp_path,
         [
@@ -366,7 +366,7 @@ def test_sender_resends_when_card_template_changes_same_preview(tmp_path):
         json.dumps(
             {
                 "schema": "paper_telegram_sent_keys.v1",
-                "sent_keys": ["preview_1:3febbb64d20fb6f9"],
+                "sent_keys": ["preview_1:f6e0a1e2ac41945a"],
             }
         ),
         encoding="utf-8",
@@ -386,11 +386,12 @@ def test_sender_resends_when_card_template_changes_same_preview(tmp_path):
         send_text=fake_send,
     )
 
-    assert summary["sent"] == 1
-    assert summary["duplicates"] == 0
-    assert len(calls) == 1
+    assert summary["sent"] == 0
+    assert summary["duplicates"] == 1
+    assert len(calls) == 0
     data = json.loads(sent_keys_path.read_text(encoding="utf-8"))
-    assert "preview_1:3febbb64d20fb6f9" in data["sent_keys"]
+    assert "preview_1:f6e0a1e2ac41945a" in data["sent_keys"]
+    assert "signal:sig_1:f6e0a1e2ac41945a" in data["sent_keys"]
     assert "tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in data["sent_keys"]
 
 
@@ -617,11 +618,11 @@ def test_sender_status_digest_when_quality_gate_leaves_no_cards(tmp_path):
 def test_sender_separates_unique_cards_from_recipient_messages(tmp_path):
     _write_preview_snapshot(
         tmp_path,
-        [
-            _preview(preview_id="preview_1", instruction_id="mainpaper_1"),
-            _preview(preview_id="preview_2", instruction_id="mainpaper_2"),
-        ],
-    )
+            [
+                _preview(preview_id="preview_1", instruction_id="mainpaper_1", source_signal_id="sig_1"),
+                _preview(preview_id="preview_2", instruction_id="mainpaper_2", source_signal_id="sig_2"),
+            ],
+        )
     calls = []
 
     async def fake_send(chat_id, text):

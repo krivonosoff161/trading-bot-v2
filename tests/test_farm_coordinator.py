@@ -227,7 +227,7 @@ def test_feedback_followup_becomes_typed_run_sweep_task(tmp_path):
     tasks.close()
 
 
-def test_outcome_review_followup_reuses_feedback_followup_path(tmp_path):
+def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     tasks = FarmTasksDB(":memory:")
     tasks.upsert_unique_candidate({
         "uc_key": "BTC::1h::momentum_breakout::ph::fp",
@@ -253,6 +253,10 @@ def test_outcome_review_followup_reuses_feedback_followup_path(tmp_path):
                 "family": "momentum_breakout",
                 "result": "stop",
                 "diagnosis": "bad_exit_gave_back",
+                "entry_mid": 100.0,
+                "stop_loss": 96.0,
+                "tp1": 108.0,
+                "max_hold_bars": 5,
                 "net_pct": -0.8,
                 "mfe_pct": 1.6,
                 "paper_only": True,
@@ -276,6 +280,7 @@ def test_outcome_review_followup_reuses_feedback_followup_path(tmp_path):
                     "review_kind": "loss",
                     "outcome_bucket": "gave_back",
                     "actionability": "retest_exit_or_capture",
+                    "next_test_dimensions": ["earlier_profit_lock"],
                     "confidence": 0.7,
                 },
                 "paper_only": True,
@@ -293,10 +298,13 @@ def test_outcome_review_followup_reuses_feedback_followup_path(tmp_path):
         run_worker=False, run_validation=False, run_followups=True, max_followups=5,
     )
 
-    assert out["counters"]["followups_scheduled"] == 1
-    assert out["counters"]["followup_sweeps_planned"] == 1
+    assert out["counters"]["outcome_retests_cataloged"] == 1
+    assert out["counters"]["outcome_retests_scheduled"] == 1
+    assert out["counters"]["outcome_retest_sweeps_planned"] == 1
     queued = tasks.tasks_in_state("queued", task_type="run_sweep")
     assert len(queued) == 1
-    assert "origin" in queued[0]["payload_json"]
-    assert "feedback_followup" in queued[0]["payload_json"]
+    payload = json.loads(queued[0]["payload_json"])
+    assert payload["origin"] == "outcome_retest"
+    assert payload["execution_allowed"] is False
+    assert payload["sweep_spec"]["exit_grid"]["take_pct"]
     tasks.close()

@@ -33,7 +33,7 @@ from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
-from src.research_lab.outcome_learning import build_outcome_review_recommendations
+from src.research_lab.outcome_retest import write_outcome_retest_specs
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
 from src.research_lab.strategy_registry import get_strategy
@@ -54,7 +54,9 @@ _COUNTER_KEYS = (
     "runs_completed", "runs_failed", "classified",
     "unique_upserted", "exports_created", "followups_scheduled",
     "followups_deduped", "followup_notes", "followup_sweeps_planned",
-    "followup_invalid",
+    "followup_invalid", "outcome_retests_cataloged", "outcome_retests_scheduled",
+    "outcome_retests_deduped", "outcome_retest_sweeps_planned",
+    "outcome_retest_invalid", "outcome_retest_notes",
 )
 
 
@@ -255,7 +257,25 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
 def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
                             now: float, limit: int) -> None:
     recs = fr.build_recommendations(load_feedback_queue(private_root), _load_setup_cards(private_root))
-    recs.extend(build_outcome_review_recommendations(private_root, max_recommendations=limit))
+    retest_catalog = write_outcome_retest_specs(private_root, max_specs=limit)
+    if int(retest_catalog.get("specs") or 0):
+        _bump(counters, "outcome_retests_cataloged", int(retest_catalog.get("specs") or 0))
+    for spec in retest_catalog.get("items") or []:
+        if not isinstance(spec, dict) or not bool(spec.get("queueable")):
+            continue
+        key = f"retest_schedule::{spec.get('retest_id')}"
+        _, created = tasks.enqueue_task(
+            task_type="schedule_retest",
+            task_key=key,
+            priority=60,
+            symbol=str(spec.get("symbol") or ""),
+            timeframe=str(spec.get("timeframe") or ""),
+            family=str(spec.get("family") or ""),
+            source_event_id=str(spec.get("retest_id") or ""),
+            payload={"retest_spec": spec, "followup_depth": 0},
+            now=now,
+        )
+        _bump(counters, "outcome_retests_scheduled" if created else "outcome_retests_deduped")
     for rec in recs[: max(0, int(limit))]:
         cid = rec.candidate_ids[0] if rec.candidate_ids else ""
         key = f"followup_schedule::{cid or rec.symbol}::{rec.strategy_id}::{rec.action}::{rec.hard_status}"
@@ -310,13 +330,85 @@ def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
     )
 
 
+def _retest_spec_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    data = payload.get("retest_spec") if isinstance(payload, dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def _drain_retest_task(
+    tasks: FarmTasksDB,
+    task: dict[str, Any],
+    *,
+    profiles,
+    policy,
+    counters: dict[str, int],
+    now: float,
+) -> None:
+    try:
+        payload = json.loads(task.get("payload_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    spec_row = _retest_spec_from_payload(payload)
+    if spec_row is None:
+        tasks.skip_task(task["task_id"], "malformed_retest_payload", now=now)
+        _bump(counters, "outcome_retest_invalid")
+        return
+    depth = int(payload.get("followup_depth") or 0)
+    if depth >= MAX_FOLLOWUP_DEPTH:
+        tasks.complete_task(task["task_id"], reason="retest_depth_capped", now=now)
+        _bump(counters, "outcome_retest_notes")
+        return
+    sweep_data = spec_row.get("sweep_spec")
+    if not isinstance(sweep_data, dict):
+        tasks.complete_task(task["task_id"], reason=spec_row.get("not_queueable_reason") or "no_sweep_spec", now=now)
+        _bump(counters, "outcome_retest_notes")
+        return
+    sweep = _sweep_from_payload(sweep_data)
+    check = validate_sweep_spec(sweep, timeframe_profiles=profiles, resource_policy=policy)
+    if not check.ok:
+        tasks.skip_task(task["task_id"], "invalid_retest_spec:" + "|".join(check.errors), now=now)
+        _bump(counters, "outcome_retest_invalid")
+        return
+    run_payload = {
+        "origin": "outcome_retest",
+        "retest_id": spec_row.get("retest_id"),
+        "review_id": spec_row.get("review_id"),
+        "source_ref": spec_row.get("source_ref"),
+        "paper_signal_id": spec_row.get("paper_signal_id"),
+        "actionability": spec_row.get("actionability"),
+        "outcome_bucket": spec_row.get("outcome_bucket"),
+        "baseline": spec_row.get("baseline") or {},
+        "proposed_changes": spec_row.get("proposed_changes") or [],
+        "sweep_spec": _sweep_payload(sweep),
+        "followup_depth": depth + 1,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    _, created = tasks.enqueue_task(
+        task_type="run_sweep",
+        task_key=f"run_sweep::outcome_retest::{sweep.sweep_id}",
+        priority=int(task.get("priority") or 60),
+        symbol=sweep.anchor_symbol,
+        timeframe=sweep.timeframe,
+        family=sweep.setup_family,
+        source_event_id=str(spec_row.get("retest_id") or ""),
+        payload=run_payload,
+        now=now,
+    )
+    tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
+    _bump(counters, "outcome_retest_sweeps_planned" if created else "outcome_retests_deduped")
+
+
 def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
                      counters: dict[str, int], now: float) -> None:
     contexts = _candidate_context_by_id(tasks)
     for _ in range(limit):
-        task = tasks.claim_next_task(task_types=("schedule_followup",), now=now)
+        task = tasks.claim_next_task(task_types=("schedule_followup", "schedule_retest"), now=now)
         if task is None:
             break
+        if task.get("task_type") == "schedule_retest":
+            _drain_retest_task(tasks, task, profiles=profiles, policy=policy, counters=counters, now=now)
+            continue
         try:
             payload = json.loads(task.get("payload_json") or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -688,6 +780,7 @@ def run_coordinator_cycle(
     did_work = any(counters[k] for k in ("prepared_ok", "enriched_ok", "enriched_oi_ok",
                                          "sweeps_materialized", "runs_completed", "classified",
                                          "unblocked", "followup_sweeps_planned",
+                                         "outcome_retest_sweeps_planned",
                                          "followups_scheduled"))
     pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
                           snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,

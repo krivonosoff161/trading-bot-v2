@@ -4,6 +4,7 @@ from src.research_lab.outcome_learning import (
     recommendations_from_outcome_reviews,
     learning_summary,
 )
+from src.research_lab.outcome_retest import build_outcome_retest_specs
 
 
 def _row(**overrides):
@@ -117,3 +118,43 @@ def test_accepted_outcome_review_becomes_bounded_followup_recommendation():
     assert recs[0].strategy_id == "momentum_breakout"
     assert recs[0].candidate_ids == ["candidate_1"]
     assert "outcome_review:llmr_1" in recs[0].reason_codes
+
+
+def test_accepted_outcome_review_becomes_retest_spec():
+    rows = [
+        _row(
+            family="momentum_breakout",
+            candidate_id="candidate_1",
+            result="stop",
+            diagnosis="bad_exit_gave_back",
+            max_hold_bars=10,
+        )
+    ]
+    reviews = [
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": "llmr_1",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {
+                "summary": "Exit gave back positive MFE.",
+                "review_kind": "loss",
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
+                "next_test_dimensions": ["earlier_profit_lock"],
+                "confidence": 0.7,
+            },
+        }
+    ]
+
+    specs = build_outcome_retest_specs(rows, reviews)
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.schema == "OutcomeRetestSpec.v1"
+    assert spec.queueable is True
+    assert spec.execution_allowed is False
+    assert spec.paper_only is True
+    assert spec.sweep_spec["setup_family"] == "momentum_breakout"
+    assert "take_pct" in spec.sweep_spec["exit_grid"]
+    assert spec.baseline["diagnosis"] == "bad_exit_gave_back"
