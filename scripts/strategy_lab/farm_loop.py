@@ -303,6 +303,14 @@ def _print_cycle(out: dict) -> None:
         pfr_c = {k: v for k, v in (ps_op.get("pfr_counts") or {}).items() if isinstance(v, int) and v}
         if pfr_c:
             print("  pfr_lane: " + " ".join(f"{k}={v}" for k, v in pfr_c.items()))
+    exit_supervisor = out.get("paper_exit_supervisor") or {}
+    if exit_supervisor:
+        print(
+            "  paper_exit_supervisor: "
+            f"supervised={exit_supervisor.get('supervised', 0)} "
+            f"by_action={exit_supervisor.get('by_action') or {}} "
+            f"execution_allowed={exit_supervisor.get('execution_allowed')}"
+        )
     mb = out.get("main_paper_bridge") or {}
     if mb:
         print(
@@ -476,6 +484,10 @@ def _cycle_summary(out: dict) -> dict:
             "active_trades": (out.get("paper_product_trade_ledger") or {}).get("active_trades", 0),
             "active_live_ready": (out.get("paper_product_trade_ledger") or {}).get("active_live_ready", 0),
             "active_live_blocked": (out.get("paper_product_trade_ledger") or {}).get("active_live_blocked", 0),
+        },
+        "paper_exit_supervisor": {
+            "supervised": (out.get("paper_exit_supervisor") or {}).get("supervised", 0),
+            "by_action": (out.get("paper_exit_supervisor") or {}).get("by_action") or {},
         },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),
@@ -889,6 +901,18 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     max_observe=getattr(args, "paper_signals_max_observe", None),
                     max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
                     max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)))
+                try:
+                    _write_loop_status(
+                        private_root,
+                        stage="paper_exit_supervisor",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
+                    from src.research_lab.paper_exit_supervisor import write_exit_supervisor
+                    out["paper_exit_supervisor"] = write_exit_supervisor(private_root)
+                except Exception as exc:  # noqa: BLE001 - exit advice must not break the cycle
+                    out.setdefault("errors", []).append({"where": "paper_exit_supervisor", "error": str(exc)})
                 try:
                     _write_loop_status(
                         private_root,

@@ -227,6 +227,16 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     now_ms = int(now * 1000)
     existing = store.load_signals(private_root)
     by_key_active = {s.dedup_key for s in existing if s.status in ACTIVE}
+    # PFR is the validated/main-paper lane. Broad farm watches are useful research
+    # candidates, but they must not starve a validated setup with the same
+    # symbol/timeframe/family identity. PFR therefore dedups against active PFR
+    # signals only; any new PFR signal is then added to by_key_active so the broad
+    # lane cannot create a second watch on top of it in the same cycle.
+    pfr_key_active = {
+        s.dedup_key
+        for s in existing
+        if s.status in ACTIVE and str(s.source or "") == "pfr_farm"
+    }
     recent_terminal = {(s.dedup_key, s.data_fingerprint) for s in existing if s.status in TERMINAL}
     last_seen = {s.dedup_key: s.created_at for s in existing}
     known_bad = lane.load_known_bad(private_root)
@@ -293,11 +303,61 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         pfr_reserved = min(max_new, max(0, int(pfr_reserved_new)))
     live_new_cap = max(0, max_new - pfr_reserved)
 
-    # (2) generate new, deduplicated -- over the MEMORY-RANKED live-mover universe (search layer)
+    # (2) PFR lane first: validated/PAPER_FORWARD_READY setups feed main-paper.
+    pfr_counts: dict[str, int] = {}
+    pfr_gap_samples: list[dict[str, Any]] = []
+    new_sigs = []
+    pfr_new_keys: set[str] = set()
+    if pfr_db_path is not None and max_new > 0:
+        pfr_cap = max_new if pfr_reserved <= 0 else pfr_reserved
+        if pfr_reserved:
+            pfr_counts["pfr_reserved_slots"] = pfr_reserved
+        all_pfr = pfr_bridge.load_pfr_records(pfr_db_path)
+        passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
+            all_pfr, policy=pfr_quality_policy
+        )
+        pfr_counts["pfr_records_loaded"] = len(all_pfr)
+        pfr_counts["pfr_passed_quality"] = len(passed_pfr)
+        pfr_counts["pfr_rejected_quality"] = len(rejected_pfr)
+        pfr_counts["pfr_unique_setups"] = len(
+            {(r["symbol"], r["timeframe"], r["family"]) for r in passed_pfr}
+        )
+
+        active_setup_ids: set[str] = set()
+        for s in existing:
+            if s.status in ACTIVE and str(s.source or "") == "pfr_farm":
+                sid = (s.validator_context or {}).get("setup_id") or ""
+                if sid:
+                    active_setup_ids.add(sid)
+
+        pfr_sigs = pfr_bridge.generate_pfr_signals(
+            passed_pfr,
+            provider=provider,
+            now=now,
+            mode=mode,
+            active_dedup=pfr_key_active,
+            active_setup_ids=active_setup_ids,
+            recent_fingerprints=recent_terminal,
+            max_pfr=max(0, pfr_cap),
+            timeframes=timeframes,
+            status_counts=pfr_counts,
+            max_pfr_scan=max_pfr_scan,
+            max_pfr_fetches=max_pfr_fetches,
+            gap_samples=pfr_gap_samples,
+        )
+        new_sigs.extend(pfr_sigs)
+        for sig, _ in pfr_sigs:
+            by_key_active.add(sig.dedup_key)
+            pfr_new_keys.add(sig.dedup_key)
+        for k, v in pfr_counts.items():
+            gate_counts[k] = gate_counts.get(k, 0) + v
+
+    live_new_cap = max(0, max_new - len(new_sigs))
+
+    # (3) generate new, deduplicated -- over the MEMORY-RANKED live-mover universe (search layer)
     movers = rank_movers(_load_movers(private_root), mem, known_bad)
     if apply:
         write_selection_snapshot(private_root, movers)
-    new_sigs = []
     live_fetches = 0
     live_fetch_limit_reached = False
     for mv in movers:
@@ -357,56 +417,24 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 new_sigs.append((sig, candles))
                 by_key_active.add(sig.dedup_key)
 
-    # (3) PFR lane - bounded separate source, runs after movers so dedup is shared
-    pfr_counts: dict[str, int] = {}
-    pfr_gap_samples: list[dict[str, Any]] = []
-    if pfr_db_path is not None and len(new_sigs) < max_new:
-        if pfr_reserved:
-            pfr_counts["pfr_reserved_slots"] = pfr_reserved
-        all_pfr = pfr_bridge.load_pfr_records(pfr_db_path)
-        passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
-            all_pfr, policy=pfr_quality_policy
-        )
-        pfr_counts["pfr_records_loaded"] = len(all_pfr)
-        pfr_counts["pfr_passed_quality"] = len(passed_pfr)
-        pfr_counts["pfr_rejected_quality"] = len(rejected_pfr)
-        pfr_counts["pfr_unique_setups"] = len(
-            {(r["symbol"], r["timeframe"], r["family"]) for r in passed_pfr}
-        )
-
-        # Collect setup_ids already active so we don't generate a duplicate for the same setup
-        active_setup_ids: set[str] = set()
-        for s in existing:
-            if s.status in ACTIVE:
-                sid = (s.validator_context or {}).get("setup_id") or ""
-                if sid:
-                    active_setup_ids.add(sid)
-        for s, _ in new_sigs:
-            sid = (s.validator_context or {}).get("setup_id") or ""
-            if sid:
-                active_setup_ids.add(sid)
-
-        pfr_sigs = pfr_bridge.generate_pfr_signals(
-            passed_pfr,
-            provider=provider,
-            now=now,
-            mode=mode,
-            active_dedup=by_key_active,          # shared mutable set - movers dedup carries over
-            active_setup_ids=active_setup_ids,
-            recent_fingerprints=recent_terminal,
-            max_pfr=max(0, max_new - len(new_sigs)),
-            timeframes=timeframes,
-            status_counts=pfr_counts,
-            max_pfr_scan=max_pfr_scan,
-            max_pfr_fetches=max_pfr_fetches,
-            gap_samples=pfr_gap_samples,
-        )
-        new_sigs.extend(pfr_sigs)
-        # gate_counts merged for single report surface
-        for k, v in pfr_counts.items():
-            gate_counts[k] = gate_counts.get(k, 0) + v
-
     if apply:
+        if pfr_new_keys:
+            for old in existing:
+                if old.status not in ACTIVE or old.source == "pfr_farm" or old.dedup_key not in pfr_new_keys:
+                    continue
+                old.status = "invalidated"
+                old.outcome = {
+                    **(old.outcome or {}),
+                    "result": "superseded_by_pfr",
+                    "superseded_by": "validated_pfr_signal",
+                }
+                old.review = {
+                    **(old.review or {}),
+                    "diagnosis": "superseded_by_pfr",
+                    "note": "A validated PFR signal replaced this broad farm-watch card.",
+                }
+                store.update_signal(private_root, old)
+                gate_counts["superseded_by_pfr"] = gate_counts.get("superseded_by_pfr", 0) + 1
         for sig, candles in new_sigs:
             sig = _attach_lineage(private_root, sig, candles, mode=mode, provider=provider)
             store.append_signal(private_root, sig)
