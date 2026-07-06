@@ -154,9 +154,11 @@ async def _send_items(
     deliveries: list[PaperTelegramDelivery] = []
     for item in items:
         for recipient_id in recipient_ids:
-            delivery_key = _delivery_key(item, recipient_id)
+            delivery_keys = _delivery_keys(item, recipient_id)
             chart_path, chart_problem = _safe_chart_path(item, private_root)
-            if delivery_key in sent_keys:
+            if any(key in sent_keys for key in delivery_keys):
+                sent_keys.update(delivery_keys)
+                _save_sent_keys(private_root, sent_keys)
                 deliveries.append(
                     _delivery_from_preview(
                         item,
@@ -201,7 +203,7 @@ async def _send_items(
                 )
             )
             if status == "sent":
-                sent_keys.add(delivery_key)
+                sent_keys.update(delivery_keys)
                 _save_sent_keys(private_root, sent_keys)
     return deliveries
 
@@ -211,11 +213,38 @@ def _recipient_hash(recipient_id: str) -> str:
 
 
 def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
-    # ``preview_id`` is the signal identity. ``telegram_card_id`` also includes
-    # the rendered card content/version, so template fixes can be delivered once
-    # without disabling duplicate protection for unchanged cards.
-    item_key = str(item.get("telegram_card_id") or item.get("preview_id") or "")
-    return f"{item_key}:{_recipient_hash(recipient_id)}"
+    return _delivery_keys(item, recipient_id)[0]
+
+
+def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
+    """Return primary + legacy sent keys for one recipient.
+
+    Signal cards deduplicate on stable signal identity. ``telegram_card_id`` is a
+    rendered-content hash and changes when wording/templates change, which caused
+    duplicate Telegram sends for the same trade idea. Status digests are different:
+    their preview_id includes a bucket/state hash, so they intentionally resend
+    only when the operator digest materially changes.
+    """
+    rh = _recipient_hash(recipient_id)
+    source_signal_id = str(item.get("source_signal_id") or "").strip()
+    preview_id = str(item.get("preview_id") or "").strip()
+    telegram_card_id = str(item.get("telegram_card_id") or "").strip()
+
+    if source_signal_id and source_signal_id != "paper_status_digest":
+        candidates = [f"signal:{source_signal_id}:{rh}"]
+    else:
+        digest_key = preview_id or source_signal_id or telegram_card_id
+        candidates = [f"digest:{digest_key}:{rh}"] if digest_key else []
+
+    for legacy in (telegram_card_id, preview_id):
+        if legacy:
+            candidates.append(f"{legacy}:{rh}")
+
+    out: list[str] = []
+    for key in candidates:
+        if key and key not in out:
+            out.append(key)
+    return out or [f"missing_preview_identity:{rh}"]
 
 
 def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | None, str]:

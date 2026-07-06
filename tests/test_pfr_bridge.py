@@ -167,7 +167,7 @@ def _live_signal(symbol: str = "LIVE_USDT_SWAP", tf: str = "15m", now: float = 2
 
 
 class TestPFRReservation:
-    def test_pfr_reserve_prevents_live_mover_starvation(self, tmp_path, monkeypatch):
+    def test_pfr_lane_runs_before_live_movers_even_without_reserved_slots(self, tmp_path, monkeypatch):
         db = tmp_path / "sl.sqlite"
         _make_db(db, [_MRF_ROW_DICT])
 
@@ -203,7 +203,7 @@ class TestPFRReservation:
             pfr_reserved_new=0,
         )
         assert no_reserve["generated"] == 1
-        assert seen_max_pfr == []
+        assert seen_max_pfr == [1]
 
         with_reserve = cycle.run_cycle(
             tmp_path,
@@ -216,7 +216,7 @@ class TestPFRReservation:
             pfr_reserved_new=1,
         )
         assert with_reserve["generated"] == 1
-        assert seen_max_pfr == [1]
+        assert seen_max_pfr == [1, 1]
         assert with_reserve["pfr_counts"]["pfr_reserved_slots"] == 1
 
 
@@ -693,6 +693,36 @@ class TestPFRCycleIntegration:
         assert s.validator_context.get("setup_id") == "setup-C1"
         assert s.validator_context.get("source_validation_verdict") == "PAPER_FORWARD_READY"
         assert s.validator_context.get("params_hash") is not None
+
+    def test_run_cycle_pfr_supersedes_broad_farm_watch_with_same_key(self, tmp_path):
+        from src.research_lab.paper_signals import cycle, store
+        _seed_universe(tmp_path)
+        db = self._pfr_db(tmp_path)
+        broad = _live_signal(symbol="AAOI_USDT_SWAP", tf="1h", now=999_900.0)
+        broad.signal_id = "broad-active-watch"
+        broad.source = "farm"
+        broad.setup_family = "mean_reversion_fade"
+        broad.dedup_key = "AAOI_USDT_SWAP|1h|mean_reversion_fade"
+        store.append_signal(tmp_path, broad)
+
+        rep = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=FakeProvider(_mrf_candles_short()),
+            apply=True,
+            now=1e6,
+            pfr_db_path=db,
+            max_observe=0,
+        )
+
+        sigs = store.load_signals(tmp_path)
+        by_id = {s.signal_id: s for s in sigs}
+        pfr_sigs = [s for s in sigs if s.source == "pfr_farm"]
+        assert len(pfr_sigs) == 1
+        assert by_id["broad-active-watch"].status == "invalidated"
+        assert by_id["broad-active-watch"].review["diagnosis"] == "superseded_by_pfr"
+        assert rep["gate_counts"]["superseded_by_pfr"] == 1
 
     def test_run_cycle_without_pfr_db_is_silent(self, tmp_path):
         from src.research_lab.paper_signals import cycle

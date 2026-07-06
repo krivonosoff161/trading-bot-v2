@@ -288,6 +288,11 @@ async def run(
         print("LLM formatter skipped: NO_TRADE template path")
 
     delivery_text = llm_text if llm_text else _manual_delivery_text(result)
+    from src.research_lab.manual_farm_context import manual_farm_context_text
+
+    farm_context = manual_farm_context_text(symbol)
+    if farm_context:
+        delivery_text = f"{delivery_text}\n\n{farm_context}"
     summary_path = run_dir / f"{symbol}_client_summary.txt"
     summary_path.write_text(delivery_text, encoding="utf-8")
     print(f"Saved: {summary_path}")
