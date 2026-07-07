@@ -476,6 +476,78 @@ class TestLearning:
 
         assert profiles == ["base"]
 
+    def test_product_memory_overrides_legacy_runner_on_losing_cell(self):
+        from src.research_lab.paper_signals import cycle
+        # Legacy memory alone would request runner_probe, but broader product
+        # memory says this non-tactical cell is loss-dominant.  The next probe
+        # should test stop relief, not hold longer into a bad cell.
+        mem = [
+            {"symbol": "X", "timeframe": "15m", "family": "liquidity_sweep_reclaim",
+             "diagnosis": "good_signal", "result": "take"},
+            {"symbol": "X", "timeframe": "15m", "family": "liquidity_sweep_reclaim",
+             "diagnosis": "good_signal", "result": "take"},
+        ]
+        product_memory = {
+            "by_cell": {
+                "X|15m|liquidity_sweep_reclaim": {
+                    "terminal_rows": 21,
+                    "win_rows": 1,
+                    "loss_rows": 14,
+                    "gave_back_rows": 0,
+                    "paper_pnl_usdt": -21.0,
+                }
+            }
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            mem, product_memory, symbol="X", timeframe="15m", family="liquidity_sweep_reclaim")
+
+        assert profiles == ["base", "stop_relief"]
+
+    def test_losing_tactical_cell_does_not_widen_risk(self):
+        from src.research_lab.paper_signals import cycle
+        mem = [
+            {"symbol": "X", "timeframe": "15m", "family": "early_tp_tactical",
+             "diagnosis": "good_signal", "result": "take"},
+            {"symbol": "X", "timeframe": "15m", "family": "early_tp_tactical",
+             "diagnosis": "good_signal", "result": "take"},
+        ]
+        product_memory = {
+            "by_cell": {
+                "X|15m|early_tp_tactical": {
+                    "terminal_rows": 10,
+                    "win_rows": 1,
+                    "loss_rows": 8,
+                    "gave_back_rows": 0,
+                    "paper_pnl_usdt": -4.0,
+                }
+            }
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            mem, product_memory, symbol="X", timeframe="15m", family="early_tp_tactical")
+
+        assert profiles == ["base"]
+
+    def test_positive_product_memory_promotes_runner_probe(self):
+        from src.research_lab.paper_signals import cycle
+        product_memory = {
+            "by_cell": {
+                "X|1h|continuation": {
+                    "terminal_rows": 12,
+                    "win_rows": 7,
+                    "loss_rows": 3,
+                    "gave_back_rows": 0,
+                    "paper_pnl_usdt": 9.0,
+                }
+            }
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [], product_memory, symbol="X", timeframe="1h", family="continuation")
+
+        assert profiles == ["base", "runner_probe"]
+
 
 class TestPartialBreakevenExit:
     def _sig(self, exit_mode):

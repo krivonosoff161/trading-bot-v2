@@ -301,6 +301,33 @@ def _profile_is_disfavored(stats: dict[str, Any]) -> bool:
     return gave_back >= max(1, wins) and pnl < 0
 
 
+def _product_memory_profile(stats: dict[str, Any], *, family: str) -> str:
+    """Deterministic profile preference from product paper outcomes.
+
+    Product memory is the broader, money-normalized feedback loop.  When it has
+    enough terminal rows for a cell, it should outrank the older lightweight
+    paper_signal_memory hints: a few historic takes must not request runner_probe
+    on a cell that is now consistently losing.
+    """
+    terminal = int(stats.get("terminal_rows") or 0)
+    if terminal < 3:
+        return ""
+    wins = int(stats.get("win_rows") or 0)
+    losses = int(stats.get("loss_rows") or 0)
+    gave_back = int(stats.get("gave_back_rows") or 0)
+    pnl = float(stats.get("paper_pnl_usdt") or 0.0)
+    tactical = family in {"early_tp_tactical", "reversal_fade"}
+    if pnl < 0 and losses > wins:
+        if gave_back >= max(1, wins):
+            return "faster_capture"
+        return "base" if tactical else "stop_relief"
+    if pnl > 0 and wins > losses:
+        if gave_back >= max(2, wins // 2):
+            return "faster_capture"
+        return "runner_probe"
+    return ""
+
+
 def geometry_profiles_for_cell(
     memory: list[dict[str, Any]],
     product_memory: dict[str, Any] | None,
@@ -338,12 +365,19 @@ def geometry_profiles_for_cell(
     terminal = int(stats.get("terminal_rows") or 0)
     pnl = float(stats.get("paper_pnl_usdt") or 0.0)
 
-    selected = "base"
-    if diag.get("stop_too_tight", 0) >= 1:
+    product_selected = _product_memory_profile(stats, family=family)
+    selected = product_selected or "base"
+    if not product_selected and diag.get("stop_too_tight", 0) >= 1:
         selected = "stop_relief"
-    elif diag.get("bad_exit_gave_back", 0) + diag.get("target_too_far", 0) >= 1 or gave_back >= max(1, wins):
+    elif not product_selected and (
+        diag.get("bad_exit_gave_back", 0) + diag.get("target_too_far", 0) >= 1
+        or gave_back >= max(1, wins)
+    ):
         selected = "faster_capture"
-    elif (diag.get("good_signal", 0) + results.get("take", 0) >= 2) or (terminal >= 3 and wins > losses and pnl > 0):
+    elif not product_selected and (
+        (diag.get("good_signal", 0) + results.get("take", 0) >= 2)
+        or (terminal >= 3 and wins > losses and pnl > 0)
+    ):
         selected = "runner_probe"
 
     if selected != "base":
