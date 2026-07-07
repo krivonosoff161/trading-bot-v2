@@ -596,6 +596,13 @@ class TestCycleLogStages:
         assert "Tee-Object" not in bat
         assert "Add-Content -Path '%LOG_FILE%' -Value $line -Encoding UTF8" in bat
 
+    def test_farm_loop_cli_default_matches_visible_pfr_budget(self) -> None:
+        source = Path("scripts/strategy_lab/farm_loop.py").read_text(encoding="utf-8")
+
+        assert 'STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES", "12"' in source
+        assert 'paper_signals_max_pfr_fetches", 12' in source
+        assert 'paper_signals_max_pfr_fetches", 8' not in source
+
     def test_visible_full_cycle_network_cap_covers_paper_signal_lanes(self) -> None:
         bat = Path("bat/strategy_lab_farm_full_cycle_loop.bat").read_text(encoding="utf-8")
 

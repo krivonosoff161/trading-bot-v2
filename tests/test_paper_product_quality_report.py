@@ -1,6 +1,9 @@
 import json
 
-from src.research_lab.paper_product_quality_report import build_paper_product_quality_report
+from src.research_lab.paper_product_quality_report import (
+    _pfr_trigger_state,
+    build_paper_product_quality_report,
+)
 
 
 def _write_json(path, payload):
@@ -11,6 +14,27 @@ def _write_json(path, payload):
 def _append_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def test_pfr_trigger_state_separates_budget_limited_scans():
+    state = _pfr_trigger_state(
+        {
+            "catalog_ready": 24,
+            "bridge_instructions": 0,
+            "bridge_validated_instructions": 0,
+            "last_cycle_pfr_generated": 0,
+            "live_trigger_reasons": {
+                "pfr_fetch_limit_reached": 1,
+                "pfr_rejected:no_breakout": 3,
+            },
+        }
+    )
+
+    assert state["state"] == "pfr_trigger_scan_limited"
+    assert state["top_reasons"] == {
+        "pfr_rejected:no_breakout": 3,
+        "pfr_fetch_limit_reached": 1,
+    }
 
 
 def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
