@@ -345,14 +345,14 @@ def _prepared_candles_chart_path(
     if not symbol or not timeframe:
         return None
     path = choose_symbol_file(market_data_glob(private_root, timeframe), symbol, timeframe=timeframe)
-    candles: list[dict[str, Any]] = []
+    prepared_candles: list[dict[str, Any]] = []
     if path is not None:
         try:
-            candles = load_candles(path)
+            prepared_candles = load_candles(path)
         except Exception:  # noqa: BLE001 - card rendering must not break preview generation
-            candles = []
+            prepared_candles = []
     record_ms = _record_epoch_ms(record)
-    candles = _candles_near_record(candles, record_ms, timeframe) if len(candles) >= 30 else []
+    candles = _candles_near_record(prepared_candles, record_ms, timeframe) if len(prepared_candles) >= 30 else []
     if len(candles) < 30:
         candles = _public_chart_candles(
             symbol,
@@ -360,6 +360,8 @@ def _prepared_candles_chart_path(
             record_ms,
             fetch_enabled=fetch_public_chart_candles,
         )
+    if len(candles) < 30 and len(prepared_candles) >= 30:
+        candles = prepared_candles[-120:]
     if len(candles) < 30:
         return None
     raw = [
