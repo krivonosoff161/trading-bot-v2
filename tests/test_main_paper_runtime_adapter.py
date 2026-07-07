@@ -90,6 +90,7 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     assert rows[0]["adaptive_policy_id"].startswith("main_policy_")
     assert rows[0]["ready_strategy_id"] == "ready_fast"
     assert rows[0]["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    assert rows[0]["validation_tier"] == "validated_pfr"
     assert rows[0]["adaptive_execution_profile"] == "fast_tactical_watch"
     assert rows[0]["adaptive_exit_profile"] == "early_tp_partial_be"
     assert "forward_lead:early_tp_tactical" in rows[0]["adaptive_policy_reasons"]
@@ -168,6 +169,9 @@ def test_runtime_queue_record_rejects_execution_enabled():
             adaptive_regime_hint="impulse_exhaustion_scalp",
             adaptive_policy_confidence=0.7,
             adaptive_policy_reasons=["test"],
+            validation_tier="validated_pfr",
+            ready_strategy_id="ready_test",
+            source_validation_verdict="PAPER_FORWARD_READY",
             execution_allowed=True,
         )
 
