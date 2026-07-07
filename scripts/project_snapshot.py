@@ -374,6 +374,13 @@ def _top_counts(raw: Any, *, limit: int = 4) -> dict[str, int]:
     return dict(pairs[:limit])
 
 
+def _canonical_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return ""
+
+
 def _sent_key_summary(private_root: Path) -> dict[str, int]:
     data = _read_json(private_root / "state" / "derived" / "paper_telegram_sent_keys.json")
     keys = [str(item) for item in data.get("sent_keys", []) if str(item)]
@@ -399,10 +406,16 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
         for item in catalog.get("items") or []
         if isinstance(item, dict) and bool(item.get("queueable")) and str(item.get("retest_id") or "")
     }
-    try:
-        catalog_updated_at = (derived / "outcome_retest_specs.json").stat().st_mtime
-    except OSError:
-        catalog_updated_at = 0.0
+    current_spec_hash = {
+        str(item.get("retest_id") or ""): _canonical_json(item)
+        for item in catalog.get("items") or []
+        if isinstance(item, dict) and str(item.get("retest_id") or "")
+    }
+    current_sweep_hash = {
+        str(item.get("retest_id") or ""): _canonical_json(item.get("sweep_spec") or {})
+        for item in catalog.get("items") or []
+        if isinstance(item, dict) and str(item.get("retest_id") or "")
+    }
     out: dict[str, Any] = {
         "catalog_specs": int(catalog.get("specs") or 0),
         "catalog_queueable": int(catalog.get("queueable") or 0),
@@ -450,31 +463,38 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
         task_type = str(row["task_type"] or "")
         state = str(row["state"] or "")
         reason = str(row["machine_reason"] or "")
-        task_updated_at = float(row["updated_at"] or 0.0)
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
         if task_type == "schedule_retest":
             schedule[state] = schedule.get(state, 0) + 1
             source_ref = str(row["source_event_id"] or "")
-            if source_ref in current_queueable_ids and task_updated_at >= catalog_updated_at:
+            payload_spec = payload.get("retest_spec") if isinstance(payload, dict) else None
+            schedule_is_current = (
+                source_ref in current_queueable_ids
+                and _canonical_json(payload_spec or {}) == current_spec_hash.get(source_ref)
+            )
+            if schedule_is_current:
                 current_scheduled_ids.add(source_ref)
             if reason.startswith("invalid_retest_spec:"):
                 label = reason.replace("invalid_retest_spec:", "", 1)
                 invalid_reasons[label] = invalid_reasons.get(label, 0) + 1
                 invalid += 1
-                if source_ref in current_retest_ids and task_updated_at >= catalog_updated_at:
+                if source_ref in current_retest_ids and schedule_is_current:
                     out["invalid_retest_current"] += 1
                     current = out["invalid_current_reasons"]
                     current[label] = current.get(label, 0) + 1
                 else:
                     out["invalid_retest_historical"] += 1
             continue
-        try:
-            payload = json.loads(row["payload_json"] or "{}")
-        except Exception:
-            payload = {}
         if isinstance(payload, dict) and payload.get("origin") == "outcome_retest":
             run_sweep[state] = run_sweep.get(state, 0) + 1
             retest_id = str(payload.get("retest_id") or row["source_event_id"] or "")
-            if retest_id in current_queueable_ids and task_updated_at >= catalog_updated_at:
+            if (
+                retest_id in current_queueable_ids
+                and _canonical_json(payload.get("sweep_spec") or {}) == current_sweep_hash.get(retest_id)
+            ):
                 current_run_ids.add(retest_id)
     out["schedule_retest"] = _top_counts(schedule, limit=6)
     out["run_sweep_outcome_retest"] = _top_counts(run_sweep, limit=6)
