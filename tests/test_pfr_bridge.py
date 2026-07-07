@@ -120,6 +120,13 @@ def _flat_candles(n: int = 25, price: float = 100.0) -> list[dict]:
             for i in range(n)]
 
 
+def _mrf_near_candles_up(n: int = 25) -> list[dict]:
+    """25 bars; last 5 bars rose 7.6% (< move_pct=8) -> short fade pre-trigger."""
+    prices = [100.0] * (n - 6) + [100.0, 101.5, 103.0, 104.5, 106.0, 107.6]
+    return [{"ts": i, "open": p, "high": p * 1.005, "low": p * 0.995, "close": p}
+            for i, p in enumerate(prices)]
+
+
 class FakeProvider:
     def __init__(self, candles: list[dict]):
         self._candles = candles
@@ -291,6 +298,12 @@ class TestPFRQualityPolicy:
         row = _row({**_MRF_ROW_DICT, "avg_net_pct": -0.5})
         passed, rejected = pfr_bridge.apply_quality_policy([row])
         assert len(passed) == 0 and len(rejected) == 1
+
+    def test_executable_risk_contract_rejected(self):
+        row = _row({**_MRF_ROW_DICT, "params": {**_MRF_PARAMS, "stop_pct": 10.0}})
+        passed, rejected = pfr_bridge.apply_quality_policy([row])
+        assert len(passed) == 0 and len(rejected) == 1
+        assert any("stop_pct=10>8" in r for r in rejected[0]["_rejection_reasons"])
 
     def test_custom_policy_override(self):
         row = _row({**_MRF_ROW_DICT, "max_drawdown_pct": 40.0})
@@ -636,6 +649,67 @@ def test_near_trigger_breakout_generates_pretrigger_watch():
     assert gap_samples[0]["selection_state"] == "pretrigger_selected"
 
 
+def test_near_trigger_fade_generates_pretrigger_watch():
+    rows = [_row({**_MRF_ROW_DICT, "candidate_id": "MRF_NEAR", "symbol": "NEARFADE_USDT_SWAP"})]
+
+    class Provider:
+        def fetch_ohlcv(self, *_args):
+            return _mrf_near_candles_up()
+
+    sc: dict = {}
+    gap_samples: list[dict] = []
+    sigs = pfr_bridge.generate_pfr_signals(
+        rows,
+        provider=Provider(),
+        now=1e6,
+        mode="live",
+        active_dedup=set(),
+        active_setup_ids=set(),
+        recent_fingerprints=set(),
+        max_pfr=1,
+        max_pfr_fetches=1,
+        timeframes=("1h",),
+        status_counts=sc,
+        gap_samples=gap_samples,
+    )
+
+    assert len(sigs) == 1
+    sig, _candles = sigs[0]
+    assert sig.source == "pfr_farm"
+    assert sig.setup_family == "mean_reversion_fade"
+    assert sig.side == "short"
+    assert sig.validator_context["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    assert sig.validator_context["ready_strategy_id"]
+    assert sig.validator_context["entry_trigger"] == "mean_reversion_threshold"
+    assert sig.validator_context["pretrigger"] is True
+    assert sig.validator_context["trigger_gap_pct"] <= 1.0
+    assert sc["pfr_generated"] == 1
+    assert sc["pfr_generated_pretrigger"] == 1
+    assert len(gap_samples) == 1
+    assert gap_samples[0]["bucket"].startswith("fade_")
+    assert gap_samples[0]["selection_state"] == "pretrigger_selected"
+
+
+def test_near_trigger_fade_surfaces_wide_risk_blocker():
+    row = _row({
+        **_MRF_ROW_DICT,
+        "candidate_id": "MRF_WIDE_RISK",
+        "symbol": "WIDERISK_USDT_SWAP",
+        "params": {**_MRF_PARAMS, "stop_pct": 10.0},
+    })
+
+    sig, reason = pfr_bridge.build_pfr_mean_reversion_fade(
+        row,
+        _mrf_near_candles_up(),
+        now=1e6,
+        boundary_ts=24,
+        mode="live",
+    )
+
+    assert sig is None
+    assert reason.startswith("risk_too_wide_")
+
+
 class TestPFRBridgeNoBoundaryViolation:
     def test_pfr_bridge_no_forbidden_imports(self):
         """pfr_bridge.py must not import any live-order / credential modules."""
@@ -693,6 +767,26 @@ class TestPFRCycleIntegration:
         assert s.validator_context.get("setup_id") == "setup-C1"
         assert s.validator_context.get("source_validation_verdict") == "PAPER_FORWARD_READY"
         assert s.validator_context.get("params_hash") is not None
+
+    def test_run_cycle_reports_pfr_quality_rejection_reason(self, tmp_path):
+        from src.research_lab.paper_signals import cycle, store
+
+        _seed_universe(tmp_path)
+        db = tmp_path / "sl.sqlite"
+        _make_db(db, [{**_MRF_ROW_DICT, "params": {**_MRF_PARAMS, "stop_pct": 10.0}}])
+        rep = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=FakeProvider(_mrf_candles_short()),
+            apply=True,
+            now=1e6,
+            pfr_db_path=db,
+        )
+
+        assert rep["pfr_counts"]["pfr_rejected_quality"] == 1
+        assert rep["pfr_counts"]["pfr_rejected_quality:stop_pct=10>8"] == 1
+        assert store.load_signals(tmp_path) == []
 
     def test_run_cycle_pfr_supersedes_broad_farm_watch_with_same_key(self, tmp_path):
         from src.research_lab.paper_signals import cycle, store
