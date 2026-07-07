@@ -307,4 +307,24 @@ def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     assert payload["origin"] == "outcome_retest"
     assert payload["execution_allowed"] is False
     assert payload["sweep_spec"]["exit_grid"]["take_pct"]
+
+    out2 = run_coordinator_cycle(
+        tasks, private_root=tmp_path, profiles=PROFILES, policy=POLICY,
+        intake_events=[], data_state_fn=_usable_state(), apply=True, now=1010.0,
+        run_worker=False, run_validation=False, run_followups=False, max_sweeps=1,
+    )
+    assert out2["counters"]["sweeps_materialized"] == 1
+    from src.research_lab.state_db import connect, default_db_path
+
+    conn = connect(default_db_path(tmp_path))
+    try:
+        spec_path = conn.execute("SELECT spec_path FROM queue ORDER BY job_id DESC LIMIT 1").fetchone()["spec_path"]
+    finally:
+        conn.close()
+    spec_payload = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+    ctx = spec_payload["event_context"]
+    assert ctx["origin"] == "outcome_retest"
+    assert ctx["retest_id"] == payload["retest_id"]
+    assert ctx["source_ref"] == "training_s1"
+    assert ctx["paper_signal_id"] == "s1"
     tasks.close()
