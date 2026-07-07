@@ -92,7 +92,7 @@ def main() -> None:
                     help="path to strategy_lab.sqlite вЂ” activates PFR lane (PAPER_FORWARD_READY records)")
     ap.add_argument("--max-pfr-scan", type=int, default=30,
                     help="max PFR records to inspect per cycle; lower this for fast smoke checks")
-    ap.add_argument("--max-pfr-fetches", type=int, default=8,
+    ap.add_argument("--max-pfr-fetches", type=int, default=12,
                     help="max PFR candle fetches per cycle; bounds public network work")
     ap.add_argument("--pfr-reserved-signals", type=int, default=0,
                     help="reserve this many new-signal slots for PFR records when --pfr-db-path is set")

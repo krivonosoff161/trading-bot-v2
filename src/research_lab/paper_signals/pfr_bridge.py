@@ -840,7 +840,7 @@ def generate_pfr_signals(
     timeframes: tuple[str, ...] | list[str] = ("15m", "1h", "4h"),
     status_counts: dict[str, int] | None = None,
     max_pfr_scan: int = 30,
-    max_pfr_fetches: int | None = 8,
+    max_pfr_fetches: int | None = 12,
     gap_samples: list[dict[str, Any]] | None = None,
 ) -> list[tuple[PaperActionSignal, list[dict]]]:
     """Generate paper-watch signals from PFR records using live candles.

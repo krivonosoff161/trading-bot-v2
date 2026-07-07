@@ -407,7 +407,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               families_arg=None, pfr_db_path: Path | None = None,
               pfr_quality_policy: dict | None = None,
               max_pfr_scan: int = 30,
-              max_pfr_fetches: int | None = 8,
+              max_pfr_fetches: int | None = 12,
               pfr_reserved_new: int = 0,
               max_observe: int | None = None,
               max_live_fetches: int | None = 12,
