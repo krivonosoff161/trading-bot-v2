@@ -374,14 +374,54 @@ def _write_chart_png(path: Path, sig: PaperActionSignal, candles: list[dict[str,
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
     tail = candles[-(sig.max_hold_bars + 30):]
-    closes = [float(c["close"]) for c in tail]
+    if not tail:
+        return
+    ohlc = [
+        (
+            float(c["open"]),
+            float(c["high"]),
+            float(c["low"]),
+            float(c["close"]),
+        )
+        for c in tail
+    ]
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(closes, color="black", lw=1)
+    highs = [row[1] for row in ohlc]
+    lows = [row[2] for row in ohlc]
+    levels = [float(sig.entry_zone[0]), float(sig.entry_zone[1]), float(sig.stop_loss)]
+    levels.extend(float(t["price"]) for t in sig.take_profit_plan if t.get("price") is not None)
+    y_min = min(lows + levels)
+    y_max = max(highs + levels)
+    y_span = max(y_max - y_min, max(abs(y_max), 1.0) * 0.01)
+    body_min = y_span * 0.003
+    for i, (open_, high, low, close) in enumerate(ohlc):
+        color = "#26a69a" if close >= open_ else "#ef5350"
+        ax.vlines(i, low, high, color=color, linewidth=1.0, alpha=0.95)
+        bottom = min(open_, close)
+        height = max(abs(close - open_), body_min)
+        ax.add_patch(
+            Rectangle(
+                (i - 0.28, bottom),
+                0.56,
+                height,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.8,
+                alpha=0.85,
+            )
+        )
     ax.axhspan(sig.entry_zone[0], sig.entry_zone[1], color="tab:blue", alpha=0.2, label="entry zone")
     ax.axhline(sig.stop_loss, color="tab:red", ls="--", lw=1, label="stop")
-    for t in sig.take_profit_plan:
-        ax.axhline(t["price"], color="tab:green", ls=":", lw=1)
+    entry_mid = (float(sig.entry_zone[0]) + float(sig.entry_zone[1])) / 2
+    ax.axhline(entry_mid, color="tab:blue", ls="-", lw=0.8, alpha=0.7, label="entry")
+    for idx, t in enumerate(sig.take_profit_plan):
+        label = "take profit" if idx == 0 else None
+        ax.axhline(t["price"], color="tab:green", ls=":", lw=1, label=label)
+    ax.set_xlim(-1, len(ohlc))
+    ax.set_ylim(y_min - y_span * 0.08, y_max + y_span * 0.08)
+    ax.grid(True, axis="y", alpha=0.18, linewidth=0.6)
     ax.set_title(f"{sig.okx_inst_id} {sig.timeframe} {sig.side.upper()} [{sig.review.get('diagnosis', 'paper')}]")
     ax.legend(loc="best", fontsize=7)
     fig.tight_layout()
