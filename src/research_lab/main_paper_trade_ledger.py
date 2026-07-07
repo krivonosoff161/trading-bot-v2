@@ -18,6 +18,9 @@ from src.research_lab.lineage_contract import stable_id, utc_now
 
 SCHEMA = "MainPaperTrade.v1"
 SUMMARY_SCHEMA = "main_paper_trade_ledger.v1"
+VALIDATED_TIER = "validated_pfr"
+FARM_CALCULATED_TIER = "farm_calculated"
+MAIN_PAPER_TIERS = {VALIDATED_TIER, FARM_CALCULATED_TIER}
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class MainPaperTrade:
     runtime_id: str
     instruction_id: str
     source_signal_id: str
+    validation_tier: str
     ready_strategy_id: str
     source_validation_verdict: str
     okx_inst_id: str
@@ -63,10 +67,13 @@ class MainPaperTrade:
             raise ValueError("paper trade ledger must never allow execution")
         if not self.paper_only:
             raise ValueError("paper trade ledger must be paper_only")
-        if not self.ready_strategy_id:
-            raise ValueError("paper trade requires ready_strategy_id")
-        if self.source_validation_verdict != "PAPER_FORWARD_READY":
-            raise ValueError("paper trade requires PAPER_FORWARD_READY source verdict")
+        if self.validation_tier not in MAIN_PAPER_TIERS:
+            raise ValueError(f"paper trade validation_tier must be one of {sorted(MAIN_PAPER_TIERS)}")
+        if self.validation_tier == VALIDATED_TIER:
+            if not self.ready_strategy_id:
+                raise ValueError("validated paper trade requires ready_strategy_id")
+            if self.source_validation_verdict != "PAPER_FORWARD_READY":
+                raise ValueError("validated paper trade requires PAPER_FORWARD_READY source verdict")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,11 +132,17 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         },
         length=20,
     )
+    validation_tier = str(queue_item.get("validation_tier") or "").strip()
+    if not validation_tier:
+        ready_strategy_id = str(queue_item.get("ready_strategy_id") or "").strip()
+        verdict = str(queue_item.get("source_validation_verdict") or "").strip()
+        validation_tier = VALIDATED_TIER if ready_strategy_id and verdict == "PAPER_FORWARD_READY" else FARM_CALCULATED_TIER
     return MainPaperTrade(
         paper_trade_id=paper_trade_id,
         runtime_id=str(queue_item.get("runtime_id") or ""),
         instruction_id=str(queue_item.get("instruction_id") or ""),
         source_signal_id=str(queue_item.get("source_signal_id") or ""),
+        validation_tier=validation_tier,
         ready_strategy_id=str(queue_item.get("ready_strategy_id") or ""),
         source_validation_verdict=str(queue_item.get("source_validation_verdict") or ""),
         okx_inst_id=str(queue_item.get("okx_inst_id") or ""),

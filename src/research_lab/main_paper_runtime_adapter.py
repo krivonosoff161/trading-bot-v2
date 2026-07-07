@@ -19,6 +19,9 @@ from src.research_lab.paper_signals.contract import SOURCES
 
 SCHEMA = "MainPaperRuntimeQueueItem.v1"
 SUMMARY_SCHEMA = "main_paper_runtime_adapter.v1"
+VALIDATED_TIER = "validated_pfr"
+FARM_CALCULATED_TIER = "farm_calculated"
+MAIN_PAPER_TIERS = {VALIDATED_TIER, FARM_CALCULATED_TIER}
 
 FAMILY_PRIORITY = {
     "early_tp_tactical": 0,
@@ -74,6 +77,7 @@ class MainPaperRuntimeQueueItem:
     adaptive_regime_hint: str
     adaptive_policy_confidence: float
     adaptive_policy_reasons: list[str]
+    validation_tier: str = FARM_CALCULATED_TIER
     ready_strategy_id: str = ""
     source_validation_verdict: str = ""
     setup_id: str = ""
@@ -99,6 +103,13 @@ class MainPaperRuntimeQueueItem:
             raise ValueError("runtime queue accepts only accepted consumer rows")
         if self.source not in SOURCES:
             raise ValueError(f"runtime queue source must be one of {SOURCES}")
+        if self.validation_tier not in MAIN_PAPER_TIERS:
+            raise ValueError(f"validation_tier must be one of {sorted(MAIN_PAPER_TIERS)}")
+        if self.validation_tier == VALIDATED_TIER:
+            if not self.ready_strategy_id:
+                raise ValueError("validated runtime queue item requires ready_strategy_id")
+            if self.source_validation_verdict != "PAPER_FORWARD_READY":
+                raise ValueError("validated runtime queue item requires PAPER_FORWARD_READY")
         if self.entry <= 0 or self.stop <= 0:
             raise ValueError("entry and stop must be positive")
         if self.entry == self.stop:
@@ -194,6 +205,11 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         return None
     exit_rule = dict(contract.get("exit_rule") or {})
     exit_params = dict(exit_rule.get("params") or {})
+    validation_tier = str(meta.get("validation_tier") or "").strip()
+    if not validation_tier:
+        ready_strategy_id = str(meta.get("ready_strategy_id") or "").strip()
+        verdict = str(meta.get("source_validation_verdict") or "").strip()
+        validation_tier = VALIDATED_TIER if ready_strategy_id and verdict == "PAPER_FORWARD_READY" else FARM_CALCULATED_TIER
     take_profit_plan = list(
         row.get("take_profit_plan")
         or meta.get("take_profit_plan")
@@ -247,6 +263,7 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         adaptive_regime_hint=policy.regime_hint,
         adaptive_policy_confidence=policy.confidence,
         adaptive_policy_reasons=policy.reason_codes,
+        validation_tier=validation_tier,
         ready_strategy_id=str(meta.get("ready_strategy_id") or ""),
         source_validation_verdict=str(meta.get("source_validation_verdict") or ""),
         setup_id=str(meta.get("setup_id") or ""),
