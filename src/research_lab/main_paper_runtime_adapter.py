@@ -217,6 +217,9 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         or []
     )
     priority, priority_reasons = _priority(row, contract)
+    if validation_tier == VALIDATED_TIER:
+        priority -= 1000
+        priority_reasons.insert(0, "validation_tier=validated_pfr:-1000")
     policy_input = {
         "source_signal_id": str(row.get("source_signal_id") or ""),
         "okx_inst_id": str(row.get("okx_inst_id") or contract.get("pair") or ""),

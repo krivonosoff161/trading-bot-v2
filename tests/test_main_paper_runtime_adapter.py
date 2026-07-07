@@ -20,7 +20,16 @@ def _sig(
     family: str = "early_tp_tactical",
     tf: str = "1h",
     source: str = "farm",
+    validated: bool = True,
 ) -> PaperActionSignal:
+    validator_context = {}
+    if validated:
+        validator_context = {
+            "ready_strategy_id": f"ready_{signal_id}",
+            "source_validation_verdict": "PAPER_FORWARD_READY",
+            "setup_id": f"setup_{signal_id}",
+            "candidate_id": f"cand_{signal_id}",
+        }
     return PaperActionSignal(
         signal_id=signal_id,
         source=source,
@@ -29,12 +38,7 @@ def _sig(
         timeframe=tf,
         side="long",
         setup_family=family,
-        validator_context={
-            "ready_strategy_id": f"ready_{signal_id}",
-            "source_validation_verdict": "PAPER_FORWARD_READY",
-            "setup_id": f"setup_{signal_id}",
-            "candidate_id": f"cand_{signal_id}",
-        },
+        validator_context=validator_context,
         entry_zone=[100.0, 101.0],
         stop_loss=95.0,
         invalidation_rule="close below 95",
@@ -113,6 +117,27 @@ def test_runtime_queue_preserves_pfr_source(tmp_path):
     ]
     assert summary["queued"] == 1
     assert rows[0]["source"] == "pfr_farm"
+
+
+def test_runtime_queue_prioritizes_validated_pfr_over_calculated_farm(tmp_path):
+    append_signal(tmp_path, _sig("farm_fast", family="early_tp_tactical", tf="15m", validated=False))
+    append_signal(tmp_path, _sig("pfr_slow", family="continuation", tf="4h", source="pfr_farm"))
+    export_main_paper_instructions(tmp_path)
+    consume_main_paper_instructions(tmp_path)
+
+    summary = build_main_paper_runtime_queue(tmp_path)
+
+    rows = [
+        json.loads(line)
+        for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert summary["queued"] == 2
+    assert rows[0]["source_signal_id"] == "pfr_slow"
+    assert rows[0]["validation_tier"] == "validated_pfr"
+    assert rows[0]["source"] == "pfr_farm"
+    assert "validation_tier=validated_pfr:-1000" in rows[0]["priority_reasons"]
+    assert rows[1]["source_signal_id"] == "farm_fast"
+    assert rows[1]["validation_tier"] == "farm_calculated"
 
 
 def test_runtime_queue_skips_rejected_consumer_rows(tmp_path):
