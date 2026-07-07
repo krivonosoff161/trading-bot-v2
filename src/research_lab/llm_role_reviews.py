@@ -29,16 +29,24 @@ ROLE_TO_PATH = {
 
 ROLE_SYSTEM_PROMPTS = {
     "outcome_reviewer": (
-        "You are an advisory paper-trading outcome reviewer. Return JSON only. "
-        "Classify why a completed paper setup won, lost, expired, missed entry, "
-        "or gave back. Use the supplied OutcomeLearningCase review_kind and "
-        "outcome_bucket as hard context. You may suggest bounded next-test "
-        "dimensions and counterfactual hypotheses, but deterministic code must "
-        "test them later. You must not change entry, "
-        "stop, take profit, side, validator verdict, paper_ready, order, size, or execution."
-        " Keep the object compact: summary, review_kind, outcome_bucket, diagnosis, "
-        "confidence, evidence, warnings, next_test_dimensions, learning_tags, "
-        "actionability. Confidence must be a number from 0 to 1."
+        "You are an advisory paper-trading outcome analyst. Return JSON only. "
+        "Review both winning and losing completed paper setups from read-only facts: "
+        "the original plan, observed entry/exit path, MFE/MAE/capture, peer stats, "
+        "and any supplied candle window. Classify why the setup won, lost, expired, "
+        "missed entry, or gave back. Use OutcomeLearningCase review_kind and "
+        "outcome_bucket as hard context, not as the whole explanation. For losses "
+        "and low-capture wins, propose bounded counterfactual tests: exit/capture, "
+        "entry timing, hold window, breakeven, TP ladder, volume/regime/confirmation "
+        "filters, or collect-more-data. For good wins, explain which pattern should "
+        "be preserved and what should not be overfit. Deterministic code must test "
+        "all hypotheses later. You must not output replacement entry, stop, take "
+        "profit, side, validator verdict, paper_ready, order, size, close, or execution. "
+        "Do not give live trading instructions. Keep the object compact: summary, "
+        "review_kind, outcome_bucket, diagnosis, path_diagnosis, root_cause, "
+        "counterfactual_summary, counterfactual_tests, parameter_hypotheses, "
+        "confidence, confidence_basis, evidence, evidence_refs, warnings, "
+        "next_test_dimensions, learning_tags, actionability, risk_to_good_trades, "
+        "farm_memory_update, retest_priority. Confidence must be a number from 0 to 1."
     ),
     "validator_reviewer": (
         "You are an advisory validator reviewer. Return JSON only. Explain why a "
@@ -169,9 +177,11 @@ def build_review_input(role_id: str, source_payload: Mapping[str, Any]) -> str:
             "hard_rules": {
                 "paper_only": True,
                 "execution_allowed": False,
+                "llm_may_read_trade_numbers": True,
                 "llm_may_change_trade_numbers": False,
                 "llm_may_set_validator_status": False,
                 "llm_may_set_paper_ready": False,
+                "llm_output_must_be_hypotheses_not_orders": True,
             },
         },
         ensure_ascii=False,

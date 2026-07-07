@@ -8,7 +8,8 @@ trading system. It is a design-and-implementation note, not a live-trading claim
 - Paper/research only.
 - `execution_allowed=false` at every new artifact boundary.
 - LLMs may classify, explain, and suggest bounded next-test dimensions.
-- LLMs must not set entry, stop, take profit, side, validator verdict,
+- LLMs may read planned and observed paper-trade levels as historical evidence.
+- LLMs must not output replacement entry, stop, take profit, side, validator verdict,
   `paper_ready`, order size, order action, or execution permission.
 - No `.env`, Telegram credentials, private OKX account endpoints, or live order
   modules are used by the outcome-learning code.
@@ -58,7 +59,7 @@ exchange endpoints, and no LLM authority over execution.
 terminal paper outcome
   -> paper_signals.lane.review()
   -> TrainingRow.v2
-  -> OutcomeLearningCase.v1
+  -> OutcomeLearningCase.v1 + read-only plan/outcome/path pack
   -> outcome_reviewer advisory JSON
   -> state/llm_advice/outcome_reviews.jsonl
   -> next TrainingRow.v2 export links outcome_review_id
@@ -98,8 +99,19 @@ This makes later analysis able to answer:
 | `win_low_capture` | `counterfactual` | green outcome but poor MFE capture | TP ladder/max-hold retest |
 | `win` | `win` | positive outcome worth preserving as pattern evidence | preserve/shadow same context |
 
-The LLM receives a sanitized review pack. Exact entry/stop/TP levels and final
-human card text are intentionally not included in that pack.
+The LLM receives a sanitized review pack. The pack now includes read-only
+planned/observed trade facts so the reviewer can act like a post-trade analyst:
+
+- original side, entry zone, midpoint, stop, TP1, risk, max-hold, exit mode;
+- observed paper entry/exit, result, net, MFE/MAE, capture, bars held, partial/BE facts;
+- a compact candle window from private prepared `market_data/<tf>/` when available;
+- peer stats for the same family/timeframe.
+
+Final human card text is intentionally not included in that pack. The reviewer
+can propose hypotheses such as "test earlier profit lock", "compare BE policy",
+or "add volume/regime confirmation", but it cannot return executable levels or
+change the signal. Deterministic code turns accepted hypotheses into capped
+`OutcomeRetestSpec`/`SweepSpec` rows and the farm tests them.
 
 ## What This Is Not
 
@@ -147,6 +159,20 @@ Implemented in this slice:
    reuse the existing `feedback_followup.py` planner.
 5. `OutcomePromotionGate.v1` status view over accepted outcome reviews,
    shadow-forward, true-forward, and the ready-strategy catalog.
+
+Implemented in the trader-analyst expansion:
+
+1. `TrainingRow.v2` preserves observed paper entry/exit, bars held, TP1/partial
+   flags, and banked percentage.
+2. `OutcomeLearningCase.v1.review_input` includes read-only `original_plan`,
+   `observed_trade`, and `market_context` sections.
+3. `agent_role_review_cycle` passes the private research root so prepared candle
+   windows can be attached without public output or exchange/order access.
+4. The `outcome_reviewer` prompt/contract accepts counterfactual tests,
+   parameter hypotheses, path diagnosis, and farm-memory hints, while forbidding
+   trade/execution authority.
+5. `outcome_retest` consumes `next_test_dimensions`, `counterfactual_tests`, and
+   `parameter_hypotheses` as bounded retest dimensions.
 
 Next implementation steps:
 
