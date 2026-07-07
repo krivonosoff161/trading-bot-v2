@@ -1,6 +1,6 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-07-05
+Updated: 2026-07-07
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
@@ -20,6 +20,15 @@ documents are preserved as history, but they no longer define the active work.
 > slices should add operator evidence reports and source-quality joins, still
 > reusing existing `feedback_followup`, `setup_outcome_memory`, `shadow_forward`,
 > and `true_forward` instead of adding a parallel queue or second memory system.
+
+> **Update 2026-07-07 - farm geometry now has bounded A/B probes.**
+> The next calibration step is no longer to hand-edit fixed TP/SL constants. Broad
+> farm families can now emit the legacy `base` geometry plus at most one bounded
+> adaptive profile selected from outcome memory (`stop_relief`, `faster_capture`,
+> `runner_probe`). Code still owns all prices and risk checks; memory only selects
+> the profile label. Near-term work is to run paper cycles, compare terminal
+> `TrainingRow.v2` outcomes by `farm_geometry_profile_id`, and only then promote,
+> demote, or adjust the profile rules.
 
 > **Update 2026-07-05 - headless product loop is the low-load operator mode.**
 > The visible control room remains useful for manual observation, but the normal
