@@ -626,6 +626,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
             else {}
         ),
         "pfr_funnel": quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {},
+        "pfr_trigger_state": (
+            quality.get("pfr_trigger_state")
+            if isinstance(quality.get("pfr_trigger_state"), dict)
+            else {}
+        ),
         "quality_report_exists": bool(quality),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
@@ -792,6 +797,7 @@ def _print_paper_product_status() -> None:
                 f"expiry:{lifecycle.get('expiry_buckets') or {}}"
             )
         if pfr:
+            trigger_state = st.get("pfr_trigger_state") if isinstance(st.get("pfr_trigger_state"), dict) else {}
             print(
                 "                "
                 f"pfr_ready={pfr.get('catalog_ready', 0)} "
@@ -805,6 +811,14 @@ def _print_paper_product_status() -> None:
                     "                "
                     f"pfr_near={pfr.get('near_trigger_counts') or {}} "
                     f"cycle_blockers={pfr.get('cycle_resource_reasons') or {}}"
+                )
+            if trigger_state:
+                print(
+                    "                "
+                    f"pfr_trigger_state={trigger_state.get('state') or '-'} "
+                    f"validated_instructions={trigger_state.get('bridge_validated_instructions', 0)} "
+                    f"pfr_generated={trigger_state.get('last_cycle_pfr_generated', 0)} "
+                    f"top_reasons={trigger_state.get('top_reasons') or {}}"
                 )
 
 
