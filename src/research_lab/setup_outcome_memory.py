@@ -370,7 +370,9 @@ def _derived_by_uc(private_root: Path, filename: str) -> dict[str, dict[str, Any
     return by_uc if isinstance(by_uc, dict) else {}
 
 
-def _training_memory(private_root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _training_memory(
+    private_root: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Aggregate paper-product training rows for memory enrichment.
 
     Training rows are already sanitized derived artifacts.  This function keeps
@@ -380,12 +382,13 @@ def _training_memory(private_root: Path) -> tuple[dict[str, dict[str, Any]], dic
     path = Path(private_root) / "state" / "derived" / "paper_signal_training.jsonl"
     by_candidate: dict[str, dict[str, Any]] = {}
     by_cell: dict[str, dict[str, Any]] = {}
+    by_geometry_profile_cell: dict[str, dict[str, Any]] = {}
     if not path.exists():
-        return by_candidate, by_cell
+        return by_candidate, by_cell, by_geometry_profile_cell
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return by_candidate, by_cell
+        return by_candidate, by_cell, by_geometry_profile_cell
     for line in lines:
         if not line.strip():
             continue
@@ -401,11 +404,22 @@ def _training_memory(private_root: Path) -> tuple[dict[str, dict[str, Any]], dic
         }
         candidate_ids.discard("")
         cell_key = _training_cell_key(row.get("symbol") or row.get("okx_inst_id"), row.get("timeframe"), row.get("family"))
+        profile_cell_key = _training_geometry_profile_key(
+            row.get("symbol") or row.get("okx_inst_id"),
+            row.get("timeframe"),
+            row.get("family"),
+            row.get("farm_geometry_profile_id"),
+        )
         for candidate_id in candidate_ids:
             _add_training_row(by_candidate.setdefault(candidate_id, _empty_training_agg()), row)
         if cell_key:
             _add_training_row(by_cell.setdefault(cell_key, _empty_training_agg()), row)
-    return by_candidate, by_cell
+        if profile_cell_key:
+            _add_training_row(
+                by_geometry_profile_cell.setdefault(profile_cell_key, _empty_training_agg()),
+                row,
+            )
+    return by_candidate, by_cell, by_geometry_profile_cell
 
 
 def _normalize_symbol(value: Any) -> str:
@@ -420,6 +434,14 @@ def _training_cell_key(symbol: Any, timeframe: Any, family: Any) -> str:
     if not (sym and tf and fam):
         return ""
     return f"{sym}|{tf}|{fam}"
+
+
+def _training_geometry_profile_key(symbol: Any, timeframe: Any, family: Any, profile_id: Any) -> str:
+    cell = _training_cell_key(symbol, timeframe, family)
+    profile = str(profile_id or "").strip()
+    if not (cell and profile):
+        return ""
+    return f"{cell}|{profile}"
 
 
 def _empty_training_agg() -> dict[str, Any]:
@@ -510,11 +532,13 @@ def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
     ``momentum_breakout``).  Mixing them would fake validator evidence.  The
     summary keeps the product learning signal visible without promoting it.
     """
-    _, by_cell = _training_memory(private_root)
+    _, by_cell, by_geometry_profile_cell = _training_memory(private_root)
     total = _empty_training_agg()
     by_family: dict[str, dict[str, Any]] = {}
     by_timeframe: dict[str, dict[str, Any]] = {}
+    by_geometry_profile: dict[str, dict[str, Any]] = {}
     by_cell_summary: dict[str, dict[str, Any]] = {}
+    by_geometry_profile_cell_summary: dict[str, dict[str, Any]] = {}
     for key, agg in by_cell.items():
         parts = key.split("|")
         if len(parts) != 3:
@@ -524,14 +548,24 @@ def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
         _merge_training_agg(by_family.setdefault(family, _empty_training_agg()), agg)
         _merge_training_agg(by_timeframe.setdefault(tf, _empty_training_agg()), agg)
         by_cell_summary[key] = _training_summary(agg)
+    for key, agg in by_geometry_profile_cell.items():
+        parts = key.split("|")
+        if len(parts) != 4:
+            continue
+        _symbol, _tf, _family, profile_id = parts
+        _merge_training_agg(by_geometry_profile.setdefault(profile_id, _empty_training_agg()), agg)
+        by_geometry_profile_cell_summary[key] = _training_summary(agg)
     return {
         "schema": "product_paper_memory.v1",
         "disclaimer": "Broad paper-product outcomes only; research signal for review and next sweeps, not validation.",
         "cells": len(by_cell_summary),
+        "geometry_profile_cells": len(by_geometry_profile_cell_summary),
         "summary": _training_summary(total),
         "by_family": {k: _training_summary(v) for k, v in sorted(by_family.items())},
         "by_timeframe": {k: _training_summary(v) for k, v in sorted(by_timeframe.items())},
+        "by_geometry_profile": {k: _training_summary(v) for k, v in sorted(by_geometry_profile.items())},
         "by_cell": by_cell_summary,
+        "by_geometry_profile_cell": by_geometry_profile_cell_summary,
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -577,7 +611,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
     exit2 = _derived_by_uc(private_root, "exit_phase2.json")
-    training_by_candidate, training_by_cell = _training_memory(private_root)
+    training_by_candidate, training_by_cell, _training_by_geometry_profile_cell = _training_memory(private_root)
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
