@@ -2,6 +2,18 @@
 
 Updated: 2026-07-07
 
+> **Update 2026-07-08 - PFR trigger-budget and gap-memory alignment.**
+> The PFR/main-paper handoff now has one visible fetch budget across the full-cycle
+> launcher, `farm_loop`, standalone `paper_signals_run`, `cycle.run_cycle`, and
+> `pfr_bridge.generate_pfr_signals`: `max_pfr_fetches=12`. The private aggregate
+> product-quality report now separates a budget-limited PFR scan from an ordinary
+> waiting-for-trigger state via `pfr_trigger_state=pfr_trigger_scan_limited`.
+> PFR candidate selection also reuses recent private `pfr_gap_telemetry.jsonl`
+> trigger-distance memory to check near-trigger validated setups before spending the
+> bounded candle-fetch budget on farther historical winners. This is deterministic
+> paper/research routing only: no `.env`, no `AUTO_TRADE`, no old `main.py`, no live
+> orders, no Telegram sending authority, and no LLM authority over trade permission.
+
 > **Update 2026-07-07 - adaptive farm geometry probes.**
 > Broad farm paper signals no longer have to use only one fixed ATR/R geometry per
 > family. The family builders still compute all entry/stop/TP/hold levels

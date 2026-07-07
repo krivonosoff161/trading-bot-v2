@@ -1,14 +1,24 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-07-05
+Updated: 2026-07-08
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
 
 ## Current State
 
-Current center: the calculation farm plus the validator-backed main-paper watcher,
+Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.
+
+New 2026-07-08 context: the PFR handoff was tightened after the user noticed that
+subscriber cards were still broad farm cards while validated PFR candidates existed.
+The full-cycle launcher, `farm_loop`, standalone paper-signal runner, `cycle.run_cycle`,
+and `pfr_bridge.generate_pfr_signals` now share `max_pfr_fetches=12`. The private
+product-quality report distinguishes `pfr_trigger_scan_limited` from ordinary
+`waiting_for_live_trigger`. The paper-signal cycle now reads recent private
+`pfr_gap_telemetry.jsonl` trigger-distance memory and prioritizes near-trigger PFR
+records before spending the bounded public-candle fetch budget. This is deterministic
+paper/research routing only; it does not grant live execution or LLM authority.
 
 New 2026-07-05 context: the first outcome-learning loop slice is in place. Terminal
 paper outcomes can be routed into deterministic `OutcomeLearningCase.v1` records,
@@ -29,15 +39,18 @@ Read first:
 - `docs/session_handoff_2026-07-03.md`
 - `docs/outcome_learning_loop_2026-07-05.md`
 
-Current verified runtime:
+Current verified snapshot after PRs #135-#137:
 
-- branch/head: `feature/calc-farm`, `7bbc65c feat: harden farm loop observability`
-- canonical loop: running as `python pid=18900`
+- branch/head: `main`, `fa74ddc feat: prioritize PFR candidates by gap memory (#137)`
+- relevant trading processes: none running during the handoff snapshot
 - mode: `paper_only=true`
 - execution: `execution_allowed=false`
-- `AUTO_TRADE=false`
-- old `main.py`: isolated
-- health: no blocking gates, `ready_for_visible_paper_research_loop=pass`
+- old `main.py`: isolated / not part of this PFR handoff
+- active paper product: broad farm rows still dominate the already-open active set;
+  the next cycle is expected to apply PFR gap-memory ordering before new PFR fetches
+- latest aggregate state before the next runtime cycle:
+  `pfr_ready=24`, `validated_instructions=0`, `pfr_generated=0`,
+  `pfr_trigger_state=pfr_trigger_scan_limited`
 
 Canonical flow:
 
@@ -100,12 +113,13 @@ subscriber/main cards unless they have a validator-backed `ready_strategy_id`.
 
 Next product build target, if the user continues this thread:
 
-- design and implement a separate reviewed `main_paper_executor` contract;
+- run the canonical visible paper cycle and confirm new PFR counts include
+  `pfr_gap_memory_keys` / `pfr_gap_memory_prioritized`;
+- verify whether near-trigger PFR candidates start producing `source=pfr_farm`
+  active rows and `validated_pfr` subscriber-card labels;
+- continue the separate adaptive farm/validator/main/outcome architecture work only
+  after this PFR handoff evidence is visible in the next cycle;
 - keep `execution_allowed=false`;
-- use shared deterministic trade math for entry/SL/TP/RR/risk/outcome;
-- allow LLM only as bounded advisor/explainer, not price/permission authority;
-- write pseudo-trade lifecycle and outcome rows;
-- render human-readable subscriber cards;
 - do **not** wire farm outputs directly into old live/order-capable `main.py`.
 
 Next learning-loop build target:
