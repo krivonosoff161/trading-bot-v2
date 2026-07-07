@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from scripts import project_snapshot
@@ -124,24 +123,33 @@ def test_outcome_retest_status_separates_current_from_historical_invalid(tmp_pat
 
     derived = tmp_path / "state" / "derived"
     derived.mkdir(parents=True)
+    fresh_spec = {
+        "retest_id": "fresh_retest",
+        "queueable": True,
+        "sweep_spec": {"sweep_id": "fresh", "max_variants": 8},
+    }
     catalog_path = derived / "outcome_retest_specs.json"
     catalog_path.write_text(
         json.dumps({
             "specs": 2,
             "queueable": 2,
             "items": [
-                {"retest_id": "fresh_retest", "queueable": True},
-                {"retest_id": "queued_retest", "queueable": True},
+                fresh_spec,
+                {
+                    "retest_id": "queued_retest",
+                    "queueable": True,
+                    "sweep_spec": {"sweep_id": "queued", "max_variants": 8},
+                },
             ],
         }),
         encoding="utf-8",
     )
-    os.utime(catalog_path, (5.0, 5.0))
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
     tasks.enqueue_task(
         task_type="schedule_retest",
         task_key="fresh",
         source_event_id="fresh_retest",
+        payload={"retest_spec": fresh_spec},
         state="skipped",
         machine_reason="invalid_retest_spec:variant grid exceeds max_variants",
         now=10.0,
@@ -150,6 +158,7 @@ def test_outcome_retest_status_separates_current_from_historical_invalid(tmp_pat
         task_type="schedule_retest",
         task_key="old",
         source_event_id="old_retest",
+        payload={"retest_spec": {"retest_id": "old_retest", "queueable": True}},
         state="skipped",
         machine_reason="invalid_retest_spec:old invalid grid",
         now=1.0,
