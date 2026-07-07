@@ -24,6 +24,14 @@ from src.research_lab.sweep_spec import SweepSpec
 SCHEMA = "OutcomeRetestSpec.v1"
 
 _RETEST_ACTIONS = {"retest_exit_or_capture", "retest_entry_timing", "compare_breakeven_policy"}
+_PAPER_TO_EXECUTABLE_FAMILY = {
+    "early_tp_tactical": "momentum_breakout",
+    "continuation": "momentum_breakout",
+    "momentum_continuation": "momentum_breakout",
+    "pullback_continuation": "breakout_retest",
+    "reversal_fade": "mean_reversion_fade",
+    "liquidity_sweep_reclaim": "sfp_liquidity_sweep",
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,7 @@ class OutcomeRetestSpec:
     family: str
     actionability: str
     outcome_bucket: str
+    source_family: str = ""
     dimensions: list[str] = field(default_factory=list)
     proposed_changes: list[str] = field(default_factory=list)
     baseline: dict[str, Any] = field(default_factory=dict)
@@ -86,6 +95,11 @@ def _baseline(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _executable_family(source_family: str) -> str:
+    family = str(source_family or "")
+    return _PAPER_TO_EXECUTABLE_FAMILY.get(family, family)
+
+
 def _exit_grid(row: dict[str, Any], dimensions: Iterable[str]) -> tuple[dict[str, list[Any]], list[str]]:
     entry = _float(row, "entry_mid")
     tp1 = _float(row, "tp1")
@@ -122,7 +136,8 @@ def _entry_grid(row: dict[str, Any], dimensions: Iterable[str]) -> tuple[dict[st
 
 
 def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -> tuple[SweepSpec | None, list[str], str]:
-    family = str(row.get("family") or "")
+    source_family = str(row.get("family") or "")
+    family = _executable_family(source_family)
     symbol = str(row.get("symbol") or "")
     timeframe = str(row.get("timeframe") or "")
     if not symbol or not timeframe or not family:
@@ -133,6 +148,9 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
     entry_grid, entry_changes = _entry_grid(row, dimensions)
     if not exit_grid and not entry_grid:
         return None, [], "no_deterministic_retest_grid"
+    mapping_note = []
+    if source_family and source_family != family:
+        mapping_note.append(f"mapped paper family {source_family} -> executable farm family {family}")
     sweep = SweepSpec(
         sweep_id=f"outcome_{retest_id}",
         anchor_symbol=symbol,
@@ -147,7 +165,7 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
         private_output_policy="private_only",
         variant_tier="smoke",
     )
-    return sweep, exit_changes + entry_changes, ""
+    return sweep, mapping_note + exit_changes + entry_changes, ""
 
 
 def _review_payload(review: dict[str, Any]) -> dict[str, Any]:
@@ -205,11 +223,12 @@ def build_outcome_retest_specs(
         row = rows_by_ref.get(source_ref)
         if not row:
             continue
+        source_family = str(row.get("family") or "")
+        family = _executable_family(source_family)
         dimensions = _review_dimensions(payload)
         if not dimensions:
             dimensions = ["exit_mode_partial_be_vs_fixed"] if actionability == "retest_exit_or_capture" else []
         identity = {
-            "review_id": review.get("review_id"),
             "source_ref": source_ref,
             "paper_signal_id": row.get("paper_signal_id") or row.get("signal_id"),
             "actionability": actionability,
@@ -229,7 +248,8 @@ def build_outcome_retest_specs(
                 candidate_id=str(row.get("candidate_id") or row.get("setup_candidate_id") or ""),
                 symbol=str(row.get("symbol") or ""),
                 timeframe=str(row.get("timeframe") or ""),
-                family=str(row.get("family") or ""),
+                family=family,
+                source_family=source_family,
                 actionability=actionability,
                 outcome_bucket=str(payload.get("outcome_bucket") or ""),
                 dimensions=dimensions,

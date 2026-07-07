@@ -20,6 +20,10 @@ from src.strategy.signal_contract import ExitRule, FollowRule, SignalContract
 SCHEMA = "MainPaperInstruction.v1"
 ACTIVE_STATUSES = ("armed", "opened_paper")
 MAIN_READY_VERDICT = "PAPER_FORWARD_READY"
+VALIDATED_TIER = "validated_pfr"
+FARM_CALCULATED_TIER = "farm_calculated"
+RESEARCH_ONLY_TIER = "research_only"
+MAIN_PAPER_TIERS = {VALIDATED_TIER, FARM_CALCULATED_TIER}
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,7 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
             "sweep_run_id": sig.sweep_run_id,
             "validation_id": sig.validation_id,
             "llm_interpretation_ref": sig.llm_interpretation_ref,
+            "validation_tier": validation_tier_from_signal(sig),
             "ready_strategy_id": str(sig.validator_context.get("ready_strategy_id") or ""),
             "setup_id": str(sig.validator_context.get("setup_id") or ""),
             "candidate_id": str(sig.validator_context.get("candidate_id") or ""),
@@ -142,7 +147,7 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
 def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | None:
     if sig.status not in ACTIVE_STATUSES:
         return None
-    if not is_main_ready_signal(sig):
+    if validation_tier_from_signal(sig) not in MAIN_PAPER_TIERS:
         return None
     entry = _entry_midpoint(sig)
     contract = _contract_from_signal(sig, entry)
@@ -164,18 +169,27 @@ def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | No
     )
 
 
-def is_main_ready_signal(sig: PaperActionSignal) -> bool:
-    """Return True only for validator-backed signals allowed into main-paper runtime.
+def validation_tier_from_signal(sig: PaperActionSignal) -> str:
+    """Classify the paper signal's evidence tier for the main-paper runtime.
 
-    The paper signal lane may create broad research/watch cards. The main-paper runtime
-    is stricter: it receives only candidates that came through the hard validator/PFR
-    catalog and carry a stable ready strategy identity. This keeps farm exploration out
-    of operator/subscriber cards until validation promoted the setup to forward-watch.
+    ``validated_pfr`` means the signal carries the hard-validation verdict and a stable
+    ready strategy identity. ``farm_calculated`` is still paper-only, but it is a live
+    farm calculation that has not completed the full PFR identity path. ``research_only``
+    stays out of the main-paper runtime.
     """
     context = sig.validator_context or {}
     ready_strategy_id = str(context.get("ready_strategy_id") or "").strip()
     verdict = str(context.get("source_validation_verdict") or "").strip()
-    return bool(ready_strategy_id) and verdict == MAIN_READY_VERDICT
+    if bool(ready_strategy_id) and verdict == MAIN_READY_VERDICT:
+        return VALIDATED_TIER
+    if sig.source in {"farm", "pfr_farm"}:
+        return FARM_CALCULATED_TIER
+    return RESEARCH_ONLY_TIER
+
+
+def is_main_ready_signal(sig: PaperActionSignal) -> bool:
+    """Return True for paper-only signals allowed into the main-paper watch runtime."""
+    return validation_tier_from_signal(sig) in MAIN_PAPER_TIERS
 
 
 def _jsonl_path(private_root: Path) -> Path:
@@ -197,9 +211,12 @@ def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
         if instruction_from_signal(sig) is not None:
             continue
         context = sig.validator_context or {}
+        tier = validation_tier_from_signal(sig)
         ready_strategy_id = str(context.get("ready_strategy_id") or "").strip()
         verdict = str(context.get("source_validation_verdict") or "").strip()
-        if not ready_strategy_id:
+        if tier == RESEARCH_ONLY_TIER:
+            reason = "research_only_source"
+        elif not ready_strategy_id:
             reason = "missing_ready_strategy_id"
         elif verdict != MAIN_READY_VERDICT:
             reason = f"verdict_not_{MAIN_READY_VERDICT}"

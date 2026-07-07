@@ -108,23 +108,36 @@ def test_export_main_paper_instructions_rebuilds_private_view(tmp_path):
     out_jsonl = Path(summary["jsonl_path"])
     out_snapshot = Path(summary["snapshot_path"])
 
-    assert summary["instructions"] == 2
+    assert summary["instructions"] == 3
     assert summary["active_source_signals"] == 3
-    assert summary["skipped_unvalidated"] == 1
-    assert summary["skip_reasons"] == {"missing_ready_strategy_id": 1}
-    assert summary["skipped_examples"][0]["reason"] == "missing_ready_strategy_id"
+    assert summary["skipped_unvalidated"] == 0
+    assert summary["skip_reasons"] == {}
     assert summary["required_validator_verdict"] == "PAPER_FORWARD_READY"
     assert summary["execution_allowed"] is False
     rows = [json.loads(line) for line in out_jsonl.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert all(row["execution_allowed"] is False for row in rows)
+    tiers = {row["source_signal_id"]: row["signal_contract"]["metadata"]["validation_tier"] for row in rows}
+    assert tiers["sig-armed1"] == "validated_pfr"
+    assert tiers["sig-opened_paper2"] == "validated_pfr"
+    assert tiers["sig-armed4"] == "farm_calculated"
     snap = json.loads(out_snapshot.read_text(encoding="utf-8"))
-    assert snap["instructions"] == 2
-    assert snap["skip_reasons"] == {"missing_ready_strategy_id": 1}
+    assert snap["instructions"] == 3
+    assert snap["skip_reasons"] == {}
 
 
-def test_instruction_from_signal_skips_unvalidated_research_watch():
-    assert instruction_from_signal(_sig("armed", validated=False)) is None
+def test_instruction_from_signal_accepts_unvalidated_farm_as_calculated_paper_watch():
+    item = instruction_from_signal(_sig("armed", validated=False))
+
+    assert item is not None
+    assert item.signal_contract["metadata"]["validation_tier"] == "farm_calculated"
+
+
+def test_instruction_from_signal_skips_research_only_sources():
+    sig = _sig("armed", validated=False)
+    sig.source = "scanner"
+
+    assert instruction_from_signal(sig) is None
 
 
 def test_main_paper_instruction_rejects_execution_enabled():

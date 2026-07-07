@@ -206,3 +206,83 @@ def test_accepted_outcome_review_becomes_retest_spec():
     assert spec.sweep_spec["setup_family"] == "momentum_breakout"
     assert "take_pct" in spec.sweep_spec["exit_grid"]
     assert spec.baseline["diagnosis"] == "bad_exit_gave_back"
+
+
+def test_paper_family_outcome_review_maps_to_executable_retest_spec():
+    rows = [
+        _row(
+            family="early_tp_tactical",
+            candidate_id="",
+            result="stop",
+            diagnosis="bad_exit_gave_back",
+            max_hold_bars=6,
+        )
+    ]
+    reviews = [
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": "llmr_paper",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {
+                "summary": "Paper signal gave back MFE.",
+                "review_kind": "loss",
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
+                "next_test_dimensions": ["earlier_profit_lock"],
+                "confidence": 0.7,
+            },
+        }
+    ]
+
+    specs = build_outcome_retest_specs(rows, reviews)
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.queueable is True
+    assert spec.source_family == "early_tp_tactical"
+    assert spec.family == "momentum_breakout"
+    assert spec.sweep_spec["setup_family"] == "momentum_breakout"
+    assert "mapped paper family early_tp_tactical -> executable farm family momentum_breakout" in spec.proposed_changes
+
+
+def test_retest_specs_dedupe_same_trade_and_dimensions_across_reviews():
+    rows = [
+        _row(
+            family="early_tp_tactical",
+            result="stop",
+            diagnosis="bad_exit_gave_back",
+            max_hold_bars=6,
+        )
+    ]
+    reviews = [
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": "llmr_first",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {
+                "review_kind": "loss",
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
+                "next_test_dimensions": ["earlier_profit_lock"],
+            },
+        },
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": "llmr_second",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {
+                "review_kind": "loss",
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
+                "next_test_dimensions": ["earlier_profit_lock"],
+            },
+        },
+    ]
+
+    specs = build_outcome_retest_specs(rows, reviews)
+
+    assert len(specs) == 1
+    assert specs[0].review_id == "llmr_first"
