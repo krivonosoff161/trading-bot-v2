@@ -796,6 +796,77 @@ class TestPFRCycleIntegration:
         assert rep["pfr_counts"]["pfr_rejected_quality:stop_pct=10>8"] == 1
         assert store.load_signals(tmp_path) == []
 
+    def test_run_cycle_prioritizes_recent_pfr_gap_memory_before_fetch_cap(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+
+        _seed_universe(tmp_path)
+        db = tmp_path / "sl.sqlite"
+        _make_db(
+            db,
+            [
+                {
+                    **_MRF_ROW_DICT,
+                    "candidate_id": "FAR",
+                    "symbol": "FAR_USDT_SWAP",
+                    "avg_net_pct": 9.0,
+                },
+                {
+                    **_MRF_ROW_DICT,
+                    "candidate_id": "NEAR",
+                    "symbol": "NEAR_USDT_SWAP",
+                    "avg_net_pct": 1.0,
+                },
+            ],
+        )
+        telemetry = tmp_path / "state" / "derived" / "pfr_gap_telemetry.jsonl"
+        telemetry.parent.mkdir(parents=True, exist_ok=True)
+        telemetry.write_text(
+            json.dumps(
+                {
+                    "schema": "PFRGapTelemetryCycle.v1",
+                    "updated_at": 1_000.0,
+                    "samples": [
+                        {
+                            "symbol": "NEAR_USDT_SWAP",
+                            "timeframe": "1h",
+                            "family": "mean_reversion_fade",
+                            "min_gap_pct": 0.1,
+                            "selection_state": "rejected",
+                            "bucket": "fade_gap_le_0_25pct",
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        calls: list[str] = []
+
+        class Provider:
+            def fetch_ohlcv(self, symbol, tf, start, end):
+                calls.append(symbol)
+                if symbol == "NEAR-USDT-SWAP":
+                    return _mrf_near_candles_up()
+                return _flat_candles()
+
+        rep = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("1h",),
+            provider=Provider(),
+            apply=False,
+            now=1e6,
+            pfr_db_path=db,
+            max_pfr_fetches=1,
+            max_live_fetches=0,
+        )
+
+        assert calls == ["NEAR-USDT-SWAP"]
+        assert rep["generated"] == 1
+        assert rep["new_cards"][0].startswith("NEAR_USDT_SWAP")
+        assert rep["pfr_counts"]["pfr_gap_memory_keys"] == 1
+        assert rep["pfr_counts"]["pfr_gap_memory_prioritized"] == 1
+
     def test_run_cycle_pfr_supersedes_broad_farm_watch_with_same_key(self, tmp_path):
         from src.research_lab.paper_signals import cycle, store
         _seed_universe(tmp_path)
