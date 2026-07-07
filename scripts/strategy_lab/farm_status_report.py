@@ -578,7 +578,7 @@ def _print(report: dict) -> None:
               f"trades={tl.get('trades', 0)} invalid={tl.get('invalid', 0)} "
               f"by_status={tl.get('by_status') or '(none)'} "
               f"execution_allowed={tl.get('execution_allowed')} "
-              "(validated paper trades only; no order path)")
+              "(validated/farm-calculated paper trades; no order path)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "
