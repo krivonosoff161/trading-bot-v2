@@ -468,6 +468,25 @@ def test_preview_fetches_public_chart_when_prepared_candles_are_stale(monkeypatc
     assert Path(item["chart_path"]).parent.name == "paper_telegram_base_charts"
 
 
+def test_preview_uses_latest_prepared_candles_before_old_review_chart(monkeypatch, tmp_path):
+    _write_market_data(tmp_path)
+    created_at = "2026-07-04T20:37:57+00:00"
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record(source_signal_id="sig_product", created_at=created_at)])
+    review_chart = tmp_path / "state" / "derived" / "paper_reviews" / "sig_product.png"
+    review_chart.parent.mkdir(parents=True, exist_ok=True)
+    review_chart.write_bytes(b"old-line-chart")
+    monkeypatch.delenv("STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES", raising=False)
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["charts_available"] == 1
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    chart_path = Path(item["chart_path"])
+    assert chart_path.parent.name == "paper_telegram_base_charts"
+    assert chart_path != review_chart
+    assert chart_path.exists()
+
+
 def test_preview_explicit_public_chart_fetch_does_not_require_env(monkeypatch, tmp_path):
     _write_market_data(tmp_path)
     created_at = "2026-07-04T20:37:57+00:00"
