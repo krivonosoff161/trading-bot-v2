@@ -468,6 +468,43 @@ def test_preview_fetches_public_chart_when_prepared_candles_are_stale(monkeypatc
     assert Path(item["chart_path"]).parent.name == "paper_telegram_base_charts"
 
 
+def test_preview_explicit_public_chart_fetch_does_not_require_env(monkeypatch, tmp_path):
+    _write_market_data(tmp_path)
+    created_at = "2026-07-04T20:37:57+00:00"
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record(source_signal_id="sig_product", created_at=created_at)])
+    monkeypatch.delenv("STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES", raising=False)
+    calls = []
+
+    class FakeProvider:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_ohlcv(self, symbol, timeframe, start_ts, end_ts):
+            calls.append((symbol, timeframe, start_ts, end_ts))
+            step = 60 * 60_000
+            base = end_ts - 79 * step
+            return [
+                {
+                    "ts": base + idx * step,
+                    "open": 100.0 + idx * 0.1,
+                    "high": 101.0 + idx * 0.1,
+                    "low": 99.5 + idx * 0.1,
+                    "close": 100.4 + idx * 0.1,
+                    "vol": 1000 + idx,
+                }
+                for idx in range(80)
+            ]
+
+    monkeypatch.setattr("src.research_lab.paper_telegram_preview.OkxPublicMarketDataProvider", FakeProvider)
+
+    summary = build_paper_telegram_preview(tmp_path, fetch_public_chart_candles=True)
+
+    assert calls
+    assert summary["chart_path_types"] == {"paper_telegram_base_charts": 1}
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    assert Path(item["chart_path"]).parent.name == "paper_telegram_base_charts"
+
+
 def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
     _write_quality_report(
         tmp_path,

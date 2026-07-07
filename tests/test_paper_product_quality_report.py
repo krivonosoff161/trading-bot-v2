@@ -185,7 +185,9 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["pfr_funnel"]["catalog_rejected_quality"] == 10
     assert summary["pfr_funnel"]["bridge_active_source_signals"] == 3
     assert summary["pfr_funnel"]["bridge_instructions"] == 0
+    assert summary["pfr_funnel"]["bridge_validated_instructions"] == 0
     assert summary["pfr_funnel"]["bridge_skip_reasons"] == {"missing_ready_strategy_id": 3}
+    assert summary["pfr_funnel"]["last_cycle_pfr_generated"] == 0
     assert summary["pfr_funnel"]["last_cycle_pfr_counts"] == {
         "pfr_records_loaded": 53,
         "pfr_passed_quality": 43,
@@ -210,7 +212,9 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "state": "waiting_for_live_trigger",
         "catalog_ready": 43,
         "bridge_instructions": 0,
+        "bridge_validated_instructions": 0,
         "last_cycle_generated": 0,
+        "last_cycle_pfr_generated": 0,
         "top_reasons": {
             "pfr_rejected:no_breakout": 6,
             "pfr_rejected:no_fade_signal:move_pct_threshold=8.0": 5,

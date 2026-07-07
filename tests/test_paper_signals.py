@@ -470,6 +470,37 @@ class TestSearchRanking:
         assert ranked[0]["symbol"] == "GOOD_USDT_SWAP"
         assert "knownbad-5" in ranked[1]["_reason"]
 
+    def test_product_memory_softly_reranks_universe(self):
+        from src.research_lab.paper_signals import cycle
+        movers = [
+            {"symbol": "WEAK_USDT_SWAP", "inst_id": "WEAK-USDT-SWAP", "score": 10, "_bucket": "meme"},
+            {"symbol": "BETTER_USDT_SWAP", "inst_id": "BETTER-USDT-SWAP", "score": 9, "_bucket": "majors"},
+        ]
+        product_memory = {
+            "by_cell": {
+                "WEAK_USDT_SWAP|15m|continuation": {
+                    "terminal_rows": 10,
+                    "win_rows": 1,
+                    "loss_rows": 8,
+                    "gave_back_rows": 3,
+                    "paper_pnl_usdt": -4.0,
+                },
+                "BETTER_USDT_SWAP|15m|continuation": {
+                    "terminal_rows": 10,
+                    "win_rows": 7,
+                    "loss_rows": 2,
+                    "gave_back_rows": 0,
+                    "paper_pnl_usdt": 3.0,
+                },
+            }
+        }
+
+        ranked = cycle.rank_movers(movers, [], set(), product_memory)
+
+        assert ranked[0]["symbol"] == "BETTER_USDT_SWAP"
+        assert "product_memory=+" in ranked[0]["_reason"]
+        assert "product_memory=-" in ranked[1]["_reason"]
+
     def test_selection_snapshot_written(self, tmp_path):
         from src.research_lab.paper_signals import cycle
         ranked = cycle.rank_movers([{"symbol": "A_USDT_SWAP", "score": 5, "_bucket": "majors"}], [], set())
@@ -529,7 +560,7 @@ class TestKnownBadGate:
         d = tmp_path / "state" / "derived"
         d.mkdir(parents=True)
         (d / "setup_outcome_memory.json").write_text(json.dumps({"records": [
-            {"symbol": "BAD_USDT_SWAP", "family": "reversal_fade", "outcome_class": "REJECTED_CONFIRMED_BAD"}]}),
+            {"symbol": "BAD_USDT_SWAP", "family": "reversal_fade", "outcome_class": "CONFIRMED_BAD"}]}),
             encoding="utf-8")
         kb = lane.load_known_bad(tmp_path)
         assert ("BAD_USDT_SWAP", "reversal_fade") in kb and ("BAD_USDT_SWAP", "*") in kb

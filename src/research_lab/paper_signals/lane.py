@@ -398,7 +398,11 @@ def load_known_bad(private_root: Path) -> set[tuple[str, str]]:
         return set()
     bad = set()
     for r in recs:
-        if r.get("outcome_class") == "REJECTED_CONFIRMED_BAD" or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD":
+        if (
+            r.get("outcome_class") == "CONFIRMED_BAD"
+            or r.get("tactical_status") == "REJECTED_CONFIRMED_BAD"
+            or r.get("tactical_class") == "REJECTED_CONFIRMED_BAD"
+        ):
             sym = str(r.get("symbol"))
             fam = str(r.get("family") or "*")
             bad.add((sym, fam))      # block this exact (symbol, family) ...

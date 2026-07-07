@@ -15,6 +15,7 @@ from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, utc_now
 from src.research_lab.main_paper_bridge import MAIN_READY_VERDICT
+from src.research_lab.paper_money_model import paper_money_from_outcome, summarize_paper_money
 from src.research_lab.paper_signals import store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import midpoint
@@ -49,6 +50,7 @@ class PaperProductTrade:
     source: str
     outcome: dict[str, Any] = field(default_factory=dict)
     review: dict[str, Any] = field(default_factory=dict)
+    paper_account: dict[str, Any] = field(default_factory=dict)
     reason_now: str = ""
     risk_pct: float = 0.0
     created_at: str = field(default_factory=utc_now)
@@ -132,6 +134,7 @@ def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
         source=sig.source,
         outcome=dict(sig.outcome or {}),
         review=dict(sig.review or {}),
+        paper_account=paper_money_from_outcome(dict(sig.outcome or {})),
         reason_now=sig.reason_now,
         risk_pct=float(sig.risk_pct or 0.0),
     )
@@ -194,6 +197,7 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         "active_by_source": active_by_source,
         "active_by_family": active_by_family,
         "by_live_block": by_live_block,
+        "paper_money": summarize_paper_money([trade.to_dict() for trade in trades]),
         "paper_only": True,
         "execution_allowed": False,
         "jsonl_path": str(out_jsonl),

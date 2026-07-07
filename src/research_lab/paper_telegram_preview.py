@@ -303,7 +303,9 @@ def _candles_near_record(candles: list[dict[str, Any]], record_ms: int | None, t
     return before[-120:]
 
 
-def _public_chart_fetch_enabled() -> bool:
+def _public_chart_fetch_enabled(override: bool | None = None) -> bool:
+    if override is not None:
+        return bool(override)
     return str(os.getenv("STRATEGY_LAB_PAPER_TELEGRAM_FETCH_CHART_CANDLES") or "").strip().lower() in {
         "1",
         "true",
@@ -312,8 +314,14 @@ def _public_chart_fetch_enabled() -> bool:
     }
 
 
-def _public_chart_candles(symbol: str, timeframe: str, record_ms: int | None) -> list[dict[str, Any]]:
-    if not _public_chart_fetch_enabled():
+def _public_chart_candles(
+    symbol: str,
+    timeframe: str,
+    record_ms: int | None,
+    *,
+    fetch_enabled: bool | None = None,
+) -> list[dict[str, Any]]:
+    if not _public_chart_fetch_enabled(fetch_enabled):
         return []
     tf_ms = _timeframe_ms(timeframe)
     end_ts = int(record_ms or time.time() * 1000)
@@ -325,7 +333,13 @@ def _public_chart_candles(symbol: str, timeframe: str, record_ms: int | None) ->
         return []
 
 
-def _prepared_candles_chart_path(private_root: Path, record: dict[str, Any], source_signal_id: str) -> Path | None:
+def _prepared_candles_chart_path(
+    private_root: Path,
+    record: dict[str, Any],
+    source_signal_id: str,
+    *,
+    fetch_public_chart_candles: bool | None = None,
+) -> Path | None:
     symbol = str(record.get("okx_inst_id") or record.get("pair") or record.get("symbol") or "").replace("-", "_")
     timeframe = str(record.get("timeframe") or "").strip().lower()
     if not symbol or not timeframe:
@@ -340,7 +354,12 @@ def _prepared_candles_chart_path(private_root: Path, record: dict[str, Any], sou
     record_ms = _record_epoch_ms(record)
     candles = _candles_near_record(candles, record_ms, timeframe) if len(candles) >= 30 else []
     if len(candles) < 30:
-        candles = _public_chart_candles(symbol, timeframe, record_ms)
+        candles = _public_chart_candles(
+            symbol,
+            timeframe,
+            record_ms,
+            fetch_enabled=fetch_public_chart_candles,
+        )
     if len(candles) < 30:
         return None
     raw = [
@@ -367,8 +386,19 @@ def _prepared_candles_chart_path(private_root: Path, record: dict[str, Any], sou
     return out_path if out_path.exists() else None
 
 
-def _render_telegram_card_image(private_root: Path, record: dict[str, Any], source_signal_id: str) -> str:
-    base_chart = _prepared_candles_chart_path(private_root, record, source_signal_id)
+def _render_telegram_card_image(
+    private_root: Path,
+    record: dict[str, Any],
+    source_signal_id: str,
+    *,
+    fetch_public_chart_candles: bool | None = None,
+) -> str:
+    base_chart = _prepared_candles_chart_path(
+        private_root,
+        record,
+        source_signal_id,
+        fetch_public_chart_candles=fetch_public_chart_candles,
+    )
     if base_chart is None:
         base_chart = _paper_review_chart_path(private_root, source_signal_id)
     return str(base_chart) if base_chart is not None else ""
@@ -809,7 +839,12 @@ def _write_card_ledger(private_root: Path, previews: list[PaperTelegramPreview])
     return summary
 
 
-def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict[str, Any]:
+def build_paper_telegram_preview(
+    private_root: Path,
+    *,
+    limit: int = 20,
+    fetch_public_chart_candles: bool | None = None,
+) -> dict[str, Any]:
     rows, source_path = _load_records(_trade_snapshot_path(private_root))
     source_schema = "main_paper_trade_ledger.v1"
     if not rows:
@@ -875,7 +910,12 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
                 consumer_status=str(row.get("consumer_status") or row.get("status") or ""),
                 validation_tier=tier,
                 text=text,
-                chart_path=_render_telegram_card_image(Path(private_root), row, source_signal_id),
+                chart_path=_render_telegram_card_image(
+                    Path(private_root),
+                    row,
+                    source_signal_id,
+                    fetch_public_chart_candles=fetch_public_chart_candles,
+                ),
                 problems=problems,
             )
         )
@@ -890,8 +930,11 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
 
     invalid = sum(1 for preview in previews if preview.problems)
     by_validation_tier: dict[str, int] = {}
+    chart_path_types: dict[str, int] = {}
     for preview in previews:
         by_validation_tier[preview.validation_tier] = by_validation_tier.get(preview.validation_tier, 0) + 1
+        chart_type = Path(preview.chart_path).parent.name if preview.chart_path else "missing"
+        chart_path_types[chart_type] = chart_path_types.get(chart_type, 0) + 1
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": source_schema,
@@ -907,6 +950,7 @@ def build_paper_telegram_preview(private_root: Path, *, limit: int = 20) -> dict
         "quality_gate_reasons": quality_gate_reasons,
         "quality_ranked": quality_ranked,
         "by_validation_tier": by_validation_tier,
+        "chart_path_types": dict(sorted(chart_path_types.items())),
         "items": [preview.to_dict() for preview in previews],
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
