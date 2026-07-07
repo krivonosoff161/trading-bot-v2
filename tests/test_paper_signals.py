@@ -346,6 +346,32 @@ class TestFamilies:
         assert len(families.FAMILIES) >= 3
         assert {"continuation", "reversal_fade", "liquidity_sweep_reclaim"} <= set(families.FAMILIES)
 
+    def test_geometry_profile_changes_signal_identity_and_bounds(self):
+        from src.research_lab.paper_signals import families
+        candles = _series([100 + i * 0.05 for i in range(40)])
+        base, why_base = families.build_early_tp("X", "X-USDT-SWAP", "15m", candles, mover={},
+                                                now=1.0, boundary_ts=0, mode="live")
+        runner, why_runner = families.build_early_tp(
+            "X", "X-USDT-SWAP", "15m", candles, mover={}, now=1.0, boundary_ts=0, mode="live",
+            geometry_profile="runner_probe")
+        assert base is not None, why_base
+        assert runner is not None, why_runner
+        assert base.dedup_key == "X|15m|early_tp_tactical"
+        assert runner.dedup_key == "X|15m|early_tp_tactical|runner_probe"
+        assert runner.validator_context["geometry_profile_id"] == "runner_probe"
+        assert runner.max_hold_bars > base.max_hold_bars
+        assert runner.take_profit_plan[0]["price"] > base.take_profit_plan[0]["price"]
+
+    def test_generate_can_emit_base_and_one_adaptive_profile(self):
+        from src.research_lab.paper_signals import families
+        candles = _series([100 + i * 0.05 for i in range(40)])
+        out = families.generate(
+            "X", "X-USDT-SWAP", "15m", candles, mover={}, now=1.0, boundary_ts=0, mode="live",
+            families=["early_tp_tactical"],
+            geometry_profiles={"early_tp_tactical": ["base", "faster_capture"]},
+        )
+        assert [sig.validator_context["geometry_profile_id"] for sig, _ in out] == ["base", "faster_capture"]
+
     def test_family_meta_is_structural_and_complete(self):
         from src.research_lab.paper_signals import families
         assert len(families.FAMILY_META) >= 6   # 5 builders + watch_only described structurally
@@ -396,6 +422,14 @@ class TestLearning:
         assert not cycle.validate_advice({"entry_zone": [1, 2]})[0]   # LLM cannot mint geometry
         assert not cycle.validate_advice({"side": "long"})[0]
         assert not cycle.validate_advice({"confidence": 5})[0]
+
+    def test_geometry_profiles_use_outcome_memory_without_raw_prices(self):
+        from src.research_lab.paper_signals import cycle
+        mem = [{"symbol": "X", "timeframe": "15m", "family": "early_tp_tactical",
+                "diagnosis": "bad_exit_gave_back", "result": "timeout"}]
+        profiles = cycle.geometry_profiles_for_cell(
+            mem, {}, symbol="X", timeframe="15m", family="early_tp_tactical")
+        assert profiles == ["base", "faster_capture"]
 
 
 class TestPartialBreakevenExit:
