@@ -431,6 +431,27 @@ class TestLearning:
             mem, {}, symbol="X", timeframe="15m", family="early_tp_tactical")
         assert profiles == ["base", "faster_capture"]
 
+    def test_geometry_profile_memory_demotes_losing_profile(self):
+        from src.research_lab.paper_signals import cycle
+        mem = [{"symbol": "X", "timeframe": "15m", "family": "early_tp_tactical",
+                "diagnosis": "bad_exit_gave_back", "result": "timeout"}]
+        product_memory = {
+            "by_geometry_profile_cell": {
+                "X|15m|early_tp_tactical|faster_capture": {
+                    "terminal_rows": 3,
+                    "win_rows": 0,
+                    "loss_rows": 3,
+                    "gave_back_rows": 2,
+                    "paper_pnl_usdt": -1.2,
+                }
+            }
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            mem, product_memory, symbol="X", timeframe="15m", family="early_tp_tactical")
+
+        assert profiles == ["base"]
+
 
 class TestPartialBreakevenExit:
     def _sig(self, exit_mode):

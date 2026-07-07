@@ -270,6 +270,37 @@ def _product_cell_stats(
     return {}
 
 
+def _product_profile_cell_stats(
+    product_memory: dict[str, Any] | None,
+    symbol: str,
+    timeframe: str,
+    family: str,
+    profile_id: str,
+) -> dict[str, Any]:
+    by_profile_cell = (
+        (product_memory or {}).get("by_geometry_profile_cell")
+        if isinstance(product_memory, dict)
+        else None
+    )
+    if not isinstance(by_profile_cell, dict):
+        return {}
+    exact = by_profile_cell.get(f"{symbol}|{timeframe}|{family}|{profile_id}")
+    return exact if isinstance(exact, dict) else {}
+
+
+def _profile_is_disfavored(stats: dict[str, Any]) -> bool:
+    terminal = int(stats.get("terminal_rows") or 0)
+    if terminal < 3:
+        return False
+    wins = int(stats.get("win_rows") or 0)
+    losses = int(stats.get("loss_rows") or 0)
+    gave_back = int(stats.get("gave_back_rows") or 0)
+    pnl = float(stats.get("paper_pnl_usdt") or 0.0)
+    if losses >= wins and pnl < 0:
+        return True
+    return gave_back >= max(1, wins) and pnl < 0
+
+
 def geometry_profiles_for_cell(
     memory: list[dict[str, Any]],
     product_memory: dict[str, Any] | None,
@@ -314,6 +345,11 @@ def geometry_profiles_for_cell(
         selected = "faster_capture"
     elif (diag.get("good_signal", 0) + results.get("take", 0) >= 2) or (terminal >= 3 and wins > losses and pnl > 0):
         selected = "runner_probe"
+
+    if selected != "base":
+        profile_stats = _product_profile_cell_stats(product_memory, symbol, timeframe, family, selected)
+        if _profile_is_disfavored(profile_stats):
+            selected = "base"
 
     return ["base"] if selected == "base" else ["base", selected]
 
