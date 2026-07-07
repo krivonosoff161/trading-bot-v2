@@ -82,6 +82,53 @@ def _read_jsonl_tail(path: Path, limit: int) -> list[dict[str, Any]]:
     return rows[-limit:]
 
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _accepted_source_refs(path: Path, role_id: str) -> set[str]:
+    refs: set[str] = set()
+    for row in _read_jsonl(path):
+        if str(row.get("role_id") or "") != role_id:
+            continue
+        if not bool(row.get("accepted")):
+            continue
+        source_ref = str(row.get("source_ref") or "")
+        if source_ref:
+            refs.add(source_ref)
+    return refs
+
+
+def _load_unreviewed_training_rows(private_root: Path, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    training_path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
+    rows = _read_jsonl(training_path)
+    accepted_refs = _accepted_source_refs(
+        private_root / "state" / "llm_advice" / "outcome_reviews.jsonl",
+        "outcome_reviewer",
+    )
+    missing = []
+    for row in rows:
+        source_ref = str(row.get("training_row_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
+        if source_ref and source_ref in accepted_refs:
+            continue
+        missing.append(row)
+    return missing[-limit:]
+
+
 def _load_validator_memory(private_root: Path, limit: int) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
@@ -171,10 +218,7 @@ def _summary_path(private_root: Path) -> Path:
 def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     private_root = resolve_private_root(args.private_root)
     provider = _make_provider(args)
-    training_rows = _read_jsonl_tail(
-        private_root / "state" / "derived" / "paper_signal_training.jsonl",
-        args.max_outcomes,
-    )
+    training_rows = _load_unreviewed_training_rows(private_root, args.max_outcomes)
     validator_rows = _load_validator_memory(private_root, args.max_validator)
     source_rows = _read_jsonl_tail(
         private_root / "state" / "lineage" / "scanner_events.jsonl",
