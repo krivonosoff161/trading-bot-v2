@@ -1,6 +1,20 @@
 # Current State
 
-Updated: 2026-07-05
+Updated: 2026-07-07
+
+> **Update 2026-07-07 - adaptive farm geometry probes.**
+> Broad farm paper signals no longer have to use only one fixed ATR/R geometry per
+> family. The family builders still compute all entry/stop/TP/hold levels
+> deterministically, but the paper-signal cycle can now add at most one bounded
+> adaptive geometry profile next to the legacy `base` profile for the same
+> symbol/timeframe/family. Outcome memory selects only profile labels such as
+> `stop_relief`, `faster_capture`, or `runner_probe`; it never supplies raw prices,
+> order fields, leverage, validator verdicts, or execution permission. The selected
+> profile is written into `validator_context`, gate counts, and `TrainingRow.v2`
+> fields (`farm_geometry_profile_id`, scales, reason), so later outcome analysis can
+> compare whether the base or adaptive geometry actually performed better. This stays
+> paper/research-only and does not touch `.env`, `AUTO_TRADE`, Telegram sending, old
+> `main.py`, order paths, or private exchange endpoints.
 
 > **Update 2026-07-05 - Telegram chart/news delivery hardening.**
 > Paper setup chart delivery now requires a confirmed Telegram photo `message_id`;

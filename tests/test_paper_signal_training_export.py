@@ -40,6 +40,16 @@ def _signal(signal_id: str = "s1", status: str = "armed") -> PaperActionSignal:
 
 def test_training_row_contains_outcome_and_review_fields():
     sig = _signal(status="reviewed")
+    sig.validator_context.update(
+        {
+            "geometry_profile_id": "runner_probe",
+            "geometry_profile_reason": "memory says this cell can justify a longer capture probe",
+            "geometry_entry_scale": 1.0,
+            "geometry_stop_scale": 1.1,
+            "geometry_tp_scale": 1.35,
+            "geometry_hold_scale": 1.5,
+        }
+    )
     sig.outcome = {
         "result": "take",
         "entry": 100.0,
@@ -65,6 +75,8 @@ def test_training_row_contains_outcome_and_review_fields():
     assert row["ready_strategy_id"] == "ready_1"
     assert row["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert row["tp1"] == 105.0
+    assert row["farm_geometry_profile_id"] == "runner_probe"
+    assert row["farm_geometry_tp_scale"] == 1.35
     assert row["observed_entry"] == 100.0
     assert row["observed_exit"] == 105.0
     assert row["bars_held"] == 4

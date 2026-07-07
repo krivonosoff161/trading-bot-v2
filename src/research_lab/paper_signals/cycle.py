@@ -251,6 +251,73 @@ def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
     return out
 
 
+def _product_cell_stats(
+    product_memory: dict[str, Any] | None,
+    symbol: str,
+    timeframe: str,
+    family: str,
+) -> dict[str, Any]:
+    by_cell = (product_memory or {}).get("by_cell") if isinstance(product_memory, dict) else None
+    if not isinstance(by_cell, dict):
+        return {}
+    exact = by_cell.get(f"{symbol}|{timeframe}|{family}")
+    if isinstance(exact, dict):
+        return exact
+    prefix = f"{symbol}|{timeframe}|{family}"
+    for key, stats in by_cell.items():
+        if str(key).startswith(prefix) and isinstance(stats, dict):
+            return stats
+    return {}
+
+
+def geometry_profiles_for_cell(
+    memory: list[dict[str, Any]],
+    product_memory: dict[str, Any] | None,
+    *,
+    symbol: str,
+    timeframe: str,
+    family: str,
+) -> list[str]:
+    """Pick up to two bounded geometry profiles for the next farm probe.
+
+    This is intentionally deterministic: outcome memory can request a profile
+    label, but only family code computes prices. The first profile remains the
+    legacy/base geometry so old behavior is still comparable.
+    """
+    diag: dict[str, int] = {}
+    results: dict[str, int] = {}
+    for row in memory:
+        if (
+            str(row.get("symbol") or "") != symbol
+            or str(row.get("timeframe") or "") != timeframe
+            or str(row.get("family") or "") != family
+        ):
+            continue
+        d = str(row.get("diagnosis") or "")
+        r = str(row.get("result") or "")
+        if d:
+            diag[d] = diag.get(d, 0) + 1
+        if r:
+            results[r] = results.get(r, 0) + 1
+
+    stats = _product_cell_stats(product_memory, symbol, timeframe, family)
+    gave_back = int(stats.get("gave_back_rows") or 0)
+    wins = int(stats.get("win_rows") or 0)
+    losses = int(stats.get("loss_rows") or 0)
+    terminal = int(stats.get("terminal_rows") or 0)
+    pnl = float(stats.get("paper_pnl_usdt") or 0.0)
+
+    selected = "base"
+    if diag.get("stop_too_tight", 0) >= 1:
+        selected = "stop_relief"
+    elif diag.get("bad_exit_gave_back", 0) + diag.get("target_too_far", 0) >= 1 or gave_back >= max(1, wins):
+        selected = "faster_capture"
+    elif (diag.get("good_signal", 0) + results.get("take", 0) >= 2) or (terminal >= 3 and wins > losses and pnl > 0):
+        selected = "runner_probe"
+
+    return ["base"] if selected == "base" else ["base", selected]
+
+
 def write_selection_snapshot(private_root: Path, ranked: list[dict], top_n: int = 20) -> Path:
     out = Path(private_root) / "state" / "derived" / "paper_selection.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -452,8 +519,19 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             if wo:
                 gate_counts[wo] = gate_counts.get(wo, 0) + 1
                 continue
+            geometry_profiles = {
+                fam: geometry_profiles_for_cell(
+                    mem,
+                    product_memory,
+                    symbol=symbol,
+                    timeframe=tf,
+                    family=fam,
+                )
+                for fam in fam_order
+            }
             for sig, fam in families.generate(symbol, inst, tf, decide, mover=mv, now=now,
-                                              boundary_ts=boundary_ts, mode=mode, families=fam_order):
+                                              boundary_ts=boundary_ts, mode=mode, families=fam_order,
+                                              geometry_profiles=geometry_profiles):
                 if len(new_sigs) >= live_new_cap:
                     break
                 if sig.dedup_key in by_key_active:
@@ -468,7 +546,11 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                 if (sig.dedup_key, sig.data_fingerprint) in recent_terminal:
                     gate_counts["dedup_same_data"] = gate_counts.get("dedup_same_data", 0) + 1
                     continue
+                profile_id = str((sig.validator_context or {}).get("geometry_profile_id") or "base")
                 gate_counts[f"family:{fam}"] = gate_counts.get(f"family:{fam}", 0) + 1
+                gate_counts[f"geometry_profile:{profile_id}"] = (
+                    gate_counts.get(f"geometry_profile:{profile_id}", 0) + 1
+                )
                 if mode == "replay":
                     sig = lane.review(lane.observe(sig, candles))
                 new_sigs.append((sig, candles))
