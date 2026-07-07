@@ -162,6 +162,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
                 "diagnosis": "good_signal" if idx < 10 else "breakeven_save",
                 "net_r": 0.25,
                 "net_pct": 0.1,
+                "paper_pnl_usdt": 0.4 if idx < 10 else -0.2,
+                "farm_geometry_profile_id": "base" if idx < 12 else "faster_capture",
                 "final_card_text": "private text must not be copied",
             }
         )
@@ -236,6 +238,10 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert summary["families"][0]["family"] == "early_tp_tactical"
     assert summary["families"][0]["rows"] == 22
     assert summary["families"][0]["quality_label"] == "candidate_watch"
+    assert summary["geometry_profiles"][0]["profile_id"] == "base"
+    assert summary["geometry_profiles"][0]["rows"] == 12
+    assert summary["geometry_profiles"][1]["profile_id"] == "faster_capture"
+    assert summary["geometry_profiles"][1]["rows"] == 10
     assert "items" not in summary
     raw = (derived / "paper_product_quality_report.json").read_text(encoding="utf-8")
     assert "private_signal" not in raw
@@ -244,6 +250,8 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
     assert "live-trigger state: waiting_for_live_trigger" in markdown
     assert "pending active outcomes: 2" in markdown
     assert "next active expiry hours: 0.5" in markdown
+    assert "## Farm Geometry Profiles" in markdown
+    assert "faster_capture" in markdown
 
 
 def test_quality_report_flags_missing_pfr_context_as_fix_needed(tmp_path):
