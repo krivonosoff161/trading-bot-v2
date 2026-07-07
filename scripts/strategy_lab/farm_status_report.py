@@ -252,8 +252,15 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             except Exception:  # noqa: BLE001 - optional derived view must not break status
                 report["setup_lifecycle"] = {"available": False}
             try:  # Setup Outcome Memory: rejected-as-knowledge sub-views (derived, research-only)
-                from src.research_lab.setup_outcome_memory import build_memory_index, summarize_memory
-                report["outcome_memory"] = summarize_memory(build_memory_index(db_path.parent.parent))
+                from src.research_lab.setup_outcome_memory import (
+                    build_memory_index,
+                    summarize_memory,
+                    summarize_product_training_memory,
+                )
+                report["outcome_memory"] = {
+                    **summarize_memory(build_memory_index(db_path.parent.parent)),
+                    "product_paper_memory": summarize_product_training_memory(db_path.parent.parent)["summary"],
+                }
             except Exception:  # noqa: BLE001 - optional derived view must not break status
                 report["outcome_memory"] = {"available": False}
         try:  # shadow-forward watch lane (research-only; survivors observed on new bars, never traded)
@@ -398,6 +405,13 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["main_paper_trade_ledger"] = json.loads(tr_path.read_text(encoding="utf-8")) if tr_path.exists() else {}
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_trade_ledger"] = {}
+        try:  # broad subscriber-facing paper product ledger (never orders)
+            ptr_path = db_path.parent.parent / "state" / "derived" / "paper_product_trades.json"
+            report["paper_product_trade_ledger"] = (
+                json.loads(ptr_path.read_text(encoding="utf-8")) if ptr_path.exists() else {}
+            )
+        except Exception:  # noqa: BLE001 - optional surface must not break status
+            report["paper_product_trade_ledger"] = {}
         try:  # offline Telegram-card preview for paper-watch instructions (never sends)
             pt_path = db_path.parent.parent / "state" / "derived" / "paper_telegram_preview.json"
             report["paper_telegram_preview"] = json.loads(pt_path.read_text(encoding="utf-8")) if pt_path.exists() else {}
@@ -579,6 +593,22 @@ def _print(report: dict) -> None:
               f"by_status={tl.get('by_status') or '(none)'} "
               f"execution_allowed={tl.get('execution_allowed')} "
               "(validated/farm-calculated paper trades; no order path)")
+        money = tl.get("paper_money") if isinstance(tl.get("paper_money"), dict) else {}
+        if money:
+            print("    main paper money: "
+                  f"terminal={money.get('terminal_trades', 0)} "
+                  f"wins={money.get('wins', 0)} losses={money.get('losses', 0)} "
+                  f"pnl_usdt={money.get('total_pnl_usdt', 0)} "
+                  f"avg_usdt={money.get('avg_pnl_usdt', 0)}")
+    ptl = report.get("paper_product_trade_ledger") or {}
+    if ptl.get("trades") is not None:
+        money = ptl.get("paper_money") if isinstance(ptl.get("paper_money"), dict) else {}
+        print("  paper product trade ledger: "
+              f"trades={ptl.get('trades', 0)} active={ptl.get('active_trades', 0)} "
+              f"live_ready={ptl.get('live_ready', 0)} live_blocked={ptl.get('live_blocked', 0)} "
+              f"by_status={ptl.get('by_status') or '(none)'} "
+              f"paper_money_pnl={money.get('total_pnl_usdt', 0) if money else 0} "
+              "(subscriber paper ledger; no order path)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "
@@ -639,6 +669,8 @@ def _print(report: dict) -> None:
             print("    PFR live-trigger state: "
                   f"state={pfr_state.get('state') or 'unknown'} "
                   f"catalog_ready={pfr_state.get('catalog_ready', 0)} "
+                  f"validated_instructions={pfr_state.get('bridge_validated_instructions', 0)} "
+                  f"pfr_generated={pfr_state.get('last_cycle_pfr_generated', 0)} "
                   f"generated={pfr_state.get('last_cycle_generated', 0)} "
                   f"reasons={pfr_state.get('top_reasons') or {}}")
         pfr_funnel = pq.get("pfr_funnel") if isinstance(pq.get("pfr_funnel"), dict) else {}
@@ -684,6 +716,20 @@ def _print(report: dict) -> None:
                   f"one_shot={om.get('one_shot_candidates', 0)} "
                   f"maker_unlock={om.get('cost_bound_maker_unlock', 0)} (maker = hypothesis, not edge)")
             print(f"    next_action queue: {om.get('by_next_action')}")
+        if om.get("paper_memory_rows"):
+            print(f"    paper memory: rows={om.get('paper_memory_rows', 0)} "
+                  f"terminal={om.get('paper_terminal_rows', 0)} "
+                  f"pnl_usdt={om.get('paper_pnl_usdt', 0)} "
+                  f"avg_usdt={om.get('paper_avg_pnl_usdt', 0)} "
+                  f"gave_back={om.get('paper_gave_back_rows', 0)}")
+        product_memory = om.get("product_paper_memory") if isinstance(om.get("product_paper_memory"), dict) else {}
+        if product_memory:
+            print(f"    product paper memory: rows={product_memory.get('rows', 0)} "
+                  f"terminal={product_memory.get('terminal_rows', 0)} "
+                  f"pnl_usdt={product_memory.get('paper_pnl_usdt', 0)} "
+                  f"avg_usdt={product_memory.get('avg_paper_pnl_usdt', 0)} "
+                  f"gave_back={product_memory.get('gave_back_rows', 0)} "
+                  "(broad cards; not validator promotion)")
     sh = report.get("shadow_forward") or {}
     if sh.get("shadow_candidates"):
         print(f"  shadow-forward watch: candidates={sh['shadow_candidates']} by_family={sh.get('by_family')} "

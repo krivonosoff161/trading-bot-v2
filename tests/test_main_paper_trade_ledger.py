@@ -100,6 +100,8 @@ def test_trade_ledger_builds_validated_and_calculated_paper_trades(tmp_path):
     assert trade["validation_tier"] == "validated_pfr"
     assert trade["ready_strategy_id"] == "ready_abc"
     assert trade["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    assert trade["paper_account"]["deposit_usdt"] == 700.0
+    assert trade["paper_account"]["position_margin_usdt"] == 35.0
     calc = summary["items"][1]
     assert calc["validation_tier"] == "farm_calculated"
     assert calc["ready_strategy_id"] == ""
@@ -130,6 +132,9 @@ def test_trade_ledger_records_terminal_outcome(tmp_path):
     assert summary["by_status"] == {"closed_take": 1}
     assert summary["items"][0]["outcome"]["net_pct"] == 1.5
     assert summary["items"][0]["review"]["diagnosis"] == "good_signal"
+    assert summary["items"][0]["paper_account"]["pnl_usdt"] == 1.575
+    assert summary["paper_money"]["terminal_trades"] == 1
+    assert summary["paper_money"]["total_pnl_usdt"] == 1.575
 
 
 def test_trade_ledger_has_no_live_or_sender_imports():

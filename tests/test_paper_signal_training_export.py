@@ -220,6 +220,14 @@ def test_export_training_rows_links_product_trade_when_main_trade_missing(tmp_pa
                         "paper_trade_id": "paperproducttrade_1",
                         "paper_product_trade_id": "paperproducttrade_1",
                         "status": "reviewed",
+                        "paper_account": {
+                            "deposit_usdt": 700.0,
+                            "position_margin_usdt": 35.0,
+                            "leverage": 3.0,
+                            "notional_usdt": 105.0,
+                            "pnl_usdt": 1.05,
+                            "equity_after_usdt": 701.05,
+                        },
                     }
                 ],
             }
@@ -234,6 +242,10 @@ def test_export_training_rows_links_product_trade_when_main_trade_missing(tmp_pa
     assert rows[0]["paper_product_trade_id"] == "paperproducttrade_1"
     assert rows[0]["main_paper_runtime_id"] == ""
     assert rows[0]["main_paper_status"] == "reviewed"
+    assert rows[0]["paper_deposit_usdt"] == 700.0
+    assert rows[0]["paper_position_margin_usdt"] == 35.0
+    assert rows[0]["paper_leverage"] == 3.0
+    assert rows[0]["paper_pnl_usdt"] == 1.05
 
 
 def test_export_training_rows_links_calculator_advice(tmp_path):

@@ -288,7 +288,7 @@ def test_run_loop_provider_breaker_stops_repeated_provider_errors(tmp_path, monk
 
     def fake_cycle(*args, **kwargs):
         return SimpleNamespace(counts={
-            "proposals_queued": 0, "ready_jobs": 0, "skipped_missing_data": 0,
+            "proposals_queued": 0, "ready_jobs": 1, "skipped_missing_data": 0,
             "worker_completed": 0, "worker_deferred": 0, "worker_failed": 0,
         })
 

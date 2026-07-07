@@ -58,6 +58,7 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert trade["source_signal_id"] == "sig_product_1"
     assert trade["live_ready"] is False
     assert trade["live_block_reason"] == "missing_ready_strategy_id"
+    assert trade["paper_account"]["notional_usdt"] == 105.0
     assert Path(summary["snapshot_path"]).exists()
     assert Path(summary["jsonl_path"]).exists()
 
@@ -102,6 +103,8 @@ def test_product_trade_ledger_links_terminal_outcome(tmp_path):
     assert summary["active_live_blocked"] == 0
     assert summary["items"][0]["outcome"]["result"] == "take"
     assert summary["items"][0]["review"]["diagnosis"] == "good_signal"
+    assert summary["items"][0]["paper_account"]["pnl_usdt"] == 1.26
+    assert summary["paper_money"]["terminal_trades"] == 1
 
 
 def test_product_trade_ledger_has_no_provider_exchange_or_order_imports():

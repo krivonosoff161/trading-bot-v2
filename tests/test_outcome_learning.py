@@ -6,6 +6,9 @@ from src.research_lab.outcome_learning import (
 )
 from src.research_lab.data_prepare import write_candles
 from src.research_lab.outcome_retest import build_outcome_retest_specs
+from src.research_lab.resource_policy import load_resource_policy
+from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
+from src.research_lab.timeframes import load_timeframe_profiles
 
 
 def _row(**overrides):
@@ -205,6 +208,12 @@ def test_accepted_outcome_review_becomes_retest_spec():
     assert spec.paper_only is True
     assert spec.sweep_spec["setup_family"] == "momentum_breakout"
     assert "take_pct" in spec.sweep_spec["exit_grid"]
+    assert "stop_pct" in spec.sweep_spec["exit_grid"]
+    assert len(spec.sweep_spec["exit_grid"]["hold_bars"]) <= 3
+    assert spec.sweep_spec["max_variants"] == 8
+    assert spec.sweep_spec["variant_tier"] == "normal"
+    assert spec.sweep_spec["exit_grid"]
+    assert any("budget" in change for change in spec.proposed_changes)
     assert spec.baseline["diagnosis"] == "bad_exit_gave_back"
 
 
@@ -244,6 +253,50 @@ def test_paper_family_outcome_review_maps_to_executable_retest_spec():
     assert spec.family == "momentum_breakout"
     assert spec.sweep_spec["setup_family"] == "momentum_breakout"
     assert "mapped paper family early_tp_tactical -> executable farm family momentum_breakout" in spec.proposed_changes
+
+
+def test_retest_spec_prunes_entry_and_exit_grid_to_validate():
+    rows = [
+        _row(
+            family="early_tp_tactical",
+            result="expired_no_entry",
+            diagnosis="expired_no_entry",
+            max_hold_bars=10,
+            entry_mid=100.0,
+            stop_loss=92.0,
+            tp1=108.0,
+        )
+    ]
+    reviews = [
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": "llmr_entry_exit",
+            "source_ref": "training_s1",
+            "accepted": True,
+            "payload": {
+                "review_kind": "missed",
+                "outcome_bucket": "missed_entry",
+                "actionability": "retest_entry_timing",
+                "next_test_dimensions": ["entry_timeout", "pretrigger_watch"],
+                "counterfactual_tests": [{"dimension": "entry_zone_width"}],
+                "confidence": 0.7,
+            },
+        }
+    ]
+
+    specs = build_outcome_retest_specs(rows, reviews)
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.queueable is True
+    sweep = SweepSpec(**spec.sweep_spec)
+    assert sweep.variant_count() <= sweep.max_variants
+    result = validate_sweep_spec(
+        sweep,
+        timeframe_profiles=load_timeframe_profiles(),
+        resource_policy=load_resource_policy(),
+    )
+    assert result.ok, result.errors
 
 
 def test_retest_specs_dedupe_same_trade_and_dimensions_across_reviews():
