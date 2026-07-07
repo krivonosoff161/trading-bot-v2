@@ -389,6 +389,20 @@ def _sent_key_summary(private_root: Path) -> dict[str, int]:
 def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
     derived = Path(private_root) / "state" / "derived"
     catalog = _read_json(derived / "outcome_retest_specs.json")
+    current_retest_ids = {
+        str(item.get("retest_id") or "")
+        for item in catalog.get("items") or []
+        if isinstance(item, dict) and str(item.get("retest_id") or "")
+    }
+    current_queueable_ids = {
+        str(item.get("retest_id") or "")
+        for item in catalog.get("items") or []
+        if isinstance(item, dict) and bool(item.get("queueable")) and str(item.get("retest_id") or "")
+    }
+    try:
+        catalog_updated_at = (derived / "outcome_retest_specs.json").stat().st_mtime
+    except OSError:
+        catalog_updated_at = 0.0
     out: dict[str, Any] = {
         "catalog_specs": int(catalog.get("specs") or 0),
         "catalog_queueable": int(catalog.get("queueable") or 0),
@@ -396,7 +410,13 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
         "schedule_retest": {},
         "run_sweep_outcome_retest": {},
         "invalid_retest": 0,
+        "invalid_retest_current": 0,
+        "invalid_retest_historical": 0,
         "invalid_reasons": {},
+        "invalid_current_reasons": {},
+        "catalog_current_scheduled": 0,
+        "catalog_current_run_sweep": 0,
+        "catalog_current_unscheduled": len(current_queueable_ids),
     }
     try:
         from src.research_lab.farm_tasks_db import tasks_db_path
@@ -410,7 +430,7 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
         try:
             rows = conn.execute(
                 """
-                SELECT task_type, state, machine_reason, payload_json
+                SELECT task_type, state, machine_reason, source_event_id, updated_at, payload_json
                 FROM tasks
                 WHERE task_type IN ('schedule_retest', 'run_sweep')
                 """
@@ -424,16 +444,28 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
     run_sweep: dict[str, int] = {}
     invalid_reasons: dict[str, int] = {}
     invalid = 0
+    current_scheduled_ids: set[str] = set()
+    current_run_ids: set[str] = set()
     for row in rows:
         task_type = str(row["task_type"] or "")
         state = str(row["state"] or "")
         reason = str(row["machine_reason"] or "")
+        task_updated_at = float(row["updated_at"] or 0.0)
         if task_type == "schedule_retest":
             schedule[state] = schedule.get(state, 0) + 1
+            source_ref = str(row["source_event_id"] or "")
+            if source_ref in current_queueable_ids and task_updated_at >= catalog_updated_at:
+                current_scheduled_ids.add(source_ref)
             if reason.startswith("invalid_retest_spec:"):
-                invalid += 1
                 label = reason.replace("invalid_retest_spec:", "", 1)
                 invalid_reasons[label] = invalid_reasons.get(label, 0) + 1
+                invalid += 1
+                if source_ref in current_retest_ids and task_updated_at >= catalog_updated_at:
+                    out["invalid_retest_current"] += 1
+                    current = out["invalid_current_reasons"]
+                    current[label] = current.get(label, 0) + 1
+                else:
+                    out["invalid_retest_historical"] += 1
             continue
         try:
             payload = json.loads(row["payload_json"] or "{}")
@@ -441,10 +473,18 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
             payload = {}
         if isinstance(payload, dict) and payload.get("origin") == "outcome_retest":
             run_sweep[state] = run_sweep.get(state, 0) + 1
+            retest_id = str(payload.get("retest_id") or row["source_event_id"] or "")
+            if retest_id in current_queueable_ids and task_updated_at >= catalog_updated_at:
+                current_run_ids.add(retest_id)
     out["schedule_retest"] = _top_counts(schedule, limit=6)
     out["run_sweep_outcome_retest"] = _top_counts(run_sweep, limit=6)
     out["invalid_retest"] = invalid
     out["invalid_reasons"] = _top_counts(invalid_reasons, limit=4)
+    out["invalid_current_reasons"] = _top_counts(out["invalid_current_reasons"], limit=4)
+    handled_current = current_scheduled_ids | current_run_ids
+    out["catalog_current_scheduled"] = len(current_scheduled_ids)
+    out["catalog_current_run_sweep"] = len(current_run_ids)
+    out["catalog_current_unscheduled"] = max(0, len(current_queueable_ids - handled_current))
     return out
 
 
@@ -684,14 +724,19 @@ def _print_paper_product_status() -> None:
             "                "
             f"outcome_retest catalog={retest.get('catalog_specs', 0)} "
             f"queueable={retest.get('catalog_queueable', 0)} "
+            f"current_scheduled={retest.get('catalog_current_scheduled', 0)} "
+            f"current_run={retest.get('catalog_current_run_sweep', 0)} "
+            f"current_unscheduled={retest.get('catalog_current_unscheduled', 0)} "
             f"schedule={retest.get('schedule_retest') or {}} "
             f"run_sweep={retest.get('run_sweep_outcome_retest') or {}} "
-            f"invalid={retest.get('invalid_retest', 0)}"
+            f"invalid_current={retest.get('invalid_retest_current', 0)} "
+            f"invalid_historical={retest.get('invalid_retest_historical', 0)} "
+            f"invalid_total={retest.get('invalid_retest', 0)}"
         )
-        if retest.get("invalid_reasons"):
+        if retest.get("invalid_current_reasons"):
             print(
                 "                "
-                f"outcome_retest_invalid_reasons={retest.get('invalid_reasons')}"
+                f"outcome_retest_invalid_current_reasons={retest.get('invalid_current_reasons')}"
             )
     if st["quality_report_exists"]:
         pfr = st["pfr_funnel"]
