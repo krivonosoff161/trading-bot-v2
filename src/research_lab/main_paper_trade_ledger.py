@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, utc_now
+from src.research_lab.paper_money_model import paper_money_from_outcome, summarize_paper_money
 
 SCHEMA = "MainPaperTrade.v1"
 SUMMARY_SCHEMA = "main_paper_trade_ledger.v1"
@@ -46,6 +47,7 @@ class MainPaperTrade:
     signal_status: str = ""
     outcome: dict[str, Any] = field(default_factory=dict)
     review: dict[str, Any] = field(default_factory=dict)
+    paper_account: dict[str, Any] = field(default_factory=dict)
     adaptive_policy_id: str = ""
     adaptive_execution_profile: str = ""
     adaptive_entry_profile: str = ""
@@ -159,6 +161,7 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         signal_status=signal_status,
         outcome=outcome,
         review=review,
+        paper_account=paper_money_from_outcome(outcome),
         adaptive_policy_id=str(queue_item.get("adaptive_policy_id") or ""),
         adaptive_execution_profile=str(queue_item.get("adaptive_execution_profile") or ""),
         adaptive_entry_profile=str(queue_item.get("adaptive_entry_profile") or ""),
@@ -211,6 +214,7 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
         "invalid_reasons": invalid_reasons,
         "by_status": by_status,
         "by_family": by_family,
+        "paper_money": summarize_paper_money([trade.to_dict() for trade in trades]),
         "paper_only": True,
         "execution_allowed": False,
         "jsonl_path": str(out_jsonl),

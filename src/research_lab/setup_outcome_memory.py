@@ -370,6 +370,184 @@ def _derived_by_uc(private_root: Path, filename: str) -> dict[str, dict[str, Any
     return by_uc if isinstance(by_uc, dict) else {}
 
 
+def _training_memory(private_root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Aggregate paper-product training rows for memory enrichment.
+
+    Training rows are already sanitized derived artifacts.  This function keeps
+    only numeric/label aggregates needed by the memory gate; it never carries
+    Telegram card text, raw LLM payloads, recipient ids, or provider secrets.
+    """
+    path = Path(private_root) / "state" / "derived" / "paper_signal_training.jsonl"
+    by_candidate: dict[str, dict[str, Any]] = {}
+    by_cell: dict[str, dict[str, Any]] = {}
+    if not path.exists():
+        return by_candidate, by_cell
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return by_candidate, by_cell
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        candidate_ids = {
+            str(row.get("candidate_id") or "").strip(),
+            str(row.get("setup_candidate_id") or "").strip(),
+        }
+        candidate_ids.discard("")
+        cell_key = _training_cell_key(row.get("symbol") or row.get("okx_inst_id"), row.get("timeframe"), row.get("family"))
+        for candidate_id in candidate_ids:
+            _add_training_row(by_candidate.setdefault(candidate_id, _empty_training_agg()), row)
+        if cell_key:
+            _add_training_row(by_cell.setdefault(cell_key, _empty_training_agg()), row)
+    return by_candidate, by_cell
+
+
+def _normalize_symbol(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    return text.replace("-", "_")
+
+
+def _training_cell_key(symbol: Any, timeframe: Any, family: Any) -> str:
+    sym = _normalize_symbol(symbol)
+    tf = str(timeframe or "").strip()
+    fam = str(family or "").strip()
+    if not (sym and tf and fam):
+        return ""
+    return f"{sym}|{tf}|{fam}"
+
+
+def _empty_training_agg() -> dict[str, Any]:
+    return {
+        "rows": 0,
+        "terminal_rows": 0,
+        "paper_pnl_usdt": 0.0,
+        "net_pct_sum": 0.0,
+        "win_rows": 0,
+        "loss_rows": 0,
+        "gave_back_rows": 0,
+        "outcome_bucket": {},
+        "actionability": {},
+    }
+
+
+def _add_training_row(agg: dict[str, Any], row: dict[str, Any]) -> None:
+    agg["rows"] = int(agg.get("rows") or 0) + 1
+    pnl = _float_or_none(row.get("paper_pnl_usdt"))
+    net = _float_or_none(row.get("net_pct"))
+    if pnl is not None or net is not None:
+        agg["terminal_rows"] = int(agg.get("terminal_rows") or 0) + 1
+    if pnl is not None:
+        agg["paper_pnl_usdt"] = round(float(agg.get("paper_pnl_usdt") or 0.0) + pnl, 6)
+        if pnl > 0:
+            agg["win_rows"] = int(agg.get("win_rows") or 0) + 1
+        elif pnl < 0:
+            agg["loss_rows"] = int(agg.get("loss_rows") or 0) + 1
+    if net is not None:
+        agg["net_pct_sum"] = round(float(agg.get("net_pct_sum") or 0.0) + net, 6)
+    diagnosis = str(row.get("diagnosis") or "")
+    bucket = str(row.get("outcome_learning_bucket") or "")
+    actionability = str(row.get("outcome_learning_actionability") or "")
+    if diagnosis == "bad_exit_gave_back" or bucket == "gave_back":
+        agg["gave_back_rows"] = int(agg.get("gave_back_rows") or 0) + 1
+    if bucket:
+        counts = agg.setdefault("outcome_bucket", {})
+        counts[bucket] = int(counts.get(bucket) or 0) + 1
+    if actionability:
+        counts = agg.setdefault("actionability", {})
+        counts[actionability] = int(counts.get(actionability) or 0) + 1
+
+
+def _training_summary(agg: dict[str, Any] | None) -> dict[str, Any]:
+    if not agg:
+        return {
+            "rows": 0,
+            "terminal_rows": 0,
+            "paper_pnl_usdt": 0.0,
+            "avg_paper_pnl_usdt": 0.0,
+            "avg_net_pct": 0.0,
+            "win_rows": 0,
+            "loss_rows": 0,
+            "gave_back_rows": 0,
+            "outcome_bucket": {},
+            "actionability": {},
+        }
+    terminal = int(agg.get("terminal_rows") or 0)
+    pnl = round(float(agg.get("paper_pnl_usdt") or 0.0), 6)
+    net_sum = round(float(agg.get("net_pct_sum") or 0.0), 6)
+    return {
+        "rows": int(agg.get("rows") or 0),
+        "terminal_rows": terminal,
+        "paper_pnl_usdt": pnl,
+        "avg_paper_pnl_usdt": round(pnl / terminal, 6) if terminal else 0.0,
+        "avg_net_pct": round(net_sum / terminal, 6) if terminal else 0.0,
+        "win_rows": int(agg.get("win_rows") or 0),
+        "loss_rows": int(agg.get("loss_rows") or 0),
+        "gave_back_rows": int(agg.get("gave_back_rows") or 0),
+        "outcome_bucket": dict(agg.get("outcome_bucket") or {}),
+        "actionability": dict(agg.get("actionability") or {}),
+    }
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
+    """Aggregate broad subscriber-facing paper outcomes.
+
+    This is intentionally separate from the strict setup memory: product paper
+    rows often use user-facing families (for example ``early_tp_tactical``) while
+    hard-validation candidates use research families (for example
+    ``momentum_breakout``).  Mixing them would fake validator evidence.  The
+    summary keeps the product learning signal visible without promoting it.
+    """
+    _, by_cell = _training_memory(private_root)
+    total = _empty_training_agg()
+    by_family: dict[str, dict[str, Any]] = {}
+    by_timeframe: dict[str, dict[str, Any]] = {}
+    by_cell_summary: dict[str, dict[str, Any]] = {}
+    for key, agg in by_cell.items():
+        parts = key.split("|")
+        if len(parts) != 3:
+            continue
+        _symbol, tf, family = parts
+        _merge_training_agg(total, agg)
+        _merge_training_agg(by_family.setdefault(family, _empty_training_agg()), agg)
+        _merge_training_agg(by_timeframe.setdefault(tf, _empty_training_agg()), agg)
+        by_cell_summary[key] = _training_summary(agg)
+    return {
+        "schema": "product_paper_memory.v1",
+        "disclaimer": "Broad paper-product outcomes only; research signal for review and next sweeps, not validation.",
+        "cells": len(by_cell_summary),
+        "summary": _training_summary(total),
+        "by_family": {k: _training_summary(v) for k, v in sorted(by_family.items())},
+        "by_timeframe": {k: _training_summary(v) for k, v in sorted(by_timeframe.items())},
+        "by_cell": by_cell_summary,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def _merge_training_agg(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key in ("rows", "terminal_rows", "win_rows", "loss_rows", "gave_back_rows"):
+        target[key] = int(target.get(key) or 0) + int(source.get(key) or 0)
+    for key in ("paper_pnl_usdt", "net_pct_sum"):
+        target[key] = round(float(target.get(key) or 0.0) + float(source.get(key) or 0.0), 6)
+    for key in ("outcome_bucket", "actionability"):
+        target_counts = target.setdefault(key, {})
+        for label, count in (source.get(key) or {}).items():
+            target_counts[label] = int(target_counts.get(label) or 0) + int(count or 0)
+
+
 def _backfill_by_uc(private_root: Path) -> dict[str, dict[str, Any]]:
     """Per-uc trade-path metrics from the bounded backfill snapshot (empty if not run)."""
     return _derived_by_uc(private_root, "trade_path_backfill.json")
@@ -399,16 +577,22 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
     exit2 = _derived_by_uc(private_root, "exit_phase2.json")
+    training_by_candidate, training_by_cell = _training_memory(private_root)
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
-        cell = f"{lc['symbol']}|{lc['timeframe']}|{lc['family']}"
+        cell = _training_cell_key(lc["symbol"], lc["timeframe"], lc["family"])
         sub = subreason.get(uc, {})
         sub_reason = str(sub.get("reject_subreason") or "")
         recovered = sub_reason == "wrong_exit" and cell in recovered_cells
         outcome = derive_outcome_class(lc["derived_lifecycle_state"], sub_reason, recovered,
                                        lc["hard_status"])
         bf = backfill.get(uc, {})
+        product_training = _training_summary(
+            training_by_candidate.get(str(lc.get("source_candidate_id") or ""))
+            or training_by_candidate.get(str(lc.get("validation_candidate_id") or ""))
+            or training_by_cell.get(cell)
+        )
         cost_cls = cost_class(lc["avg_net_pct"])
         tactical_cls = tactical_class(lc["n_trades"], lc["avg_net_pct"], lc["hard_status"])
         records.append({
@@ -417,6 +601,11 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             "params_hash": lc["params_hash"], "data_fingerprint": lc["data_fingerprint"],
             "regime_bucket": lc["regime_bucket"], "n_trades": lc["n_trades"],
             "baseline_net": lc["avg_net_pct"],
+            "product_training": product_training,
+            "paper_pnl_usdt": product_training["paper_pnl_usdt"],
+            "paper_avg_pnl_usdt": product_training["avg_paper_pnl_usdt"],
+            "paper_terminal_rows": product_training["terminal_rows"],
+            "paper_gave_back_rows": product_training["gave_back_rows"],
             # Tactical Setup Library dimensions (research labels; none is edge or paper-ready):
             "cost_class": cost_cls, "tactical_class": tactical_cls,
             "next_action": next_action(outcome, cost_cls, tactical_cls),
@@ -493,6 +682,9 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_class: dict[str, int] = {}
     for r in records:
         by_class[r["outcome_class"]] = by_class.get(r["outcome_class"], 0) + 1
+    paper_rows = [r for r in records if int(r.get("paper_terminal_rows") or 0) > 0]
+    total_paper_pnl = round(sum(float(r.get("paper_pnl_usdt") or 0.0) for r in paper_rows), 6)
+    total_paper_terminal = sum(int(r.get("paper_terminal_rows") or 0) for r in paper_rows)
     return {
         "total": len(records),
         "by_outcome_class": dict(sorted(by_class.items(), key=lambda kv: -kv[1])),
@@ -500,6 +692,13 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
         "by_cost_class": _tally_field(records, "cost_class"),
         "by_tactical_class": _tally_field(records, "tactical_class"),
         "by_next_action": _tally_field(records, "next_action"),
+        "paper_memory_rows": len(paper_rows),
+        "paper_terminal_rows": total_paper_terminal,
+        "paper_pnl_usdt": total_paper_pnl,
+        "paper_avg_pnl_usdt": (
+            round(total_paper_pnl / total_paper_terminal, 6) if total_paper_terminal else 0.0
+        ),
+        "paper_gave_back_rows": sum(int(r.get("paper_gave_back_rows") or 0) for r in paper_rows),
         "one_shot_candidates": sum(1 for r in records if r.get("tactical_class") == "one_shot_candidate"),
         "cost_bound_maker_unlock": sum(1 for r in records if r.get("cost_class") == "cost_bound_maker_unlock"),
         "positive": len(positive_setups(records)),
@@ -530,6 +729,7 @@ def write_memory_snapshot(private_root: Path) -> Path:
         "disclaimer": "Derived read-model rebuilt from canonical sources. Research-only: no "
                       "outcome here grants PAPER_FORWARD_READY or is a trade signal.",
         "summary": summarize_memory(records),
+        "product_paper_memory": summarize_product_training_memory(private_root),
         "records": records,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -549,7 +749,10 @@ def main() -> None:
     ap.add_argument("--snapshot", action="store_true", help="write the derived snapshot artifact")
     args = ap.parse_args()
     records = build_memory_index(Path(args.private_root))
-    print(json.dumps(summarize_memory(records), ensure_ascii=False, indent=2))
+    print(json.dumps({
+        **summarize_memory(records),
+        "product_paper_memory": summarize_product_training_memory(Path(args.private_root))["summary"],
+    }, ensure_ascii=False, indent=2))
     if args.snapshot:
         print("snapshot:", write_memory_snapshot(Path(args.private_root)))
 

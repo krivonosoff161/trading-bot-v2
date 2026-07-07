@@ -35,6 +35,8 @@ class _FamilyStats:
     net_r_count: int = 0
     net_pct_sum: float = 0.0
     net_pct_count: int = 0
+    paper_pnl_sum: float = 0.0
+    paper_pnl_count: int = 0
 
     def add(self, row: dict[str, Any]) -> None:
         self.rows += 1
@@ -66,6 +68,10 @@ class _FamilyStats:
         if net_pct is not None:
             self.net_pct_sum += net_pct
             self.net_pct_count += 1
+        paper_pnl = _float_or_none(row.get("paper_pnl_usdt"))
+        if paper_pnl is not None:
+            self.paper_pnl_sum += paper_pnl
+            self.paper_pnl_count += 1
 
     def to_dict(self) -> dict[str, Any]:
         decisive = self.take + self.stop
@@ -73,6 +79,7 @@ class _FamilyStats:
         stop_rate = self.stop / decisive if decisive else 0.0
         avg_net_r = self.net_r_sum / self.net_r_count if self.net_r_count else 0.0
         avg_net_pct = self.net_pct_sum / self.net_pct_count if self.net_pct_count else 0.0
+        avg_paper_pnl = self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
         label = _quality_label(rows=self.rows, take_rate=take_rate, stop_rate=stop_rate, avg_net_r=avg_net_r)
         return {
             "family": self.family,
@@ -90,6 +97,8 @@ class _FamilyStats:
             "breakeven_save": self.breakeven_save,
             "avg_net_r": round(avg_net_r, 4),
             "avg_net_pct": round(avg_net_pct, 4),
+            "paper_pnl_usdt": round(self.paper_pnl_sum, 6),
+            "avg_paper_pnl_usdt": round(avg_paper_pnl, 6),
             "quality_label": label,
         }
 
@@ -188,6 +197,28 @@ def _pfr_near_trigger_counts(pfr_counts: dict[str, Any]) -> dict[str, int]:
         {str(key): int(value or 0) for key, value in pfr_counts.items() if str(key).startswith("pfr_near_trigger:")},
         limit=12,
     )
+
+
+def _validated_bridge_instructions(bridge: dict[str, Any]) -> int:
+    items = bridge.get("items")
+    if not isinstance(items, list):
+        return 0
+    total = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        contract = item.get("signal_contract")
+        metadata = contract.get("metadata") if isinstance(contract, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        ready_strategy_id = str(item.get("ready_strategy_id") or metadata.get("ready_strategy_id") or "").strip()
+        verdict = str(
+            item.get("source_validation_verdict") or metadata.get("source_validation_verdict") or ""
+        ).strip()
+        tier = str(item.get("validation_tier") or metadata.get("validation_tier") or "").strip()
+        if tier == "validated_pfr" or (ready_strategy_id and verdict == "PAPER_FORWARD_READY"):
+            total += 1
+    return total
 
 
 def _delivery_int(delivery: dict[str, Any], primary: str, fallback: str) -> int:
@@ -295,8 +326,11 @@ def _pfr_funnel(
         "catalog_ready_by_timeframe": _top_counts(ready_catalog.get("ready_by_timeframe") or {}),
         "bridge_active_source_signals": int(bridge.get("active_source_signals") or 0),
         "bridge_instructions": int(bridge.get("instructions") or 0),
+        "bridge_validated_instructions": _validated_bridge_instructions(bridge),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "last_cycle_generated": int(last_cycle.get("generated") or 0) if last_cycle else 0,
+        "last_cycle_pfr_generated": int(pfr_counts.get("pfr_generated") or 0)
+        + int(pfr_counts.get("pfr_generated_pretrigger") or 0),
         "last_cycle_observed": int(last_cycle.get("observed") or 0) if last_cycle else 0,
         "last_cycle_pfr_counts": _top_counts(pfr_counts),
         "last_cycle_gate_counts": _top_counts(gate_counts),
@@ -309,14 +343,15 @@ def _pfr_funnel(
 def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
     catalog_ready = int(pfr_funnel.get("catalog_ready") or 0)
     bridge_instructions = int(pfr_funnel.get("bridge_instructions") or 0)
-    generated = int(pfr_funnel.get("last_cycle_generated") or 0)
+    bridge_validated_instructions = int(pfr_funnel.get("bridge_validated_instructions") or 0)
+    generated = int(pfr_funnel.get("last_cycle_pfr_generated") or 0)
     trigger_reasons = pfr_funnel.get("live_trigger_reasons") if isinstance(
         pfr_funnel.get("live_trigger_reasons"),
         dict,
     ) else {}
     if catalog_ready <= 0:
         state = "no_pfr_catalog_ready"
-    elif bridge_instructions > 0:
+    elif bridge_validated_instructions > 0:
         state = "main_paper_has_pfr_instructions"
     elif generated > 0:
         state = "pfr_generated_waiting_downstream"
@@ -328,7 +363,9 @@ def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
         "state": state,
         "catalog_ready": catalog_ready,
         "bridge_instructions": bridge_instructions,
-        "last_cycle_generated": generated,
+        "bridge_validated_instructions": bridge_validated_instructions,
+        "last_cycle_generated": int(pfr_funnel.get("last_cycle_generated") or 0),
+        "last_cycle_pfr_generated": generated,
         "top_reasons": _top_counts(trigger_reasons, limit=12),
     }
 
@@ -412,7 +449,8 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- ready by family: {summary['pfr_funnel']['catalog_ready_by_family']}",
         f"- ready by timeframe: {summary['pfr_funnel']['catalog_ready_by_timeframe']}",
         f"- active source signals: {summary['pfr_funnel']['bridge_active_source_signals']}",
-        f"- strict instructions: {summary['pfr_funnel']['bridge_instructions']}",
+        f"- main-paper instructions: {summary['pfr_funnel']['bridge_instructions']}",
+        f"- validated/PFR instructions: {summary['pfr_funnel']['bridge_validated_instructions']}",
         f"- bridge skip reasons: {summary['pfr_funnel']['bridge_skip_reasons']}",
         f"- last PFR counts: {summary['pfr_funnel']['last_cycle_pfr_counts']}",
         f"- live-trigger state: {summary['pfr_trigger_state']['state']}",
@@ -479,6 +517,11 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
     total_blockers = _top_counts(product_trades.get("by_live_block") or {})
     pfr_funnel = _pfr_funnel(ready_catalog=ready_catalog, bridge=bridge, paper_status=paper_status)
     families = _family_stats(training_rows)
+    paper_pnl_values = [
+        value
+        for value in (_float_or_none(row.get("paper_pnl_usdt")) for row in training_rows)
+        if value is not None
+    ]
     quality_labels: dict[str, int] = {}
     for family in families:
         label = str(family.get("quality_label") or "")
@@ -525,6 +568,10 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
         "training_rows": int(training_summary.get("rows") or len(training_rows)),
         "training_terminal_only": bool(training_summary.get("terminal_only", True)),
         "training_by_result": _top_counts(training_summary.get("by_result") or {}),
+        "training_paper_pnl_usdt": round(sum(paper_pnl_values), 6),
+        "training_avg_paper_pnl_usdt": (
+            round(sum(paper_pnl_values) / len(paper_pnl_values), 6) if paper_pnl_values else 0.0
+        ),
         "quality_labels": dict(sorted(quality_labels.items())),
         "families": families,
         "telegram": telegram,

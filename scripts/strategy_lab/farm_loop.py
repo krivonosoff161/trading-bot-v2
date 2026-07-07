@@ -409,6 +409,16 @@ def _print_cycle(out: dict) -> None:
             f"rows={product_train.get('rows', 0)} source_rows={product_train.get('source_rows', 0)} "
             f"paper_only={product_train.get('paper_only')}"
         )
+    memory_refresh = out.get("setup_outcome_memory_refresh") or {}
+    if memory_refresh:
+        print(
+            "  setup_outcome_memory_refresh: "
+            f"total={memory_refresh.get('total', 0)} "
+            f"product_rows={memory_refresh.get('product_rows', 0)} "
+            f"product_terminal={memory_refresh.get('product_terminal_rows', 0)} "
+            f"product_pnl={memory_refresh.get('product_pnl_usdt', 0)} "
+            f"paper_only={memory_refresh.get('paper_only')}"
+        )
     quality = out.get("paper_product_quality_report") or {}
     if quality:
         print(
@@ -538,6 +548,7 @@ def _cycle_signature(out: dict) -> tuple:
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
     product_training_export = tuple(sorted((out.get("product_signal_training_export") or {}).items()))
+    memory_refresh = tuple(sorted((out.get("setup_outcome_memory_refresh") or {}).items()))
     product_quality = tuple(sorted((out.get("paper_product_quality_report") or {}).items()))
     calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
     agent_role_reviews = tuple(sorted((out.get("agent_role_reviews") or {}).items()))
@@ -546,7 +557,7 @@ def _cycle_signature(out: dict) -> tuple:
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, product_trade_ledger,
         telegram_preview,
-        telegram_delivery, training_export, product_training_export, product_quality, calculator_advisor,
+        telegram_delivery, training_export, product_training_export, memory_refresh, product_quality, calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
@@ -1004,7 +1015,10 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         cycle_started_at=cycle_started_at,
                     )
                     from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
-                    out["paper_telegram_preview"] = build_paper_telegram_preview(private_root)
+                    out["paper_telegram_preview"] = build_paper_telegram_preview(
+                        private_root,
+                        fetch_public_chart_candles=True,
+                    )
                 except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
                 try:
@@ -1061,6 +1075,40 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
                     out.setdefault("errors", []).append({
                         "where": "product_signal_training_export",
+                        "error": str(exc),
+                    })
+                try:
+                    _write_loop_status(
+                        private_root,
+                        stage="setup_outcome_memory_refresh",
+                        apply=apply,
+                        loop=loop,
+                        cycle_started_at=cycle_started_at,
+                    )
+                    from src.research_lab.setup_outcome_memory import (
+                        build_memory_index,
+                        summarize_memory,
+                        summarize_product_training_memory,
+                        write_memory_snapshot,
+                    )
+
+                    memory_records = build_memory_index(private_root)
+                    memory_summary = summarize_memory(memory_records)
+                    product_memory = summarize_product_training_memory(private_root)["summary"]
+                    out["setup_outcome_memory_refresh"] = {
+                        "schema": "setup_outcome_memory_refresh.v1",
+                        "snapshot_path": str(write_memory_snapshot(private_root)),
+                        "total": memory_summary.get("total", 0),
+                        "paper_ready_without_hard_pass": memory_summary.get("paper_ready_without_hard_pass", 0),
+                        "product_rows": product_memory.get("rows", 0),
+                        "product_terminal_rows": product_memory.get("terminal_rows", 0),
+                        "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
+                        "paper_only": True,
+                        "execution_allowed": False,
+                    }
+                except Exception as exc:  # noqa: BLE001 - memory refresh must not break the cycle
+                    out.setdefault("errors", []).append({
+                        "where": "setup_outcome_memory_refresh",
                         "error": str(exc),
                     })
                 try:

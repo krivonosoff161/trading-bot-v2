@@ -22,6 +22,7 @@ from src.research_lab.strategy_registry import REGISTRY
 from src.research_lab.sweep_spec import SweepSpec
 
 SCHEMA = "OutcomeRetestSpec.v1"
+OUTCOME_RETEST_MAX_VARIANTS = 8
 
 _RETEST_ACTIONS = {"retest_exit_or_capture", "retest_entry_timing", "compare_breakeven_policy"}
 _PAPER_TO_EXECUTABLE_FAMILY = {
@@ -81,6 +82,11 @@ def _pct_distance(entry: float, other: float) -> float:
     return round(abs(other - entry) / entry * 100.0, 4)
 
 
+def _scaled_levels(base: float, factors: Iterable[float], *, floor: float = 0.0001) -> list[float]:
+    values = {round(base * factor, 4) for factor in factors if base * factor >= floor}
+    return sorted(values)
+
+
 def _baseline(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "result": str(row.get("result") or ""),
@@ -108,18 +114,31 @@ def _exit_grid(row: dict[str, Any], dimensions: Iterable[str]) -> tuple[dict[str
     take_pct = _pct_distance(entry, tp1)
     stop_pct = _pct_distance(entry, stop)
     dims = set(str(d) for d in dimensions)
-    grid: dict[str, list[Any]] = {"hold_bars": sorted({max(2, hold - 1), hold})}
-    changes = ["shorter/nearby hold_bars to test earlier capture"]
+    hold_grid = sorted({max(2, hold // 2), hold, max(2, hold * 2)})
+    grid: dict[str, list[Any]] = {"hold_bars": hold_grid}
+    changes = ["short/current/longer hold_bars to test capture horizon"]
     if take_pct > 0 and (
         "earlier_profit_lock" in dims
         or "tp_ladder" in dims
         or "exit_mode_partial_be_vs_fixed" in dims
         or "max_hold_after_tp1" in dims
     ):
-        grid["take_pct"] = sorted({round(take_pct * 0.75, 4), round(take_pct, 4)})
-        changes.append("earlier take_pct ladder around observed tp1")
-    if stop_pct > 0 and "breakeven_policy" not in dims and "take_pct" not in grid:
-        grid["stop_pct"] = sorted({round(stop_pct, 4), round(stop_pct * 1.25, 4)})
+        if stop_pct > 0:
+            stop_grid = _scaled_levels(stop_pct, (0.75, 1.0))
+            max_stop = max(stop_grid)
+            rr_take_grid = [round(max_stop * rr, 4) for rr in (2.0, 3.0, 4.0)]
+            observed_take = round(take_pct, 4)
+            take_values = set(rr_take_grid)
+            if observed_take >= round(max_stop * 2.0, 4):
+                take_values.add(observed_take)
+            grid["stop_pct"] = stop_grid
+            grid["take_pct"] = sorted(take_values)[:3]
+            changes.append("bounded stop_pct + RR-safe take_pct ladder for adaptive exit retest")
+        else:
+            grid["take_pct"] = _scaled_levels(take_pct, (0.75, 1.0, 1.5))
+            changes.append("bounded take_pct ladder around observed tp1")
+    if stop_pct > 0 and "take_pct" not in grid:
+        grid["stop_pct"] = _scaled_levels(stop_pct, (0.75, 1.0, 1.25))
         changes.append("nearby stop_pct to test whether stop geometry was too tight")
     return grid, changes
 
@@ -135,6 +154,82 @@ def _entry_grid(row: dict[str, Any], dimensions: Iterable[str]) -> tuple[dict[st
     )
 
 
+def _grid_size(*grids: dict[str, list[Any]]) -> int:
+    total = 1
+    for grid in grids:
+        for values in grid.values():
+            if values:
+                total *= len(values)
+    return total
+
+
+def _middle_only(values: list[Any]) -> list[Any]:
+    if not values:
+        return values
+    return [values[len(values) // 2]]
+
+
+def _first_middle(values: list[Any]) -> list[Any]:
+    if len(values) <= 2:
+        return values
+    out = [values[0], values[len(values) // 2]]
+    return out if out[0] != out[1] else [out[0]]
+
+
+def _fit_retest_budget(
+    entry_grid: dict[str, list[Any]],
+    exit_grid: dict[str, list[Any]],
+    *,
+    max_variants: int = OUTCOME_RETEST_MAX_VARIANTS,
+) -> tuple[dict[str, list[Any]], dict[str, list[Any]], list[str]]:
+    """Keep outcome retests executable under the farm's quiet follow-up budget."""
+    entry = {key: list(values) for key, values in entry_grid.items()}
+    exit_ = {key: list(values) for key, values in exit_grid.items()}
+    changes: list[str] = []
+
+    def size() -> int:
+        return _grid_size(entry, exit_)
+
+    if size() <= max_variants:
+        return entry, exit_, changes
+
+    if entry and len(exit_.get("hold_bars") or []) > 1:
+        exit_["hold_bars"] = _middle_only(exit_["hold_bars"])
+        changes.append("capped exit hold_bars while testing entry timing")
+
+    if size() > max_variants and len(exit_.get("take_pct") or []) > 2:
+        exit_["take_pct"] = _first_middle(exit_["take_pct"])
+        changes.append("capped take_pct ladder to fit executable retest budget")
+
+    if size() > max_variants and len(exit_.get("stop_pct") or []) > 2:
+        exit_["stop_pct"] = _first_middle(exit_["stop_pct"])
+        changes.append("capped stop_pct ladder to fit executable retest budget")
+
+    if size() > max_variants and len(exit_.get("hold_bars") or []) > 2:
+        exit_["hold_bars"] = _first_middle(exit_["hold_bars"])
+        changes.append("capped hold_bars ladder to fit executable retest budget")
+
+    if size() > max_variants and len(entry.get("hold_bars") or []) > 2:
+        entry["hold_bars"] = _first_middle(entry["hold_bars"])
+        changes.append("capped entry hold_bars ladder to fit executable retest budget")
+
+    # Last-resort deterministic trim: keep shrinking the largest remaining axis.
+    while size() > max_variants:
+        candidates: list[tuple[int, str, str]] = []
+        for name, grid in (("entry", entry), ("exit", exit_)):
+            for key, values in grid.items():
+                if len(values) > 1:
+                    candidates.append((len(values), name, key))
+        if not candidates:
+            break
+        _, name, key = max(candidates)
+        target = entry if name == "entry" else exit_
+        target[key] = target[key][:1]
+        changes.append(f"capped {name}.{key} to one value as final budget guard")
+
+    return entry, exit_, changes
+
+
 def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -> tuple[SweepSpec | None, list[str], str]:
     source_family = str(row.get("family") or "")
     family = _executable_family(source_family)
@@ -148,6 +243,7 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
     entry_grid, entry_changes = _entry_grid(row, dimensions)
     if not exit_grid and not entry_grid:
         return None, [], "no_deterministic_retest_grid"
+    entry_grid, exit_grid, budget_changes = _fit_retest_budget(entry_grid, exit_grid)
     mapping_note = []
     if source_family and source_family != family:
         mapping_note.append(f"mapped paper family {source_family} -> executable farm family {family}")
@@ -159,13 +255,13 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
         setup_family=family,
         entry_grid=entry_grid,
         exit_grid=exit_grid,
-        max_variants=8,
+        max_variants=OUTCOME_RETEST_MAX_VARIANTS,
         backend="cpu",
         resource_class="normal",
         private_output_policy="private_only",
-        variant_tier="smoke",
+        variant_tier="normal",
     )
-    return sweep, mapping_note + exit_changes + entry_changes, ""
+    return sweep, mapping_note + exit_changes + entry_changes + budget_changes, ""
 
 
 def _review_payload(review: dict[str, Any]) -> dict[str, Any]:

@@ -70,6 +70,15 @@ def load_memory(private_root: Path) -> list[dict[str, Any]]:
     return out
 
 
+def load_product_memory(private_root: Path) -> dict[str, Any]:
+    """Broad paper-product memory for search ranking; best-effort and read-only."""
+    try:
+        from src.research_lab.setup_outcome_memory import summarize_product_training_memory
+        return summarize_product_training_memory(Path(private_root))
+    except Exception:  # noqa: BLE001 - search memory must never break the paper loop
+        return {}
+
+
 def _fetch(provider, symbol: str, tf: str, now_ms: int) -> list[dict[str, Any]]:
     bars_ms = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}.get(tf, 900_000)
     try:
@@ -171,8 +180,51 @@ def _load_movers(private_root: Path) -> list[dict]:
     return rows
 
 
+def _product_scores_by_symbol(product_memory: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    by_symbol: dict[str, dict[str, Any]] = {}
+    by_cell = (product_memory or {}).get("by_cell") if isinstance(product_memory, dict) else None
+    if not isinstance(by_cell, dict):
+        return by_symbol
+    for key, stats in by_cell.items():
+        if not isinstance(stats, dict):
+            continue
+        symbol = str(key).split("|", 1)[0]
+        if not symbol:
+            continue
+        agg = by_symbol.setdefault(
+            symbol,
+            {"terminal": 0, "wins": 0, "losses": 0, "gave_back": 0, "pnl": 0.0},
+        )
+        terminal = int(stats.get("terminal_rows") or 0)
+        agg["terminal"] += terminal
+        agg["wins"] += int(stats.get("win_rows") or 0)
+        agg["losses"] += int(stats.get("loss_rows") or 0)
+        agg["gave_back"] += int(stats.get("gave_back_rows") or 0)
+        agg["pnl"] = round(float(agg.get("pnl") or 0.0) + float(stats.get("paper_pnl_usdt") or 0.0), 6)
+    for symbol, agg in by_symbol.items():
+        terminal = int(agg.get("terminal") or 0)
+        if terminal < 3:
+            agg["score"] = 0.0
+            agg["reason"] = "product_memory=thin"
+            continue
+        wins = int(agg.get("wins") or 0)
+        losses = int(agg.get("losses") or 0)
+        gave_back = int(agg.get("gave_back") or 0)
+        balance = (wins - losses) / terminal
+        gave_back_penalty = min(1.0, gave_back / terminal)
+        score = max(-3.0, min(2.0, round(balance * 2.0 - gave_back_penalty, 3)))
+        avg_pnl = round(float(agg.get("pnl") or 0.0) / terminal, 4)
+        agg["score"] = score
+        agg["reason"] = (
+            f"product_memory={score:+.2f} terminal={terminal} "
+            f"w/l={wins}/{losses} avg_pnl={avg_pnl} gave_back={gave_back}"
+        )
+    return by_symbol
+
+
 def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
-                known_bad: set[tuple[str, str]]) -> list[dict]:
+                known_bad: set[tuple[str, str]],
+                product_memory: dict[str, Any] | None = None) -> list[dict]:
     """Search Layer: re-rank the live-mover universe with OUTCOME MEMORY, not raw score alone. A symbol
     with a symbol-wide confirmed-bad record is penalised hard; a symbol with prior good_signal is
     nudged up. Each row carries a _priority and a human _reason (why it ranks where it does)."""
@@ -181,16 +233,20 @@ def rank_movers(movers: list[dict], memory: list[dict[str, Any]],
     for m in memory:
         if m.get("diagnosis") == "good_signal" or m.get("result") == "take":
             good[str(m.get("symbol"))] = good.get(str(m.get("symbol")), 0) + 1
+    product_scores = _product_scores_by_symbol(product_memory)
     out = []
     for mv in movers:
         sym = str(mv.get("symbol") or (mv.get("inst_id") or "").replace("-", "_"))
         base = float(mv.get("score") or 0.0)
         penalty = 5.0 if sym in bad_syms else 0.0
         bonus = min(2.0, 0.5 * good.get(sym, 0))
-        pr = base - penalty + bonus
+        product = product_scores.get(sym) or {}
+        product_score = float(product.get("score") or 0.0)
+        pr = base - penalty + bonus + product_score
         out.append({**mv, "_priority": round(pr, 3),
                     "_reason": f"bucket={mv.get('_bucket')} score={base:.1f} good+{bonus:.1f} "
-                               f"knownbad-{penalty:.0f} move%={mv.get('move_pct')} vol=${(mv.get('vol_usd') or 0) / 1e6:.0f}M"})
+                               f"knownbad-{penalty:.0f} {product.get('reason') or 'product_memory=none'} "
+                               f"move%={mv.get('move_pct')} vol=${(mv.get('vol_usd') or 0) / 1e6:.0f}M"})
     out.sort(key=lambda r: -r["_priority"])
     return out
 
@@ -241,6 +297,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     last_seen = {s.dedup_key: s.created_at for s in existing}
     known_bad = lane.load_known_bad(private_root)
     mem = load_memory(private_root)
+    product_memory = load_product_memory(private_root)
     learned_bad = learn_known_bad(mem)
     fam_order = families_arg or family_priority(mem)
     network_fetches = 0
@@ -355,7 +412,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     live_new_cap = max(0, max_new - len(new_sigs))
 
     # (3) generate new, deduplicated -- over the MEMORY-RANKED live-mover universe (search layer)
-    movers = rank_movers(_load_movers(private_root), mem, known_bad)
+    movers = rank_movers(_load_movers(private_root), mem, known_bad, product_memory)
     if apply:
         write_selection_snapshot(private_root, movers)
     live_fetches = 0

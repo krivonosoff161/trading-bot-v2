@@ -29,6 +29,7 @@ from src.research_lab.setup_outcome_memory import (  # noqa: E402
     rejected_research,
     revisit_policy,
     summarize_memory,
+    summarize_product_training_memory,
     tactical_setups,
 )
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -350,6 +351,102 @@ class TestBuildMemoryIndex:
         assert r["paper_forward_ready"] is False            # NOT auto-promoted
         assert r["outcome_class"] != "POSITIVE_VALIDATED"   # canonical class unchanged
         assert summarize_memory([r])["paper_ready_without_hard_pass"] == 0
+
+    def test_attaches_product_training_money_without_promoting(self, tmp_path):
+        import json
+        db = FarmTasksDB(tasks_db_path(tmp_path))
+        uc = "X::1h::momentum_breakout::ph::fp"
+        db.upsert_unique_candidate({
+            "uc_key": uc, "symbol": "X", "timeframe": "1h", "family": "momentum_breakout",
+            "params_hash": "ph", "data_fingerprint": "fp", "decision": "REJECT",
+            "validation_status": "REJECT", "hard_status": "", "n_trades": 20, "avg_net_pct": -0.5,
+            "candidate_id": "candidate_1", "params": {}}, now=1.0)
+        db.close()
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True, exist_ok=True)
+        (derived / "paper_signal_training.jsonl").write_text(
+            "\n".join(
+                json.dumps(row, sort_keys=True)
+                for row in [
+                    {
+                        "setup_candidate_id": "candidate_1",
+                        "candidate_id": "candidate_1",
+                        "symbol": "X",
+                        "timeframe": "1h",
+                        "family": "momentum_breakout",
+                        "paper_pnl_usdt": -1.5,
+                        "net_pct": -1.0,
+                        "diagnosis": "bad_exit_gave_back",
+                        "outcome_learning_bucket": "gave_back",
+                        "outcome_learning_actionability": "retest_exit_or_capture",
+                    },
+                    {
+                        "setup_candidate_id": "candidate_1",
+                        "candidate_id": "candidate_1",
+                        "symbol": "X",
+                        "timeframe": "1h",
+                        "family": "momentum_breakout",
+                        "paper_pnl_usdt": 0.6,
+                        "net_pct": 0.4,
+                        "outcome_learning_bucket": "win",
+                    },
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        rec = build_memory_index(tmp_path)[0]
+        summary = summarize_memory([rec])
+
+        assert rec["paper_terminal_rows"] == 2
+        assert rec["paper_pnl_usdt"] == -0.9
+        assert rec["paper_avg_pnl_usdt"] == -0.45
+        assert rec["paper_gave_back_rows"] == 1
+        assert rec["product_training"]["outcome_bucket"] == {"gave_back": 1, "win": 1}
+        assert rec["product_training"]["actionability"] == {"retest_exit_or_capture": 1}
+        assert rec["paper_forward_ready"] is False
+        assert summary["paper_terminal_rows"] == 2
+        assert summary["paper_pnl_usdt"] == -0.9
+        assert summary["paper_gave_back_rows"] == 1
+
+    def test_summarizes_product_training_memory_separately(self, tmp_path):
+        import json
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True, exist_ok=True)
+        (derived / "paper_signal_training.jsonl").write_text(
+            "\n".join(
+                json.dumps(row, sort_keys=True)
+                for row in [
+                    {
+                        "symbol": "X-USDT-SWAP",
+                        "timeframe": "15m",
+                        "family": "early_tp_tactical",
+                        "paper_pnl_usdt": 1.2,
+                        "net_pct": 1.0,
+                        "outcome_learning_bucket": "win",
+                    },
+                    {
+                        "okx_inst_id": "X-USDT-SWAP",
+                        "timeframe": "15m",
+                        "family": "early_tp_tactical",
+                        "paper_pnl_usdt": -0.3,
+                        "net_pct": -0.25,
+                        "diagnosis": "bad_exit_gave_back",
+                    },
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        summary = summarize_product_training_memory(tmp_path)
+
+        assert summary["cells"] == 1
+        assert summary["summary"]["terminal_rows"] == 2
+        assert summary["summary"]["paper_pnl_usdt"] == 0.9
+        assert summary["summary"]["gave_back_rows"] == 1
+        assert summary["by_family"]["early_tp_tactical"]["rows"] == 2
 
 
 class TestCoordinatorGateUsedNextCycle:

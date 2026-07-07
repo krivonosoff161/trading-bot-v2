@@ -191,6 +191,7 @@ def training_row(
     policy = adaptive_policy or {}
     review_ref = outcome_review or {}
     review_payload = review_ref.get("payload") if isinstance(review_ref.get("payload"), dict) else {}
+    paper_account = trade.get("paper_account") if isinstance(trade.get("paper_account"), dict) else {}
     card_text = str(card.get("text") or "")
     calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
@@ -255,6 +256,12 @@ def training_row(
         "slippage_bps_round_trip": (
             outcome.get("slippage_bps_round_trip") or geom["cost_assumptions"]["slippage_bps_round_trip"]
         ),
+        "paper_deposit_usdt": paper_account.get("deposit_usdt"),
+        "paper_position_margin_usdt": paper_account.get("position_margin_usdt"),
+        "paper_leverage": paper_account.get("leverage"),
+        "paper_notional_usdt": paper_account.get("notional_usdt"),
+        "paper_pnl_usdt": paper_account.get("pnl_usdt"),
+        "paper_equity_after_usdt": paper_account.get("equity_after_usdt"),
         "net_r": review.get("net_r"),
         "diagnosis": str(review.get("diagnosis") or ""),
         "reason_now": sig.reason_now,

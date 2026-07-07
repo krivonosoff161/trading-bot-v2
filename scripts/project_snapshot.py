@@ -386,6 +386,68 @@ def _sent_key_summary(private_root: Path) -> dict[str, int]:
     }
 
 
+def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
+    derived = Path(private_root) / "state" / "derived"
+    catalog = _read_json(derived / "outcome_retest_specs.json")
+    out: dict[str, Any] = {
+        "catalog_specs": int(catalog.get("specs") or 0),
+        "catalog_queueable": int(catalog.get("queueable") or 0),
+        "catalog_by_reason": _top_counts(catalog.get("by_reason") or {}, limit=6),
+        "schedule_retest": {},
+        "run_sweep_outcome_retest": {},
+        "invalid_retest": 0,
+        "invalid_reasons": {},
+    }
+    try:
+        from src.research_lab.farm_tasks_db import tasks_db_path
+        import sqlite3
+
+        db_path = tasks_db_path(private_root)
+        if not db_path.exists():
+            return out
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT task_type, state, machine_reason, payload_json
+                FROM tasks
+                WHERE task_type IN ('schedule_retest', 'run_sweep')
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return out
+
+    schedule: dict[str, int] = {}
+    run_sweep: dict[str, int] = {}
+    invalid_reasons: dict[str, int] = {}
+    invalid = 0
+    for row in rows:
+        task_type = str(row["task_type"] or "")
+        state = str(row["state"] or "")
+        reason = str(row["machine_reason"] or "")
+        if task_type == "schedule_retest":
+            schedule[state] = schedule.get(state, 0) + 1
+            if reason.startswith("invalid_retest_spec:"):
+                invalid += 1
+                label = reason.replace("invalid_retest_spec:", "", 1)
+                invalid_reasons[label] = invalid_reasons.get(label, 0) + 1
+            continue
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("origin") == "outcome_retest":
+            run_sweep[state] = run_sweep.get(state, 0) + 1
+    out["schedule_retest"] = _top_counts(schedule, limit=6)
+    out["run_sweep_outcome_retest"] = _top_counts(run_sweep, limit=6)
+    out["invalid_retest"] = invalid
+    out["invalid_reasons"] = _top_counts(invalid_reasons, limit=4)
+    return out
+
+
 def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     """Small operator view over the current paper-product chain.
 
@@ -410,6 +472,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     outcome_reviews = _read_jsonl(root / "state" / "llm_advice" / "outcome_reviews.jsonl")
     quality = _read_json(derived / "paper_product_quality_report.json")
     sent_keys = _sent_key_summary(root)
+    outcome_retest = _outcome_retest_status(root)
     accepted_reviews = [row for row in outcome_reviews if bool(row.get("accepted"))]
     linked_training = [row for row in training_rows if str(row.get("outcome_review_id") or "")]
     try:
@@ -456,6 +519,10 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "product_active_by_family": _top_counts(product_trades.get("active_by_family") or {}),
         "product_trade_status": product_trades.get("by_status") or {},
         "product_live_block": _top_counts(product_trades.get("by_live_block") or {}),
+        "strict_paper_money": trades.get("paper_money") if isinstance(trades.get("paper_money"), dict) else {},
+        "product_paper_money": (
+            product_trades.get("paper_money") if isinstance(product_trades.get("paper_money"), dict) else {}
+        ),
         "preview_rendered": int(preview.get("rendered") or 0),
         "preview_skipped_quality_gate": int(preview.get("skipped_quality_gate") or 0),
         "preview_quality_gate_reasons": _top_counts(preview.get("quality_gate_reasons") or {}),
@@ -485,6 +552,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "training_learning_bucket": _top_counts(_count_field(linked_training, "outcome_learning_bucket")),
         "outcome_gate_verdicts": int(outcome_gate.get("verdicts") or 0),
         "outcome_gate_by_stage": _top_counts(outcome_gate.get("by_stage") or {}, limit=8),
+        "outcome_retest": outcome_retest,
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
         "active_lifecycle": (
@@ -585,6 +653,16 @@ def _print_paper_product_status() -> None:
             f"bridge_skip={st['bridge_skip_reasons']} "
             f"diagnosis={st['training_by_diagnosis']}"
         )
+    money = st.get("product_paper_money") or {}
+    if money:
+        print(
+            "                "
+            f"paper_money terminal={money.get('terminal_trades', 0)} "
+            f"wins={money.get('wins', 0)} losses={money.get('losses', 0)} "
+            f"pnl_usdt={money.get('total_pnl_usdt', 0)} "
+            f"avg_usdt={money.get('avg_pnl_usdt', 0)} "
+            "model=700usdt/35usdt/3x"
+        )
     if st["outcome_review_rows"] or st["training_outcome_review_linked"]:
         print(
             "                "
@@ -600,6 +678,21 @@ def _print_paper_product_status() -> None:
             f"stage={st['outcome_gate_by_stage']} "
             "execution_allowed=False"
         )
+    retest = st.get("outcome_retest") or {}
+    if retest.get("catalog_specs") or retest.get("schedule_retest") or retest.get("run_sweep_outcome_retest"):
+        print(
+            "                "
+            f"outcome_retest catalog={retest.get('catalog_specs', 0)} "
+            f"queueable={retest.get('catalog_queueable', 0)} "
+            f"schedule={retest.get('schedule_retest') or {}} "
+            f"run_sweep={retest.get('run_sweep_outcome_retest') or {}} "
+            f"invalid={retest.get('invalid_retest', 0)}"
+        )
+        if retest.get("invalid_reasons"):
+            print(
+                "                "
+                f"outcome_retest_invalid_reasons={retest.get('invalid_reasons')}"
+            )
     if st["quality_report_exists"]:
         pfr = st["pfr_funnel"]
         print(
