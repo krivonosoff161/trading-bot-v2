@@ -155,6 +155,34 @@ def _review_payload(review: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _string_list(value: Any, *, max_items: int = 12) -> list[str]:
+    out: list[str] = []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return out
+    for item in value:
+        if isinstance(item, dict):
+            text = str(item.get("dimension") or item.get("name") or item.get("test") or item.get("hypothesis") or "")
+        else:
+            text = str(item or "")
+        text = text.strip()
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _review_dimensions(payload: dict[str, Any]) -> list[str]:
+    dims: list[str] = []
+    for key in ("next_test_dimensions", "counterfactual_tests", "parameter_hypotheses"):
+        for value in _string_list(payload.get(key)):
+            if value not in dims:
+                dims.append(value)
+    return dims
+
+
 def build_outcome_retest_specs(
     training_rows: Iterable[dict[str, Any]],
     outcome_reviews: Iterable[dict[str, Any]],
@@ -177,7 +205,7 @@ def build_outcome_retest_specs(
         row = rows_by_ref.get(source_ref)
         if not row:
             continue
-        dimensions = [str(x) for x in payload.get("next_test_dimensions") or [] if str(x)]
+        dimensions = _review_dimensions(payload)
         if not dimensions:
             dimensions = ["exit_mode_partial_be_vs_fixed"] if actionability == "retest_exit_or_capture" else []
         identity = {

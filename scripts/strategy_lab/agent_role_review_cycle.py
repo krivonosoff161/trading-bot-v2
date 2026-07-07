@@ -104,8 +104,8 @@ def _pick(row: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
     return {key: row[key] for key in keys if key in row}
 
 
-def _outcome_payload(row: dict[str, Any], peers: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    return build_outcome_review_pack(row, peers=peers)
+def _outcome_payload(row: dict[str, Any], peers: Iterable[dict[str, Any]], private_root: Path) -> dict[str, Any]:
+    return build_outcome_review_pack(row, peers=peers, private_root=private_root)
 
 
 def _validator_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -189,7 +189,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
                 private_root,
                 role_id="outcome_reviewer",
                 source_ref=source_ref or f"outcome_{len(reviews)}",
-                source_payload=_outcome_payload(row, training_rows),
+                source_payload=_outcome_payload(row, training_rows, private_root),
                 provider=provider,
             )
         )

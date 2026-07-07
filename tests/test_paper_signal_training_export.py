@@ -40,7 +40,19 @@ def _signal(signal_id: str = "s1", status: str = "armed") -> PaperActionSignal:
 
 def test_training_row_contains_outcome_and_review_fields():
     sig = _signal(status="reviewed")
-    sig.outcome = {"result": "take", "net_pct": 1.2, "mfe_pct": 1.8, "mae_pct": 0.2, "capture": 0.66}
+    sig.outcome = {
+        "result": "take",
+        "entry": 100.0,
+        "exit": 105.0,
+        "bars_held": 4,
+        "reached_tp1": True,
+        "partial_done": True,
+        "banked_pct": 1.0,
+        "net_pct": 1.2,
+        "mfe_pct": 1.8,
+        "mae_pct": 0.2,
+        "capture": 0.66,
+    }
     sig.review = {"diagnosis": "good_signal", "net_r": 0.8}
 
     row = training_row(sig)
@@ -53,6 +65,11 @@ def test_training_row_contains_outcome_and_review_fields():
     assert row["ready_strategy_id"] == "ready_1"
     assert row["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert row["tp1"] == 105.0
+    assert row["observed_entry"] == 100.0
+    assert row["observed_exit"] == 105.0
+    assert row["bars_held"] == 4
+    assert row["reached_tp1"] is True
+    assert row["partial_done"] is True
     assert row["geometry"]["rr_tp1"] > 0
     assert row["result"] == "take"
     assert row["diagnosis"] == "good_signal"

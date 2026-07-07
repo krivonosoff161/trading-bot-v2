@@ -13,8 +13,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.research_lab.experiment import choose_symbol_file, load_candles
 from src.research_lab import feedback_reader as fr
 from src.research_lab.lineage_contract import stable_id
+from src.research_lab.paths import market_data_glob
 
 SCHEMA = "OutcomeLearningCase.v1"
 
@@ -54,6 +56,16 @@ def _float(row: dict[str, Any], key: str) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(row: dict[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if value in ("", None):
+        return None
+    try:
+        return int(float(value))
     except (TypeError, ValueError):
         return None
 
@@ -148,6 +160,229 @@ def _next_test_dimensions(outcome_bucket: str) -> list[str]:
     return list(mapping.get(outcome_bucket, ["collect_more_outcomes"]))
 
 
+def _round_float(value: Any, digits: int = 8) -> float | None:
+    if value in ("", None):
+        return None
+    try:
+        return round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compact_float(value: Any) -> float | None:
+    parsed = _round_float(value, 8)
+    if parsed is None:
+        return None
+    return parsed
+
+
+def _pct(entry: float | None, price: float | None, side: str) -> float | None:
+    if entry is None or price is None or entry <= 0 or price <= 0:
+        return None
+    direction = 1.0 if str(side).lower() == "long" else -1.0
+    return round((price - entry) / entry * 100.0 * direction, 4)
+
+
+def _planned_trade(row: dict[str, Any]) -> dict[str, Any]:
+    entry_mid = _compact_float(row.get("entry_mid"))
+    stop = _compact_float(row.get("stop_loss"))
+    tp1 = _compact_float(row.get("tp1"))
+    return {
+        "side": str(row.get("side") or ""),
+        "entry_mid": entry_mid,
+        "entry_zone": [
+            value
+            for value in (
+                _compact_float(row.get("entry_zone_low")),
+                _compact_float(row.get("entry_zone_high")),
+            )
+            if value is not None
+        ],
+        "stop_loss": stop,
+        "tp1": tp1,
+        "tp1_distance_pct": _pct(entry_mid, tp1, str(row.get("side") or "")),
+        "stop_distance_pct": _pct(entry_mid, stop, str(row.get("side") or "")),
+        "risk_pct": _compact_float(row.get("risk_pct")),
+        "max_hold_bars": _int(row, "max_hold_bars"),
+        "max_hold_minutes": _int(row, "max_hold_minutes"),
+        "exit_mode": str(row.get("exit_mode") or ""),
+        "invalidation_rule": str(row.get("invalidation_rule") or ""),
+        "reason_now": str(row.get("reason_now") or ""),
+        "source_validation_verdict": str(row.get("source_validation_verdict") or ""),
+        "ready_strategy_id": str(row.get("ready_strategy_id") or ""),
+    }
+
+
+def _observed_trade(row: dict[str, Any]) -> dict[str, Any]:
+    entry = _compact_float(row.get("observed_entry")) or _compact_float(row.get("entry_mid"))
+    exit_price = _compact_float(row.get("observed_exit"))
+    return {
+        "observed_entry": entry,
+        "observed_exit": exit_price,
+        "observed_return_pct": _pct(entry, exit_price, str(row.get("side") or "")),
+        "result": str(row.get("result") or ""),
+        "diagnosis": str(row.get("diagnosis") or ""),
+        "gross_pct": row.get("gross_pct"),
+        "net_pct": row.get("net_pct"),
+        "net_r": row.get("net_r"),
+        "mfe_pct": row.get("mfe_pct"),
+        "mae_pct": row.get("mae_pct"),
+        "capture": row.get("capture"),
+        "bars_held": _int(row, "bars_held"),
+        "reached_tp1": bool(row.get("reached_tp1")),
+        "partial_done": bool(row.get("partial_done")),
+        "banked_pct": row.get("banked_pct"),
+        "fees_bps_round_trip": row.get("fees_bps_round_trip"),
+        "slippage_bps_round_trip": row.get("slippage_bps_round_trip"),
+    }
+
+
+def _timeframe_ms(timeframe: str) -> int:
+    tf = str(timeframe or "").strip().lower()
+    return {
+        "1m": 60_000,
+        "5m": 5 * 60_000,
+        "15m": 15 * 60_000,
+        "1h": 60 * 60_000,
+        "4h": 4 * 60 * 60_000,
+        "1d": 24 * 60 * 60_000,
+    }.get(tf, 15 * 60_000)
+
+
+def _candle_price(row: dict[str, Any], key: str) -> float | None:
+    try:
+        return float(row[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _compact_candles(candles: list[dict[str, Any]], *, entry: float | None, side: str) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for idx, row in enumerate(candles):
+        high = _candle_price(row, "high")
+        low = _candle_price(row, "low")
+        close = _candle_price(row, "close")
+        compact.append(
+            {
+                "i": idx,
+                "ts": int(row.get("ts") or 0),
+                "open": _compact_float(row.get("open")),
+                "high": _compact_float(high),
+                "low": _compact_float(low),
+                "close": _compact_float(close),
+                "vol": _compact_float(row.get("vol")),
+                "close_vs_entry_pct": _pct(entry, close, side),
+                "high_vs_entry_pct": _pct(entry, high, side),
+                "low_vs_entry_pct": _pct(entry, low, side),
+            }
+        )
+    return compact
+
+
+def _path_summary(candles: list[dict[str, Any]], *, entry: float | None, side: str) -> dict[str, Any]:
+    if not candles or entry is None or entry <= 0:
+        return {"bars": len(candles), "status": "no_entry_or_empty_path"}
+    favourable: list[tuple[int, float]] = []
+    adverse: list[tuple[int, float]] = []
+    for idx, row in enumerate(candles):
+        high = _candle_price(row, "high")
+        low = _candle_price(row, "low")
+        if str(side).lower() == "long":
+            fav = _pct(entry, high, side)
+            adv = _pct(entry, low, side)
+        else:
+            fav = _pct(entry, low, side)
+            adv = _pct(entry, high, side)
+        if fav is not None:
+            favourable.append((idx, fav))
+        if adv is not None:
+            adverse.append((idx, adv))
+    best = max(favourable, key=lambda item: item[1], default=(None, None))
+    worst = min(adverse, key=lambda item: item[1], default=(None, None))
+    closes = [_pct(entry, _candle_price(row, "close"), side) for row in candles]
+    closes = [value for value in closes if value is not None]
+    return {
+        "bars": len(candles),
+        "best_favourable_pct": best[1],
+        "best_favourable_bar": best[0],
+        "worst_adverse_pct": worst[1],
+        "worst_adverse_bar": worst[0],
+        "last_close_vs_entry_pct": closes[-1] if closes else None,
+        "status": "available",
+    }
+
+
+def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str, Any]:
+    if private_root is None:
+        return {
+            "schema": "OutcomeMarketContext.v1",
+            "status": "not_available",
+            "reason": "private_root_not_supplied",
+            "candles": [],
+        }
+    symbol = str(row.get("okx_inst_id") or row.get("symbol") or "").strip()
+    timeframe = str(row.get("timeframe") or "").strip().lower()
+    if not symbol or not timeframe:
+        return {
+            "schema": "OutcomeMarketContext.v1",
+            "status": "not_available",
+            "reason": "missing_symbol_or_timeframe",
+            "candles": [],
+        }
+    path = choose_symbol_file(market_data_glob(private_root, timeframe), symbol, timeframe=timeframe)
+    if path is None:
+        return {
+            "schema": "OutcomeMarketContext.v1",
+            "status": "not_available",
+            "reason": "prepared_candles_not_found",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "candles": [],
+        }
+    try:
+        candles = load_candles(path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return {
+            "schema": "OutcomeMarketContext.v1",
+            "status": "not_available",
+            "reason": "prepared_candles_unreadable",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "source_label": f"market_data/{timeframe}/{path.name}",
+            "candles": [],
+        }
+    boundary = _int(row, "boundary_ts")
+    tf_ms = _timeframe_ms(timeframe)
+    hold = max(1, _int(row, "max_hold_bars") or 1)
+    entry = _compact_float(row.get("observed_entry")) or _compact_float(row.get("entry_mid"))
+    side = str(row.get("side") or "")
+    if boundary:
+        before = 24
+        after = min(64, hold + 16)
+        start_ts = boundary - before * tf_ms
+        end_ts = boundary + after * tf_ms
+        window = [c for c in candles if start_ts <= int(c.get("ts") or 0) <= end_ts]
+        pre_bars = sum(1 for c in window if int(c.get("ts") or 0) <= boundary)
+    else:
+        window = candles[-80:]
+        pre_bars = 0
+    if len(window) > 88:
+        window = window[-88:]
+    return {
+        "schema": "OutcomeMarketContext.v1",
+        "status": "available" if window else "not_available",
+        "reason": "" if window else "no_candles_in_signal_window",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "source_label": f"market_data/{timeframe}/{path.name}",
+        "boundary_ts": boundary,
+        "pre_bars": pre_bars,
+        "post_bars": max(0, len(window) - pre_bars),
+        "summary": _path_summary(window, entry=entry, side=side),
+        "candles": _compact_candles(window, entry=entry, side=side),
+    }
+
+
 def peer_stats(row: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     family = str(row.get("family") or "")
     timeframe = str(row.get("timeframe") or "")
@@ -200,17 +435,26 @@ def build_outcome_learning_case(row: dict[str, Any], *, peers: Iterable[dict[str
     )
 
 
-def build_outcome_review_pack(row: dict[str, Any], *, peers: Iterable[dict[str, Any]] = ()) -> dict[str, Any]:
+def build_outcome_review_pack(
+    row: dict[str, Any],
+    *,
+    peers: Iterable[dict[str, Any]] = (),
+    private_root: Path | None = None,
+) -> dict[str, Any]:
     """Build the sanitized source payload for the advisory outcome reviewer.
 
-    Exact trade levels and final human card text intentionally stay out of the
-    LLM packet. Deterministic code may still retain them in private training
-    rows; the reviewer receives outcome facts and lineage refs only.
+    Trade levels are included only as read-only observed/planned facts so the
+    analyst can explain the outcome and propose retest dimensions. Final human
+    card text stays out of the packet. The reviewer still cannot output trade
+    levels, validator verdicts, paper_ready, orders, or execution commands.
     """
     case = build_outcome_learning_case(row, peers=peers)
     return {
         "schema": f"{SCHEMA}.review_input",
         "case": case.to_dict(),
+        "original_plan": _planned_trade(row),
+        "observed_trade": _observed_trade(row),
+        "market_context": _market_context(row, private_root),
         "facts": {
             "symbol": row.get("symbol"),
             "okx_inst_id": row.get("okx_inst_id"),
@@ -248,9 +492,11 @@ def build_outcome_review_pack(row: dict[str, Any], *, peers: Iterable[dict[str, 
         "hard_rules": {
             "paper_only": True,
             "execution_allowed": False,
+            "llm_may_read_trade_numbers": True,
             "llm_may_change_trade_numbers": False,
             "llm_may_set_validator_status": False,
             "llm_may_set_paper_ready": False,
+            "llm_output_must_be_hypotheses_not_orders": True,
         },
         "paper_only": True,
         "execution_allowed": False,
