@@ -615,6 +615,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "outcome_retest": outcome_retest,
         "quality_operator_action": str(quality.get("operator_action") or ""),
         "quality_labels": _top_counts(quality.get("quality_labels") or {}),
+        "geometry_profiles": (
+            quality.get("geometry_profiles")
+            if isinstance(quality.get("geometry_profiles"), list)
+            else []
+        ),
         "active_lifecycle": (
             quality.get("active_signal_lifecycle")
             if isinstance(quality.get("active_signal_lifecycle"), dict)
@@ -765,6 +770,18 @@ def _print_paper_product_status() -> None:
             f"quality_action={st['quality_operator_action']} "
             f"quality_labels={st['quality_labels']}"
         )
+        geometry_profiles = st.get("geometry_profiles") if isinstance(st.get("geometry_profiles"), list) else []
+        if geometry_profiles:
+            preview = []
+            for item in geometry_profiles[:4]:
+                if not isinstance(item, dict):
+                    continue
+                preview.append(
+                    f"{item.get('profile_id')}:rows={item.get('rows', 0)} "
+                    f"take={item.get('take_rate', 0)} r={item.get('avg_net_r', 0)}"
+                )
+            if preview:
+                print("                " f"geometry_profiles={' | '.join(preview)}")
         lifecycle = st["active_lifecycle"]
         if lifecycle:
             print(
