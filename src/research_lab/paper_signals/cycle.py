@@ -479,6 +479,10 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         pfr_counts["pfr_records_loaded"] = len(all_pfr)
         pfr_counts["pfr_passed_quality"] = len(passed_pfr)
         pfr_counts["pfr_rejected_quality"] = len(rejected_pfr)
+        for row in rejected_pfr:
+            for reason in row.get("_rejection_reasons") or []:
+                key = f"pfr_rejected_quality:{str(reason)[:50]}"
+                pfr_counts[key] = pfr_counts.get(key, 0) + 1
         pfr_counts["pfr_unique_setups"] = len(
             {(r["symbol"], r["timeframe"], r["family"]) for r in passed_pfr}
         )
