@@ -51,6 +51,30 @@ class TestContractGate:
         assert "PAPER WATCH" in card and "NOT an order" in card
 
 
+class TestReviewChart:
+    def test_review_chart_writes_candlestick_png(self, tmp_path):
+        sig = _good_long()
+        sig.review = {"diagnosis": "good_signal"}
+        candles = [
+            {
+                "ts": i,
+                "open": 100.0 + i * 0.1,
+                "high": 101.0 + i * 0.1,
+                "low": 99.0 + i * 0.1,
+                "close": 100.4 + i * 0.1 if i % 2 == 0 else 99.8 + i * 0.1,
+                "vol": 1000,
+            }
+            for i in range(50)
+        ]
+        path = tmp_path / "chart.png"
+
+        lane._write_chart_png(path, sig, candles)
+
+        assert path.exists()
+        assert path.read_bytes().startswith(b"\x89PNG")
+        assert path.stat().st_size > 1000
+
+
 class TestStore:
     def test_append_load_update_latest_wins(self, tmp_path):
         s = _good_long()
