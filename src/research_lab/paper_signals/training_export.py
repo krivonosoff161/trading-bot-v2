@@ -196,6 +196,16 @@ def training_row(
     calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
     validator_context = sig.validator_context or {}
+    geometry_profile_id = str(
+        validator_context.get("geometry_profile_id")
+        or trade.get("farm_geometry_profile_id")
+        or ""
+    )
+    geometry_profile_reason = str(
+        validator_context.get("geometry_profile_reason")
+        or trade.get("farm_geometry_profile_reason")
+        or ""
+    )
     return {
         "schema": SCHEMA,
         "schema_compat": ["PaperSignalTrainingRow.v1", "PaperSignalTrainingRow.v2"],
@@ -214,12 +224,16 @@ def training_row(
         "setup_id": str(validator_context.get("setup_id") or ""),
         "candidate_id": str(validator_context.get("candidate_id") or ""),
         "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
-        "farm_geometry_profile_id": str(validator_context.get("geometry_profile_id") or ""),
-        "farm_geometry_profile_reason": str(validator_context.get("geometry_profile_reason") or ""),
-        "farm_geometry_entry_scale": validator_context.get("geometry_entry_scale"),
-        "farm_geometry_stop_scale": validator_context.get("geometry_stop_scale"),
-        "farm_geometry_tp_scale": validator_context.get("geometry_tp_scale"),
-        "farm_geometry_hold_scale": validator_context.get("geometry_hold_scale"),
+        "farm_geometry_profile_id": geometry_profile_id,
+        "farm_geometry_profile_reason": geometry_profile_reason,
+        "farm_geometry_entry_scale": validator_context.get("geometry_entry_scale")
+        or trade.get("farm_geometry_entry_scale"),
+        "farm_geometry_stop_scale": validator_context.get("geometry_stop_scale")
+        or trade.get("farm_geometry_stop_scale"),
+        "farm_geometry_tp_scale": validator_context.get("geometry_tp_scale")
+        or trade.get("farm_geometry_tp_scale"),
+        "farm_geometry_hold_scale": validator_context.get("geometry_hold_scale")
+        or trade.get("farm_geometry_hold_scale"),
         "telegram_card_id": str(card.get("telegram_card_id") or ""),
         "paper_trade_id": str(trade.get("paper_trade_id") or ""),
         "paper_product_trade_id": str(trade.get("paper_product_trade_id") or ""),
