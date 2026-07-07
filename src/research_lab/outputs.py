@@ -45,6 +45,7 @@ def write_run_outputs(
         "requested_backend": spec.backend,
         "runtime": dict(runtime_meta or {}),
         "filters": spec.filters,
+        "event_context": dict(spec.event_context or {}),
         "plan_meta": dict(spec.plan_meta or {}),
         "fees_bps": spec.fees_bps,
         "slippage_bps": spec.slippage_bps,

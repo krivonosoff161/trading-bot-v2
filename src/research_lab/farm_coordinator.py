@@ -330,6 +330,36 @@ def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
     )
 
 
+_SWEEP_EVENT_CONTEXT_KEYS = {
+    "origin",
+    "action",
+    "retest_id",
+    "review_id",
+    "source_ref",
+    "paper_signal_id",
+    "actionability",
+    "outcome_bucket",
+    "baseline",
+    "proposed_changes",
+    "source_candidate_id",
+    "hard_status",
+    "hard_status_action",
+    "followup_depth",
+    "paper_only",
+    "execution_allowed",
+}
+
+
+def _event_context_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _SWEEP_EVENT_CONTEXT_KEYS:
+        if key in payload:
+            out[key] = payload[key]
+    return out
+
+
 def _retest_spec_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
     data = payload.get("retest_spec") if isinstance(payload, dict) else None
     return data if isinstance(data, dict) else None
@@ -600,9 +630,17 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             spec = _sweep_from_payload(payload["sweep_spec"])
         else:
             spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier=sweep_tier)
-        exp_id, job_id, created = queue_sweep(conn, spec, private_root=private_root, profiles=profiles,
-                                              policy=policy, data_glob=glob, fingerprint=fp,
-                                              priority=priority_base + int(task.get("priority") or 100))
+        exp_id, job_id, created = queue_sweep(
+            conn,
+            spec,
+            private_root=private_root,
+            profiles=profiles,
+            policy=policy,
+            data_glob=glob,
+            fingerprint=fp,
+            priority=priority_base + int(task.get("priority") or 100),
+            event_context=_event_context_from_payload(payload),
+        )
         if created:
             tasks.materialize_task(task["task_id"], job_id, now=now)
             _bump(counters, "sweeps_materialized")
