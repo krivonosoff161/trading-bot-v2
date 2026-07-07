@@ -422,6 +422,7 @@ class TestBuildMemoryIndex:
                         "symbol": "X-USDT-SWAP",
                         "timeframe": "15m",
                         "family": "early_tp_tactical",
+                        "farm_geometry_profile_id": "base",
                         "paper_pnl_usdt": 1.2,
                         "net_pct": 1.0,
                         "outcome_learning_bucket": "win",
@@ -430,6 +431,7 @@ class TestBuildMemoryIndex:
                         "okx_inst_id": "X-USDT-SWAP",
                         "timeframe": "15m",
                         "family": "early_tp_tactical",
+                        "farm_geometry_profile_id": "faster_capture",
                         "paper_pnl_usdt": -0.3,
                         "net_pct": -0.25,
                         "diagnosis": "bad_exit_gave_back",
@@ -447,6 +449,12 @@ class TestBuildMemoryIndex:
         assert summary["summary"]["paper_pnl_usdt"] == 0.9
         assert summary["summary"]["gave_back_rows"] == 1
         assert summary["by_family"]["early_tp_tactical"]["rows"] == 2
+        assert summary["geometry_profile_cells"] == 2
+        assert summary["by_geometry_profile"]["base"]["win_rows"] == 1
+        assert summary["by_geometry_profile"]["faster_capture"]["loss_rows"] == 1
+        assert summary["by_geometry_profile_cell"]["X_USDT_SWAP|15m|early_tp_tactical|faster_capture"][
+            "gave_back_rows"
+        ] == 1
 
 
 class TestCoordinatorGateUsedNextCycle:
