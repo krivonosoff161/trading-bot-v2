@@ -260,6 +260,41 @@ def test_export_training_rows_links_product_trade_when_main_trade_missing(tmp_pa
     assert rows[0]["paper_pnl_usdt"] == 1.05
 
 
+def test_export_training_rows_can_backfill_geometry_profile_from_product_trade(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.validator_context = {}
+    sig.outcome = {"result": "stop", "net_pct": -1.0}
+    sig.review = {"diagnosis": "wrong_geometry"}
+    append_signal(tmp_path, sig)
+    trades = tmp_path / "state" / "derived" / "paper_product_trades.json"
+    trades.parent.mkdir(parents=True, exist_ok=True)
+    trades.write_text(
+        json.dumps(
+            {
+                "schema": "paper_product_trade_ledger.v1",
+                "items": [
+                    {
+                        "source_signal_id": sig.signal_id,
+                        "paper_product_trade_id": "paperproducttrade_1",
+                        "status": "reviewed",
+                        "farm_geometry_profile_id": "stop_relief",
+                        "farm_geometry_profile_reason": "trade ledger preserved the generated profile",
+                        "farm_geometry_stop_scale": 1.2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = export_training_rows(tmp_path)
+    rows = [json.loads(line) for line in Path(summary["jsonl_path"]).read_text(encoding="utf-8").splitlines()]
+
+    assert rows[0]["farm_geometry_profile_id"] == "stop_relief"
+    assert rows[0]["farm_geometry_profile_reason"] == "trade ledger preserved the generated profile"
+    assert rows[0]["farm_geometry_stop_scale"] == 1.2
+
+
 def test_export_training_rows_links_calculator_advice(tmp_path):
     sig = _signal(status="reviewed")
     sig.feature_packet_id = "fp1"

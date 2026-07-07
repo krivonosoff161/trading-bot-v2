@@ -85,6 +85,29 @@ def test_product_trade_ledger_marks_pfr_rows_as_live_ready_shadow(tmp_path):
     assert summary["items"][0]["live_block_reason"] == ""
 
 
+def test_product_trade_ledger_preserves_geometry_profile_lineage(tmp_path):
+    append_signal(
+        tmp_path,
+        _signal(
+            validator_context={
+                "geometry_profile_id": "stop_relief",
+                "geometry_profile_reason": "product memory says this cell needs wider invalidation",
+                "geometry_entry_scale": 1.0,
+                "geometry_stop_scale": 1.2,
+                "geometry_tp_scale": 1.0,
+                "geometry_hold_scale": 1.0,
+            },
+        ),
+    )
+
+    summary = build_paper_product_trade_ledger(tmp_path)
+
+    assert summary["by_geometry_profile"] == {"stop_relief": 1}
+    trade = summary["items"][0]
+    assert trade["farm_geometry_profile_id"] == "stop_relief"
+    assert trade["farm_geometry_stop_scale"] == 1.2
+
+
 def test_product_trade_ledger_links_terminal_outcome(tmp_path):
     append_signal(
         tmp_path,

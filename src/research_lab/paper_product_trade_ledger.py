@@ -48,6 +48,12 @@ class PaperProductTrade:
     status: str
     signal_status: str
     source: str
+    farm_geometry_profile_id: str = ""
+    farm_geometry_profile_reason: str = ""
+    farm_geometry_entry_scale: Any = None
+    farm_geometry_stop_scale: Any = None
+    farm_geometry_tp_scale: Any = None
+    farm_geometry_hold_scale: Any = None
     outcome: dict[str, Any] = field(default_factory=dict)
     review: dict[str, Any] = field(default_factory=dict)
     paper_account: dict[str, Any] = field(default_factory=dict)
@@ -102,6 +108,7 @@ def _readiness(sig: PaperActionSignal) -> tuple[bool, str, str, str]:
 
 def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
     live_ready, block_reason, ready_strategy_id, verdict = _readiness(sig)
+    context = sig.validator_context or {}
     trade_id = stable_id(
         "paperproducttrade",
         {
@@ -132,6 +139,12 @@ def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
         status=sig.status,
         signal_status=sig.status,
         source=sig.source,
+        farm_geometry_profile_id=str(context.get("geometry_profile_id") or ""),
+        farm_geometry_profile_reason=str(context.get("geometry_profile_reason") or ""),
+        farm_geometry_entry_scale=context.get("geometry_entry_scale"),
+        farm_geometry_stop_scale=context.get("geometry_stop_scale"),
+        farm_geometry_tp_scale=context.get("geometry_tp_scale"),
+        farm_geometry_hold_scale=context.get("geometry_hold_scale"),
         outcome=dict(sig.outcome or {}),
         review=dict(sig.review or {}),
         paper_account=paper_money_from_outcome(dict(sig.outcome or {})),
@@ -156,12 +169,15 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
 
     by_status: dict[str, int] = {}
     by_family: dict[str, int] = {}
+    by_geometry_profile: dict[str, int] = {}
     active_by_source: dict[str, int] = {}
     active_by_family: dict[str, int] = {}
     by_live_block: dict[str, int] = {}
     for trade in trades:
         by_status[trade.status] = by_status.get(trade.status, 0) + 1
         by_family[trade.setup_family] = by_family.get(trade.setup_family, 0) + 1
+        profile_id = trade.farm_geometry_profile_id or "legacy_or_unknown"
+        by_geometry_profile[profile_id] = by_geometry_profile.get(profile_id, 0) + 1
         if trade.status in ACTIVE_PRODUCT_STATUSES:
             active_by_source[trade.source] = active_by_source.get(trade.source, 0) + 1
             active_by_family[trade.setup_family] = active_by_family.get(trade.setup_family, 0) + 1
@@ -194,6 +210,7 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         "invalid_reasons": invalid_reasons,
         "by_status": by_status,
         "by_family": by_family,
+        "by_geometry_profile": by_geometry_profile,
         "active_by_source": active_by_source,
         "active_by_family": active_by_family,
         "by_live_block": by_live_block,
