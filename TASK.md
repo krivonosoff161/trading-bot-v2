@@ -20,6 +20,16 @@ product-quality report distinguishes `pfr_trigger_scan_limited` from ordinary
 records before spending the bounded public-candle fetch budget. This is deterministic
 paper/research routing only; it does not grant live execution or LLM authority.
 
+Follow-up 2026-07-08 context: PR #139 fixes the downstream priority gap. Validated
+PFR rows now sort before ordinary calculated farm rows in `main_paper_runtime_queue`,
+so Telegram preview/card selection sees `validated_pfr` candidates first instead of
+letting broad farm cards fill the preview limit. Verified state after local derived
+artifact refresh and merge: `instructions=31`, `queued=31`, `active_source={farm:29,
+pfr_farm:2}`, `validated_instructions=2`,
+`pfr_trigger_state=main_paper_has_pfr_instructions`, `quality_action=collect_outcomes`.
+Still paper-only: `execution_allowed=false`, no live orders, no old `main.py`, no
+Telegram send authority, no `.env` edits.
+
 New 2026-07-05 context: the first outcome-learning loop slice is in place. Terminal
 paper outcomes can be routed into deterministic `OutcomeLearningCase.v1` records,
 reviewed by the bounded `outcome_reviewer`, and linked back into later
@@ -39,18 +49,18 @@ Read first:
 - `docs/session_handoff_2026-07-03.md`
 - `docs/outcome_learning_loop_2026-07-05.md`
 
-Current verified snapshot after PRs #135-#137:
+Current verified snapshot after PR #139:
 
-- branch/head: `main`, `fa74ddc feat: prioritize PFR candidates by gap memory (#137)`
+- branch/head: `main`, `72a531e fix: prioritize validated PFR main-paper queue (#139)`
 - relevant trading processes: none running during the handoff snapshot
 - mode: `paper_only=true`
 - execution: `execution_allowed=false`
 - old `main.py`: isolated / not part of this PFR handoff
-- active paper product: broad farm rows still dominate the already-open active set;
-  the next cycle is expected to apply PFR gap-memory ordering before new PFR fetches
-- latest aggregate state before the next runtime cycle:
-  `pfr_ready=24`, `validated_instructions=0`, `pfr_generated=0`,
-  `pfr_trigger_state=pfr_trigger_scan_limited`
+- active paper product: `31` active rows, `29` ordinary farm rows and `2` active
+  `pfr_farm` rows
+- latest aggregate state:
+  `pfr_ready=24`, `validated_instructions=2`, `pfr_generated=4`,
+  `pfr_trigger_state=main_paper_has_pfr_instructions`
 
 Canonical flow:
 
@@ -113,10 +123,10 @@ subscriber/main cards unless they have a validator-backed `ready_strategy_id`.
 
 Next product build target, if the user continues this thread:
 
-- run the canonical visible paper cycle and confirm new PFR counts include
-  `pfr_gap_memory_keys` / `pfr_gap_memory_prioritized`;
-- verify whether near-trigger PFR candidates start producing `source=pfr_farm`
-  active rows and `validated_pfr` subscriber-card labels;
+- run the canonical visible paper cycle and let the two active `pfr_farm` rows reach
+  observation/outcome;
+- verify subscriber-card delivery only after preview remains headed by
+  `validated_pfr` rows and Telegram sending is explicitly enabled by the operator;
 - continue the separate adaptive farm/validator/main/outcome architecture work only
   after this PFR handoff evidence is visible in the next cycle;
 - keep `execution_allowed=false`;
