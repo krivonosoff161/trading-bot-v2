@@ -8,6 +8,7 @@ order, .env, AUTO_TRADE, or a private endpoint.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +48,11 @@ def _swing_high(candles: list[dict[str, Any]], k: int = 10) -> float:
 
 
 def _round(x: float, ref: float) -> float:
-    """Round to a sane precision relative to price magnitude (keeps cards readable)."""
-    if ref <= 0:
-        return round(x, 6)
-    digits = max(2, 6 - len(str(int(ref))))
+    """Round by price magnitude so sub-cent instruments keep usable TP/SL precision."""
+    if ref <= 0 or x <= 0:
+        return round(x, 8)
+    magnitude = math.floor(math.log10(abs(ref)))
+    digits = max(0, min(10, 4 - magnitude))
     return round(x, digits)
 
 

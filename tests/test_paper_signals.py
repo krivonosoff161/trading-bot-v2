@@ -90,6 +90,12 @@ class TestSelectionGates:
 
 
 class TestGeometry:
+    def test_round_preserves_micro_price_levels(self):
+        # HMSTR-like instruments trade below 0.001; rounding them to 5 decimals makes
+        # one display step several percent wide and distorts paper TP/SL geometry.
+        assert lane._round(0.00030741, 0.00030741) == 0.00030741
+        assert lane._round(100.12345, 100.0) == 100.12
+
     def test_builds_valid_long_or_short(self):
         candles = _series([100 + i * 0.5 for i in range(60)])  # uptrend
         sig, why = lane.build_signal("X_USDT_SWAP", "X-USDT-SWAP", "15m", candles, source="farm",
