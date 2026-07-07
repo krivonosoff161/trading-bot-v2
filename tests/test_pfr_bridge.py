@@ -17,6 +17,7 @@ Security constraints: no .env, no AUTO_TRADE, no order path, paper/research only
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import sqlite3
 import sys
@@ -174,6 +175,13 @@ def _live_signal(symbol: str = "LIVE_USDT_SWAP", tf: str = "15m", now: float = 2
 
 
 class TestPFRReservation:
+    def test_default_pfr_fetch_budget_matches_full_cycle_launcher(self):
+        assert inspect.signature(cycle.run_cycle).parameters["max_pfr_fetches"].default == 12
+        assert inspect.signature(pfr_bridge.generate_pfr_signals).parameters["max_pfr_fetches"].default == 12
+        source = Path("scripts/strategy_lab/paper_signals_run.py").read_text(encoding="utf-8")
+        assert 'default=12' in source
+        assert 'default=8' not in source
+
     def test_pfr_lane_runs_before_live_movers_even_without_reserved_slots(self, tmp_path, monkeypatch):
         db = tmp_path / "sl.sqlite"
         _make_db(db, [_MRF_ROW_DICT])
