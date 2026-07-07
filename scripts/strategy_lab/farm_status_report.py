@@ -652,6 +652,17 @@ def _print(report: dict) -> None:
             )
         if preview:
             print(f"    paper family quality: {'; '.join(preview)}")
+        geometry_profiles = pq.get("geometry_profiles") if isinstance(pq.get("geometry_profiles"), list) else []
+        geometry_preview: list[str] = []
+        for item in geometry_profiles[:4]:
+            if not isinstance(item, dict):
+                continue
+            geometry_preview.append(
+                f"{item.get('profile_id')}:rows={item.get('rows', 0)} "
+                f"take={item.get('take_rate', 0)} avg_net_r={item.get('avg_net_r', 0)}"
+            )
+        if geometry_preview:
+            print(f"    paper geometry profile quality: {'; '.join(geometry_preview)}")
         lifecycle = pq.get("active_signal_lifecycle") if isinstance(pq.get("active_signal_lifecycle"), dict) else {}
         if lifecycle:
             print("    paper active lifecycle: "

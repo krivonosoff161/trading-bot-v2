@@ -337,6 +337,20 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
             "schema": "paper_product_quality_report.v1",
             "operator_action": "fix_promotion_gap_missing_ready_strategy_id",
             "quality_labels": {"candidate_watch": 1, "needs_review": 2},
+            "geometry_profiles": [
+                {
+                    "profile_id": "base",
+                    "rows": 12,
+                    "take_rate": 0.5,
+                    "avg_net_r": 0.1,
+                },
+                {
+                    "profile_id": "faster_capture",
+                    "rows": 10,
+                    "take_rate": 0.4,
+                    "avg_net_r": -0.2,
+                },
+            ],
             "active_signal_lifecycle": {
                 "active": 3,
                 "pending_outcomes": 2,
@@ -397,6 +411,10 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["outcome_gate_by_stage"] == {"review_only": 1}
     assert status["quality_operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
     assert status["quality_labels"] == {"needs_review": 2, "candidate_watch": 1}
+    assert status["geometry_profiles"] == [
+        {"profile_id": "base", "rows": 12, "take_rate": 0.5, "avg_net_r": 0.1},
+        {"profile_id": "faster_capture", "rows": 10, "take_rate": 0.4, "avg_net_r": -0.2},
+    ]
     assert status["active_lifecycle"] == {
         "active": 3,
         "pending_outcomes": 2,

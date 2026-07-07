@@ -167,6 +167,20 @@ def test_status_report_collect(tmp_path):
                         "avg_net_r": 0.1366,
                     }
                 ],
+                "geometry_profiles": [
+                    {
+                        "profile_id": "base",
+                        "rows": 100,
+                        "take_rate": 0.42,
+                        "avg_net_r": 0.08,
+                    },
+                    {
+                        "profile_id": "faster_capture",
+                        "rows": 24,
+                        "take_rate": 0.5,
+                        "avg_net_r": 0.2,
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -412,6 +426,20 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
                         "avg_net_r": 0.1366,
                     }
                 ],
+                "geometry_profiles": [
+                    {
+                        "profile_id": "base",
+                        "rows": 100,
+                        "take_rate": 0.42,
+                        "avg_net_r": 0.08,
+                    },
+                    {
+                        "profile_id": "faster_capture",
+                        "rows": 24,
+                        "take_rate": 0.5,
+                        "avg_net_r": 0.2,
+                    },
+                ],
             }
         ),
         encoding="utf-8",
@@ -425,6 +453,8 @@ def test_status_report_prints_paper_product_quality(tmp_path, capsys):
     assert "active=12" in out
     assert "training_rows=1393" in out
     assert "early_tp_tactical:mixed" in out
+    assert "paper geometry profile quality:" in out
+    assert "faster_capture:rows=24" in out
     assert "paper active lifecycle:" in out
     assert "paper active timing:" in out
     assert "pending=12" in out
