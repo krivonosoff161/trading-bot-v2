@@ -44,6 +44,7 @@ DEFAULT_QUALITY_POLICY: dict[str, float | int] = {
 _MIN_RR = 2.0   # minimum risk-reward required (matches param_schemas.executable_params_ready)
 _FETCH_WINDOW_BARS = 1500
 _PRETRIGGER_BREAKOUT_MAX_GAP_PCT = 1.0
+_PRETRIGGER_FADE_MAX_GAP_PCT = 1.0
 _PRETRIGGER_ENTRY_BAND_PCT = 0.2
 
 
@@ -52,6 +53,16 @@ _PRETRIGGER_ENTRY_BAND_PCT = 0.2
 def _params_hash(params: dict) -> str:
     """Stable 12-char SHA1 of sorted params JSON — the canonical identity of a parameter set."""
     return hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:12]
+
+
+def _float_param(params: dict[str, Any], key: str) -> float | None:
+    raw = params.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _ready_strategy_id(row: dict[str, Any]) -> str:
@@ -134,6 +145,9 @@ def apply_quality_policy(
         n = int(r.get("n_trades") or 0)
         wr = float(r.get("win_rate") or 0.0)
         net = float(r.get("avg_net_pct") or 0.0)
+        params = r.get("params") if isinstance(r.get("params"), dict) else {}
+        stop_pct = _float_param(params, "stop_pct")
+        take_pct = _float_param(params, "take_pct")
         if dd > p["max_drawdown_pct"]:
             reasons.append(f"max_drawdown_pct={dd:.1f}>{p['max_drawdown_pct']}")
         if n < p["min_n_trades"]:
@@ -142,6 +156,10 @@ def apply_quality_policy(
             reasons.append(f"win_rate={wr:.3f}<{p['min_win_rate']}")
         if net < p["min_avg_net_pct"]:
             reasons.append(f"avg_net_pct={net:.4f}<{p['min_avg_net_pct']}")
+        if stop_pct is not None and stop_pct > MAX_RISK_PCT:
+            reasons.append(f"stop_pct={stop_pct:g}>{MAX_RISK_PCT:g}")
+        if stop_pct is not None and take_pct is not None and take_pct < stop_pct * _MIN_RR:
+            reasons.append(f"rr={take_pct / max(stop_pct, 1e-9):.2f}<{_MIN_RR:g}")
         if reasons:
             rejected.append({**r, "_rejection_reasons": reasons})
         else:
@@ -287,6 +305,118 @@ def _breakout_pretrigger(
 
 
 # ── signal builders ───────────────────────────────────────────────────────────
+
+def _fade_pretrigger(
+    row: dict[str, Any],
+    candles: list[dict[str, Any]],
+    *,
+    lookback: int,
+    move_pct: float,
+    stop_pct: float,
+    take_pct: float,
+    hold_bars: int,
+    now: float,
+    boundary_ts: int,
+    mode: str,
+) -> tuple[PaperActionSignal | None, str]:
+    idx = len(candles) - 1
+    if lookback <= 0 or move_pct <= 0 or idx - lookback < 0:
+        return None, "no_fade_pretrigger"
+
+    base = float(candles[idx - lookback]["close"])
+    price = float(candles[idx]["close"])
+    if base <= 0 or price <= 0:
+        return None, "bad_price"
+
+    move = (price / base - 1) * 100
+    gap_pct = max(0.0, move_pct - abs(move))
+    if gap_pct > _PRETRIGGER_FADE_MAX_GAP_PCT:
+        return None, "no_fade_pretrigger"
+
+    side = "short" if move >= 0 else "long"
+    symbol = str(row["symbol"])
+    inst = symbol.replace("_", "-")
+    tf = str(row["timeframe"])
+    tf_min = TF_MINUTES.get(tf, 15)
+    trigger = base * (1 + move_pct / 100) if side == "short" else base * (1 - move_pct / 100)
+    band = max(abs(trigger) * (_PRETRIGGER_ENTRY_BAND_PCT / 100), abs(price) * 0.001)
+
+    if side == "short":
+        entry_lo = _round(trigger, price)
+        entry_hi = _round(trigger + band, price)
+        if entry_lo >= entry_hi:
+            entry_hi = _round(trigger * 1.002, price)
+        stop = _round(entry_hi * (1 + stop_pct / 100), price)
+        tp_price = _round(entry_lo * (1 - take_pct / 100), price)
+        risk = stop - entry_hi
+    else:
+        entry_hi = _round(trigger, price)
+        entry_lo = _round(trigger - band, price)
+        if entry_lo >= entry_hi:
+            entry_lo = _round(trigger * 0.998, price)
+        stop = _round(entry_lo * (1 - stop_pct / 100), price)
+        tp_price = _round(entry_hi * (1 + take_pct / 100), price)
+        risk = entry_lo - stop
+
+    if risk <= 0:
+        return None, "non_positive_risk"
+    risk_pct = round(risk / price * 100, 3)
+    if risk_pct > MAX_RISK_PCT:
+        return None, f"risk_too_wide_{risk_pct}pct"
+
+    fp = fingerprint(candles)
+    validator_context = {
+        **_common_validator_context(row, symbol, tf),
+        "entry_trigger": "mean_reversion_threshold",
+        "pretrigger": True,
+        "trigger_price": _round(trigger, price),
+        "trigger_gap_pct": round(gap_pct, 4),
+        "pretrigger_max_gap_pct": _PRETRIGGER_FADE_MAX_GAP_PCT,
+        "observed_move_pct": round(move, 4),
+        "required_move_pct": round(move_pct, 4),
+    }
+    sig = PaperActionSignal(
+        signal_id=f"{symbol}_{tf}_mean_reversion_fade_pretrigger_{fp}",
+        source="pfr_farm",
+        symbol=symbol,
+        okx_inst_id=inst,
+        timeframe=tf,
+        side=side,
+        setup_family="mean_reversion_fade",
+        entry_zone=[entry_lo, entry_hi],
+        stop_loss=stop,
+        invalidation_rule=(
+            f"pre-trigger fade watch invalidated if {lookback}-bar move threshold="
+            f"{move_pct:.2f}% is not reached within {ARM_WINDOW_BARS} bars"
+        ),
+        take_profit_plan=[{"label": "tp1", "price": tp_price, "size_frac": 1.0}],
+        max_hold_bars=hold_bars,
+        max_hold_minutes=hold_bars * tf_min,
+        reason_now=(
+            f"PFR mean_reversion_fade pre-trigger: {side} is {gap_pct:.3f}% from "
+            f"{move_pct:.2f}% {lookback}-bar move threshold; fill only when threshold is reached; "
+            f"farm WR={row.get('win_rate', 0):.0%} n={row.get('n_trades', 0)}"
+        ),
+        risk_notes=(
+            "paper-only PFR pre-trigger watch; fill requires mean-reversion threshold; "
+            "farm backtest != live forward; no order path; NOT an edge claim"
+        ),
+        validator_context=validator_context,
+        status="armed",
+        created_at=now,
+        expires_at=now + ARM_WINDOW_BARS * tf_min * 60,
+        ref_price=price,
+        risk_pct=risk_pct,
+        boundary_ts=boundary_ts,
+        data_fingerprint=fp,
+        dedup_key=f"{symbol}|{tf}|mean_reversion_fade",
+        mode=mode,
+    )
+    ok, problems = validate_signal(sig)
+    if not ok:
+        return None, "failed_validate:" + ";".join(problems)
+    return sig, "ok_pretrigger"
+
 
 def build_pfr_momentum_breakout(
     row: dict[str, Any],
@@ -458,6 +588,22 @@ def build_pfr_mean_reversion_fade(
 
     det = _detect_mrf(candles, len(candles) - 1, lookback=lookback, move_pct=move_pct)
     if det is None:
+        pre_sig, pre_reason = _fade_pretrigger(
+            row,
+            candles,
+            lookback=lookback,
+            move_pct=move_pct,
+            stop_pct=stop_pct,
+            take_pct=take_pct,
+            hold_bars=hold_bars,
+            now=now,
+            boundary_ts=boundary_ts,
+            mode=mode,
+        )
+        if pre_sig is not None:
+            return pre_sig, pre_reason
+        if pre_reason not in ("no_fade_pretrigger", "bad_price"):
+            return None, pre_reason
         return None, f"no_fade_signal:move_pct_threshold={move_pct}"
 
     side = det["side"]
