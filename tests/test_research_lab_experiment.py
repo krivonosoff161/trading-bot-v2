@@ -60,6 +60,7 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert (out_dir / "llm_review_prompt.md").exists()
     assert "Strategy Lab Run" in (out_dir / "summary.md").read_text(encoding="utf-8")
     payload = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert payload["event_context"] == {}
     assert "trades" in payload["results"][0]
     assert payload["results"][0]["trades_stored"] == len(payload["results"][0]["trades"])
     assert payload["results"][0]["params"]["stop_pct"] > 0
@@ -170,6 +171,30 @@ def test_event_context_adds_event_entry_timing(tmp_path):
                 "capture_ratio", "missed_move_pct", "late_entry"} <= set(et)
         assert et["event_ts"] == ts0
         assert isinstance(et["late_entry"], bool)
+
+
+def test_run_outputs_preserve_event_context(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    ctx = {
+        "origin": "outcome_retest",
+        "retest_id": "ort_1",
+        "source_ref": "training_s1",
+        "paper_signal_id": "sig_1",
+    }
+    spec = ExperimentSpec(
+        experiment_id="unit_event_context",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 5, "hold_bars": 2}]},
+        event_context=ctx,
+        min_trades=1,
+    )
+    results = evaluate_spec(spec)
+    out_dir = write_run_outputs(spec, results, tmp_path / "private")
+    payload = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert payload["event_context"] == ctx
 
 
 def test_reject_excluded_from_registry_unless_debug(tmp_path):
