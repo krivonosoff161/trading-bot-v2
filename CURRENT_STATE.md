@@ -12,7 +12,9 @@ Updated: 2026-07-07
 > order fields, leverage, validator verdicts, or execution permission. The selected
 > profile is written into `validator_context`, gate counts, and `TrainingRow.v2`
 > fields (`farm_geometry_profile_id`, scales, reason), so later outcome analysis can
-> compare whether the base or adaptive geometry actually performed better. This stays
+> compare whether the base or adaptive geometry actually performed better. The private
+> `paper_product_quality_report` now also aggregates terminal rows by geometry profile,
+> without copying raw signal text or private setup artifacts. This stays
 > paper/research-only and does not touch `.env`, `AUTO_TRADE`, Telegram sending, old
 > `main.py`, order paths, or private exchange endpoints.
 

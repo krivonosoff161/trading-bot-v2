@@ -103,6 +103,70 @@ class _FamilyStats:
         }
 
 
+@dataclass
+class _GeometryProfileStats:
+    profile_id: str
+    rows: int = 0
+    take: int = 0
+    stop: int = 0
+    timeout: int = 0
+    simple_be: int = 0
+    other: int = 0
+    net_r_sum: float = 0.0
+    net_r_count: int = 0
+    paper_pnl_sum: float = 0.0
+    paper_pnl_count: int = 0
+    by_family: dict[str, int] | None = None
+
+    def add(self, row: dict[str, Any]) -> None:
+        self.rows += 1
+        result = str(row.get("result") or "")
+        if result == "take":
+            self.take += 1
+        elif result == "stop":
+            self.stop += 1
+        elif result == "timeout":
+            self.timeout += 1
+        elif result in {"simple_be", "partial_be"}:
+            self.simple_be += 1
+        else:
+            self.other += 1
+        net_r = _float_or_none(row.get("net_r"))
+        if net_r is not None:
+            self.net_r_sum += net_r
+            self.net_r_count += 1
+        paper_pnl = _float_or_none(row.get("paper_pnl_usdt"))
+        if paper_pnl is not None:
+            self.paper_pnl_sum += paper_pnl
+            self.paper_pnl_count += 1
+        family = str(row.get("family") or "unknown")
+        if self.by_family is None:
+            self.by_family = {}
+        self.by_family[family] = self.by_family.get(family, 0) + 1
+
+    def to_dict(self) -> dict[str, Any]:
+        decisive = self.take + self.stop
+        take_rate = self.take / decisive if decisive else 0.0
+        avg_net_r = self.net_r_sum / self.net_r_count if self.net_r_count else 0.0
+        avg_paper_pnl = self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
+        return {
+            "profile_id": self.profile_id,
+            "rows": self.rows,
+            "take": self.take,
+            "stop": self.stop,
+            "timeout": self.timeout,
+            "simple_be": self.simple_be,
+            "other": self.other,
+            "decisive": decisive,
+            "take_rate": round(take_rate, 4),
+            "avg_net_r": round(avg_net_r, 4),
+            "paper_pnl_usdt": round(self.paper_pnl_sum, 6),
+            "avg_paper_pnl_usdt": round(avg_paper_pnl, 6),
+            "top_families": _top_counts(self.by_family or {}),
+            "sample_label": "sample_too_small" if self.rows < 10 else "ready_for_compare",
+        }
+
+
 def _float_or_none(value: Any) -> float | None:
     try:
         return float(value)
@@ -418,6 +482,20 @@ def _family_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ranked
 
 
+def _geometry_profile_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_profile: dict[str, _GeometryProfileStats] = {}
+    for row in rows:
+        if row.get("schema") != "TrainingRow.v2":
+            continue
+        profile_id = str(row.get("farm_geometry_profile_id") or "legacy_or_unknown")
+        by_profile.setdefault(profile_id, _GeometryProfileStats(profile_id=profile_id)).add(row)
+    ranked = sorted(
+        (stat.to_dict() for stat in by_profile.values()),
+        key=lambda item: (-int(item["rows"]), str(item["profile_id"])),
+    )
+    return ranked
+
+
 def _render_markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# Paper Product Quality Report",
@@ -487,6 +565,20 @@ def _render_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Farm Geometry Profiles",
+            "",
+            "| profile | rows | take | stop | timeout | be | avg_net_r | pnl_usdt | sample |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for row in summary["geometry_profiles"][:12]:
+        lines.append(
+            "| {profile_id} | {rows} | {take} | {stop} | {timeout} | {simple_be} | "
+            "{avg_net_r} | {paper_pnl_usdt} | {sample_label} |".format(**row)
+        )
+    lines.extend(
+        [
+            "",
             "## Boundaries",
             "",
             "- paper_only: true",
@@ -517,6 +609,7 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
     total_blockers = _top_counts(product_trades.get("by_live_block") or {})
     pfr_funnel = _pfr_funnel(ready_catalog=ready_catalog, bridge=bridge, paper_status=paper_status)
     families = _family_stats(training_rows)
+    geometry_profiles = _geometry_profile_stats(training_rows)
     paper_pnl_values = [
         value
         for value in (_float_or_none(row.get("paper_pnl_usdt")) for row in training_rows)
@@ -574,6 +667,7 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
         ),
         "quality_labels": dict(sorted(quality_labels.items())),
         "families": families,
+        "geometry_profiles": geometry_profiles,
         "telegram": telegram,
         "pfr_funnel": pfr_funnel,
         "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
