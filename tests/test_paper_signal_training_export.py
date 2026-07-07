@@ -71,6 +71,8 @@ def test_training_row_contains_outcome_and_review_fields():
     assert "PaperSignalTrainingRow.v1" in row["schema_compat"]
     assert row["paper_only"] is True
     assert row["execution_allowed"] is False
+    assert row["family"] == "early_tp_tactical"
+    assert row["setup_family"] == "early_tp_tactical"
     assert row["entry_mid"] == 100.5
     assert row["ready_strategy_id"] == "ready_1"
     assert row["source_validation_verdict"] == "PAPER_FORWARD_READY"
@@ -101,10 +103,29 @@ def test_export_training_rows_uses_latest_terminal_state(tmp_path):
 
     assert summary["rows"] == 1
     assert summary["row_schema"] == "TrainingRow.v2"
+    assert summary["row_fields_version"] == "setup_family_alias.v1"
     assert summary["execution_allowed"] is False
     assert rows[0]["status"] == "reviewed"
     assert rows[0]["result"] == "stop"
     assert summary["by_diagnosis"] == {"wrong_direction": 1}
+
+
+def test_export_training_rows_rebuilds_when_field_version_missing(tmp_path):
+    sig = _signal(status="reviewed")
+    sig.outcome = {"result": "take", "net_pct": 1.0}
+    sig.review = {"diagnosis": "good_signal"}
+    append_signal(tmp_path, sig)
+
+    first = export_training_rows(tmp_path)
+    snapshot = Path(first["snapshot_path"])
+    cached = json.loads(snapshot.read_text(encoding="utf-8"))
+    cached.pop("row_fields_version", None)
+    snapshot.write_text(json.dumps(cached), encoding="utf-8")
+
+    second = export_training_rows(tmp_path)
+
+    assert second["skipped"] is False
+    assert second["row_fields_version"] == "setup_family_alias.v1"
 
 
 def test_export_training_rows_links_telegram_preview(tmp_path):

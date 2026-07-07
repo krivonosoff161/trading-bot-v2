@@ -18,6 +18,7 @@ from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import first_tp, geometry, midpoint
 
 SCHEMA = "TrainingRow.v2"
+ROW_FIELDS_VERSION = "setup_family_alias.v1"
 TERMINAL_STATUSES = {"closed_paper", "expired", "invalidated", "reviewed"}
 
 
@@ -245,6 +246,7 @@ def training_row(
         "okx_inst_id": sig.okx_inst_id,
         "timeframe": sig.timeframe,
         "family": sig.setup_family,
+        "setup_family": sig.setup_family,
         "side": sig.side,
         "status": sig.status,
         "mode": sig.mode,
@@ -353,6 +355,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
         and out_jsonl.exists()
         and existing.get("source_terminal_hash") == source_terminal_hash
         and existing.get("export_refs_hash") == export_refs_hash
+        and existing.get("row_fields_version") == ROW_FIELDS_VERSION
         and int(existing.get("source_terminal_rows") or -1) == len(source_terminal)
     ):
         return {
@@ -424,6 +427,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
     summary = {
         "schema": "paper_signal_training_export.v2",
         "row_schema": SCHEMA,
+        "row_fields_version": ROW_FIELDS_VERSION,
         "rows": len(rows),
         "terminal_only": terminal_only,
         "source_terminal_rows": len(source_terminal),
