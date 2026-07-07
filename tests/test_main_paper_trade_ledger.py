@@ -10,6 +10,7 @@ def _queue_item(**overrides):
         "runtime_id": "runtime_1",
         "instruction_id": "mainpaper_sig",
         "source_signal_id": "sig",
+        "validation_tier": "validated_pfr",
         "ready_strategy_id": "ready_abc",
         "source_validation_verdict": "PAPER_FORWARD_READY",
         "okx_inst_id": "BTC-USDT-SWAP",
@@ -57,14 +58,21 @@ def _write_snapshot(root: Path, name: str, rows: list[dict]) -> None:
     path.write_text(json.dumps({"items": rows}, ensure_ascii=False), encoding="utf-8")
 
 
-def test_trade_ledger_builds_only_validator_ready_trades(tmp_path):
+def test_trade_ledger_builds_validated_and_calculated_paper_trades(tmp_path):
     _write_snapshot(
         tmp_path,
         "main_paper_runtime_queue.json",
         [
             _queue_item(),
+            _queue_item(
+                runtime_id="runtime_calc",
+                source_signal_id="sig_calc",
+                validation_tier="farm_calculated",
+                ready_strategy_id="",
+                source_validation_verdict="",
+            ),
             _queue_item(runtime_id="runtime_bad", ready_strategy_id=""),
-            _queue_item(runtime_id="runtime_research", source_validation_verdict="REGIME_ONLY"),
+            _queue_item(runtime_id="runtime_research", validation_tier="research_only"),
         ],
     )
     _write_snapshot(
@@ -72,6 +80,7 @@ def test_trade_ledger_builds_only_validator_ready_trades(tmp_path):
         "main_paper_runtime_observation.json",
         [
             _observation(),
+            _observation(runtime_id="runtime_calc"),
             _observation(runtime_id="runtime_bad"),
             _observation(runtime_id="runtime_research"),
         ],
@@ -80,16 +89,21 @@ def test_trade_ledger_builds_only_validator_ready_trades(tmp_path):
     summary = build_main_paper_trade_ledger(tmp_path)
 
     assert summary["schema"] == "main_paper_trade_ledger.v1"
-    assert summary["queue_rows"] == 3
-    assert summary["trades"] == 1
+    assert summary["queue_rows"] == 4
+    assert summary["trades"] == 2
     assert summary["invalid"] == 2
     assert summary["paper_only"] is True
     assert summary["execution_allowed"] is False
-    assert summary["by_status"] == {"opened_paper": 1}
+    assert summary["by_status"] == {"opened_paper": 2}
     trade = summary["items"][0]
     assert trade["schema"] == "MainPaperTrade.v1"
+    assert trade["validation_tier"] == "validated_pfr"
     assert trade["ready_strategy_id"] == "ready_abc"
     assert trade["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    calc = summary["items"][1]
+    assert calc["validation_tier"] == "farm_calculated"
+    assert calc["ready_strategy_id"] == ""
+    assert calc["source_validation_verdict"] == ""
     assert trade["paper_only"] is True
     assert trade["execution_allowed"] is False
     assert Path(summary["snapshot_path"]).exists()
