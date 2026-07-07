@@ -368,6 +368,15 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
                 "near_trigger_counts": {"pfr_near_trigger:breakout_gap_le_1pct": 1},
                 "cycle_resource_reasons": {"stale_data": 1},
             },
+            "pfr_trigger_state": {
+                "state": "waiting_for_live_trigger",
+                "catalog_ready": 43,
+                "bridge_instructions": 0,
+                "bridge_validated_instructions": 0,
+                "last_cycle_generated": 3,
+                "last_cycle_pfr_generated": 0,
+                "top_reasons": {"pfr_rejected:no_breakout": 6},
+            },
             "execution_allowed": False,
         }),
         encoding="utf-8",
@@ -431,6 +440,15 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         "last_cycle_pfr_counts": {"pfr_rejected:no_breakout": 6},
         "near_trigger_counts": {"pfr_near_trigger:breakout_gap_le_1pct": 1},
         "cycle_resource_reasons": {"stale_data": 1},
+    }
+    assert status["pfr_trigger_state"] == {
+        "state": "waiting_for_live_trigger",
+        "catalog_ready": 43,
+        "bridge_instructions": 0,
+        "bridge_validated_instructions": 0,
+        "last_cycle_generated": 3,
+        "last_cycle_pfr_generated": 0,
+        "top_reasons": {"pfr_rejected:no_breakout": 6},
     }
     assert status["quality_report_exists"] is True
     assert status["execution_allowed"] is False
