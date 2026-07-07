@@ -105,6 +105,144 @@ class TestPrintWarning:
         assert "duplicate_messages=2" in out
         assert "duplicate_cards=1" in out
 
+    def test_run_paper_refreshes_main_paper_chain_without_signal_lane(self, tmp_path, monkeypatch) -> None:
+        seen: dict[str, object] = {}
+
+        monkeypatch.setattr(farm_loop, "_providers", lambda args, apply: ("provider", None, None))
+        monkeypatch.setattr(farm_loop, "_discovery", lambda args, root, apply: (None, {"status": "test"}))
+        monkeypatch.setattr(
+            farm_loop,
+            "run_coordinator_cycle",
+            lambda *args, **kwargs: {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}},
+        )
+
+        from src.research_lab import paper_runtime
+
+        monkeypatch.setattr(
+            paper_runtime,
+            "run_paper_cycle",
+            lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
+        )
+
+        def fake_refresh(args, private_root, *, apply, loop, cycle_started_at, out, provider=None):
+            seen["called"] = True
+            seen["provider"] = provider
+            out["main_paper_bridge"] = {"instructions": 1}
+
+        monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", fake_refresh)
+
+        args = Namespace(
+            max_plan_events=0,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=0,
+            run_worker=False,
+            max_worker_jobs=0,
+            max_validations=0,
+            night_mode=False,
+            allow_public_output=False,
+            run_validation=False,
+            no_followups=True,
+            max_followups=0,
+            sweep_tier="smoke",
+            run_paper=True,
+            max_paper_cards=1,
+            true_forward_max_candidates=0,
+            run_paper_signals=False,
+            provider="synthetic",
+            backend="cpu",
+            data_days=None,
+            enrich_funding=False,
+            enrich_oi=False,
+            run_journal_export=False,
+            discovery_ttl_seconds=3600,
+            no_discovery_refresh=True,
+            loop=False,
+        )
+
+        out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
+
+        assert seen == {"called": True, "provider": "provider"}
+        assert out["paper"]["counters"]["cards"] == 1
+        assert out["main_paper_bridge"]["instructions"] == 1
+
+    def test_run_paper_refreshes_main_chain_once_when_signal_lane_runs(self, tmp_path, monkeypatch) -> None:
+        seen: dict[str, int] = {"refresh_calls": 0}
+
+        monkeypatch.setattr(farm_loop, "_providers", lambda args, apply: ("provider", None, None))
+        monkeypatch.setattr(farm_loop, "_discovery", lambda args, root, apply: (None, {"status": "test"}))
+        monkeypatch.setattr(
+            farm_loop,
+            "run_coordinator_cycle",
+            lambda *args, **kwargs: {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}},
+        )
+
+        from src.research_lab import paper_runtime
+
+        monkeypatch.setattr(
+            paper_runtime,
+            "run_paper_cycle",
+            lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
+        )
+
+        def fake_refresh(*args, **kwargs):
+            seen["refresh_calls"] += 1
+
+        monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", fake_refresh)
+
+        args = Namespace(
+            max_plan_events=0,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=0,
+            run_worker=False,
+            max_worker_jobs=0,
+            max_validations=0,
+            night_mode=False,
+            allow_public_output=False,
+            run_validation=False,
+            no_followups=True,
+            max_followups=0,
+            sweep_tier="smoke",
+            run_paper=True,
+            max_paper_cards=1,
+            true_forward_max_candidates=0,
+            run_paper_signals=True,
+            pfr_db_path="",
+            paper_signals_fetch_timeout=1.0,
+            paper_signals_timeframes="15m",
+            paper_signals_max_new=0,
+            paper_signals_max_pfr_scan=0,
+            paper_signals_max_pfr_fetches=0,
+            paper_signals_pfr_reserved=0,
+            paper_signals_max_observe=0,
+            paper_signals_max_live_fetches=0,
+            paper_signals_max_network_fetches=0,
+            main_paper_runtime_limit=0,
+            provider="synthetic",
+            backend="cpu",
+            data_days=None,
+            enrich_funding=False,
+            enrich_oi=False,
+            run_journal_export=False,
+            discovery_ttl_seconds=3600,
+            no_discovery_refresh=True,
+            loop=False,
+            no_live_universe_refresh=True,
+            live_universe_ttl_seconds=3600,
+            live_universe_top_n=1,
+            send_paper_telegram=False,
+            paper_telegram_limit=0,
+            paper_telegram_status_digest=False,
+            paper_telegram_status_digest_hours=12,
+            run_calculator_advisor=False,
+            run_agent_role_reviews=False,
+        )
+
+        farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
+
+        assert seen["refresh_calls"] == 1
+
 
 class TestCycleLogStages:
     def test_live_universe_refresh_skips_fresh_snapshot(self, tmp_path, monkeypatch) -> None:

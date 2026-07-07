@@ -269,6 +269,200 @@ def _providers(args, apply: bool):
     return provider, flow_provider, oi_provider
 
 
+def _run_main_paper_derived_chain(
+    args,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+    out: dict,
+    provider=None,
+) -> None:
+    """Refresh paper-only main artifacts after paper state changes.
+
+    This is intentionally local/derived work: no live orders, no AUTO_TRADE, and no
+    Telegram delivery. Network market data is used only by the bounded runtime observer
+    through the explicit public provider already selected for the farm cycle.
+    """
+    try:
+        _write_loop_status(
+            private_root,
+            stage="main_paper_bridge",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.main_paper_bridge import export_main_paper_instructions
+        out["main_paper_bridge"] = export_main_paper_instructions(private_root)
+    except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
+        out.setdefault("errors", []).append({"where": "main_paper_bridge", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="main_paper_consumer",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.main_paper_consumer import consume_main_paper_instructions
+        out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
+    except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
+        out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="main_paper_runtime_queue",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.main_paper_runtime_adapter import build_main_paper_runtime_queue
+        out["main_paper_runtime_queue"] = build_main_paper_runtime_queue(private_root)
+    except Exception as exc:  # noqa: BLE001 - runtime queue must not break the cycle
+        out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="main_paper_runtime_observation",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={"limit": int(getattr(args, "main_paper_runtime_limit", 50))},
+        )
+        from src.research_lab.main_paper_runtime import observe_main_paper_runtime
+        runtime_limit = int(getattr(args, "main_paper_runtime_limit", 50))
+        out["main_paper_runtime_observation"] = observe_main_paper_runtime(
+            private_root,
+            limit=runtime_limit,
+            apply=apply and runtime_limit != 0,
+            provider=provider,
+        )
+    except Exception as exc:  # noqa: BLE001 - paper observer must not break the cycle
+        out.setdefault("errors", []).append({
+            "where": "main_paper_runtime_observation",
+            "error": str(exc),
+        })
+    try:
+        _write_loop_status(
+            private_root,
+            stage="main_paper_trade_ledger",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.main_paper_trade_ledger import build_main_paper_trade_ledger
+        out["main_paper_trade_ledger"] = build_main_paper_trade_ledger(private_root)
+    except Exception as exc:  # noqa: BLE001 - paper trade ledger must not break the cycle
+        out.setdefault("errors", []).append({"where": "main_paper_trade_ledger", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="paper_product_trade_ledger",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.paper_product_trade_ledger import build_paper_product_trade_ledger
+        out["paper_product_trade_ledger"] = build_paper_product_trade_ledger(private_root)
+    except Exception as exc:  # noqa: BLE001 - product ledger must not break the cycle
+        out.setdefault("errors", []).append({"where": "paper_product_trade_ledger", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="paper_telegram_preview",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
+        out["paper_telegram_preview"] = build_paper_telegram_preview(
+            private_root,
+            fetch_public_chart_candles=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
+        out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="paper_signal_training_export",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.paper_signals.training_export import export_training_rows
+        out["paper_signal_training_export"] = export_training_rows(private_root)
+    except Exception as exc:  # noqa: BLE001 - training export must not break the cycle
+        out.setdefault("errors", []).append({
+            "where": "paper_signal_training_export",
+            "error": str(exc),
+        })
+    try:
+        _write_loop_status(
+            private_root,
+            stage="product_signal_training_export",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.product_signal_training import export_product_signal_training
+        out["product_signal_training_export"] = export_product_signal_training(private_root)
+    except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
+        out.setdefault("errors", []).append({
+            "where": "product_signal_training_export",
+            "error": str(exc),
+        })
+    try:
+        _write_loop_status(
+            private_root,
+            stage="setup_outcome_memory_refresh",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.setup_outcome_memory import (
+            build_memory_index,
+            summarize_memory,
+            summarize_product_training_memory,
+            write_memory_snapshot,
+        )
+
+        memory_records = build_memory_index(private_root)
+        memory_summary = summarize_memory(memory_records)
+        product_memory = summarize_product_training_memory(private_root)["summary"]
+        out["setup_outcome_memory_refresh"] = {
+            "schema": "setup_outcome_memory_refresh.v1",
+            "snapshot_path": str(write_memory_snapshot(private_root)),
+            "total": memory_summary.get("total", 0),
+            "paper_ready_without_hard_pass": memory_summary.get("paper_ready_without_hard_pass", 0),
+            "product_rows": product_memory.get("rows", 0),
+            "product_terminal_rows": product_memory.get("terminal_rows", 0),
+            "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    except Exception as exc:  # noqa: BLE001 - memory refresh must not break the cycle
+        out.setdefault("errors", []).append({
+            "where": "setup_outcome_memory_refresh",
+            "error": str(exc),
+        })
+    try:
+        _write_loop_status(
+            private_root,
+            stage="paper_product_quality_report",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.paper_product_quality_report import build_paper_product_quality_report
+        out["paper_product_quality_report"] = build_paper_product_quality_report(private_root)
+    except Exception as exc:  # noqa: BLE001 - aggregate report must not break the cycle
+        out.setdefault("errors", []).append({
+            "where": "paper_product_quality_report",
+            "error": str(exc),
+        })
+
+
 def _print_cycle(out: dict) -> None:
     c = out["counters"]
     interesting = {k: v for k, v in c.items() if isinstance(v, int) and v}
@@ -812,6 +1006,16 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             "readiness": paper.get("readiness", {}),
             "results": (paper.get("results") or [])[:10],
         }
+        if not getattr(args, "run_paper_signals", False):
+            _run_main_paper_derived_chain(
+                args,
+                private_root,
+                apply=apply,
+                loop=loop,
+                cycle_started_at=cycle_started_at,
+                out=out,
+                provider=provider,
+            )
     if apply:
         # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
         # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
@@ -912,6 +1116,15 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     max_observe=getattr(args, "paper_signals_max_observe", None),
                     max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
                     max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)))
+                _run_main_paper_derived_chain(
+                    args,
+                    private_root,
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    out=out,
+                    provider=paper_provider,
+                )
                 try:
                     _write_loop_status(
                         private_root,
@@ -924,103 +1137,6 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     out["paper_exit_supervisor"] = write_exit_supervisor(private_root)
                 except Exception as exc:  # noqa: BLE001 - exit advice must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_exit_supervisor", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="main_paper_bridge",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.main_paper_bridge import export_main_paper_instructions
-                    out["main_paper_bridge"] = export_main_paper_instructions(private_root)
-                except Exception as exc:  # noqa: BLE001 - derived bridge must not break the cycle
-                    out.setdefault("errors", []).append({"where": "main_paper_bridge", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="main_paper_consumer",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.main_paper_consumer import consume_main_paper_instructions
-                    out["main_paper_consumer"] = consume_main_paper_instructions(private_root)
-                except Exception as exc:  # noqa: BLE001 - paper consumer must not break the cycle
-                    out.setdefault("errors", []).append({"where": "main_paper_consumer", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="main_paper_runtime_queue",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.main_paper_runtime_adapter import build_main_paper_runtime_queue
-                    out["main_paper_runtime_queue"] = build_main_paper_runtime_queue(private_root)
-                except Exception as exc:  # noqa: BLE001 - runtime queue must not break the cycle
-                    out.setdefault("errors", []).append({"where": "main_paper_runtime_queue", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="main_paper_runtime_observation",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                        details={"limit": int(getattr(args, "main_paper_runtime_limit", 50))},
-                    )
-                    from src.research_lab.main_paper_runtime import observe_main_paper_runtime
-                    runtime_limit = int(getattr(args, "main_paper_runtime_limit", 50))
-                    out["main_paper_runtime_observation"] = observe_main_paper_runtime(
-                        private_root,
-                        limit=runtime_limit,
-                        apply=apply and runtime_limit != 0,
-                        provider=paper_provider,
-                    )
-                except Exception as exc:  # noqa: BLE001 - paper observer must not break the cycle
-                    out.setdefault("errors", []).append({
-                        "where": "main_paper_runtime_observation",
-                        "error": str(exc),
-                    })
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="main_paper_trade_ledger",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.main_paper_trade_ledger import build_main_paper_trade_ledger
-                    out["main_paper_trade_ledger"] = build_main_paper_trade_ledger(private_root)
-                except Exception as exc:  # noqa: BLE001 - paper trade ledger must not break the cycle
-                    out.setdefault("errors", []).append({"where": "main_paper_trade_ledger", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="paper_product_trade_ledger",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.paper_product_trade_ledger import build_paper_product_trade_ledger
-                    out["paper_product_trade_ledger"] = build_paper_product_trade_ledger(private_root)
-                except Exception as exc:  # noqa: BLE001 - product ledger must not break the cycle
-                    out.setdefault("errors", []).append({"where": "paper_product_trade_ledger", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="paper_telegram_preview",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
-                    out["paper_telegram_preview"] = build_paper_telegram_preview(
-                        private_root,
-                        fetch_public_chart_candles=True,
-                    )
-                except Exception as exc:  # noqa: BLE001 - preview surface must not break the cycle
-                    out.setdefault("errors", []).append({"where": "paper_telegram_preview", "error": str(exc)})
                 try:
                     _write_loop_status(
                         private_root,
@@ -1047,85 +1163,6 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         out["paper_telegram_delivery"]["config_error"] = delivery_config["config_error"]
                 except Exception as exc:  # noqa: BLE001 - delivery audit must not break the cycle
                     out.setdefault("errors", []).append({"where": "paper_telegram_delivery", "error": str(exc)})
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="paper_signal_training_export",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.paper_signals.training_export import export_training_rows
-                    out["paper_signal_training_export"] = export_training_rows(private_root)
-                except Exception as exc:  # noqa: BLE001 - training export must not break the cycle
-                    out.setdefault("errors", []).append({
-                        "where": "paper_signal_training_export",
-                        "error": str(exc),
-                    })
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="product_signal_training_export",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.product_signal_training import export_product_signal_training
-                    out["product_signal_training_export"] = export_product_signal_training(private_root)
-                except Exception as exc:  # noqa: BLE001 - product training export must not break the cycle
-                    out.setdefault("errors", []).append({
-                        "where": "product_signal_training_export",
-                        "error": str(exc),
-                    })
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="setup_outcome_memory_refresh",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.setup_outcome_memory import (
-                        build_memory_index,
-                        summarize_memory,
-                        summarize_product_training_memory,
-                        write_memory_snapshot,
-                    )
-
-                    memory_records = build_memory_index(private_root)
-                    memory_summary = summarize_memory(memory_records)
-                    product_memory = summarize_product_training_memory(private_root)["summary"]
-                    out["setup_outcome_memory_refresh"] = {
-                        "schema": "setup_outcome_memory_refresh.v1",
-                        "snapshot_path": str(write_memory_snapshot(private_root)),
-                        "total": memory_summary.get("total", 0),
-                        "paper_ready_without_hard_pass": memory_summary.get("paper_ready_without_hard_pass", 0),
-                        "product_rows": product_memory.get("rows", 0),
-                        "product_terminal_rows": product_memory.get("terminal_rows", 0),
-                        "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
-                        "paper_only": True,
-                        "execution_allowed": False,
-                    }
-                except Exception as exc:  # noqa: BLE001 - memory refresh must not break the cycle
-                    out.setdefault("errors", []).append({
-                        "where": "setup_outcome_memory_refresh",
-                        "error": str(exc),
-                    })
-                try:
-                    _write_loop_status(
-                        private_root,
-                        stage="paper_product_quality_report",
-                        apply=apply,
-                        loop=loop,
-                        cycle_started_at=cycle_started_at,
-                    )
-                    from src.research_lab.paper_product_quality_report import build_paper_product_quality_report
-                    out["paper_product_quality_report"] = build_paper_product_quality_report(private_root)
-                except Exception as exc:  # noqa: BLE001 - aggregate report must not break the cycle
-                    out.setdefault("errors", []).append({
-                        "where": "paper_product_quality_report",
-                        "error": str(exc),
-                    })
                 if getattr(args, "run_journal_export", False):
                     try:
                         _write_loop_status(
