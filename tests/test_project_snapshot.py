@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from scripts import project_snapshot
@@ -116,6 +117,67 @@ def test_farm_loop_status_snapshot_reports_stage_freshness(tmp_path) -> None:
         "execution_allowed": False,
         "details": {"max_pfr_scan": 30},
     }
+
+
+def test_outcome_retest_status_separates_current_from_historical_invalid(tmp_path) -> None:
+    from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    catalog_path = derived / "outcome_retest_specs.json"
+    catalog_path.write_text(
+        json.dumps({
+            "specs": 2,
+            "queueable": 2,
+            "items": [
+                {"retest_id": "fresh_retest", "queueable": True},
+                {"retest_id": "queued_retest", "queueable": True},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    os.utime(catalog_path, (5.0, 5.0))
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="schedule_retest",
+        task_key="fresh",
+        source_event_id="fresh_retest",
+        state="skipped",
+        machine_reason="invalid_retest_spec:variant grid exceeds max_variants",
+        now=10.0,
+    )
+    tasks.enqueue_task(
+        task_type="schedule_retest",
+        task_key="old",
+        source_event_id="old_retest",
+        state="skipped",
+        machine_reason="invalid_retest_spec:old invalid grid",
+        now=1.0,
+    )
+    tasks.enqueue_task(
+        task_type="run_sweep",
+        task_key="run",
+        state="completed",
+        payload={"origin": "outcome_retest"},
+        now=1.0,
+    )
+
+    status = project_snapshot._outcome_retest_status(tmp_path)
+
+    assert status["catalog_specs"] == 2
+    assert status["catalog_queueable"] == 2
+    assert status["invalid_retest"] == 2
+    assert status["invalid_retest_current"] == 1
+    assert status["invalid_retest_historical"] == 1
+    assert status["catalog_current_scheduled"] == 1
+    assert status["catalog_current_run_sweep"] == 0
+    assert status["catalog_current_unscheduled"] == 1
+    assert status["invalid_current_reasons"] == {"variant grid exceeds max_variants": 1}
+    assert status["invalid_reasons"] == {
+        "old invalid grid": 1,
+        "variant grid exceeds max_variants": 1,
+    }
+    assert status["run_sweep_outcome_retest"] == {"completed": 1}
 
 
 def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -> None:
