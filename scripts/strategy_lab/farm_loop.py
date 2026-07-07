@@ -1101,7 +1101,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     details={
                         "timeframes": list(paper_timeframes),
                         "max_pfr_scan": int(getattr(args, "paper_signals_max_pfr_scan", 30)),
-                        "max_pfr_fetches": int(getattr(args, "paper_signals_max_pfr_fetches", 8)),
+                        "max_pfr_fetches": int(getattr(args, "paper_signals_max_pfr_fetches", 12)),
                         "max_live_fetches": int(getattr(args, "paper_signals_max_live_fetches", 12)),
                         "max_network_fetches": int(getattr(args, "paper_signals_max_network_fetches", 16)),
                     },
@@ -1111,7 +1111,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     max_new=int(getattr(args, "paper_signals_max_new", 5)), apply=True,
                     pfr_db_path=_pfr_db, provider=paper_provider,
                     max_pfr_scan=int(getattr(args, "paper_signals_max_pfr_scan", 30)),
-                    max_pfr_fetches=int(getattr(args, "paper_signals_max_pfr_fetches", 8)),
+                    max_pfr_fetches=int(getattr(args, "paper_signals_max_pfr_fetches", 12)),
                     pfr_reserved_new=int(getattr(args, "paper_signals_pfr_reserved", 0)),
                     max_observe=getattr(args, "paper_signals_max_observe", None),
                     max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
@@ -1310,7 +1310,7 @@ def main() -> None:
     ap.add_argument("--paper-signals-max-pfr-scan", type=int, default=30,
                     help="max PFR records inspected by --run-paper-signals per farm cycle")
     ap.add_argument("--paper-signals-max-pfr-fetches", type=int,
-                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES", "8")),
+                    default=int(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES", "12")),
                     help="max PFR candle fetch attempts per paper-signal cycle")
     ap.add_argument("--paper-signals-pfr-reserved", type=int, default=0,
                     help=("reserve this many new paper-watch card slots for PFR records when "
