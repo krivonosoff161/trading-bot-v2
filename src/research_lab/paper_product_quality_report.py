@@ -236,6 +236,11 @@ def _top_counts(raw: Any, *, limit: int = 6) -> dict[str, int]:
     return dict(pairs[:limit])
 
 
+def _has_pfr_budget_limit(reasons: dict[str, Any]) -> bool:
+    budget_prefixes = ("pfr_fetch_limit", "pfr_scan_limit")
+    return any(str(reason).startswith(budget_prefixes) for reason in reasons)
+
+
 def _pfr_live_trigger_reasons(pfr_counts: dict[str, Any]) -> dict[str, int]:
     reasons: dict[str, int] = {}
     for key, value in pfr_counts.items():
@@ -419,6 +424,8 @@ def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
         state = "main_paper_has_pfr_instructions"
     elif generated > 0:
         state = "pfr_generated_waiting_downstream"
+    elif trigger_reasons and _has_pfr_budget_limit(trigger_reasons):
+        state = "pfr_trigger_scan_limited"
     elif trigger_reasons:
         state = "waiting_for_live_trigger"
     else:
