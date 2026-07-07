@@ -2,6 +2,17 @@
 
 Updated: 2026-07-07
 
+> **Update 2026-07-08 - validated PFR rows now lead main-paper queue.**
+> The PFR/main-paper handoff no longer hides validated rows behind broad farm
+> candidates in the runtime/Telegram preview priority order. `validated_pfr` queue
+> items now receive a deterministic priority boost before ordinary
+> `farm_calculated` rows. Verified after PR #139 on the private paper state:
+> `main-paper instructions=31`, `queued=31`, `active_source={farm:29,pfr_farm:2}`,
+> `validated_instructions=2`, `pfr_trigger_state=main_paper_has_pfr_instructions`,
+> and `quality_action=collect_outcomes`. This is still paper/research only:
+> `execution_allowed=false`, no `.env`, no `AUTO_TRADE`, no Telegram send authority,
+> no old `main.py`, and no live order path.
+
 > **Update 2026-07-08 - PFR trigger-budget and gap-memory alignment.**
 > The PFR/main-paper handoff now has one visible fetch budget across the full-cycle
 > launcher, `farm_loop`, standalone `paper_signals_run`, `cycle.run_cycle`, and
