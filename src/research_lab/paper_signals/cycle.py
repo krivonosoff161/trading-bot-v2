@@ -42,6 +42,76 @@ def _pfr_gap_telemetry_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "pfr_gap_telemetry.jsonl"
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def load_pfr_gap_memory(private_root: Path, *, max_cycles: int = 20) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Recent PFR trigger-distance memory used to spend bounded fetches on nearer setups first."""
+    path = _pfr_gap_telemetry_path(private_root)
+    if not path.exists():
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()[-max(1, int(max_cycles)):]
+    except OSError:
+        return {}
+    out: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        updated_at = float(payload.get("updated_at") or 0.0)
+        samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            key = (
+                str(sample.get("symbol") or ""),
+                str(sample.get("timeframe") or ""),
+                str(sample.get("family") or ""),
+            )
+            if not all(key):
+                continue
+            gap = _float_or_none(sample.get("min_gap_pct"))
+            if gap is None:
+                continue
+            current = out.get(key)
+            if current is None or gap < float(current.get("min_gap_pct") or 999_999.0):
+                out[key] = {
+                    "min_gap_pct": round(gap, 6),
+                    "updated_at": updated_at,
+                    "selection_state": str(sample.get("selection_state") or ""),
+                    "bucket": str(sample.get("bucket") or ""),
+                }
+    return out
+
+
+def prioritize_pfr_records_by_gap_memory(
+    records: list[dict[str, Any]],
+    gap_memory: dict[tuple[str, str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not gap_memory:
+        return list(records)
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, float, float, str]:
+        key = (str(row.get("symbol") or ""), str(row.get("timeframe") or ""), str(row.get("family") or ""))
+        memory = gap_memory.get(key)
+        if not memory:
+            return (1, 999_999.0, -float(row.get("avg_net_pct") or 0.0), str(row.get("candidate_id") or ""))
+        return (
+            0,
+            float(memory.get("min_gap_pct") or 999_999.0),
+            -float(row.get("avg_net_pct") or 0.0),
+            str(row.get("candidate_id") or ""),
+        )
+
+    return sorted(records, key=sort_key)
+
+
 def record_memory(private_root: Path, sig: PaperActionSignal) -> None:
     """Append a terminal outcome as a learning row (research-only knowledge, not edge)."""
     row = {"ts": round(sig.created_at, 1), "dedup_key": sig.dedup_key, "symbol": sig.symbol,
@@ -520,6 +590,21 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         pfr_counts["pfr_unique_setups"] = len(
             {(r["symbol"], r["timeframe"], r["family"]) for r in passed_pfr}
         )
+        pfr_gap_memory = load_pfr_gap_memory(private_root)
+        if pfr_gap_memory:
+            prioritized = prioritize_pfr_records_by_gap_memory(passed_pfr, pfr_gap_memory)
+            pfr_counts["pfr_gap_memory_keys"] = len(pfr_gap_memory)
+            pfr_counts["pfr_gap_memory_prioritized"] = sum(
+                1
+                for row in prioritized
+                if (
+                    str(row.get("symbol") or ""),
+                    str(row.get("timeframe") or ""),
+                    str(row.get("family") or ""),
+                )
+                in pfr_gap_memory
+            )
+            passed_pfr = prioritized
 
         active_setup_ids: set[str] = set()
         for s in existing:
