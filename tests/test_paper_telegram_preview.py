@@ -259,6 +259,12 @@ def _product_trade_record(**overrides):
         "status": "armed",
         "signal_status": "armed",
         "source": "farm",
+        "farm_geometry_profile_id": "base",
+        "farm_geometry_profile_reason": "default deterministic family geometry",
+        "farm_geometry_entry_scale": 1.0,
+        "farm_geometry_stop_scale": 1.0,
+        "farm_geometry_tp_scale": 1.0,
+        "farm_geometry_hold_scale": 1.0,
         "reason_now": "tactical early-TP scalp; fast in/out",
         "paper_only": True,
         "execution_allowed": False,
@@ -310,6 +316,21 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert "research-only, not an order" not in text
     assert "execution_allowed=false" not in text
     assert not any(marker in text for marker in ("\u0420\u00a0", "\u0420\u040f", "\u0420\u2019", "\u0456\u201a"))
+
+
+def test_preview_falls_back_to_product_trades_when_main_runtime_has_only_provider_errors(tmp_path):
+    _write_trade_snapshot(tmp_path, [_trade_record(status="provider_error", signal_status="")])
+    _write_product_trade_snapshot(tmp_path, [_product_trade_record()])
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_product_trade_ledger.v1"
+    assert summary["records_read"] == 1
+    assert summary["rendered"] == 1
+    assert summary["invalid"] == 0
+    item = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"][0]
+    assert item["source_signal_id"] == "sig_product"
+    assert item["farm_geometry_profile_id"] == "base"
 
 
 def test_preview_falls_back_to_active_paper_signal_candidates(tmp_path):

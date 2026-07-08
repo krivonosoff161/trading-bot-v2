@@ -57,6 +57,12 @@ class MainPaperTrade:
     adaptive_regime_hint: str = ""
     adaptive_policy_confidence: float = 0.0
     adaptive_policy_reasons: list[str] = field(default_factory=list)
+    farm_geometry_profile_id: str = ""
+    farm_geometry_profile_reason: str = ""
+    farm_geometry_entry_scale: Any = None
+    farm_geometry_stop_scale: Any = None
+    farm_geometry_tp_scale: Any = None
+    farm_geometry_hold_scale: Any = None
     created_at: str = field(default_factory=utc_now)
     paper_only: bool = True
     execution_allowed: bool = False
@@ -171,6 +177,12 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         adaptive_regime_hint=str(queue_item.get("adaptive_regime_hint") or ""),
         adaptive_policy_confidence=float(queue_item.get("adaptive_policy_confidence") or 0.0),
         adaptive_policy_reasons=list(queue_item.get("adaptive_policy_reasons") or []),
+        farm_geometry_profile_id=str(queue_item.get("farm_geometry_profile_id") or ""),
+        farm_geometry_profile_reason=str(queue_item.get("farm_geometry_profile_reason") or ""),
+        farm_geometry_entry_scale=queue_item.get("farm_geometry_entry_scale"),
+        farm_geometry_stop_scale=queue_item.get("farm_geometry_stop_scale"),
+        farm_geometry_tp_scale=queue_item.get("farm_geometry_tp_scale"),
+        farm_geometry_hold_scale=queue_item.get("farm_geometry_hold_scale"),
     )
 
 

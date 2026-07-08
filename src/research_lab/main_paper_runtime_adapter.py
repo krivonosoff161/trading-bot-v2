@@ -77,6 +77,12 @@ class MainPaperRuntimeQueueItem:
     adaptive_regime_hint: str
     adaptive_policy_confidence: float
     adaptive_policy_reasons: list[str]
+    farm_geometry_profile_id: str = ""
+    farm_geometry_profile_reason: str = ""
+    farm_geometry_entry_scale: Any = None
+    farm_geometry_stop_scale: Any = None
+    farm_geometry_tp_scale: Any = None
+    farm_geometry_hold_scale: Any = None
     validation_tier: str = FARM_CALCULATED_TIER
     ready_strategy_id: str = ""
     source_validation_verdict: str = ""
@@ -266,6 +272,12 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         adaptive_regime_hint=policy.regime_hint,
         adaptive_policy_confidence=policy.confidence,
         adaptive_policy_reasons=policy.reason_codes,
+        farm_geometry_profile_id=str(meta.get("geometry_profile_id") or ""),
+        farm_geometry_profile_reason=str(meta.get("geometry_profile_reason") or ""),
+        farm_geometry_entry_scale=meta.get("geometry_entry_scale"),
+        farm_geometry_stop_scale=meta.get("geometry_stop_scale"),
+        farm_geometry_tp_scale=meta.get("geometry_tp_scale"),
+        farm_geometry_hold_scale=meta.get("geometry_hold_scale"),
         validation_tier=validation_tier,
         ready_strategy_id=str(meta.get("ready_strategy_id") or ""),
         source_validation_verdict=str(meta.get("source_validation_verdict") or ""),

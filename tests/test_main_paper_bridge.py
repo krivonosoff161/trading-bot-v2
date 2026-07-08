@@ -21,6 +21,12 @@ def _sig(status: str = "armed", *, validated: bool = True, suffix: str = "") -> 
             "source_validation_verdict": "PAPER_FORWARD_READY",
             "setup_id": "setup_abc",
             "candidate_id": "cand_abc",
+            "geometry_profile_id": "base",
+            "geometry_profile_reason": "default deterministic family geometry",
+            "geometry_entry_scale": 1.0,
+            "geometry_stop_scale": 1.25,
+            "geometry_tp_scale": 0.75,
+            "geometry_hold_scale": 1.5,
         }
     return PaperActionSignal(
         signal_id=f"sig-{status}{suffix}",
@@ -75,6 +81,12 @@ def test_instruction_from_signal_reuses_signal_contract_shape():
     assert item.signal_contract["metadata"]["exit_mode"] == "partial_be"
     assert item.signal_contract["metadata"]["entry_trigger"] == "limit_pullback"
     assert item.signal_contract["metadata"]["pretrigger"] is False
+    assert item.signal_contract["metadata"]["geometry_profile_id"] == "base"
+    assert item.signal_contract["metadata"]["geometry_profile_reason"] == "default deterministic family geometry"
+    assert item.signal_contract["metadata"]["geometry_entry_scale"] == 1.0
+    assert item.signal_contract["metadata"]["geometry_stop_scale"] == 1.25
+    assert item.signal_contract["metadata"]["geometry_tp_scale"] == 0.75
+    assert item.signal_contract["metadata"]["geometry_hold_scale"] == 1.5
 
 
 def test_instruction_from_signal_ignores_terminal_reviews():
@@ -131,6 +143,27 @@ def test_instruction_from_signal_accepts_unvalidated_farm_as_calculated_paper_wa
 
     assert item is not None
     assert item.signal_contract["metadata"]["validation_tier"] == "farm_calculated"
+    assert item.signal_contract["metadata"]["geometry_profile_id"] == "farm_legacy_static"
+    assert item.signal_contract["metadata"]["geometry_profile_reason"] == (
+        "legacy farm signal without explicit geometry profile"
+    )
+
+
+def test_instruction_from_legacy_pfr_gets_validated_static_geometry_profile():
+    sig = _sig("armed", validated=True)
+    sig.source = "pfr_farm"
+    for key in list(sig.validator_context):
+        if key.startswith("geometry_"):
+            sig.validator_context.pop(key)
+
+    item = instruction_from_signal(sig)
+
+    assert item is not None
+    assert item.signal_contract["metadata"]["validation_tier"] == "validated_pfr"
+    assert item.signal_contract["metadata"]["geometry_profile_id"] == "pfr_validated_static"
+    assert item.signal_contract["metadata"]["geometry_profile_reason"] == (
+        "hard-validation selected fixed PFR params"
+    )
 
 
 def test_instruction_from_signal_skips_research_only_sources():

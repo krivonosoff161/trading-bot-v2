@@ -77,7 +77,30 @@ def _entry_midpoint(sig: PaperActionSignal) -> float:
     return midpoint(sig.entry_zone)
 
 
+def _geometry_metadata(sig: PaperActionSignal) -> dict[str, Any]:
+    context = sig.validator_context or {}
+    profile_id = str(context.get("geometry_profile_id") or "")
+    if not profile_id and sig.source == "pfr_farm":
+        profile_id = "pfr_validated_static"
+    elif not profile_id and sig.source == "farm":
+        profile_id = "farm_legacy_static"
+    reason = str(context.get("geometry_profile_reason") or "")
+    if not reason and profile_id == "pfr_validated_static":
+        reason = "hard-validation selected fixed PFR params"
+    elif not reason and profile_id == "farm_legacy_static":
+        reason = "legacy farm signal without explicit geometry profile"
+    return {
+        "geometry_profile_id": profile_id,
+        "geometry_profile_reason": reason,
+        "geometry_entry_scale": context.get("geometry_entry_scale"),
+        "geometry_stop_scale": context.get("geometry_stop_scale"),
+        "geometry_tp_scale": context.get("geometry_tp_scale"),
+        "geometry_hold_scale": context.get("geometry_hold_scale"),
+    }
+
+
 def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContract:
+    geometry_meta = _geometry_metadata(sig)
     targets = [
         {
             "label": str(tp.get("label", "tp")),
@@ -131,6 +154,7 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
             "setup_id": str(sig.validator_context.get("setup_id") or ""),
             "candidate_id": str(sig.validator_context.get("candidate_id") or ""),
             "source_validation_verdict": str(sig.validator_context.get("source_validation_verdict") or ""),
+            **geometry_meta,
             "entry_trigger": str(sig.validator_context.get("entry_trigger") or "limit_pullback"),
             "pretrigger": bool(sig.validator_context.get("pretrigger")),
             "trigger_gap_pct": sig.validator_context.get("trigger_gap_pct"),

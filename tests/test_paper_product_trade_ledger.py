@@ -49,6 +49,7 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert summary["active_live_blocked"] == 1
     assert summary["active_by_source"] == {"farm": 1}
     assert summary["active_by_family"] == {"early_tp_tactical": 1}
+    assert summary["by_geometry_profile"] == {"farm_legacy_static": 1}
     assert summary["by_live_block"] == {"missing_ready_strategy_id": 1}
     assert summary["paper_only"] is True
     assert summary["execution_allowed"] is False
@@ -58,6 +59,7 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert trade["source_signal_id"] == "sig_product_1"
     assert trade["live_ready"] is False
     assert trade["live_block_reason"] == "missing_ready_strategy_id"
+    assert trade["farm_geometry_profile_id"] == "farm_legacy_static"
     assert trade["paper_account"]["notional_usdt"] == 105.0
     assert Path(summary["snapshot_path"]).exists()
     assert Path(summary["jsonl_path"]).exists()
@@ -67,6 +69,7 @@ def test_product_trade_ledger_marks_pfr_rows_as_live_ready_shadow(tmp_path):
     append_signal(
         tmp_path,
         _signal(
+            source="pfr_farm",
             validator_context={
                 "ready_strategy_id": "ready_1",
                 "source_validation_verdict": "PAPER_FORWARD_READY",
@@ -83,6 +86,7 @@ def test_product_trade_ledger_marks_pfr_rows_as_live_ready_shadow(tmp_path):
     assert summary["active_live_blocked"] == 0
     assert summary["items"][0]["ready_strategy_id"] == "ready_1"
     assert summary["items"][0]["live_block_reason"] == ""
+    assert summary["items"][0]["farm_geometry_profile_id"] == "pfr_validated_static"
 
 
 def test_product_trade_ledger_preserves_geometry_profile_lineage(tmp_path):
