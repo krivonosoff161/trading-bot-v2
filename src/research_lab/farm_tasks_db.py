@@ -35,7 +35,7 @@ SCHEMA = "farm_tasks.v1"
 TASK_TYPES = (
     "intake_event", "resolve_instrument", "prepare_data", "enrich_funding",
     "enrich_oi", "run_sweep", "classify_result", "export_validation",
-    "run_or_refresh_validation", "schedule_followup",
+    "run_or_refresh_validation", "schedule_followup", "schedule_advisor_sweep",
 )
 TERMINAL_STATES = ("completed", "skipped", "failed")
 ACTIVE_STATES = ("queued", "running", "deferred", "blocked")
