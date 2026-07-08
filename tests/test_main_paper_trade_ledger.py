@@ -35,6 +35,12 @@ def _queue_item(**overrides):
         "adaptive_regime_hint": "volatile",
         "adaptive_policy_confidence": 0.75,
         "adaptive_policy_reasons": ["forward_lead:early_tp_tactical"],
+        "farm_geometry_profile_id": "runner_probe",
+        "farm_geometry_profile_reason": "test geometry profile",
+        "farm_geometry_entry_scale": 1.0,
+        "farm_geometry_stop_scale": 1.1,
+        "farm_geometry_tp_scale": 1.35,
+        "farm_geometry_hold_scale": 1.5,
     }
     row.update(overrides)
     return row
@@ -102,6 +108,9 @@ def test_trade_ledger_builds_validated_and_calculated_paper_trades(tmp_path):
     assert trade["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert trade["paper_account"]["deposit_usdt"] == 700.0
     assert trade["paper_account"]["position_margin_usdt"] == 35.0
+    assert trade["farm_geometry_profile_id"] == "runner_probe"
+    assert trade["farm_geometry_profile_reason"] == "test geometry profile"
+    assert trade["farm_geometry_tp_scale"] == 1.35
     calc = summary["items"][1]
     assert calc["validation_tier"] == "farm_calculated"
     assert calc["ready_strategy_id"] == ""

@@ -91,6 +91,12 @@ class PaperTelegramPreview:
     validation_tier: str
     text: str
     chart_path: str = ""
+    farm_geometry_profile_id: str = ""
+    farm_geometry_profile_reason: str = ""
+    farm_geometry_entry_scale: Any = None
+    farm_geometry_stop_scale: Any = None
+    farm_geometry_tp_scale: Any = None
+    farm_geometry_hold_scale: Any = None
     problems: list[str] = field(default_factory=list)
     card_template_version: str = CARD_TEMPLATE_VERSION
     paper_only: bool = True
@@ -849,6 +855,11 @@ def build_paper_telegram_preview(
 ) -> dict[str, Any]:
     rows, source_path = _load_records(_trade_snapshot_path(private_root))
     source_schema = "main_paper_trade_ledger.v1"
+    if rows and not any(str(row.get("status") or "") not in NON_ACTIONABLE_TRADE_STATUSES for row in rows):
+        product_rows, product_source_path = _load_records(_product_trade_snapshot_path(private_root))
+        if product_rows:
+            rows, source_path = product_rows, product_source_path
+            source_schema = "paper_product_trade_ledger.v1"
     if not rows:
         rows, source_path = _load_records(_product_trade_snapshot_path(private_root))
         source_schema = "paper_product_trade_ledger.v1"
@@ -918,6 +929,12 @@ def build_paper_telegram_preview(
                     source_signal_id,
                     fetch_public_chart_candles=fetch_public_chart_candles,
                 ),
+                farm_geometry_profile_id=str(row.get("farm_geometry_profile_id") or ""),
+                farm_geometry_profile_reason=str(row.get("farm_geometry_profile_reason") or ""),
+                farm_geometry_entry_scale=row.get("farm_geometry_entry_scale"),
+                farm_geometry_stop_scale=row.get("farm_geometry_stop_scale"),
+                farm_geometry_tp_scale=row.get("farm_geometry_tp_scale"),
+                farm_geometry_hold_scale=row.get("farm_geometry_hold_scale"),
                 problems=problems,
             )
         )

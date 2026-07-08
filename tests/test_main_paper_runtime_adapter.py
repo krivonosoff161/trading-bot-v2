@@ -29,6 +29,12 @@ def _sig(
             "source_validation_verdict": "PAPER_FORWARD_READY",
             "setup_id": f"setup_{signal_id}",
             "candidate_id": f"cand_{signal_id}",
+            "geometry_profile_id": "runner_probe",
+            "geometry_profile_reason": "test geometry profile",
+            "geometry_entry_scale": 1.0,
+            "geometry_stop_scale": 1.1,
+            "geometry_tp_scale": 1.35,
+            "geometry_hold_scale": 1.5,
         }
     return PaperActionSignal(
         signal_id=signal_id,
@@ -98,6 +104,10 @@ def test_runtime_queue_builds_from_accepted_consumer_rows(tmp_path):
     assert rows[0]["adaptive_execution_profile"] == "fast_tactical_watch"
     assert rows[0]["adaptive_exit_profile"] == "early_tp_partial_be"
     assert "forward_lead:early_tp_tactical" in rows[0]["adaptive_policy_reasons"]
+    assert rows[0]["farm_geometry_profile_id"] == "runner_probe"
+    assert rows[0]["farm_geometry_profile_reason"] == "test geometry profile"
+    assert rows[0]["farm_geometry_stop_scale"] == 1.1
+    assert rows[0]["farm_geometry_tp_scale"] == 1.35
     policy_snapshot = tmp_path / "state" / "derived" / "main_adaptive_policy.json"
     assert policy_snapshot.exists()
     assert all(row["paper_only"] is True for row in rows)
