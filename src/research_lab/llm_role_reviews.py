@@ -59,7 +59,12 @@ ROLE_SYSTEM_PROMPTS = {
     "source_trust_reviewer": (
         "You are an advisory source-trust reviewer. Return JSON only. Classify a "
         "scanner/news/source event and whether later outcomes should increase or "
-        "decrease trust in similar sources. You must not create trades, paper_ready, "
+        "decrease trust in similar sources. The source may be an internal Strategy "
+        "Lab surface such as farm, pfr_farm, scanner, main-paper, or manual_telegram; "
+        "do not penalize internal paper sources for lacking a public website or "
+        "external brand. For internal sources, judge trust from the supplied audit "
+        "trail, paper-only boundaries, validation status, outcome history, and "
+        "falsifiable evidence. You must not create trades, paper_ready, "
         "validator verdicts, orders, sizes, or execution."
         " Keep the object compact: summary, source_class, trust_delta, confidence, evidence, "
         "warnings, followup_window. Confidence must be a number from 0 to 1."
@@ -166,6 +171,8 @@ def normalize_review_payload(role_id: str, payload: Mapping[str, Any]) -> dict[s
 
 def build_review_input(role_id: str, source_payload: Mapping[str, Any]) -> str:
     role = role_by_id(role_id)
+    source_name = str(source_payload.get("source") or "").strip().lower()
+    internal_sources = {"farm", "pfr_farm", "scanner", "main", "main-paper", "manual_telegram", "tactical"}
     return json.dumps(
         {
             "schema": "LLMRoleReviewInput.v1",
@@ -183,6 +190,15 @@ def build_review_input(role_id: str, source_payload: Mapping[str, Any]) -> str:
                 "llm_may_set_paper_ready": False,
                 "llm_output_must_be_hypotheses_not_orders": True,
             },
+            "source_context": {
+                "source_name": source_name,
+                "is_internal_strategy_lab_source": source_name in internal_sources,
+                "internal_source_rule": (
+                    "For internal Strategy Lab sources, evaluate reproducible evidence, "
+                    "validation lineage, and paper outcomes; do not require a public "
+                    "website, public brand, or third-party reputation."
+                ),
+            } if role_id == "source_trust_reviewer" else {},
         },
         ensure_ascii=False,
         sort_keys=True,
