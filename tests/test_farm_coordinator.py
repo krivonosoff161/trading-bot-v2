@@ -311,6 +311,7 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
     assert payload["execution_allowed"] is False
     assert payload["sweep_spec"]["sweep_id"].startswith("advisor_")
     assert payload["sweep_spec"]["setup_family"] == "mean_reversion_fade"
+    assert len(payload["sweep_spec"]["exit_grid"]["hold_bars"]) > 2
     tasks.close()
 
 

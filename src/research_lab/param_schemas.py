@@ -15,8 +15,25 @@ from src.research_lab.config_io import CONFIG_DIR, load_yaml_mapping
 from src.research_lab.strategy_registry import REGISTRY, get_strategy
 
 DEFAULT_PATH = CONFIG_DIR / "param_schemas.yaml"
-META_KEYS = {"direction", "side"}
-META_ENUMS = {"direction": {"long", "short", "both"}, "side": {"long", "short", "both"}}
+EXIT_MODES = {
+    "baseline",
+    "early_tp",
+    "trailing",
+    "trailing_tight",
+    "break_even",
+    "time_decay",
+    "partial_tp",
+    "partial_be",
+    "hold_long",
+    "fixed",
+    "ride",
+}
+META_KEYS = {"direction", "side", "exit_mode"}
+META_ENUMS = {
+    "direction": {"long", "short", "both"},
+    "side": {"long", "short", "both"},
+    "exit_mode": EXIT_MODES,
+}
 
 
 @dataclass(frozen=True)

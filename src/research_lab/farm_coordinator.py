@@ -481,7 +481,10 @@ def _drain_advisor_sweeps(
         fp = str(source_signal.get("data_fingerprint") or task.get("data_fingerprint") or "nofp")
         dimension = str(proposal.get("dimension") or "unknown")
         try:
-            base = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier="normal")
+            base = build_sweep_spec(
+                sym, tf, fam, fingerprint=fp, backend=backend, tier="normal",
+                dimensions=(dimension,),
+            )
         except ValueError as exc:
             tasks.skip_task(task["task_id"], f"invalid_advisor_family:{exc}", now=now)
             _bump(counters, "advisor_sweep_invalid")
