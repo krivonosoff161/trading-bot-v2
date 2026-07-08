@@ -23,3 +23,44 @@ def test_farm_sweep_variants_include_executable_exit_params():
         assert params["hold_bars"] > 0
         assert params["stop_pct"] > 0
         assert params["take_pct"] > 0
+
+
+def _variants_for_dimension(dimension: str):
+    spec = build_sweep_spec(
+        "BTC_USDT_SWAP",
+        "1h",
+        "momentum_breakout",
+        fingerprint="fp",
+        dimensions=(dimension,),
+    )
+    exp = compile_sweep(
+        spec,
+        data_glob="market_data/1h/{symbol}_*.json",
+        timeframe_profiles=load_timeframe_profiles(),
+        resource_policy=load_resource_policy(),
+    )
+    return exp.parameter_grid["momentum_breakout"]
+
+
+def test_trailing_dimension_adds_dynamic_exit_modes():
+    variants = _variants_for_dimension("trailing")
+    modes = {row.get("exit_mode") for row in variants}
+    assert {"baseline", "trailing", "break_even"} <= modes
+
+
+def test_stop_dimension_widens_stop_axis():
+    base = _variants_for_dimension("hold")
+    stop = _variants_for_dimension("stop")
+    assert len({row["stop_pct"] for row in stop}) > len({row["stop_pct"] for row in base})
+
+
+def test_take_profit_dimension_widens_take_axis():
+    base = _variants_for_dimension("hold")
+    take = _variants_for_dimension("take_profit")
+    assert len({row["take_pct"] for row in take}) > len({row["take_pct"] for row in base})
+
+
+def test_entry_timing_dimension_widens_size_axis():
+    base = _variants_for_dimension("hold")
+    entry = _variants_for_dimension("entry_timing")
+    assert len({row["lookback"] for row in entry}) > len({row["lookback"] for row in base})

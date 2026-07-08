@@ -27,6 +27,7 @@ from src.research_lab.sweep_spec import SweepSpec
 _SIZE_KEYS = ("lookback", "period", "trend_ma", "oi_lookback", "range_lookback",
               "swing_lookback", "fvg_lookback", "squeeze_lookback", "vwap_period", "bb_period")
 DEFAULT_TIER = "normal"
+_DYNAMIC_EXIT_MODES = ("baseline", "trailing", "trailing_tight", "break_even", "partial_tp")
 
 # Per-tier search depth. The product of these axes (plus a fixed RR set) is the grid;
 # smoke ~= the old tiny grid, normal/deep actually search stop/take/hold + the size knob.
@@ -51,14 +52,55 @@ def _num_levels(base: float, factors: tuple[float, ...]) -> list[float]:
     return sorted({round(base * f, 6) for f in factors if base * f > 0})
 
 
-def _family_grids(defaults: dict[str, Any], tier: str) -> tuple[dict, dict]:
+def _normal_dimensions(dimensions: tuple[str, ...] | list[str] | None) -> set[str]:
+    out: set[str] = set()
+    for raw in dimensions or ():
+        text = str(raw or "").lower().replace("-", "_").strip()
+        if not text:
+            continue
+        if "entry" in text or "timing" in text:
+            out.add("entry_timing")
+        if "stop" in text or "risk" in text:
+            out.add("stop")
+        if "take" in text or "profit" in text or "rr" in text:
+            out.add("take_profit")
+        if "hold" in text or "time" in text or "horizon" in text:
+            out.add("hold")
+        if "trail" in text or "break_even" in text or "partial" in text or "exit_mode" in text:
+            out.add("dynamic_exit")
+        if "regime" in text or "filter" in text:
+            out.add("regime_filter")
+    return out
+
+
+def _dimension_cfg(tier: str, dimensions: set[str]) -> dict[str, tuple[float, ...]]:
+    cfg = dict(_TIERS.get(tier, _TIERS[DEFAULT_TIER]))
+    if "dynamic_exit" in dimensions:
+        cfg["size"] = (1.0,)
+        cfg["stop"] = (1.0,)
+        cfg["rr"] = (2.0,)
+        cfg["hold"] = (1.0,)
+    if "entry_timing" in dimensions:
+        cfg["size"] = tuple(sorted(set(cfg["size"]) | {0.35, 0.75, 1.25, 2.0}))
+    if "stop" in dimensions:
+        cfg["stop"] = tuple(sorted(set(cfg["stop"]) | {0.45, 0.6, 1.25, 1.6}))
+    if "take_profit" in dimensions:
+        cfg["rr"] = tuple(sorted(set(cfg["rr"]) | {1.5, 2.5, 4.0, 5.0}))
+    if "hold" in dimensions:
+        cfg["hold"] = tuple(sorted(set(cfg["hold"]) | {0.35, 0.75, 1.5, 2.5, 3.0}))
+    return cfg
+
+
+def _family_grids(defaults: dict[str, Any], tier: str,
+                  dimensions: tuple[str, ...] | list[str] | None = None) -> tuple[dict, dict]:
     """A real per-family grid: one size knob + varied stop/take(RR)/hold, RR>=2 preserved.
 
     take levels are derived from the LARGEST stop in the set (take = max_stop * rr), so every
     stop x take combination in the cartesian product still satisfies take >= 2 * stop and
     passes the executable reward/risk gate — no invalid variants are generated.
     """
-    cfg = _TIERS.get(tier, _TIERS[DEFAULT_TIER])
+    dims = _normal_dimensions(dimensions)
+    cfg = _dimension_cfg(tier, dims)
     exit_keys = {"hold_bars", "stop_pct", "take_pct"}
     setup: dict[str, list[Any]] = {k: [v] for k, v in defaults.items() if k not in exit_keys}
     for key in _SIZE_KEYS:
@@ -76,18 +118,25 @@ def _family_grids(defaults: dict[str, Any], tier: str) -> tuple[dict, dict]:
         exit_grid["take_pct"] = take_set
     if "hold_bars" in defaults:
         exit_grid["hold_bars"] = _int_levels(int(defaults["hold_bars"]), cfg["hold"])
+    if "dynamic_exit" in dims:
+        exit_grid["exit_mode"] = list(_DYNAMIC_EXIT_MODES)
     return setup, exit_grid
 
 
 def build_sweep_spec(symbol: str, timeframe: str, family: str, *, fingerprint: str | None,
                      backend: str = "auto", tier: str = DEFAULT_TIER,
-                     max_variants: int = MAX_VARIANTS) -> SweepSpec:
+                     max_variants: int = MAX_VARIANTS,
+                     dimensions: tuple[str, ...] | list[str] | None = None) -> SweepSpec:
     tier = tier if tier in _TIERS else DEFAULT_TIER
     defaults = executable_exit_params(family, get_strategy(family).parameter_defaults)
-    setup_grid, exit_grid = _family_grids(defaults, tier)
+    setup_grid, exit_grid = _family_grids(defaults, tier, dimensions)
     fp_tag = (fingerprint or "nofp")[:10]
+    dim_tag = ""
+    norm_dims = sorted(_normal_dimensions(dimensions))
+    if norm_dims:
+        dim_tag = "_" + "_".join(norm_dims)[:36]
     return SweepSpec(
-        sweep_id=f"farm_{_safe(symbol)}_{timeframe}_{family}_{tier}_{fp_tag}",
+        sweep_id=f"farm_{_safe(symbol)}_{timeframe}_{family}_{tier}{dim_tag}_{fp_tag}",
         anchor_symbol=symbol, related_symbols=(), timeframe=timeframe, setup_family=family,
         setup_grid=setup_grid, exit_grid=exit_grid, max_variants=max_variants,
         variant_tier=tier, backend=backend, resource_class="normal",

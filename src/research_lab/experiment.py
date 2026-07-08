@@ -32,6 +32,15 @@ from src.research_lab.gpu_runtime import (
 
 # Descriptor of the exit mode the GPU/batched simulator faithfully reproduces.
 GPU_SUPPORTED_SIMULATION_MODES = ("fixed_sl_tp_hold_long_short",)
+CPU_DYNAMIC_EXIT_MODES = (
+    "early_tp",
+    "trailing",
+    "trailing_tight",
+    "break_even",
+    "time_decay",
+    "partial_tp",
+    "hold_long",
+)
 
 COST_STRESS_MULT = 1.5  # validator stress: costs scaled by this factor
 
@@ -229,6 +238,12 @@ def simulate_trades(
     fees_bps: float,
     slippage_bps: float,
 ) -> list[dict[str, Any]]:
+    exit_mode = str(params.get("exit_mode") or "baseline").strip().lower()
+    if exit_mode and exit_mode != "baseline":
+        return simulate_dynamic_exit_trades(
+            candles, signals, params, exit_mode=exit_mode,
+            fees_bps=fees_bps, slippage_bps=slippage_bps,
+        )
     hold_bars = int(params.get("hold_bars", 5))
     stop_pct = float(params.get("stop_pct", 0.0))
     take_pct = float(params.get("take_pct", 0.0))
@@ -270,6 +285,185 @@ def simulate_trades(
         trades.append(
             finalize_trade(candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct)
         )
+    return trades
+
+
+def _dynamic_mode_params(params: dict[str, Any], exit_mode: str) -> dict[str, Any]:
+    stop = float(params.get("stop_pct") or 0.0) or 1.0
+    take = float(params.get("take_pct") or 0.0) or (stop * 2)
+    hold = int(params.get("hold_bars") or 5)
+    if exit_mode == "early_tp":
+        return {"kind": "fixed", "take_pct": round(take * 0.5, 6), "hold_bars": hold}
+    if exit_mode == "trailing":
+        return {"kind": "trailing", "trail_pct": round(stop, 6), "hold_bars": hold}
+    if exit_mode == "trailing_tight":
+        return {"kind": "trailing", "trail_pct": round(stop * 0.5, 6), "hold_bars": hold}
+    if exit_mode == "break_even":
+        return {"kind": "break_even", "be_trigger_pct": round(stop, 6), "hold_bars": hold}
+    if exit_mode == "time_decay":
+        return {"kind": "time_decay", "hold_bars": hold}
+    if exit_mode in {"partial_tp", "partial_be"}:
+        return {
+            "kind": "partial",
+            "tp1_pct": round(take * 0.5, 6),
+            "tp2_pct": round(take, 6),
+            "hold_bars": hold,
+        }
+    if exit_mode == "hold_long":
+        return {"kind": "fixed", "hold_bars": max(1, hold * 2)}
+    return {"kind": "fixed", "hold_bars": hold}
+
+
+def _level(entry: float, pct: float, *, long_: bool) -> float | None:
+    if pct <= 0:
+        return None
+    return entry * (1 + pct / 100) if long_ else entry * (1 - pct / 100)
+
+
+def _scan_dynamic_exit(
+    candles: list[dict[str, Any]],
+    idx: int,
+    cap: int,
+    entry: float,
+    side: str,
+    stop_pct: float,
+    take_pct: float,
+    mode: dict[str, Any],
+) -> tuple[float, str, int]:
+    long_ = side == "long"
+    kind = str(mode.get("kind") or "fixed")
+    take_pct = float(mode.get("take_pct", take_pct))
+    initial_stop = _level(entry, stop_pct, long_=not long_) if stop_pct > 0 else None
+    take = _level(entry, take_pct, long_=long_)
+    stop = initial_stop
+    water = entry
+    span = max(1, cap - idx)
+    for j in range(idx, cap + 1):
+        high = float(candles[j]["high"])
+        low = float(candles[j]["low"])
+        if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+            return stop, ("trail" if kind == "trailing" else "stop"), j
+        if take is not None and ((long_ and high >= take) or (not long_ and low <= take)):
+            return take, "take", j
+        water = max(water, high) if long_ else min(water, low)
+        if kind == "trailing":
+            trail = _level(water, float(mode["trail_pct"]), long_=not long_)
+            stop = max(initial_stop or trail, trail) if long_ else min(initial_stop or trail, trail)
+        elif kind == "break_even":
+            trigger = _level(entry, float(mode["be_trigger_pct"]), long_=long_)
+            if trigger is not None and ((long_ and water >= trigger) or (not long_ and water <= trigger)):
+                stop = entry
+        elif kind == "time_decay":
+            decayed = stop_pct * max(0.0, 1 - (j - idx) / span)
+            stop = _level(entry, decayed, long_=not long_)
+    return float(candles[cap]["close"]), "time_exit", cap
+
+
+def _partial_dynamic_trade(
+    candles: list[dict[str, Any]],
+    idx: int,
+    cap: int,
+    entry: float,
+    side: str,
+    stop_pct: float,
+    mode: dict[str, Any],
+    sig: dict[str, Any],
+    cost_pct: float,
+) -> dict[str, Any] | None:
+    long_ = side == "long"
+    direction = 1 if long_ else -1
+    tp1 = _level(entry, float(mode["tp1_pct"]), long_=long_)
+    tp2 = _level(entry, float(mode["tp2_pct"]), long_=long_)
+    stop = _level(entry, stop_pct, long_=not long_) if stop_pct > 0 else None
+    filled_first = False
+    first_exit = entry
+    outcome = "time_exit"
+    exit_price = float(candles[cap]["close"])
+    exit_idx = cap
+    for j in range(idx, cap + 1):
+        high = float(candles[j]["high"])
+        low = float(candles[j]["low"])
+        if not filled_first:
+            if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+                exit_price, exit_idx, outcome = stop, j, "stop"
+                break
+            if tp1 is not None and ((long_ and high >= tp1) or (not long_ and low <= tp1)):
+                filled_first = True
+                first_exit = tp1
+                stop = entry
+                continue
+        else:
+            if tp2 is not None and ((long_ and high >= tp2) or (not long_ and low <= tp2)):
+                exit_price, exit_idx, outcome = tp2, j, "take"
+                break
+            if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+                exit_price, exit_idx, outcome = stop, j, "partial_be"
+                break
+    first_fraction = 0.5 if filled_first else 0.0
+    first_ret = direction * (first_exit / entry - 1) * 100 if filled_first else 0.0
+    second_ret = direction * (exit_price / entry - 1) * 100
+    ret_pct = first_fraction * first_ret + (1 - first_fraction) * second_ret
+    net_pct = ret_pct - cost_pct * 100
+    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(candles, idx, exit_idx, entry, side)
+    capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
+    return {
+        "entry_ts": candles[idx]["ts"],
+        "exit_ts": candles[exit_idx]["ts"],
+        "side": side,
+        "entry": round(entry, 10),
+        "exit": round(exit_price, 10),
+        "net_pct": round(net_pct, 4),
+        "outcome": outcome,
+        "reason": sig.get("reason"),
+        "regime": sig.get("regime") or {},
+        "mfe_pct": round(mfe_pct, 4),
+        "mae_pct": round(mae_pct, 4),
+        "capture_of_mfe": capture,
+        "bars_held": int(exit_idx - idx),
+        "time_to_mfe": int(mfe_off),
+        "time_to_mae": int(mae_off),
+        "tp_before_sl": True if outcome == "take" else (False if outcome == "stop" else None),
+        "bars_to_tp": int(exit_idx - idx) if outcome == "take" else None,
+        "bars_to_sl": int(exit_idx - idx) if outcome == "stop" else None,
+        "adverse_before_favorable": bool(mae_off < mfe_off),
+        "path_quality": _path_quality(mfe_pct, capture, mae_off < mfe_off),
+        "partial_exit_fraction": first_fraction,
+    }
+
+
+def simulate_dynamic_exit_trades(
+    candles: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    params: dict[str, Any],
+    *,
+    exit_mode: str,
+    fees_bps: float,
+    slippage_bps: float,
+) -> list[dict[str, Any]]:
+    mode = _dynamic_mode_params(params, exit_mode)
+    hold_bars = int(mode.get("hold_bars", params.get("hold_bars", 5)))
+    stop_pct = float(params.get("stop_pct", 0.0))
+    take_pct = float(params.get("take_pct", 0.0))
+    cost_pct = (fees_bps + slippage_bps) / 10000.0
+    trades: list[dict[str, Any]] = []
+    for sig in signals:
+        idx = int(sig["idx"])
+        cap = min(idx + hold_bars, len(candles) - 1)
+        if idx >= len(candles) or cap <= idx:
+            continue
+        side = str(sig["side"])
+        entry = float(candles[idx]["open"])
+        if entry <= 0:
+            continue
+        if mode["kind"] == "partial":
+            trade = _partial_dynamic_trade(candles, idx, cap, entry, side, stop_pct, mode, sig, cost_pct)
+            if trade is not None:
+                trades.append(trade)
+            continue
+        exit_price, outcome, exit_idx = _scan_dynamic_exit(
+            candles, idx, cap, entry, side, stop_pct, take_pct, mode
+        )
+        trades.append(finalize_trade(candles, idx, exit_idx, side, entry, exit_price, outcome, sig, cost_pct))
     return trades
 
 
