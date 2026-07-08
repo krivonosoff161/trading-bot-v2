@@ -23,7 +23,22 @@ ALLOWED_DIMENSIONS = {
     "trailing": ("trail", "trailing", "be", "breakeven", "partial"),
     "timeframe": ("tf", "timeframe", "multi_tf"),
     "family": ("family", "setup_family"),
-    "regime_filter": ("regime", "filter", "regime_filter"),
+    "regime_filter": (
+        "regime",
+        "filter",
+        "regime_filter",
+        "rsi",
+        "atr",
+        "adx",
+        "trend",
+        "volatility",
+        "volume",
+        "liquidity",
+        "funding",
+        "oi",
+        "spike",
+        "confirmation",
+    ),
 }
 
 
@@ -60,9 +75,12 @@ def proposal_path(private_root: Path) -> Path:
 
 
 def normalize_dimension(value: Any) -> str | None:
+    if isinstance(value, dict):
+        value = value.get("dimension") or value.get("name") or value.get("type")
     text = str(value or "").strip().lower()
     if not text:
         return None
+    text = text.replace("-", "_").replace(" ", "_")
     for dimension, tokens in ALLOWED_DIMENSIONS.items():
         if text == dimension or any(token in text for token in tokens):
             return dimension
@@ -78,31 +96,28 @@ def compile_sweep_proposals(private_root: Path, advice: Any) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     rejected: list[str] = []
     for item in suggestions:
-        source_text = str(item.get("dimension") if isinstance(item, dict) else item)
-        if any(ch.isdigit() for ch in source_text):
-            rejected.append(source_text or "unknown")
+        extracted = list(_iter_suggestion_dimensions(item))
+        if not extracted:
+            rejected.append(str(item or "unknown"))
             continue
-        dimension = normalize_dimension(source_text)
-        if not dimension:
-            rejected.append(source_text or "unknown")
-            continue
-        payload = {
-            "advisor_ref": advice.advisor_ref,
-            "feature_packet_id": advice.feature_packet_id,
-            "dimension": dimension,
-            "source_text": source_text,
-        }
-        rows.append(
-            AdvisorSweepProposal(
-                proposal_id=stable_id("asp", payload, length=20),
-                advisor_ref=advice.advisor_ref,
-                feature_packet_id=advice.feature_packet_id,
-                dimension=dimension,
-                source_text=source_text,
-                status="needs_deterministic_compile",
-                created_at=utc_now(),
-            ).to_dict()
-        )
+        for dimension, source_text in extracted:
+            payload = {
+                "advisor_ref": advice.advisor_ref,
+                "feature_packet_id": advice.feature_packet_id,
+                "dimension": dimension,
+                "source_text": source_text,
+            }
+            rows.append(
+                AdvisorSweepProposal(
+                    proposal_id=stable_id("asp", payload, length=20),
+                    advisor_ref=advice.advisor_ref,
+                    feature_packet_id=advice.feature_packet_id,
+                    dimension=dimension,
+                    source_text=source_text,
+                    status="needs_deterministic_compile",
+                    created_at=utc_now(),
+                ).to_dict()
+            )
     path = proposal_path(private_root)
     for row in rows:
         append_jsonl(path, row)
@@ -120,6 +135,46 @@ def compile_sweep_proposals(private_root: Path, advice: Any) -> dict[str, Any]:
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     snapshot.write_text(json.dumps({**summary, "items": rows[-100:]}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return summary
+
+
+def _iter_suggestion_dimensions(item: Any):
+    if isinstance(item, dict):
+        explicit = item.get("dimension") or item.get("name") or item.get("type")
+        if explicit:
+            dimension = normalize_dimension(explicit)
+            source_text = str(explicit)
+            if dimension and not _looks_like_numeric_trade_level(source_text):
+                yield dimension, source_text
+            return
+        for key in item:
+            dimension = normalize_dimension(key)
+            if dimension:
+                yield dimension, str(key)
+        return
+
+    source_text = str(item)
+    dimension = normalize_dimension(source_text)
+    if dimension and not _looks_like_numeric_trade_level(source_text):
+        yield dimension, source_text
+
+
+def _looks_like_numeric_trade_level(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not any(ch.isdigit() for ch in text):
+        return False
+    unsafe_tokens = (
+        "set ",
+        "entry",
+        "stop",
+        "sl",
+        "take",
+        "tp",
+        "target",
+        "price",
+        "leverage",
+        "size",
+    )
+    return any(token in text for token in unsafe_tokens)
 
 
 def _counts(values) -> dict[str, int]:

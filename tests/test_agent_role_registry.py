@@ -1,7 +1,7 @@
 import json
 
 from src.research_lab.agent_role_registry import role_registry_summary, validate_role_payload
-from src.research_lab.llm_role_reviews import normalize_review_payload, request_role_review, review_summary
+from src.research_lab.llm_role_reviews import build_review_input, normalize_review_payload, request_role_review, review_summary
 from src.research_lab.llm_provider import NullProposalProvider
 
 
@@ -109,6 +109,20 @@ def test_review_payload_normalizes_wrappers_and_scalar_types():
     ok, problems = validate_role_payload("source_trust_reviewer", payload)
     assert ok is True
     assert problems == []
+
+
+def test_source_trust_review_input_marks_internal_farm_source():
+    payload = json.loads(
+        build_review_input(
+            "source_trust_reviewer",
+            {"source": "farm", "symbol": "HMSTR-USDT-SWAP", "reason": "paper setup"},
+        )
+    )
+
+    assert payload["source_context"]["source_name"] == "farm"
+    assert payload["source_context"]["is_internal_strategy_lab_source"] is True
+    assert "public website" in payload["source_context"]["internal_source_rule"]
+    assert payload["hard_rules"]["execution_allowed"] is False
 
 
 def test_disabled_provider_writes_private_review_row(tmp_path):
