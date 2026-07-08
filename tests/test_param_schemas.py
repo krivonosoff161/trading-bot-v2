@@ -42,6 +42,34 @@ def test_unknown_parameter_rejected_but_direction_meta_key_allowed():
     assert "mystery:unknown_param" in bad.errors
 
 
+def test_exit_mode_meta_key_allowed_for_research_variants():
+    result = validate_params(
+        "momentum_breakout",
+        {
+            "lookback": 20,
+            "hold_bars": 5,
+            "stop_pct": 8,
+            "take_pct": 16,
+            "exit_mode": "trailing",
+        },
+        require_executable=True,
+    )
+    assert result.ok, result.errors
+
+    bad = validate_params(
+        "momentum_breakout",
+        {
+            "lookback": 20,
+            "hold_bars": 5,
+            "stop_pct": 8,
+            "take_pct": 16,
+            "exit_mode": "magic_exit",
+        },
+    )
+    assert not bad.ok
+    assert "exit_mode:invalid_value" in bad.errors
+
+
 def test_parameter_grid_reports_variant_errors():
     result = validate_parameter_grid(
         "momentum_breakout",

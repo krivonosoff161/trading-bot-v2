@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs
+from src.research_lab.experiment import simulate_trades
 
 
 def _write_candles(path: Path) -> None:
@@ -28,6 +29,24 @@ def _write_candles(path: Path) -> None:
             }
         )
     path.write_text(json.dumps(rows), encoding="utf-8")
+
+
+def test_simulate_trades_supports_dynamic_trailing_exit():
+    candles = [
+        {"ts": 0, "open": 100, "high": 100, "low": 100, "close": 100},
+        {"ts": 1, "open": 100, "high": 110, "low": 100, "close": 109},
+        {"ts": 2, "open": 100, "high": 110, "low": 101, "close": 101},
+    ]
+    signals = [{"idx": 0, "side": "long", "reason": "unit"}]
+    trades = simulate_trades(
+        candles,
+        signals,
+        {"hold_bars": 5, "stop_pct": 8, "take_pct": 50, "exit_mode": "trailing"},
+        fees_bps=7,
+        slippage_bps=3,
+    )
+    assert trades[0]["outcome"] == "trail"
+    assert abs(trades[0]["exit"] - 101.2) < 1e-6
 
 
 def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
