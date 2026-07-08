@@ -396,6 +396,21 @@ class TestFamilies:
         )
         assert [sig.validator_context["geometry_profile_id"] for sig, _ in out] == ["base", "faster_capture"]
 
+    def test_generate_interleaves_base_profiles_before_secondary_profiles(self):
+        from src.research_lab.paper_signals import families
+        candles = _series([100 + i * 0.05 for i in range(40)])
+        out = families.generate(
+            "X", "X-USDT-SWAP", "15m", candles, mover={}, now=1.0, boundary_ts=0, mode="live",
+            families=["continuation", "early_tp_tactical"],
+            geometry_profiles={
+                "continuation": ["base", "stop_relief"],
+                "early_tp_tactical": ["base", "faster_capture"],
+            },
+        )
+        profile_ids = [sig.validator_context["geometry_profile_id"] for sig, _ in out]
+        assert profile_ids[:2] == ["base", "base"]
+        assert set(profile_ids[2:]) == {"stop_relief", "faster_capture"}
+
     def test_family_meta_is_structural_and_complete(self):
         from src.research_lab.paper_signals import families
         assert len(families.FAMILY_META) >= 6   # 5 builders + watch_only described structurally
@@ -547,6 +562,30 @@ class TestLearning:
             [], product_memory, symbol="X", timeframe="1h", family="continuation")
 
         assert profiles == ["base", "runner_probe"]
+
+    def test_thin_longer_timeframe_bootstraps_runner_probe(self):
+        from src.research_lab.paper_signals import cycle
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [], {}, symbol="X", timeframe="1h", family="continuation")
+
+        assert profiles == ["base", "runner_probe"]
+
+    def test_thin_tactical_cell_bootstraps_faster_capture(self):
+        from src.research_lab.paper_signals import cycle
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [], {}, symbol="X", timeframe="15m", family="early_tp_tactical")
+
+        assert profiles == ["base", "faster_capture"]
+
+    def test_thin_short_timeframe_statistical_cell_bootstraps_stop_relief(self):
+        from src.research_lab.paper_signals import cycle
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [], {}, symbol="X", timeframe="15m", family="liquidity_sweep_reclaim")
+
+        assert profiles == ["base", "stop_relief"]
 
 
 class TestPartialBreakevenExit:
