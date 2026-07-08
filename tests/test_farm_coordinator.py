@@ -227,6 +227,93 @@ def test_feedback_followup_becomes_typed_run_sweep_task(tmp_path):
     tasks.close()
 
 
+def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path):
+    from types import SimpleNamespace
+
+    from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
+
+    tasks = FarmTasksDB(":memory:")
+    advice = SimpleNamespace(
+        accepted=True,
+        advisor_ref="advisor_1",
+        feature_packet_id="fp-advisor",
+        advice={"sweep_suggestions": ["hold"]},
+    )
+    compile_sweep_proposals(tmp_path, advice)
+    lineage = tmp_path / "state" / "lineage"
+    lineage.mkdir(parents=True)
+    (lineage / "feature_packets.jsonl").write_text(
+        json.dumps(
+            {
+                "schema": "FeaturePacketIndex.v1",
+                "feature_packet_id": "fp-advisor",
+                "symbol": "BTC_USDT_SWAP",
+                "instrument": "BTC-USDT-SWAP",
+                "timeframe": "1h",
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    derived = tmp_path / "state" / "derived"
+    (derived / "paper_signals.json").write_text(
+        json.dumps(
+            {
+                "schema": "paper_signals.v1",
+                "active": [
+                    {
+                        "signal_id": "sig-advisor",
+                        "source": "farm",
+                        "symbol": "BTC_USDT_SWAP",
+                        "timeframe": "1h",
+                        "setup_family": "reversal_fade",
+                        "feature_packet_id": "fp-advisor",
+                        "data_fingerprint": "fp-market",
+                        "status": "armed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = run_coordinator_cycle(
+        tasks,
+        private_root=tmp_path,
+        profiles=PROFILES,
+        policy=POLICY,
+        intake_events=[],
+        data_state_fn=_usable_state(),
+        apply=True,
+        now=1000.0,
+        backend="auto",
+        run_worker=False,
+        run_validation=False,
+        run_followups=True,
+        max_followups=5,
+        max_sweeps=5,
+    )
+
+    assert out["counters"]["advisor_sweeps_scheduled"] == 1
+    assert out["counters"]["advisor_sweeps_planned"] == 1
+    assert out["counters"]["sweeps_materialized"] == 1
+    running = tasks.tasks_in_state("running", task_type="run_sweep")
+    assert len(running) == 1
+    payload = json.loads(running[0]["payload_json"])
+    assert payload["origin"] == "calculator_advisor"
+    assert payload["dimension"] == "hold"
+    assert payload["source_signal_id"] == "sig-advisor"
+    assert payload["source_family"] == "reversal_fade"
+    assert payload["executable_family"] == "mean_reversion_fade"
+    assert payload["paper_only"] is True
+    assert payload["execution_allowed"] is False
+    assert payload["sweep_spec"]["sweep_id"].startswith("advisor_")
+    assert payload["sweep_spec"]["setup_family"] == "mean_reversion_fade"
+    tasks.close()
+
+
 def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     tasks = FarmTasksDB(":memory:")
     tasks.upsert_unique_candidate({
