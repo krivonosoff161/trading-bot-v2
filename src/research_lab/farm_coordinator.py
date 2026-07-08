@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,6 +33,7 @@ from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
+from src.research_lab.outcome_retest import paper_to_executable_family
 from src.research_lab.outcome_retest import write_outcome_retest_specs
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
@@ -57,6 +58,8 @@ _COUNTER_KEYS = (
     "followup_invalid", "outcome_retests_cataloged", "outcome_retests_scheduled",
     "outcome_retests_deduped", "outcome_retest_sweeps_planned",
     "outcome_retest_invalid", "outcome_retest_notes",
+    "advisor_proposals_loaded", "advisor_sweeps_scheduled",
+    "advisor_sweeps_deduped", "advisor_sweep_invalid", "advisor_sweeps_planned",
 )
 
 
@@ -345,6 +348,11 @@ _SWEEP_EVENT_CONTEXT_KEYS = {
     "hard_status",
     "hard_status_action",
     "followup_depth",
+    "advisor_ref",
+    "proposal_id",
+    "feature_packet_id",
+    "dimension",
+    "source_signal_id",
     "paper_only",
     "execution_allowed",
 }
@@ -427,6 +435,98 @@ def _drain_retest_task(
     )
     tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
     _bump(counters, "outcome_retest_sweeps_planned" if created else "outcome_retests_deduped")
+
+
+def _schedule_advisor_sweeps(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
+                             now: float, limit: int) -> None:
+    from src.research_lab.advisor_sweep_bridge import schedule_advisor_sweep_tasks
+
+    summary = schedule_advisor_sweep_tasks(private_root, tasks, limit=limit, now=now)
+    _bump(counters, "advisor_proposals_loaded", int(summary.get("loaded") or 0))
+    _bump(counters, "advisor_sweeps_scheduled", int(summary.get("scheduled") or 0))
+    _bump(counters, "advisor_sweeps_deduped", int(summary.get("deduped") or 0))
+
+
+def _safe_part(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in str(value or ""))[:48].strip("_") or "x"
+
+
+def _drain_advisor_sweeps(
+    tasks: FarmTasksDB,
+    *,
+    profiles,
+    policy,
+    backend: str,
+    counters: dict[str, int],
+    now: float,
+    limit: int,
+) -> None:
+    for _ in range(limit):
+        task = tasks.claim_next_task(task_types=("schedule_advisor_sweep",), now=now)
+        if task is None:
+            break
+        try:
+            payload = json.loads(task.get("payload_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        proposal = payload.get("proposal") if isinstance(payload, dict) else {}
+        source_signal = payload.get("source_signal") if isinstance(payload, dict) else {}
+        if not isinstance(proposal, dict) or not isinstance(source_signal, dict):
+            tasks.skip_task(task["task_id"], "malformed_advisor_payload", now=now)
+            _bump(counters, "advisor_sweep_invalid")
+            continue
+        sym, tf = task["symbol"], task["timeframe"]
+        source_family = str(source_signal.get("setup_family") or task.get("family") or "")
+        fam = str(source_signal.get("executable_family") or paper_to_executable_family(source_family))
+        fp = str(source_signal.get("data_fingerprint") or task.get("data_fingerprint") or "nofp")
+        dimension = str(proposal.get("dimension") or "unknown")
+        try:
+            base = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier="normal")
+        except ValueError as exc:
+            tasks.skip_task(task["task_id"], f"invalid_advisor_family:{exc}", now=now)
+            _bump(counters, "advisor_sweep_invalid")
+            continue
+        sweep = replace(
+            base,
+            sweep_id=(
+                "advisor_"
+                f"{_safe_part(str(proposal.get('proposal_id') or 'proposal'))}_"
+                f"{_safe_part(sym)}_{_safe_part(tf)}_{_safe_part(fam)}_"
+                f"{_safe_part(dimension)}_{_safe_part(fp)}"
+            ),
+        )
+        check = validate_sweep_spec(sweep, timeframe_profiles=profiles, resource_policy=policy)
+        blocking_errors = [err for err in check.errors if "variant grid" not in err]
+        if blocking_errors:
+            tasks.skip_task(task["task_id"], "invalid_advisor_spec:" + "|".join(blocking_errors), now=now)
+            _bump(counters, "advisor_sweep_invalid")
+            continue
+        run_payload = {
+            "origin": "calculator_advisor",
+            "proposal_id": proposal.get("proposal_id"),
+            "advisor_ref": proposal.get("advisor_ref"),
+            "feature_packet_id": proposal.get("feature_packet_id"),
+            "dimension": dimension,
+            "source_signal_id": source_signal.get("signal_id"),
+            "source_family": source_family,
+            "executable_family": fam,
+            "sweep_spec": _sweep_payload(sweep),
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        _, created = tasks.enqueue_task(
+            task_type="run_sweep",
+            task_key=f"run_sweep::advisor::{sweep.sweep_id}",
+            priority=int(task.get("priority") or 65),
+            symbol=sweep.anchor_symbol,
+            timeframe=sweep.timeframe,
+            family=sweep.setup_family,
+            source_event_id=str(proposal.get("proposal_id") or ""),
+            payload=run_payload,
+            now=now,
+        )
+        tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
+        _bump(counters, "advisor_sweeps_planned" if created else "advisor_sweeps_deduped")
 
 
 def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
@@ -790,6 +890,11 @@ def run_coordinator_cycle(
                           limit=max_enrich, counters=counters, now=now)
             _drain_enrich_oi(tasks, private_root=private_root, oi_provider=oi_provider, now_ms=now_ms,
                              limit=max_enrich, counters=counters, now=now)
+            if run_followups:
+                _schedule_advisor_sweeps(tasks, private_root=private_root, counters=counters,
+                                         now=now, limit=max_followups)
+                _drain_advisor_sweeps(tasks, profiles=profiles, policy=policy, backend=backend,
+                                      counters=counters, now=now, limit=max_followups)
             _drain_run_sweep(tasks, conn=conn, private_root=private_root, profiles=profiles, policy=policy,
                              backend=backend, priority_base=priority_base, limit=max_sweeps,
                              counters=counters, now=now, sweep_tier=sweep_tier)
@@ -819,7 +924,7 @@ def run_coordinator_cycle(
                                          "sweeps_materialized", "runs_completed", "classified",
                                          "unblocked", "followup_sweeps_planned",
                                          "outcome_retest_sweeps_planned",
-                                         "followups_scheduled"))
+                                         "followups_scheduled", "advisor_sweeps_planned"))
     pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
                           snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,
                           max_discovery=max_discovery, counters=counters, gate_index=gate_index)

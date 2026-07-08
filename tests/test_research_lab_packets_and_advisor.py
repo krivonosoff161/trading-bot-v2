@@ -2,7 +2,8 @@ import json
 from types import SimpleNamespace
 
 from src.research_lab.calculator_advisor import normalize_advice_payload, request_calculator_advice, validate_advice_payload
-from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
+from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals, schedule_advisor_sweep_tasks
+from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
 from src.research_lab.human_feedback import create_feedback, feedback_summary, record_feedback
 from src.research_lab.lineage_backfill import build_lineage_backfill
@@ -301,6 +302,115 @@ def test_calculator_dict_suggestions_compile_dimensions_without_numeric_levels(t
     }
     assert all("0.000" not in row["source_text"] for row in rows)
     assert all(row["execution_allowed"] is False for row in rows)
+
+
+def test_advisor_sweep_tasks_bind_to_active_paper_signal(tmp_path):
+    advice = SimpleNamespace(
+        accepted=True,
+        advisor_ref="advisor_4",
+        feature_packet_id="fp4",
+        advice={"sweep_suggestions": ["hold"]},
+    )
+    compile_sweep_proposals(tmp_path, advice)
+    lineage = tmp_path / "state" / "lineage"
+    lineage.mkdir(parents=True)
+    (lineage / "feature_packets.jsonl").write_text(
+        json.dumps({
+            "schema": "FeaturePacketIndex.v1",
+            "feature_packet_id": "fp4",
+            "symbol": "BTC_USDT_SWAP",
+            "instrument": "BTC-USDT-SWAP",
+            "timeframe": "1h",
+            "paper_only": True,
+            "execution_allowed": False,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    derived = tmp_path / "state" / "derived"
+    (derived / "paper_signals.json").write_text(
+        json.dumps({
+            "schema": "paper_signals.v1",
+            "active": [
+                {
+                    "signal_id": "sig1",
+                    "source": "farm",
+                    "symbol": "BTC_USDT_SWAP",
+                    "timeframe": "1h",
+                    "setup_family": "momentum_breakout",
+                    "feature_packet_id": "fp4",
+                    "data_fingerprint": "abc123",
+                    "status": "armed",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+
+    summary = schedule_advisor_sweep_tasks(tmp_path, tasks, now=1.0)
+    queued = tasks.tasks_in_state("queued", task_type="schedule_advisor_sweep")
+
+    assert summary["scheduled"] == 1
+    assert summary["deduped"] == 0
+    assert queued[0]["symbol"] == "BTC_USDT_SWAP"
+    assert queued[0]["family"] == "momentum_breakout"
+    payload = json.loads(queued[0]["payload_json"])
+    assert payload["proposal"]["dimension"] == "hold"
+    assert payload["source_signal"]["signal_id"] == "sig1"
+    assert payload["source_signal"]["executable_family"] == "momentum_breakout"
+    assert payload["execution_allowed"] is False
+
+
+def test_advisor_sweep_tasks_map_product_family_to_executable_family(tmp_path):
+    advice = SimpleNamespace(
+        accepted=True,
+        advisor_ref="advisor_5",
+        feature_packet_id="fp5",
+        advice={"sweep_suggestions": ["take_profit"]},
+    )
+    compile_sweep_proposals(tmp_path, advice)
+    lineage = tmp_path / "state" / "lineage"
+    lineage.mkdir(parents=True)
+    (lineage / "feature_packets.jsonl").write_text(
+        json.dumps({
+            "schema": "FeaturePacketIndex.v1",
+            "feature_packet_id": "fp5",
+            "symbol": "HMSTR_USDT_SWAP",
+            "instrument": "HMSTR-USDT-SWAP",
+            "timeframe": "1h",
+            "paper_only": True,
+            "execution_allowed": False,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    derived = tmp_path / "state" / "derived"
+    (derived / "paper_signals.json").write_text(
+        json.dumps({
+            "schema": "paper_signals.v1",
+            "active": [
+                {
+                    "signal_id": "sig5",
+                    "source": "farm",
+                    "symbol": "HMSTR_USDT_SWAP",
+                    "timeframe": "1h",
+                    "setup_family": "reversal_fade",
+                    "feature_packet_id": "fp5",
+                    "data_fingerprint": "market5",
+                    "status": "armed",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+
+    summary = schedule_advisor_sweep_tasks(tmp_path, tasks, now=1.0)
+    queued = tasks.tasks_in_state("queued", task_type="schedule_advisor_sweep")
+
+    assert summary["scheduled"] == 1
+    payload = json.loads(queued[0]["payload_json"])
+    assert payload["source_signal"]["setup_family"] == "reversal_fade"
+    assert payload["source_signal"]["executable_family"] == "mean_reversion_fade"
 
 
 def test_pipeline_policy_and_provider_routes_are_public_safe():

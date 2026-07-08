@@ -101,9 +101,13 @@ def _baseline(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _executable_family(source_family: str) -> str:
+def paper_to_executable_family(source_family: str) -> str:
     family = str(source_family or "")
     return _PAPER_TO_EXECUTABLE_FAMILY.get(family, family)
+
+
+def _executable_family(source_family: str) -> str:
+    return paper_to_executable_family(source_family)
 
 
 def _exit_grid(row: dict[str, Any], dimensions: Iterable[str]) -> tuple[dict[str, list[Any]], list[str]]:
