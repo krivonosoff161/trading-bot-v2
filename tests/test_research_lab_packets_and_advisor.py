@@ -236,6 +236,73 @@ def test_calculator_advice_compiles_bounded_sweep_proposals(tmp_path):
     assert all(row["execution_allowed"] is False for row in rows)
 
 
+def test_calculator_indicator_suggestions_compile_to_regime_filter(tmp_path):
+    advice = SimpleNamespace(
+        accepted=True,
+        advisor_ref="advisor_2",
+        feature_packet_id="fp2",
+        advice={"sweep_suggestions": ["RSI_14", "trend_atr", "volume_spike"]},
+    )
+
+    summary = compile_sweep_proposals(tmp_path, advice)
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "state" / "derived" / "calculator_sweep_proposals.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert summary["rows"] == 3
+    assert summary["rejected"] == 0
+    assert {row["dimension"] for row in rows} == {"regime_filter"}
+    assert all(row["execution_allowed"] is False for row in rows)
+
+
+def test_calculator_dict_suggestions_compile_dimensions_without_numeric_levels(tmp_path):
+    advice = SimpleNamespace(
+        accepted=True,
+        advisor_ref="advisor_3",
+        feature_packet_id="fp3",
+        advice={
+            "sweep_suggestions": [
+                {
+                    "entry_timing": "mid",
+                    "family": "up",
+                    "hold": 7.0,
+                    "regime_filter": "down",
+                    "stop": 0.000225,
+                    "take_profit": 0.000236,
+                    "timeframe": "15m",
+                    "trailing": True,
+                }
+            ]
+        },
+    )
+
+    summary = compile_sweep_proposals(tmp_path, advice)
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "state" / "derived" / "calculator_sweep_proposals.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert summary["rows"] == 8
+    assert summary["rejected"] == 0
+    assert {row["dimension"] for row in rows} == {
+        "entry_timing",
+        "family",
+        "hold",
+        "regime_filter",
+        "stop",
+        "take_profit",
+        "timeframe",
+        "trailing",
+    }
+    assert all("0.000" not in row["source_text"] for row in rows)
+    assert all(row["execution_allowed"] is False for row in rows)
+
+
 def test_pipeline_policy_and_provider_routes_are_public_safe():
     caps = default_caps()
     assert caps.max_candles_per_packet == 512
