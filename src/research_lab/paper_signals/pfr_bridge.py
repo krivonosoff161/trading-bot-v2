@@ -188,6 +188,12 @@ def _common_validator_context(row: dict[str, Any], symbol: str, tf: str) -> dict
         "pfr_avg_net_pct": row.get("avg_net_pct"),
         "pfr_win_rate": row.get("win_rate"),
         "pfr_n_trades": row.get("n_trades"),
+        "geometry_profile_id": "pfr_validated_static",
+        "geometry_profile_reason": "hard-validation selected fixed PFR params",
+        "geometry_entry_scale": 1.0,
+        "geometry_stop_scale": 1.0,
+        "geometry_tp_scale": 1.0,
+        "geometry_hold_scale": 1.0,
     }
 
 

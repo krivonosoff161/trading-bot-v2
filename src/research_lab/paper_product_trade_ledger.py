@@ -106,9 +106,32 @@ def _readiness(sig: PaperActionSignal) -> tuple[bool, str, str, str]:
     return False, "not_live_ready", ready_strategy_id, verdict
 
 
+def _geometry_from_signal(sig: PaperActionSignal) -> dict[str, Any]:
+    context = sig.validator_context or {}
+    profile_id = str(context.get("geometry_profile_id") or "")
+    if not profile_id and sig.source == "pfr_farm":
+        profile_id = "pfr_validated_static"
+    elif not profile_id and sig.source == "farm":
+        profile_id = "farm_legacy_static"
+    reason = str(context.get("geometry_profile_reason") or "")
+    if not reason and profile_id == "pfr_validated_static":
+        reason = "hard-validation selected fixed PFR params"
+    elif not reason and profile_id == "farm_legacy_static":
+        reason = "legacy farm signal without explicit geometry profile"
+    return {
+        "profile_id": profile_id,
+        "reason": reason,
+        "entry_scale": context.get("geometry_entry_scale"),
+        "stop_scale": context.get("geometry_stop_scale"),
+        "tp_scale": context.get("geometry_tp_scale"),
+        "hold_scale": context.get("geometry_hold_scale"),
+    }
+
+
 def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
     live_ready, block_reason, ready_strategy_id, verdict = _readiness(sig)
     context = sig.validator_context or {}
+    geometry = _geometry_from_signal(sig)
     trade_id = stable_id(
         "paperproducttrade",
         {
@@ -139,12 +162,12 @@ def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
         status=sig.status,
         signal_status=sig.status,
         source=sig.source,
-        farm_geometry_profile_id=str(context.get("geometry_profile_id") or ""),
-        farm_geometry_profile_reason=str(context.get("geometry_profile_reason") or ""),
-        farm_geometry_entry_scale=context.get("geometry_entry_scale"),
-        farm_geometry_stop_scale=context.get("geometry_stop_scale"),
-        farm_geometry_tp_scale=context.get("geometry_tp_scale"),
-        farm_geometry_hold_scale=context.get("geometry_hold_scale"),
+        farm_geometry_profile_id=geometry["profile_id"],
+        farm_geometry_profile_reason=geometry["reason"],
+        farm_geometry_entry_scale=geometry["entry_scale"],
+        farm_geometry_stop_scale=geometry["stop_scale"],
+        farm_geometry_tp_scale=geometry["tp_scale"],
+        farm_geometry_hold_scale=geometry["hold_scale"],
         outcome=dict(sig.outcome or {}),
         review=dict(sig.review or {}),
         paper_account=paper_money_from_outcome(dict(sig.outcome or {})),
