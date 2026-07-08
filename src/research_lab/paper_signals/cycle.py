@@ -398,6 +398,21 @@ def _product_memory_profile(stats: dict[str, Any], *, family: str) -> str:
     return ""
 
 
+def _bootstrap_profile_for_family(*, family: str, timeframe: str) -> str:
+    """One bounded exploration profile for cells that do not have enough memory yet.
+
+    The farm should not wait for losses before it tries a second geometry, but
+    the search still must stay cheap and deterministic.  This picks one extra
+    profile per family/timeframe; prices are still computed only by family code.
+    """
+    tactical = family in {"early_tp_tactical", "reversal_fade"}
+    if tactical:
+        return "faster_capture"
+    if timeframe in {"1h", "4h", "1d"}:
+        return "runner_probe"
+    return "stop_relief"
+
+
 def geometry_profiles_for_cell(
     memory: list[dict[str, Any]],
     product_memory: dict[str, Any] | None,
@@ -436,6 +451,7 @@ def geometry_profiles_for_cell(
     pnl = float(stats.get("paper_pnl_usdt") or 0.0)
 
     product_selected = _product_memory_profile(stats, family=family)
+    terminal = int(stats.get("terminal_rows") or 0)
     selected = product_selected or "base"
     if not product_selected and diag.get("stop_too_tight", 0) >= 1:
         selected = "stop_relief"
@@ -449,6 +465,8 @@ def geometry_profiles_for_cell(
         or (terminal >= 3 and wins > losses and pnl > 0)
     ):
         selected = "runner_probe"
+    elif not product_selected and terminal < 3:
+        selected = _bootstrap_profile_for_family(family=family, timeframe=timeframe)
 
     if selected != "base":
         profile_stats = _product_profile_cell_stats(product_memory, symbol, timeframe, family, selected)
@@ -502,6 +520,10 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     }
     recent_terminal = {(s.dedup_key, s.data_fingerprint) for s in existing if s.status in TERMINAL}
     last_seen = {s.dedup_key: s.created_at for s in existing}
+    last_seen_cell: dict[tuple[str, str, str], float] = {}
+    for s in existing:
+        cell = (str(s.symbol), str(s.timeframe), str(s.setup_family))
+        last_seen_cell[cell] = max(last_seen_cell.get(cell, 0.0), float(s.created_at or 0.0))
     known_bad = lane.load_known_bad(private_root)
     mem = load_memory(private_root)
     product_memory = load_product_memory(private_root)
@@ -706,6 +728,13 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
                     gate_counts["dedup_same_data"] = gate_counts.get("dedup_same_data", 0) + 1
                     continue
                 profile_id = str((sig.validator_context or {}).get("geometry_profile_id") or "base")
+                if profile_id != "base":
+                    cell = (str(sig.symbol), str(sig.timeframe), str(sig.setup_family))
+                    if now - last_seen_cell.get(cell, 0.0) < REGEN_TTL_SECONDS:
+                        gate_counts["geometry_profile_cell_ttl"] = (
+                            gate_counts.get("geometry_profile_cell_ttl", 0) + 1
+                        )
+                        continue
                 gate_counts[f"family:{fam}"] = gate_counts.get(f"family:{fam}", 0) + 1
                 gate_counts[f"geometry_profile:{profile_id}"] = (
                     gate_counts.get(f"geometry_profile:{profile_id}", 0) + 1

@@ -333,18 +333,34 @@ def watch_only_reason(candles: list[dict[str, Any]]) -> str | None:
 
 def generate(symbol, inst, tf, candles, *, mover, now, boundary_ts, mode,
              families=None, geometry_profiles=None) -> list[tuple[PaperActionSignal, str]]:
-    """Run the requested families over one candidate; return the signals that fire."""
+    """Run the requested families over one candidate; return the signals that fire.
+
+    Profiles are interleaved by rank: first every family gets its base/primary
+    profile, then secondary probes are attempted.  This keeps a small max_new
+    cap from spending all slots on one family before the rest are tested.
+    """
     out = []
-    for name in (families or list(FAMILIES)):
-        builder = FAMILIES.get(name)
-        if builder is None:
-            continue
+    names = [name for name in (families or list(FAMILIES)) if name in FAMILIES]
+    profile_map: dict[str, list[str]] = {}
+    max_depth = 1
+    for name in names:
         profiles = None
         if isinstance(geometry_profiles, dict):
             profiles = geometry_profiles.get(name) or geometry_profiles.get("*")
         if not profiles:
             profiles = ["base"]
-        for profile_id in list(profiles)[:2]:
+        selected = list(profiles)[:2]
+        profile_map[name] = selected
+        max_depth = max(max_depth, len(selected))
+    for idx in range(max_depth):
+        for name in names:
+            profiles = profile_map.get(name) or ["base"]
+            if idx >= len(profiles):
+                continue
+            builder = FAMILIES.get(name)
+            if builder is None:
+                continue
+            profile_id = profiles[idx]
             sig, _why = builder(symbol, inst, tf, candles, mover=mover, now=now,
                                 boundary_ts=boundary_ts, mode=mode,
                                 geometry_profile=profile_id)
