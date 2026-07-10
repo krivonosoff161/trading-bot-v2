@@ -15,6 +15,7 @@ from typing import Any
 from src.research_lab.feature_packet import FeaturePacket
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
 from src.research_lab.llm_provider import LLMProviderError, ProposalProvider, record_usage
+from src.research_lab.llm_invocation_ledger import preflight_invocation, record_invocation
 
 SCHEMA = "CalculatorAdvice.v1"
 PROMPT_VERSION = "calculator_advisor_v2_feature_packet_json"
@@ -169,17 +170,40 @@ def request_calculator_advice(
     *,
     allow_public_output: bool = False,
 ) -> CalculatorAdvice:
-    if not provider.configured:
+    permit = preflight_invocation(
+        private_root,
+        role_id="farm_calculator_advisor",
+        source_ref=packet.feature_packet_id,
+        input_payload={
+            "feature_packet": packet.to_dict(),
+            "prompt_version": PROMPT_VERSION,
+            "prompt_hash": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16],
+        },
+        provider=provider,
+        local_only=True,
+    )
+    if not permit.allowed:
         advice = CalculatorAdvice(
-            advisor_ref=stable_id("advisor", {"feature_packet_id": packet.feature_packet_id, "status": "disabled"}),
+            advisor_ref=stable_id(
+                "advisor",
+                {"feature_packet_id": packet.feature_packet_id, "status": permit.reason},
+            ),
             feature_packet_id=packet.feature_packet_id,
             provider=getattr(provider, "name", "null"),
             model="",
             advice={},
-            problems=["provider_not_configured"],
+            problems=[permit.reason],
             accepted=False,
         )
-        append_jsonl(advice_path(private_root), advice.to_dict())
+        if permit.reason != "duplicate_completed":
+            record_invocation(
+                private_root,
+                permit,
+                status="blocked",
+                output_ref=advice.advisor_ref,
+                problems=advice.problems,
+            )
+            append_jsonl(advice_path(private_root), advice.to_dict())
         return advice
     try:
         text, usage = provider.generate(SYSTEM_PROMPT, _user_payload(packet))
@@ -198,6 +222,14 @@ def request_calculator_advice(
             problems=problems,
             accepted=ok,
         )
+        record_invocation(
+            private_root,
+            permit,
+            status="accepted" if ok else "schema_rejected",
+            output_ref=advice.advisor_ref,
+            problems=problems,
+            usage=usage,
+        )
     except (LLMProviderError, json.JSONDecodeError, ValueError) as exc:
         problem = str(exc).strip() or type(exc).__name__
         advice = CalculatorAdvice(
@@ -208,6 +240,13 @@ def request_calculator_advice(
             advice={},
             problems=[problem],
             accepted=False,
+        )
+        record_invocation(
+            private_root,
+            permit,
+            status="provider_error",
+            output_ref=advice.advisor_ref,
+            problems=advice.problems,
         )
     append_jsonl(advice_path(private_root), advice.to_dict())
     return advice

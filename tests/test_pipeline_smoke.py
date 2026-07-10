@@ -15,7 +15,6 @@ from src.research_lab.hard_validation_contract import (
 )
 from src.research_lab.hard_validation_export import export_requests
 from src.research_lab.honest_backtest_bridge import run_validation_batch
-from src.research_lab.local_llm_advisor import generate_suggestions
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
 
@@ -120,10 +119,6 @@ def test_full_pipeline_smoke() -> None:
         assert (lib_dir / "by_symbol" / "BTC-USDT-SWAP").exists()
         assert (lib_dir / "by_timeframe" / "15m").exists()
         assert (lib_dir / "by_strategy" / "trend").exists()
-
-        # Step 5: LLM advisor (dry-run)
-        llm_result = generate_suggestions([], dry_run=True)
-        assert llm_result["enabled"] is False
 
         # Verify no private artifacts in public repo
         # (we only wrote to temp dir, not to trading-bot-v2)

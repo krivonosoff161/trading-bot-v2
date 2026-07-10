@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 6 / issue #155. Calibrate
-entry/exit/hold geometry only from repaired lifecycle evidence after closing the
-analyst -> bounded retest -> farm result -> promotion gate -> memory cycle.
+Current engineering task: GitHub epic #158, phase 7 / issue #156. Consolidate
+LLM role invocation and run the private calculator roles sequentially on one
+allowlisted local model before the 24-48 hour acceptance run.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -56,6 +56,13 @@ rows from automatic learning, aggregates only `PaperSignalLifecycle.v2`
 terminal evidence, reports sample uncertainty and can suppress a profile only
 after a deterministic `demote` verdict. Existing legacy rows stay private and
 visible for forensic comparison; they no longer steer the farm.
+
+Phase 7 makes `AgentRoleContract` plus `LLMInvocation.v1` the canonical role and
+call control plane. The farm calculator uses three sequential local passes on
+the allowlisted `calculator-swarm` model. The shared private ledger deduplicates before
+inference, opens a circuit after repeated provider failures and records actual
+tokens/cost. Cloud reviewer roles keep sanitized inputs and cannot occupy the
+local calculator route.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

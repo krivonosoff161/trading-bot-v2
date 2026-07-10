@@ -899,11 +899,11 @@ def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict
         result["skipped"] = 1
         result["reason_counts"] = {"cap_zero": 1}
         return result
-    from src.research_lab.calculator_advisor import request_calculator_advice
     from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
     from src.research_lab.feature_packet import latest_feature_packet_path, load_feature_packet
     from src.research_lab.lineage_contract import write_cycle_link
     from src.research_lab.llm_provider import load_provider
+    from src.research_lab.local_calculator_swarm import request_local_calculator_swarm
 
     packet_path = latest_feature_packet_path(private_root)
     if packet_path is None:
@@ -911,7 +911,7 @@ def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict
         result["reason_counts"] = {"missing_feature_packet": 1}
         return result
     packet = load_feature_packet(packet_path)
-    advice = request_calculator_advice(
+    advice = request_local_calculator_swarm(
         private_root,
         packet,
         load_provider(_provider_env(args)),
@@ -926,7 +926,15 @@ def _run_calculator_advisor_stage(args, private_root: Path, apply: bool) -> dict
     result["feature_packet_id"] = packet.feature_packet_id
     result["provider"] = advice.provider
     result["model"] = advice.model
+    result["swarm_roles"] = [
+        "calculator_context_classifier",
+        "calculator_hypothesis_proposer",
+        "calculator_hypothesis_critic",
+    ]
     result["sweep_proposals"] = compile_sweep_proposals(private_root, advice)
+    from src.research_lab.llm_invocation_ledger import invocation_summary
+
+    result["invocations"] = invocation_summary(private_root)
     write_cycle_link(
         private_root,
         {

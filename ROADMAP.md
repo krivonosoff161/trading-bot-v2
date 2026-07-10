@@ -51,6 +51,14 @@ documents are preserved as history, but they no longer define the active work.
 > retain, demote, mixed, or exit/capture retest. This makes the next 24-48 hour
 > run an evidence-collection phase rather than another hand-tuned constant pass.
 
+> **Phase 7 status - consolidated LLM roles.** `AgentRoleContract` is the
+> canonical role specification, and calculator plus reviewer calls now share an
+> append-only private `LLMInvocation.v1` ledger. The calculator is a sequential
+> three-pass local mini-swarm on the allowlisted `calculator-swarm` model. Duplicate
+> inputs are blocked before inference, repeated provider errors open a circuit,
+> and token/cost counters are attached to the invocation. LLM output remains
+> advisory JSON; deterministic code owns all numbers, verdicts and permissions.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

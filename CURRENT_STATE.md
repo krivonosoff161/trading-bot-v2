@@ -2,6 +2,19 @@
 
 Updated: 2026-07-10
 
+> **Update 2026-07-10 - canonical LLM invocation control.** The farm calculator
+> now runs three sequential bounded roles on one allowlisted local `calculator-swarm`
+> model: context classification, sweep-hypothesis proposal and hypothesis
+> critique. All calculator/reviewer calls share a private invocation ledger with
+> pre-call deduplication, role/provider circuit breaking and real token/cost
+> metadata. Cloud providers cannot occupy the local calculator role; cloud
+> reviewers still receive sanitized packets only. The obsolete write-only
+> `local_llm_advisor` path was removed.
+> A bounded local smoke completed all three roles; its critic rejected the
+> proposed hypothesis, so no sweep was emitted. The private invocation aggregate
+> recorded `9` calls, `6875` tokens and `0 RUB`, without storing raw prompts or
+> granting execution authority.
+
 > **Update 2026-07-10 - calibration evidence gate.** Adaptive geometry no
 > longer learns from pre-cursor lifecycle rows. The private
 > `trading_policy_calibration.json` report separates trusted
