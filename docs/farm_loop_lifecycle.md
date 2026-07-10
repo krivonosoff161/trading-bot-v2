@@ -3,9 +3,10 @@
 Status: **ACTIVE**. Last updated: 2026-06-19. Branch: `feature/calc-farm`.
 
 This is the canonical calculation-farm lifecycle. It supersedes the older
-`universe_farm_loop` and `scanner_farm_loop` operator paths. Everything here is
-paper/research only: no `.env`, no `AUTO_TRADE`, no order execution, no private exchange
-endpoints, no Telegram.
+`universe_farm_loop` and `scanner_farm_loop` operator paths. The core is
+paper/research only: no `AUTO_TRADE`, no order execution, and no private exchange
+endpoints. The core does not send Telegram by default; a separate delivery edge
+may read local configuration only when an explicit send path is selected.
 
 ## What It Is
 

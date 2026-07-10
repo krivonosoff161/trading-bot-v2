@@ -131,9 +131,11 @@ def test_default_http_get_parses_json_response(monkeypatch):
 
 
 def test_default_http_get_accepts_worker_payload():
+    # Windows spawn startup can exceed the 0.1s network lower bound on a busy
+    # workstation. The neighboring slow-worker test covers deadline enforcement.
     assert _default_http_get(
         "https://www.okx.com/api/v5/market/history-candles",
-        0.1,
+        1.0,
         worker=_ok_worker_success,
     ) == {"code": "0", "data": []}
 

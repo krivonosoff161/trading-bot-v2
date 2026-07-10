@@ -1,5 +1,8 @@
 # Main / TA Research Verdict Index
 
+Status: **REFERENCE**. This is a high-level role boundary, not a current
+strategy report or a source of performance claims.
+
 Updated: 2026-06-11
 
 ## Bottom Line
@@ -26,13 +29,12 @@ Do not use it as:
 
 | Report | Practical conclusion |
 |---|---|
-| `scripts/analysis/research/docs/main_directional_FINAL_verdict_2026-05-31.md` | Directed 15m Main is exhausted as a primary money edge; direction is not enough |
-| `scripts/analysis/research/docs/main_entry_regime_forensics_2026-05-29.md` | Main WS behaves like late momentum confirmation, not anticipatory entry |
-| `scripts/analysis/research/docs/anticipation_geometry_toggle_2026-05-29.md` | Realistic-fill baseline is deeply negative; RR geometry did not rescue it |
-| `scripts/analysis/research/docs/directional_asymmetry_digest_2026-05-30.md` | No causal condition produced durable OOS directional asymmetry |
-| `scripts/analysis/research/docs/lower_tf_sweep_2026-05-30.md` | Lower timeframes worsened the cost/edge ratio |
-| `scripts/analysis/research/docs/all_signals_tf_breakdown_2026-05-30.md` | Some wins were phantom/expired-entry artifacts |
-| `docs/strategy_impulse_postmortem.md` | `ws_main_impulse` forward paper failed |
+| Local historical research archive | Directed 15m Main is not accepted as a primary signal source. |
+| Local historical research archive | Main WS is treated as confirmation/context, not anticipatory entry. |
+| Local historical research archive | Realistic-fill and data-quality checks are mandatory before a claim. |
+| Local historical research archive | No durable directional asymmetry is assumed without fresh evidence. |
+| Local historical research archive | Lower timeframes are not presumed to improve an entry. |
+| Local historical research archive | A result may be affected by fill or expiry artifacts and needs validation. |
 
 ## What Remains Useful
 
