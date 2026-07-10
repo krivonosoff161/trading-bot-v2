@@ -41,6 +41,13 @@ These describe a stable limited surface but do not supersede current status:
 `deferred-adaptive-paper-architecture.md` preserves a reviewed future
 initiative. It is not current implementation authority.
 
+## Sanitized Legacy Evidence
+
+`legacy-evidence/` contains a deliberately small set of retrospective
+narratives about closed or revised early hypotheses. It is **REFERENCE** only:
+the pages preserve limitations and methodology, but do not supply a current
+strategy, raw calculation, parameter set, or performance claim.
+
 ## Archive And Local-History Rule
 
 Every dated report, handoff, experiment, AI-provider brief, strategy postmortem,
@@ -53,6 +60,10 @@ This includes files with names such as `gpt_*`, `kimi_*`, `brief_*`,
 `*_audit_*`, `*_report_*`, `*_handoff_*`, `strategy_*_postmortem`, and dated
 research/cycle/revival/forensic documents.
 
+The only public exception is a page explicitly written under
+`docs/legacy-evidence/`; it must be a sanitized derived narrative and meet the
+public-artifact policy.
+
 ## Local-Only Rule
 
 Raw runtime outputs, journals, individual trade paths, raw model conversations,
@@ -61,6 +72,7 @@ charts are **LOCAL ONLY** even where an archived document mentions them. Public
 documents may state a method or an aggregated limitation, but not reproduce the
 underlying data.
 
-Historical Git history is a separate remediation item. Current public tracking
-is being made safe without rewriting published history; history rewrite requires
-an explicit owner decision and an encrypted private backup first.
+Historical Git heads were rewritten on 2026-07-10 after an encrypted private
+backup was verified. Current public heads and fresh clones do not include the
+removed raw artifacts. GitHub pull-request refs and external clones can retain
+older references and remain a separate residual-risk and support-process item.
