@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Mapping
 from src.research_lab.agent_role_registry import role_by_id, validate_role_payload
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
 from src.research_lab.llm_provider import LLMProviderError, ProposalProvider, record_usage
+from src.research_lab.llm_invocation_ledger import preflight_invocation, record_invocation
 
 OUTCOME_SCHEMA = "OutcomeReview.v1"
 VALIDATOR_SCHEMA = "ValidatorReview.v1"
@@ -216,19 +218,42 @@ def request_role_review(
 ) -> LLMRoleReview:
     if role_id not in ROLE_TO_SCHEMA:
         raise KeyError(f"unsupported review role: {role_id}")
-    if not provider.configured:
+    permit = preflight_invocation(
+        private_root,
+        role_id=role_id,
+        source_ref=source_ref,
+        input_payload={
+            "source_payload": dict(source_payload),
+            "prompt_hash": hashlib.sha256(ROLE_SYSTEM_PROMPTS[role_id].encode("utf-8")).hexdigest()[:16],
+            "output_schema": ROLE_TO_SCHEMA[role_id],
+        },
+        provider=provider,
+        local_only=False,
+    )
+    if not permit.allowed:
         review = LLMRoleReview(
-            review_id=stable_id("llmr", {"role_id": role_id, "source_ref": source_ref, "status": "disabled"}),
+            review_id=stable_id(
+                "llmr",
+                {"role_id": role_id, "source_ref": source_ref, "status": permit.reason},
+            ),
             role_id=role_id,
             source_ref=source_ref,
             provider=getattr(provider, "name", "null"),
             model="",
             payload={},
             accepted=False,
-            problems=["provider_not_configured"],
+            problems=[permit.reason],
             schema=ROLE_TO_SCHEMA[role_id],
         )
-        append_jsonl(review_path(private_root, role_id), review.to_dict())
+        if permit.reason != "duplicate_completed":
+            record_invocation(
+                private_root,
+                permit,
+                status="blocked",
+                output_ref=review.review_id,
+                problems=review.problems,
+            )
+            append_jsonl(review_path(private_root, role_id), review.to_dict())
         return review
     try:
         text, usage = provider.generate(ROLE_SYSTEM_PROMPTS[role_id], build_review_input(role_id, source_payload))
@@ -249,6 +274,14 @@ def request_role_review(
             problems=problems,
             schema=ROLE_TO_SCHEMA[role_id],
         )
+        record_invocation(
+            private_root,
+            permit,
+            status="accepted" if accepted else "schema_rejected",
+            output_ref=review.review_id,
+            problems=problems,
+            usage=usage,
+        )
     except (LLMProviderError, json.JSONDecodeError, ValueError) as exc:
         review = LLMRoleReview(
             review_id=stable_id("llmr", {"role_id": role_id, "source_ref": source_ref, "error": type(exc).__name__}),
@@ -260,6 +293,13 @@ def request_role_review(
             accepted=False,
             problems=[str(exc).strip() or type(exc).__name__],
             schema=ROLE_TO_SCHEMA[role_id],
+        )
+        record_invocation(
+            private_root,
+            permit,
+            status="provider_error",
+            output_ref=review.review_id,
+            problems=review.problems,
         )
     append_jsonl(review_path(private_root, role_id), review.to_dict())
     return review

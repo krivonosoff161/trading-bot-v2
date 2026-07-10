@@ -99,6 +99,7 @@ class NullProposalProvider:
     """Default: no network, never configured."""
 
     name = "null"
+    model_name = ""
     configured = False
 
     def generate(self, system: str, user: str) -> tuple[str, LLMUsage]:
@@ -109,6 +110,7 @@ class SyntheticProposalProvider:
     """Offline deterministic provider for testing the loop mechanics. Not a real model."""
 
     name = "synthetic"
+    model_name = "offline"
     configured = True
 
     def __init__(self, candidates: list[dict[str, Any]]):
@@ -142,6 +144,7 @@ class OpenAICompatibleProvider:
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._key = api_key  # held only for the Authorization header; never logged/returned
         self._model = model
+        self.model_name = model
         self._timeout = float(timeout)
         self._rate = float(rate_rub_per_1k)
         self._http_post = http_post or _default_http_post
@@ -202,6 +205,7 @@ class OllamaProposalProvider:
         self.configured = bool(base_url and model)
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._model = model
+        self.model_name = model
         self._timeout = float(timeout)
         self._num_ctx = max(512, int(num_ctx))
         self._num_predict = max(32, int(num_predict))

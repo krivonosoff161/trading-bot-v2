@@ -4,6 +4,15 @@ Updated: 2026-07-10
 
 ## Boundary
 
+> **Update 2026-07-10 - LLM roles share one control plane.**
+> `AgentRoleContract` defines role input/output/field boundaries, while the
+> private append-only `LLMInvocation.v1` ledger owns pre-call deduplication,
+> provider/model identity, circuit state and token/cost accounting. The farm
+> calculator is three sequential roles on the single allowlisted local
+> `calculator-swarm` model. Cloud reviewer roles receive sanitized packets and cannot
+> enter the local calculator route. No role owns prices, validator state,
+> readiness, execution or orders.
+
 > **Update 2026-07-10 - account truth is separate from research variants.**
 > `main_paper_trade_ledger` now reconciles an append-only `PaperAccountEvent.v1`
 > stream for the agreed `700 USDT` paper account. One primary thesis per scenario
@@ -139,6 +148,19 @@ paper_signals / PFR-ready rows
   -> feedback_followup              (bounded retest planning; no second queue)
   -> OutcomePromotionGate.v1        (review/retest/shadow/operator stage, no authority)
   -> outcome_retest_result          (completed sweep -> review verdict -> memory)
+```
+
+LLM sidecars around that deterministic flow use this separate control path:
+
+```text
+sanitized role input
+  -> AgentRoleContract
+  -> LLMInvocation preflight (dedup / allowlist / circuit)
+  -> local calculator passes OR sanitized cloud reviewer
+  -> semantic output validation
+  -> private invocation + usage ledger
+  -> bounded hypothesis/review artifact
+  -> deterministic retest/promotion gate
 ```
 
 The current path is deliberately stricter than a raw main scan. It refuses broad research

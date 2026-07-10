@@ -546,6 +546,12 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         outcome_gate = build_outcome_promotion_gate(root)
     except Exception:
         outcome_gate = {}
+    try:
+        from src.research_lab.llm_invocation_ledger import invocation_summary
+
+        llm_invocations = invocation_summary(root)
+    except Exception:
+        llm_invocations = {}
 
     active = (
         int(paper.get("total") or 0) > 0
@@ -666,6 +672,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "calibration_legacy_excluded": int(calibration.get("legacy_rows_excluded") or 0),
         "calibration_ready": bool(calibration.get("calibration_ready")),
         "calibration_verdicts": _top_counts(calibration.get("profile_verdicts") or {}, limit=8),
+        "llm_invocations": int(llm_invocations.get("invocations") or 0),
+        "llm_invocation_status": _top_counts(llm_invocations.get("by_status") or {}, limit=8),
+        "llm_invocation_roles": _top_counts(llm_invocations.get("by_role") or {}, limit=8),
+        "llm_invocation_tokens": int(llm_invocations.get("total_tokens") or 0),
+        "llm_invocation_cost_rub": float(llm_invocations.get("total_cost_rub") or 0.0),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
     }
@@ -861,6 +872,13 @@ def _print_paper_product_status() -> None:
             f"legacy_excluded={st['calibration_legacy_excluded']} "
             f"ready={st['calibration_ready']} verdicts={st['calibration_verdicts']}"
         )
+        if st["llm_invocations"]:
+            print(
+                "                "
+                f"llm_invocations={st['llm_invocations']} status={st['llm_invocation_status']} "
+                f"roles={st['llm_invocation_roles']} tokens={st['llm_invocation_tokens']} "
+                f"cost_rub={st['llm_invocation_cost_rub']}"
+            )
         lifecycle = st["active_lifecycle"]
         if lifecycle:
             print(
