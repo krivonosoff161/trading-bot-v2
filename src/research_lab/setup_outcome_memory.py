@@ -398,6 +398,11 @@ def _training_memory(
             continue
         if not isinstance(row, dict):
             continue
+        # Legacy rows were produced before durable lifecycle cursors. They stay
+        # in the private export for forensic comparison, but must not steer the
+        # adaptive farm because entry/hold labels may be contradictory.
+        if str(row.get("lifecycle_schema") or "") != "PaperSignalLifecycle.v2":
+            continue
         candidate_ids = {
             str(row.get("candidate_id") or "").strip(),
             str(row.get("setup_candidate_id") or "").strip(),

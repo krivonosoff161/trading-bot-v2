@@ -144,7 +144,14 @@ def load_product_memory(private_root: Path) -> dict[str, Any]:
     """Broad paper-product memory for search ranking; best-effort and read-only."""
     try:
         from src.research_lab.setup_outcome_memory import summarize_product_training_memory
-        return summarize_product_training_memory(Path(private_root))
+        memory = summarize_product_training_memory(Path(private_root))
+        calibration_path = Path(private_root) / "state" / "derived" / "trading_policy_calibration.json"
+        try:
+            calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            calibration = {}
+        memory["calibration"] = calibration if isinstance(calibration, dict) else {}
+        return memory
     except Exception:  # noqa: BLE001 - search memory must never break the paper loop
         return {}
 
@@ -469,6 +476,11 @@ def geometry_profiles_for_cell(
         selected = _bootstrap_profile_for_family(family=family, timeframe=timeframe)
 
     if selected != "base":
+        from src.research_lab.trading_policy_calibration import profile_verdict
+
+        calibration_verdict = profile_verdict((product_memory or {}).get("calibration"), selected)
+        if calibration_verdict == "demote":
+            selected = "base"
         profile_stats = _product_profile_cell_stats(product_memory, symbol, timeframe, family, selected)
         if _profile_is_disfavored(profile_stats):
             selected = "base"

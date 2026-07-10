@@ -369,6 +369,7 @@ class TestBuildMemoryIndex:
                 json.dumps(row, sort_keys=True)
                 for row in [
                     {
+                        "lifecycle_schema": "PaperSignalLifecycle.v2",
                         "setup_candidate_id": "candidate_1",
                         "candidate_id": "candidate_1",
                         "symbol": "X",
@@ -381,6 +382,7 @@ class TestBuildMemoryIndex:
                         "outcome_learning_actionability": "retest_exit_or_capture",
                     },
                     {
+                        "lifecycle_schema": "PaperSignalLifecycle.v2",
                         "setup_candidate_id": "candidate_1",
                         "candidate_id": "candidate_1",
                         "symbol": "X",
@@ -451,6 +453,7 @@ class TestBuildMemoryIndex:
                 json.dumps(row, sort_keys=True)
                 for row in [
                     {
+                        "lifecycle_schema": "PaperSignalLifecycle.v2",
                         "symbol": "X-USDT-SWAP",
                         "timeframe": "15m",
                         "family": "early_tp_tactical",
@@ -460,6 +463,7 @@ class TestBuildMemoryIndex:
                         "outcome_learning_bucket": "win",
                     },
                     {
+                        "lifecycle_schema": "PaperSignalLifecycle.v2",
                         "okx_inst_id": "X-USDT-SWAP",
                         "timeframe": "15m",
                         "family": "early_tp_tactical",
