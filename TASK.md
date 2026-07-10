@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 5 / issue #154. Close the
-analyst -> bounded retest -> farm result -> promotion gate -> memory cycle after
-merging unified lineage in PR #162.
+Current engineering task: GitHub epic #158, phase 6 / issue #155. Calibrate
+entry/exit/hold geometry only from repaired lifecycle evidence after closing the
+analyst -> bounded retest -> farm result -> promotion gate -> memory cycle.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -50,6 +50,12 @@ Phase 5 reconciles completed `outcome_retest` task/run artifacts into
 updates promotion stages, and attaches evidence to setup memory. Direct
 candidate matches remain distinct from executable-family cell matches; neither
 scope can grant paper/live authority.
+
+Phase 6 adds `trading_policy_calibration.json`. It excludes legacy lifecycle
+rows from automatic learning, aggregates only `PaperSignalLifecycle.v2`
+terminal evidence, reports sample uncertainty and can suppress a profile only
+after a deterministic `demote` verdict. Existing legacy rows stay private and
+visible for forensic comparison; they no longer steer the farm.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

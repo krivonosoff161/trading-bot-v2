@@ -389,3 +389,25 @@ eligible_now=42 running=3 deferred_future=5 blocked=36
 No runtime was restarted in this slice. Before the next unattended run, reconcile
 or restart the farm loop deliberately so stale `running` work does not confuse
 the operator view.
+
+## Calibration evidence gate (2026-07-10)
+
+The lifecycle repair exposed a second-order problem: the existing private
+training export still consisted of legacy lifecycle rows. Those rows are useful
+for forensic comparison, but their entry/hold labels predate durable candle
+cursors and therefore cannot safely select the next farm geometry.
+
+The canonical rule is now:
+
+```text
+legacy outcome -> forensic background only
+PaperSignalLifecycle.v2 terminal outcome -> calibration evidence
+calibration evidence below sample floor -> bounded probe only
+calibration evidence above sample floor -> retain/demote/retest verdict
+verdict -> profile label only; deterministic family code still owns prices
+```
+
+`state/derived/trading_policy_calibration.json` is private and aggregate. It
+reports sample sizes, Wilson 95% win-rate bounds, net/capture/give-back metrics,
+and observational profile verdicts. The report explicitly does not claim causal
+attribution, does not promote a setup, and keeps `execution_allowed=false`.

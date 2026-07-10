@@ -2,6 +2,15 @@
 
 Updated: 2026-07-10
 
+> **Update 2026-07-10 - calibration evidence gate.** Adaptive geometry no
+> longer learns from pre-cursor lifecycle rows. The private
+> `trading_policy_calibration.json` report separates trusted
+> `PaperSignalLifecycle.v2` terminal outcomes from legacy history, reports
+> sample size, Wilson win-rate bounds, net/capture/give-back aggregates and a
+> bounded profile verdict. Legacy rows remain available for forensics but cannot
+> steer profile selection. Profile-wide `demote` can suppress a probe; all price
+> levels remain deterministic and the gate has no execution authority.
+
 > **Update 2026-07-10 - stable paper scenario lifecycle.** Active symbol-level
 > trade theses retain one ID across confirmations and leader changes. Thesis
 > events are append-only, and the preview emits a dedicated close card when no

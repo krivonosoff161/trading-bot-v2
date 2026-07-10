@@ -552,6 +552,20 @@ class TestLearning:
 
         assert profiles == ["base"]
 
+    def test_global_calibration_can_demote_a_profile(self):
+        from src.research_lab.paper_signals import cycle
+
+        product_memory = {
+            "calibration": {
+                "by_profile": {"runner_probe": {"verdict": "demote"}},
+            }
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [], product_memory, symbol="X", timeframe="1h", family="continuation")
+
+        assert profiles == ["base"]
+
     def test_product_memory_overrides_legacy_runner_on_losing_cell(self):
         from src.research_lab.paper_signals import cycle
         # Legacy memory alone would request runner_probe, but broader product
