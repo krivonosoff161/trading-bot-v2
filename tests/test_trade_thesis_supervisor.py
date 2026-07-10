@@ -31,7 +31,7 @@ def _trade(**overrides):
 
 def _write_ledger(tmp_path, rows):
     derived = tmp_path / "state" / "derived"
-    derived.mkdir(parents=True)
+    derived.mkdir(parents=True, exist_ok=True)
     (derived / "paper_product_trades.json").write_text(
         json.dumps({
             "schema": "paper_product_trade_ledger.v1",
@@ -67,8 +67,16 @@ def test_trade_thesis_supervisor_keeps_higher_timeframe_primary_thesis(tmp_path)
     assert summary["active_trades"] == 2
     assert summary["items"][0]["side"] == "short"
     assert summary["items"][0]["primary_timeframe"] == "4h"
-    assert summary["by_event_type"] == {"countertrend_bounce": 1, "primary_thesis": 1}
-    assert summary["by_action"] == {"hold_primary_tighten_watch": 1, "track_primary": 1}
+    assert summary["by_event_type"] == {
+        "countertrend_bounce": 1,
+        "primary_thesis": 1,
+        "scenario_opened": 1,
+    }
+    assert summary["by_action"] == {
+        "hold_primary_tighten_watch": 1,
+        "start_watch": 1,
+        "track_primary": 1,
+    }
     assert summary["execution_allowed"] is False
 
 
@@ -103,6 +111,62 @@ def test_trade_thesis_supervisor_writes_private_artifacts(tmp_path):
     assert Path(summary["events_jsonl_path"]).exists()
     assert summary["paper_only"] is True
     assert summary["execution_allowed"] is False
+
+
+def test_trade_thesis_id_survives_new_confirmation_and_event_log_is_idempotent(tmp_path):
+    _write_ledger(tmp_path, [_trade()])
+    first = write_trade_thesis_supervisor(tmp_path)
+    first_id = first["items"][0]["thesis_id"]
+
+    _write_ledger(
+        tmp_path,
+        [
+            _trade(),
+            _trade(
+                source_signal_id="sig_2",
+                paper_product_trade_id="ppt_2",
+                timeframe="15m",
+                created_at="2026-07-08T13:00:00+00:00",
+            ),
+        ],
+    )
+    second = write_trade_thesis_supervisor(tmp_path)
+    second_id = second["items"][0]["thesis_id"]
+    event_log = Path(second["events_jsonl_path"])
+    before = event_log.read_bytes()
+    third = write_trade_thesis_supervisor(tmp_path)
+
+    assert first_id == second_id
+    assert second["events_added"] > 0
+    assert third["events_added"] == 0
+    assert event_log.read_bytes() == before
+
+
+def test_trade_thesis_closes_when_last_active_signal_ends(tmp_path):
+    _write_ledger(tmp_path, [_trade()])
+    opened = write_trade_thesis_supervisor(tmp_path)
+    thesis_id = opened["items"][0]["thesis_id"]
+
+    _write_ledger(
+        tmp_path,
+        [
+            _trade(
+                status="reviewed",
+                outcome={"result": "take", "net_pct": 1.25},
+            )
+        ],
+    )
+    closed = write_trade_thesis_supervisor(tmp_path)
+
+    thesis = closed["items"][0]
+    closure = [row for row in closed["event_items"] if row["event_type"] == "scenario_closed"][-1]
+    assert thesis["thesis_id"] == thesis_id
+    assert thesis["status"] == "closed"
+    assert thesis["active_signals"] == 0
+    assert thesis["close_reason"] == "take"
+    assert closure["supervisor_action"] == "stop_watch"
+    assert closure["terminal_result"] == "take"
+    assert closure["terminal_net_pct"] == 1.25
 
 
 def test_trade_thesis_supervisor_has_no_live_order_imports():

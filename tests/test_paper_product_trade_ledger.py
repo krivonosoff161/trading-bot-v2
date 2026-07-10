@@ -60,6 +60,8 @@ def test_product_trade_ledger_tracks_broad_paper_candidates_without_live_ready(t
     assert trade["live_ready"] is False
     assert trade["live_block_reason"] == "missing_ready_strategy_id"
     assert trade["farm_geometry_profile_id"] == "farm_legacy_static"
+    assert trade["boundary_ts"] == 1_700_000_000_000
+    assert trade["source_created_at"] == 1_000.0
     assert trade["paper_account"]["notional_usdt"] == 105.0
     assert Path(summary["snapshot_path"]).exists()
     assert Path(summary["jsonl_path"]).exists()

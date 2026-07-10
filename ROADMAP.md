@@ -25,6 +25,12 @@ documents are preserved as history, but they no longer define the active work.
 > allocation rejections are auditable. This is paper accounting only and has no
 > exchange/order path.
 
+> **Phase 3 status - scenario lifecycle.** Symbol-level paper theses now retain a
+> stable identity while active. The supervisor appends `scenario_opened`, material
+> `scenario_updated`, signal-role and `scenario_closed` events; Telegram preview
+> can prioritize an explicit close-of-observation card. Repeated cycles are
+> idempotent, and a changed signal leader does not silently create a new scenario.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1
