@@ -37,6 +37,12 @@ documents are preserved as history, but they no longer define the active work.
 > summary reports conflicts, queue rows without trades and terminal rows without
 > training evidence. Historical joins read full JSONL logs instead of capped views.
 
+> **Phase 5 status - analyst/retest/memory loop.** Completed outcome-retest sweeps
+> now return to the originating review with an evidence-strength verdict. Finished
+> IDs rotate out of the 10-item work catalog, promotion gates consume the result,
+> and setup memory records candidate- or explicit cell-scoped evidence. Missing
+> historical run artifacts remain reported instead of being treated as failures.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

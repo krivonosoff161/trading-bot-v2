@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 4 / issue #153. Preserve and
-audit one lineage from farm/PFR evidence through main-paper, account, scenario,
-Telegram, outcome and training after merging scenario lifecycle in PR #161.
+Current engineering task: GitHub epic #158, phase 5 / issue #154. Close the
+analyst -> bounded retest -> farm result -> promotion gate -> memory cycle after
+merging unified lineage in PR #162.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -44,6 +44,12 @@ Phase 4 propagates scanner/data/feature/setup/sweep/validation IDs through the
 runtime and trade surfaces, then writes a private `PaperLineageEnvelope.v1`
 index. It joins existing IDs only, reads full append-only training/card/thesis
 history instead of capped snapshots, and reports conflicts or missing links.
+
+Phase 5 reconciles completed `outcome_retest` task/run artifacts into
+`OutcomeRetestResult.v1`, rotates completed IDs out of the bounded catalog,
+updates promotion stages, and attaches evidence to setup memory. Direct
+candidate matches remain distinct from executable-family cell matches; neither
+scope can grant paper/live authority.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

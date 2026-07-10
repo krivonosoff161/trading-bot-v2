@@ -72,6 +72,29 @@ def test_positive_preserve_pattern_requires_shadow_watch():
     assert "positive_pattern_needs_forward_watch" in verdicts[0].reasons
 
 
+def test_improved_retest_moves_to_shadow_instead_of_repeating_review():
+    verdicts = build_gate_verdicts(
+        [_training()],
+        [_review()],
+        retest_index={"llmr_1": {"retest_id": "ort_1", "verdict": "improved_directional"}},
+    )
+
+    assert verdicts[0].gate_stage == NEEDS_SHADOW
+    assert verdicts[0].evidence_refs["outcome_retest_id"] == "ort_1"
+    assert "completed_retest_improved_directional_needs_shadow" in verdicts[0].reasons
+
+
+def test_failed_retest_returns_to_review_only():
+    verdicts = build_gate_verdicts(
+        [_training()],
+        [_review()],
+        retest_index={"llmr_1": {"retest_id": "ort_1", "verdict": "no_improvement"}},
+    )
+
+    assert verdicts[0].gate_stage == REVIEW_ONLY
+    assert "completed_retest_found_no_improvement" in verdicts[0].reasons
+
+
 def test_shadow_candidate_must_move_to_true_forward_before_operator_review():
     verdicts = build_gate_verdicts(
         [_training(candidate_id="uc_1")],
