@@ -410,6 +410,38 @@ class TestBuildMemoryIndex:
         assert summary["paper_pnl_usdt"] == -0.9
         assert summary["paper_gave_back_rows"] == 1
 
+    def test_attaches_completed_outcome_retest_without_promoting(self, tmp_path):
+        import json
+
+        db = FarmTasksDB(tasks_db_path(tmp_path))
+        uc = "X::1h::momentum_breakout::ph::fp"
+        db.upsert_unique_candidate({
+            "uc_key": uc, "symbol": "X", "timeframe": "1h", "family": "momentum_breakout",
+            "params_hash": "ph", "data_fingerprint": "fp", "decision": "REJECT",
+            "validation_status": "REJECT", "hard_status": "", "n_trades": 20, "avg_net_pct": -0.5,
+            "candidate_id": "candidate_1", "params": {}}, now=1.0)
+        db.close()
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True, exist_ok=True)
+        (derived / "outcome_retest_results.json").write_text(
+            json.dumps({"items": [{
+                "retest_id": "ort_1", "review_id": "review_1",
+                "source_candidate_id": "candidate_1", "verdict": "improved_directional",
+                "best_n_trades": 20, "delta_vs_baseline_pct": 1.2,
+                "comparison_kind": "directional_retest_not_single_trade_pnl_attribution",
+            }]}),
+            encoding="utf-8",
+        )
+
+        rec = build_memory_index(tmp_path)[0]
+        summary = summarize_memory([rec])
+
+        assert rec["outcome_retest"]["retest_id"] == "ort_1"
+        assert rec["outcome_retest"]["verdict"] == "improved_directional"
+        assert rec["paper_forward_ready"] is False
+        assert summary["outcome_retest_records"] == 1
+        assert summary["outcome_retest_by_verdict"] == {"improved_directional": 1}
+
     def test_summarizes_product_training_memory_separately(self, tmp_path):
         import json
         derived = tmp_path / "state" / "derived"

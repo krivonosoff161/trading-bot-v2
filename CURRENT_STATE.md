@@ -12,6 +12,11 @@ Updated: 2026-07-10
 > review and training IDs in a private derived index. Aggregate health exposes
 > conflicts and missing downstream rows without exposing raw evidence.
 
+> **Update 2026-07-10 - outcome retest return path.** Completed analyst-requested
+> sweeps now produce deterministic result verdicts, rotate out of the pending
+> catalog, update promotion-gate stages and enter setup memory with an explicit
+> candidate/cell match scope. No result promotes itself to trading authority.
+
 > **Update 2026-07-08 - validated PFR rows now lead main-paper queue.**
 > The PFR/main-paper handoff no longer hides validated rows behind broad farm
 > candidates in the runtime/Telegram preview priority order. `validated_pfr` queue

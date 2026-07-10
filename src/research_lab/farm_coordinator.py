@@ -260,6 +260,9 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
 def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
                             now: float, limit: int) -> None:
     recs = fr.build_recommendations(load_feedback_queue(private_root), _load_setup_cards(private_root))
+    from src.research_lab.outcome_retest_result import build_outcome_retest_results
+
+    build_outcome_retest_results(private_root)
     retest_catalog = write_outcome_retest_specs(private_root, max_specs=limit)
     if int(retest_catalog.get("specs") or 0):
         _bump(counters, "outcome_retests_cataloged", int(retest_catalog.get("specs") or 0))
@@ -416,6 +419,8 @@ def _drain_retest_task(
         "actionability": spec_row.get("actionability"),
         "outcome_bucket": spec_row.get("outcome_bucket"),
         "baseline": spec_row.get("baseline") or {},
+        "source_candidate_id": spec_row.get("candidate_id"),
+        "source_family": spec_row.get("source_family"),
         "proposed_changes": spec_row.get("proposed_changes") or [],
         "sweep_spec": _sweep_payload(sweep),
         "followup_depth": depth + 1,

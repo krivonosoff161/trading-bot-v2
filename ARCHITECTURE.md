@@ -25,6 +25,13 @@ Updated: 2026-07-10
 > append-only history where snapshots are intentionally capped, reports conflicts
 > and missing downstream rows, and never fabricates missing validation evidence.
 
+> **Update 2026-07-10 - analyst retests return to memory.** Completed
+> `outcome_retest` farm sweeps are reconciled back to their review/training source,
+> classified as improved, no-improvement or insufficient-evidence, and attached
+> to setup memory at candidate scope where possible or explicit executable-family
+> cell scope otherwise. Completed IDs rotate out of the bounded retest catalog.
+> Promotion remains deterministic and never grants execution authority.
+
 > **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
 > self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
 > `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
@@ -131,6 +138,7 @@ paper_signals / PFR-ready rows
   -> outcome_review_id backlink     (next TrainingRow.v2 export)
   -> feedback_followup              (bounded retest planning; no second queue)
   -> OutcomePromotionGate.v1        (review/retest/shadow/operator stage, no authority)
+  -> outcome_retest_result          (completed sweep -> review verdict -> memory)
 ```
 
 The current path is deliberately stricter than a raw main scan. It refuses broad research
