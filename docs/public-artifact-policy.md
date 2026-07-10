@@ -9,6 +9,9 @@ Before staging a file, classify it by content rather than its extension.
 - source code, tests, configuration templates, and small deterministic fixtures;
 - architecture, operation, and safety documentation;
 - synthetic examples and sanitized aggregate methodology;
+- sanitized retrospective narratives in `docs/legacy-evidence/` that state
+  their historical status and limitations without reproducing raw calculations,
+  parameters, per-trade results, or strategy rankings;
 - public diagrams that contain no private market history, per-trade results,
   candidate rankings, credentials, or raw model output.
 
@@ -37,7 +40,8 @@ private and must not be committed.
 
 ## Existing Historical Material
 
-The current branch removes raw model packs and geometry outputs from the public
-index while keeping local copies ignored. Historical Git cleanup is not done
-automatically: it requires a separate approved procedure with an encrypted
-private backup and a review of rewritten public refs.
+Public Git heads were rewritten on 2026-07-10 after an encrypted private backup
+was verified. Fresh clones do not include the removed raw model packs or
+geometry outputs. GitHub pull-request refs and external clones can retain older
+references, so no raw artifact may be reintroduced as a substitute for a
+sanitized public narrative.

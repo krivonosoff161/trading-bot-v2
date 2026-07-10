@@ -103,6 +103,10 @@ in local/private history. They are intentionally excluded from this public
 repository. A current document must state the method or conclusion again if it
 is needed for public operation.
 
+A deliberately limited exception is [Legacy Evidence](legacy-evidence/README.md):
+sanitized retrospective narratives that explain closed hypotheses and historical
+limitations without publishing raw research artifacts or current strategy data.
+
 ## Related Public Repository
 
 [honest-backtest](https://github.com/krivonosoff161/honest-backtest) owns the
