@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 7 / issue #156. Consolidate
-LLM role invocation and run the private calculator roles sequentially on one
-allowlisted local model before the 24-48 hour acceptance run.
+Current engineering task: GitHub epic #158, phase 8 / issue #157. Run the
+formal 24-hour-or-longer headless paper acceptance cycle and evaluate all
+repaired architecture gates against an immutable private baseline.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -63,6 +63,13 @@ the allowlisted `calculator-swarm` model. The shared private ledger deduplicates
 inference, opens a circuit after repeated provider failures and records actual
 tokens/cost. Cloud reviewer roles keep sanitized inputs and cannot occupy the
 local calculator route.
+
+Phase 8 uses `PaperAcceptanceSnapshot.v1` and `PaperAcceptanceReport.v1` under
+the private research root. It requires elapsed wall time plus new trusted
+lifecycle outcomes, exact paper-account replay, scenario close/card evidence,
+clean lineage, retest progress, reconstructible charts, bounded artifact growth
+and unchanged paper-only safety. The issue stays open until the wall-clock run
+actually passes.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

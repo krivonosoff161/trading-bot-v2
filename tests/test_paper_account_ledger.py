@@ -2,7 +2,7 @@ import ast
 import json
 from pathlib import Path
 
-from src.research_lab.paper_account_ledger import build_paper_account_ledger
+from src.research_lab.paper_account_ledger import audit_paper_account_ledger, build_paper_account_ledger
 
 
 def _trade(trade_id: str, **overrides):
@@ -82,6 +82,16 @@ def test_account_ledger_is_append_only_and_idempotent(tmp_path):
     assert first["events_added"] == 1
     assert second["events_added"] == 0
     assert Path(second["event_log_path"]).read_bytes() == before
+
+
+def test_account_ledger_audit_replays_snapshot_exactly(tmp_path):
+    build_paper_account_ledger(tmp_path, [_trade("trade_1")])
+
+    audit = audit_paper_account_ledger(tmp_path)
+
+    assert audit["valid"] is True
+    assert audit["mismatches"] == {}
+    assert audit["execution_allowed"] is False
 
 
 def test_account_ledger_rejects_when_all_margin_is_reserved(tmp_path):
