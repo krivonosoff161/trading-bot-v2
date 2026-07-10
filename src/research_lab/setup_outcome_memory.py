@@ -422,6 +422,48 @@ def _training_memory(
     return by_candidate, by_cell, by_geometry_profile_cell
 
 
+def _outcome_retest_memory(
+    private_root: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    path = Path(private_root) / "state" / "derived" / "outcome_retest_results.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    by_candidate: dict[str, dict[str, Any]] = {}
+    by_cell: dict[str, dict[str, Any]] = {}
+    for row in payload.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        candidate_id = str(row.get("source_candidate_id") or "")
+        compact = {
+            "retest_id": str(row.get("retest_id") or ""),
+            "review_id": str(row.get("review_id") or ""),
+            "verdict": str(row.get("verdict") or ""),
+            "best_n_trades": int(row.get("best_n_trades") or 0),
+            "delta_vs_baseline_pct": row.get("delta_vs_baseline_pct"),
+            "comparison_kind": str(row.get("comparison_kind") or ""),
+        }
+        keys: list[tuple[dict[str, dict[str, Any]], str, str]] = []
+        if candidate_id:
+            keys.append((by_candidate, candidate_id, "candidate"))
+        cell = _training_cell_key(
+            row.get("source_symbol") or row.get("symbol"),
+            row.get("source_timeframe") or row.get("timeframe"),
+            # Memory is keyed by the executable farm family. The source family
+            # may be a paper-facing alias such as early_tp_tactical.
+            row.get("family") or row.get("source_family"),
+        )
+        if cell:
+            keys.append((by_cell, cell, "cell"))
+        for target, key, match_scope in keys:
+            scoped = {**compact, "match_scope": match_scope}
+            prior = target.get(key)
+            if prior is None or scoped["best_n_trades"] >= int(prior.get("best_n_trades") or 0):
+                target[key] = scoped
+    return by_candidate, by_cell
+
+
 def _normalize_symbol(value: Any) -> str:
     text = str(value or "").strip().upper()
     return text.replace("-", "_")
@@ -612,6 +654,7 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
     exit2 = _derived_by_uc(private_root, "exit_phase2.json")
     training_by_candidate, training_by_cell, _training_by_geometry_profile_cell = _training_memory(private_root)
+    retest_by_candidate, retest_by_cell = _outcome_retest_memory(private_root)
     records: list[dict[str, Any]] = []
     for lc in lifecycle:
         uc = lc["uc_key"]
@@ -640,6 +683,10 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
             "paper_avg_pnl_usdt": product_training["avg_paper_pnl_usdt"],
             "paper_terminal_rows": product_training["terminal_rows"],
             "paper_gave_back_rows": product_training["gave_back_rows"],
+            "outcome_retest": retest_by_candidate.get(str(lc.get("source_candidate_id") or ""))
+            or retest_by_candidate.get(str(lc.get("validation_candidate_id") or ""))
+            or retest_by_cell.get(cell)
+            or {},
             # Tactical Setup Library dimensions (research labels; none is edge or paper-ready):
             "cost_class": cost_cls, "tactical_class": tactical_cls,
             "next_action": next_action(outcome, cost_cls, tactical_cls),
@@ -712,6 +759,16 @@ def _tally_field(records: list[dict[str, Any]], field_name: str) -> dict[str, in
     return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
 
+def _tally_nested_field(records: list[dict[str, Any]], parent: str, field_name: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in records:
+        nested = row.get(parent) if isinstance(row.get(parent), dict) else {}
+        value = str(nested.get(field_name) or "")
+        if value:
+            out[value] = out.get(value, 0) + 1
+    return dict(sorted(out.items(), key=lambda item: (-item[1], item[0])))
+
+
 def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_class: dict[str, int] = {}
     for r in records:
@@ -733,6 +790,14 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
             round(total_paper_pnl / total_paper_terminal, 6) if total_paper_terminal else 0.0
         ),
         "paper_gave_back_rows": sum(int(r.get("paper_gave_back_rows") or 0) for r in paper_rows),
+        "outcome_retest_records": sum(1 for r in records if r.get("outcome_retest")),
+        "outcome_retest_unique_ids": len({
+            str((r.get("outcome_retest") or {}).get("retest_id") or "")
+            for r in records
+            if str((r.get("outcome_retest") or {}).get("retest_id") or "")
+        }),
+        "outcome_retest_by_verdict": _tally_nested_field(records, "outcome_retest", "verdict"),
+        "outcome_retest_by_scope": _tally_nested_field(records, "outcome_retest", "match_scope"),
         "one_shot_candidates": sum(1 for r in records if r.get("tactical_class") == "one_shot_candidate"),
         "cost_bound_maker_unlock": sum(1 for r in records if r.get("cost_class") == "cost_bound_maker_unlock"),
         "positive": len(positive_setups(records)),

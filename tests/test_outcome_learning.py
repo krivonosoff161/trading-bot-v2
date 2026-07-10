@@ -5,7 +5,9 @@ from src.research_lab.outcome_learning import (
     learning_summary,
 )
 from src.research_lab.data_prepare import write_candles
-from src.research_lab.outcome_retest import build_outcome_retest_specs
+import json
+
+from src.research_lab.outcome_retest import build_outcome_retest_specs, write_outcome_retest_specs
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.timeframes import load_timeframe_profiles
@@ -339,3 +341,49 @@ def test_retest_specs_dedupe_same_trade_and_dimensions_across_reviews():
 
     assert len(specs) == 1
     assert specs[0].review_id == "llmr_first"
+
+
+def test_retest_catalog_rotates_past_completed_reviews(tmp_path):
+    rows = [
+        _row(training_row_id="training_1", paper_signal_id="sig_1"),
+        _row(training_row_id="training_2", paper_signal_id="sig_2", symbol="B_USDT_SWAP"),
+    ]
+    reviews = [
+        {
+            "role_id": "outcome_reviewer",
+            "review_id": f"review_{idx}",
+            "source_ref": f"training_{idx}",
+            "accepted": True,
+            "payload": {
+                "outcome_bucket": "gave_back",
+                "actionability": "retest_exit_or_capture",
+                "next_test_dimensions": ["earlier_profit_lock"],
+            },
+        }
+        for idx in (1, 2)
+    ]
+    derived = tmp_path / "state" / "derived"
+    advice = tmp_path / "state" / "llm_advice"
+    derived.mkdir(parents=True)
+    advice.mkdir(parents=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    (advice / "outcome_reviews.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in reviews) + "\n",
+        encoding="utf-8",
+    )
+    first_id = build_outcome_retest_specs(rows, reviews)[0].retest_id
+    (derived / "outcome_retest_results.json").write_text(
+        json.dumps({"items": [{"retest_id": first_id}]}),
+        encoding="utf-8",
+    )
+
+    catalog = write_outcome_retest_specs(tmp_path, max_specs=1)
+
+    assert catalog["eligible_total"] == 2
+    assert catalog["completed_total"] == 1
+    assert catalog["remaining_total"] == 1
+    assert catalog["specs"] == 1
+    assert catalog["items"][0]["source_ref"] == "training_2"

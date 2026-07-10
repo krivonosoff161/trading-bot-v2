@@ -372,11 +372,22 @@ def outcome_retest_snapshot_path(private_root: Path) -> Path:
 
 
 def write_outcome_retest_specs(private_root: Path, *, max_specs: int = 50) -> dict[str, Any]:
-    specs = build_outcome_retest_specs(
+    all_specs = build_outcome_retest_specs(
         load_training_rows(private_root),
         load_outcome_reviews(private_root),
-        max_specs=max_specs,
+        max_specs=10_000,
     )
+    completed_path = Path(private_root) / "state" / "derived" / "outcome_retest_results.json"
+    try:
+        completed_payload = json.loads(completed_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        completed_payload = {}
+    completed_ids = {
+        str(row.get("retest_id") or "")
+        for row in completed_payload.get("items") or []
+        if isinstance(row, dict) and str(row.get("retest_id") or "")
+    }
+    specs = [spec for spec in all_specs if spec.retest_id not in completed_ids][: max(0, int(max_specs))]
     by_reason: dict[str, int] = {}
     for spec in specs:
         reason = spec.not_queueable_reason or "queueable"
@@ -384,6 +395,9 @@ def write_outcome_retest_specs(private_root: Path, *, max_specs: int = 50) -> di
     payload = {
         "schema": "OutcomeRetestCatalog.v1",
         "specs": len(specs),
+        "eligible_total": len(all_specs),
+        "completed_total": len(completed_ids),
+        "remaining_total": max(0, len(all_specs) - len(completed_ids)),
         "queueable": sum(1 for spec in specs if spec.queueable),
         "by_reason": dict(sorted(by_reason.items())),
         "items": [spec.to_dict() for spec in specs],

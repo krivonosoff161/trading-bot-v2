@@ -530,6 +530,8 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
     lineage = _read_json(derived / "paper_lineage.json")
+    retest_results = _read_json(derived / "outcome_retest_results.json")
+    outcome_memory = _read_json(derived / "setup_outcome_memory.json")
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
     outcome_reviews = _read_jsonl(root / "state" / "llm_advice" / "outcome_reviews.jsonl")
     quality = _read_json(derived / "paper_product_quality_report.json")
@@ -618,6 +620,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "lineage_main_without_trade": int(lineage.get("main_without_trade") or 0),
         "lineage_terminal_without_training": int(lineage.get("terminal_without_training") or 0),
         "lineage_valid": bool(lineage.get("valid")) if lineage else False,
+        "outcome_retest_results": int(retest_results.get("results") or 0),
+        "outcome_retest_result_verdicts": _top_counts(retest_results.get("by_verdict") or {}),
+        "outcome_retest_unreadable": int(retest_results.get("unreadable_completed_tasks") or 0),
+        "outcome_retest_memory_records": int((outcome_memory.get("summary") or {}).get("outcome_retest_records") or 0),
+        "outcome_retest_memory_unique": int((outcome_memory.get("summary") or {}).get("outcome_retest_unique_ids") or 0),
         "training_by_result": _top_counts(training.get("by_result") or {}),
         "training_by_family": _top_counts(training.get("by_family") or {}),
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
@@ -760,6 +767,15 @@ def _print_paper_product_status() -> None:
             f"conflicts={st['lineage_conflicts']} "
             f"main_without_trade={st['lineage_main_without_trade']} "
             f"terminal_without_training={st['lineage_terminal_without_training']}"
+        )
+    if st["outcome_retest_results"]:
+        print(
+            "                "
+            f"outcome_retest_results={st['outcome_retest_results']} "
+            f"verdicts={st['outcome_retest_result_verdicts']} "
+            f"unreadable={st['outcome_retest_unreadable']} "
+            f"memory_records={st['outcome_retest_memory_records']} "
+            f"memory_unique={st['outcome_retest_memory_unique']}"
         )
     account = st.get("strict_paper_money") or {}
     if account:

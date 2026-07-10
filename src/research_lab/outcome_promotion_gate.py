@@ -105,6 +105,7 @@ def _gate_stage(
     shadow: dict[str, Any],
     true_forward: dict[str, Any],
     ready: dict[str, Any],
+    retest: dict[str, Any],
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     true_status = str(true_forward.get("status") or "")
@@ -120,6 +121,16 @@ def _gate_stage(
     if shadow:
         reasons.append("shadow_forward_registered")
         return NEEDS_TRUE_FORWARD, reasons
+    retest_verdict = str(retest.get("verdict") or "")
+    if retest_verdict == "improved_directional":
+        reasons.append("completed_retest_improved_directional_needs_shadow")
+        return NEEDS_SHADOW, reasons
+    if retest_verdict == "no_improvement":
+        reasons.append("completed_retest_found_no_improvement")
+        return REVIEW_ONLY, reasons
+    if retest_verdict == "insufficient_evidence":
+        reasons.append("completed_retest_insufficient_evidence")
+        return NEEDS_RETEST, reasons
     if actionability in _RETEST_ACTIONS:
         reasons.append(f"accepted_review_requires_retest:{actionability}")
         return NEEDS_RETEST, reasons
@@ -140,11 +151,13 @@ def build_gate_verdicts(
     shadow_index: dict[str, dict[str, Any]] | None = None,
     true_forward_index: dict[str, dict[str, Any]] | None = None,
     ready_index: dict[str, dict[str, Any]] | None = None,
+    retest_index: dict[str, dict[str, Any]] | None = None,
 ) -> list[PromotionGateVerdict]:
     rows_by_ref = {str(row.get("training_row_id") or ""): row for row in training_rows}
     shadow_index = shadow_index or {}
     true_forward_index = true_forward_index or {}
     ready_index = ready_index or {}
+    retest_index = retest_index or {}
     verdicts: list[PromotionGateVerdict] = []
     for review in outcome_reviews:
         if str(review.get("role_id") or "") != "outcome_reviewer" or not bool(review.get("accepted")):
@@ -157,14 +170,17 @@ def build_gate_verdicts(
         shadow_key, shadow = _lookup_any(shadow_index, keys)
         true_key, true_forward = _lookup_any(true_forward_index, keys)
         ready = ready_index.get(candidate_id, {}) if candidate_id else {}
+        review_id = str(review.get("review_id") or "")
+        retest = retest_index.get(review_id, {})
         stage, reasons = _gate_stage(
             actionability=str(payload.get("actionability") or ""),
             shadow=shadow,
             true_forward=true_forward,
             ready=ready,
+            retest=retest,
         )
         verdicts.append(PromotionGateVerdict(
-            review_id=str(review.get("review_id") or ""),
+            review_id=review_id,
             source_ref=source_ref,
             candidate_id=candidate_id,
             symbol=str(row.get("symbol") or ""),
@@ -176,6 +192,8 @@ def build_gate_verdicts(
                 "shadow_uc_key": shadow_key,
                 "true_forward_uc_key": true_key,
                 "ready_strategy_id": str(ready.get("ready_strategy_id") or ""),
+                "outcome_retest_id": str(retest.get("retest_id") or ""),
+                "outcome_retest_verdict": str(retest.get("verdict") or ""),
             },
         ))
     return verdicts
@@ -203,6 +221,11 @@ def build_outcome_promotion_gate(private_root: Path) -> dict[str, Any]:
         shadow_index=_registry_by_uc(private_root, "shadow_forward.json"),
         true_forward_index=_registry_by_uc(private_root, "true_forward.json"),
         ready_index=_items_by_candidate(_read_json(catalog_snapshot_path(private_root))),
+        retest_index={
+            str(row.get("review_id") or ""): row
+            for row in _read_json(Path(private_root) / "state" / "derived" / "outcome_retest_results.json").get("items") or []
+            if isinstance(row, dict) and str(row.get("review_id") or "")
+        },
     )
     return {
         **summarize_gate(verdicts),

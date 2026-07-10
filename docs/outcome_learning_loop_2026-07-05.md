@@ -173,11 +173,17 @@ Implemented in the trader-analyst expansion:
    trade/execution authority.
 5. `outcome_retest` consumes `next_test_dimensions`, `counterfactual_tests`, and
    `parameter_hypotheses` as bounded retest dimensions.
+6. `outcome_retest_result` returns completed farm sweeps to their originating
+   review/training row and classifies evidence as `improved_directional`,
+   `no_improvement`, or `insufficient_evidence`.
+7. Completed retest IDs rotate out of the bounded catalog; promotion gates and
+   setup memory consume the returned verdict at candidate or explicit cell scope.
+
+The result comparison is a directional retest against a single-trade baseline,
+not a PnL-attribution claim. It cannot promote itself to paper/live authority.
 
 Next implementation steps:
 
-1. Let the next headless farm/training cycles accumulate linked
-   `outcome_review_id` rows.
-2. Link source-trust reviews to outcome clusters for scanner/news quality.
-3. Add an explicit operator evidence report for `eligible_for_operator_review`
+1. Link source-trust reviews to outcome clusters for scanner/news quality.
+2. Add an explicit operator evidence report for `eligible_for_operator_review`
    cases without granting paper-ready or execution authority.

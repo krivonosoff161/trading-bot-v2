@@ -440,6 +440,19 @@ def _run_main_paper_derived_chain(
     try:
         _write_loop_status(
             private_root,
+            stage="outcome_retest_results",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.outcome_retest_result import build_outcome_retest_results
+
+        out["outcome_retest_results"] = build_outcome_retest_results(private_root)
+    except Exception as exc:  # noqa: BLE001 - retest reconciliation must not break the cycle
+        out.setdefault("errors", []).append({"where": "outcome_retest_results", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
             stage="setup_outcome_memory_refresh",
             apply=apply,
             loop=loop,
