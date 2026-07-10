@@ -1,8 +1,17 @@
 # Architecture
 
-Updated: 2026-07-05
+Updated: 2026-07-10
 
 ## Boundary
+
+> **Update 2026-07-10 - account truth is separate from research variants.**
+> `main_paper_trade_ledger` now reconciles an append-only `PaperAccountEvent.v1`
+> stream for the agreed `700 USDT` paper account. One primary thesis per scenario
+> may reserve `35 USDT` at `3x`; sibling geometry variants remain counterfactual.
+> The account snapshot reports available/reserved margin, realized PnL, fees,
+> slippage and allocation rejections. It is deterministic paper accounting, not an
+> order path. Broad `paper_product_trade_ledger` sums are explicitly labeled as
+> independent what-if variants and are not account equity.
 
 > **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
 > self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
@@ -100,6 +109,7 @@ paper_signals / PFR-ready rows
   -> main_paper_runtime_queue       (runtime_action=watch_paper)
   -> main_paper_runtime_observation (public candles, pending/reviewed/provider-error)
   -> main_paper_trade_ledger        (paper pseudo-trade lifecycle)
+  -> paper_account_ledger           (one funded thesis/scenario; append-only events)
   -> paper_telegram_preview         (human card preview/audit)
   -> paper_signal_training_export   (training rows)
   -> OutcomeLearningCase.v1         (deterministic learning case)

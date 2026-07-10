@@ -1,7 +1,27 @@
 # Paper Trading Runtime - Design And Current Contract
 
 Status: **CONTRACT + MINIMAL PAPER LOOP + AGGREGATE FEEDBACK IMPLEMENTED**.
-Last updated: 2026-06-19.
+Last updated: 2026-07-10.
+
+## Main-Paper Account Reconciliation
+
+The newer main-paper watcher has a separate account projection in
+`src/research_lab/paper_account_ledger.py`. It does not replace the validated
+setup runtime described below. It answers a different question: what would one
+shared paper account have been able to fund?
+
+- starts with `700 USDT`;
+- reserves `35 USDT` per accepted primary thesis at `3x` leverage;
+- keeps `5x` as a hard model cap, not a default;
+- funds one primary thesis per instrument/timeframe/side/boundary scenario;
+- records sibling geometry variants as counterfactual exclusions;
+- appends stable open/close/rejection events and derives the current snapshot;
+- records realized PnL and the fee/slippage components already present in the
+  deterministic outcome;
+- has no exchange, order, `.env`, provider, or Telegram imports.
+
+`paper_product_trade_ledger` remains useful for broad research comparison, but
+its summed what-if PnL is explicitly not shared account equity.
 
 Paper runtime is the forward executor for already validated setup cards. It is not a live
 trading engine. It does not import `.env`, `AUTO_TRADE`, order clients, private exchange

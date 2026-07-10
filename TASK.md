@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 1 / issue #150. Repair paper
-signal lifecycle truth before changing strategy parameters or fine-tuning models.
-The implementation replaces list-relative `open_index` replay with durable
+Current engineering task: GitHub epic #158, phase 2 / issue #151. Build a
+reconciled paper account after repairing lifecycle truth in merged PR #159.
+The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
 `expires_at` transition and therefore cannot become `expired_no_entry`.
@@ -24,6 +24,13 @@ Private acceptance evidence over the frozen July 8-10 cohort:
 The private CSV/candle evidence remains outside the public repository. Public
 code remains paper-only and does not read `.env`, send Telegram, or access live
 order/private exchange paths during this phase.
+
+Phase 2 adds `paper_account_events.jsonl` and `paper_account.json` under the
+private derived state. The ledger starts at `700 USDT`, reserves `35 USDT` at
+`3x` for one primary main-paper thesis per scenario, records fees/slippage and
+realized PnL, and rejects allocations when margin is unavailable. Broad product
+geometry variants remain counterfactual and must not be read as shared account
+equity. The event ledger is append-only and idempotent by stable event ID.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

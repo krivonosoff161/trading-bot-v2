@@ -130,7 +130,6 @@ def _geometry_from_signal(sig: PaperActionSignal) -> dict[str, Any]:
 
 def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
     live_ready, block_reason, ready_strategy_id, verdict = _readiness(sig)
-    context = sig.validator_context or {}
     geometry = _geometry_from_signal(sig)
     trade_id = stable_id(
         "paperproducttrade",
@@ -214,6 +213,7 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         for trade in trades:
             fh.write(json.dumps(trade.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
 
+    counterfactual_money = summarize_paper_money([trade.to_dict() for trade in trades])
     summary = {
         "schema": SUMMARY_SCHEMA,
         "row_schema": SCHEMA,
@@ -237,7 +237,8 @@ def build_paper_product_trade_ledger(private_root: Path) -> dict[str, Any]:
         "active_by_source": active_by_source,
         "active_by_family": active_by_family,
         "by_live_block": by_live_block,
-        "paper_money": summarize_paper_money([trade.to_dict() for trade in trades]),
+        "paper_money": counterfactual_money,
+        "counterfactual_money": counterfactual_money,
         "paper_only": True,
         "execution_allowed": False,
         "jsonl_path": str(out_jsonl),
