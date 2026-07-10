@@ -17,6 +17,14 @@ documents are preserved as history, but they no longer define the active work.
 > acceptance run (#157). Strategy and model tuning are blocked until the frozen
 > cohort replays deterministically.
 
+> **Phase 2 status - reconciled paper account.** The strict main-paper lane now
+> owns an append-only account ledger with a `700 USDT` starting balance, `35 USDT`
+> margin per position, `3x` default leverage and `5x` policy cap. Only one primary
+> thesis per market scenario reserves capital; sibling geometry variants remain
+> explicitly counterfactual. Fees, slippage, realized PnL, reserved margin and
+> allocation rejections are auditable. This is paper accounting only and has no
+> exchange/order path.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, utc_now
+from src.research_lab.paper_account_ledger import build_paper_account_ledger
 from src.research_lab.paper_money_model import paper_money_from_outcome, summarize_paper_money
 
 SCHEMA = "MainPaperTrade.v1"
@@ -43,6 +44,8 @@ class MainPaperTrade:
     take_profit_plan: list[dict[str, Any]]
     max_hold_min: int
     max_hold_bars: int
+    boundary_ts: int
+    source_created_at: float
     status: str
     signal_status: str = ""
     outcome: dict[str, Any] = field(default_factory=dict)
@@ -163,6 +166,8 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         take_profit_plan=list(queue_item.get("take_profit_plan") or []),
         max_hold_min=int(queue_item.get("max_hold_min") or 0),
         max_hold_bars=int(queue_item.get("max_hold_bars") or 0),
+        boundary_ts=int(queue_item.get("boundary_ts") or 0),
+        source_created_at=float(queue_item.get("created_at") or 0.0),
         status=status,
         signal_status=signal_status,
         outcome=outcome,
@@ -216,6 +221,8 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
         by_status[trade.status] = by_status.get(trade.status, 0) + 1
         by_family[trade.setup_family] = by_family.get(trade.setup_family, 0) + 1
 
+    items = [trade.to_dict() for trade in trades]
+    account = build_paper_account_ledger(private_root, items)
     summary = {
         "schema": SUMMARY_SCHEMA,
         "row_schema": SCHEMA,
@@ -226,12 +233,14 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
         "invalid_reasons": invalid_reasons,
         "by_status": by_status,
         "by_family": by_family,
-        "paper_money": summarize_paper_money([trade.to_dict() for trade in trades]),
+        "paper_money": account,
+        "paper_account_ledger": account,
+        "counterfactual_trade_summary": summarize_paper_money(items),
         "paper_only": True,
         "execution_allowed": False,
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
-        "items": [trade.to_dict() for trade in trades],
+        "items": items,
     }
     out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
