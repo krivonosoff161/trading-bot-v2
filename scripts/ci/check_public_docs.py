@@ -22,6 +22,17 @@ def tracked_markdown_files() -> list[Path]:
     return [ROOT / line for line in result.stdout.splitlines() if line]
 
 
+def tracked_paths() -> set[Path]:
+    result = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {(ROOT / line).resolve() for line in result.stdout.splitlines() if line}
+
+
 def local_destination(source: Path, raw_destination: str) -> Path | None:
     destination = raw_destination.strip().split(maxsplit=1)[0].strip("<>")
     if not destination or "://" in destination or destination.startswith(("#", "mailto:")):
@@ -31,11 +42,12 @@ def local_destination(source: Path, raw_destination: str) -> Path | None:
 
 def check_markdown_links() -> list[str]:
     failures: list[str] = []
+    public_paths = tracked_paths()
     for source in tracked_markdown_files():
         text = source.read_text(encoding="utf-8", errors="replace")
         for raw_destination in MARKDOWN_LINK.findall(text):
             destination = local_destination(source, raw_destination)
-            if destination is not None and not destination.exists():
+            if destination is not None and destination not in public_paths:
                 failures.append(
                     f"broken public doc link: {source.relative_to(ROOT)} -> {raw_destination}"
                 )

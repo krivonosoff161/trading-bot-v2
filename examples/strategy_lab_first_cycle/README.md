@@ -1,78 +1,28 @@
-# Strategy Lab first controlled cycle
+# Strategy Lab Controlled-Cycle Example
 
-This is a small public showcase of the Strategy Lab operating loop. It is not a
-strategy recommendation, not a signal, and not a profitability claim. Full run
-artifacts, candidate tables, SQLite state, Obsidian notes, and follow-up specs
-remain in the private research root.
+This directory is a public-safe illustration of the **shape** of a controlled
+paper/research cycle. It is not a strategy recommendation, a signal, or a
+profitability claim.
 
-## What was tested
+## What A Controlled Cycle Demonstrates
 
-The first unattended controlled loop was run against already-prepared private
-research data using:
+- bounded queue ownership and deterministic worker execution;
+- explicit data/validation gates rather than hidden promotion;
+- paper-only lifecycle records and a clean stop path;
+- no order engine, live account access, or model execution authority.
 
-- the closed proposal queue;
-- the deterministic worker;
-- the validator-lite labels;
-- the private candidate registry;
-- no live trading;
-- no order engine;
-- no paid LLM calls;
-- no market-data downloads during the loop.
+The example intentionally omits runtime duration, candidate counts, symbols,
+parameter values, result tables, private data, and generated reports. Those are
+local research artifacts and must not be committed.
 
-The loop used the default safe desktop policy. It was intended to prove that the
-machine can work unattended, keep the queue bounded, write artifacts, and stop
-cleanly.
+## Supported Operator Guidance
 
-## Public-safe summary
+Use the current public runbook and launcher catalog for exact commands:
 
-| Item | Result |
-|---|---:|
-| Wall-clock loop duration | 240 minutes |
-| Loop iterations | 240 |
-| Completed worker jobs | 8 |
-| Deferred worker checks | 232 |
-| Worker failures | 0 |
-| Missing-data skips | 0 |
-| LLM requests | 0 |
-| LLM cost | 0 |
-| New candidate rows | 33 |
-| Unique new candidates | 23 |
-| Forward-paper labels | 7 |
-| Observe labels | 11 |
-| Reject labels | 5 |
+- [Farm Runbook](../../docs/farm_runbook.md)
+- [Entrypoint Catalog](../../docs/entrypoints.md)
+- [Storage Boundaries](../../docs/storage_boundaries.md)
 
-The strongest public-safe cluster from this cycle was mean-reversion-style
-research on high-beta crypto symbols. This is only a pointer for further
-pressure testing; it is not an executable strategy.
-
-## What the cycle proved
-
-- The queue and worker ran without crashes.
-- The throttle worked: the loop waited instead of flooding the desktop.
-- The private registry and reports were updated.
-- The loop stopped by its configured safety ceiling.
-- The system did not spend money or touch live-trading code.
-
-## Known limitation found
-
-The first long run revealed an intentional safety backstop in
-`scripts/strategy_lab/research_loop.py`: requested durations are clamped to four
-hours. This is safe, but it means an "overnight" run currently requires either
-manual restart or a future explicit overnight mode.
-
-Lower timeframes also remain blocked until the worker is fully timeframe-aware.
-This cycle therefore stayed on the safer daily-data path.
-
-## How to reproduce the shape
-
-Use the operator guide rather than this example as an exact command source:
-
-- [Strategy Lab operator guide](../../docs/strategy_lab_operator_guide.md)
-
-The public command shape is:
-
-```bash
-python -m scripts.strategy_lab.research_loop --apply --duration-minutes 240 --sleep-seconds 60 --max-queued 10 --max-worker-jobs-per-iteration 1
-```
-
-The private result corpus is intentionally not included in the public repository.
+The source and tests explain contracts. Local outcomes are evidence for bounded
+research only; they never become a public performance claim or a live-trading
+permission.
