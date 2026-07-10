@@ -115,7 +115,8 @@ Paper confirmation is still paper-only. It does not promote live trading.
 - Funding accrual over actual funding windows.
 - Multi-TP / partial closes.
 - Rich promotion/demotion rules after enough forward paper trades.
-- Telegram notifications.
+- Direct Telegram imports or side effects inside the paper runtime. The separate
+  opt-in delivery edge is implemented and documented in `farm_notification_layer.md`.
 - Live trading integration.
 
 ## Mandatory Boundaries

@@ -532,7 +532,7 @@ def validation_tier(record: dict[str, Any]) -> str:
     verdict = str(
         record.get("source_validation_verdict") or meta.get("source_validation_verdict") or ""
     ).strip()
-    if bool(record.get("live_ready")) or (ready_strategy_id and verdict == "PAPER_FORWARD_READY"):
+    if ready_strategy_id and verdict == "PAPER_FORWARD_READY":
         return VALIDATED_TIER
 
     source = str(record.get("source") or "").strip()

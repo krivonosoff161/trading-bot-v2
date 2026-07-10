@@ -33,6 +33,8 @@ logs_archive/
 
 # Analyzer working folders
 scripts/tape/
+scripts/tape_verify_*.json
+scripts/tape_verify_*.txt
 scripts/tg_temp/
 scripts/analysis_output/
 обучение проба/*

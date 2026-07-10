@@ -51,6 +51,8 @@ DENY_PATTERNS = [
     "scripts/backtest/results/*",
     "scripts/analysis_output/*",
     "scripts/tape/*",
+    "scripts/tape_verify_*.json",
+    "scripts/tape_verify_*.txt",
     "scripts/tg_temp/*",
     "reports/*",
 ]
