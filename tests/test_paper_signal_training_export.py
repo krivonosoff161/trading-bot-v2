@@ -51,9 +51,13 @@ def test_training_row_contains_outcome_and_review_fields():
         }
     )
     sig.outcome = {
+        "lifecycle_schema": "PaperSignalLifecycle.v2",
         "result": "take",
         "entry": 100.0,
         "exit": 105.0,
+        "opened_at_bar_ts": 901,
+        "last_observed_bar_ts": 905,
+        "bars_waited": 1,
         "bars_held": 4,
         "reached_tp1": True,
         "partial_done": True,
@@ -81,6 +85,10 @@ def test_training_row_contains_outcome_and_review_fields():
     assert row["farm_geometry_tp_scale"] == 1.35
     assert row["observed_entry"] == 100.0
     assert row["observed_exit"] == 105.0
+    assert row["lifecycle_schema"] == "PaperSignalLifecycle.v2"
+    assert row["opened_at_bar_ts"] == 901
+    assert row["last_observed_bar_ts"] == 905
+    assert row["bars_waited"] == 1
     assert row["bars_held"] == 4
     assert row["reached_tp1"] is True
     assert row["partial_done"] is True
@@ -103,7 +111,7 @@ def test_export_training_rows_uses_latest_terminal_state(tmp_path):
 
     assert summary["rows"] == 1
     assert summary["row_schema"] == "TrainingRow.v2"
-    assert summary["row_fields_version"] == "setup_family_alias.v1"
+    assert summary["row_fields_version"] == "lifecycle_cursor.v2"
     assert summary["execution_allowed"] is False
     assert rows[0]["status"] == "reviewed"
     assert rows[0]["result"] == "stop"
@@ -125,7 +133,7 @@ def test_export_training_rows_rebuilds_when_field_version_missing(tmp_path):
     second = export_training_rows(tmp_path)
 
     assert second["skipped"] is False
-    assert second["row_fields_version"] == "setup_family_alias.v1"
+    assert second["row_fields_version"] == "lifecycle_cursor.v2"
 
 
 def test_export_training_rows_links_telegram_preview(tmp_path):

@@ -194,6 +194,67 @@ class TestLifecycle:
         assert out.status == "opened_paper"
         assert out.outcome["entry"] == 101.2
 
+    def test_multi_cycle_observation_does_not_replay_pre_entry_bars(self):
+        phase_one = _series([100, 99, 101])
+        signal = lane.observe(self._sig(), phase_one)
+
+        assert signal.status == "opened_paper"
+        assert signal.outcome["bars_held"] == 1
+        assert signal.outcome["lifecycle_schema"] == "PaperSignalLifecycle.v2"
+        assert signal.outcome["last_observed_bar_ts"] == phase_one[-1]["ts"]
+
+        phase_two = list(phase_one)
+        phase_two.append({"ts": 3 * 900_000, "open": 101, "high": 101.1, "low": 98.5, "close": 99})
+        signal = lane.observe(signal, phase_two)
+
+        assert signal.status == "closed_paper"
+        assert signal.outcome["result"] == "simple_be"
+        assert signal.outcome["bars_held"] == 2
+
+    def test_reobserving_same_candles_is_idempotent(self):
+        candles = _series([100, 99, 101])
+        signal = lane.observe(self._sig(), candles)
+        before = dict(signal.outcome)
+
+        signal = lane.observe(signal, candles)
+
+        assert signal.status == "opened_paper"
+        assert signal.outcome["bars_held"] == before["bars_held"]
+        assert signal.outcome["last_observed_bar_ts"] == before["last_observed_bar_ts"]
+        assert signal.outcome["fresh_bars_this_cycle"] == 0
+
+    def test_legacy_open_index_state_migrates_to_timestamp_cursor(self):
+        signal = self._sig()
+        signal.status = "opened_paper"
+        signal.outcome = {
+            "result": "pending_open",
+            "entry": 99.0,
+            "open_index": 1,
+            "new_bars": 3,
+            "eff_stop": 97.0,
+        }
+        candles = _series([100, 99, 100, 101, 102])
+
+        signal = lane.observe(signal, candles)
+
+        assert signal.status == "opened_paper"
+        assert signal.outcome["bars_held"] == 2
+        assert signal.outcome["last_observed_bar_ts"] == candles[-1]["ts"]
+        assert "open_index" not in signal.outcome
+
+    def test_one_shot_and_incremental_replay_match(self):
+        candles = _series([100, 99, 101, 102, 103.5, 104])
+        one_shot = lane.observe(PaperActionSignal.from_dict(self._sig().to_dict()), candles)
+        incremental = PaperActionSignal.from_dict(self._sig().to_dict())
+        for candle in candles:
+            incremental = lane.observe(incremental, [candle])
+
+        keys = ("result", "entry", "exit", "bars_waited", "bars_held", "mfe_pct", "mae_pct", "net_pct")
+        assert one_shot.status == incremental.status
+        assert {key: one_shot.outcome.get(key) for key in keys} == {
+            key: incremental.outcome.get(key) for key in keys
+        }
+
 
 class TestReview:
     def test_diagnoses(self):
@@ -742,6 +803,26 @@ class TestAgeOut:
 
     def test_fresh_armed_survives(self):
         assert lane.age_out(self._armed(expires_at=1e12), now=1.0) is False
+
+    def test_opened_signal_does_not_become_expired_no_entry(self):
+        signal = self._armed(expires_at=100.0)
+        signal.status = "opened_paper"
+        signal.outcome = {"result": "pending_open", "entry": 99.0, "bars_held": 2}
+
+        assert lane.age_out(signal, now=200.0) is False
+        assert signal.status == "opened_paper"
+        assert signal.outcome["entry"] == 99.0
+
+    def test_opened_signal_with_repeated_no_data_is_invalidated(self):
+        signal = self._armed(expires_at=1e12)
+        signal.status = "opened_paper"
+        signal.outcome = {"entry": 99.0, "no_data_count": 4}
+
+        assert lane.age_out(signal, now=1.0) is True
+        assert signal.status == "invalidated"
+        assert signal.outcome["lifecycle_schema"] == "PaperSignalLifecycle.v2"
+        assert signal.outcome["result"] == "no_data"
+        assert signal.outcome["reason"] == "no_data_repeated_opened"
 
 
 class TestKnownBadGate:

@@ -631,6 +631,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
             if isinstance(quality.get("active_signal_lifecycle"), dict)
             else {}
         ),
+        "lifecycle_integrity": (
+            quality.get("lifecycle_integrity")
+            if isinstance(quality.get("lifecycle_integrity"), dict)
+            else {}
+        ),
         "pfr_funnel": quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {},
         "pfr_trigger_state": (
             quality.get("pfr_trigger_state")
@@ -809,6 +814,15 @@ def _print_paper_product_status() -> None:
                 f"next_expiry_h:{lifecycle.get('next_expiry_hours')} "
                 f"overdue:{lifecycle.get('overdue_expiry', 0)} "
                 f"expiry:{lifecycle.get('expiry_buckets') or {}}"
+            )
+        integrity = st["lifecycle_integrity"]
+        if integrity:
+            print(
+                "                "
+                f"lifecycle_v2=rows:{integrity.get('v2_rows', 0)} "
+                f"entry_expired:{integrity.get('entry_expired_contradictions', 0)} "
+                f"negative_hold:{integrity.get('negative_bars_held', 0)} "
+                f"valid:{integrity.get('valid')}"
             )
         if pfr:
             trigger_state = st.get("pfr_trigger_state") if isinstance(st.get("pfr_trigger_state"), dict) else {}

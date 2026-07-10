@@ -1,11 +1,29 @@
 # TASK / HANDOFF FOR CLAUDE AND CODEX
 
-Updated: 2026-07-08
+Updated: 2026-07-10
 
 This file is the local handoff channel between agents in VS Code.
 It is not the canonical architecture document.
 
 ## Current State
+
+Current engineering task: GitHub epic #158, phase 1 / issue #150. Repair paper
+signal lifecycle truth before changing strategy parameters or fine-tuning models.
+The implementation replaces list-relative `open_index` replay with durable
+`last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
+idempotent candle processing. An opened signal no longer uses the entry-window
+`expires_at` transition and therefore cannot become `expired_no_entry`.
+
+Private acceptance evidence over the frozen July 8-10 cohort:
+
+- 474 signals and all local candle sets available;
+- one-shot versus incremental replay mismatches: 0;
+- stored-entry plus `expired_no_entry`: 36 before, 0 after replay;
+- negative `bars_held`: 26 before, 0 after replay.
+
+The private CSV/candle evidence remains outside the public repository. Public
+code remains paper-only and does not read `.env`, send Telegram, or access live
+order/private exchange paths during this phase.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.
