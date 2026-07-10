@@ -289,3 +289,46 @@ def build_paper_account_ledger(
         encoding="utf-8",
     )
     return summary
+
+
+def audit_paper_account_ledger(private_root: Path, *, model: PaperMoneyModel | None = None) -> dict[str, Any]:
+    """Independently replay the append-only account log and compare its snapshot."""
+    private_root = Path(private_root)
+    model = model or default_paper_money_model()
+    try:
+        events = _load_events(_events_path(private_root))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "valid": False,
+            "reason": f"event_log_unreadable:{type(exc).__name__}",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    replay = _replay(events, model)
+    try:
+        snapshot = json.loads(_snapshot_path(private_root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        snapshot = {}
+    fields = (
+        "balance_usdt",
+        "reserved_margin_usdt",
+        "available_margin_usdt",
+        "active_positions",
+        "terminal_trades",
+        "wins",
+        "losses",
+        "total_pnl_usdt",
+    )
+    mismatches = {
+        field: {"snapshot": snapshot.get(field), "replay": replay.get(field)}
+        for field in fields
+        if snapshot.get(field) != replay.get(field)
+    }
+    return {
+        "valid": bool(snapshot) and not mismatches,
+        "events": len(events),
+        "mismatches": mismatches,
+        "replay": replay,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
