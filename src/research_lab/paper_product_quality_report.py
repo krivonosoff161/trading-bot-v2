@@ -379,6 +379,30 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> di
     }
 
 
+def _lifecycle_integrity(training_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = [
+        row
+        for row in training_rows
+        if str(row.get("lifecycle_schema") or "") == "PaperSignalLifecycle.v2"
+    ]
+    entry_expired = sum(
+        str(row.get("result") or "") == "expired_no_entry"
+        and (_float_or_none(row.get("observed_entry")) or 0.0) > 0
+        for row in rows
+    )
+    negative_hold = sum(
+        (_float_or_none(row.get("bars_held")) or 0.0) < 0
+        for row in rows
+    )
+    return {
+        "schema": "paper_signal_lifecycle_integrity.v1",
+        "v2_rows": len(rows),
+        "entry_expired_contradictions": entry_expired,
+        "negative_bars_held": negative_hold,
+        "valid": entry_expired == 0 and negative_hold == 0,
+    }
+
+
 def _pfr_funnel(
     *,
     ready_catalog: dict[str, Any],
@@ -526,6 +550,7 @@ def _render_markdown(summary: dict[str, Any]) -> str:
         f"- oldest active age hours: {summary['active_signal_lifecycle']['oldest_age_hours']}",
         f"- next active expiry hours: {summary['active_signal_lifecycle']['next_expiry_hours']}",
         f"- active expiry buckets: {summary['active_signal_lifecycle']['expiry_buckets']}",
+        f"- lifecycle v2 integrity: {summary['lifecycle_integrity']}",
         "",
         "## Strict PFR Funnel",
         "",
@@ -679,6 +704,7 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
         "pfr_funnel": pfr_funnel,
         "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
         "active_signal_lifecycle": _active_signal_lifecycle(paper_signals, now=now),
+        "lifecycle_integrity": _lifecycle_integrity(training_rows),
         "operator_action": _operator_action(
             delivery=delivery,
             product_trades=product_trades,

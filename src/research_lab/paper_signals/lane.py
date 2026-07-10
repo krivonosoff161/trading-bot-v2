@@ -25,6 +25,7 @@ ATR_N = 14
 TREND_LOOKBACK = 10
 STOP_ATR_MULT = 1.2             # stop = entry -/+ this many ATR (bounded risk; structure only if tighter)
 MAX_RISK_PCT = 8.0              # a signal whose 1R exceeds this is too volatile to be actionable
+LIFECYCLE_SCHEMA = "PaperSignalLifecycle.v2"
 
 
 # ── small pure helpers ────────────────────────────────────────────────────────
@@ -156,102 +157,196 @@ def gate_candidate(mover: dict[str, Any], candles: list[dict[str, Any]], *, now_
     return "ok"
 
 
-# ── lifecycle: observe a signal on FRESH candles (bars strictly after boundary_ts) ──
+# ── lifecycle: observe each post-boundary candle exactly once ──
+def _ordered_post_boundary(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique = {
+        int(row.get("ts") or 0): row
+        for row in candles
+        if int(row.get("ts") or 0) > int(sig.boundary_ts)
+    }
+    return [unique[ts] for ts in sorted(unique)]
+
+
+def _legacy_progress(sig: PaperActionSignal, outcome: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, int]:
+    has_cursor = outcome.get("last_observed_bar_ts") not in (None, "")
+    stored_observed = max(0, int(outcome.get("observed_bars_total") or outcome.get("new_bars") or 0))
+    observed = stored_observed if has_cursor else min(stored_observed, len(rows))
+    cursor = int(outcome.get("last_observed_bar_ts") or sig.boundary_ts)
+    if not has_cursor and observed:
+        cursor = int(rows[observed - 1].get("ts") or sig.boundary_ts)
+    open_index = max(0, int(outcome.get("open_index") or 0))
+    held = outcome.get("bars_held")
+    if sig.status == "opened_paper":
+        bars_held = max(0, int(held)) if held is not None else max(0, observed - open_index - 1)
+    else:
+        bars_held = 0
+    waited = outcome.get("bars_waited")
+    bars_waited = max(0, int(waited)) if waited is not None else min(observed, ARM_WINDOW_BARS)
+    return {"cursor": cursor, "observed": observed, "bars_held": bars_held, "bars_waited": bars_waited}
+
+
+def _entry_filled(sig: PaperActionSignal, high: float, low: float) -> bool:
+    lo, hi = sig.entry_zone
+    trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
+    if trigger == "breakout_stop":
+        return high >= hi if sig.side == "long" else low <= lo
+    return low <= lo if sig.side == "long" else high >= hi
+
+
+def _entry_price(sig: PaperActionSignal) -> float:
+    lo, hi = sig.entry_zone
+    trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
+    if trigger == "breakout_stop":
+        return hi if sig.side == "long" else lo
+    return lo if sig.side == "long" else hi
+
+
+def _pending_outcome(state: dict[str, Any], *, opened: bool) -> dict[str, Any]:
+    state.pop("open_index", None)
+    return {
+        **state,
+        "lifecycle_schema": LIFECYCLE_SCHEMA,
+        "result": "pending_open" if opened else "pending_arm",
+    }
+
+
 def observe(sig: PaperActionSignal, candles: list[dict[str, Any]]) -> PaperActionSignal:
-    """Advance armed -> opened_paper -> closed_paper/expired/invalidated using only bars after the
-    creation boundary. No look-ahead: each bar is evaluated in order."""
+    """Advance lifecycle using a durable candle cursor, with no replay across cycles."""
     if sig.status not in ("armed", "opened_paper"):
         return sig
-    new = [c for c in candles if int(c.get("ts") or 0) > int(sig.boundary_ts)]
-    if not new:
-        sig.outcome = {"result": "pending", "new_bars": 0}
+    rows = _ordered_post_boundary(sig, candles)
+    original = dict(sig.outcome or {})
+    progress = _legacy_progress(sig, original, rows)
+    fresh = [row for row in rows if int(row.get("ts") or 0) > progress["cursor"]]
+    if not fresh:
+        sig.outcome = _pending_outcome({**original, "fresh_bars_this_cycle": 0}, opened=sig.status == "opened_paper")
         return sig
+
     long_ = sig.side == "long"
-    lo, hi = sig.entry_zone
-    tp_final = sig.take_profit_plan[-1]["price"]
-    tp1 = sig.take_profit_plan[0]["price"]
-    do_partial = sig.exit_mode == "partial_be" and len(sig.take_profit_plan) > 1
     opened = sig.status == "opened_paper"
-    o = sig.outcome or {}
-    entry_px = float(o.get("entry") or 0.0)
-    open_i = int(o.get("open_index") or 0)
-    eff_stop = float(o.get("eff_stop") or sig.stop_loss)     # stop moves to breakeven after the partial
-    partial_done = bool(o.get("partial_done"))
-    be_done = bool(o.get("be_done"))                          # simple BE at 0.5R already activated
-    banked = float(o.get("banked_pct") or 0.0)               # realized leg-1 net% (half size)
-    mfe = float(o.get("mfe_pct") or 0.0)
-    mae = float(o.get("mae_pct") or 0.0)
-    fav_wait = 0.0
+    entry_px = float(original.get("entry") or 0.0)
+    eff_stop = float(original.get("eff_stop") or sig.stop_loss)
+    partial_done = bool(original.get("partial_done"))
+    be_done = bool(original.get("be_done"))
+    banked = float(original.get("banked_pct") or 0.0)
+    mfe = float(original.get("mfe_pct") or 0.0)
+    mae = float(original.get("mae_pct") or 0.0)
+    fav_wait = float(original.get("fav_wait_pct") or 0.0)
+    bars_held, bars_waited = progress["bars_held"], progress["bars_waited"]
+    observed = progress["observed"]
+    processed = 0
+    state = dict(original)
 
-    def _leg(px):
-        return (px - entry_px if long_ else entry_px - px) / entry_px * 100
-
-    def _fills_entry(high: float, low: float) -> bool:
-        trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
-        if trigger == "breakout_stop":
-            return high >= hi if long_ else low <= lo
-        return low <= lo if long_ else high >= hi
-
-    def _entry_price() -> float:
-        trigger = str((sig.validator_context or {}).get("entry_trigger") or "limit_pullback")
-        if trigger == "breakout_stop":
-            return hi if long_ else lo
-        return lo if long_ else hi
-
-    for i, c in enumerate(new):
-        h, lov, cl = float(c["high"]), float(c["low"]), float(c["close"])
+    for candle in fresh:
+        processed += 1
+        ts = int(candle.get("ts") or 0)
+        high, low, close = float(candle["high"]), float(candle["low"]), float(candle["close"])
+        observed += 1
+        state.update({
+            "last_observed_bar_ts": ts,
+            "last_observed_close": close,
+            "observed_bars_total": observed,
+            "fresh_bars_this_cycle": processed,
+        })
         if not opened:
-            fav_wait = max(fav_wait, ((h - hi) / hi if long_ else (lo - lov) / lo) * 100)
-            if i >= ARM_WINDOW_BARS:
-                sig.status = "expired"
-                sig.outcome = {"result": "expired_no_entry", "bars_waited": i,
-                               "ran_away": fav_wait >= (sig.risk_pct or 99)}
-                return sig
-            filled = _fills_entry(h, lov)
-            if filled:
-                entry_px = _entry_price()
-                opened, open_i = True, i
-                eff_stop = sig.stop_loss
+            if bars_waited >= ARM_WINDOW_BARS:
+                return _expire_no_entry(sig, state, bars_waited, fav_wait)
+            lo, hi = sig.entry_zone
+            fav_wait = max(fav_wait, ((high - hi) / hi if long_ else (lo - low) / lo) * 100)
+            bars_waited += 1
+            state.update({"bars_waited": bars_waited, "fav_wait_pct": round(fav_wait, 3)})
+            if _entry_filled(sig, high, low):
+                entry_px, opened, eff_stop = _entry_price(sig), True, sig.stop_loss
                 sig.status = "opened_paper"
+                state.update({"entry": entry_px, "opened_at_bar_ts": ts, "eff_stop": eff_stop})
+            elif bars_waited >= ARM_WINDOW_BARS:
+                return _expire_no_entry(sig, state, bars_waited, fav_wait)
             continue
-        mfe = max(mfe, (h - entry_px if long_ else entry_px - lov) / entry_px * 100)
-        mae = max(mae, (entry_px - lov if long_ else h - entry_px) / entry_px * 100)
-        bars_held = i - open_i
-        hit_sl = lov <= eff_stop if long_ else h >= eff_stop
-        if hit_sl:
-            # same-bar ambiguity is handled conservatively: if this bar also triggered the
-            # original stop, we honour the stop; be_done only applies from the NEXT bar onward
-            # (the simple-BE block below runs AFTER this check)
-            kind = ("simple_be" if (be_done and not partial_done)
-                    else "partial_be" if partial_done
-                    else "stop")
-            return _close(sig, kind, eff_stop, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
-        # simple BE at 0.5R — only in partial_be exit mode (consistent with do_partial gating).
-        # Placed AFTER the stop check so a same-bar low/high that also hits the original stop
-        # is never retroactively saved; BE applies from NEXT bar only.
-        if not be_done and sig.exit_mode == "partial_be":
-            risk_dist = abs(entry_px - sig.stop_loss)
-            if risk_dist > 0:
-                be_px = (entry_px + 0.5 * risk_dist) if long_ else (entry_px - 0.5 * risk_dist)
-                if (h >= be_px) if long_ else (lov <= be_px):
-                    eff_stop = entry_px
-                    be_done = True
-        # bank half at tp1 and trail the stop to breakeven (the bad_exit_gave_back remedy)
-        if do_partial and not partial_done and ((h >= tp1) if long_ else (lov <= tp1)):
-            banked, partial_done, eff_stop = 0.5 * _leg(tp1), True, entry_px
-        if (h >= tp_final) if long_ else (lov <= tp_final):
-            return _close(sig, "take", tp_final, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
+
+        bars_held += 1
+        mfe = max(mfe, (high - entry_px if long_ else entry_px - low) / entry_px * 100)
+        mae = max(mae, (entry_px - low if long_ else high - entry_px) / entry_px * 100)
+        state.update({"bars_held": bars_held, "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3)})
+        if (low <= eff_stop) if long_ else (high >= eff_stop):
+            kind = "simple_be" if be_done and not partial_done else "partial_be" if partial_done else "stop"
+            return _close(sig, entry_px, banked, partial_done, mfe, mae, bars_held, long_, state,
+                          kind=kind, exit_px=eff_stop)
+        risk_dist = abs(entry_px - sig.stop_loss)
+        if not be_done and sig.exit_mode == "partial_be" and risk_dist > 0:
+            be_price = entry_px + 0.5 * risk_dist if long_ else entry_px - 0.5 * risk_dist
+            if (high >= be_price) if long_ else (low <= be_price):
+                eff_stop, be_done = entry_px, True
+        tp1 = float(sig.take_profit_plan[0]["price"])
+        do_partial = sig.exit_mode == "partial_be" and len(sig.take_profit_plan) > 1
+        if do_partial and not partial_done and ((high >= tp1) if long_ else (low <= tp1)):
+            leg = (tp1 - entry_px if long_ else entry_px - tp1) / entry_px * 100
+            banked, partial_done, eff_stop = round(0.5 * leg, 4), True, entry_px
+        state.update({
+            "eff_stop": eff_stop,
+            "be_done": be_done,
+            "partial_done": partial_done,
+            "banked_pct": round(banked, 4),
+        })
+        tp_final = float(sig.take_profit_plan[-1]["price"])
+        if (high >= tp_final) if long_ else (low <= tp_final):
+            return _close(sig, entry_px, banked, partial_done, mfe, mae, bars_held, long_, state,
+                          kind="take", exit_px=tp_final)
         if bars_held >= sig.max_hold_bars:
-            return _close(sig, "timeout", cl, entry_px, banked, partial_done, mfe, mae, bars_held, long_)
-    sig.outcome = {"result": "pending_open" if opened else "pending_arm", "entry": entry_px,
-                   "open_index": open_i, "eff_stop": eff_stop, "partial_done": partial_done,
-                   "be_done": be_done,
-                   "banked_pct": round(banked, 4), "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3),
-                   "new_bars": len(new)}
+            return _close(sig, entry_px, banked, partial_done, mfe, mae, bars_held, long_, state,
+                          kind="timeout", exit_px=close)
+
+    state.update({
+        "bars_waited": bars_waited,
+        "fav_wait_pct": round(fav_wait, 3),
+        "fresh_bars_this_cycle": processed,
+    })
+    if opened:
+        state.update({
+            "entry": entry_px,
+            "eff_stop": eff_stop,
+            "partial_done": partial_done,
+            "be_done": be_done,
+            "banked_pct": round(banked, 4),
+            "mfe_pct": round(mfe, 3),
+            "mae_pct": round(mae, 3),
+            "bars_held": bars_held,
+        })
+    sig.outcome = _pending_outcome(state, opened=opened)
     return sig
 
 
-def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_held, long_):
+def _expire_no_entry(
+    sig: PaperActionSignal,
+    state: dict[str, Any],
+    bars_waited: int,
+    fav_wait: float,
+) -> PaperActionSignal:
+    sig.status = "expired"
+    for key in (
+        "open_index",
+        "entry",
+        "eff_stop",
+        "partial_done",
+        "be_done",
+        "banked_pct",
+        "mfe_pct",
+        "mae_pct",
+        "bars_held",
+        "opened_at_bar_ts",
+    ):
+        state.pop(key, None)
+    sig.outcome = {
+        **state,
+        "lifecycle_schema": LIFECYCLE_SCHEMA,
+        "result": "expired_no_entry",
+        "bars_waited": bars_waited,
+        "fav_wait_pct": round(fav_wait, 3),
+        "ran_away": fav_wait >= (sig.risk_pct or 99),
+    }
+    return sig
+
+
+def _close(sig, entry_px, banked, partial_done, mfe, mae, bars_held, long_, state, *, kind, exit_px):
     side = "long" if long_ else "short"
     leg2 = gross_pct(entry_px, exit_px, side)
     # remaining size is 0.5 after a partial, else full
@@ -259,7 +354,9 @@ def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_he
     assumptions = CostAssumptions()
     net = net_pct(gross, assumptions)
     sig.status = "closed_paper"
-    sig.outcome = {"result": kind, "entry": round(entry_px, 8), "exit": round(exit_px, 8),
+    state.pop("open_index", None)
+    sig.outcome = {**state, "lifecycle_schema": LIFECYCLE_SCHEMA,
+                   "result": kind, "entry": round(entry_px, 8), "exit": round(exit_px, 8),
                    "gross_pct": round(gross, 3), "net_pct": round(net, 3),
                    "fees_bps_round_trip": assumptions.fees_bps_round_trip,
                    "slippage_bps_round_trip": assumptions.slippage_bps_round_trip,
@@ -270,19 +367,24 @@ def _close(sig, kind, exit_px, entry_px, banked, partial_done, mfe, mae, bars_he
 
 
 def age_out(sig: PaperActionSignal, now: float, *, max_no_data: int = 4) -> bool:
-    """Wall-clock / no-data age-out so an armed card cannot strand forever (bottleneck #5). An armed or
-    opened signal past expires_at, or one whose symbol has returned no candles too many times, becomes
-    terminal (expired_no_entry with a reason). Returns True if it just aged out."""
+    """Expire an unfilled watch or invalidate an opened watch with repeated data loss."""
     if sig.status not in ("armed", "opened_paper"):
         return False
     o = sig.outcome or {}
-    if sig.expires_at and now > sig.expires_at:
+    if sig.status == "armed" and sig.expires_at and now > sig.expires_at:
         sig.status = "expired"
-        sig.outcome = {**o, "result": "expired_no_entry", "reason": "stale_past_expiry"}
+        sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+                       "result": "expired_no_entry", "reason": "stale_past_expiry"}
         return True
     if int(o.get("no_data_count") or 0) >= max_no_data:
-        sig.status = "expired"
-        sig.outcome = {**o, "result": "expired_no_entry", "reason": "no_data_repeated"}
+        if sig.status == "opened_paper":
+            sig.status = "invalidated"
+            sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+                           "result": "no_data", "reason": "no_data_repeated_opened"}
+        else:
+            sig.status = "expired"
+            sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+                           "result": "expired_no_entry", "reason": "no_data_repeated"}
         return True
     return False
 

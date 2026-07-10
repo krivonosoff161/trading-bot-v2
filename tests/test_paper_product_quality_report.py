@@ -1,9 +1,33 @@
 import json
 
 from src.research_lab.paper_product_quality_report import (
+    _lifecycle_integrity,
     _pfr_trigger_state,
     build_paper_product_quality_report,
 )
+
+
+def test_lifecycle_integrity_checks_only_cursor_v2_rows():
+    summary = _lifecycle_integrity(
+        [
+            {"lifecycle_schema": "legacy", "result": "expired_no_entry", "observed_entry": 100},
+            {"lifecycle_schema": "PaperSignalLifecycle.v2", "result": "take", "bars_held": 4},
+            {
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "result": "expired_no_entry",
+                "observed_entry": 99,
+                "bars_held": -1,
+            },
+        ]
+    )
+
+    assert summary == {
+        "schema": "paper_signal_lifecycle_integrity.v1",
+        "v2_rows": 2,
+        "entry_expired_contradictions": 1,
+        "negative_bars_held": 1,
+        "valid": False,
+    }
 
 
 def _write_json(path, payload):
@@ -258,6 +282,13 @@ def test_quality_report_aggregates_private_rows_without_raw_items(tmp_path):
         "age_buckets": {"le_1h": 2, "le_3h": 1},
         "expiry_buckets": {"le_1h": 1, "le_3h": 1, "overdue": 1},
         "terminal_training_backlog": 0,
+    }
+    assert summary["lifecycle_integrity"] == {
+        "schema": "paper_signal_lifecycle_integrity.v1",
+        "v2_rows": 0,
+        "entry_expired_contradictions": 0,
+        "negative_bars_held": 0,
+        "valid": True,
     }
     assert summary["families"][0]["family"] == "early_tp_tactical"
     assert summary["families"][0]["rows"] == 22
