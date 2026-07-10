@@ -41,6 +41,9 @@ LABEL_OUTCOME = "\u0418\u0441\u0445\u043e\u0434"
 LABEL_REASON = "\u041f\u043e\u0447\u0435\u043c\u0443 \u0441\u0435\u0439\u0447\u0430\u0441"
 LABEL_SOURCE = "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a"
 LABEL_VALIDATION = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"
+LABEL_SCENARIO = "\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439"
+LABEL_SIGNAL_ROLE = "\u0420\u043e\u043b\u044c \u0441\u0438\u0433\u043d\u0430\u043b\u0430"
+LABEL_SCENARIO_VARIANTS = "\u0412\u0430\u0440\u0438\u0430\u043d\u0442\u043e\u0432 \u0432 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0438"
 EXECUTION_OFF = "\u0410\u0432\u0442\u043e\u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435 \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e."
 
 MOJIBAKE_MARKERS = (
@@ -74,6 +77,33 @@ VALIDATION_TIER_LABELS = {
     VALIDATED_TIER: "\u043f\u0440\u043e\u0448\u0435\u043b PFR/\u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044e",
     FARM_CALCULATED_TIER: "\u0440\u0430\u0441\u0447\u0435\u0442\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b \u0444\u0435\u0440\u043c\u044b; \u043f\u043e\u043b\u043d\u044b\u0439 PFR \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d",
     RESEARCH_ONLY_TIER: "\u0438\u0441\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u043e\u0435 \u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435",
+}
+TIMEFRAME_RANK = {
+    "1m": 1,
+    "3m": 2,
+    "5m": 3,
+    "15m": 4,
+    "30m": 5,
+    "1h": 6,
+    "2h": 7,
+    "4h": 8,
+    "1d": 9,
+}
+SCENARIO_EVENT_PRIORITY = {
+    "primary_thesis": 0,
+    "higher_tf_conflict": 1,
+    "invalidation_warning": 2,
+    "confirmation": 3,
+    "lower_tf_confirmation": 4,
+    "countertrend_bounce": 5,
+}
+SCENARIO_ROLE_LABELS = {
+    "primary_thesis": "\u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439",
+    "confirmation": "\u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u0435\u0442 \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439",
+    "lower_tf_confirmation": "\u043c\u043b\u0430\u0434\u0448\u0435\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u0438\u0435 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f",
+    "countertrend_bounce": "\u0432\u0441\u0442\u0440\u0435\u0447\u043d\u044b\u0439 \u043e\u0442\u043a\u0430\u0442, \u043d\u0435 \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 \u043f\u0435\u0440\u0435\u0432\u043e\u0440\u043e\u0442",
+    "invalidation_warning": "\u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0430\u0435\u0442 \u043e \u0440\u0438\u0441\u043a\u0435 \u0441\u043c\u0435\u043d\u044b \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f",
+    "higher_tf_conflict": "\u0441\u0442\u0430\u0440\u0448\u0438\u0439 \u043a\u043e\u043d\u0444\u043b\u0438\u043a\u0442 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f",
 }
 
 
@@ -127,6 +157,10 @@ def _trade_snapshot_path(private_root: Path) -> Path:
 
 def _product_trade_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_product_trades.json"
+
+
+def _trade_thesis_snapshot_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "trade_thesis_supervisor.json"
 
 
 def _paper_signal_snapshot_path(private_root: Path) -> Path:
@@ -537,6 +571,25 @@ def _reason_label(reason: str) -> str:
     return f"{side}: {text}" if side else text
 
 
+def _scenario_lines(record: dict[str, Any]) -> list[str]:
+    context = dict(record.get("_trade_thesis_context") or {})
+    if not context:
+        return []
+    primary_timeframe = html.escape(str(context.get("primary_timeframe") or "unknown"))
+    primary_side = html.escape(_side_label(str(context.get("primary_side") or "unknown")))
+    primary_family = html.escape(_family_label(str(context.get("primary_family") or "unknown")))
+    event_type = str(context.get("event_type") or "")
+    role = html.escape(SCENARIO_ROLE_LABELS.get(event_type, event_type or "unknown"))
+    lines = [
+        f"<b>{LABEL_SCENARIO}:</b> \u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 {primary_timeframe} {primary_side} \u00b7 {primary_family}",
+        f"<b>{LABEL_SIGNAL_ROLE}:</b> {role}",
+    ]
+    active_signals = int(context.get("active_signals") or 0)
+    if active_signals > 1:
+        lines.append(f"<b>{LABEL_SCENARIO_VARIANTS}:</b> <code>{active_signals}</code>")
+    return lines
+
+
 def _trade_text(record: dict[str, Any]) -> str:
     pair = html.escape(str(record.get("okx_inst_id") or "unknown"))
     timeframe = html.escape(str(record.get("timeframe") or "unknown"))
@@ -544,6 +597,7 @@ def _trade_text(record: dict[str, Any]) -> str:
     family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
     status = html.escape(_status_label(str(record.get("status") or "queued")))
     targets = _targets_from_plan(list(record.get("take_profit_plan") or []))
+    scenario_lines = _scenario_lines(record)
     outcome = dict(record.get("outcome") or {})
     result_line = ""
     if outcome:
@@ -557,6 +611,7 @@ def _trade_text(record: dict[str, Any]) -> str:
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             _validation_line(record),
+            *scenario_lines,
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(record.get('entry'))}</code>",
@@ -579,12 +634,14 @@ def _product_trade_text(record: dict[str, Any]) -> str:
     family = html.escape(_family_label(str(record.get("setup_family") or "unknown")))
     status = html.escape(_status_label(str(record.get("status") or "armed")))
     reason = html.escape(_reason_label(str(record.get("reason_now") or "paper product candidate")))
+    scenario_lines = _scenario_lines(record)
     return "\n".join(
         [
             f"<b>\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b: {pair} \u00b7 {timeframe} \u00b7 {side}</b>",
             HUMAN_DISCLAIMER,
             f"<code>{REQUIRED_DISCLAIMER}</code>",
             _validation_line(record),
+            *scenario_lines,
             "",
             f"<b>{LABEL_IDEA}:</b> {family}",
             f"<b>{LABEL_ENTRY}:</b> <code>{_fmt_price(record.get('entry'))}</code>",
@@ -725,6 +782,64 @@ def _quality_report_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
 
 
+def _tf_rank(value: Any) -> int:
+    return TIMEFRAME_RANK.get(str(value or "").strip().lower(), 0)
+
+
+def _load_trade_thesis_context(private_root: Path) -> dict[str, dict[str, Any]]:
+    path = _trade_thesis_snapshot_path(private_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    theses = {
+        str(item.get("thesis_id")): item
+        for item in data.get("items") or []
+        if isinstance(item, dict) and str(item.get("thesis_id") or "")
+    }
+    out: dict[str, dict[str, Any]] = {}
+    for event in data.get("event_items") or []:
+        if not isinstance(event, dict):
+            continue
+        source_signal_id = str(event.get("source_signal_id") or "")
+        thesis = theses.get(str(event.get("thesis_id") or "")) or {}
+        if not source_signal_id or not thesis:
+            continue
+        out[source_signal_id] = {
+            "thesis_id": str(event.get("thesis_id") or ""),
+            "event_type": str(event.get("event_type") or ""),
+            "supervisor_action": str(event.get("supervisor_action") or ""),
+            "primary_timeframe": str(thesis.get("primary_timeframe") or ""),
+            "primary_side": str(thesis.get("side") or ""),
+            "primary_family": str(thesis.get("primary_family") or ""),
+            "primary_validation_tier": str(thesis.get("primary_validation_tier") or ""),
+            "active_signals": int(thesis.get("active_signals") or 0),
+        }
+    return out
+
+
+def _attach_trade_thesis_context(
+    private_root: Path,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    contexts = _load_trade_thesis_context(private_root)
+    if not contexts:
+        return rows, 0
+    attached = 0
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        signal_id = str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+        context = contexts.get(signal_id)
+        if context:
+            row = dict(row)
+            row["_trade_thesis_context"] = context
+            attached += 1
+        enriched.append(row)
+    return enriched, attached
+
+
 def _family_quality(private_root: Path) -> dict[str, dict[str, Any]]:
     path = _quality_report_path(private_root)
     if not path.exists():
@@ -771,6 +886,188 @@ def _rank_product_preview_rows(private_root: Path, rows: list[dict[str, Any]]) -
     if not family_quality:
         return rows, False
     return sorted(rows, key=lambda row: _product_preview_rank(row, family_quality)), True
+
+
+def _scenario_preview_rank(row: dict[str, Any]) -> tuple[Any, ...]:
+    context = dict(row.get("_trade_thesis_context") or {})
+    return (
+        0 if validation_tier(row) == VALIDATED_TIER else 1,
+        SCENARIO_EVENT_PRIORITY.get(str(context.get("event_type") or ""), 99),
+        -_tf_rank(row.get("timeframe")),
+        0 if str(row.get("status") or "") == "opened_paper" else 1,
+        0 if str(row.get("source") or "") == "pfr_farm" else 1,
+        str(row.get("source_signal_id") or row.get("paper_product_trade_id") or ""),
+    )
+
+
+def _scenario_gate_product_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, dict[str, int], bool, int]:
+    if not any(isinstance(row.get("_trade_thesis_context"), dict) for row in rows):
+        return rows, 0, {}, False, 0
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        context = dict(row.get("_trade_thesis_context") or {})
+        thesis_id = str(context.get("thesis_id") or "")
+        if not thesis_id:
+            grouped[f"ungrouped:{row.get('source_signal_id') or row.get('paper_product_trade_id') or id(row)}"] = [row]
+            continue
+        grouped.setdefault(f"thesis:{thesis_id}", []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    skipped = 0
+    reasons: dict[str, int] = {}
+    for group in grouped.values():
+        if len(group) == 1:
+            selected.append(group[0])
+            continue
+        winner = sorted(group, key=_scenario_preview_rank)[0]
+        selected.append(winner)
+        skipped += len(group) - 1
+        reasons["same_thesis_variant"] = reasons.get("same_thesis_variant", 0) + len(group) - 1
+    selected.sort(key=_scenario_preview_rank)
+    return selected, skipped, reasons, True, len(grouped)
+
+
+def _scenario_groups(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        context = dict(row.get("_trade_thesis_context") or {})
+        thesis_id = str(context.get("thesis_id") or "")
+        if thesis_id:
+            grouped.setdefault(thesis_id, []).append(row)
+    return grouped
+
+
+def _top_counts(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _scenario_state_hash(leader: dict[str, Any], group: list[dict[str, Any]]) -> str:
+    context = dict(leader.get("_trade_thesis_context") or {})
+    state = {
+        "thesis_id": context.get("thesis_id"),
+        "primary_timeframe": context.get("primary_timeframe"),
+        "primary_side": context.get("primary_side"),
+        "primary_family": context.get("primary_family"),
+        "active_signals": context.get("active_signals"),
+        "leader_signal": leader.get("source_signal_id") or leader.get("paper_product_trade_id"),
+        "leader_status": leader.get("status"),
+        "leader_entry": _record_entry_for_card(leader),
+        "leader_stop": _record_stop_for_card(leader),
+        "leader_targets": _record_targets_for_card(leader),
+        "event_counts": _top_counts([str((row.get("_trade_thesis_context") or {}).get("event_type") or "") for row in group]),
+        "status_counts": _top_counts([str(row.get("status") or "") for row in group]),
+    }
+    encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:12]
+
+
+def _scenario_update_text(leader: dict[str, Any], group: list[dict[str, Any]]) -> str:
+    context = dict(leader.get("_trade_thesis_context") or {})
+    pair = html.escape(str(leader.get("okx_inst_id") or "unknown"))
+    primary_timeframe = html.escape(str(context.get("primary_timeframe") or leader.get("timeframe") or "unknown"))
+    primary_side = html.escape(_side_label(str(context.get("primary_side") or leader.get("side") or "unknown")))
+    primary_family = html.escape(_family_label(str(context.get("primary_family") or leader.get("setup_family") or "unknown")))
+    event_counts = _top_counts([str((row.get("_trade_thesis_context") or {}).get("event_type") or "") for row in group])
+    status_counts = _top_counts([str(row.get("status") or "") for row in group])
+    role_bits = []
+    if event_counts.get("confirmation"):
+        role_bits.append(f"старшие/равные подтверждения: {event_counts['confirmation']}")
+    if event_counts.get("lower_tf_confirmation"):
+        role_bits.append(f"младшие подтверждения: {event_counts['lower_tf_confirmation']}")
+    if event_counts.get("countertrend_bounce"):
+        role_bits.append(f"встречные откаты: {event_counts['countertrend_bounce']}")
+    if event_counts.get("invalidation_warning") or event_counts.get("higher_tf_conflict"):
+        role_bits.append(
+            "предупреждения: "
+            f"{event_counts.get('invalidation_warning', 0) + event_counts.get('higher_tf_conflict', 0)}"
+        )
+    role_line = "; ".join(role_bits) or "внутренние варианты без дополнительных предупреждений"
+    status_line = ", ".join(f"{_status_label(key)}: {value}" for key, value in status_counts.items()) or "n/a"
+    return "\n".join(
+        [
+            f"<b>Обновление сценария: {pair} · {primary_timeframe} · {primary_side}</b>",
+            HUMAN_DISCLAIMER,
+            f"<code>{REQUIRED_DISCLAIMER}</code>",
+            _validation_line(leader),
+            "",
+            f"<b>{LABEL_SCENARIO}:</b> основной {primary_timeframe} {primary_side} · {primary_family}",
+            f"<b>{LABEL_SIGNAL_ROLE}:</b> состояние уже опубликованного сценария",
+            f"<b>{LABEL_SCENARIO_VARIANTS}:</b> <code>{len(group)}</code>",
+            "",
+            f"<b>Что видно сейчас:</b> {html.escape(role_line)}",
+            f"<b>{LABEL_STATUS}:</b> {html.escape(status_line)}",
+            f"<b>{LABEL_ENTRY}:</b> <code>{html.escape(_record_entry_for_card(leader))}</code>",
+            f"<b>{LABEL_STOP}:</b> <code>{html.escape(_record_stop_for_card(leader))}</code>",
+            f"<b>{LABEL_TARGETS}:</b> <code>{html.escape(_record_targets_for_card(leader))}</code>",
+            "",
+            "<i>Это обновление сценария, а не новый отдельный вход.</i>",
+            f"<i>{EXECUTION_OFF}</i>",
+        ]
+    )
+
+
+def _scenario_update_previews(
+    groups: dict[str, list[dict[str, Any]]],
+    *,
+    limit: int,
+) -> list[PaperTelegramPreview]:
+    previews: list[PaperTelegramPreview] = []
+    for thesis_id, group in sorted(groups.items()):
+        if len(previews) >= limit:
+            break
+        if len(group) <= 1:
+            continue
+        leader = sorted(group, key=_scenario_preview_rank)[0]
+        state_hash = _scenario_state_hash(leader, group)
+        source_signal_id = f"scenario_update:{thesis_id}:{state_hash}"
+        text = _scenario_update_text(leader, group)
+        problems = validate_preview(leader, text)
+        previews.append(
+            PaperTelegramPreview(
+                telegram_card_id=f"tgcard_{source_signal_id}_{_card_hash(text)}",
+                preview_id=f"preview_{source_signal_id}",
+                instruction_id=str(leader.get("instruction_id") or ""),
+                source_signal_id=source_signal_id,
+                pair=str(leader.get("okx_inst_id") or leader.get("pair") or leader.get("symbol") or ""),
+                timeframe=str(leader.get("timeframe") or ""),
+                side=str(leader.get("side") or ""),
+                setup_family=str(leader.get("setup_family") or ""),
+                consumer_status="scenario_update",
+                validation_tier=validation_tier(leader),
+                text=text,
+                chart_path="",
+                farm_geometry_profile_id=str(leader.get("farm_geometry_profile_id") or ""),
+                farm_geometry_profile_reason=str(leader.get("farm_geometry_profile_reason") or ""),
+                farm_geometry_entry_scale=leader.get("farm_geometry_entry_scale"),
+                farm_geometry_stop_scale=leader.get("farm_geometry_stop_scale"),
+                farm_geometry_tp_scale=leader.get("farm_geometry_tp_scale"),
+                farm_geometry_hold_scale=leader.get("farm_geometry_hold_scale"),
+                problems=problems,
+            )
+        )
+    return previews
+
+
+def _scenario_gate_rows(
+    private_root: Path,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int, dict[str, int], bool, int, dict[str, list[dict[str, Any]]]]:
+    rows, scenario_context_rows = _attach_trade_thesis_context(private_root, rows)
+    groups = _scenario_groups(rows)
+    (
+        rows,
+        skipped_scenario_gate,
+        scenario_gate_reasons,
+        scenario_ranked,
+        scenario_groups,
+    ) = _scenario_gate_product_rows(rows)
+    return rows, scenario_context_rows, skipped_scenario_gate, scenario_gate_reasons, scenario_ranked, scenario_groups, groups
 
 
 def _load_paper_signal_candidates(path: Path) -> tuple[list[dict[str, Any]], Path | None]:
@@ -870,6 +1167,7 @@ def build_paper_telegram_preview(
         rows, source_path = _load_paper_signal_candidates(_paper_signal_snapshot_path(private_root))
         source_schema = "paper_signals.v1"
 
+    records_read = len(rows)
     previews: list[PaperTelegramPreview] = []
     skipped_rejected = 0
     skipped_non_actionable = 0
@@ -877,22 +1175,75 @@ def build_paper_telegram_preview(
     quality_gate_reasons: dict[str, int] = {}
     quality_ranked = False
     family_quality: dict[str, dict[str, Any]] = {}
+    scenario_context_rows = 0
+    skipped_scenario_gate = 0
+    scenario_gate_reasons: dict[str, int] = {}
+    scenario_ranked = False
+    scenario_groups = 0
+    scenario_update_groups: dict[str, list[dict[str, Any]]] = {}
+    main_rows_prefiltered = False
+    product_rows_prefiltered = False
+    if source_schema == "main_paper_trade_ledger.v1":
+        main_rows_prefiltered = True
+        filtered_rows = []
+        for row in rows:
+            if str(row.get("status") or "") in NON_ACTIONABLE_TRADE_STATUSES:
+                skipped_non_actionable += 1
+                continue
+            filtered_rows.append(row)
+        (
+            rows,
+            scenario_context_rows,
+            skipped_scenario_gate,
+            scenario_gate_reasons,
+            scenario_ranked,
+            scenario_groups,
+            scenario_update_groups,
+        ) = _scenario_gate_rows(Path(private_root), filtered_rows)
     if source_schema == "paper_product_trade_ledger.v1":
         family_quality = _family_quality(Path(private_root))
         rows, quality_ranked = _rank_product_preview_rows(Path(private_root), rows)
+        product_rows_prefiltered = True
+        filtered_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("status") or "") not in ACTIONABLE_PRODUCT_TRADE_STATUSES:
+                skipped_non_actionable += 1
+                continue
+            if quality_ranked:
+                problem = _subscriber_quality_problem(row, family_quality)
+                if problem:
+                    skipped_quality_gate += 1
+                    quality_gate_reasons[problem] = quality_gate_reasons.get(problem, 0) + 1
+                    continue
+            filtered_rows.append(row)
+        (
+            rows,
+            scenario_context_rows,
+            skipped_scenario_gate,
+            scenario_gate_reasons,
+            scenario_ranked,
+            scenario_groups,
+            scenario_update_groups,
+        ) = _scenario_gate_rows(Path(private_root), filtered_rows)
     for row in rows:
         if source_schema == "main_paper_consumer.v1" and row.get("consumer_status") != "accepted_for_paper_watch":
             skipped_rejected += 1
             continue
-        if source_schema == "main_paper_trade_ledger.v1" and str(row.get("status") or "") in NON_ACTIONABLE_TRADE_STATUSES:
-            skipped_non_actionable += 1
-            continue
-        if source_schema == "paper_product_trade_ledger.v1" and (
-            str(row.get("status") or "") not in ACTIONABLE_PRODUCT_TRADE_STATUSES
+        if (
+            source_schema == "main_paper_trade_ledger.v1"
+            and not main_rows_prefiltered
+            and str(row.get("status") or "") in NON_ACTIONABLE_TRADE_STATUSES
         ):
             skipped_non_actionable += 1
             continue
-        if source_schema == "paper_product_trade_ledger.v1" and quality_ranked:
+        if (
+            source_schema == "paper_product_trade_ledger.v1"
+            and not product_rows_prefiltered
+            and str(row.get("status") or "") not in ACTIONABLE_PRODUCT_TRADE_STATUSES
+        ):
+            skipped_non_actionable += 1
+            continue
+        if source_schema == "paper_product_trade_ledger.v1" and quality_ranked and not product_rows_prefiltered:
             problem = _subscriber_quality_problem(row, family_quality)
             if problem:
                 skipped_quality_gate += 1
@@ -939,6 +1290,12 @@ def build_paper_telegram_preview(
             )
         )
 
+    scenario_update_cards = _scenario_update_previews(
+        scenario_update_groups,
+        limit=max(0, limit - len(previews)),
+    )
+    previews.extend(scenario_update_cards)
+
     out_jsonl = _jsonl_path(private_root)
     out_snapshot = _snapshot_path(private_root)
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -959,7 +1316,7 @@ def build_paper_telegram_preview(
         "source_schema": source_schema,
         "source_exists": source_path is not None,
         "source_path": str(source_path) if source_path else "",
-        "records_read": len(rows),
+        "records_read": records_read,
         "rendered": len(previews),
         "invalid": invalid,
         "charts_available": sum(1 for preview in previews if preview.chart_path),
@@ -968,6 +1325,12 @@ def build_paper_telegram_preview(
         "skipped_quality_gate": skipped_quality_gate,
         "quality_gate_reasons": quality_gate_reasons,
         "quality_ranked": quality_ranked,
+        "scenario_context_rows": scenario_context_rows,
+        "skipped_scenario_gate": skipped_scenario_gate,
+        "scenario_gate_reasons": scenario_gate_reasons,
+        "scenario_ranked": scenario_ranked,
+        "scenario_groups": scenario_groups,
+        "scenario_update_cards": len(scenario_update_cards),
         "by_validation_tier": by_validation_tier,
         "chart_path_types": dict(sorted(chart_path_types.items())),
         "items": [preview.to_dict() for preview in previews],

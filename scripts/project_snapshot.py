@@ -525,6 +525,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     observation = _read_json(derived / "main_paper_runtime_observation.json")
     trades = _read_json(derived / "main_paper_trades.json")
     product_trades = _read_json(derived / "paper_product_trades.json")
+    trade_thesis = _read_json(derived / "trade_thesis_supervisor.json")
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
@@ -550,7 +551,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     )
     execution_allowed = any(
         bool(row.get("execution_allowed"))
-        for row in (bridge, consumer, queue, observation, trades, product_trades, preview, delivery)
+        for row in (bridge, consumer, queue, observation, trades, product_trades, trade_thesis, preview, delivery)
         if row
     )
     return {
@@ -579,6 +580,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "product_active_by_family": _top_counts(product_trades.get("active_by_family") or {}),
         "product_trade_status": product_trades.get("by_status") or {},
         "product_live_block": _top_counts(product_trades.get("by_live_block") or {}),
+        "trade_thesis_theses": int(trade_thesis.get("theses") or 0),
+        "trade_thesis_events": int(trade_thesis.get("events") or 0),
+        "trade_thesis_by_action": _top_counts(trade_thesis.get("by_action") or {}),
+        "trade_thesis_by_event": _top_counts(trade_thesis.get("by_event_type") or {}),
+        "trade_thesis_by_side": _top_counts(trade_thesis.get("by_primary_side") or {}),
         "strict_paper_money": trades.get("paper_money") if isinstance(trades.get("paper_money"), dict) else {},
         "product_paper_money": (
             product_trades.get("paper_money") if isinstance(product_trades.get("paper_money"), dict) else {}
@@ -711,6 +717,14 @@ def _print_paper_product_status() -> None:
             "                "
             f"active_source={st['product_active_by_source']} "
             f"active_family={st['product_active_by_family']}"
+        )
+    if st["trade_thesis_theses"] or st["trade_thesis_events"]:
+        print(
+            "                "
+            f"trade_thesis theses={st['trade_thesis_theses']} "
+            f"events={st['trade_thesis_events']} "
+            f"action={st['trade_thesis_by_action']} "
+            f"event={st['trade_thesis_by_event']}"
         )
     print(
         "                "

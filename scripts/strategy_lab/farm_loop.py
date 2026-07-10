@@ -370,6 +370,18 @@ def _run_main_paper_derived_chain(
     try:
         _write_loop_status(
             private_root,
+            stage="trade_thesis_supervisor",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.trade_thesis_supervisor import write_trade_thesis_supervisor
+        out["trade_thesis_supervisor"] = write_trade_thesis_supervisor(private_root)
+    except Exception as exc:  # noqa: BLE001 - thesis supervisor must not break the cycle
+        out.setdefault("errors", []).append({"where": "trade_thesis_supervisor", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
             stage="paper_telegram_preview",
             apply=apply,
             loop=loop,
@@ -565,6 +577,16 @@ def _print_cycle(out: dict) -> None:
             f"by_status={product_ledger.get('by_status') or {}} "
             f"execution_allowed={product_ledger.get('execution_allowed')}"
         )
+    thesis = out.get("trade_thesis_supervisor") or {}
+    if thesis:
+        print(
+            "  trade_thesis_supervisor: "
+            f"theses={thesis.get('theses', 0)} "
+            f"active={thesis.get('active_trades', 0)} "
+            f"events={thesis.get('events', 0)} "
+            f"by_action={thesis.get('by_action') or {}} "
+            f"execution_allowed={thesis.get('execution_allowed')}"
+        )
     tp = out.get("paper_telegram_preview") or {}
     if tp:
         print(
@@ -693,6 +715,11 @@ def _cycle_summary(out: dict) -> dict:
             "supervised": (out.get("paper_exit_supervisor") or {}).get("supervised", 0),
             "by_action": (out.get("paper_exit_supervisor") or {}).get("by_action") or {},
         },
+        "trade_thesis_supervisor": {
+            "theses": (out.get("trade_thesis_supervisor") or {}).get("theses", 0),
+            "events": (out.get("trade_thesis_supervisor") or {}).get("events", 0),
+            "by_action": (out.get("trade_thesis_supervisor") or {}).get("by_action") or {},
+        },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),
             "preview_quality_skip": (out.get("paper_telegram_preview") or {}).get("skipped_quality_gate", 0),
@@ -738,6 +765,7 @@ def _cycle_signature(out: dict) -> tuple:
     main_runtime_observation = tuple(sorted((out.get("main_paper_runtime_observation") or {}).items()))
     main_trade_ledger = tuple(sorted((out.get("main_paper_trade_ledger") or {}).items()))
     product_trade_ledger = tuple(sorted((out.get("paper_product_trade_ledger") or {}).items()))
+    trade_thesis = tuple(sorted((out.get("trade_thesis_supervisor") or {}).items()))
     telegram_preview = tuple(sorted((out.get("paper_telegram_preview") or {}).items()))
     telegram_delivery = tuple(sorted((out.get("paper_telegram_delivery") or {}).items()))
     training_export = tuple(sorted((out.get("paper_signal_training_export") or {}).items()))
@@ -750,7 +778,7 @@ def _cycle_signature(out: dict) -> tuple:
     return (
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, product_trade_ledger,
-        telegram_preview,
+        trade_thesis, telegram_preview,
         telegram_delivery, training_export, product_training_export, memory_refresh, product_quality, calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),

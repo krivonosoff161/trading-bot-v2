@@ -19,6 +19,9 @@ HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u043
 VALIDATION = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430:"
 VALIDATED_LABEL = "\u043f\u0440\u043e\u0448\u0435\u043b PFR/\u0432\u0430\u043b\u0438\u0434\u0430\u0446\u0438\u044e"
 FARM_CALCULATED_LABEL = "\u0440\u0430\u0441\u0447\u0435\u0442\u043d\u044b\u0439 \u0441\u0438\u0433\u043d\u0430\u043b \u0444\u0435\u0440\u043c\u044b"
+SCENARIO = "\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0439:"
+SIGNAL_ROLE = "\u0420\u043e\u043b\u044c \u0441\u0438\u0433\u043d\u0430\u043b\u0430:"
+PRIMARY_SCENARIO = "\u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0439"
 
 
 def _consumer_record(**overrides):
@@ -159,6 +162,24 @@ def _write_quality_report(root: Path, families: list[dict]) -> None:
             {
                 "schema": "paper_product_quality_report.v1",
                 "families": families,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_trade_thesis_snapshot(root: Path, theses: list[dict], events: list[dict]) -> None:
+    path = root / "state" / "derived" / "trade_thesis_supervisor.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "trade_thesis_supervisor.v1",
+                "items": theses,
+                "event_items": events,
                 "paper_only": True,
                 "execution_allowed": False,
             },
@@ -577,6 +598,111 @@ def test_preview_ranks_product_trades_by_private_quality_report(tmp_path):
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["source_signal_id"] == "sig_better"
     assert data["items"][1]["source_signal_id"] == "sig_bad"
+
+
+def test_preview_groups_product_variants_by_trade_thesis_for_telegram(tmp_path):
+    rows = [
+        _product_trade_record(
+            paper_trade_id="paper_primary",
+            source_signal_id="sig_primary_4h",
+            okx_inst_id="KAITO-USDT-SWAP",
+            timeframe="4h",
+            side="long",
+            setup_family="continuation",
+        ),
+        _product_trade_record(
+            paper_trade_id="paper_confirm",
+            source_signal_id="sig_confirm_15m",
+            okx_inst_id="KAITO-USDT-SWAP",
+            timeframe="15m",
+            side="long",
+            setup_family="early_tp_tactical",
+        ),
+        _product_trade_record(
+            paper_trade_id="paper_bounce",
+            source_signal_id="sig_bounce_15m",
+            okx_inst_id="KAITO-USDT-SWAP",
+            timeframe="15m",
+            side="short",
+            setup_family="liquidity_sweep_reclaim",
+        ),
+    ]
+    _write_product_trade_snapshot(tmp_path, rows)
+    _write_trade_thesis_snapshot(
+        tmp_path,
+        [
+            {
+                "schema": "TradeThesis.v1",
+                "thesis_id": "thesis_kaito",
+                "symbol": "KAITO-USDT-SWAP",
+                "side": "long",
+                "primary_signal_id": "sig_primary_4h",
+                "primary_timeframe": "4h",
+                "primary_family": "continuation",
+                "primary_status": "armed",
+                "primary_source": "farm",
+                "primary_validation_tier": "farm_calculated",
+                "active_signals": 3,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ],
+        [
+            {
+                "schema": "TradeThesisEvent.v1",
+                "thesis_id": "thesis_kaito",
+                "symbol": "KAITO-USDT-SWAP",
+                "source_signal_id": "sig_primary_4h",
+                "event_type": "primary_thesis",
+                "supervisor_action": "track_primary",
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            {
+                "schema": "TradeThesisEvent.v1",
+                "thesis_id": "thesis_kaito",
+                "symbol": "KAITO-USDT-SWAP",
+                "source_signal_id": "sig_confirm_15m",
+                "event_type": "lower_tf_confirmation",
+                "supervisor_action": "add_watch",
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            {
+                "schema": "TradeThesisEvent.v1",
+                "thesis_id": "thesis_kaito",
+                "symbol": "KAITO-USDT-SWAP",
+                "source_signal_id": "sig_bounce_15m",
+                "event_type": "countertrend_bounce",
+                "supervisor_action": "hold_primary_tighten_watch",
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["source_schema"] == "paper_product_trade_ledger.v1"
+    assert summary["records_read"] == 3
+    assert summary["scenario_context_rows"] == 3
+    assert summary["scenario_ranked"] is True
+    assert summary["scenario_groups"] == 1
+    assert summary["rendered"] == 2
+    assert summary["skipped_scenario_gate"] == 2
+    assert summary["scenario_gate_reasons"] == {"same_thesis_variant": 2}
+    assert summary["scenario_update_cards"] == 1
+    items = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))["items"]
+    item = items[0]
+    update = items[1]
+    assert item["source_signal_id"] == "sig_primary_4h"
+    assert update["source_signal_id"].startswith("scenario_update:thesis_kaito:")
+    assert update["consumer_status"] == "scenario_update"
+    assert SCENARIO in item["text"]
+    assert SIGNAL_ROLE in item["text"]
+    assert PRIMARY_SCENARIO in item["text"]
+    assert "\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f" in update["text"]
+    assert "\u0427\u0442\u043e \u0432\u0438\u0434\u043d\u043e \u0441\u0435\u0439\u0447\u0430\u0441" in update["text"]
 
 
 def test_preview_quality_gate_skips_weak_product_rows_for_subscribers(tmp_path):
