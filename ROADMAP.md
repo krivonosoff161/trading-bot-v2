@@ -1,11 +1,21 @@
 # ROADMAP - Current Project Direction
 
-Updated: 2026-07-07
+Updated: 2026-07-10
 
 This is the current roadmap for `trading-bot-v2`. Older roadmap and service-pivot
 documents are preserved as history, but they no longer define the active work.
 
 ## Current Thesis
+
+> **Update 2026-07-10 - measurement truth is the blocking phase.**
+> A private 48-hour audit found that strategy calibration was consuming corrupted
+> lifecycle labels: 36 rows were marked `expired_no_entry` despite a stored entry,
+> and 26 terminal rows had negative `bars_held`. GitHub epic #158 now sequences the
+> rebuild through lifecycle truth (#150), reconciled paper accounting (#151), stable
+> scenario/Telegram events (#152), unified lineage (#153), analyst/retest memory
+> (#154), trading calibration (#155), LLM role consolidation (#156), and a 24-48h
+> acceptance run (#157). Strategy and model tuning are blocked until the frozen
+> cohort replays deterministically.
 
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research

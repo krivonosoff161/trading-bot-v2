@@ -219,6 +219,32 @@ the real account in this phase.
 9. Keep Telegram labels honest and user-readable.
 10. Add docs/tests/status reports before long unattended runs.
 
+## Measurement correction - 2026-07-10
+
+The July 8-10 private replay showed that the feedback loop must first repair its
+measurement foundation. The old observer reused `open_index`, which was relative
+to a fetched list that restarted at index zero on every cycle. It also applied the
+entry-window wall-clock expiry to already opened paper positions. These two
+behaviors produced negative hold counts and `expired_no_entry` rows with stored
+entries.
+
+The corrected contract is:
+
+```text
+boundary_ts
+-> last_observed_bar_ts advances once per candle
+-> opened_at_bar_ts records the fill candle
+-> bars_waited accumulates only before entry
+-> bars_held accumulates only after entry
+-> entry-window expiry applies only while armed
+-> repeated no-data after entry becomes a data invalidation, not no-entry
+```
+
+The frozen 474-signal cohort now produces identical one-shot and incremental
+results, with zero stored-entry/no-entry contradictions and zero negative hold
+counts. This proves lifecycle determinism, not profitability; account-level PnL
+and trading calibration remain later phases in epic #158.
+
 ## Implementation status - retest bridge
 
 The outcome analyst now has a deterministic bridge into farm follow-up work:

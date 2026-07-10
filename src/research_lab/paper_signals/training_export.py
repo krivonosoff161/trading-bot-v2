@@ -18,7 +18,7 @@ from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import first_tp, geometry, midpoint
 
 SCHEMA = "TrainingRow.v2"
-ROW_FIELDS_VERSION = "setup_family_alias.v1"
+ROW_FIELDS_VERSION = "lifecycle_cursor.v2"
 TERMINAL_STATUSES = {"closed_paper", "expired", "invalidated", "reviewed"}
 
 
@@ -263,8 +263,12 @@ def training_row(
         "max_hold_bars": int(sig.max_hold_bars),
         "max_hold_minutes": int(sig.max_hold_minutes),
         "result": str(outcome.get("result") or ""),
+        "lifecycle_schema": str(outcome.get("lifecycle_schema") or "legacy"),
         "observed_entry": outcome.get("entry"),
         "observed_exit": outcome.get("exit"),
+        "opened_at_bar_ts": outcome.get("opened_at_bar_ts"),
+        "last_observed_bar_ts": outcome.get("last_observed_bar_ts"),
+        "bars_waited": outcome.get("bars_waited"),
         "bars_held": outcome.get("bars_held"),
         "reached_tp1": bool(outcome.get("reached_tp1")),
         "partial_done": bool(outcome.get("partial_done")),

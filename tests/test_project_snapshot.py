@@ -359,6 +359,13 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
                 "overdue_expiry": 0,
                 "expiry_buckets": {"le_1h": 1, "le_3h": 2},
             },
+            "lifecycle_integrity": {
+                "schema": "paper_signal_lifecycle_integrity.v1",
+                "v2_rows": 12,
+                "entry_expired_contradictions": 0,
+                "negative_bars_held": 0,
+                "valid": True,
+            },
             "pfr_funnel": {
                 "catalog_ready": 43,
                 "catalog_rejected_quality": 10,
@@ -431,6 +438,13 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
         "next_expiry_hours": 0.5,
         "overdue_expiry": 0,
         "expiry_buckets": {"le_1h": 1, "le_3h": 2},
+    }
+    assert status["lifecycle_integrity"] == {
+        "schema": "paper_signal_lifecycle_integrity.v1",
+        "v2_rows": 12,
+        "entry_expired_contradictions": 0,
+        "negative_bars_held": 0,
+        "valid": True,
     }
     assert status["pfr_funnel"] == {
         "catalog_ready": 43,
