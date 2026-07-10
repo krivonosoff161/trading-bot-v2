@@ -59,6 +59,12 @@ documents are preserved as history, but they no longer define the active work.
 > and token/cost counters are attached to the invocation. LLM output remains
 > advisory JSON; deterministic code owns all numbers, verdicts and permissions.
 
+> **Phase 8 status - acceptance harness ready.** The final epic gate is a private
+> 24-hour-or-longer headless paper run with a captured baseline and deterministic
+> report. It cannot pass early: new lifecycle-v2 terminal evidence, exact account
+> replay, scenario close/card, clean lineage, retest progress, chart history,
+> bounded artifact growth and paper-only safety must all pass together.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

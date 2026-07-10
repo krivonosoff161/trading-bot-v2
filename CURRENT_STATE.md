@@ -2,6 +2,15 @@
 
 Updated: 2026-07-10
 
+> **Update 2026-07-10 - formal paper acceptance harness.**
+> `paper_acceptance_headless_loop.bat` records a private immutable baseline and
+> runs the canonical headless farm with the local calculator/reviewer loop but
+> without dashboards, graph viewers or Telegram network delivery. The acceptance
+> report requires 24 hours, new lifecycle-v2 terminal evidence, exact account
+> reconciliation, scenario closure/card evidence, clean lineage, retest progress,
+> reconstructible chart history, bounded artifact growth and unchanged safety
+> boundaries.
+
 > **Update 2026-07-10 - canonical LLM invocation control.** The farm calculator
 > now runs three sequential bounded roles on one allowlisted local `calculator-swarm`
 > model: context classification, sweep-hypothesis proposal and hypothesis
