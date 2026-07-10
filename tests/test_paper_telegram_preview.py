@@ -301,6 +301,11 @@ def test_validation_tier_classifies_main_pfr_and_farm_rows():
     assert validation_tier(_paper_signal_row()) == "farm_calculated"
 
 
+def test_validation_tier_does_not_trust_live_ready_without_hard_verdict():
+    row = _product_trade_record(live_ready=True, ready_strategy_id="", source_validation_verdict="")
+    assert validation_tier(row) == "farm_calculated"
+
+
 def test_validation_tier_classifies_research_retest_rows():
     row = _paper_signal_row(source="research", origin="outcome_retest")
     assert validation_tier(row) == "research_only"

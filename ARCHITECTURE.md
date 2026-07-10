@@ -1,402 +1,76 @@
 # Architecture
 
-Updated: 2026-07-10
+Status: **ACTIVE**. Updated 2026-07-10.
 
-## Boundary
+This file is the current architectural source of truth. Dated reports and
+older plans under `docs/` are historical evidence unless the
+[Docs Home](docs/README.md) explicitly promotes them.
 
-> **Update 2026-07-10 - LLM roles share one control plane.**
-> `AgentRoleContract` defines role input/output/field boundaries, while the
-> private append-only `LLMInvocation.v1` ledger owns pre-call deduplication,
-> provider/model identity, circuit state and token/cost accounting. The farm
-> calculator is three sequential roles on the single allowlisted local
-> `calculator-swarm` model. Cloud reviewer roles receive sanitized packets and cannot
-> enter the local calculator route. No role owns prices, validator state,
-> readiness, execution or orders.
+## Operating Boundary
 
-> **Update 2026-07-10 - account truth is separate from research variants.**
-> `main_paper_trade_ledger` now reconciles an append-only `PaperAccountEvent.v1`
-> stream for the agreed `700 USDT` paper account. One primary thesis per scenario
-> may reserve `35 USDT` at `3x`; sibling geometry variants remain counterfactual.
-> The account snapshot reports available/reserved margin, realized PnL, fees,
-> slippage and allocation rejections. It is deterministic paper accounting, not an
-> order path. Broad `paper_product_trade_ledger` sums are explicitly labeled as
-> independent what-if variants and are not account equity.
-
-> **Update 2026-07-10 - scenario lifecycle is durable.** The paper thesis
-> supervisor keeps one stable `thesis_id` while a symbol-level idea is active,
-> appends open/update/classification/close events, and emits an explicit Telegram
-> close card when observation ends. A lower-timeframe confirmation no longer
-> creates a new subscriber idea merely because the leading signal changed.
-
-> **Update 2026-07-10 - paper lineage is auditable end to end.** Existing farm,
-> validation, signal, runtime, trade, account, thesis, Telegram, outcome-review
-> and training IDs are joined in `PaperLineageEnvelope.v1`. The index reads full
-> append-only history where snapshots are intentionally capped, reports conflicts
-> and missing downstream rows, and never fabricates missing validation evidence.
-
-> **Update 2026-07-10 - analyst retests return to memory.** Completed
-> `outcome_retest` farm sweeps are reconciled back to their review/training source,
-> classified as improved, no-improvement or insufficient-evidence, and attached
-> to setup memory at candidate scope where possible or explicit executable-family
-> cell scope otherwise. Completed IDs rotate out of the bounded retest catalog.
-> Promotion remains deterministic and never grants execution authority.
-
-> **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
-> self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
-> `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
-> sanitized review packs for the existing `outcome_reviewer`, and writes advisory
-> reviews under the private Strategy Lab root. The next training export can link the
-> review back through `outcome_review_id`. `OutcomePromotionGate.v1` then explains
-> whether a case is only a review note, needs retest, needs shadow/true-forward, or
-> is ready for operator evidence review. This sidecar is not a live executor and not
-> a second farm brain; it feeds bounded follow-up/retest work only after deterministic
-> code accepts a next step, and every gate stage keeps `execution_allowed=false`.
-
-> **Update 2026-07-05 - headless operator surface.** The low-load product-paper
-> entrypoint is `bat\paper_product_headless_loop.bat`. It wraps the same canonical
-> full-cycle farm loop used by the visible control room, but opens no dashboard,
-> graph viewer, or status-monitor window. It enables bounded outcome-learning
-> reviews by default and keeps Telegram delivery off unless the explicit
-> `bat\paper_product_headless_send_loop.bat` wrapper is used. This is an operator
-> surface change only; it does not create a new engine and does not alter the
-> paper-only/no-execution boundary.
-
-> **Update 2026-07-03 - main-paper watcher vs main-style executor.** The active runtime
-> is health-green as a paper/research backbone, but it is not yet the user's expected
-> main-paper product. The current main-compatible path is a validator-backed watcher:
-> `paper_signals/PFR -> main_paper_bridge -> main_paper_consumer ->
-> main_adaptive_policy -> main_paper_runtime_queue -> main_paper_runtime_observation ->
-> main_paper_trade_ledger`. It writes paper lifecycle/training data with
-> `execution_allowed=false`. It does not make the old `main.py` consume farm outputs, and
-> it does not let broad unvalidated farm paper signals become subscriber trading cards.
-> A future "what if opened" main-paper executor must be a separate reviewed contract,
-> not a direct revival of old `main.py`.
-
-> **Update 2026-06-27 - paper/main/Telegram ownership.** The active architecture now
-> has a rebuildable paper handoff after the farm: paper signals/PFR ->
-> `main_paper_instructions` -> `main_paper_consumed` -> `main_paper_runtime_queue` ->
-> public-candle `main_paper_runtime_observation` -> offline `paper_telegram_preview` ->
-> training/journal export. This is still paper/research only. The old live `main.py`
-> does not consume farm instructions, and Telegram is a surface, not an executor.
-> `operational_health.readiness.ready_for_visible_paper_research_loop` is the aggregate
-> machine-check for this operator state.
-
-> **Update 2026-06-19 — center shifted to the calculation farm.** The current
-> research center is the **universe-driven calculation farm** (`farm_loop` →
-> `farm_coordinator` → `farm_tasks.sqlite`, paper/research only). The scanner
-> (`src/scout/`) is now one **upstream intake source** that feeds the farm, not the
-> product. Canonical: [docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md),
-> [docs/farm_ownership_map.md](docs/farm_ownership_map.md).
-
-The project has three contours:
-
-1. **Active research core:** the calculation farm (`research_lab` + `scripts/strategy_lab`).
-2. **Upstream intake:** `src/scout/` information-edge scanner (one farm intake source).
-3. **Frozen/reference:** old WebSocket Main/TA and paper engines (confirmation/risk/level
-   context only; their useful strategy logic is already ported into research_lab families).
-
-Current fourth surface:
-
-4. **Paper product bridge:** `main_paper_*` modules. These are not live execution. They
-   translate validator-backed paper rows into a watch queue, observation ledger, readable
-   Telegram previews/audits, and training rows.
-
-Neither the scanner nor the farm may place orders. The farm is fully isolated from the
-money path (no `.env`/`AUTO_TRADE`/orders/private endpoints/Telegram), enforced by an AST
-import test over the farm modules.
-
-## Current Active Flow (calculation farm)
-
-The active core is the universe-driven calculation farm. Full detail:
-[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
+The supported system is paper/research infrastructure. It may obtain public
+market data and write local research artifacts, but it must not place orders,
+use private exchange-account endpoints, or grant an LLM execution authority.
 
 ```text
-intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery snapshot)
-  -> data_planner            (per symbol/tf: prepare / defer / enrich / block-with-reason)
-  -> farm_coordinator        (brain: state/farm_tasks.sqlite, typed tasks, fingerprint re-arm)
-       prepare_data (public candles) / enrich_funding / enrich_oi (public OKX, keyless)
-  -> run_sweep               (materialized into state/strategy_lab.sqlite compute queue)
-  -> worker_once             (no-lookahead simulation; cpu/gpu/auto)
-  -> classify_result         (-> unique_candidates)
-  -> validation_orchestrator (unique_candidates -> export -> honest-backtest -> STAMP-BACK
-                              -> setup_library)   [--run-validation]
-  -> paper_loop              (only paper_forward_ready setup cards -> paper outcomes)
-  -> pivot (work_available / advanced_lifecycle / discovery_refill / blocked:no_eligible_tasks)
-  -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
+scanner/news intake          manual hypotheses
+        |                           |
+        +----------> calculation farm <---------- public market data
+                               |
+                     deterministic sweep/classify
+                               |
+                  honest-backtest validation bridge
+                               |
+                  PAPER_FORWARD_READY setup cards
+                               |
+                paper observation + outcome records
+                               |
+              optional preview / explicit delivery edge
 ```
 
-## Current Paper Product Flow
+The diagram describes evidence flow, not a promise of performance or a live
+execution path.
 
-This is the running post-farm paper path:
+## Ownership
 
-```text
-paper_signals / PFR-ready rows
-  -> main_paper_bridge              (requires validator/PFR-ready strategy identity)
-  -> main_paper_consumer            (contract validation, paper-only)
-  -> main_adaptive_policy           (bounded profile labels, no price authority)
-  -> main_paper_runtime_queue       (runtime_action=watch_paper)
-  -> main_paper_runtime_observation (public candles, pending/reviewed/provider-error)
-  -> main_paper_trade_ledger        (paper pseudo-trade lifecycle)
-  -> paper_account_ledger           (one funded thesis/scenario; append-only events)
-  -> trade_thesis_supervisor        (stable scenario ID and append-only lifecycle)
-  -> paper_telegram_preview         (open/update/close human card preview/audit)
-  -> paper_signal_training_export   (training rows)
-  -> paper_lineage                  (derived join and broken-link audit)
-  -> OutcomeLearningCase.v1         (deterministic learning case)
-  -> outcome_reviewer               (advisory-only LLM review)
-  -> outcome_review_id backlink     (next TrainingRow.v2 export)
-  -> feedback_followup              (bounded retest planning; no second queue)
-  -> OutcomePromotionGate.v1        (review/retest/shadow/operator stage, no authority)
-  -> outcome_retest_result          (completed sweep -> review verdict -> memory)
-```
-
-LLM sidecars around that deterministic flow use this separate control path:
-
-```text
-sanitized role input
-  -> AgentRoleContract
-  -> LLMInvocation preflight (dedup / allowlist / circuit)
-  -> local calculator passes OR sanitized cloud reviewer
-  -> semantic output validation
-  -> private invocation + usage ledger
-  -> bounded hypothesis/review artifact
-  -> deterministic retest/promotion gate
-```
-
-The current path is deliberately stricter than a raw main scan. It refuses broad research
-signals when they have no `ready_strategy_id`; those rows stay in research/training.
-
-## Operator Entrypoints
-
-Use these as the current product-paper surfaces:
-
-| Entrypoint | Purpose | Windows | Telegram | Boundary |
-|---|---|---|---|---|
-| `bat\paper_product_headless_loop.bat` | Low-load long run for farm, paper runtime, training, and bounded outcome reviews | Farm loop only | Off by default | Paper/research only |
-| `bat\paper_product_headless_send_loop.bat` | Same low-load run, but explicitly sends reviewed paper cards to active subscribers | Farm loop only | On | Paper/research only |
-| `bat\paper_product_control_room.bat` | Visible operator room for manual observation | Farm, dashboard, graph, status | Off by default | Paper/research only |
-| `bat\paper_product_control_room_send.bat` | Visible operator room with explicit paper-card delivery | Farm, dashboard, graph, status | On | Paper/research only |
-
-None of these entrypoints enable `AUTO_TRADE`, call old `main.py`, place orders,
-or use private exchange endpoints.
-
-## Scanner Intake Flow (upstream source, not the center)
-
-```text
-sources
-  -> data/scout/news_buffer.sqlite
-  -> machine_docs / normalized_events
-  -> asset/layer router
-  -> cheap layer agent
-  -> orchestrator code gate
-  -> chief model for selected candidates
-  -> logs/scout/scanner_journal.jsonl
-  -> logs/scout/watch_queue.jsonl        (consumed by the farm via intake_adapter)
-  -> setup_confirmation engine
-  -> future paper confirmation journal
-```
-
-The scanner can send `GO/WATCH` cards to Telegram, but those are paper research
-cards, not trade instructions. Strategy Lab paper alerts are currently offline preview
-artifacts by default; scanner/analyzer Telegram surfaces are separate operator surfaces,
-not farm/PFR executors. See
-[docs/farm_notification_layer.md](docs/farm_notification_layer.md).
-
-## Scanner Components
-
-| Component | File(s) | Role |
+| Component | Owns | Cannot do |
 |---|---|---|
-| Intake buffer | `src/scout/news_buffer.py` | Durable raw/extracted/normalized news state |
-| Source registry | `src/scout/config/source_registry.yaml` | Source layer, trust, onboarding status, rollback |
-| Router | `src/scout/router.py` | Asset/layer/baseline/source routing |
-| Cheap layer agent | `src/scout/agents/layer_agent.py` | Structured first-pass extraction |
-| Orchestrator | `src/scout/agents/orchestrator.py` | Deterministic escalation and safety gates |
-| Chief | `src/scout/agents/chief.py` | Final candidate judgment |
-| Journal | `src/scout/scanner_journal.py` | Append-only decision rows |
-| Structured records | `src/scout/scanner_records.py` | Event/reasoning/training/memory blocks |
-| Outcomes | `src/scout/resolve_outcomes.py` | Forward MFE/MAE, side-aware scoring, baseline/excess |
-| Reports | `src/scout/*_report.py`, `scripts/analysis/*report.py` | Calibration, source quality, onboarding, deep audit |
-| Watch queue | `src/scout/watch_queue.py` | `WATCH/GO` queue for later TA confirmation |
+| `src/scout/` | Public information intake and normalized context | Promote a trade or execute an order. |
+| `src/research_lab/` | Farm scheduling, bounded sweeps, paper lifecycle | Import the old execution engine or access credentials. |
+| `scripts/strategy_lab/` | Operators, workers, bridge invocation, reports | Bypass deterministic validation. |
+| `honest-backtest` | Independent validation methods and verdicts | Run the farm or place orders. |
+| Paper runtime | Observation, accounting, outcomes, card previews | Convert paper state into exchange actions. |
+| LLM sidecars | Bounded advisory JSON or presentation text | Alter prices, verdicts, registry, permissions, or `.env`. |
+| Telegram surfaces | Optional human-facing delivery | Become a farm controller or executor. |
 
-## Source Onboarding
+## LLM Governance
 
-The current source policy is deliberately conservative:
+LLMs are optional advisory sidecars. The calculator and reviewer may receive
+sanitized, bounded input packs and return schema-validated proposals. Their
+output is rejected unless deterministic validators accept it. They cannot read
+credentials, raw private data, live account data, or call an order path.
 
-```text
-one source per layer
-  -> run 24-48h
-  -> measure body quality, cards, chief cost, outcomes
-  -> keep / observe / disable
-```
+See [LLM Proposal Contract](docs/llm_proposal_contract.md) and
+[Local Calculator Mini-Swarm](docs/local_calculator_swarm_2026-07-10.md).
 
-Current source onboarding state:
+## Current And Deferred Work
 
-| Layer | Source | State |
-|---|---|---|
-| L1 | `etf_flow` | Disabled context slot; needs provider or manual CSV |
-| L2 | `token_unlocks` | Configured but needs `TOKENOMIST_API_KEY`; DexScreener quality is live context |
-| L3 | `investing_commodities` | Candidate direct source |
-| L4 | `rigzone` | Candidate direct source |
-| L5 | `globenewswire_public` | Candidate direct company/IR source |
+The active public workbench ends at paper evidence and independent validation.
+The proposed adaptive paper architecture is deliberately **deferred**, recorded
+in [docs/deferred-adaptive-paper-architecture.md](docs/deferred-adaptive-paper-architecture.md).
+It is not a permission to revive `main.py` or enable live trading.
 
-Rollback is one line: set `enabled: false` for a source in
-`src/scout/config/source_registry.yaml`.
+## Operations
 
-## Scanner To TA Confirmation
+Use [Farm Ownership Map](docs/farm_ownership_map.md),
+[Farm Runbook](docs/farm_runbook.md), and
+[Entrypoint Catalog](docs/entrypoints.md) together. The catalog is authoritative
+for launchers; no legacy command becomes supported merely because it exists.
 
-The bridge exists, but it is still paper/read-only:
+## Storage
 
-```text
-scanner_journal WATCH/GO
-  -> watch_queue.jsonl
-  -> setup_confirmation.confirm_setup(watch, SignalResult)
-  -> status only
-```
-
-Allowed statuses:
-
-- `WATCH_CONTINUE`
-- `SETUP_FORMING`
-- `TRADE_PLAN_READY`
-- `INVALIDATED`
-- `EXPIRED`
-- `NEEDS_DATA`
-
-Important invariants:
-
-- `NO_GO` does not enter `watch_queue`.
-- `watch_queue` rows have `execution_allowed=false`.
-- `TRADE_PLAN_READY` is paper-only and also has `execution_allowed=false`.
-- A future runner may write confirmation results, but must not call order
-  execution.
-
-## Main/TA Role
-
-Old Main/TA research showed that the directed 15m Main is not a durable primary
-signal. It can still provide useful market structure.
-
-Allowed use:
-
-- confirm scanner side with current market structure;
-- invalidate scanner thesis when technical side conflicts;
-- produce paper levels for analysis;
-- provide chart/indicator context;
-- classify `SETUP_FORMING` vs `WATCH_CONTINUE`;
-- support later extended Telegram analysis.
-
-Forbidden use:
-
-- old `ENTRY` becoming a live order;
-- old Main/TA originating trades without scanner event context;
-- scanner calling old client text/entry formatters as a trade signal;
-- any automatic execution from `watch_queue` or `setup_confirmation`.
-
-## Frozen/Reference Code
-
-These files are reference unless a task explicitly says otherwise:
-
-- `src/strategy/signal.py`
-- `src/strategy/signal_engine.py`
-- `scripts/ws/ws_main_screener.py`
-- `src/data/main_impulse_*.py`
-- `src/data/impulse_pump_*.py`
-- old `scripts/analysis/research/` experiments
-
-Safe reuse from frozen code:
-
-- `src/strategy/indicators.py`
-- `src/strategy/chart_renderer.py`
-- `src/strategy/signal_contract.py`
-- `build_analysis_snapshot()` as read-only context
-- OKX market-data utilities
-
-## Operational Commands
-
-Scanner:
-
-```bash
-bat\news_scanner_loop.bat
-python -u src\scout\scanner_v0.py --buffer --limit 5
-python -m src.scout.news_buffer stats
-python src/scout/resolve_outcomes.py --limit 50
-```
-
-`bat\news_scanner_loop.bat` keeps the feedback loop closed by running
-`resolve_outcomes.py --limit %SCANNER_OUTCOME_LIMIT%` after each scanner pass.
-The resolver is bounded and keyless; it writes only mature forward outcomes.
-
-Reports:
-
-```bash
-python src/scout/source_quality_report.py
-python src/scout/chief_usage_report.py
-python scripts/analysis/source_onboarding_report.py
-python scripts/analysis/build_watch_queue.py --dry-run
-```
-
-Focused checks:
-
-```bash
-python -m pytest tests/test_source_onboarding.py tests/test_watch_queue.py tests/test_setup_confirmation.py tests/test_build_watch_queue.py -q
-```
-
-## Research machine — the calculation farm (current core)
-
-The calculation farm is the continuous, self-deciding research lifecycle. It is
-universe-driven (scanner watches are one optional intake source) and fully paper/research
-only — no stage touches the order engine, `AUTO_TRADE`, or live trading. Canonical doc:
-[docs/farm_loop_lifecycle.md](docs/farm_loop_lifecycle.md).
-
-```text
-intake (scanner watch_queue.jsonl via intake_adapter + OKX discovery)
-  -> data_planner          (per symbol/timeframe: prepare / defer / enrich / block-with-reason)
-  -> farm_coordinator      (brain: state/farm_tasks.sqlite — typed tasks, fingerprint re-arm)
-       prepare_data        (public OKX candles) / enrich_funding / enrich_oi (public OKX)
-  -> run_sweep             (materialized into state/strategy_lab.sqlite compute queue)
-  -> worker_once           (no-lookahead simulation on local candles; cpu/gpu/auto)
-  -> classify_result       (-> unique_candidates, keyed symbol+tf+family+params+fingerprint)
-  -> validation_orchestrator (export -> honest-backtest -> verdict -> STAMP-BACK)  [--run-validation]
-  -> pivot                 (work_available / advanced_lifecycle / discovery_refill /
-                            blocked:no_eligible_tasks — never spins on already_queued)
-  -> logs/farm/{cycle_log,task_transitions,errors}.jsonl
-```
-
-Run it (dry-run writes nothing):
-
-```bash
-python -m scripts.strategy_lab.farm_loop --once --dry-run
-python -m scripts.strategy_lab.farm_loop --once --apply --run-worker --enrich-funding --enrich-oi
-python -m scripts.strategy_lab.farm_loop --loop --apply --run-worker --run-validation --run-paper --stop-file STOP
-bat\strategy_lab_farm_full_cycle_loop.bat
-bat\strategy_lab_control_room.bat
-bat\strategy_lab_farm_full_cycle_stop.bat
-python -m scripts.strategy_lab.farm_status_report --fast
-python -m scripts.strategy_lab.farm_status_report   # full audit/drilldown
-```
-
-**Legacy demo (superseded):** the older flat bridge path
-`scanner_bridge -> generate_event_sweeps --from-scanner -> worker_once ->
-validate_candidates_pipeline` (driven by `run_research_machine_demo.py`) predates the
-coordinator and is kept only as a walkthrough — see
-[docs/farm_ownership_map.md](docs/farm_ownership_map.md).
-
-The scanner only chooses which symbol to research; the news trigger is recorded
-as provenance in the spec's `event_context` and is never used as a price anchor.
-The sweep worker has a real backend contract (`cpu`/`gpu`/`auto`, see
-`src/research_lab/gpu_runtime.py` + `gpu_kernels.py` + `gpu_simulator.py`) with
-two independently GPU-accelerated stages: the `momentum_breakout` signal kernel
-and the batched trade simulation (first-touch SL/TP/max-hold barrier, long &
-short, fees+slippage) for the supported exit mode. Both run on a cupy GPU backend
-when usable (CPU/GPU parity proven by tests); `gpu` errors instead of silently
-using CPU when no backend is available, and `auto` falls back to CPU with a
-recorded reason. Unsupported exit modes (e.g. trailing stops) and over-cap
-batches fall back to CPU with an explicit `simulation_fallback_reason`; the
-`signal_backend` and `simulation_backend` are recorded separately in
-`metrics.json.runtime`. Check with `python -m scripts.strategy_lab.gpu_doctor`.
-Regime-filtered
-follow-up sweeps are **not** implemented (`compile_sweep` does not forward filters);
-`apply_feedback_recommendations` records `REGIME_SWEEP` as a note, not a queued
-sweep. Strategy timeframe is recorded end-to-end (run evaluator derives it from
-candle spacing; the exporter recovers it from the data-file label;
-`repair_hard_validation_metadata` backfills legacy artifacts). Full operator
-detail: [strategy_lab_operator_guide.md](docs/strategy_lab_operator_guide.md).
+Public Git holds source, tests, public-safe documentation, templates, and
+small deterministic fixtures. Local/private storage holds data, logs,
+credentials, model conversations, candidate rankings, journals, and raw
+research output. The binding repository policy is
+[docs/storage_boundaries.md](docs/storage_boundaries.md).

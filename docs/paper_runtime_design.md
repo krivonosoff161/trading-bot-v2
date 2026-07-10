@@ -10,9 +10,10 @@ The newer main-paper watcher has a separate account projection in
 setup runtime described below. It answers a different question: what would one
 shared paper account have been able to fund?
 
-- starts with `700 USDT`;
-- reserves `35 USDT` per accepted primary thesis at `3x` leverage;
-- keeps `5x` as a hard model cap, not a default;
+- uses a bounded local paper-account configuration;
+- reserves margin only for accepted primary theses;
+- keeps leverage and position caps as local research settings, not public
+  strategy parameters;
 - funds one primary thesis per instrument/timeframe/side/boundary scenario;
 - records sibling geometry variants as counterfactual exclusions;
 - appends stable open/close/rejection events and derives the current snapshot;
@@ -114,7 +115,8 @@ Paper confirmation is still paper-only. It does not promote live trading.
 - Funding accrual over actual funding windows.
 - Multi-TP / partial closes.
 - Rich promotion/demotion rules after enough forward paper trades.
-- Telegram notifications.
+- Direct Telegram imports or side effects inside the paper runtime. The separate
+  opt-in delivery edge is implemented and documented in `farm_notification_layer.md`.
 - Live trading integration.
 
 ## Mandatory Boundaries

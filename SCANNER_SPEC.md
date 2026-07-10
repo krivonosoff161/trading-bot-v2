@@ -1,5 +1,9 @@
 # SCANNER — specification and as-built notes
 
+Status: **REFERENCE**. This file describes scanner concepts and as-built notes.
+For current operation and authority, follow `ARCHITECTURE.md`,
+`CURRENT_STATE.md`, and `docs/README.md`.
+
 > Current status note, 2026-06-19: the scanner is an upstream intake source for
 > the calculation farm, not the active project center. For the canonical runtime
 > read `docs/farm_loop_lifecycle.md`, `docs/farm_runbook.md`, `CURRENT_STATE.md`,

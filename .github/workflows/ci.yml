@@ -32,6 +32,9 @@ jobs:
       - name: Check tracked private/runtime artifacts
         run: python scripts/ci/check_tracked_artifacts.py
 
+      - name: Check public documentation and entrypoint catalog
+        run: python scripts/ci/check_public_docs.py
+
       - name: Run non-live tests
         env:
           AUTO_TRADE: "false"

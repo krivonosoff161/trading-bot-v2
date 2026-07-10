@@ -33,6 +33,8 @@ logs_archive/
 
 # Analyzer working folders
 scripts/tape/
+scripts/tape_verify_*.json
+scripts/tape_verify_*.txt
 scripts/tg_temp/
 scripts/analysis_output/
 обучение проба/*
@@ -59,6 +61,7 @@ api_keys.yaml
 scripts/backtest/cache/
 scripts/backtest/results/
 scripts/backtest/*.json
+scripts/backtest/indicator_research_report.md
 scripts/backtest_result.txt
 scripts/backtest_*.txt
 scripts/qwen_analysis_pack.txt
@@ -90,7 +93,45 @@ docs/video_research_catalog.md
 docs/*.mp4
 docs/video*_frames/
 docs/video*_transcript_*.txt
-!docs/video2_transcript_medium.txt
+docs/qwen_*.txt
+docs/geometry/*
+!docs/geometry/findings.md
+
+# Local historical research. Public documentation is a deliberately small
+# allowlist; see docs/document-catalog.md before promoting a file.
+docs/*.md
+!docs/README.md
+!docs/document-catalog.md
+!docs/public-artifact-policy.md
+!docs/entrypoints.md
+!docs/project-map.md
+!docs/validation-bridge-contract.md
+!docs/storage_boundaries.md
+!docs/REMOTE_DATA_MANIFEST.md
+!docs/farm_loop_lifecycle.md
+!docs/farm_runbook.md
+!docs/farm_ownership_map.md
+!docs/farm_notification_layer.md
+!docs/llm_proposal_contract.md
+!docs/local_calculator_swarm_2026-07-10.md
+!docs/main_research_verdict_index.md
+!docs/outcome_learning_loop_2026-07-05.md
+!docs/paper_acceptance_cycle_2026-07-10.md
+!docs/paper_runtime_design.md
+!docs/public_channel_news_flow.md
+!docs/scanner_ta_confirmation_contract.md
+!docs/deferred-adaptive-paper-architecture.md
+docs/research_*/
+docs/strategy_lab/
+
+# Historical root handoffs/plans contain local research context, not public docs.
+BACKLOG.md
+JOURNAL.md
+PLAN.md
+PROJECT_VISION.md
+REFACTOR_PLAN.md
+SERVICE_PIVOT.md
+TASK.md
 docs/инста*/
 
 # Client subscriptions data
@@ -152,4 +193,5 @@ scripts/analysis/research/output/continuation_*.json
 # Research → ПРИВАТНЫЙ репозиторий (отдельный git внутри папки).
 # Публичный репо игнорирует ВЕСЬ research; в PLAN.md — только указатель.
 scripts/analysis/research/
+scripts/analysis/backtest_runs/
 reports/
