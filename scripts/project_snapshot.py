@@ -535,6 +535,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
     outcome_reviews = _read_jsonl(root / "state" / "llm_advice" / "outcome_reviews.jsonl")
     quality = _read_json(derived / "paper_product_quality_report.json")
+    calibration = _read_json(derived / "trading_policy_calibration.json")
     sent_keys = _sent_key_summary(root)
     outcome_retest = _outcome_retest_status(root)
     accepted_reviews = [row for row in outcome_reviews if bool(row.get("accepted"))]
@@ -661,6 +662,10 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
             else {}
         ),
         "quality_report_exists": bool(quality),
+        "calibration_trusted_rows": int(calibration.get("trusted_terminal_rows") or 0),
+        "calibration_legacy_excluded": int(calibration.get("legacy_rows_excluded") or 0),
+        "calibration_ready": bool(calibration.get("calibration_ready")),
+        "calibration_verdicts": _top_counts(calibration.get("profile_verdicts") or {}, limit=8),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
     }
@@ -850,6 +855,12 @@ def _print_paper_product_status() -> None:
                 )
             if preview:
                 print("                " f"geometry_profiles={' | '.join(preview)}")
+        print(
+            "                "
+            f"calibration trusted={st['calibration_trusted_rows']} "
+            f"legacy_excluded={st['calibration_legacy_excluded']} "
+            f"ready={st['calibration_ready']} verdicts={st['calibration_verdicts']}"
+        )
         lifecycle = st["active_lifecycle"]
         if lifecycle:
             print(

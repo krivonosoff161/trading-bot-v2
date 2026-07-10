@@ -43,6 +43,14 @@ documents are preserved as history, but they no longer define the active work.
 > and setup memory records candidate- or explicit cell-scoped evidence. Missing
 > historical run artifacts remain reported instead of being treated as failures.
 
+> **Phase 6 status - evidence-gated calibration foundation.** The current private
+> training export still contains legacy lifecycle rows, so it is not allowed to
+> tune the farm. A new aggregate calibration artifact accepts only durable
+> `PaperSignalLifecycle.v2` terminal outcomes, reports uncertainty and minimum
+> sample gates by profile/horizon/cell, and labels profiles as insufficient,
+> retain, demote, mixed, or exit/capture retest. This makes the next 24-48 hour
+> run an evidence-collection phase rather than another hand-tuned constant pass.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

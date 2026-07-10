@@ -453,6 +453,19 @@ def _run_main_paper_derived_chain(
     try:
         _write_loop_status(
             private_root,
+            stage="trading_policy_calibration",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.trading_policy_calibration import build_trading_policy_calibration
+
+        out["trading_policy_calibration"] = build_trading_policy_calibration(private_root)
+    except Exception as exc:  # noqa: BLE001 - calibration report must not break the cycle
+        out.setdefault("errors", []).append({"where": "trading_policy_calibration", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
             stage="setup_outcome_memory_refresh",
             apply=apply,
             loop=loop,
@@ -644,6 +657,16 @@ def _print_cycle(out: dict) -> None:
             f"rows={train.get('rows', 0)} terminal_only={train.get('terminal_only')} "
             f"paper_only={train.get('paper_only')}"
         )
+    calibration = out.get("trading_policy_calibration") or {}
+    if calibration:
+        print(
+            "  trading_policy_calibration: "
+            f"trusted={calibration.get('trusted_terminal_rows', 0)} "
+            f"legacy_excluded={calibration.get('legacy_rows_excluded', 0)} "
+            f"ready={calibration.get('calibration_ready')} "
+            f"verdicts={calibration.get('profile_verdicts') or {}} "
+            f"execution_allowed={calibration.get('execution_allowed')}"
+        )
     product_train = out.get("product_signal_training_export") or {}
     if product_train:
         print(
@@ -776,6 +799,20 @@ def _cycle_summary(out: dict) -> dict:
             "families": len((out.get("paper_product_quality_report") or {}).get("families") or []),
             "quality_labels": (out.get("paper_product_quality_report") or {}).get("quality_labels") or {},
         },
+        "trading_policy_calibration": {
+            "trusted_terminal_rows": (out.get("trading_policy_calibration") or {}).get(
+                "trusted_terminal_rows", 0
+            ),
+            "legacy_rows_excluded": (out.get("trading_policy_calibration") or {}).get(
+                "legacy_rows_excluded", 0
+            ),
+            "calibration_ready": (out.get("trading_policy_calibration") or {}).get(
+                "calibration_ready", False
+            ),
+            "profile_verdicts": (out.get("trading_policy_calibration") or {}).get(
+                "profile_verdicts"
+            ) or {},
+        },
     }
 
 
@@ -798,6 +835,7 @@ def _cycle_signature(out: dict) -> tuple:
     product_training_export = tuple(sorted((out.get("product_signal_training_export") or {}).items()))
     memory_refresh = tuple(sorted((out.get("setup_outcome_memory_refresh") or {}).items()))
     product_quality = tuple(sorted((out.get("paper_product_quality_report") or {}).items()))
+    calibration = tuple(sorted((out.get("trading_policy_calibration") or {}).items()))
     calculator_advisor = tuple(sorted((out.get("calculator_advisor") or {}).items()))
     agent_role_reviews = tuple(sorted((out.get("agent_role_reviews") or {}).items()))
     ready_catalog = tuple(sorted((out.get("ready_strategy_catalog") or {}).items()))
@@ -805,7 +843,8 @@ def _cycle_signature(out: dict) -> tuple:
         out.get("pivot"), nz, by_state, paper_counters, paper_ready,
         main_consumer, main_runtime_queue, main_runtime_observation, main_trade_ledger, product_trade_ledger,
         trade_thesis, telegram_preview,
-        telegram_delivery, training_export, product_training_export, memory_refresh, product_quality, calculator_advisor,
+        telegram_delivery, training_export, product_training_export, memory_refresh, product_quality, calibration,
+        calculator_advisor,
         agent_role_reviews, ready_catalog,
         bool(out.get("errors")),
     )
