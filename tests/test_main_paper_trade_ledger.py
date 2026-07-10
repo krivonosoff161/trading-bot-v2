@@ -43,6 +43,14 @@ def _queue_item(**overrides):
         "farm_geometry_stop_scale": 1.1,
         "farm_geometry_tp_scale": 1.35,
         "farm_geometry_hold_scale": 1.5,
+        "scanner_event_id": "se_1",
+        "data_packet_id": "dp_1",
+        "feature_packet_id": "fp_1",
+        "setup_candidate_id": "setup_candidate_1",
+        "sweep_run_id": "sweep_1",
+        "setup_id": "setup_1",
+        "candidate_id": "candidate_1",
+        "validation_id": "validation_1",
     }
     row.update(overrides)
     return row
@@ -112,6 +120,10 @@ def test_trade_ledger_builds_validated_and_calculated_paper_trades(tmp_path):
     assert trade["paper_account"]["position_margin_usdt"] == 35.0
     assert trade["boundary_ts"] == 1_700_000_000_000
     assert trade["source_created_at"] == 1_700_000_000.0
+    assert trade["scanner_event_id"] == "se_1"
+    assert trade["feature_packet_id"] == "fp_1"
+    assert trade["setup_id"] == "setup_1"
+    assert trade["validation_id"] == "validation_1"
     assert trade["farm_geometry_profile_id"] == "runner_probe"
     assert trade["farm_geometry_profile_reason"] == "test geometry profile"
     assert trade["farm_geometry_tp_scale"] == 1.35

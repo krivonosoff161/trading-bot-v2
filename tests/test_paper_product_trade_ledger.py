@@ -114,6 +114,32 @@ def test_product_trade_ledger_preserves_geometry_profile_lineage(tmp_path):
     assert trade["farm_geometry_stop_scale"] == 1.2
 
 
+def test_product_trade_ledger_preserves_full_signal_lineage(tmp_path):
+    append_signal(
+        tmp_path,
+        _signal(
+            scanner_event_id="se_1",
+            data_packet_id="dp_1",
+            feature_packet_id="fp_1",
+            setup_candidate_id="setup_candidate_1",
+            sweep_run_id="sweep_1",
+            validation_id="validation_1",
+            validator_context={"setup_id": "setup_1", "candidate_id": "candidate_1"},
+        ),
+    )
+
+    trade = build_paper_product_trade_ledger(tmp_path)["items"][0]
+
+    assert trade["scanner_event_id"] == "se_1"
+    assert trade["data_packet_id"] == "dp_1"
+    assert trade["feature_packet_id"] == "fp_1"
+    assert trade["setup_candidate_id"] == "setup_candidate_1"
+    assert trade["sweep_run_id"] == "sweep_1"
+    assert trade["validation_id"] == "validation_1"
+    assert trade["setup_id"] == "setup_1"
+    assert trade["candidate_id"] == "candidate_1"
+
+
 def test_product_trade_ledger_links_terminal_outcome(tmp_path):
     append_signal(
         tmp_path,
