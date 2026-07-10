@@ -1,6 +1,6 @@
 # Current State
 
-Updated: 2026-07-07
+Updated: 2026-07-10
 
 > **Update 2026-07-08 - validated PFR rows now lead main-paper queue.**
 > The PFR/main-paper handoff no longer hides validated rows behind broad farm
@@ -115,7 +115,8 @@ Updated: 2026-07-07
 > is validator-backed paper observation, not old-main live execution:
 > `farm_loop -> validation/PFR -> paper_signals -> main_paper_bridge ->
 > main_paper_consumer -> main_adaptive_policy -> main_paper_runtime_queue ->
-> main_paper_runtime_observation -> main_paper_trade_ledger -> Telegram preview/audit
+> main_paper_runtime_observation -> main_paper_trade_ledger -> paper_account_ledger
+> -> Telegram preview/audit
 > -> training export -> journal`. See
 > [docs/session_handoff_2026-07-03.md](docs/session_handoff_2026-07-03.md).
 >

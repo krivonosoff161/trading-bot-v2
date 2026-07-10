@@ -589,6 +589,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "product_paper_money": (
             product_trades.get("paper_money") if isinstance(product_trades.get("paper_money"), dict) else {}
         ),
+        "product_counterfactual_money": (
+            product_trades.get("counterfactual_money")
+            if isinstance(product_trades.get("counterfactual_money"), dict)
+            else {}
+        ),
         "preview_rendered": int(preview.get("rendered") or 0),
         "preview_skipped_quality_gate": int(preview.get("skipped_quality_gate") or 0),
         "preview_quality_gate_reasons": _top_counts(preview.get("quality_gate_reasons") or {}),
@@ -742,15 +747,24 @@ def _print_paper_product_status() -> None:
             f"bridge_skip={st['bridge_skip_reasons']} "
             f"diagnosis={st['training_by_diagnosis']}"
         )
-    money = st.get("product_paper_money") or {}
-    if money:
+    account = st.get("strict_paper_money") or {}
+    if account:
         print(
             "                "
-            f"paper_money terminal={money.get('terminal_trades', 0)} "
-            f"wins={money.get('wins', 0)} losses={money.get('losses', 0)} "
-            f"pnl_usdt={money.get('total_pnl_usdt', 0)} "
-            f"avg_usdt={money.get('avg_pnl_usdt', 0)} "
-            "model=700usdt/35usdt/3x"
+            f"paper_account balance={account.get('balance_usdt', 0)} "
+            f"available={account.get('available_margin_usdt', 0)} "
+            f"reserved={account.get('reserved_margin_usdt', 0)} "
+            f"active={account.get('active_positions', 0)} "
+            f"terminal={account.get('terminal_trades', 0)} "
+            f"pnl_usdt={account.get('total_pnl_usdt', 0)}"
+        )
+    counterfactual = st.get("product_counterfactual_money") or st.get("product_paper_money") or {}
+    if counterfactual:
+        print(
+            "                "
+            f"counterfactual variants terminal={counterfactual.get('terminal_trades', 0)} "
+            f"wins={counterfactual.get('wins', 0)} losses={counterfactual.get('losses', 0)} "
+            f"sum_usdt={counterfactual.get('total_pnl_usdt', 0)} account_state=False"
         )
     if st["outcome_review_rows"] or st["training_outcome_review_linked"]:
         print(

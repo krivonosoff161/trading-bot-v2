@@ -26,6 +26,8 @@ def _queue_item(**overrides):
         ],
         "max_hold_min": 600,
         "max_hold_bars": 10,
+        "boundary_ts": 1_700_000_000_000,
+        "created_at": 1_700_000_000.0,
         "adaptive_policy_id": "main_policy_fast",
         "adaptive_execution_profile": "fast_tactical_watch",
         "adaptive_entry_profile": "limit_mid_zone",
@@ -108,6 +110,8 @@ def test_trade_ledger_builds_validated_and_calculated_paper_trades(tmp_path):
     assert trade["source_validation_verdict"] == "PAPER_FORWARD_READY"
     assert trade["paper_account"]["deposit_usdt"] == 700.0
     assert trade["paper_account"]["position_margin_usdt"] == 35.0
+    assert trade["boundary_ts"] == 1_700_000_000_000
+    assert trade["source_created_at"] == 1_700_000_000.0
     assert trade["farm_geometry_profile_id"] == "runner_probe"
     assert trade["farm_geometry_profile_reason"] == "test geometry profile"
     assert trade["farm_geometry_tp_scale"] == 1.35
@@ -144,6 +148,8 @@ def test_trade_ledger_records_terminal_outcome(tmp_path):
     assert summary["items"][0]["paper_account"]["pnl_usdt"] == 1.575
     assert summary["paper_money"]["terminal_trades"] == 1
     assert summary["paper_money"]["total_pnl_usdt"] == 1.575
+    assert summary["paper_money"]["balance_usdt"] == 701.575
+    assert summary["paper_account_ledger"] == summary["paper_money"]
 
 
 def test_trade_ledger_has_no_live_or_sender_imports():

@@ -91,6 +91,7 @@ def paper_money_from_outcome(
 
 
 def summarize_paper_money(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize independent what-if outcomes, never a shared account balance."""
     terminal = [
         row.get("paper_account") or {}
         for row in rows
@@ -108,6 +109,9 @@ def summarize_paper_money(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "losses": len(losses),
         "total_pnl_usdt": round(sum(pnl), 6),
         "avg_pnl_usdt": round(sum(pnl) / len(pnl), 6) if pnl else 0.0,
+        "counterfactual": True,
+        "account_state": False,
+        "note": "independent research variants; do not interpret summed PnL as account equity",
         "paper_only": True,
         "execution_allowed": False,
     }

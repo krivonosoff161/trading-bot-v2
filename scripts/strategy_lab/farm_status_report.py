@@ -599,7 +599,9 @@ def _print(report: dict) -> None:
                   f"terminal={money.get('terminal_trades', 0)} "
                   f"wins={money.get('wins', 0)} losses={money.get('losses', 0)} "
                   f"pnl_usdt={money.get('total_pnl_usdt', 0)} "
-                  f"avg_usdt={money.get('avg_pnl_usdt', 0)}")
+                  f"balance={money.get('balance_usdt', 0)} "
+                  f"available={money.get('available_margin_usdt', 0)} "
+                  f"reserved={money.get('reserved_margin_usdt', 0)}")
     ptl = report.get("paper_product_trade_ledger") or {}
     if ptl.get("trades") is not None:
         money = ptl.get("paper_money") if isinstance(ptl.get("paper_money"), dict) else {}
@@ -607,8 +609,8 @@ def _print(report: dict) -> None:
               f"trades={ptl.get('trades', 0)} active={ptl.get('active_trades', 0)} "
               f"live_ready={ptl.get('live_ready', 0)} live_blocked={ptl.get('live_blocked', 0)} "
               f"by_status={ptl.get('by_status') or '(none)'} "
-              f"paper_money_pnl={money.get('total_pnl_usdt', 0) if money else 0} "
-              "(subscriber paper ledger; no order path)")
+              f"counterfactual_sum={money.get('total_pnl_usdt', 0) if money else 0} "
+              "(independent research variants, not account equity; no order path)")
     pt = report.get("paper_telegram_preview") or {}
     if pt.get("rendered") is not None:
         print("  paper Telegram preview: "
