@@ -2,6 +2,11 @@
 
 Updated: 2026-07-10
 
+> **Update 2026-07-10 - stable paper scenario lifecycle.** Active symbol-level
+> trade theses retain one ID across confirmations and leader changes. Thesis
+> events are append-only, and the preview emits a dedicated close card when no
+> active signal remains. This changes paper observation/reporting only.
+
 > **Update 2026-07-08 - validated PFR rows now lead main-paper queue.**
 > The PFR/main-paper handoff no longer hides validated rows behind broad farm
 > candidates in the runtime/Telegram preview priority order. `validated_pfr` queue

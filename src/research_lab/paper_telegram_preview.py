@@ -26,7 +26,7 @@ from src.strategy.chart_renderer import generate_chart_png
 
 SCHEMA = "PaperTelegramPreview.v1"
 SUMMARY_SCHEMA = "paper_telegram_preview.v1"
-CARD_TEMPLATE_VERSION = "paper_telegram_card_v6_validation_tier_ru"
+CARD_TEMPLATE_VERSION = "paper_telegram_card_v7_scenario_lifecycle_ru"
 MAX_MESSAGE_CHARS = 4096
 REQUIRED_DISCLAIMER = "\u0411\u0443\u043c\u0430\u0436\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c: \u044d\u0442\u043e \u043d\u0435 \u043e\u0440\u0434\u0435\u0440."
 HUMAN_DISCLAIMER = "\u042d\u0442\u043e paper-\u043d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435, \u043d\u0435 \u043e\u0440\u0434\u0435\u0440 \u0438 \u043d\u0435 \u043a\u043e\u043c\u0430\u043d\u0434\u0430 \u043a \u0432\u0445\u043e\u0434\u0443."
@@ -1054,6 +1054,81 @@ def _scenario_update_previews(
     return previews
 
 
+def _scenario_close_text(thesis: dict[str, Any], event: dict[str, Any]) -> str:
+    pair = html.escape(str(thesis.get("symbol") or event.get("symbol") or "unknown"))
+    timeframe = html.escape(str(thesis.get("primary_timeframe") or event.get("signal_timeframe") or "unknown"))
+    side = html.escape(_side_label(str(thesis.get("side") or event.get("signal_side") or "unknown")))
+    family = html.escape(_family_label(str(thesis.get("primary_family") or event.get("signal_family") or "unknown")))
+    result = html.escape(str(event.get("terminal_result") or thesis.get("close_reason") or "observation_ended"))
+    net_pct = event.get("terminal_net_pct")
+    outcome = "данных о доходности нет"
+    if net_pct not in (None, ""):
+        outcome = f"{float(net_pct):+.3f}%"
+    return "\n".join(
+        [
+            f"<b>Наблюдение завершено: {pair} · {timeframe} · {side}</b>",
+            HUMAN_DISCLAIMER,
+            f"<code>{REQUIRED_DISCLAIMER}</code>",
+            "",
+            f"<b>{LABEL_SCENARIO}:</b> {timeframe} {side} · {family}",
+            f"<b>Причина завершения:</b> {result}",
+            f"<b>{LABEL_OUTCOME}:</b> <code>{html.escape(outcome)}</code>",
+            "",
+            "Система закрыла наблюдение за этой идеей. Новые сообщения по ней появятся только как новый сценарий.",
+            "<i>Это завершение paper-наблюдения, не команда к закрытию реальной позиции.</i>",
+            f"<i>{EXECUTION_OFF}</i>",
+        ]
+    )
+
+
+def _scenario_close_previews(private_root: Path, *, limit: int) -> list[PaperTelegramPreview]:
+    path = _trade_thesis_snapshot_path(private_root)
+    if not path.exists() or limit <= 0:
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    events = {
+        str(row.get("thesis_id") or ""): row
+        for row in data.get("event_items") or []
+        if isinstance(row, dict) and row.get("event_type") == "scenario_closed"
+    }
+    previews: list[PaperTelegramPreview] = []
+    for thesis in data.get("items") or []:
+        if len(previews) >= limit or not isinstance(thesis, dict) or thesis.get("status") != "closed":
+            continue
+        thesis_id = str(thesis.get("thesis_id") or "")
+        event = events.get(thesis_id)
+        if not thesis_id or not event:
+            continue
+        source_signal_id = f"scenario_closed:{thesis_id}:{event.get('event_id') or ''}"
+        text = _scenario_close_text(thesis, event)
+        tier = VALIDATED_TIER if thesis.get("primary_validation_tier") == VALIDATED_TIER else FARM_CALCULATED_TIER
+        validation_row = {
+            "schema": "PaperSignalCandidate.v1",
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        previews.append(
+            PaperTelegramPreview(
+                telegram_card_id=f"tgcard_{source_signal_id}_{_card_hash(text)}",
+                preview_id=f"preview_{source_signal_id}",
+                instruction_id="",
+                source_signal_id=source_signal_id,
+                pair=str(thesis.get("symbol") or ""),
+                timeframe=str(thesis.get("primary_timeframe") or ""),
+                side=str(thesis.get("side") or ""),
+                setup_family=str(thesis.get("primary_family") or ""),
+                consumer_status="scenario_closed",
+                validation_tier=tier,
+                text=text,
+                problems=validate_preview(validation_row, text),
+            )
+        )
+    return previews
+
+
 def _scenario_gate_rows(
     private_root: Path,
     rows: list[dict[str, Any]],
@@ -1168,7 +1243,8 @@ def build_paper_telegram_preview(
         source_schema = "paper_signals.v1"
 
     records_read = len(rows)
-    previews: list[PaperTelegramPreview] = []
+    scenario_close_cards = _scenario_close_previews(Path(private_root), limit=limit)
+    previews: list[PaperTelegramPreview] = list(scenario_close_cards)
     skipped_rejected = 0
     skipped_non_actionable = 0
     skipped_quality_gate = 0
@@ -1331,6 +1407,7 @@ def build_paper_telegram_preview(
         "scenario_ranked": scenario_ranked,
         "scenario_groups": scenario_groups,
         "scenario_update_cards": len(scenario_update_cards),
+        "scenario_close_cards": len(scenario_close_cards),
         "by_validation_tier": by_validation_tier,
         "chart_path_types": dict(sorted(chart_path_types.items())),
         "items": [preview.to_dict() for preview in previews],
