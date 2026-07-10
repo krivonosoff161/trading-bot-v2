@@ -324,6 +324,54 @@ def test_sender_deduplicates_sent_preview_per_recipient(tmp_path):
     assert len(calls) == 1
 
 
+def test_sender_sends_scenario_update_as_separate_state_event(tmp_path):
+    _write_preview_snapshot(
+        tmp_path,
+        [
+            _preview(
+                preview_id="preview_signal",
+                source_signal_id="sig_primary",
+                telegram_card_id="tgcard_sig_primary",
+            ),
+            _preview(
+                preview_id="preview_scenario_update",
+                source_signal_id="scenario_update:thesis_1:state_1",
+                telegram_card_id="tgcard_scenario_update_1",
+                consumer_status="scenario_update",
+                text=f"<b>scenario update</b>\n{sender.REQUIRED_DISCLAIMER}\nexecution disabled.",
+            ),
+        ],
+    )
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert first["sent"] == 2
+    assert first["sent_cards"] == 2
+    assert second["sent"] == 0
+    assert second["duplicate_cards"] == 2
+    assert len(calls) == 2
+
+
 def test_sender_persists_sent_key_after_each_successful_delivery(tmp_path):
     _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_sig_1_clean_v2")])
     sent_keys_path = tmp_path / "state" / "derived" / "paper_telegram_sent_keys.json"
