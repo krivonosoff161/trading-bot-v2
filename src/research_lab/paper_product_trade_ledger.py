@@ -31,6 +31,14 @@ class PaperProductTrade:
     paper_trade_id: str
     paper_product_trade_id: str
     source_signal_id: str
+    setup_id: str
+    candidate_id: str
+    validation_id: str
+    scanner_event_id: str
+    data_packet_id: str
+    feature_packet_id: str
+    setup_candidate_id: str
+    sweep_run_id: str
     ready_strategy_id: str
     source_validation_verdict: str
     live_ready: bool
@@ -133,6 +141,7 @@ def _geometry_from_signal(sig: PaperActionSignal) -> dict[str, Any]:
 def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
     live_ready, block_reason, ready_strategy_id, verdict = _readiness(sig)
     geometry = _geometry_from_signal(sig)
+    context = sig.validator_context or {}
     trade_id = stable_id(
         "paperproducttrade",
         {
@@ -146,6 +155,14 @@ def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
         paper_trade_id=trade_id,
         paper_product_trade_id=trade_id,
         source_signal_id=sig.signal_id,
+        setup_id=str(context.get("setup_id") or ""),
+        candidate_id=str(context.get("candidate_id") or ""),
+        validation_id=str(sig.validation_id or context.get("validation_id") or ""),
+        scanner_event_id=str(sig.scanner_event_id or ""),
+        data_packet_id=str(sig.data_packet_id or ""),
+        feature_packet_id=str(sig.feature_packet_id or ""),
+        setup_candidate_id=str(sig.setup_candidate_id or ""),
+        sweep_run_id=str(sig.sweep_run_id or ""),
         ready_strategy_id=ready_strategy_id,
         source_validation_verdict=verdict,
         live_ready=live_ready,

@@ -34,6 +34,14 @@ class MainPaperTrade:
     validation_tier: str
     ready_strategy_id: str
     source_validation_verdict: str
+    setup_id: str
+    candidate_id: str
+    validation_id: str
+    scanner_event_id: str
+    data_packet_id: str
+    feature_packet_id: str
+    setup_candidate_id: str
+    sweep_run_id: str
     okx_inst_id: str
     timeframe: str
     side: str
@@ -156,6 +164,14 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         validation_tier=validation_tier,
         ready_strategy_id=str(queue_item.get("ready_strategy_id") or ""),
         source_validation_verdict=str(queue_item.get("source_validation_verdict") or ""),
+        setup_id=str(queue_item.get("setup_id") or ""),
+        candidate_id=str(queue_item.get("candidate_id") or ""),
+        validation_id=str(queue_item.get("validation_id") or ""),
+        scanner_event_id=str(queue_item.get("scanner_event_id") or ""),
+        data_packet_id=str(queue_item.get("data_packet_id") or ""),
+        feature_packet_id=str(queue_item.get("feature_packet_id") or ""),
+        setup_candidate_id=str(queue_item.get("setup_candidate_id") or ""),
+        sweep_run_id=str(queue_item.get("sweep_run_id") or ""),
         okx_inst_id=str(queue_item.get("okx_inst_id") or ""),
         timeframe=str(queue_item.get("timeframe") or ""),
         side=str(queue_item.get("side") or ""),

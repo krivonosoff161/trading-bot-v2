@@ -529,6 +529,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     preview = _read_json(derived / "paper_telegram_preview.json")
     delivery = _read_json(derived / "paper_telegram_delivery.json")
     training = _read_json(derived / "paper_signal_training.json")
+    lineage = _read_json(derived / "paper_lineage.json")
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
     outcome_reviews = _read_jsonl(root / "state" / "llm_advice" / "outcome_reviews.jsonl")
     quality = _read_json(derived / "paper_product_quality_report.json")
@@ -551,7 +552,7 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     )
     execution_allowed = any(
         bool(row.get("execution_allowed"))
-        for row in (bridge, consumer, queue, observation, trades, product_trades, trade_thesis, preview, delivery)
+        for row in (bridge, consumer, queue, observation, trades, product_trades, trade_thesis, preview, delivery, lineage)
         if row
     )
     return {
@@ -612,6 +613,11 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "cumulative_sent_previews": sent_keys["sent_preview_count"],
         "cumulative_sent_recipients": sent_keys["sent_recipient_count"],
         "training_rows": int(training.get("rows") or 0),
+        "lineage_envelopes": int(lineage.get("envelopes") or 0),
+        "lineage_conflicts": int(lineage.get("conflicts") or 0),
+        "lineage_main_without_trade": int(lineage.get("main_without_trade") or 0),
+        "lineage_terminal_without_training": int(lineage.get("terminal_without_training") or 0),
+        "lineage_valid": bool(lineage.get("valid")) if lineage else False,
         "training_by_result": _top_counts(training.get("by_result") or {}),
         "training_by_family": _top_counts(training.get("by_family") or {}),
         "training_by_diagnosis": _top_counts(training.get("by_diagnosis") or {}),
@@ -746,6 +752,14 @@ def _print_paper_product_status() -> None:
             "                "
             f"bridge_skip={st['bridge_skip_reasons']} "
             f"diagnosis={st['training_by_diagnosis']}"
+        )
+    if st["lineage_envelopes"]:
+        print(
+            "                "
+            f"lineage envelopes={st['lineage_envelopes']} valid={st['lineage_valid']} "
+            f"conflicts={st['lineage_conflicts']} "
+            f"main_without_trade={st['lineage_main_without_trade']} "
+            f"terminal_without_training={st['lineage_terminal_without_training']}"
         )
     account = st.get("strict_paper_money") or {}
     if account:
