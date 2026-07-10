@@ -13,6 +13,12 @@ Updated: 2026-07-10
 > order path. Broad `paper_product_trade_ledger` sums are explicitly labeled as
 > independent what-if variants and are not account equity.
 
+> **Update 2026-07-10 - scenario lifecycle is durable.** The paper thesis
+> supervisor keeps one stable `thesis_id` while a symbol-level idea is active,
+> appends open/update/classification/close events, and emits an explicit Telegram
+> close card when observation ends. A lower-timeframe confirmation no longer
+> creates a new subscriber idea merely because the leading signal changed.
+
 > **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
 > self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
 > `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
@@ -110,7 +116,8 @@ paper_signals / PFR-ready rows
   -> main_paper_runtime_observation (public candles, pending/reviewed/provider-error)
   -> main_paper_trade_ledger        (paper pseudo-trade lifecycle)
   -> paper_account_ledger           (one funded thesis/scenario; append-only events)
-  -> paper_telegram_preview         (human card preview/audit)
+  -> trade_thesis_supervisor        (stable scenario ID and append-only lifecycle)
+  -> paper_telegram_preview         (open/update/close human card preview/audit)
   -> paper_signal_training_export   (training rows)
   -> OutcomeLearningCase.v1         (deterministic learning case)
   -> outcome_reviewer               (advisory-only LLM review)

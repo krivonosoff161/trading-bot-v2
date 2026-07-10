@@ -45,6 +45,8 @@ class PaperProductTrade:
     take_profit_plan: list[dict[str, Any]]
     max_hold_min: int
     max_hold_bars: int
+    boundary_ts: int
+    source_created_at: float
     status: str
     signal_status: str
     source: str
@@ -158,6 +160,8 @@ def _trade_from_signal(sig: PaperActionSignal) -> PaperProductTrade:
         take_profit_plan=list(sig.take_profit_plan),
         max_hold_min=int(sig.max_hold_minutes),
         max_hold_bars=int(sig.max_hold_bars),
+        boundary_ts=int(sig.boundary_ts or 0),
+        source_created_at=float(sig.created_at or 0.0),
         status=sig.status,
         signal_status=sig.status,
         source=sig.source,

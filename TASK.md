@@ -7,8 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 2 / issue #151. Build a
-reconciled paper account after repairing lifecycle truth in merged PR #159.
+Current engineering task: GitHub epic #158, phase 3 / issue #152. Complete
+stable scenario identity and Telegram open/update/close lifecycle after merging
+the reconciled paper account in PR #160.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -31,6 +32,13 @@ private derived state. The ledger starts at `700 USDT`, reserves `35 USDT` at
 realized PnL, and rejects allocations when margin is unavailable. Broad product
 geometry variants remain counterfactual and must not be read as shared account
 equity. The event ledger is append-only and idempotent by stable event ID.
+
+Phase 3 keeps one `thesis_id` for the lifetime of an active symbol-level idea,
+persists append-only thesis events, retains the primary signal while it remains
+active, records material state/leader changes, and creates `scenario_closed`
+when the final active signal ends. Telegram preview v7 renders that closure as
+an explicit end-of-observation card; it remains a dry-run surface until the
+normal operator-controlled sender stage.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

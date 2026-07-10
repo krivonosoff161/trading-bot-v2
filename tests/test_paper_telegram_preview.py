@@ -317,7 +317,7 @@ def test_preview_prefers_main_paper_trade_cards(tmp_path):
     assert summary["rendered"] == 1
     assert summary["invalid"] == 0
     assert summary["sends_network"] is False
-    assert summary["card_template_version"] == "paper_telegram_card_v6_validation_tier_ru"
+    assert summary["card_template_version"] == "paper_telegram_card_v7_scenario_lifecycle_ru"
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     item = data["items"][0]
     text = item["text"]
@@ -703,6 +703,54 @@ def test_preview_groups_product_variants_by_trade_thesis_for_telegram(tmp_path):
     assert PRIMARY_SCENARIO in item["text"]
     assert "\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u044f" in update["text"]
     assert "\u0427\u0442\u043e \u0432\u0438\u0434\u043d\u043e \u0441\u0435\u0439\u0447\u0430\u0441" in update["text"]
+
+
+def test_preview_emits_explicit_scenario_close_card(tmp_path):
+    _write_trade_thesis_snapshot(
+        tmp_path,
+        [
+            {
+                "schema": "TradeThesis.v1",
+                "thesis_id": "thesis_closed",
+                "symbol": "KAITO-USDT-SWAP",
+                "side": "short",
+                "primary_signal_id": "sig_closed",
+                "primary_timeframe": "4h",
+                "primary_family": "reversal_fade",
+                "primary_validation_tier": "validated_pfr",
+                "active_signals": 0,
+                "status": "closed",
+                "close_reason": "take",
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ],
+        [
+            {
+                "schema": "TradeThesisEvent.v1",
+                "event_id": "event_closed",
+                "thesis_id": "thesis_closed",
+                "symbol": "KAITO-USDT-SWAP",
+                "event_type": "scenario_closed",
+                "supervisor_action": "stop_watch",
+                "terminal_result": "take",
+                "terminal_net_pct": 1.25,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ],
+    )
+
+    summary = build_paper_telegram_preview(tmp_path)
+
+    assert summary["scenario_close_cards"] == 1
+    assert summary["rendered"] == 1
+    item = summary["items"][0]
+    assert item["consumer_status"] == "scenario_closed"
+    assert item["source_signal_id"].startswith("scenario_closed:thesis_closed:")
+    assert item["problems"] == []
+    assert "\u041d\u0430\u0431\u043b\u044e\u0434\u0435\u043d\u0438\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e" in item["text"]
+    assert "+1.250%" in item["text"]
 
 
 def test_preview_quality_gate_skips_weak_product_rows_for_subscribers(tmp_path):
