@@ -19,6 +19,12 @@ Updated: 2026-07-10
 > close card when observation ends. A lower-timeframe confirmation no longer
 > creates a new subscriber idea merely because the leading signal changed.
 
+> **Update 2026-07-10 - paper lineage is auditable end to end.** Existing farm,
+> validation, signal, runtime, trade, account, thesis, Telegram, outcome-review
+> and training IDs are joined in `PaperLineageEnvelope.v1`. The index reads full
+> append-only history where snapshots are intentionally capped, reports conflicts
+> and missing downstream rows, and never fabricates missing validation evidence.
+
 > **Update 2026-07-05 - outcome-learning is a sidecar over training rows.** The
 > self-improvement layer now starts at terminal paper outcomes and `TrainingRow.v2`.
 > `OutcomeLearningCase.v1` classifies loss/win/missed/counterfactual cases, builds
@@ -119,6 +125,7 @@ paper_signals / PFR-ready rows
   -> trade_thesis_supervisor        (stable scenario ID and append-only lifecycle)
   -> paper_telegram_preview         (open/update/close human card preview/audit)
   -> paper_signal_training_export   (training rows)
+  -> paper_lineage                  (derived join and broken-link audit)
   -> OutcomeLearningCase.v1         (deterministic learning case)
   -> outcome_reviewer               (advisory-only LLM review)
   -> outcome_review_id backlink     (next TrainingRow.v2 export)

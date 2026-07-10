@@ -427,6 +427,19 @@ def _run_main_paper_derived_chain(
     try:
         _write_loop_status(
             private_root,
+            stage="paper_lineage_index",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.paper_lineage import build_paper_lineage
+
+        out["paper_lineage_index"] = build_paper_lineage(private_root)
+    except Exception as exc:  # noqa: BLE001 - lineage audit must not break the cycle
+        out.setdefault("errors", []).append({"where": "paper_lineage_index", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
             stage="setup_outcome_memory_refresh",
             apply=apply,
             loop=loop,

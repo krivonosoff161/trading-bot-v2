@@ -31,6 +31,12 @@ documents are preserved as history, but they no longer define the active work.
 > can prioritize an explicit close-of-observation card. Repeated cycles are
 > idempotent, and a changed signal leader does not silently create a new scenario.
 
+> **Phase 4 status - unified lineage.** Full farm/PFR identifiers now survive the
+> runtime queue and strict/product trade ledgers. `paper_lineage.jsonl` joins the
+> existing IDs through account, thesis, Telegram and training surfaces, while the
+> summary reports conflicts, queue rows without trades and terminal rows without
+> training evidence. Historical joins read full JSONL logs instead of capped views.
+
 > **Update 2026-07-05 - self-improvement track is now explicit.**
 > The next work is not a new trading brain. It is a closed paper/research
 > learning loop over existing artifacts: `TrainingRow.v2 -> OutcomeLearningCase.v1

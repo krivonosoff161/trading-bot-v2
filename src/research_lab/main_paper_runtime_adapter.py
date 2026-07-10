@@ -89,6 +89,11 @@ class MainPaperRuntimeQueueItem:
     setup_id: str = ""
     candidate_id: str = ""
     validation_id: str = ""
+    scanner_event_id: str = ""
+    data_packet_id: str = ""
+    feature_packet_id: str = ""
+    setup_candidate_id: str = ""
+    sweep_run_id: str = ""
     priority_reasons: list[str] = field(default_factory=list)
     runtime_action: str = "watch_paper"
     source_consumer_status: str = "accepted_for_paper_watch"
@@ -284,6 +289,11 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         setup_id=str(meta.get("setup_id") or ""),
         candidate_id=str(meta.get("candidate_id") or ""),
         validation_id=str(meta.get("validation_id") or ""),
+        scanner_event_id=str(meta.get("scanner_event_id") or ""),
+        data_packet_id=str(meta.get("data_packet_id") or ""),
+        feature_packet_id=str(meta.get("feature_packet_id") or ""),
+        setup_candidate_id=str(meta.get("setup_candidate_id") or ""),
+        sweep_run_id=str(meta.get("sweep_run_id") or ""),
         priority_reasons=priority_reasons,
     )
 

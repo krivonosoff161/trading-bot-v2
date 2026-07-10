@@ -7,9 +7,9 @@ It is not the canonical architecture document.
 
 ## Current State
 
-Current engineering task: GitHub epic #158, phase 3 / issue #152. Complete
-stable scenario identity and Telegram open/update/close lifecycle after merging
-the reconciled paper account in PR #160.
+Current engineering task: GitHub epic #158, phase 4 / issue #153. Preserve and
+audit one lineage from farm/PFR evidence through main-paper, account, scenario,
+Telegram, outcome and training after merging scenario lifecycle in PR #161.
 The lifecycle implementation replaces list-relative `open_index` replay with durable
 `last_observed_bar_ts`, `opened_at_bar_ts`, cumulative wait/hold counters, and
 idempotent candle processing. An opened signal no longer uses the entry-window
@@ -39,6 +39,11 @@ active, records material state/leader changes, and creates `scenario_closed`
 when the final active signal ends. Telegram preview v7 renders that closure as
 an explicit end-of-observation card; it remains a dry-run surface until the
 normal operator-controlled sender stage.
+
+Phase 4 propagates scanner/data/feature/setup/sweep/validation IDs through the
+runtime and trade surfaces, then writes a private `PaperLineageEnvelope.v1`
+index. It joins existing IDs only, reads full append-only training/card/thesis
+history instead of capped snapshots, and reports conflicts or missing links.
 
 Current center: the calculation farm plus the validator/PFR-backed main-paper watcher,
 not the scanner and not old live `main.py`.

@@ -7,6 +7,11 @@ Updated: 2026-07-10
 > events are append-only, and the preview emits a dedicated close card when no
 > active signal remains. This changes paper observation/reporting only.
 
+> **Update 2026-07-10 - unified paper lineage.** Farm/PFR provenance now survives
+> the runtime and trade ledgers and is joined with account, scenario, Telegram,
+> review and training IDs in a private derived index. Aggregate health exposes
+> conflicts and missing downstream rows without exposing raw evidence.
+
 > **Update 2026-07-08 - validated PFR rows now lead main-paper queue.**
 > The PFR/main-paper handoff no longer hides validated rows behind broad farm
 > candidates in the runtime/Telegram preview priority order. `validated_pfr` queue
