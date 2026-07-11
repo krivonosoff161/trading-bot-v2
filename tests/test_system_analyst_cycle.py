@@ -59,6 +59,72 @@ def test_system_analyst_preview_does_not_write(tmp_path):
     assert not (tmp_path / "state").exists()
 
 
+def test_expired_feedback_is_counted_and_skipped_without_writing_ledger(tmp_path):
+    derived = tmp_path / "state" / "derived"
+    advice = tmp_path / "state" / "llm_advice"
+    derived.mkdir(parents=True)
+    advice.mkdir(parents=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps(_training()) + "\n", encoding="utf-8"
+    )
+    (advice / "outcome_reviews.jsonl").write_text(
+        json.dumps(_review()) + "\n", encoding="utf-8"
+    )
+
+    summary = run_system_analyst_cycle(
+        tmp_path, apply=True, now="2026-08-01T00:00:00+00:00"
+    )
+
+    assert summary["routed"] == 0
+    assert summary["rejected"] == 1
+    assert summary["rejection_reasons"] == {"provenance_expired": 1}
+    assert not (
+        tmp_path / "state" / "system_analyst_feedback" / "ledger.jsonl"
+    ).exists()
+
+
+def test_cycle_bounds_feedback_and_prefers_newest_review(tmp_path):
+    derived = tmp_path / "state" / "derived"
+    advice = tmp_path / "state" / "llm_advice"
+    derived.mkdir(parents=True)
+    advice.mkdir(parents=True)
+    training_rows = []
+    review_rows = []
+    for index in range(3):
+        training = {**_training(), "training_row_id": f"training-{index}"}
+        review = {
+            **_review(),
+            "review_id": f"review-{index}",
+            "source_ref": f"training-{index}",
+            "created_at": f"2026-07-11T1{index}:00:00+00:00",
+        }
+        training_rows.append(training)
+        review_rows.append(review)
+    (derived / "paper_signal_training.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in training_rows), encoding="utf-8"
+    )
+    (advice / "outcome_reviews.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in review_rows), encoding="utf-8"
+    )
+
+    summary = run_system_analyst_cycle(
+        tmp_path,
+        apply=True,
+        now="2026-07-11T13:00:00+00:00",
+        max_feedback=1,
+    )
+
+    assert summary["feedback_candidates_total"] == 3
+    assert summary["feedback_candidates"] == 1
+    assert summary["max_feedback"] == 1
+    assert summary["routed"] == 1
+    ledger = (
+        tmp_path / "state" / "system_analyst_feedback" / "ledger.jsonl"
+    ).read_text(encoding="utf-8")
+    assert "review-2" in ledger
+    assert "review-0" not in ledger
+
+
 def test_cycle_recovers_request_projection_after_ack_succeeded(tmp_path, monkeypatch):
     derived = tmp_path / "state" / "derived"
     advice = tmp_path / "state" / "llm_advice"

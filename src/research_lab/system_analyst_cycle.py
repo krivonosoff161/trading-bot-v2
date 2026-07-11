@@ -22,6 +22,9 @@ from src.research_lab.system_analyst_feedback import (
 )
 
 
+DEFAULT_MAX_FEEDBACK_PER_CYCLE = 20
+
+
 def _iso(value: Any, fallback: dt.datetime) -> str:
     if isinstance(value, (int, float)) and float(value) > 0:
         number = float(value)
@@ -119,15 +122,30 @@ def feedback_payloads_from_outcomes(
 
 
 def run_system_analyst_cycle(
-    private_root: Path, *, apply: bool, now: str | None = None
+    private_root: Path,
+    *,
+    apply: bool,
+    now: str | None = None,
+    max_feedback: int = DEFAULT_MAX_FEEDBACK_PER_CYCLE,
 ) -> dict[str, Any]:
-    payloads = feedback_payloads_from_outcomes(
+    if max_feedback < 1:
+        raise ValueError("max_feedback must be positive")
+    all_payloads = feedback_payloads_from_outcomes(
         load_training_rows(private_root), load_outcome_reviews(private_root)
     )
+    payloads = sorted(
+        all_payloads,
+        key=lambda payload: str(payload.get("provenance", {}).get("generated_at") or ""),
+        reverse=True,
+    )[:max_feedback]
     summary: dict[str, Any] = {
         "schema": "system_analyst_cycle.v1",
+        "feedback_candidates_total": len(all_payloads),
         "feedback_candidates": len(payloads),
+        "max_feedback": max_feedback,
         "routed": 0,
+        "rejected": 0,
+        "rejection_reasons": {},
         "role_environment_candidates": {},
         "accepted_role_requests": {},
         "paper_only": True,
@@ -138,7 +156,15 @@ def run_system_analyst_cycle(
         return summary
     gate_now = now or utc_now()
     for payload in payloads:
-        feedback = build_feedback(payload, now=gate_now)
+        try:
+            feedback = build_feedback(payload, now=gate_now)
+        except ValueError as exc:
+            reason = str(exc).removeprefix("feedback rejected: ")
+            summary["rejected"] += 1
+            summary["rejection_reasons"][reason] = (
+                int(summary["rejection_reasons"].get(reason, 0)) + 1
+            )
+            continue
         route_feedback(private_root, feedback)
         summary["routed"] += 1
     for recipient in ("farm", "validator", "trader"):
