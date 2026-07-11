@@ -30,8 +30,10 @@ from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.hard_validation_contract import (
     CandidateForValidation,
     CONTRACT_VERSION,
+    trade_evidence_hash,
     write_json,
 )
+from src.research_lab.honest_backtest_bridge import _artifact_stem
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
@@ -99,7 +101,7 @@ def export_requests(
         if candidate is None:
             summary["skipped_no_artifact"] += 1
             continue
-        req_path = out_dir / f"{candidate.candidate_id}.json"
+        req_path = out_dir / f"{_artifact_stem(candidate.candidate_id)}.json"
         write_json(req_path, candidate.to_dict())
         summary["exported"] += 1
         summary["exported_ids"].append(candidate.candidate_id)
@@ -246,8 +248,27 @@ def _build_candidate(
     slippage_value = (
         entry["slippage_bps"] if "slippage_bps" in entry else metrics.pop("_slippage_bps", 3.0)
     )
-    fees_bps = float(fee_value or 7.0)
-    slippage_bps = float(slippage_value or 3.0)
+    fees_bps = float(7.0 if fee_value is None else fee_value)
+    slippage_bps = float(3.0 if slippage_value is None else slippage_value)
+    metrics["returns_basis"] = "net_pct"
+    metrics["costs_applied"] = True
+    metrics["data_fingerprint"] = str(
+        metrics.get("data_fingerprint") or entry.get("data_fingerprint") or ""
+    )
+    metrics["params_hash"] = str(
+        metrics.get("params_hash") or entry.get("params_hash") or ""
+    )
+    metrics.setdefault("validation_epoch", {
+        "schema": "ValidationEpoch.v1",
+        "evidence_stage": "selection_only",
+        "selection_data_fingerprint": metrics["data_fingerprint"],
+        "selection_evidence_hash": trade_evidence_hash(trades),
+        "selection_evidence": trades,
+        "evaluation_data_fingerprint": "",
+        "evaluation_evidence_hash": "",
+        "hypothesis_frozen_at": str(entry.get("updated_at") or ""),
+        "evaluation_started_at": "",
+    })
     equity_curve = _build_equity_curve(trades)
     data_window = _build_data_window(trades)
 
@@ -323,8 +344,14 @@ def _load_experiment_metrics(
             continue
         context = {
             "_filters": dict(data.get("filters") or {}),
-            "_fees_bps": float(data.get("fees_bps", entry.get("fees_bps", 7.0)) or 7.0),
-            "_slippage_bps": float(data.get("slippage_bps", entry.get("slippage_bps", 3.0)) or 3.0),
+            "_fees_bps": float(
+                7.0 if data.get("fees_bps", entry.get("fees_bps")) is None
+                else data.get("fees_bps", entry.get("fees_bps"))
+            ),
+            "_slippage_bps": float(
+                3.0 if data.get("slippage_bps", entry.get("slippage_bps")) is None
+                else data.get("slippage_bps", entry.get("slippage_bps"))
+            ),
             "_timeframe": str(data.get("timeframe") or entry.get("timeframe") or ""),
         }
         results = data.get("results") or []
@@ -409,8 +436,10 @@ def _rebuild_trades_from_result(
             candles,
             signals,
             params,
-            fees_bps=float(context.get("_fees_bps") or 7.0),
-            slippage_bps=float(context.get("_slippage_bps") or 3.0),
+            fees_bps=float(7.0 if context.get("_fees_bps") is None else context["_fees_bps"]),
+            slippage_bps=float(
+                3.0 if context.get("_slippage_bps") is None else context["_slippage_bps"]
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return []
@@ -422,7 +451,8 @@ def _build_equity_curve(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     equity = 10000.0
     curve = [{"ts": 0, "value": equity}]
     for t in trades:
-        pnl_pct = float(t.get("net_pct") or t.get("pnl_pct") or 0.0)
+        raw = t.get("net_pct") if t.get("net_pct") is not None else t.get("pnl_pct")
+        pnl_pct = float(raw if raw is not None else 0.0)
         equity *= 1.0 + pnl_pct / 100.0
         ts = int(t.get("exit_ts") or t.get("entry_ts") or 0)
         curve.append({"ts": ts, "value": round(equity, 2)})

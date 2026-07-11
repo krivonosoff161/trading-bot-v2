@@ -179,14 +179,26 @@ def _avg_net(trades: list[dict[str, Any]]) -> float:
 def _bridge_status(symbol: str, tf: str, family: str, params: dict[str, Any],
                    trades: list[dict[str, Any]], n_trials: int) -> str:
     """Honest-bridge verdict on the best mode's trades, deflated by the exit-grid size (in-sample)."""
-    from src.research_lab.hard_validation_contract import CandidateForValidation
+    from src.research_lab.hard_validation_contract import (
+        CONTRACT_VERSION, CandidateForValidation, trade_evidence_hash,
+    )
     from src.research_lab.honest_backtest_bridge import run_validation
+    evidence = [{"net_pct": float(t.get("net_pct") or 0.0)} for t in trades]
     cand = CandidateForValidation.from_dict({
+        "contract_version": CONTRACT_VERSION,
         "candidate_id": f"exit2::{symbol}::{tf}::{family}", "source_run_id": "exit_phase2",
         "symbol": symbol, "normalized_symbol": symbol, "timeframe": tf, "strategy_id": family,
         "params": params, "fees_bps": FEES_BPS, "slippage_bps": SLIP_BPS, "lite_status": "FORWARD_PAPER",
-        "metrics": {"n_trades": len(trades), "runtime": {"n_variants_evaluated": int(n_trials)}},
-        "trades": [{"net_pct": float(t.get("net_pct") or 0.0)} for t in trades]})
+        "metrics": {"n_trades": len(trades), "data_fingerprint": "selection_only:exit_phase2",
+                    "returns_basis": "net_pct", "costs_applied": True,
+                    "validation_epoch": {"schema": "ValidationEpoch.v1", "evidence_stage": "selection_only",
+                        "selection_data_fingerprint": "selection_only:exit_phase2",
+                        "selection_evidence_hash": trade_evidence_hash(evidence),
+                        "selection_evidence": evidence,
+                        "evaluation_data_fingerprint": "", "evaluation_evidence_hash": "",
+                        "hypothesis_frozen_at": "", "evaluation_started_at": ""},
+                    "runtime": {"n_variants_evaluated": int(n_trials)}},
+        "trades": evidence})
     return str(run_validation(cand, Path("."), dry_run=True).get("hard_status") or "")
 
 

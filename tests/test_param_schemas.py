@@ -2,11 +2,24 @@
 """Parameter authority: registry remains source of truth; schema gates execution."""
 
 from src.research_lab.param_schemas import (
+    PARAMETER_SEARCH_CONTRACT_VERSION,
     executable_exit_params,
+    parameter_search_contract,
     validate_horizon,
     validate_parameter_grid,
     validate_params,
 )
+
+
+def test_parameter_search_contract_is_typed_versioned_and_family_derived():
+    contract = parameter_search_contract("rsi_reversal")
+    assert contract.version == PARAMETER_SEARCH_CONTRACT_VERSION
+    assert contract.strategy_id == "rsi_reversal"
+    assert contract.primary_axis.name == "period"
+    assert contract.primary_axis.value_type == "int"
+    assert contract.primary_axis.minimum <= contract.primary_axis.default <= contract.primary_axis.maximum
+    assert contract.primary_axis.unit == "bars"
+    assert contract.followup.max_default_multiplier == 2.0
 
 
 def test_stop_take_units_are_percent_points_and_rr_gated():

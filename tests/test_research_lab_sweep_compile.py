@@ -3,7 +3,12 @@
 import pytest
 
 from src.research_lab.resource_policy import load_resource_policy
-from src.research_lab.sweep_compile import compile_sweep, expand_grids
+from src.research_lab.sweep_compile import (
+    bounded_uniform_sample,
+    compile_sweep,
+    expand_grids,
+    expand_grids_bounded,
+)
 from src.research_lab.sweep_spec import SweepSpec
 from src.research_lab.timeframes import load_timeframe_profiles
 
@@ -64,6 +69,41 @@ def test_compile_caps_variant_explosion():
     exp = compile_sweep(spec, data_glob=GLOB, timeframe_profiles=profiles, resource_policy=policy)
     assert len(exp.parameter_grid["momentum_breakout"]) == 16  # profile max_variants_per_setup
     assert exp.max_runs == 24  # resource policy max_variants_per_job
+
+
+def test_bounded_sampler_is_deterministic_and_not_prefix_biased():
+    variants = [{"axis": value} for value in range(100)]
+    first = bounded_uniform_sample(variants, 10, seed_material="same")
+    second = bounded_uniform_sample(variants, 10, seed_material="same")
+    assert first == second
+    assert len(first) == 10
+    assert first != variants[:10]
+    assert any(row["axis"] >= 50 for row in first)
+
+
+def test_bounded_cartesian_expansion_does_not_materialize_prefix_only():
+    first = expand_grids_bounded(
+        {"a": list(range(10_000))}, {"b": list(range(10_000))},
+        cap=12, seed_material="large-space",
+    )
+    second = expand_grids_bounded(
+        {"a": list(range(10_000))}, {"b": list(range(10_000))},
+        cap=12, seed_material="large-space",
+    )
+    assert first == second
+    assert len(first) == 12
+    assert any(row["a"] > 100 or row["b"] > 100 for row in first)
+
+
+def test_bounded_cartesian_reserves_baseline_and_axis_coverage():
+    rows = expand_grids_bounded(
+        {"a": [0, 1, 2]}, {"b": [0, 1, 2]}, {"c": [0, 1, 2]},
+        cap=8, seed_material="coverage", baseline={"a": 1, "b": 1, "c": 1},
+    )
+    assert {"a": 1, "b": 1, "c": 1} in rows
+    assert {row["a"] for row in rows} == {0, 1, 2}
+    assert {row["b"] for row in rows} == {0, 1, 2}
+    assert {row["c"] for row in rows} == {0, 1, 2}
 
 
 def test_compile_rejects_heavy_under_quiet():

@@ -41,7 +41,7 @@ class TestRewardRiskPreserved:
     def test_all_stop_take_combos_are_rr2(self) -> None:
         for fam in FAMILIES:
             for tier in ("smoke", "normal", "deep"):
-                _setup, exit_grid = _family_grids(_defaults(fam), tier)
+                _setup, exit_grid = _family_grids(fam, _defaults(fam), tier)
                 stops = exit_grid.get("stop_pct") or []
                 takes = exit_grid.get("take_pct") or []
                 if stops and takes:
@@ -50,7 +50,7 @@ class TestRewardRiskPreserved:
 
     def test_generated_variants_pass_executable_gate(self) -> None:
         for fam in FAMILIES:
-            setup, exit_grid = _family_grids(_defaults(fam), "deep")
+            setup, exit_grid = _family_grids(fam, _defaults(fam), "deep")
             keys = sorted({*setup, *exit_grid})
             axes = {**setup, **exit_grid}
             combos = list(itertools.product(*(axes[k] for k in keys)))[:40]
@@ -63,15 +63,17 @@ class TestRewardRiskPreserved:
 class TestTierDepth:
     def test_deeper_tier_searches_more(self) -> None:
         for fam in FAMILIES:
-            smoke = _grid_count(*_family_grids(_defaults(fam), "smoke"))
-            normal = _grid_count(*_family_grids(_defaults(fam), "normal"))
-            deep = _grid_count(*_family_grids(_defaults(fam), "deep"))
+            smoke = _grid_count(*_family_grids(fam, _defaults(fam), "smoke"))
+            normal = _grid_count(*_family_grids(fam, _defaults(fam), "normal"))
+            deep = _grid_count(*_family_grids(fam, _defaults(fam), "deep"))
             assert smoke <= normal <= deep
             assert deep > smoke  # depth actually increases
 
     def test_normal_varies_stop_and_take(self) -> None:
         # The whole point: stop/take are no longer frozen at one value.
-        setup, exit_grid = _family_grids(_defaults("momentum_breakout"), "normal")
+        setup, exit_grid = _family_grids(
+            "momentum_breakout", _defaults("momentum_breakout"), "normal"
+        )
         assert len(exit_grid.get("stop_pct") or []) >= 2
         assert len(exit_grid.get("take_pct") or []) >= 2
 

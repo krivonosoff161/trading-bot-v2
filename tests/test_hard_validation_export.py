@@ -15,6 +15,7 @@ from src.research_lab.hard_validation_export import (
     export_requests,
     validation_id_for_unique_candidate,
 )
+from src.research_lab.honest_backtest_bridge import _artifact_stem
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 
 
@@ -132,6 +133,8 @@ class TestBuildCandidate:
         assert c.filters == {"trend": ["up"]}
         assert c.fees_bps == 9.0
         assert c.slippage_bps == 4.0
+        assert c.metrics["returns_basis"] == "net_pct"
+        assert c.metrics["costs_applied"] is True
 
     def test_builds_candidate_with_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -265,6 +268,10 @@ class TestEquityCurve:
         assert curve[1]["value"] == 10100.0
         assert curve[2]["value"] == 10049.5
 
+    def test_zero_net_return_does_not_fall_back_to_gross_pnl(self) -> None:
+        curve = _build_equity_curve([{"net_pct": 0.0, "pnl_pct": 10.0, "exit_ts": 1}])
+        assert curve[-1]["value"] == 10000.0
+
 
 class TestDataWindow:
     def test_empty_trades(self) -> None:
@@ -303,11 +310,11 @@ class TestExportRequests:
             (reg_dir / "candidates.jsonl").write_text(json.dumps(entry))
             summary = export_requests(private, dry_run=False)
             assert summary["exported"] == 1
-            req_file = private / "hard_validation" / "requests" / "c-001.json"
+            req_file = private / "hard_validation" / "requests" / f"{_artifact_stem('c-001')}.json"
             assert req_file.exists()
             data = json.loads(req_file.read_text())
             assert data["candidate_id"] == "c-001"
-            assert data["contract_version"] == "1.0.0"
+            assert data["contract_version"] == "1.1.0"
 
     def test_no_candidates_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -338,7 +345,7 @@ class TestExportRequests:
             entry = _make_entry()
             (reg_dir / "candidates.jsonl").write_text(json.dumps(entry))
             export_requests(private, dry_run=False)
-            req_file = private / "hard_validation" / "requests" / "c-001.json"
+            req_file = private / "hard_validation" / "requests" / f"{_artifact_stem('c-001')}.json"
             raw = req_file.read_text()
             assert "C:\\" not in raw
             assert "krivo" not in raw
@@ -387,7 +394,9 @@ class TestExportRequests:
             vid = validation_id_for_unique_candidate({"uc_key": uc_key})
             assert summary["source"] == "farm_tasks"
             assert summary["exported_ids"] == [vid]
-            req = json.loads((private / "hard_validation" / "requests" / f"{vid}.json").read_text())
+            req = json.loads((
+                private / "hard_validation" / "requests" / f"{_artifact_stem(vid)}.json"
+            ).read_text())
             assert req["candidate_id"] == vid
             assert req["metrics"]["source_candidate_id"] == "raw-candidate"
             assert req["metrics"]["uc_key"] == uc_key

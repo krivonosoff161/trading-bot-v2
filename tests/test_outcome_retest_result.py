@@ -17,6 +17,8 @@ def _completed_retest(root: Path, *, n_trades: int = 20, avg_net_pct: float = 0.
         "source_ref": "training_1",
         "paper_signal_id": "sig_1",
         "baseline": {"net_pct": -0.8},
+        "selection_window_start": "2026-01-01T00:00:00+00:00",
+        "selection_window_end": "2026-02-01T00:00:00+00:00",
     }
     (run_dir / "metrics.json").write_text(
         json.dumps(
@@ -64,13 +66,20 @@ def test_completed_retest_returns_to_review_and_candidate_memory(tmp_path):
 
     assert summary["schema"] == "outcome_retest_results.v1"
     assert summary["results"] == 1
-    assert summary["by_verdict"] == {"improved_directional": 1}
+    assert summary["by_verdict"] == {"selection_only": 1}
     row = summary["items"][0]
     assert row["retest_id"] == "ort_1"
     assert row["review_id"] == "review_1"
     assert row["source_candidate_id"] == "candidate_1"
-    assert row["delta_vs_baseline_pct"] == 1.2
+    assert "baseline_net_pct" not in row
+    assert "delta_vs_baseline_pct" not in row
     assert row["best_n_trades"] == 20
+    assert row["evidence_stage"] == "selection"
+    assert row["required_evaluation"] == "untouched_out_of_sample"
+    assert row["untouched_evaluation_required"] is True
+    assert row["selection_window_start"] == "2026-01-01T00:00:00+00:00"
+    assert row["selection_window_end"] == "2026-02-01T00:00:00+00:00"
+    assert row["evaluated_at"] == "1970-01-01T00:00:02+00:00"
     assert row["paper_only"] is True
     assert row["execution_allowed"] is False
 

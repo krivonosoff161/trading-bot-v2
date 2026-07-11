@@ -11,12 +11,41 @@ Nothing in this module touches live trading, network, or LLM calls.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
+
+
+def trade_evidence_hash(trades: list[dict[str, Any]]) -> str:
+    normalized = [
+        {
+            "entry_ts": trade.get("entry_ts"), "exit_ts": trade.get("exit_ts"),
+            "net_pct": trade.get("net_pct"), "pnl_pct": trade.get("pnl_pct"),
+            "side": trade.get("side"),
+        }
+        for trade in trades
+    ]
+    raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def validation_evidence_hash(
+    trades: list[dict[str, Any]], equity_curve: list[dict[str, Any]]
+) -> str:
+    """Bind the evidence source actually used to derive validation returns."""
+    if trades:
+        return trade_evidence_hash(trades)
+    normalized = [
+        {"ts": point.get("ts"), "value": point.get("value")}
+        for point in equity_curve
+    ]
+    raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 HARD_STATUSES = {
     "HARD_REJECT",
@@ -98,6 +127,7 @@ class CandidateForValidation:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CandidateForValidation:
+        version = d.get("contract_version") or ""
         return cls(
             candidate_id=str(d["candidate_id"]),
             source_run_id=str(d["source_run_id"]),
@@ -117,7 +147,7 @@ class CandidateForValidation:
             equity_curve=list(d.get("equity_curve") or []),
             data_window=dict(d.get("data_window") or {}),
             created_at=str(d.get("created_at") or _utc_now()),
-            contract_version=str(d.get("contract_version") or CONTRACT_VERSION),
+            contract_version=str(version),
         )
 
 

@@ -29,15 +29,13 @@ from typing import Any
 from src.research_lab import feedback_reader as fr
 from src.research_lab.data_inventory import normalize_timeframe
 from src.research_lab.scanner_bridge import MAX_VARIANTS_CAP
+from src.research_lab.param_schemas import AdaptiveAxis, parameter_search_contract
 from src.research_lab.strategy_registry import REGISTRY, get_strategy
 from src.research_lab.sweep_spec import SweepSpec
 
 # Actions that may produce a queued follow-up sweep.
 QUEUEABLE_ACTIONS = {fr.NARROW_PARAMS, fr.WIDEN_PARAMS, fr.REGIME_SWEEP}
 # A safe absolute ceiling for any widened axis (multiple of the family default).
-WIDEN_CEILING_MULT = 2
-
-
 @dataclass(frozen=True)
 class FollowupPlan:
     """One decided next step for a recommendation."""
@@ -75,17 +73,30 @@ def _note_plan(rec: fr.Recommendation, cid: str, *, reason: str, note: str) -> F
     )
 
 
+def _axis_levels(axis: AdaptiveAxis, values: set[float]) -> list[Any]:
+    bounded = {min(axis.maximum, max(axis.minimum, value)) for value in values}
+    if axis.value_type == "int":
+        return sorted({int(round(value)) for value in bounded})
+    return sorted({round(value, 6) for value in bounded})
+
+
 def _narrow_grids(family: str, params: dict[str, Any], *, lower_turnover: bool) -> tuple[dict, dict]:
     """Build a tight, deterministic neighborhood around the candidate's params.
 
-    Narrows lookback and hold_bars only (the axes every sweep family exposes),
+    Narrows the family's declared primary axis and hold_bars,
     biasing hold_bars upward for lower-turnover (cost-failure) follow-ups. Pure
     function of the candidate params -> identical input yields an identical grid.
     """
     defaults = dict(get_strategy(family).parameter_defaults)
-    lb = int(params.get("lookback", defaults.get("lookback", 20)) or defaults.get("lookback", 20))
+    contract = parameter_search_contract(family)
+    axis = contract.primary_axis
     hb = int(params.get("hold_bars", defaults.get("hold_bars", 5)) or defaults.get("hold_bars", 5))
-    setup_grid = {"lookback": sorted({max(2, lb), max(2, lb + max(1, lb // 4))})}
+    setup_grid: dict[str, list[Any]] = {}
+    if axis is not None:
+        base = float(params.get(axis.name, defaults[axis.name]) or defaults[axis.name])
+        setup_grid[axis.name] = _axis_levels(
+            axis, {base * factor for factor in contract.followup.narrow_factors}
+        )
     if lower_turnover:
         exit_grid = {"hold_bars": sorted({hb, hb + 1, hb + 2})}
     else:
@@ -96,15 +107,22 @@ def _narrow_grids(family: str, params: dict[str, Any], *, lower_turnover: bool) 
 def _widen_grids(family: str, params: dict[str, Any]) -> tuple[dict, dict, bool]:
     """Widen with a hard ceiling. Returns (setup_grid, exit_grid, capped_ok)."""
     defaults = dict(get_strategy(family).parameter_defaults)
-    lb_def = int(defaults.get("lookback", 20))
+    contract = parameter_search_contract(family)
+    axis = contract.primary_axis
     hb_def = int(defaults.get("hold_bars", 5))
-    lb = int(params.get("lookback", lb_def) or lb_def)
     hb = int(params.get("hold_bars", hb_def) or hb_def)
-    lb_ceiling = lb_def * WIDEN_CEILING_MULT
-    hb_ceiling = hb_def * WIDEN_CEILING_MULT
-    if lb_ceiling <= 0 or hb_ceiling <= 0:
+    hb_ceiling = hb_def * contract.followup.max_default_multiplier
+    if axis is None or hb_ceiling <= 0:
         return ({}, {}, False)
-    setup_grid = {"lookback": sorted({max(2, lb), min(lb_ceiling, lb * 2)})}
+    axis_default = float(defaults[axis.name])
+    axis_value = float(params.get(axis.name, axis_default) or axis_default)
+    ceiling = axis_default * contract.followup.max_default_multiplier
+    setup_grid = {
+        axis.name: _axis_levels(
+            axis,
+            {min(ceiling, axis_value * factor) for factor in contract.followup.widen_factors},
+        )
+    }
     exit_grid = {"hold_bars": sorted({max(2, hb), min(hb_ceiling, hb + 2)})}
     return (setup_grid, exit_grid, True)
 

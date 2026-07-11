@@ -1,6 +1,6 @@
 @echo off
 title THEME40 MICRO RECORDER
-cd /d C:\Users\krivo\trading-bot-v2
+cd /d "%~dp0.."
 echo ============================================================
 echo  THEME 40 - MICROSTRUCTURE ORDERBOOK RECORDER (research-only)
 echo  keyless public OKX books+trades - no keys, no orders

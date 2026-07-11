@@ -87,6 +87,7 @@ def test_prepare_chains_to_run_sweep_in_one_cycle(tmp_path):
 
 def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
+    from src.research_lab.honest_backtest_bridge import _artifact_stem
     from src.research_lab.validation_orchestrator import run_due_validations
     uc_key = "X::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
@@ -121,7 +122,7 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         }), encoding="utf-8")
     reports = tmp_path / "hard_validation" / "reports"
     reports.mkdir(parents=True)
-    (reports / f"{validation_id}.json").write_text(json.dumps({
+    (reports / f"{_artifact_stem(validation_id)}.json").write_text(json.dumps({
         "candidate_id": validation_id,
         "source_run_id": "run",
         "symbol": "X",

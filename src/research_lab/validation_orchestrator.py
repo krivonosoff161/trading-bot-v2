@@ -21,7 +21,11 @@ from typing import Any
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.hard_validation_contract import HardValidationReport
 from src.research_lab.hard_validation_export import export_requests, validation_id_for_unique_candidate
-from src.research_lab.honest_backtest_bridge import bridge_available, run_validation_batch
+from src.research_lab.honest_backtest_bridge import (
+    _artifact_stem,
+    bridge_available,
+    run_validation_batch,
+)
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_handoff import refresh_from_artifacts
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
@@ -119,7 +123,7 @@ def _write_setup_cards(private_root: Path, candidate_ids: list[str]) -> int:
     reqs = _request_map(private_root)
     cards = []
     for cid in candidate_ids:
-        report = _read_json(reports_dir / f"{cid}.json")
+        report = _read_json(reports_dir / f"{_artifact_stem(cid)}.json")
         if not report:
             continue
         cards.append(build_setup_card(report, reqs.get(cid) or {}))
@@ -182,7 +186,7 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
     counters["setup_cards"] = _write_setup_cards(Path(private_root), current_ids)
     reports_dir = Path(private_root) / "hard_validation" / "reports"
     for cid in current_ids:
-        report_data = _read_json(reports_dir / f"{cid}.json")
+        report_data = _read_json(reports_dir / f"{_artifact_stem(cid)}.json")
         if not report_data:
             continue
         try:

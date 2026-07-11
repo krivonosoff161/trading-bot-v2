@@ -18,6 +18,36 @@ _CRYPTO = ("crypto_perp",)
 _ALL_TF = ("15m", "1H", "4H", "1D")
 _DAILY_UP = ("4H", "1D")
 
+_ADAPTIVE_AXES_BY_STRATEGY = {
+    "momentum_breakout": ("lookback", "threshold_pct"),
+    "donchian_breakout": ("lookback",),
+    "range_breakout": ("lookback", "max_range_pct"),
+    "volatility_squeeze_breakout": ("lookback", "squeeze_ratio"),
+    "breakout_retest": ("lookback", "retest_window", "retest_tol_pct"),
+    "mean_reversion_fade": ("lookback", "move_pct"),
+    "rsi_reversal": ("period", "oversold", "overbought"),
+    "volume_exhaustion_fade": ("lookback", "move_bars", "min_move_pct", "vol_mult"),
+    "trend_pullback": ("trend_ma", "pullback_ma"),
+    "moving_average_reclaim": ("ma", "below_bars"),
+    "volume_shock_continuation": ("lookback", "vol_mult", "min_body_pct"),
+    "impulse_continuation": ("min_body_pct", "min_close_pos"),
+    "main_fast_swing_regime": ("ema_fast", "ema_slow", "adx_period", "adx_trend", "di_trend", "breakout_lookback", "min_vol_ratio"),
+    "range_volume_breakout": ("range_lookback", "max_range_pct", "min_accumulation", "min_vol_ratio", "vol_period"),
+    "volatility_squeeze_breakout_v2": ("squeeze_lookback", "squeeze_ratio", "atr_pct_max", "min_vol_ratio", "atr_period", "vol_period"),
+    "vwap_reclaim_reject": ("vwap_period", "ema_fast", "ema_slow", "max_day_position"),
+    "fvg_reclaim_reject": ("fvg_lookback", "max_distance_pct"),
+    "fractal_swing_break_retest": ("swing_lookback", "retest_window", "retest_tol_pct"),
+    "exhaustion_fade": ("run_lookback", "run_pct", "vol_climax_mult"),
+    "sfp_liquidity_sweep": ("lookback", "vol_mult", "reclaim_buf_pct"),
+    "oi_funding_squeeze": ("oi_lookback", "oi_surge_min", "funding_warn", "funding_block"),
+    "oi_price_quadrant": ("oi_lookback",),
+    "oi_price_quadrant_continuation": ("oi_lookback",),
+    "oi_price_quadrant_trap_fade": ("oi_lookback",),
+    "bb_volume_fade": ("bb_period", "bb_std", "pct_b_extreme_high", "pct_b_extreme_low", "max_vol_ratio", "max_adx", "min_width_pct", "adx_period", "vol_period"),
+    "pump_dump_scalp": ("min_body_pct", "vol_mult", "vol_period", "min_close_pos"),
+    "microstructure_confirmed_breakout": ("range_lookback", "min_obi", "min_trade_delta", "max_spread_bps"),
+}
+
 
 @dataclass(frozen=True)
 class StrategyDef:
@@ -29,11 +59,21 @@ class StrategyDef:
     compatible_asset_classes: tuple[str, ...] = _CRYPTO
     compatible_timeframes: tuple[str, ...] = _ALL_TF
     parameter_defaults: dict[str, Any] = field(default_factory=dict)
+    adaptive_parameter_axes: tuple[str, ...] = ()
     risk_notes: str = ""
     # Optional candle data a family needs beyond OHLCV. When absent on the data, the
     # farm classifies the result as NEEDS_<...>_DATA instead of pretending it's active.
     # Tokens: "oi" | "funding" | "microstructure".
     required_data: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.adaptive_parameter_axes:
+            return
+        axes = _ADAPTIVE_AXES_BY_STRATEGY.get(self.strategy_id, ())
+        unknown = set(axes) - set(self.parameter_defaults)
+        if unknown:
+            raise ValueError(f"unknown adaptive axes for {self.strategy_id}: {sorted(unknown)}")
+        object.__setattr__(self, "adaptive_parameter_axes", axes)
 
 
 _DEFS: list[StrategyDef] = [
