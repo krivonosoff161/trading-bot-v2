@@ -1,6 +1,11 @@
 # Deferred Adaptive Paper Architecture
 
-Status: **DEFERRED**. Recorded: 2026-07-10.
+Status: **SUPERSEDED**. Recorded: 2026-07-10. Superseded: 2026-07-11.
+
+The return criteria were satisfied by the documentation and storage-boundary
+rebuild. Active implementation authority now lives in
+[adaptive-research-center-contract.md](adaptive-research-center-contract.md)
+and GitHub issue #172. This file remains a historical decision record.
 
 ## Purpose
 

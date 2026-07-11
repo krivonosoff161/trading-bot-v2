@@ -15,6 +15,7 @@ public market/news intake
   -> deterministic candidate classification
   -> independent honest-backtest validation
   -> paper-only observation and outcome records
+  -> evidence-backed role environment candidates
   -> optional, explicitly enabled paper-card delivery
 ```
 
@@ -31,6 +32,8 @@ reference and is not part of the supported paper path.
    command.
 4. Read [Storage Boundaries](docs/storage_boundaries.md) before collecting or
    exporting any artifact.
+5. Read [Adaptive Research Center Contract](docs/adaptive-research-center-contract.md)
+   before changing farm, validator, Trader Supervisor, or System Analyst logic.
 
 ## Public-Safe Setup
 

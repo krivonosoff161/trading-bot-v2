@@ -20,8 +20,8 @@ Do not commit raw runtime or farm output:
 Use local storage for raw artifacts:
 
 ```text
-C:\Users\krivo\research-artifacts\trading-farm\
-C:\Users\krivo\research-artifacts\security-harness\
+%USERPROFILE%\research-artifacts\trading-farm\
+%USERPROFILE%\research-artifacts\security-harness\
 ```
 
 Research that should become durable can be summarized in `docs/` or moved to the
