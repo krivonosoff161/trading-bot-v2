@@ -8,15 +8,16 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.research_lab import farm_scheduler as FS  # noqa: E402
+from src.research_lab.farm_priority import priority_label, priority_value  # noqa: E402
 
 
 def _watch(symbol, *, inst=None, resolved=True, eligible=True, readiness="usable",
            tf="1h", source="cointelegraph", event_type="etf_flow", created="2026-06-17T00:00:00Z",
-           pending_reason=None, watch_id=None):
+           pending_reason=None, watch_id=None, verdict="WATCH"):
     return {
         "watch_id": watch_id or f"watch_{symbol}",
         "created_at": created,
-        "scanner": {"verdict": "WATCH", "event_type": event_type},
+        "scanner": {"verdict": verdict, "event_type": event_type},
         "trigger": {"source": source},
         "asset": {"symbol": symbol, "okx_inst": inst or f"{symbol}-USDT-SWAP", "okx_resolved": resolved},
         "farm": {"eligible": eligible, "pending_reason": pending_reason,
@@ -57,16 +58,25 @@ def test_fresh_listing_pending_counts_recheck_not_queued():
     assert plan["counters"]["queued"] == 0
 
 
-def test_priority_order_mover_announcement_watch():
+def test_priority_order_go_watch_announcement_mover():
     watches = [
-        _watch("AAA", source="cointelegraph", event_type="etf_flow"),       # scanner watch (prio 1)
-        _watch("BBB", source="okx_announcements", event_type="listing"),    # announcement (prio 2)
-        _watch("CCC", source="okx_market_tape", event_type="market_mover"), # mover (prio 3)
+        _watch("AAA", source="cointelegraph", event_type="etf_flow"),
+        _watch("BBB", source="okx_announcements", event_type="listing"),
+        _watch("CCC", source="okx_market_tape", event_type="market_mover"),
+        _watch("DDD", source="cointelegraph", event_type="etf_flow", verdict="GO"),
     ]
     plan = FS.plan_jobs(watches)
     kinds = [j.source_kind for j in plan["jobs"]]
-    assert kinds[0] == "scanner_watch_go"
+    assert kinds[0] == "scanner_go"
+    assert kinds.index("scanner_go") < kinds.index("scanner_watch")
     assert kinds.index("okx_announcement") < kinds.index("okx_market_mover")
+
+
+def test_priority_labels_are_stable_and_readable():
+    assert priority_label(0) == "manual urgent"
+    assert priority_label(90) == "background sweep"
+    assert priority_value(4) == 90
+    assert priority_value(0) == 0
 
 
 def test_dedup_by_instrument():

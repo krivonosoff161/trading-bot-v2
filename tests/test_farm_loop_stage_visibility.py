@@ -24,6 +24,28 @@ def _args(**over) -> Namespace:
 
 
 class TestStageStatus:
+    def test_priority_checkpoint_is_resumable_and_paper_only(self, tmp_path: Path) -> None:
+        target = farm_loop._write_priority_checkpoint(
+            tmp_path,
+            {
+                "pivot": "advanced_lifecycle",
+                "active_tasks": 3,
+                "status": {"by_state": {"queued": 2, "running": 1}},
+                "counters": {"runs_completed": 1},
+                "errors": [],
+            },
+            sequence=7,
+        )
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["sequence"] == 7
+        assert payload["resume_mode"] == "requeue_atomic_slot_from_durable_ledgers"
+        assert payload["paper_only"] is True
+        assert payload["execution_allowed"] is False
+
+    def test_slot_did_work_uses_real_transition_counters(self) -> None:
+        assert farm_loop._slot_did_work({"counters": {"runs_completed": 1}}) is True
+        assert farm_loop._slot_did_work({"counters": {"runs_completed": 0}}) is False
+
     def test_pid_probe_treats_windows_system_error_as_dead(self, monkeypatch) -> None:
         def bad_kill(_pid: int, _sig: int) -> None:
             raise SystemError("<built-in function kill> returned a result with an exception set")

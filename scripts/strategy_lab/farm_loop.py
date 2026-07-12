@@ -1115,6 +1115,25 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
     )
     out["discovery"] = discovery_info
+
+    def priority_checkpoint(after_stage: str) -> None:
+        """Let urgent/GO work advance between heavyweight full-cycle stages."""
+        if not (apply and loop):
+            return
+        slot = _run_priority_slot(args, tasks, profiles, policy, private_root)
+        out.setdefault("priority_checkpoints", []).append({
+            "after_stage": after_stage,
+            "did_work": _slot_did_work(slot),
+            "counters": slot.get("counters") or {},
+            "errors": len(slot.get("errors") or []),
+        })
+        _write_priority_checkpoint(
+            private_root,
+            slot,
+            sequence=len(out["priority_checkpoints"]),
+        )
+
+    priority_checkpoint("coordinator")
     if args.run_paper:
         _write_loop_status(
             private_root,
@@ -1140,6 +1159,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 out=out,
                 provider=provider,
             )
+        priority_checkpoint("paper_runtime")
     if apply:
         # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
         # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
@@ -1163,6 +1183,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
         else:
             out["true_forward"] = {"skipped": "true_forward_max_candidates=0"}
+        priority_checkpoint("true_forward")
         if getattr(args, "run_paper_signals", False):
             # Operational paper-watch lane: one bounded cycle (observe armed -> close -> remember ->
             # generate new). Crash-isolated; paper/research-only, never an order.
@@ -1240,6 +1261,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     max_observe=getattr(args, "paper_signals_max_observe", None),
                     max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
                     max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)))
+                priority_checkpoint("paper_signals")
                 _run_main_paper_derived_chain(
                     args,
                     private_root,
@@ -1312,6 +1334,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         out["calculator_advisor"] = _run_calculator_advisor_stage(args, private_root, apply)
                     except Exception as exc:  # noqa: BLE001 - advisory stage must not break the cycle
                         out.setdefault("errors", []).append({"where": "calculator_advisor", "error": str(exc)})
+                priority_checkpoint("calculator_advisor")
                 if getattr(args, "run_agent_role_reviews", False):
                     try:
                         _write_loop_status(
@@ -1375,6 +1398,87 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         },
     )
     return out
+
+
+def _run_priority_slot(args, tasks: FarmTasksDB, profiles, policy, private_root: Path) -> dict:
+    """Advance one short compute slot between expensive full farm cycles.
+
+    The slot reads fresh WATCH/GO/manual intake, prepares at most one missing
+    dataset, materializes one sweep and runs one worker job.  It deliberately
+    skips discovery refresh, paper delivery, validation and LLM roles.  Those
+    remain on the bounded full-cycle cadence, while queued numeric work no
+    longer sleeps for minutes.
+    """
+    provider, flow_provider, oi_provider = _providers(args, True)
+    events = _read_intake(min(8, max(1, int(args.max_plan_events))))
+    return run_coordinator_cycle(
+        tasks,
+        private_root=private_root,
+        profiles=profiles,
+        policy=policy,
+        intake_events=events,
+        families=DEFAULT_FAMILIES,
+        provider=provider,
+        flow_provider=flow_provider,
+        oi_provider=oi_provider,
+        apply=True,
+        backend=args.backend,
+        data_days=args.data_days,
+        max_plan_events=min(8, max(1, int(args.max_plan_events))),
+        max_prepares=1,
+        max_enrich=0,
+        max_sweeps=1,
+        max_classify=2,
+        run_worker=True,
+        max_worker_jobs=1,
+        night_mode=args.night_mode,
+        allow_public_output=args.allow_public_output,
+        discovery_snapshot=None,
+        max_discovery=0,
+        run_validation=False,
+        run_followups=False,
+        max_followups=0,
+        sweep_tier=args.sweep_tier,
+    )
+
+
+def _slot_did_work(slot: dict) -> bool:
+    counters = slot.get("counters") or {}
+    return any(
+        int(counters.get(name) or 0) > 0
+        for name in (
+            "events_ingested",
+            "events_consumed",
+            "prepared_ok",
+            "sweeps_materialized",
+            "runs_completed",
+            "classified",
+            "unblocked",
+        )
+    )
+
+
+def _write_priority_checkpoint(private_root: Path, slot: dict, *, sequence: int) -> Path:
+    """Persist the slot boundary; restart resumes from durable queue state."""
+    target = private_root / "state" / "farm_priority_checkpoint.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "FarmPriorityCheckpoint.v1",
+        "updated_at": time.time(),
+        "sequence": int(sequence),
+        "pivot": slot.get("pivot"),
+        "active_tasks": int(slot.get("active_tasks") or 0),
+        "queue": (slot.get("status") or {}).get("by_state", {}),
+        "counters": slot.get("counters") or {},
+        "errors": len(slot.get("errors") or []),
+        "resume_mode": "requeue_atomic_slot_from_durable_ledgers",
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(target)
+    return target
 
 
 def main() -> None:
@@ -1504,6 +1608,10 @@ def main() -> None:
                     help="never auto-refresh the discovery snapshot in apply mode (warn loudly if stale)")
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--sleep-seconds", type=int, default=180)
+    ap.add_argument("--busy-slot-seconds", type=float, default=1.0,
+                    help="pause between short compute slots while work is available")
+    ap.add_argument("--idle-poll-seconds", type=float, default=5.0,
+                    help="poll interval for new urgent/scanner work between full cycles")
     ap.add_argument("--stop-file", default="")
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
@@ -1571,6 +1679,7 @@ def main() -> None:
             _print_cycle(out)  # a single explicit cycle is always shown
             return
         prev_sig = None
+        slot_sequence = 0
         while True:
             if args.stop_file and Path(args.stop_file).exists():
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
@@ -1590,13 +1699,61 @@ def main() -> None:
                 lock_path.write_text(str(os.getpid()), encoding="utf-8")  # keep the lock fresh
                 _write_loop_status(
                     private_root,
-                    stage="sleep",
+                    stage="priority_slots",
                     apply=apply,
                     loop=True,
                     cycle_started_at=time.time(),
-                    details={"sleep_seconds": args.sleep_seconds},
+                    details={
+                        "full_cycle_seconds": args.sleep_seconds,
+                        "busy_slot_seconds": args.busy_slot_seconds,
+                        "idle_poll_seconds": args.idle_poll_seconds,
+                    },
                 )
-            if not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
+            if apply:
+                deadline = time.monotonic() + max(0.0, float(args.sleep_seconds))
+                stop_requested = False
+                while time.monotonic() < deadline:
+                    if args.stop_file and Path(args.stop_file).exists():
+                        stop_requested = True
+                        break
+                    slot_started = time.time()
+                    slot = _run_priority_slot(args, tasks, profiles, policy, private_root)
+                    slot_sequence += 1
+                    _write_priority_checkpoint(private_root, slot, sequence=slot_sequence)
+                    did_slot_work = _slot_did_work(slot)
+                    eligible = tasks.eligible_count()
+                    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+                    _write_loop_status(
+                        private_root,
+                        stage="priority_slot",
+                        apply=True,
+                        loop=True,
+                        cycle_started_at=slot_started,
+                        details={
+                            "did_work": did_slot_work,
+                            "eligible_now": eligible,
+                            "pivot": slot.get("pivot"),
+                            "active_tasks": slot.get("active_tasks"),
+                            "queue": (slot.get("status") or {}).get("by_state", {}),
+                            "errors": len(slot.get("errors") or []),
+                        },
+                    )
+                    if did_slot_work or slot.get("errors"):
+                        print(
+                            f"  priority-slot did_work={did_slot_work} eligible={eligible} "
+                            f"pivot={slot.get('pivot')} errors={len(slot.get('errors') or [])}"
+                        )
+                    delay = args.busy_slot_seconds if eligible or did_slot_work else args.idle_poll_seconds
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    if not _sleep_until_next_cycle(min(max(0.1, delay), remaining), args.stop_file):
+                        stop_requested = True
+                        break
+                if stop_requested:
+                    print(f"stop-file present ({args.stop_file}) - exiting loop")
+                    break
+            elif not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
     except KeyboardInterrupt:

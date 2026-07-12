@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.farm_priority import priority_value
+
 SCHEMA = "farm_tasks.v1"
 
 # Task types in the research lifecycle (full graph; the coordinator creates the
@@ -115,10 +117,29 @@ class FarmTasksDB:
                 regime_bucket TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS farm_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
+        self._migrate_priority_scale()
         self._migrate_unique_candidate_columns()
         self._conn.commit()
+
+    def _migrate_priority_scale(self) -> None:
+        """Translate legacy 1..4 rows; the new scale never emits those values."""
+        mapping = "CASE priority WHEN 1 THEN 20 WHEN 2 THEN 30 WHEN 3 THEN 40 WHEN 4 THEN 90 END"
+        self._conn.execute(
+            f"UPDATE tasks SET priority={mapping} WHERE priority BETWEEN 1 AND 4"
+        )
+        self._conn.execute(
+            f"UPDATE intake_events SET priority={mapping} WHERE priority BETWEEN 1 AND 4"
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO farm_meta(key, value) VALUES('priority_scale', 'v2')"
+        )
 
     def _migrate_unique_candidate_columns(self) -> None:
         existing = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(unique_candidates)")}
@@ -142,7 +163,7 @@ class FarmTasksDB:
                  ingested_at, consumed)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
             (eid, event.get("symbol"), event.get("source"), event.get("reason"),
-             event.get("observed_at"), int(event.get("priority") or 100),
+             event.get("observed_at"), priority_value(event.get("priority")),
              event.get("asset_class"), json.dumps(event.get("suggested_timeframes") or []),
              json.dumps(event.get("evidence") or {}), json.dumps(event.get("raw_ref") or {}), now),
         )

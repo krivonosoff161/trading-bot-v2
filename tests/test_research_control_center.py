@@ -59,9 +59,11 @@ def test_scanner_delivery_is_forced_off_and_telegram_surfaces_are_marked():
 def test_ollama_is_local_and_gpu_environment_is_explicit():
     ollama = {item.key: item for item in MODULE.contour_specs()}["ollama"]
     assert ollama.env["OLLAMA_HOST"] == "127.0.0.1:11434"
-    assert ollama.env["OLLAMA_VULKAN"] == "1"
+    assert ollama.env["OLLAMA_LLM_LIBRARY"] == "cpu"
+    assert ollama.env["CUDA_VISIBLE_DEVICES"] == "-1"
+    assert ollama.env["GGML_VK_VISIBLE_DEVICES"] == "-1"
+    assert ollama.env["OLLAMA_NUM_PARALLEL"] == "1"
     assert MODULE.GPU_MASK_ENV_NAMES == ("CUDA_VISIBLE_DEVICES", "GGML_VK_VISIBLE_DEVICES")
-    assert all(name not in ollama.env for name in MODULE.GPU_MASK_ENV_NAMES)
 
 
 def test_runtime_assets_stay_outside_task_worktree():
@@ -78,8 +80,8 @@ def test_farm_and_paper_cards_share_graceful_stop_owner():
     assert specs["paper_cards"].graceful_stop is specs["farm"].graceful_stop
     assert specs["farm"].owner_group == "canonical_farm"
     assert specs["paper_cards"].owner_group == "canonical_farm"
-    assert specs["farm"].graceful_seconds == 900.0
-    assert specs["paper_cards"].graceful_seconds == 900.0
+    assert specs["farm"].graceful_seconds == 120.0
+    assert specs["paper_cards"].graceful_seconds == 120.0
     assert specs["scanner"].graceful_seconds == 300.0
     assert specs["public_news"].graceful_seconds == 300.0
 
@@ -90,6 +92,10 @@ def test_research_profile_methods_are_explicit_ui_actions():
     assert callable(MODULE.ControlCenter._health_text)
     assert MODULE.ControlCenter._file_age(Path("missing-file")) is None
     assert hasattr(MODULE.ManagedContour, "stop")
+    assert callable(MODULE.ControlCenter._enqueue_manual_urgent)
+    assert callable(MODULE.ControlCenter._system_snapshot)
+    assert callable(MODULE.ControlCenter._queue_snapshot)
+    assert callable(MODULE.ControlCenter._backend_snapshot)
 
 
 def test_scanner_delivery_environment_gate(monkeypatch):

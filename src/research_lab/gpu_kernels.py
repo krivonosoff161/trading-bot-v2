@@ -26,6 +26,17 @@ def _to_host(mask):
     return mask
 
 
+def prepare_candle_arrays(candles: list[dict[str, Any]], *, xp) -> dict[str, Any]:
+    """Upload one candle packet once and reuse it across all parameter variants."""
+    return {
+        "opens": xp.asarray([float(c["open"]) for c in candles], dtype=xp.float64),
+        "highs": xp.asarray([float(c["high"]) for c in candles], dtype=xp.float64),
+        "lows": xp.asarray([float(c["low"]) for c in candles], dtype=xp.float64),
+        "closes": xp.asarray([float(c["close"]) for c in candles], dtype=xp.float64),
+        "vols": xp.asarray([float(c.get("vol") or 0.0) for c in candles], dtype=xp.float64),
+    }
+
+
 def momentum_breakout_signals(
     highs: list[float],
     lows: list[float],
@@ -76,6 +87,132 @@ def momentum_breakout_signals(
         elif bool(short_h[i]):
             signals.append({"idx": d + 1, "side": "short", "reason": "breakout_low"})
     return signals
+
+
+def donchian_breakout_signals(highs, lows, *, lookback: int, xp) -> list[dict[str, Any]]:
+    n, lookback = len(highs), int(lookback)
+    if lookback <= 0 or n <= lookback + 1:
+        return []
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    d = xp.arange(lookback, n - 1)
+    win = d[:, None] - lookback + xp.arange(lookback)[None, :]
+    long_mask = h[d] > h[win].max(axis=1)
+    short_mask = (~long_mask) & (low_arr[d] < low_arr[win].min(axis=1))
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "donchian_pierce_high", "donchian_pierce_low",
+    )
+
+
+def range_breakout_signals(highs, lows, closes, *, lookback: int, max_range_pct: float, xp):
+    n, lookback = len(closes), int(lookback)
+    if lookback <= 0 or n <= lookback + 1:
+        return []
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    d = xp.arange(lookback, n - 1)
+    win = d[:, None] - lookback + xp.arange(lookback)[None, :]
+    win_high, win_low = h[win].max(axis=1), low_arr[win].min(axis=1)
+    safe_low = xp.where(win_low > 0, win_low, 1.0)
+    tight = (win_low > 0) & (((win_high / safe_low - 1.0) * 100.0) <= float(max_range_pct))
+    long_mask = tight & (c[d] > win_high)
+    short_mask = tight & (~long_mask) & (c[d] < win_low)
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "range_breakout_up", "range_breakout_down",
+    )
+
+
+def volatility_squeeze_breakout_signals(
+    highs, lows, closes, *, lookback: int, squeeze_ratio: float, xp,
+):
+    n, lookback = len(closes), int(lookback)
+    start = 2 * lookback
+    if lookback <= 0 or n <= start + 1:
+        return []
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    d = xp.arange(start, n - 1)
+    offsets = xp.arange(lookback)[None, :]
+    cur = d[:, None] - lookback + offsets
+    prev = d[:, None] - 2 * lookback + offsets
+    cur_high, cur_low = h[cur].max(axis=1), low_arr[cur].min(axis=1)
+    prev_range = h[prev].max(axis=1) - low_arr[prev].min(axis=1)
+    squeezed = (prev_range > 0) & ((cur_high - cur_low) <= prev_range * float(squeeze_ratio))
+    long_mask = squeezed & (c[d] > cur_high)
+    short_mask = squeezed & (~long_mask) & (c[d] < cur_low)
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "squeeze_break_up", "squeeze_break_down",
+    )
+
+
+def mean_reversion_fade_signals(closes, *, lookback: int, move_pct: float, xp):
+    n, lookback = len(closes), int(lookback)
+    if lookback <= 0 or n <= lookback + 1:
+        return []
+    c = xp.asarray(closes, dtype=xp.float64)
+    d = xp.arange(lookback, n - 1)
+    base = c[d - lookback]
+    safe = xp.where(base > 0, base, 1.0)
+    move = (c[d] / safe - 1.0) * 100.0
+    valid = base > 0
+    short_mask = valid & (move >= float(move_pct))
+    long_mask = valid & (~short_mask) & (move <= -float(move_pct))
+    # _breakout_signals takes long first; reasons are deliberately inverted for a fade.
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "fade_down_move", "fade_up_move",
+    )
+
+
+def volume_shock_continuation_signals(
+    opens, closes, vols, *, lookback: int, vol_mult: float, min_body_pct: float, xp,
+):
+    n, lookback = len(closes), int(lookback)
+    if lookback <= 0 or n <= lookback + 1:
+        return []
+    o = xp.asarray(opens, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    v = xp.asarray(vols, dtype=xp.float64)
+    d = xp.arange(lookback, n - 1)
+    win = d[:, None] - lookback + xp.arange(lookback)[None, :]
+    avg = v[win].sum(axis=1) / lookback
+    safe_o = xp.where(o[d] > 0, o[d], 1.0)
+    body = (c[d] / safe_o - 1.0) * 100.0
+    valid = (avg != 0) & (o[d] > 0) & (v[d] >= avg * float(vol_mult)) & (xp.abs(body) >= float(min_body_pct))
+    long_mask = valid & (body > 0)
+    short_mask = valid & (~long_mask)
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask), "volume_shock", "volume_shock",
+    )
+
+
+def impulse_continuation_signals(
+    opens, highs, lows, closes, *, min_body_pct: float, min_close_pos: float, xp,
+):
+    n = len(closes)
+    if n <= 2:
+        return []
+    o = xp.asarray(opens, dtype=xp.float64)
+    h = xp.asarray(highs, dtype=xp.float64)
+    low_arr = xp.asarray(lows, dtype=xp.float64)
+    c = xp.asarray(closes, dtype=xp.float64)
+    d = xp.arange(1, n - 1)
+    safe_o = xp.where(o[d] > 0, o[d], 1.0)
+    body = (c[d] / safe_o - 1.0) * 100.0
+    rng = h[d] - low_arr[d]
+    close_pos = xp.where(rng > 0, (c[d] - low_arr[d]) / xp.where(rng > 0, rng, 1.0), 0.5)
+    valid = (o[d] > 0) & (rng > 0) & (xp.abs(body) >= float(min_body_pct))
+    long_mask = valid & (body > 0) & (close_pos >= float(min_close_pos))
+    short_mask = valid & (~long_mask) & (body < 0) & (close_pos <= 1.0 - float(min_close_pos))
+    return _breakout_signals(
+        _to_host(d), _to_host(long_mask), _to_host(short_mask),
+        "impulse_up_strong_close", "impulse_down_weak_close",
+    )
 
 
 def range_volume_breakout_signals(
@@ -197,6 +334,12 @@ def _breakout_signals(decision_h, long_h, short_h, up_reason: str, down_reason: 
 # Dispatch table: family -> vectorized kernel. Extend the support matrix here.
 KERNELS = {
     "momentum_breakout": momentum_breakout_signals,
+    "donchian_breakout": donchian_breakout_signals,
+    "range_breakout": range_breakout_signals,
+    "volatility_squeeze_breakout": volatility_squeeze_breakout_signals,
+    "mean_reversion_fade": mean_reversion_fade_signals,
+    "volume_shock_continuation": volume_shock_continuation_signals,
+    "impulse_continuation": impulse_continuation_signals,
     "range_volume_breakout": range_volume_breakout_signals,
     "pump_dump_scalp": pump_dump_scalp_signals,
 }
@@ -212,13 +355,15 @@ def generate_signals_vectorized(
     params: dict[str, Any],
     *,
     xp,
+    arrays: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run the vectorized kernel for a supported family. Raises if unsupported."""
     if family not in KERNELS:
         raise KeyError(f"no vectorized kernel for family '{family}'")
-    highs = [float(c["high"]) for c in candles]
-    lows = [float(c["low"]) for c in candles]
-    closes = [float(c["close"]) for c in candles]
+    prepared = arrays or prepare_candle_arrays(candles, xp=xp)
+    highs = prepared["highs"]
+    lows = prepared["lows"]
+    closes = prepared["closes"]
     if family == "momentum_breakout":
         return momentum_breakout_signals(
             highs, lows, closes,
@@ -226,7 +371,43 @@ def generate_signals_vectorized(
             threshold_pct=float(params.get("threshold_pct", 0.0)),
             xp=xp,
         )
-    vols = [float(c.get("vol") or 0.0) for c in candles]
+    if family == "donchian_breakout":
+        return donchian_breakout_signals(
+            highs, lows, lookback=int(params.get("lookback", 20)), xp=xp,
+        )
+    if family == "range_breakout":
+        return range_breakout_signals(
+            highs, lows, closes,
+            lookback=int(params.get("lookback", 30)),
+            max_range_pct=float(params.get("max_range_pct", 12.0)), xp=xp,
+        )
+    if family == "volatility_squeeze_breakout":
+        return volatility_squeeze_breakout_signals(
+            highs, lows, closes,
+            lookback=int(params.get("lookback", 20)),
+            squeeze_ratio=float(params.get("squeeze_ratio", 0.6)), xp=xp,
+        )
+    if family == "mean_reversion_fade":
+        return mean_reversion_fade_signals(
+            closes, lookback=int(params.get("lookback", 5)),
+            move_pct=float(params.get("move_pct", 8.0)), xp=xp,
+        )
+    vols = prepared["vols"]
+    if family == "volume_shock_continuation":
+        opens = prepared["opens"]
+        return volume_shock_continuation_signals(
+            opens, closes, vols,
+            lookback=int(params.get("lookback", 20)),
+            vol_mult=float(params.get("vol_mult", 2.0)),
+            min_body_pct=float(params.get("min_body_pct", 3.0)), xp=xp,
+        )
+    if family == "impulse_continuation":
+        opens = prepared["opens"]
+        return impulse_continuation_signals(
+            opens, highs, lows, closes,
+            min_body_pct=float(params.get("min_body_pct", 6.0)),
+            min_close_pos=float(params.get("min_close_pos", 0.7)), xp=xp,
+        )
     if family == "range_volume_breakout":
         return range_volume_breakout_signals(
             highs, lows, closes, vols,
@@ -238,7 +419,7 @@ def generate_signals_vectorized(
             xp=xp,
         )
     if family == "pump_dump_scalp":
-        opens = [float(c["open"]) for c in candles]
+        opens = prepared["opens"]
         return pump_dump_scalp_signals(
             opens, highs, lows, closes, vols,
             min_body_pct=float(params.get("min_body_pct", 3.0)),

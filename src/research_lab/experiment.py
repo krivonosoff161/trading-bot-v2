@@ -26,6 +26,7 @@ from src.research_lab import gpu_kernels
 from src.research_lab.gpu_runtime import (
     GPU,
     GPU_SUPPORTED_FAMILIES,
+    auto_gpu_worthwhile,
     array_module,
     resolve_backend,
 )
@@ -774,14 +775,21 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
                 next_action="provide the required OI/funding/microstructure data, then re-run",
                 regime_summary={}))
             continue
-        gpu_family = use_gpu and gpu_kernels.supported_family(family)
+        family_variants = spec.parameter_grid.get(family, [])
+        auto_batch_ok = spec.backend != "auto" or auto_gpu_worthwhile(len(candles), len(family_variants))
+        gpu_family = use_gpu and auto_batch_ok and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
-            cpu_fallback_families.add(family)
+            cpu_fallback_families.add(
+                f"{family}:auto_batch_too_small" if not auto_batch_ok else family
+            )
+        prepared_arrays = gpu_kernels.prepare_candle_arrays(candles, xp=xp) if gpu_family else None
         strategy_defaults = dict(get_strategy(family).parameter_defaults)
-        for raw_params in spec.parameter_grid.get(family, []):
+        for raw_params in family_variants:
             params = {**strategy_defaults, **dict(raw_params or {})}
             if gpu_family:
-                signals = gpu_kernels.generate_signals_vectorized(candles, family, params, xp=xp)
+                signals = gpu_kernels.generate_signals_vectorized(
+                    candles, family, params, xp=xp, arrays=prepared_arrays,
+                )
                 accelerated_signal_runs += 1
             else:
                 signals = generate_signals(candles, family, params)
