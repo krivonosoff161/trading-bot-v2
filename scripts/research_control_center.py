@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import msvcrt
 import os
 from pathlib import Path
 import queue
@@ -24,6 +23,11 @@ import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
 from typing import Callable
+
+if os.name == "nt":
+    import msvcrt
+else:  # pragma: no cover - exercised by the Linux CI import path
+    import fcntl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -269,7 +273,10 @@ class SingleInstance:
         self.handle.flush()
         self.handle.seek(0)
         try:
-            msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            if os.name == "nt":
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             self.handle.close()
             raise RuntimeError("Центр управления уже открыт") from exc
@@ -277,8 +284,11 @@ class SingleInstance:
     def close(self) -> None:
         if self.handle.closed:
             return
-        self.handle.seek(0)
-        msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+        if os.name == "nt":
+            self.handle.seek(0)
+            msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
         self.handle.close()
 
 
