@@ -15,7 +15,9 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
-SUBS_FILE = Path(__file__).parent / "subscriptions.json"
+from src.utils.runtime_root import runtime_root
+
+SUBS_FILE = runtime_root(Path(__file__).resolve().parents[1]) / "scripts" / "subscriptions.json"
 
 
 def _load() -> dict:

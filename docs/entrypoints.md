@@ -11,6 +11,7 @@ remain isolated and must not be used as farm launchers.
 
 | Goal | Command | Effects |
 |---|---|---|
+| Unified Russian control center | `bat\research_control_center.bat` | One local UI for independently supervised paper/research contours; all switches start off. |
 | Low-load paper research | `bat\paper_product_headless_loop.bat` | Canonical farm, validation, paper lifecycle, bounded reviews; no Telegram delivery. |
 | Low-load paper cards | `bat\paper_product_headless_send_loop.bat` | Same path with explicit subscriber-card delivery and chart fetches. |
 | Visible paper operation | `bat\paper_product_control_room.bat` | Canonical farm plus local dashboard/graph/status windows. |
@@ -138,3 +139,6 @@ file is catalogued and that public documentation links resolve locally.
 3. Treat `credential`, `cost`, and `send` as explicit operator opt-ins.
 4. Do not infer live-trading authority from any entrypoint. The supported paths
    remain paper-only and keep `execution_allowed=false`.
+5. The unified control center supervises existing owners; it does not merge the
+   public-news publisher, scanner queue, canonical farm, Telegram bot, or visual
+   surfaces into one runtime process.

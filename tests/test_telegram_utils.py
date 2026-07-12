@@ -3,6 +3,14 @@ import asyncio
 from src.utils import telegram
 
 
+def test_recipient_ref_is_stable_and_does_not_expose_chat_id():
+    chat_id = "123456789"
+    value = telegram.recipient_ref(chat_id)
+    assert value == telegram.recipient_ref(chat_id)
+    assert len(value) == 12
+    assert chat_id not in value
+
+
 def test_telegram_status_reads_environment_lazily(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)

@@ -19,8 +19,9 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
     here so the farm/research modules stay free of direct money/product imports.
     """
     from dotenv import load_dotenv
+    from src.utils.runtime_root import runtime_env_file
 
-    load_dotenv(Path(root) / ".env")
+    load_dotenv(runtime_env_file(Path(root)))
 
     from scripts.subscriptions import list_delivery_users
     from src.utils.telegram import bot_token, send_photo_to

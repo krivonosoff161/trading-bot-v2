@@ -13,7 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-load_dotenv(ROOT / ".env")
+from src.utils.runtime_root import runtime_env_file  # noqa: E402
+
+load_dotenv(runtime_env_file(ROOT))
 
 from scripts.subscriptions import list_delivery_users  # noqa: E402
 from src.research_lab.paper_telegram_sender import send_paper_telegram_previews  # noqa: E402

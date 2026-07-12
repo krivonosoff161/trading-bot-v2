@@ -82,6 +82,13 @@ Use [Farm Ownership Map](docs/farm_ownership_map.md),
 [Entrypoint Catalog](docs/entrypoints.md) together. The catalog is authoritative
 for launchers; no legacy command becomes supported merely because it exists.
 
+`bat/research_control_center.bat` is the unified human-facing supervisor. It
+keeps the public news publisher, scanner-to-watch-queue intake, canonical farm,
+interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
+separate process owners. The UI starts with every contour disabled, prevents a
+second control-center instance and duplicate canonical-farm ownership, records a
+private heartbeat, and contains no execution or private-exchange entrypoint.
+
 ## Storage
 
 Public Git holds source, tests, public-safe documentation, templates, and
