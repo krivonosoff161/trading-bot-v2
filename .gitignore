@@ -171,7 +171,6 @@ docs/статисика.csv
 .codex/
 .codex-remote-attachments/
 .agents/
-AGENTS.md
 **/private_root/
 **/leak_scan.json
 **/path_trace.json
