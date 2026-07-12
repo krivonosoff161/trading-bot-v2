@@ -5,11 +5,18 @@ TELEGRAM_CHAT_ID supports multiple IDs separated by commas.
 Silently skips if not configured.
 """
 
+import hashlib
 import os
 from pathlib import Path
 
 import aiohttp
 from loguru import logger
+
+
+def recipient_ref(chat_id: str) -> str:
+    """Return a non-reversible local log label for a Telegram recipient."""
+    return hashlib.sha256(str(chat_id).encode("utf-8")).hexdigest()[:12]
+
 
 def _clean_env(value: str | None) -> str:
     return (value or "").strip().strip("'\"")
@@ -53,8 +60,11 @@ async def send_message(text: str) -> None:
                     timeout=aiohttp.ClientTimeout(total=5),
                 )
                 if resp.status != 200:
-                    body = await resp.text()
-                    logger.warning("Telegram error | chat_id={} status={} body={}", chat_id, resp.status, body)
+                    logger.warning(
+                        "Telegram error | recipient_ref={} status={}",
+                        recipient_ref(chat_id),
+                        resp.status,
+                    )
     except Exception as e:
         logger.warning("Telegram send failed | {}", e)
 
@@ -101,7 +111,11 @@ async def send_message_to(chat_id: str, text: str) -> int | None:
                 raise RuntimeError(f"Telegram ok=false: {body_text[:200]}")
 
             msg_id = body_json.get("result", {}).get("message_id")
-            logger.info("Telegram sent | chat_id={} msg_id={}", chat_id, msg_id)
+            logger.info(
+                "Telegram sent | recipient_ref={} msg_id={}",
+                recipient_ref(chat_id),
+                msg_id,
+            )
             return msg_id
 
 
@@ -134,5 +148,9 @@ async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
             raise RuntimeError(f"Telegram photo ok=false: {body_text[:200]}")
 
         msg_id = body_json.get("result", {}).get("message_id")
-        logger.info("Telegram photo sent | chat_id={} msg_id={}", chat_id, msg_id)
+        logger.info(
+            "Telegram photo sent | recipient_ref={} msg_id={}",
+            recipient_ref(chat_id),
+            msg_id,
+        )
         return msg_id

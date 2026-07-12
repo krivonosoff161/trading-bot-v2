@@ -36,7 +36,11 @@ from src.research_lab.experiment import (
     load_candles,
     simulate_trades,
 )
-from src.research_lab.hard_validation_contract import CandidateForValidation
+from src.research_lab.hard_validation_contract import (
+    CONTRACT_VERSION,
+    CandidateForValidation,
+    trade_evidence_hash,
+)
 from src.research_lab.honest_backtest_bridge import run_validation
 from src.research_lab.paths import market_data_glob
 from src.research_lab.trade_path_diagnostics import (
@@ -77,9 +81,18 @@ def _select(private_root: Path, limit_per_bucket: int | None) -> list[dict[str, 
         if limit_per_bucket and counts.get(sub, 0) >= limit_per_bucket:
             continue
         counts[sub] = counts.get(sub, 0) + 1
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        epoch = metrics.get("validation_epoch") if isinstance(metrics.get("validation_epoch"), dict) else {}
         out.append({"uc_key": str(r.get("uc_key") or ""), "symbol": str(r.get("symbol") or ""),
                     "timeframe": str(r.get("timeframe") or ""), "family": str(r.get("family") or ""),
-                    "params": dict(result.get("params") or {}), "subreason": sub})
+                    "params": dict(result.get("params") or {}), "subreason": sub,
+                    "evidence_stage": str(epoch.get("evidence_stage") or "selection_only"),
+                    "selection_data_fingerprint": str(epoch.get("selection_data_fingerprint") or ""),
+                    "selection_evidence_hash": str(epoch.get("selection_evidence_hash") or ""),
+                    "selection_evidence": list(epoch.get("selection_evidence") or []),
+                    "evaluation_data_fingerprint": str(epoch.get("evaluation_data_fingerprint") or ""),
+                    "hypothesis_frozen_at": str(epoch.get("hypothesis_frozen_at") or ""),
+                    "evaluation_started_at": str(epoch.get("evaluation_started_at") or "")})
     return out
 
 
@@ -113,12 +126,32 @@ def _candidate(item: dict[str, Any], trades: list[dict[str, Any]], n_trials: int
     """Build a validation candidate from re-simulated trades; lite_status FORWARD_PAPER isolates
     the STATISTICAL question (these were lite-rejected; we re-test the stats, not the lite gate)."""
     return CandidateForValidation.from_dict({
+        "contract_version": CONTRACT_VERSION,
         "candidate_id": f"reval::{item['uc_key']}", "source_run_id": "recyclable_revalidation",
         "symbol": item["symbol"], "normalized_symbol": item["symbol"], "timeframe": item["timeframe"],
         "strategy_id": item["family"], "params": item["params"], "fees_bps": FEES_BPS,
         "slippage_bps": SLIP_BPS, "lite_status": "FORWARD_PAPER",
-        "metrics": {"n_trades": len(trades), "runtime": {"n_variants_evaluated": int(n_trials)}},
-        "trades": [{"net_pct": float(t.get("net_pct") or 0.0)} for t in trades],
+        "metrics": {"n_trades": len(trades), "data_fingerprint": (
+                        item.get("data_fingerprint") or str(item["uc_key"]).rsplit("::", 1)[-1]
+                    ),
+                    "returns_basis": "net_pct", "costs_applied": True,
+                    "validation_epoch": {
+                        "schema": "ValidationEpoch.v1",
+                        "evidence_stage": str(item.get("evidence_stage") or "selection_only"),
+                        "selection_data_fingerprint": str(item.get("selection_data_fingerprint") or ""),
+                        "selection_evidence_hash": str(item.get("selection_evidence_hash") or ""),
+                        "selection_evidence": list(item.get("selection_evidence") or []),
+                        "evaluation_data_fingerprint": str(item.get("evaluation_data_fingerprint") or ""),
+                        "evaluation_evidence_hash": trade_evidence_hash(trades),
+                        "hypothesis_frozen_at": str(item.get("hypothesis_frozen_at") or ""),
+                        "evaluation_started_at": str(item.get("evaluation_started_at") or ""),
+                    },
+                    "runtime": {"n_variants_evaluated": int(n_trials)}},
+        "trades": [
+            {"net_pct": float(t.get("net_pct") or 0.0), "entry_ts": t.get("entry_ts"),
+             "exit_ts": t.get("exit_ts"), "side": t.get("side")}
+            for t in trades
+        ],
     })
 
 
@@ -136,20 +169,33 @@ def revalidate(private_root: Path, *, limit_per_bucket: int | None = None) -> li
         rows.append({"uc_key": it["uc_key"], "symbol": it["symbol"], "timeframe": it["timeframe"],
                      "family": it["family"], "bucket": bucket, "n_trades": len(trades),
                      "exit": exit_name, "n_trials": n_trials,
-                     "revalidation_status": str(verdict.get("hard_status") or "")})
+                     "revalidation_status": str(verdict.get("hard_status") or ""),
+                     "hypothesis_frozen_at": str(it.get("hypothesis_frozen_at") or ""),
+                     "selection_cutoff_ts": max(
+                         (t.get("exit_ts") or t.get("entry_ts") or 0)
+                         for t in (it.get("selection_evidence") or [{}])
+                     ),
+                     "selection_data_fingerprint": str(it.get("selection_data_fingerprint") or ""),
+                     "selection_evidence": list(it.get("selection_evidence") or [])})
     return rows
 
 
 def summarize_revalidation(rows: list[dict[str, Any]]) -> dict[str, Any]:
     by_bucket: dict[str, dict[str, int]] = {}
     survivors: list[dict[str, Any]] = []
+    survivor_fields = (
+        "uc_key", "symbol", "timeframe", "family", "bucket", "n_trades", "exit",
+        "hypothesis_frozen_at", "selection_cutoff_ts", "selection_data_fingerprint",
+        "selection_evidence",
+    )
     for r in rows:
         b = by_bucket.setdefault(r["bucket"], {})
-        st = r["revalidation_status"]
+        st = str(r["revalidation_status"])
+        if st == PASS_STATUS and any(not r.get(key) for key in survivor_fields):
+            st = "NEEDS_MORE_DATA"
         b[st] = b.get(st, 0) + 1
         if st == PASS_STATUS:
-            survivors.append({k: r[k] for k in ("uc_key", "symbol", "timeframe", "family", "bucket",
-                                                "n_trades", "exit")})
+            survivors.append({key: r[key] for key in survivor_fields})
     return {
         "total": len(rows),
         "by_bucket": {b: dict(sorted(c.items(), key=lambda kv: -kv[1])) for b, c in by_bucket.items()},

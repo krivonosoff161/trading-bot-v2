@@ -1,5 +1,12 @@
 # Outcome Learning Loop - 2026-07-05
 
+Status: **REFERENCE / PARTIALLY SUPERSEDED**. The original outcome-review spine
+remains useful, but the old `improved_directional` comparison and direct
+same-window promotion language are superseded by
+[Adaptive Research Center Contract](adaptive-research-center-contract.md).
+Current retests produce `selection_only` or `no_selection_signal`; a positive
+selection requires a later untouched evaluation window.
+
 This document describes the current self-improvement loop for the paper/research
 trading system. It is a design-and-implementation note, not a live-trading claim.
 
@@ -174,13 +181,14 @@ Implemented in the trader-analyst expansion:
 5. `outcome_retest` consumes `next_test_dimensions`, `counterfactual_tests`, and
    `parameter_hypotheses` as bounded retest dimensions.
 6. `outcome_retest_result` returns completed farm sweeps to their originating
-   review/training row and classifies evidence as `improved_directional`,
-   `no_improvement`, or `insufficient_evidence`.
+   review/training row and classifies same-window evidence as `selection_only`,
+   `no_selection_signal`, or `insufficient_evidence`.
 7. Completed retest IDs rotate out of the bounded catalog; promotion gates and
    setup memory consume the returned verdict at candidate or explicit cell scope.
 
-The result comparison is a directional retest against a single-trade baseline,
-not a PnL-attribution claim. It cannot promote itself to paper/live authority.
+The same-window result is a selection hypothesis, not a comparison against one
+baseline trade and not a PnL-attribution claim. It requires a later untouched
+evaluation window and cannot promote itself to paper/live authority.
 
 Next implementation steps:
 

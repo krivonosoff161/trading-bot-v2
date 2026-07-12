@@ -40,6 +40,10 @@ class ShadowCandidate:
     family: str
     recovered_exit: str
     params: dict[str, Any]
+    hypothesis_frozen_at: str = ""
+    selection_cutoff_ts: Any = None
+    selection_data_fingerprint: str = ""
+    selection_evidence: tuple[dict[str, Any], ...] = ()
     source: str = "revalidation_survivor"
 
     @property
@@ -54,6 +58,10 @@ class ShadowCandidate:
     def to_dict(self) -> dict[str, Any]:
         return {"uc_key": self.uc_key, "symbol": self.symbol, "timeframe": self.timeframe,
                 "family": self.family, "recovered_exit": self.recovered_exit, "params": self.params,
+                "hypothesis_frozen_at": self.hypothesis_frozen_at,
+                "selection_cutoff_ts": self.selection_cutoff_ts,
+                "selection_data_fingerprint": self.selection_data_fingerprint,
+                "selection_evidence": list(self.selection_evidence),
                 "source": self.source, "status": self.status, "paper_forward_ready": False}
 
 
@@ -111,7 +119,11 @@ def register_revalidation_survivors(private_root: Path) -> list[ShadowCandidate]
         cand = ShadowCandidate(uc_key=uc, symbol=str(row.get("symbol") or ""),
                                timeframe=str(row.get("timeframe") or ""), family=str(row.get("family") or ""),
                                recovered_exit=str(row.get("exit") or "baseline"),
-                               params=_params_for_uc(private_root, uc))
+                               params=_params_for_uc(private_root, uc),
+                               hypothesis_frozen_at=str(row.get("hypothesis_frozen_at") or ""),
+                               selection_cutoff_ts=row.get("selection_cutoff_ts"),
+                               selection_data_fingerprint=str(row.get("selection_data_fingerprint") or ""),
+                               selection_evidence=tuple(row.get("selection_evidence") or ()))
         registry[uc] = cand.to_dict()
         out.append(cand)
     _write_registry(private_root, registry)
@@ -135,7 +147,12 @@ def register_exit_phase2_forward(private_root: Path) -> list[ShadowCandidate]:
         cand = ShadowCandidate(uc_key=str(uc), symbol=str(row.get("symbol") or ""),
                                timeframe=str(row.get("timeframe") or ""), family=str(row.get("family") or ""),
                                recovered_exit=str(row.get("best_mode") or "baseline"),
-                               params=_params_for_uc(private_root, str(uc)), source="exit_phase2_forward_only")
+                               params=_params_for_uc(private_root, str(uc)),
+                               hypothesis_frozen_at=str(row.get("hypothesis_frozen_at") or ""),
+                               selection_cutoff_ts=row.get("selection_cutoff_ts"),
+                               selection_data_fingerprint=str(row.get("selection_data_fingerprint") or ""),
+                               selection_evidence=tuple(row.get("selection_evidence") or ()),
+                               source="exit_phase2_forward_only")
         registry[str(uc)] = cand.to_dict()
         out.append(cand)
     _write_registry(private_root, registry)

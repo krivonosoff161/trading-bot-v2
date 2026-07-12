@@ -122,11 +122,11 @@ def _gate_stage(
         reasons.append("shadow_forward_registered")
         return NEEDS_TRUE_FORWARD, reasons
     retest_verdict = str(retest.get("verdict") or "")
-    if retest_verdict == "improved_directional":
-        reasons.append("completed_retest_improved_directional_needs_shadow")
-        return NEEDS_SHADOW, reasons
-    if retest_verdict == "no_improvement":
-        reasons.append("completed_retest_found_no_improvement")
+    if retest_verdict in {"selection_only", "improved_directional"}:
+        reasons.append("selection_only_requires_untouched_evaluation")
+        return NEEDS_RETEST, reasons
+    if retest_verdict in {"no_selection_signal", "no_improvement"}:
+        reasons.append("completed_retest_found_no_selection_signal")
         return REVIEW_ONLY, reasons
     if retest_verdict == "insufficient_evidence":
         reasons.append("completed_retest_insufficient_evidence")
@@ -194,6 +194,8 @@ def build_gate_verdicts(
                 "ready_strategy_id": str(ready.get("ready_strategy_id") or ""),
                 "outcome_retest_id": str(retest.get("retest_id") or ""),
                 "outcome_retest_verdict": str(retest.get("verdict") or ""),
+                "outcome_retest_evidence_stage": str(retest.get("evidence_stage") or ""),
+                "required_evaluation": str(retest.get("required_evaluation") or ""),
             },
         ))
     return verdicts

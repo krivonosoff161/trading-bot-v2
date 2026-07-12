@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **ACTIVE**. Updated 2026-07-10.
+Status: **ACTIVE**. Updated 2026-07-11.
 
 This file is the current architectural source of truth. Dated reports and
 older plans under `docs/` are historical evidence unless the
@@ -53,12 +53,27 @@ credentials, raw private data, live account data, or call an order path.
 See [LLM Proposal Contract](docs/llm_proposal_contract.md) and
 [Local Calculator Mini-Swarm](docs/local_calculator_swarm_2026-07-10.md).
 
-## Current And Deferred Work
+## Adaptive Research Center
 
-The active public workbench ends at paper evidence and independent validation.
-The proposed adaptive paper architecture is deliberately **deferred**, recorded
-in [docs/deferred-adaptive-paper-architecture.md](docs/deferred-adaptive-paper-architecture.md).
-It is not a permission to revive `main.py` or enable live trading.
+Issue #172 activates the previously deferred paper-only feedback architecture.
+The implementation uses four bounded roles:
+
+1. the farm explores a typed, versioned parameter space with a reproducible
+   resource-bounded sampler;
+2. the validator owns independent evidence gates and applies declared costs
+   exactly once;
+3. the Trader Supervisor owns a deterministic, replayable per-symbol state
+   machine and references private visual evidence without granting it authority;
+4. the System Analyst routes evidence-backed environment candidates separately
+   to farm, validator, and trader.
+
+An environment candidate is not applied policy. The canonical cycle first runs
+the recipient-owned request-contract gate and acknowledges the resulting
+research request. Applying any policy still requires a later deterministic gate
+and untouched evaluation. See [Adaptive Research Center Contract](docs/adaptive-research-center-contract.md).
+
+This architecture does not revive `main.py`, enable live trading, or permit a
+model to edit code, weights, verdicts, levels, or process configuration.
 
 ## Operations
 
@@ -66,6 +81,13 @@ Use [Farm Ownership Map](docs/farm_ownership_map.md),
 [Farm Runbook](docs/farm_runbook.md), and
 [Entrypoint Catalog](docs/entrypoints.md) together. The catalog is authoritative
 for launchers; no legacy command becomes supported merely because it exists.
+
+`bat/research_control_center.bat` is the unified human-facing supervisor. It
+keeps the public news publisher, scanner-to-watch-queue intake, canonical farm,
+interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
+separate process owners. The UI starts with every contour disabled, prevents a
+second control-center instance and duplicate canonical-farm ownership, records a
+private heartbeat, and contains no execution or private-exchange entrypoint.
 
 ## Storage
 

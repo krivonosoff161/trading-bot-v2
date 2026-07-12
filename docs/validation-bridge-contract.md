@@ -1,6 +1,11 @@
 # Validation Bridge Contract
 
-Status: **REFERENCE CONTRACT**. Version: `1.0.0`.
+Status: **REFERENCE CONTRACT**. Version: `1.1.0`.
+
+Version `1.1.0` makes return basis, cost ownership, data fingerprint, and
+contract provenance explicit. Legacy `1.0.0` request files are not silently
+upgraded: they must be regenerated from their source candidate so the bridge
+cannot guess whether costs were already applied.
 
 `trading-bot-v2` produces bounded research candidates and consumes validation
 reports. [`honest-backtest`](https://github.com/krivonosoff161/honest-backtest)

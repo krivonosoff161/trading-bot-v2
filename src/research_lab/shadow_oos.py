@@ -24,6 +24,7 @@ deflated by the number of candidates in the pass (multiple testing). "shadow_sur
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,11 @@ def collect_candidates(private_root: Path) -> list[dict[str, Any]]:
         out.append({"uc_key": str(uc), "symbol": str(row.get("symbol") or ""),
                     "timeframe": str(row.get("timeframe") or ""), "family": str(row.get("family") or ""),
                     "exit": exit_name, "params": dict(row.get("params") or {}),
-                    "source": str(row.get("source") or "shadow_forward")})
+                    "source": str(row.get("source") or "shadow_forward"),
+                    "hypothesis_frozen_at": str(row.get("hypothesis_frozen_at") or ""),
+                    "selection_cutoff_ts": row.get("selection_cutoff_ts"),
+                    "selection_data_fingerprint": str(row.get("selection_data_fingerprint") or ""),
+                    "selection_evidence": list(row.get("selection_evidence") or [])})
 
     # 2) OI-family honest-passed survivors (note: families that produce identical trades dedupe here)
     for row in (_read_json(derived / "oi_family_research.json").get("rows") or []):
@@ -84,7 +89,11 @@ def collect_candidates(private_root: Path) -> list[dict[str, Any]]:
         seen.add(key)
         out.append({"uc_key": "", "symbol": str(row.get("symbol") or ""),
                     "timeframe": str(row.get("timeframe") or ""), "family": str(row.get("family") or ""),
-                    "exit": "baseline", "params": {}, "source": "oi_family_honest"})
+                    "exit": "baseline", "params": {}, "source": "oi_family_honest",
+                    "hypothesis_frozen_at": str(row.get("hypothesis_frozen_at") or ""),
+                    "selection_cutoff_ts": row.get("selection_cutoff_ts"),
+                    "selection_data_fingerprint": str(row.get("selection_data_fingerprint") or ""),
+                    "selection_evidence": list(row.get("selection_evidence") or [])})
     return out
 
 
@@ -121,16 +130,71 @@ def _metrics(trades: list[dict[str, Any]], bar_count: int) -> dict[str, Any]:
     return base
 
 
-def _oos_bridge_status(cand: dict[str, Any], oos_trades: list[dict[str, Any]], n_trials: int) -> str:
-    from src.research_lab.hard_validation_contract import CandidateForValidation
+def _evidence(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "entry_ts": t.get("entry_ts"), "exit_ts": t.get("exit_ts"),
+            "side": t.get("side"), "net_pct": float(t.get("net_pct") or 0.0),
+        }
+        for t in trades
+    ]
+
+
+def _iso_ts(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if number > 10_000_000_000:
+        number /= 1000.0
+    return datetime.fromtimestamp(number, tz=timezone.utc).isoformat()
+
+
+def _oos_bridge_status(
+    cand: dict[str, Any],
+    selection_trades: list[dict[str, Any]],
+    oos_trades: list[dict[str, Any]],
+    n_trials: int,
+) -> str:
+    from src.research_lab.hard_validation_contract import (
+        CONTRACT_VERSION, CandidateForValidation, trade_evidence_hash,
+    )
     from src.research_lab.honest_backtest_bridge import run_validation
+    selection_evidence = list(cand.get("selection_evidence") or [])
+    evidence = _evidence(oos_trades)
+    if not selection_evidence or not evidence:
+        return "NEEDS_MORE_DATA"
+    selection_hash = trade_evidence_hash(selection_evidence)
+    evaluation_hash = trade_evidence_hash(evidence)
+    frozen_at = str(cand.get("hypothesis_frozen_at") or "")
+    cutoff_at = _iso_ts(cand.get("selection_cutoff_ts"))
+    selection_fp = str(cand.get("selection_data_fingerprint") or "")
+    evaluation_started_at = _iso_ts(
+        min((t.get("entry_ts") or t.get("exit_ts") or 0) for t in oos_trades)
+    )
+    if not frozen_at or not cutoff_at or not evaluation_started_at or not selection_fp:
+        return "NEEDS_MORE_DATA"
+    if not (frozen_at <= cutoff_at < evaluation_started_at):
+        return "NEEDS_MORE_DATA"
     c = CandidateForValidation.from_dict({
+        "contract_version": CONTRACT_VERSION,
         "candidate_id": f"oos::{cand['symbol']}::{cand['timeframe']}::{cand['family']}::{cand['exit']}",
         "source_run_id": "shadow_oos", "symbol": cand["symbol"], "normalized_symbol": cand["symbol"],
         "timeframe": cand["timeframe"], "strategy_id": cand["family"], "params": cand.get("params") or {},
         "fees_bps": FEES_BPS, "slippage_bps": SLIP_BPS, "lite_status": "FORWARD_PAPER",
-        "metrics": {"n_trades": len(oos_trades), "runtime": {"n_variants_evaluated": int(max(1, n_trials))}},
-        "trades": [{"net_pct": float(t.get("net_pct") or 0.0)} for t in oos_trades]})
+        "metrics": {"n_trades": len(oos_trades), "data_fingerprint": f"sha256:{evaluation_hash}",
+                    "returns_basis": "net_pct", "costs_applied": True,
+                    "validation_epoch": {"schema": "ValidationEpoch.v1",
+                        "evidence_stage": "untouched_evaluation",
+                        "selection_data_fingerprint": selection_fp,
+                        "selection_evidence_hash": selection_hash,
+                        "selection_evidence": selection_evidence,
+                        "evaluation_data_fingerprint": f"sha256:{evaluation_hash}",
+                        "evaluation_evidence_hash": evaluation_hash,
+                        "hypothesis_frozen_at": frozen_at,
+                        "evaluation_started_at": evaluation_started_at},
+                    "runtime": {"n_variants_evaluated": int(max(1, n_trials))}},
+        "trades": evidence})
     return str(run_validation(c, Path("."), dry_run=True).get("hard_status") or "")
 
 
@@ -170,7 +234,11 @@ def evaluate_candidate(private_root: Path, cand: dict[str, Any], *, n_trials: in
     oos_trades = _simulate(candles, oos_sigs, cand["family"], params, cand["exit"])
     is_m = _metrics(is_trades, cut)
     oos_m = _metrics(oos_trades, len(candles) - cut)
-    bridge = _oos_bridge_status(cand, oos_trades, n_trials) if oos_m["n_trades"] >= MIN_POWER else ""
+    bridge = (
+        _oos_bridge_status(cand, is_trades, oos_trades, n_trials)
+        if oos_m["n_trades"] >= MIN_POWER
+        else ""
+    )
     cls, reason = _classify(is_m, oos_m, bridge)
     return {**_id(cand), "params": params, "oos_window_bars": len(candles) - cut,
             "in_sample": is_m, "oos": oos_m, "oos_bridge_status": bridge,

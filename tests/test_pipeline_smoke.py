@@ -14,7 +14,7 @@ from src.research_lab.hard_validation_contract import (
     HardValidationReport,
 )
 from src.research_lab.hard_validation_export import export_requests
-from src.research_lab.honest_backtest_bridge import run_validation_batch
+from src.research_lab.honest_backtest_bridge import _artifact_stem, run_validation_batch
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
 
@@ -77,7 +77,7 @@ def test_full_pipeline_smoke() -> None:
         # Step 1: Export
         export_summary = export_requests(private, dry_run=False, limit=5)
         assert export_summary["exported"] == 1
-        req_file = private / "hard_validation" / "requests" / "smoke-001.json"
+        req_file = private / "hard_validation" / "requests" / f"{_artifact_stem('smoke-001')}.json"
         assert req_file.exists()
 
         # Step 2: Validate
@@ -86,13 +86,14 @@ def test_full_pipeline_smoke() -> None:
             private, dry_run=False, limit=5,
         )
         assert val_summary["validated"] == 1
-        verdict_file = private / "hard_validation" / "verdicts" / "smoke-001.json"
-        report_file = private / "hard_validation" / "reports" / "smoke-001.json"
+        stem = _artifact_stem("smoke-001")
+        verdict_file = private / "hard_validation" / "verdicts" / f"{stem}.json"
+        report_file = private / "hard_validation" / "reports" / f"{stem}.json"
         assert verdict_file.exists()
         assert report_file.exists()
 
         # Verify report has disclaimer
-        report_md = private / "hard_validation" / "reports" / "smoke-001.md"
+        report_md = private / "hard_validation" / "reports" / f"{stem}.md"
         md_text = report_md.read_text()
         assert "not imply profitability" in md_text
 

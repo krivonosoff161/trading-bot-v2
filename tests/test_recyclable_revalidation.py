@@ -10,6 +10,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.research_lab.honest_backtest_bridge import bridge_available, run_validation  # noqa: E402
+from src.research_lab.hard_validation_contract import trade_evidence_hash  # noqa: E402
 from src.research_lab.recyclable_revalidation import (  # noqa: E402
     _avg_net,
     _candidate,
@@ -20,7 +21,24 @@ from src.research_lab.recyclable_revalidation import (  # noqa: E402
 import pytest  # noqa: E402
 
 _ITEM = {"uc_key": "X::1h::momentum_breakout::ph::fp", "symbol": "X", "timeframe": "1h",
-         "family": "momentum_breakout", "params": {"stop_pct": 1.0, "take_pct": 2.0}}
+         "family": "momentum_breakout", "params": {"stop_pct": 1.0, "take_pct": 2.0},
+         "evidence_stage": "untouched_evaluation",
+         "selection_data_fingerprint": "selection-fp",
+         "selection_evidence": [{"net_pct": 0.2, "entry_ts": 1, "exit_ts": 2, "side": "long"}],
+         "data_fingerprint": "evaluation-fp",
+         "evaluation_data_fingerprint": "evaluation-fp",
+         "hypothesis_frozen_at": "2026-07-01T00:00:00+00:00",
+         "evaluation_started_at": "2026-07-02T00:00:00+00:00"}
+_ITEM["selection_evidence_hash"] = trade_evidence_hash(_ITEM["selection_evidence"])
+
+
+def _evaluation_trades(values):
+    start = 1782950400  # 2026-07-02T00:00:00+00:00
+    return [
+        {"net_pct": value, "entry_ts": start + index * 60, "exit_ts": start + index * 60 + 30,
+         "side": "long"}
+        for index, value in enumerate(values)
+    ]
 
 
 class TestCandidate:
@@ -40,23 +58,23 @@ class TestCandidate:
 @pytest.mark.skipif(not bridge_available()["available"], reason="honest-backtest bridge not importable")
 class TestBridgeWiring:
     def test_thin_series_fails_oos(self, tmp_path):
-        c = _candidate(_ITEM, [{"net_pct": 0.5}] * 4, n_trials=1)  # n<10 -> split analysis fails
+        c = _candidate(_ITEM, _evaluation_trades([0.5] * 4), n_trials=1)  # n<10 -> split analysis fails
         assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "FAILED_OOS"
 
     def test_one_two_trade_needs_more_data(self, tmp_path):
-        c = _candidate(_ITEM, [{"net_pct": 1.5}], n_trials=1)
+        c = _candidate(_ITEM, _evaluation_trades([1.5]), n_trials=1)
         assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "NEEDS_MORE_DATA"
 
     def test_strong_series_can_pass(self, tmp_path):
         # A clearly positive, consistent series with enough trades and n_trials=1 should clear the
         # honest checks -> PAPER_FORWARD_READY (proves the wiring CAN pass, not just always-fail).
-        trades = [{"net_pct": v} for v in ([0.5, 0.4, 0.6] * 9)]  # n=27, mean 0.5%, low variance
+        trades = _evaluation_trades([0.5, 0.4, 0.6] * 9)  # n=27, mean 0.5%, low variance
         status = run_validation(_candidate(_ITEM, trades, n_trials=1), tmp_path, dry_run=True)["hard_status"]
         assert status == "PAPER_FORWARD_READY"
 
     def test_sidak_deflation_makes_it_harder(self, tmp_path):
         # The SAME borderline series is harder to pass when deflated by a big trial count.
-        trades = [{"net_pct": v} for v in ([0.3, 0.1, 0.2, -0.1, 0.25] * 4)]  # n=20, marginal
+        trades = _evaluation_trades([0.3, 0.1, 0.2, -0.1, 0.25] * 4)  # n=20, marginal
         lenient = run_validation(_candidate(_ITEM, trades, 1), tmp_path, dry_run=True)["hard_status"]
         deflated = run_validation(_candidate(_ITEM, trades, 50), tmp_path, dry_run=True)["hard_status"]
         # deflation never makes a pass easier
@@ -77,7 +95,11 @@ class TestSummary:
     def test_survivor_flagged_not_promoted(self):
         rows = [{"uc_key": "c", "symbol": "Z", "timeframe": "4h", "family": "mean_reversion_fade",
                  "bucket": "exit_recovered", "n_trades": 12, "exit": "tp_half",
-                 "revalidation_status": "PAPER_FORWARD_READY"}]
+                 "revalidation_status": "PAPER_FORWARD_READY",
+                 "hypothesis_frozen_at": "2026-07-01T00:00:00+00:00",
+                 "selection_cutoff_ts": 2,
+                 "selection_data_fingerprint": "selection-fp",
+                 "selection_evidence": [{"entry_ts": 1, "exit_ts": 2, "net_pct": 0.2}]}]
         s = summarize_revalidation(rows)
         assert s["survivors"] == 1 and "human GO" in s["verdict"]
         assert s["survivor_rows"][0]["uc_key"] == "c"

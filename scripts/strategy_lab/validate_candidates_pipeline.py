@@ -21,6 +21,7 @@ from src.research_lab.hard_validation_contract import (
 )
 from src.research_lab.hard_validation_export import export_requests
 from src.research_lab.honest_backtest_bridge import (
+    _artifact_stem,
     bridge_available,
     run_validation_batch,
 )
@@ -107,7 +108,7 @@ def main() -> None:
     reports_dir = private_root / "hard_validation" / "reports"
     if reports_dir.exists():
         for candidate_id in current_candidate_ids[:args.limit]:
-            rf = reports_dir / f"{candidate_id}.json"
+            rf = reports_dir / f"{_artifact_stem(candidate_id)}.json"
             if not rf.exists():
                 continue
             try:
@@ -128,7 +129,7 @@ def main() -> None:
     cards = []
     if reports_dir.exists():
         for candidate_id in current_candidate_ids[:args.limit]:
-            rf = reports_dir / f"{candidate_id}.json"
+            rf = reports_dir / f"{_artifact_stem(candidate_id)}.json"
             if not rf.exists():
                 continue
             try:

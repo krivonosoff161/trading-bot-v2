@@ -25,6 +25,7 @@ from src.research_lab.hard_validation_contract import (
 )
 
 CANDIDATE_DICT = {
+    "contract_version": CONTRACT_VERSION,
     "candidate_id": "c-001",
     "source_run_id": "run-abc",
     "symbol": "BTC-USDT-SWAP",
@@ -101,6 +102,11 @@ class TestCandidateForValidation:
     def test_contract_version_stable(self) -> None:
         c = _make_candidate()
         assert c.contract_version == CONTRACT_VERSION
+
+    def test_missing_contract_version_remains_explicitly_unversioned(self) -> None:
+        data = dict(CANDIDATE_DICT)
+        data.pop("contract_version", None)
+        assert CandidateForValidation.from_dict(data).contract_version == ""
 
     def test_lite_status_forward_paper(self) -> None:
         c = _make_candidate()

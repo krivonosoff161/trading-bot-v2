@@ -1,6 +1,6 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-10.
+Status: **ACTIVE**. Updated 2026-07-11.
 
 This page states what the public repository supports. It is deliberately not a
 runtime dashboard: process IDs, current balances, private journals, signal
@@ -18,6 +18,12 @@ rows, provider state, and local findings belong outside public Git.
   configured; it is not a farm decision-maker.
 - Scanner/news intake can provide upstream context. It is not the canonical
   source of trade authority.
+- The adaptive research-center contracts are implemented as paper-only,
+  versioned candidate flows. They create inspectable next-test requests; they
+  do not silently tune a model or promote a strategy.
+- New validation requests fail closed unless they carry an untouched evaluation
+  epoch distinct from the farm selection data. Existing selection-only evidence
+  therefore needs fresh data before it can become paper-forward ready.
 
 ## Explicitly Not Supported
 
@@ -53,7 +59,7 @@ into an issue, PR, or public document; produce a sanitized aggregate instead.
 
 1. Complete the documentation and Git-hygiene rebuild.
 2. Accumulate bounded paper evidence and review it locally.
-3. Revisit the deferred adaptive paper architecture only after its return gates
-   are met.
+3. Run the independent review and private acceptance window for issue #172
+   before using any environment candidate as research input.
 
 The development sequence is maintained in [ROADMAP.md](ROADMAP.md).

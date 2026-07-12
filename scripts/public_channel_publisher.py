@@ -18,10 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.scout.public_channel.publisher import collect_news_to_queue, publish_news_once, publish_stats_once  # noqa: E402
+from src.utils.runtime_root import runtime_env_file  # noqa: E402
 
 
 async def _run(args: argparse.Namespace) -> dict:
-    load_dotenv()
+    load_dotenv(runtime_env_file(ROOT))
     if args.mode == "collect":
         return collect_news_to_queue(max_queue=args.queue_max)
     if args.mode == "stats":

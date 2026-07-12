@@ -58,6 +58,8 @@ def test_registry_metadata_complete():
         assert d.compatible_asset_classes
         assert d.compatible_timeframes
         assert "hold_bars" in d.parameter_defaults
+        assert d.adaptive_parameter_axes
+        assert set(d.adaptive_parameter_axes) <= set(d.parameter_defaults)
         assert callable(d.generate_signals)
 
 

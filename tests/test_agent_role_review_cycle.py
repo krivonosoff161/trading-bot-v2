@@ -1,7 +1,10 @@
+import ast
 import json
+from pathlib import Path
 
 from scripts.strategy_lab.agent_role_review_cycle import run_cycle
 from src.research_lab.llm_provider import LLMUsage
+from src.research_lab.llm_role_reviews import LOCAL_OUTCOME_REVIEW_PROMPT, request_role_review
 
 
 class _Provider:
@@ -192,3 +195,45 @@ def test_agent_role_review_cycle_prefers_unreviewed_training_rows(monkeypatch, t
     ]
     new_refs = [row["source_ref"] for row in rows if row.get("review_id") != "llmr_existing"]
     assert new_refs == ["training_2", "training_3"]
+def test_agent_role_review_cycle_does_not_load_dotenv():
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "strategy_lab"
+        / "agent_role_review_cycle.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    imported = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "dotenv" not in imported
+    assert "load_dotenv" not in called
+
+
+def test_local_outcome_review_uses_compact_contract(tmp_path):
+    class LocalProvider(_Provider):
+        name = "ollama"
+
+        def generate(self, system, user):
+            assert system == LOCAL_OUTCOME_REVIEW_PROMPT
+            assert "counterfactual_tests" not in system
+            return super().generate(system, user)
+
+    review = request_role_review(
+        tmp_path,
+        role_id="outcome_reviewer",
+        source_ref="training-local",
+        source_payload={"schema": "OutcomeLearningCase.v1"},
+        provider=LocalProvider(),
+    )
+
+    assert review.accepted is True

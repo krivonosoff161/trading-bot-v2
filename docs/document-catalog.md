@@ -1,6 +1,6 @@
 # Document Catalog
 
-Status: **ACTIVE**. Updated 2026-07-10.
+Status: **ACTIVE**. Updated 2026-07-11.
 
 This catalog prevents a dated report from silently becoming an operating
 instruction. When documents conflict, use the authority order in
@@ -21,6 +21,7 @@ instruction. When documents conflict, use the authority order in
 | Farm lifecycle | [farm_loop_lifecycle.md](farm_loop_lifecycle.md) |
 | Storage/public boundary | [storage_boundaries.md](storage_boundaries.md) |
 | Cross-repository validation contract | [validation-bridge-contract.md](validation-bridge-contract.md) |
+| Adaptive role and feedback contract | [adaptive-research-center-contract.md](adaptive-research-center-contract.md) |
 | Local-only artifact request rules | [REMOTE_DATA_MANIFEST.md](REMOTE_DATA_MANIFEST.md) |
 
 ## Reference Documents
@@ -36,10 +37,10 @@ These describe a stable limited surface but do not supersede current status:
 - `public_channel_news_flow.md`
 - `SCANNER_SPEC.md`
 
-## Deferred Decision
+## Superseded Decision
 
-`deferred-adaptive-paper-architecture.md` preserves a reviewed future
-initiative. It is not current implementation authority.
+`deferred-adaptive-paper-architecture.md` preserves the earlier deferred
+decision. It is superseded by the active adaptive research-center contract.
 
 ## Sanitized Legacy Evidence
 

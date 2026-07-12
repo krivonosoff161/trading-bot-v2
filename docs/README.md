@@ -54,6 +54,8 @@ architecture.
   criteria for a bounded paper run.
 - [Outcome learning loop](outcome_learning_loop_2026-07-05.md): paper outcome
   review, bounded retests, and evidence gates.
+- [Adaptive Research Center Contract](adaptive-research-center-contract.md):
+  active farm, validator, Trader Supervisor, and System Analyst contracts.
 
 ### LLM And Notification Boundaries
 
@@ -84,7 +86,7 @@ architecture.
 - [Remote data manifest](REMOTE_DATA_MANIFEST.md): machine-local data locations
   and handling rules.
 - [Deferred adaptive paper architecture](deferred-adaptive-paper-architecture.md):
-  preserved next implementation initiative, not current execution work.
+  historical decision record superseded by the active contract.
 
 ## Status Labels
 

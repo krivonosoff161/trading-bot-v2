@@ -57,6 +57,70 @@ class TestClassify:
                             "PAPER_FORWARD_READY")[0] == "shadow_noise_floor"
 
 
+def test_oos_bridge_builds_content_bound_untouched_epoch(monkeypatch):
+    captured = {}
+
+    def fake_run_validation(candidate, output_root, dry_run):
+        captured["candidate"] = candidate
+        return {"hard_status": "PAPER_FORWARD_READY"}
+
+    monkeypatch.setattr(
+        "src.research_lab.honest_backtest_bridge.run_validation", fake_run_validation
+    )
+    selection = [
+        {"entry_ts": 1_700_000_000_000, "exit_ts": 1_700_000_060_000,
+         "side": "long", "net_pct": 0.2}
+    ]
+    evaluation = [
+        {"entry_ts": 1_700_000_120_000 + i * 60_000,
+         "exit_ts": 1_700_000_150_000 + i * 60_000,
+         "side": "long", "net_pct": 0.3}
+        for i in range(10)
+    ]
+    status = SO._oos_bridge_status(
+        {"symbol": "X", "timeframe": "1h", "family": "f", "exit": "baseline", "params": {},
+         "hypothesis_frozen_at": "2023-11-14T22:14:00+00:00",
+         "selection_cutoff_ts": 1_700_000_100_000,
+         "selection_data_fingerprint": "sha256:selection",
+         "selection_evidence": selection},
+        selection, evaluation, 1,
+    )
+    epoch = captured["candidate"].metrics["validation_epoch"]
+    assert status == "PAPER_FORWARD_READY"
+    assert epoch["evidence_stage"] == "untouched_evaluation"
+    assert epoch["selection_evidence"]
+    assert epoch["selection_evidence_hash"] != epoch["evaluation_evidence_hash"]
+    assert epoch["hypothesis_frozen_at"] < epoch["evaluation_started_at"]
+
+
+def test_oos_bridge_fails_closed_when_selection_slice_has_no_trades():
+    evaluation = [
+        {"entry_ts": 1_700_000_120_000 + i * 60_000,
+         "exit_ts": 1_700_000_150_000 + i * 60_000,
+         "side": "long", "net_pct": 0.3}
+        for i in range(10)
+    ]
+    status = SO._oos_bridge_status(
+        {"symbol": "X", "timeframe": "1h", "family": "f", "exit": "baseline", "params": {}},
+        [], evaluation, 1,
+    )
+    assert status == "NEEDS_MORE_DATA"
+
+
+def test_oos_bridge_rejects_missing_registry_freeze_provenance():
+    selection = [{"entry_ts": 1, "exit_ts": 2, "side": "long", "net_pct": 0.2}]
+    evaluation = [
+        {"entry_ts": 1_700_000_120_000 + i * 60_000,
+         "exit_ts": 1_700_000_150_000 + i * 60_000,
+         "side": "long", "net_pct": 0.3}
+        for i in range(10)
+    ]
+    assert SO._oos_bridge_status(
+        {"symbol": "X", "timeframe": "1h", "family": "f", "exit": "baseline", "params": {}},
+        selection, evaluation, 1,
+    ) == "NEEDS_MORE_DATA"
+
+
 class TestCollectDedup:
     def test_dedup_same_signature(self, tmp_path):
         d = tmp_path / "state" / "derived"

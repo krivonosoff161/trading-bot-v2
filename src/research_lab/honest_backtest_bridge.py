@@ -13,15 +13,19 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import hashlib
 import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.hard_validation_contract import (
+    CONTRACT_VERSION,
     CandidateForValidation,
     HardValidationReport,
     HardValidationVerdict,
+    trade_evidence_hash,
+    validation_evidence_hash,
     write_json,
 )
 
@@ -45,10 +49,11 @@ for _path_text in (_HB_ENV, str(_HB_VENDOR)):
 try:
     import backtest_sanity as _bs
     from backtest_sanity import (
-        apply_costs,
         bootstrap_ci,
+        deflated_sharpe_ratio,
         minimum_track_record_length,
         permutation_test,
+        probability_of_backtest_overfitting,
         probabilistic_sharpe_ratio,
         subperiod_stability,
         walk_forward,
@@ -139,6 +144,19 @@ def run_validation(
             _write_minimal_artifacts(private_root, candidate, result)
         return result
 
+    contract_errors = _candidate_contract_errors(candidate)
+    if contract_errors:
+        checks = [{"check_name": "contract_provenance", "passed": False,
+                   "details": {"errors": contract_errors},
+                   "message": "; ".join(contract_errors)}]
+        verdict = _build_verdict(candidate, checks)
+        report = _build_report(candidate, verdict, checks)
+        if not dry_run:
+            _write_artifacts(private_root, candidate, verdict, report)
+        return {"candidate_id": candidate.candidate_id,
+                "hard_status": verdict.hard_status, "checks_run": 1,
+                "checks_passed": 0, "checks_failed": 1, "dry_run": dry_run}
+
     returns = _extract_returns(candidate)
     if len(returns) < 3:
         result = _insufficient_data(candidate, len(returns))
@@ -178,7 +196,7 @@ def run_validation_batch(
 
     if candidate_ids:
         wanted = [str(cid) for cid in candidate_ids if str(cid)]
-        request_files = [requests_dir / f"{cid}.json" for cid in wanted]
+        request_files = [requests_dir / f"{_artifact_stem(cid)}.json" for cid in wanted]
         request_files = [p for p in request_files if p.exists()]
     else:
         request_files = sorted(requests_dir.glob("*.json"))[:limit]
@@ -186,6 +204,11 @@ def run_validation_batch(
     for rf in request_files:
         try:
             data = _read_json(rf)
+            version = data.get("contract_version") if isinstance(data, dict) else None
+            if version != CONTRACT_VERSION:
+                raise ValueError(
+                    f"unsupported contract_version {version!r}; expected {CONTRACT_VERSION!r}"
+                )
             candidate = CandidateForValidation.from_dict(data)
             result = run_validation(candidate, private_root, dry_run=dry_run)
             results.append(result)
@@ -234,8 +257,11 @@ def _insufficient_data(
 
 def _extract_returns(candidate: CandidateForValidation) -> list[float]:
     returns = []
+    basis = str(candidate.metrics.get("returns_basis") or "net_pct")
+    preferred = "pnl_pct" if basis == "gross_pct" else "net_pct"
     for t in candidate.trades:
-        pnl = float(t.get("net_pct") or t.get("pnl_pct") or 0.0)
+        raw = t.get(preferred)
+        pnl = float(raw if raw is not None else 0.0)
         returns.append(pnl)
     if not returns and candidate.equity_curve:
         values = [float(p.get("value") or 0) for p in candidate.equity_curve]
@@ -243,6 +269,40 @@ def _extract_returns(candidate: CandidateForValidation) -> list[float]:
             if values[i - 1] != 0:
                 returns.append((values[i] / values[i - 1] - 1) * 100)
     return returns
+
+
+def _candidate_contract_errors(candidate: CandidateForValidation) -> list[str]:
+    errors = []
+    if candidate.contract_version != CONTRACT_VERSION:
+        errors.append("contract_version_mismatch")
+    if not candidate.candidate_id or not candidate.source_run_id:
+        errors.append("missing_candidate_or_source_run_id")
+    if not candidate.symbol or not candidate.strategy_id:
+        errors.append("missing_symbol_or_strategy_id")
+    if not candidate.timeframe or candidate.timeframe == "unknown":
+        errors.append("missing_timeframe_provenance")
+    fingerprint = str((candidate.metrics or {}).get("data_fingerprint") or "")
+    if not fingerprint or fingerprint == "nofp":
+        errors.append("missing_data_fingerprint")
+    basis = str((candidate.metrics or {}).get("returns_basis") or "")
+    costs_applied = (candidate.metrics or {}).get("costs_applied")
+    if (
+        not math.isfinite(candidate.fees_bps)
+        or not math.isfinite(candidate.slippage_bps)
+        or candidate.fees_bps < 0
+        or candidate.slippage_bps < 0
+    ):
+        errors.append("invalid_cost_assumptions")
+    if basis not in {"gross_pct", "net_pct"}:
+        errors.append("missing_returns_basis")
+    elif costs_applied is not (basis == "net_pct"):
+        errors.append("inconsistent_cost_application_provenance")
+    elif candidate.trades and any(
+        trade.get("pnl_pct" if basis == "gross_pct" else "net_pct") is None
+        for trade in candidate.trades
+    ):
+        errors.append("returns_basis_field_missing")
+    return errors
 
 
 def _n_trials(candidate: CandidateForValidation) -> int:
@@ -269,36 +329,122 @@ def _run_all_checks(
     returns: list[float],
 ) -> list[dict[str, Any]]:
     checks = []
+    checks.append(_check_independent_evaluation(candidate))
     checks.append(_check_costs(candidate, returns))
     checks.append(_check_splits(returns))
     checks.append(_check_significance(returns, n_trials=_n_trials(candidate)))
     checks.append(_check_robustness(returns))
     checks.append(_check_overfit(candidate, returns))
+    checks.append(_check_return_concentration(returns))
     checks.append(_check_forward_readiness(candidate))
     checks.append(_check_data_quality(candidate, returns))
     return checks
 
 
+def _check_independent_evaluation(candidate: CandidateForValidation) -> dict[str, Any]:
+    epoch = candidate.metrics.get("validation_epoch")
+    problems: list[str] = []
+    if not isinstance(epoch, dict) or epoch.get("schema") != "ValidationEpoch.v1":
+        problems.append("validation_epoch_missing")
+        epoch = {}
+    selection_fp = str(epoch.get("selection_data_fingerprint") or "")
+    evaluation_fp = str(epoch.get("evaluation_data_fingerprint") or "")
+    if not selection_fp or not evaluation_fp:
+        problems.append("validation_epoch_fingerprint_missing")
+    elif selection_fp == evaluation_fp:
+        problems.append("evaluation_reuses_selection_data")
+    if evaluation_fp and evaluation_fp != str(candidate.metrics.get("data_fingerprint") or ""):
+        problems.append("evaluation_fingerprint_not_bound_to_candidate")
+    selection_hash = str(epoch.get("selection_evidence_hash") or "")
+    evaluation_hash = str(epoch.get("evaluation_evidence_hash") or "")
+    selection_evidence = epoch.get("selection_evidence")
+    actual_hash = validation_evidence_hash(candidate.trades, candidate.equity_curve)
+    if not selection_hash or not evaluation_hash:
+        problems.append("validation_epoch_evidence_hash_missing")
+    elif evaluation_hash != actual_hash:
+        problems.append("evaluation_evidence_hash_mismatch")
+    elif selection_hash == evaluation_hash:
+        problems.append("evaluation_reuses_selection_evidence")
+    if not isinstance(selection_evidence, list) or not selection_evidence:
+        problems.append("selection_evidence_missing")
+    elif trade_evidence_hash(selection_evidence) != selection_hash:
+        problems.append("selection_evidence_hash_mismatch")
+    if epoch.get("evidence_stage") != "untouched_evaluation":
+        problems.append("evidence_stage_not_untouched")
+    try:
+        frozen = dt.datetime.fromisoformat(str(epoch["hypothesis_frozen_at"]).replace("Z", "+00:00"))
+        started = dt.datetime.fromisoformat(str(epoch["evaluation_started_at"]).replace("Z", "+00:00"))
+        if started <= frozen:
+            problems.append("evaluation_not_after_freeze")
+        selection_bounds = _evidence_time_bounds(selection_evidence, [])
+        evaluation_bounds = _evidence_time_bounds(candidate.trades, candidate.equity_curve)
+        if selection_bounds is None or evaluation_bounds is None:
+            problems.append("validation_epoch_evidence_time_missing")
+        else:
+            if selection_bounds[1] > frozen:
+                problems.append("selection_evidence_after_freeze")
+            if evaluation_bounds[0] != started:
+                problems.append("evaluation_start_not_bound_to_evidence")
+            if evaluation_bounds[0] <= frozen:
+                problems.append("evaluation_evidence_not_after_freeze")
+    except (KeyError, TypeError, ValueError):
+        problems.append("validation_epoch_time_invalid")
+    return {
+        "check_name": "independent_evaluation",
+        "passed": not problems,
+        "details": {"errors": sorted(set(problems)), "epoch": epoch},
+        "message": "untouched evaluation epoch verified" if not problems else "; ".join(sorted(set(problems))),
+    }
+
+
+def _evidence_time_bounds(
+    trades: list[dict[str, Any]], equity_curve: list[dict[str, Any]]
+) -> tuple[dt.datetime, dt.datetime] | None:
+    values: list[dt.datetime] = []
+    source = trades if trades else equity_curve
+    keys = ("entry_ts", "exit_ts") if trades else ("ts",)
+    for row in source:
+        for key in keys:
+            raw = row.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, (int, float)):
+                number = float(raw)
+                if number > 10_000_000_000:
+                    number /= 1000.0
+                values.append(dt.datetime.fromtimestamp(number, tz=dt.timezone.utc))
+            else:
+                parsed = dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=dt.timezone.utc)
+                values.append(parsed.astimezone(dt.timezone.utc))
+    return (min(values), max(values)) if values else None
+
+
 def _check_costs(
     candidate: CandidateForValidation, returns: list[float],
 ) -> dict[str, Any]:
-    fee = candidate.fees_bps / 10000.0
-    slippage = candidate.slippage_bps / 10000.0
     arr = _np.asarray(returns, dtype=float)
-    result = apply_costs(arr, fee=fee, slippage=slippage, turnover=1.0)
-    passed = bool(result["survives_costs"])
+    cost_pct = (candidate.fees_bps + candidate.slippage_bps) / 100.0
+    basis = str(candidate.metrics.get("returns_basis"))
+    if basis == "net_pct":
+        net, gross = arr, arr + cost_pct
+    else:
+        gross, net = arr, arr - cost_pct
+    gross_mean, net_mean = float(_np.mean(gross)), float(_np.mean(net))
+    passed = net_mean > 0
     return {
         "check_name": "costs",
         "passed": passed,
         "details": {
-            "gross_mean": result["gross_mean"],
-            "net_mean": result["net_mean"],
-            "cost_drag": result["cost_drag"],
+            "gross_mean": gross_mean,
+            "net_mean": net_mean,
+            "cost_drag": cost_pct,
+            "returns_basis": basis,
         },
         "message": (
-            f"Gross {result['gross_mean']:.4f}%, "
-            f"net {result['net_mean']:.4f}%, "
-            f"drag {result['cost_drag']:.6f}"
+            f"Gross {gross_mean:.4f}%, net {net_mean:.4f}%, "
+            f"drag {cost_pct:.6f}% (input={basis})"
         ),
     }
 
@@ -421,20 +567,65 @@ def _check_overfit(
             "details": {"n": n},
             "message": "PSR computation failed (pathological moments).",
         }
-    passed = bool(psr["psr"] > 0.5)
+    passed = bool(psr["psr"] >= 0.95 and mtrl["sufficient"])
+    details = {
+        "psr": psr["psr"],
+        "sharpe": psr["sharpe"],
+        "min_n": mtrl["min_n"],
+        "sufficient": mtrl["sufficient"],
+    }
+    trial_sharpes = candidate.metrics.get("trial_sharpes")
+    if isinstance(trial_sharpes, list) and len(trial_sharpes) >= 2:
+        try:
+            dsr = deflated_sharpe_ratio(arr, trial_sharpes)
+            details["dsr"] = dsr
+            passed = passed and bool(dsr["dsr"] >= 0.95)
+        except ValueError as exc:
+            details["dsr_error"] = str(exc)
+            passed = False
+    trial_returns = candidate.metrics.get("trial_returns")
+    if isinstance(trial_returns, list) and trial_returns:
+        try:
+            pbo = probability_of_backtest_overfitting(trial_returns)
+            details["pbo"] = pbo
+            passed = passed and bool(pbo["pbo"] < 0.5)
+        except ValueError as exc:
+            details["pbo_error"] = str(exc)
+            passed = False
     return {
         "check_name": "overfit_psr",
         "passed": passed,
-        "details": {
-            "psr": psr["psr"],
-            "sharpe": psr["sharpe"],
-            "min_n": mtrl["min_n"],
-            "sufficient": mtrl["sufficient"],
-        },
+        "details": details,
         "message": (
             f"PSR={psr['psr']:.4f}, Sharpe={psr['sharpe']:.4f}, "
-            f"MinTRL={mtrl['min_n']:.0f}"
+            f"MinTRL={mtrl['min_n']:.0f}; pass needs PSR>=0.95 and sufficient MinTRL"
         ),
+    }
+
+
+def _check_return_concentration(returns: list[float]) -> dict[str, Any]:
+    """Reject edges whose positive mean exists only because of one best trade."""
+    arr = _np.asarray(returns, dtype=float)
+    n = len(arr)
+    if n < 6:
+        return {"check_name": "return_concentration", "passed": False,
+                "details": {"n": n},
+                "message": f"Too few returns ({n}) for concentration analysis."}
+    best_idx = int(_np.argmax(arr))
+    without_best = _np.delete(arr, best_idx)
+    full_sum = float(_np.sum(arr))
+    best = float(arr[best_idx])
+    loo_mean = float(_np.mean(without_best))
+    dominance = best / full_sum if full_sum > 0 and best > 0 else 0.0
+    passed = bool(loo_mean > 0 and dominance <= 0.5)
+    return {
+        "check_name": "return_concentration",
+        "passed": passed,
+        "details": {"n": n, "best_return": best,
+                    "leave_best_out_mean": loo_mean,
+                    "best_trade_profit_share": dominance},
+        "message": (f"leave-best-out mean={loo_mean:.4f}%, "
+                    f"best-trade profit share={dominance:.4f}"),
     }
 
 
@@ -497,6 +688,12 @@ def _build_verdict(
         reason_codes.append("low_psr")
     if "data_quality" in failed:
         reason_codes.append("data_quality_issue")
+    if "contract_provenance" in failed:
+        reason_codes.append("invalid_contract_or_provenance")
+    if "independent_evaluation" in failed:
+        reason_codes.append("untouched_evaluation_required")
+    if "return_concentration" in failed:
+        reason_codes.append("single_trade_dominance")
 
     return HardValidationVerdict(
         candidate_id=candidate.candidate_id,
@@ -511,13 +708,15 @@ def _build_verdict(
 def _map_failed_to_status(
     failed: list[str], candidate: CandidateForValidation,
 ) -> str:
-    if "data_quality" in failed:
+    if "independent_evaluation" in failed:
+        return "NEEDS_MORE_DATA"
+    if "data_quality" in failed or "contract_provenance" in failed:
         return "FAILED_DATA_QUALITY"
     if "costs" in failed:
         return "FAILED_COSTS"
     if "oos_split" in failed:
         return "FAILED_OOS"
-    if "robustness" in failed:
+    if "robustness" in failed or "return_concentration" in failed:
         return "FAILED_FRAGILITY"
     if "overfit_psr" in failed:
         return "FAILED_OVERFIT"
@@ -565,13 +764,14 @@ def _write_artifacts(
     reports_dir.mkdir(parents=True, exist_ok=True)
     verdicts_dir.mkdir(parents=True, exist_ok=True)
 
-    report_path = reports_dir / f"{candidate.candidate_id}.json"
+    stem = _artifact_stem(candidate.candidate_id)
+    report_path = reports_dir / f"{stem}.json"
     write_json(report_path, report.to_dict())
 
-    md_path = reports_dir / f"{candidate.candidate_id}.md"
+    md_path = reports_dir / f"{stem}.md"
     md_path.write_text(report.to_markdown(), encoding="utf-8")
 
-    verdict_path = verdicts_dir / f"{candidate.candidate_id}.json"
+    verdict_path = verdicts_dir / f"{stem}.json"
     write_json(verdict_path, verdict.to_dict())
 
 
@@ -610,12 +810,19 @@ def _write_minimal_artifacts(
         checks_summary={"total": 0, "passed": 0, "failed": 0},
         created_at=created_at,
     )
-    verdict_path = verdicts_dir / f"{candidate.candidate_id}.json"
+    stem = _artifact_stem(candidate.candidate_id)
+    verdict_path = verdicts_dir / f"{stem}.json"
     write_json(verdict_path, verdict_data)
-    report_path = reports_dir / f"{candidate.candidate_id}.json"
+    report_path = reports_dir / f"{stem}.json"
     write_json(report_path, report.to_dict())
-    md_path = reports_dir / f"{candidate.candidate_id}.md"
+    md_path = reports_dir / f"{stem}.md"
     md_path.write_text(report.to_markdown(), encoding="utf-8")
+
+
+def _artifact_stem(candidate_id: str) -> str:
+    """Keep untrusted candidate identifiers out of filesystem path semantics."""
+    digest = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:24]
+    return f"candidate_{digest}"
 
 
 def _read_json(path: Path) -> Any:

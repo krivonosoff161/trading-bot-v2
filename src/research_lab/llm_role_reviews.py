@@ -74,6 +74,21 @@ ROLE_SYSTEM_PROMPTS = {
 }
 
 
+LOCAL_OUTCOME_REVIEW_PROMPT = (
+    "You are a bounded paper-outcome reviewer. Return one compact JSON object "
+    "with exactly these keys: summary, review_kind, outcome_bucket, diagnosis, "
+    "confidence, actionability. Keep summary and diagnosis under 120 characters. "
+    "Confidence must be a number from 0 to 1. Do not emit markdown, trade levels, "
+    "orders, execution fields, or additional keys."
+)
+
+
+def _review_system_prompt(role_id: str, provider: ProposalProvider) -> str:
+    if role_id == "outcome_reviewer" and getattr(provider, "name", "") == "ollama":
+        return LOCAL_OUTCOME_REVIEW_PROMPT
+    return ROLE_SYSTEM_PROMPTS[role_id]
+
+
 @dataclass(frozen=True)
 class LLMRoleReview:
     review_id: str
@@ -218,13 +233,14 @@ def request_role_review(
 ) -> LLMRoleReview:
     if role_id not in ROLE_TO_SCHEMA:
         raise KeyError(f"unsupported review role: {role_id}")
+    system_prompt = _review_system_prompt(role_id, provider)
     permit = preflight_invocation(
         private_root,
         role_id=role_id,
         source_ref=source_ref,
         input_payload={
             "source_payload": dict(source_payload),
-            "prompt_hash": hashlib.sha256(ROLE_SYSTEM_PROMPTS[role_id].encode("utf-8")).hexdigest()[:16],
+            "prompt_hash": hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16],
             "output_schema": ROLE_TO_SCHEMA[role_id],
         },
         provider=provider,
@@ -256,7 +272,7 @@ def request_role_review(
             append_jsonl(review_path(private_root, role_id), review.to_dict())
         return review
     try:
-        text, usage = provider.generate(ROLE_SYSTEM_PROMPTS[role_id], build_review_input(role_id, source_payload))
+        text, usage = provider.generate(system_prompt, build_review_input(role_id, source_payload))
         record_usage(private_root, usage, allow_public_output=allow_public_output)
         payload = json.loads(text)
         if not isinstance(payload, dict):

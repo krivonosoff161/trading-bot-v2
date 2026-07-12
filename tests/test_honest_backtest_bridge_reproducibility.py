@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from src.research_lab import honest_backtest_bridge as bridge
-from src.research_lab.hard_validation_contract import CandidateForValidation
+from src.research_lab.hard_validation_contract import CandidateForValidation, trade_evidence_hash
 from src.research_lab.honest_backtest_bridge import (
     BridgeUnavailableError,
     bridge_available,
@@ -25,6 +25,7 @@ from src.research_lab.honest_backtest_bridge import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _CANDIDATE_DICT = {
+    "contract_version": "1.1.0",
     "candidate_id": "c-repro",
     "source_run_id": "run-repro",
     "symbol": "BTC-USDT-SWAP",
@@ -38,15 +39,38 @@ _CANDIDATE_DICT = {
     "lite_status": "FORWARD_PAPER",
     "lite_reasons": ["passed_lite_validation"],
     "risk_flags": [],
-    "metrics": {"n_trades": 5},
+    "metrics": {
+        "n_trades": 5, "data_fingerprint": "sha256:evaluation",
+        "returns_basis": "net_pct", "costs_applied": True,
+        "validation_epoch": {
+            "schema": "ValidationEpoch.v1", "evidence_stage": "untouched_evaluation",
+            "selection_data_fingerprint": "sha256:selection",
+            "evaluation_data_fingerprint": "sha256:evaluation",
+            "hypothesis_frozen_at": "2026-06-19T00:00:00+00:00",
+            "evaluation_started_at": "2026-06-20T00:00:00+00:00",
+        },
+    },
     "trades": [
-        {"side": "long", "net_pct": 1.0, "entry_ts": i, "exit_ts": i + 1}
+        {"side": "long", "net_pct": 1.0,
+         "entry_ts": f"2026-06-20T00:0{i}:00+00:00",
+         "exit_ts": f"2026-06-20T00:0{i}:30+00:00"}
         for i in range(5)
     ],
     "equity_curve": [],
     "data_window": {"start_ts": 0, "end_ts": 5, "n_bars": 5},
     "created_at": "2026-06-20T00:00:00Z",
 }
+_CANDIDATE_DICT["metrics"]["validation_epoch"]["selection_evidence"] = [
+    {"side": "short", "net_pct": 0.5,
+     "entry_ts": "2026-06-18T23:00:00+00:00",
+     "exit_ts": "2026-06-19T00:00:00+00:00"}
+]
+_CANDIDATE_DICT["metrics"]["validation_epoch"]["selection_evidence_hash"] = trade_evidence_hash(
+    _CANDIDATE_DICT["metrics"]["validation_epoch"]["selection_evidence"]
+)
+_CANDIDATE_DICT["metrics"]["validation_epoch"]["evaluation_evidence_hash"] = trade_evidence_hash(
+    _CANDIDATE_DICT["trades"]
+)
 
 
 def _candidate() -> CandidateForValidation:

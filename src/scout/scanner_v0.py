@@ -40,7 +40,9 @@ if str(_ROOT) not in sys.path:
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(_ROOT / ".env")
+    from src.utils.runtime_root import runtime_env_file
+
+    load_dotenv(runtime_env_file(_ROOT))
 except Exception:
     pass
 
@@ -65,6 +67,7 @@ from src.scout.sources.opec import fetch_opec_schedule                         #
 from src.scout.sources.earnings_calendar import fetch_earnings_calendar        # noqa: E402
 from src.scout.sources.etf_flow import l1_context_line                          # noqa: E402
 from src.scout.sources.telegram_web import fetch_telegram_web_sources           # noqa: E402
+from src.scout.delivery_policy import scanner_telegram_enabled                 # noqa: E402
 from src.scout.agents import orchestrator                                       # noqa: E402
 from src.scout import trigger_context as TC                                     # noqa: E402
 from src.scout.temporal import classify_temporal                                # noqa: E402
@@ -728,7 +731,8 @@ async def process_item(item: dict, mline: str | None, dry: bool,
                        btc_ref: float | None = None,
                        recent: list | None = None, dedup_min: int = 88,
                        carded: dict | None = None, max_per_asset: int = 1,
-                       use_buffer: bool = False) -> dict | None:
+                       use_buffer: bool = False,
+                       send_telegram: bool = True) -> dict | None:
     headline = item["title"]
     url = item.get("url")
     doc_id = item.get("buffer_doc_id")
@@ -1273,13 +1277,18 @@ async def process_item(item: dict, mline: str | None, dry: bool,
     # 5+6) график + доставка — только GO/WATCH chief-карточки (should_send_to_channel);
     # NO_GO (chief или дешёвый) = журнал/датасет, в канал не идёт (SCANNER_SEND_NO_GO=true вернёт)
     sent = None
-    send_allowed = bool(cid) and should_send_to_channel(verdict, bool(orch.get("send_channel")))
+    send_allowed = (
+        send_telegram
+        and bool(cid)
+        and should_send_to_channel(verdict, bool(orch.get("send_channel")))
+    )
     telegram_targets = _scanner_chat_ids()
     if not send_allowed:
         write_telegram_delivery({
             "card_id": cid, "asset": asset, "verdict": verdict, "source": source,
             "send_channel": bool(orch.get("send_channel")), "dry": dry,
-            "status": "skipped", "reason": "send_gate",
+            "status": "skipped",
+            "reason": "delivery_disabled" if not send_telegram else "send_gate",
         })
     elif not telegram_targets:
         write_telegram_delivery({
@@ -1344,6 +1353,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         PS.expire_old()
     okx_day_test = env_enabled("SCANNER_OKX_DAY_TEST")
     okx_only = env_enabled("SCANNER_OKX_ONLY")
+    send_telegram = scanner_telegram_enabled()
     seen = load_seen()
     mline = market_ctx_line()
     btc_ref = okx_last("BTC-USDT-SWAP") if not dry else None   # якорь baseline на проход
@@ -1465,7 +1475,8 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         res = await process_item(it, mline, dry, btc_ref=btc_ref,
                                  recent=recent, dedup_min=dedup_min,
                                  carded=carded, max_per_asset=max_per_asset,
-                                 use_buffer=use_buffer)
+                                 use_buffer=use_buffer,
+                                 send_telegram=send_telegram)
         doc_id = it.get("buffer_doc_id")
         skipped = res.get("skipped") if res else None
         # retry-minimal: НЕ помечаем seen при временном сбое LLM (повторим следующий проход)

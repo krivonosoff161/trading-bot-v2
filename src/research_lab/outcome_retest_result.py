@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,6 @@ from src.research_lab.state_db import default_db_path
 SCHEMA = "OutcomeRetestResult.v1"
 SUMMARY_SCHEMA = "outcome_retest_results.v1"
 MIN_EVIDENCE_TRADES = 5
-IMPROVEMENT_FLOOR_PCT = 0.05
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -102,12 +102,19 @@ def _best_result(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _verdict(*, n_trades: int, best_net: float, baseline_net: float) -> str:
+def _verdict(*, n_trades: int, best_net: float) -> str:
     if n_trades < MIN_EVIDENCE_TRADES:
         return "insufficient_evidence"
-    if best_net > 0 and best_net - baseline_net >= IMPROVEMENT_FLOOR_PCT:
-        return "improved_directional"
-    return "no_improvement"
+    if best_net > 0:
+        return "selection_only"
+    return "no_selection_signal"
+
+
+def _iso_from_epoch(value: Any) -> str:
+    timestamp = _float(value)
+    if timestamp <= 0:
+        return ""
+    return dt.datetime.fromtimestamp(timestamp, tz=dt.timezone.utc).isoformat()
 
 
 def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
@@ -135,10 +142,8 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
             continue
         best = _best_result(metrics_payload)
         metrics = best.get("metrics") if isinstance(best.get("metrics"), dict) else {}
-        baseline = context.get("baseline") if isinstance(context.get("baseline"), dict) else {}
         n_trades = int(metrics.get("n_trades") or 0)
         best_net = _float(metrics.get("avg_net_pct"))
-        baseline_net = _float(baseline.get("net_pct"))
         source_ref = str(context.get("source_ref") or "")
         source_training = training_index.get(source_ref) or {}
         row = {
@@ -154,13 +159,17 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
             "symbol": str(best.get("symbol") or task.get("symbol") or ""),
             "timeframe": str(metrics_payload.get("timeframe") or ""),
             "family": str(best.get("family") or ""),
-            "baseline_net_pct": baseline_net,
             "best_avg_net_pct": best_net,
-            "delta_vs_baseline_pct": round(best_net - baseline_net, 6),
             "best_n_trades": n_trades,
             "best_validation_status": str(best.get("validation_status") or ""),
-            "verdict": _verdict(n_trades=n_trades, best_net=best_net, baseline_net=baseline_net),
-            "comparison_kind": "directional_retest_not_single_trade_pnl_attribution",
+            "verdict": _verdict(n_trades=n_trades, best_net=best_net),
+            "evidence_stage": "selection",
+            "required_evaluation": "untouched_out_of_sample",
+            "untouched_evaluation_required": True,
+            "selection_window_start": str(context.get("selection_window_start") or ""),
+            "selection_window_end": str(context.get("selection_window_end") or ""),
+            "evaluated_at": _iso_from_epoch(task.get("updated_at")),
+            "comparison_kind": "within_sweep_selection_only_no_single_trade_baseline",
             "run_dir_label": label,
             "task_id": int(task.get("task_id") or 0),
             "completed_at": float(task.get("updated_at") or 0.0),

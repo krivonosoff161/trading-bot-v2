@@ -453,6 +453,19 @@ def _run_main_paper_derived_chain(
     try:
         _write_loop_status(
             private_root,
+            stage="system_analyst_feedback",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.system_analyst_cycle import run_system_analyst_cycle
+
+        out["system_analyst_feedback"] = run_system_analyst_cycle(private_root, apply=apply)
+    except Exception as exc:  # noqa: BLE001 - advisory feedback must not break the cycle
+        out.setdefault("errors", []).append({"where": "system_analyst_feedback", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
             stage="trading_policy_calibration",
             apply=apply,
             loop=loop,
@@ -768,6 +781,16 @@ def _cycle_summary(out: dict) -> dict:
             "theses": (out.get("trade_thesis_supervisor") or {}).get("theses", 0),
             "events": (out.get("trade_thesis_supervisor") or {}).get("events", 0),
             "by_action": (out.get("trade_thesis_supervisor") or {}).get("by_action") or {},
+        },
+        "system_analyst_feedback": {
+            "feedback_candidates": (out.get("system_analyst_feedback") or {}).get("feedback_candidates", 0),
+            "routed": (out.get("system_analyst_feedback") or {}).get("routed", 0),
+            "role_environment_candidates": (
+                (out.get("system_analyst_feedback") or {}).get("role_environment_candidates") or {}
+            ),
+            "accepted_role_requests": (
+                (out.get("system_analyst_feedback") or {}).get("accepted_role_requests") or {}
+            ),
         },
         "telegram": {
             "preview_rendered": (out.get("paper_telegram_preview") or {}).get("rendered", 0),

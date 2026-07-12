@@ -22,13 +22,6 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(ROOT / ".env")
-except Exception:
-    pass
-
 from src.research_lab.lineage_contract import utc_now  # noqa: E402
 from src.research_lab.llm_provider import (  # noqa: E402
     DEFAULT_RATE_RUB_PER_1K,

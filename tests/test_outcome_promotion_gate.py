@@ -72,27 +72,46 @@ def test_positive_preserve_pattern_requires_shadow_watch():
     assert "positive_pattern_needs_forward_watch" in verdicts[0].reasons
 
 
-def test_improved_retest_moves_to_shadow_instead_of_repeating_review():
+def test_selection_only_retest_requires_untouched_evaluation():
     verdicts = build_gate_verdicts(
         [_training()],
         [_review()],
-        retest_index={"llmr_1": {"retest_id": "ort_1", "verdict": "improved_directional"}},
+        retest_index={
+            "llmr_1": {
+                "retest_id": "ort_1",
+                "verdict": "selection_only",
+                "evidence_stage": "selection",
+                "required_evaluation": "untouched_out_of_sample",
+            }
+        },
     )
 
-    assert verdicts[0].gate_stage == NEEDS_SHADOW
+    assert verdicts[0].gate_stage == NEEDS_RETEST
     assert verdicts[0].evidence_refs["outcome_retest_id"] == "ort_1"
-    assert "completed_retest_improved_directional_needs_shadow" in verdicts[0].reasons
+    assert verdicts[0].evidence_refs["required_evaluation"] == "untouched_out_of_sample"
+    assert "selection_only_requires_untouched_evaluation" in verdicts[0].reasons
+
+
+def test_legacy_improved_directional_is_not_treated_as_proven_improvement():
+    verdicts = build_gate_verdicts(
+        [_training()],
+        [_review()],
+        retest_index={"llmr_1": {"retest_id": "ort_old", "verdict": "improved_directional"}},
+    )
+
+    assert verdicts[0].gate_stage == NEEDS_RETEST
+    assert "selection_only_requires_untouched_evaluation" in verdicts[0].reasons
 
 
 def test_failed_retest_returns_to_review_only():
     verdicts = build_gate_verdicts(
         [_training()],
         [_review()],
-        retest_index={"llmr_1": {"retest_id": "ort_1", "verdict": "no_improvement"}},
+        retest_index={"llmr_1": {"retest_id": "ort_1", "verdict": "no_selection_signal"}},
     )
 
     assert verdicts[0].gate_stage == REVIEW_ONLY
-    assert "completed_retest_found_no_improvement" in verdicts[0].reasons
+    assert "completed_retest_found_no_selection_signal" in verdicts[0].reasons
 
 
 def test_shadow_candidate_must_move_to_true_forward_before_operator_review():

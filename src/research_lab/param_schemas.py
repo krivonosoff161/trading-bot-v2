@@ -35,6 +35,84 @@ META_ENUMS = {
     "exit_mode": EXIT_MODES,
 }
 
+PARAMETER_SEARCH_CONTRACT_VERSION = "parameter-search/v1"
+SAMPLER_VERSION = "deterministic-uniform/v1"
+_AXIS_DEPENDENCIES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("rsi_reversal", "oversold"): ("oversold < overbought",),
+    ("rsi_reversal", "overbought"): ("overbought > oversold",),
+}
+
+
+@dataclass(frozen=True)
+class AdaptiveAxis:
+    name: str
+    value_type: str
+    minimum: float
+    maximum: float
+    default: float
+    unit: str = "scalar"
+    searchable: bool = True
+    dependencies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FollowupPolicy:
+    narrow_factors: tuple[float, ...] = (1.0, 1.25)
+    widen_factors: tuple[float, ...] = (1.0, 2.0)
+    max_default_multiplier: float = 2.0
+
+
+@dataclass(frozen=True)
+class ParameterSearchContract:
+    version: str
+    strategy_id: str
+    adaptive_axes: tuple[AdaptiveAxis, ...]
+    followup: FollowupPolicy
+    sampler_version: str = SAMPLER_VERSION
+
+    @property
+    def primary_axis(self) -> AdaptiveAxis | None:
+        return self.adaptive_axes[0] if self.adaptive_axes else None
+
+
+def parameter_search_contract(strategy_id: str) -> ParameterSearchContract:
+    """Return the versioned search policy owned by a registry strategy definition."""
+    strategy = get_strategy(strategy_id)
+    policy = load_param_policy()
+    units = policy.get("units") or {}
+    axes: list[AdaptiveAxis] = []
+    for name in strategy.adaptive_parameter_axes:
+        value = strategy.parameter_defaults[name]
+        range_spec = _range_for_key(name, value, policy)
+        axes.append(
+            AdaptiveAxis(
+                name,
+                "int" if isinstance(value, int) else "number",
+                float(range_spec.get("min", 2.0 if isinstance(value, int) else 0.0)),
+                float(range_spec.get("max", value)),
+                float(value),
+                str(units.get(name) or ("bars" if "lookback" in name or name.endswith("period") else "scalar")),
+                True,
+                _AXIS_DEPENDENCIES.get((strategy_id, name), ()),
+            )
+        )
+    return ParameterSearchContract(
+        version=PARAMETER_SEARCH_CONTRACT_VERSION,
+        strategy_id=strategy_id,
+        adaptive_axes=tuple(axes),
+        followup=FollowupPolicy(),
+    )
+
+
+def search_variant_is_valid(strategy_id: str, params: dict[str, Any]) -> bool:
+    """Enforce cross-axis semantics before a variant can enter the executable sample."""
+    if strategy_id == "rsi_reversal":
+        try:
+            return float(params["oversold"]) < float(params["overbought"])
+        except (KeyError, TypeError, ValueError):
+            return False
+    return True
+
 
 @dataclass(frozen=True)
 class ParamValidationResult:

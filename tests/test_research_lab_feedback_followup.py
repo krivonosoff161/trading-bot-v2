@@ -147,3 +147,13 @@ def test_narrow_followup_is_idempotent_sweep_id():
     a = plan_followup(_rec(fr.NARROW_PARAMS, status="FAILED_FRAGILITY"), PARAMS)
     b = plan_followup(_rec(fr.NARROW_PARAMS, status="FAILED_FRAGILITY"), PARAMS)
     assert a.sweep.sweep_id == b.sweep.sweep_id  # deterministic -> dedupes on re-run
+
+
+def test_followup_uses_family_axis_without_inventing_lookback():
+    params = {"period": 14, "oversold": 30, "overbought": 70, "hold_bars": 4}
+    plan = plan_followup(
+        _rec(fr.NARROW_PARAMS, strategy="rsi_reversal"), params, max_variants=8
+    )
+    assert plan.queued is True
+    assert "period" in plan.sweep.setup_grid
+    assert "lookback" not in plan.sweep.setup_grid

@@ -33,7 +33,9 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-load_dotenv()
+from src.utils.runtime_root import runtime_env_file  # noqa: E402
+
+load_dotenv(runtime_env_file(ROOT))
 
 from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: E402
 from scripts.analysis.feedback import (  # noqa: E402
