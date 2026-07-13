@@ -93,6 +93,9 @@ interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
 separate process owners. The UI starts with every contour disabled, prevents a
 second control-center instance and duplicate canonical-farm ownership, records a
 private heartbeat, and contains no execution or private-exchange entrypoint.
+If a prior center left a verified local process running, the UI exposes its PID
+and requires a separate confirmation before stopping it. A port owned by an
+unverified executable is reported but never terminated automatically.
 Its second status line explains per-role work issued, queued, waiting,
 completed, returned to the analyst, and the current bounded generation.
 

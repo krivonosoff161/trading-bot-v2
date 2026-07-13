@@ -73,7 +73,10 @@ def test_runtime_assets_stay_outside_task_worktree():
 
 
 def test_only_known_local_ports_are_probed():
-    assert MODULE.ControlCenter._external_running(object(), "unknown") is False
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.external_contours = {}
+    center._port_open = lambda _port: False
+    assert center._external_running("unknown") is False
 
 
 def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
@@ -99,18 +102,40 @@ def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
         assert recovered == {}
 
 
-def test_port_owned_external_service_is_present_in_heartbeat_metadata():
+def test_port_owned_external_service_exposes_pid(monkeypatch):
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda port: 4242 if port == 11434 else None)
+    monkeypatch.setattr(MODULE, "_process_started_at", lambda pid: 123.0 if pid == 4242 else None)
+    monkeypatch.setattr(
+        MODULE,
+        "_process_executable",
+        lambda pid: Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+        if pid == 4242 else None,
+    )
+
     class FakeCenter:
         external_contours = {}
 
         @staticmethod
-        def _external_running(key):
-            return key == "ollama"
+        def _port_open(port):
+            return port == 11434
 
     external = MODULE.ControlCenter._external_descriptor(FakeCenter(), "ollama")
 
-    assert external == {"pid": None, "started_at": None}
+    assert external == {
+        "pid": 4242,
+        "started_at": 123.0,
+        "source": "port",
+        "stoppable": True,
+    }
     assert MODULE.ControlCenter._external_descriptor(FakeCenter(), "dashboard") is None
+
+
+def test_same_live_process_rejects_missing_or_reused_pid(monkeypatch):
+    monkeypatch.setattr(MODULE, "_process_started_at", lambda pid: 200.0 if pid == 42 else None)
+
+    assert MODULE._same_live_process(42, 200.0) is True
+    assert MODULE._same_live_process(42, 190.0) is False
+    assert MODULE._same_live_process(99, 200.0) is False
 
 
 def test_farm_and_paper_cards_share_graceful_stop_owner():
