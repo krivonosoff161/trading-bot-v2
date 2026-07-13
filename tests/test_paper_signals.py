@@ -362,6 +362,27 @@ class TestCycle:
         assert rep["max_network_fetches"] == 3
         assert rep["gate_counts"]["live_fetch_limit_reached"] == 1
 
+    def test_stop_callback_preempts_before_network_work(self, tmp_path):
+        from src.research_lab.paper_signals import cycle
+        _seed_large_universe(tmp_path)
+        prov = _CountingEmptyProvider()
+
+        rep = cycle.run_cycle(
+            tmp_path,
+            mode="live",
+            timeframes=("15m", "1h", "4h"),
+            provider=prov,
+            apply=False,
+            now=1e6,
+            max_wall_seconds=45,
+            should_stop=lambda: True,
+        )
+
+        assert prov.calls == 0
+        assert rep["yield_requested"] is True
+        assert rep["elapsed_seconds"] < 1
+        assert rep["gate_counts"]["wall_or_stop_limit_reached"] >= 1
+
     def test_fetch_window_is_bounded_for_live_candidates(self, tmp_path):
         from src.research_lab.paper_signals import cycle
         _seed_universe(tmp_path)

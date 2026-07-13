@@ -757,6 +757,7 @@ class ControlCenter(tk.Tk):
         queue_state = self._queue_snapshot()
         backend = self._backend_snapshot()
         farm = self._read_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
+        priority_worker = self._read_json(PRIVATE_ROOT / "state" / "farm_priority_worker_status.json")
         stage = (
             str(farm.get("stage") or "работает")
             if self.contours.get("farm") and self.contours["farm"].running
@@ -781,6 +782,7 @@ class ControlCenter(tk.Tk):
         )
         return (
             f"{self._gpu_snapshot()}  |  {queue_text}  |  этап: {stage}  |  "
+            f"priority worker: {priority_worker.get('stage') or 'остановлен'}  |  "
             f"сейчас: {current_text}  |  {backend_text}"
         )
 

@@ -110,6 +110,27 @@ def test_claim_respects_priority_and_deferral():
     db.close()
 
 
+def test_active_duplicate_promotes_existing_task_to_urgent():
+    db = FarmTasksDB(":memory:")
+    now = 1000.0
+    background, created = db.enqueue_task(
+        task_type="run_sweep", task_key="same-work", priority=90, now=now,
+    )
+    db.enqueue_task(task_type="run_sweep", task_key="other-work", priority=40, now=now)
+
+    promoted, duplicate = db.enqueue_task(
+        task_type="run_sweep", task_key="same-work", priority=0,
+        source_event_id="manual-urgent", now=now + 1,
+    )
+
+    assert created and not duplicate and promoted == background
+    claimed = db.claim_next_task(now=now + 1)
+    assert claimed["task_id"] == background
+    assert claimed["priority"] == 0
+    assert claimed["source_event_id"] == "manual-urgent"
+    db.close()
+
+
 def test_reconcile_orphan_running_requeues_stale():
     db = FarmTasksDB(":memory:")
     now = 1000.0

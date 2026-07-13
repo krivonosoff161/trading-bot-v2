@@ -39,11 +39,39 @@ def _verdicts(directory: Path) -> dict[str, str]:
     return out
 
 
-def refresh_from_artifacts(conn: sqlite3.Connection, private_root: Path) -> dict[str, Any]:
-    """Stamp farm_results.validation_exported + hard_status from the hard-validation dirs."""
+def refresh_from_artifacts(
+    conn: sqlite3.Connection,
+    private_root: Path,
+    *,
+    candidate_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stamp exported/verdict state, optionally for only the current validation batch.
+
+    A one-candidate maintenance pass must not rescan and update the full historical
+    artifact collection: doing so holds SQLite's writer lock long enough to stall the
+    independent priority worker. Full refresh remains available when IDs are omitted.
+    """
     base = Path(private_root) / "hard_validation"
-    exported = _ids_from_dir(base / "requests")
-    verdicts = _verdicts(base / "verdicts")
+    if candidate_ids is None:
+        exported = _ids_from_dir(base / "requests")
+        verdicts = _verdicts(base / "verdicts")
+    else:
+        wanted = {str(cid) for cid in candidate_ids if str(cid)}
+        requests_dir = base / "requests"
+        exported = {cid for cid in wanted if (requests_dir / f"{cid}.json").exists()}
+        verdicts = {}
+        verdict_dir = base / "verdicts"
+        for cid in wanted:
+            path = verdict_dir / f"{cid}.json"
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            artifact_id = str(data.get("candidate_id") or cid)
+            if artifact_id in wanted:
+                verdicts[artifact_id] = str(data.get("hard_status") or "")
     marked_exported = 0
     marked_verdict = 0
     for cid in exported:

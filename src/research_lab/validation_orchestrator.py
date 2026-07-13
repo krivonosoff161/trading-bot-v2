@@ -166,20 +166,20 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
                                limit=max(limit, len(export_tasks)),
                                candidate_ids=exported_ids or None)
     counters["validated"] = int(val.get("validated") or 0)
+    current_ids = exported_ids or [_hard_id_for_task(t) for t in export_tasks]
 
     # auto stamp-back into farm_results (was the orphaned refresh_validation_handoff step)
     from src.research_lab.state_db import connect, default_db_path, init_db
     conn = connect(default_db_path(private_root))
     init_db(conn)
     try:
-        handoff = refresh_from_artifacts(conn, private_root)
+        handoff = refresh_from_artifacts(conn, private_root, candidate_ids=current_ids)
         counters["stamped_db"] = int(handoff.get("rows_stamped_verdict") or 0)
     finally:
         conn.close()
 
     # mirror verdicts into the coordinator's unique_candidates view
     verdicts_all = _verdict_map(private_root)
-    current_ids = exported_ids or [_hard_id_for_task(t) for t in export_tasks]
     verdicts = {cid: verdicts_all[cid] for cid in current_ids if cid in verdicts_all}
     reqs = _request_map(private_root)
     counters["stamped_db"] += _stamp_farm_results_from_contexts(Path(private_root), verdicts)

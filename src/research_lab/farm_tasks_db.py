@@ -59,6 +59,7 @@ class FarmTasksDB:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout = 30000")
         self._conn.execute("PRAGMA journal_mode = WAL")
         # Optional audit hook: set to a callable(record: dict) to log every state change.
         self.on_transition = None
@@ -210,10 +211,17 @@ class FarmTasksDB:
         """
         now = time.time() if now is None else now
         active = self._conn.execute(
-            f"SELECT task_id FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
+            f"SELECT task_id, priority FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
             "ORDER BY task_id ASC LIMIT 1", (task_key,),
         ).fetchone()
         if active is not None:
+            if int(priority) < int(active["priority"]):
+                self._conn.execute(
+                    "UPDATE tasks SET priority=?, source_event_id=COALESCE(?, source_event_id), "
+                    "updated_at=? WHERE task_id=?",
+                    (int(priority), source_event_id, now, int(active["task_id"])),
+                )
+                self._conn.commit()
             return int(active["task_id"]), False
         done = self._conn.execute(
             "SELECT task_id, updated_at FROM tasks WHERE task_key=? AND state='completed' "
@@ -233,10 +241,17 @@ class FarmTasksDB:
             )
         except sqlite3.IntegrityError:
             active = self._conn.execute(
-                f"SELECT task_id FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
+                f"SELECT task_id, priority FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
                 "ORDER BY task_id ASC LIMIT 1", (task_key,),
             ).fetchone()
             if active is not None:
+                if int(priority) < int(active["priority"]):
+                    self._conn.execute(
+                        "UPDATE tasks SET priority=?, source_event_id=COALESCE(?, source_event_id), "
+                        "updated_at=? WHERE task_id=?",
+                        (int(priority), source_event_id, now, int(active["task_id"])),
+                    )
+                    self._conn.commit()
                 return int(active["task_id"]), False
             raise
         self._conn.commit()

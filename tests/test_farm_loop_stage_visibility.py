@@ -9,11 +9,50 @@ from __future__ import annotations
 
 import json
 import asyncio
+import threading
 from argparse import Namespace
 from pathlib import Path
 
 from scripts.strategy_lab import farm_loop
 from src.research_lab import farm_journal
+
+
+def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_path) -> None:
+    seen = {"closed": False, "slots": 0, "statuses": []}
+
+    class FakeTasks:
+        on_transition = None
+
+        def eligible_count(self):
+            return 0
+
+        def close(self):
+            seen["closed"] = True
+
+    stop = threading.Event()
+
+    def fake_slot(*args, **kwargs):
+        seen["slots"] += 1
+        stop.set()
+        return {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}, "errors": []}
+
+    monkeypatch.setattr(farm_loop, "FarmTasksDB", lambda path: FakeTasks())
+    monkeypatch.setattr(farm_loop, "_run_priority_slot", fake_slot)
+    monkeypatch.setattr(farm_loop, "_write_priority_checkpoint", lambda *args, **kwargs: tmp_path / "cp")
+    monkeypatch.setattr(
+        farm_loop, "_write_priority_worker_status",
+        lambda root, **kwargs: seen["statuses"].append(kwargs["stage"]),
+    )
+    monkeypatch.setattr(farm_journal, "make_transition_sink", lambda root: None)
+
+    farm_loop._priority_worker_loop(
+        Namespace(stop_file="", busy_slot_seconds=0.1, idle_poll_seconds=0.1),
+        {}, {}, tmp_path, stop,
+    )
+
+    assert seen["slots"] == 1
+    assert seen["closed"] is True
+    assert seen["statuses"] == ["running_slot", "idle", "stopped"]
 
 
 def _args(**over) -> Namespace:
@@ -602,6 +641,7 @@ class TestCycleLogStages:
         assert "'--paper-signals-max-live-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%'" in bat
         assert "'--paper-signals-max-network-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%'" in bat
         assert "'--paper-signals-max-pfr-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%'" in bat
+        assert "'--paper-signals-max-seconds','%STRATEGY_LAB_PAPER_SIGNALS_MAX_SECONDS%'" in bat
         assert "'--live-universe-ttl-seconds','%STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS%'" in bat
         assert "'--live-universe-top-n','%STRATEGY_LAB_LIVE_UNIVERSE_TOP_N%'" in bat
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat

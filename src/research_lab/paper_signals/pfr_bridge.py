@@ -11,7 +11,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.lineage_contract import stable_id
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
@@ -848,6 +848,7 @@ def generate_pfr_signals(
     max_pfr_scan: int = 30,
     max_pfr_fetches: int | None = 12,
     gap_samples: list[dict[str, Any]] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[tuple[PaperActionSignal, list[dict]]]:
     """Generate paper-watch signals from PFR records using live candles.
 
@@ -871,6 +872,9 @@ def generate_pfr_signals(
         sc["pfr_duplicate_setup_variant"] = sc.get("pfr_duplicate_setup_variant", 0) + duplicate_variants
 
     for row in diverse_records:
+        if should_stop is not None and should_stop():
+            sc["pfr_time_or_stop_limit_reached"] = sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+            break
         if pfr_scanned >= max_pfr_scan:
             sc["pfr_scan_limit_reached"] = sc.get("pfr_scan_limit_reached", 0) + 1
             continue
@@ -910,6 +914,9 @@ def generate_pfr_signals(
             sc["pfr_fetch_limit_reached"] = sc.get("pfr_fetch_limit_reached", 0) + 1
             break
         try:
+            if should_stop is not None and should_stop():
+                sc["pfr_time_or_stop_limit_reached"] = sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+                break
             now_ms = int(now * 1000)
             tf_ms = TF_MINUTES.get(tf, 15) * 60_000
             pfr_fetches += 1
