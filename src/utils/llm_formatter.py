@@ -42,7 +42,7 @@ _ALIBABA_URL = (
     + "/chat/completions"
 )
 _ALIBABA_VISION_MODEL = os.getenv("ALIBABA_VISION_MODEL", "qwen-vl-plus").strip("'\"")
-_PREMIUM_VISION_PROVIDER = os.getenv("PREMIUM_VISION_PROVIDER", "auto").strip("'\"").lower()
+_PREMIUM_VISION_PROVIDER = os.getenv("PREMIUM_VISION_PROVIDER", "alibaba").strip("'\"").lower()
 
 
 def _model_label(model_uri: str) -> str:
@@ -54,7 +54,7 @@ def _model_label(model_uri: str) -> str:
 
 def _router_value(env: dict[str, str] | None = None) -> str:
     source = env if env is not None else os.environ
-    return source.get(_ROUTER_ENV, "yandex").strip("'\"").lower()
+    return source.get(_ROUTER_ENV, "llm_client").strip("'\"").lower()
 
 
 def _use_shared_router(env: dict[str, str] | None = None) -> bool:
@@ -70,7 +70,7 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
     source = env if env is not None else os.environ
     shared_router = _use_shared_router(source)
     requested_router = _router_value(source)
-    shared_provider = source.get("LLM_PROVIDER", "yandex").strip("'\"").lower()
+    shared_provider = source.get("LLM_PROVIDER", "alibaba").strip("'\"").lower()
     active_provider = shared_provider if shared_router else "yandex"
     if shared_router and active_provider == "alibaba":
         api_key_set = bool(source.get("ALIBABA_API_KEY", "").strip("'\""))
@@ -115,17 +115,18 @@ def formatter_provider_status(env: dict[str, str] | None = None) -> dict[str, ob
 def premium_vision_status(env: dict[str, str] | None = None) -> dict[str, object]:
     """Return sanitized premium screenshot provider status."""
     source = env if env is not None else os.environ
-    requested = source.get("PREMIUM_VISION_PROVIDER", "auto").strip("'\"").lower()
+    requested = source.get("PREMIUM_VISION_PROVIDER", "alibaba").strip("'\"").lower()
     alibaba_key_set = bool(source.get("ALIBABA_API_KEY", "").strip("'\""))
     alibaba_model = source.get("ALIBABA_VISION_MODEL", "qwen-vl-plus").strip("'\"")
     yandex_key_set = bool(source.get("YANDEX_API_KEY", "").strip("'\""))
     yandex_model_uri = source.get("YANDEX_GEMMA_MODEL_URI", "").strip("'\"")
     if requested == "yandex":
         active_provider = "yandex"
-    elif requested == "alibaba":
-        active_provider = "alibaba"
     else:
-        active_provider = "alibaba" if alibaba_key_set else "yandex"
+        # "auto" is retained as a compatibility spelling, but it is fail-closed:
+        # Alibaba remains the only automatic provider and Yandex requires an
+        # explicit operator selection.
+        active_provider = "alibaba"
     if active_provider == "alibaba":
         api_key_set = alibaba_key_set
         configured = alibaba_key_set and bool(alibaba_model)
@@ -147,7 +148,7 @@ def premium_vision_status(env: dict[str, str] | None = None) -> dict[str, object
         "model_uri_set": bool(yandex_model_uri) if active_provider == "yandex" else bool(alibaba_model),
         "configured": configured,
         "model_label": model_label,
-        "fallback_provider": "yandex" if active_provider == "alibaba" and bool(yandex_model_uri) else "",
+        "fallback_provider": "",
         "shared_router_active": False,
         "execution_authority": False,
         "telegram_send_authority": False,
@@ -1049,14 +1050,14 @@ async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | 
     system_prompt = PREMIUM_SYSTEM_PROMPTS.get(category, PREMIUM_SYSTEM_PROMPTS["CRYPTO"])
     provider = _PREMIUM_VISION_PROVIDER
     if provider not in {"auto", "alibaba", "yandex"}:
-        provider = "auto"
+        provider = "alibaba"
 
-    if provider in {"auto", "alibaba"} and _ALIBABA_KEY:
-        result = await _call_alibaba_premium_vision(system_prompt, PREMIUM_USER_PROMPT, image_bytes)
-        if result or provider == "alibaba":
-            return result
+    if provider in {"auto", "alibaba"}:
+        return await _call_alibaba_premium_vision(
+            system_prompt, PREMIUM_USER_PROMPT, image_bytes
+        )
 
-    if provider in {"auto", "yandex"}:
+    if provider == "yandex":
         return await _call_yandex_premium_vision(system_prompt, PREMIUM_USER_PROMPT, image_bytes)
 
     return None

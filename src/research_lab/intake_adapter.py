@@ -21,6 +21,7 @@ from typing import Any
 
 from src.research_lab.data_readiness_selector import timeframes_for_asset_class
 from src.research_lab.farm_scheduler import classify_watch
+from src.research_lab.farm_priority import PRIORITY_BACKGROUND
 
 DEFAULT_WINDOW_SECONDS = 24 * 3600
 
@@ -132,7 +133,7 @@ def discovery_intake_events(snapshot: dict[str, Any], *, covered: set[str] | Non
         out.append({
             "event_id": event_id(symbol, "okx_discovery", "universe_grind", now),
             "symbol": symbol, "source": "okx_discovery", "reason": "universe_grind",
-            "observed_at": now, "priority": 4, "asset_class": asset_class,
+            "observed_at": now, "priority": PRIORITY_BACKGROUND, "asset_class": asset_class,
             "suggested_timeframes": timeframes_for_asset_class(asset_class, farm_only=True),
             "evidence": {"group": meta.get("group")},
             "raw_ref": {"inst_id": meta.get("inst_id")},

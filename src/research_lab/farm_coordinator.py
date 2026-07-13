@@ -31,6 +31,7 @@ from src.research_lab.data_planner import plan_symbol
 from src.research_lab.farm_classifier import VALIDATION_ELIGIBLE, classify_run
 from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.farm_tasks_db import FarmTasksDB
+from src.research_lab.farm_priority import priority_value
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
 from src.research_lab.outcome_retest import paper_to_executable_family
@@ -83,7 +84,7 @@ def _create_from_decision(tasks: FarmTasksDB, dec: dict[str, Any], event: dict[s
     sym, tf = _norm(dec["symbol"]), str(dec.get("timeframe") or "")
     action = dec["action"]
     src = event.get("event_id")
-    pri = int(event.get("priority") or 100)
+    pri = priority_value(event.get("priority"))
     # prepare/defer tasks carry the planning context so completion can re-plan the symbol
     plan_ctx = {"asset_class": event.get("asset_class"), "families": list(families)}
     if action == "skip":
@@ -424,6 +425,8 @@ def _drain_retest_task(
         "proposed_changes": spec_row.get("proposed_changes") or [],
         "sweep_spec": _sweep_payload(sweep),
         "followup_depth": depth + 1,
+        "role_environment_id": payload.get("role_environment_id"),
+        "feedback_id": payload.get("feedback_id"),
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -746,7 +749,7 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             policy=policy,
             data_glob=glob,
             fingerprint=fp,
-            priority=priority_base + int(task.get("priority") or 100),
+            priority=priority_base + priority_value(task.get("priority")),
             event_context=_event_context_from_payload(payload),
         )
         if created:

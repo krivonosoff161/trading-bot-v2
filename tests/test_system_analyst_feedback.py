@@ -52,6 +52,15 @@ def _payload(feedback_id: str = "saf-1", *, supersedes: str = "") -> dict:
                 "action": "retest_candidate" if recipient != "trader" else "review_paper_outcome",
                 "reason": "Deterministic evidence requires review.",
                 "evidence_refs": [source_refs[0]],
+                "task_spec": {
+                    "schema": "RoleTaskSpec.v1",
+                    "kind": {
+                        "farm": "bounded_sweep",
+                        "validator": "untouched_validation",
+                        "trader": "paper_replay",
+                    }[recipient],
+                    "paper_only": True,
+                },
             }
             for recipient in ("farm", "validator", "trader")
         ],

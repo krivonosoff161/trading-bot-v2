@@ -19,10 +19,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-PRIORITY_SCANNER_WATCH = 1
-PRIORITY_OKX_ANNOUNCEMENT = 2
-PRIORITY_OKX_MOVER = 3
-PRIORITY_UNIVERSE = 4
+from src.research_lab.farm_priority import (
+    PRIORITY_BACKGROUND,
+    PRIORITY_OKX_ANNOUNCEMENT,
+    PRIORITY_OKX_MOVER,
+    PRIORITY_SCANNER_GO,
+    PRIORITY_SCANNER_WATCH,
+    watch_verdict,
+)
+
+PRIORITY_UNIVERSE = PRIORITY_BACKGROUND
 
 DEFAULT_MAX_JOBS = 8
 
@@ -63,11 +69,14 @@ def classify_watch(watch: dict) -> tuple[int, str]:
     scanner = watch.get("scanner") or {}
     source = str((watch.get("trigger") or {}).get("source") or "").lower()
     event_type = str(scanner.get("event_type") or "").lower()
+    verdict = watch_verdict(watch)
+    if verdict == "GO":
+        return PRIORITY_SCANNER_GO, "scanner_go"
     if event_type == "market_mover" or "market_tape" in source:
         return PRIORITY_OKX_MOVER, "okx_market_mover"
     if "okx_announcement" in source or event_type == "listing":
         return PRIORITY_OKX_ANNOUNCEMENT, "okx_announcement"
-    return PRIORITY_SCANNER_WATCH, "scanner_watch_go"
+    return PRIORITY_SCANNER_WATCH, "scanner_watch"
 
 
 def plan_jobs(

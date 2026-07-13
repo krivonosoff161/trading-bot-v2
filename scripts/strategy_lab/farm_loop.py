@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -273,6 +274,7 @@ def _run_main_paper_derived_chain(
     args,
     private_root: Path,
     *,
+    tasks: FarmTasksDB,
     apply: bool,
     loop: bool,
     cycle_started_at: float,
@@ -463,6 +465,27 @@ def _run_main_paper_derived_chain(
         out["system_analyst_feedback"] = run_system_analyst_cycle(private_root, apply=apply)
     except Exception as exc:  # noqa: BLE001 - advisory feedback must not break the cycle
         out.setdefault("errors", []).append({"where": "system_analyst_feedback", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="role_environment_dispatch",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.role_environment_dispatch import (
+            dispatch_role_environments,
+            reconcile_role_work_results,
+        )
+
+        out["role_environment_dispatch"] = dispatch_role_environments(
+            private_root, tasks, apply=apply, limit_per_role=20
+        )
+        out["role_work_result_reconciliation"] = reconcile_role_work_results(
+            private_root, tasks, apply=apply
+        )
+    except Exception as exc:  # noqa: BLE001 - role work must not break the cycle
+        out.setdefault("errors", []).append({"where": "role_environment_dispatch", "error": str(exc)})
     try:
         _write_loop_status(
             private_root,
@@ -1048,14 +1071,28 @@ def _write_loop_status(
         "execution_allowed": False,
         "details": details or {},
     }
-    tmp = path.with_suffix(".json.tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    try:
+        for attempt in range(5):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
     cycle_started_at = time.time()
     loop = bool(getattr(args, "loop", False))
+
+    def cycle_stop_requested() -> bool:
+        stop_file = str(getattr(args, "stop_file", "") or "")
+        return bool(stop_file and Path(stop_file).exists())
     _write_loop_status(
         private_root,
         stage="cycle_start",
@@ -1101,20 +1138,54 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         cycle_started_at=cycle_started_at,
         details={"intake_events": len(events)},
     )
-    out = run_coordinator_cycle(
-        tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
-        families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider,
-        oi_provider=oi_provider, apply=apply,
-        backend=args.backend, data_days=args.data_days, max_plan_events=args.max_plan_events,
-        max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
-        run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
-        allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
-        max_discovery=args.max_plan_events,
-        max_validations=int(getattr(args, "max_validations", 10)),
-        run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
-        max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
-    )
+    if bool(getattr(args, "priority_worker_active", False)):
+        # The dedicated worker is the sole coordinator/compute owner. The main
+        # thread continues discovery + paper/role maintenance without racing the
+        # same SQLite task graph.
+        out = {
+            "pivot": "priority_worker_active",
+            "active_tasks": tasks.eligible_count(),
+            "counters": {"delegated_to_priority_worker": 1},
+            "status": tasks.status_counts(),
+            "errors": [],
+        }
+    else:
+        out = run_coordinator_cycle(
+            tasks, private_root=private_root, profiles=profiles, policy=policy, intake_events=events,
+            families=DEFAULT_FAMILIES, provider=provider, flow_provider=flow_provider,
+            oi_provider=oi_provider, apply=apply,
+            backend=args.backend, data_days=args.data_days, max_plan_events=args.max_plan_events,
+            max_prepares=args.max_prepares, max_enrich=args.max_enrich, max_sweeps=args.max_sweeps,
+            run_worker=args.run_worker, max_worker_jobs=args.max_worker_jobs, night_mode=args.night_mode,
+            allow_public_output=args.allow_public_output, discovery_snapshot=snapshot,
+            max_discovery=args.max_plan_events,
+            max_validations=int(getattr(args, "max_validations", 10)),
+            run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
+            max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
+        )
     out["discovery"] = discovery_info
+
+    def priority_checkpoint(after_stage: str) -> None:
+        """Let urgent/GO work advance between heavyweight full-cycle stages."""
+        if not (apply and loop) or bool(getattr(args, "priority_worker_active", False)):
+            return
+        slot = _run_priority_slot(args, tasks, profiles, policy, private_root)
+        out.setdefault("priority_checkpoints", []).append({
+            "after_stage": after_stage,
+            "did_work": _slot_did_work(slot),
+            "counters": slot.get("counters") or {},
+            "errors": len(slot.get("errors") or []),
+        })
+        _write_priority_checkpoint(
+            private_root,
+            slot,
+            sequence=len(out["priority_checkpoints"]),
+        )
+
+    priority_checkpoint("coordinator")
+    if cycle_stop_requested():
+        out["stop_requested"] = True
+        return out
     if args.run_paper:
         _write_loop_status(
             private_root,
@@ -1134,12 +1205,17 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             _run_main_paper_derived_chain(
                 args,
                 private_root,
+                tasks=tasks,
                 apply=apply,
                 loop=loop,
                 cycle_started_at=cycle_started_at,
                 out=out,
                 provider=provider,
             )
+        priority_checkpoint("paper_runtime")
+        if cycle_stop_requested():
+            out["stop_requested"] = True
+            return out
     if apply:
         # True-forward research lane: pin boundaries for the current watchlist (idempotent) and
         # accumulate forward outcomes on genuinely new local bars. Bounded + crash-isolated so a
@@ -1163,6 +1239,10 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 out.setdefault("errors", []).append({"where": "true_forward", "error": str(exc)})
         else:
             out["true_forward"] = {"skipped": "true_forward_max_candidates=0"}
+        priority_checkpoint("true_forward")
+        if cycle_stop_requested():
+            out["stop_requested"] = True
+            return out
         if getattr(args, "run_paper_signals", False):
             # Operational paper-watch lane: one bounded cycle (observe armed -> close -> remember ->
             # generate new). Crash-isolated; paper/research-only, never an order.
@@ -1228,6 +1308,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         "max_pfr_fetches": int(getattr(args, "paper_signals_max_pfr_fetches", 12)),
                         "max_live_fetches": int(getattr(args, "paper_signals_max_live_fetches", 12)),
                         "max_network_fetches": int(getattr(args, "paper_signals_max_network_fetches", 16)),
+                        "max_wall_seconds": float(getattr(args, "paper_signals_max_seconds", 45.0)),
                     },
                 )
                 out["paper_signals"] = paper_cycle.run_cycle(
@@ -1239,10 +1320,20 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     pfr_reserved_new=int(getattr(args, "paper_signals_pfr_reserved", 0)),
                     max_observe=getattr(args, "paper_signals_max_observe", None),
                     max_live_fetches=int(getattr(args, "paper_signals_max_live_fetches", 12)),
-                    max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)))
+                    max_network_fetches=int(getattr(args, "paper_signals_max_network_fetches", 16)),
+                    max_wall_seconds=float(getattr(args, "paper_signals_max_seconds", 45.0)),
+                    should_stop=(lambda: bool(
+                        getattr(args, "stop_file", "")
+                        and Path(getattr(args, "stop_file", "")).exists()
+                    )))
+                priority_checkpoint("paper_signals")
+                if cycle_stop_requested():
+                    out["stop_requested"] = True
+                    return out
                 _run_main_paper_derived_chain(
                     args,
                     private_root,
+                    tasks=tasks,
                     apply=apply,
                     loop=loop,
                     cycle_started_at=cycle_started_at,
@@ -1300,6 +1391,9 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                     except Exception as exc:  # noqa: BLE001 - journal export must not break the cycle
                         out.setdefault("errors", []).append({"where": "journal_export", "error": str(exc)})
                 if getattr(args, "run_calculator_advisor", False):
+                    if cycle_stop_requested():
+                        out["stop_requested"] = True
+                        return out
                     try:
                         _write_loop_status(
                             private_root,
@@ -1312,7 +1406,11 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                         out["calculator_advisor"] = _run_calculator_advisor_stage(args, private_root, apply)
                     except Exception as exc:  # noqa: BLE001 - advisory stage must not break the cycle
                         out.setdefault("errors", []).append({"where": "calculator_advisor", "error": str(exc)})
+                priority_checkpoint("calculator_advisor")
                 if getattr(args, "run_agent_role_reviews", False):
+                    if cycle_stop_requested():
+                        out["stop_requested"] = True
+                        return out
                     try:
                         _write_loop_status(
                             private_root,
@@ -1334,12 +1432,32 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                             max_outcomes=int(getattr(args, "agent_role_max_outcomes", 1)),
                             max_validator=int(getattr(args, "agent_role_max_validator", 1)),
                             max_sources=int(getattr(args, "agent_role_max_sources", 1)),
+                            max_analyst=int(getattr(args, "agent_role_max_analyst", 1)),
                             sleep_seconds=float(getattr(args, "agent_role_sleep_seconds", 0.0)),
                         ))
                     except Exception as exc:  # noqa: BLE001 - advisory reviews must not break the cycle
                         out.setdefault("errors", []).append({"where": "agent_role_reviews", "error": str(exc)})
             except Exception as exc:  # noqa: BLE001 - paper lane must never break the cycle
                 out.setdefault("errors", []).append({"where": "paper_signals", "error": str(exc)})
+        if bool(getattr(args, "priority_worker_active", False)) and args.run_validation:
+            if cycle_stop_requested():
+                out["stop_requested"] = True
+                return out
+            try:
+                _write_loop_status(
+                    private_root,
+                    stage="validation_maintenance",
+                    apply=apply,
+                    loop=loop,
+                    cycle_started_at=cycle_started_at,
+                    details={"max_validations": 1},
+                )
+                from src.research_lab.validation_orchestrator import run_due_validations
+                out["validation_maintenance"] = run_due_validations(
+                    tasks, private_root, apply=True, limit=1, now=time.time(),
+                )
+            except Exception as exc:  # noqa: BLE001 - maintenance validation must not kill farm
+                out.setdefault("errors", []).append({"where": "validation_maintenance", "error": str(exc)})
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:
@@ -1375,6 +1493,191 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
         },
     )
     return out
+
+
+def _run_priority_slot(args, tasks: FarmTasksDB, profiles, policy, private_root: Path) -> dict:
+    """Advance one short compute slot between expensive full farm cycles.
+
+    The slot reads fresh WATCH/GO/manual intake, prepares at most one missing
+    dataset, materializes one sweep and runs one worker job.  It deliberately
+    skips discovery refresh, paper delivery, validation and LLM roles.  Those
+    remain on the bounded full-cycle cadence, while queued numeric work no
+    longer sleeps for minutes.
+    """
+    provider, flow_provider, oi_provider = _providers(args, True)
+    events = _read_intake(min(8, max(1, int(args.max_plan_events))))
+    return run_coordinator_cycle(
+        tasks,
+        private_root=private_root,
+        profiles=profiles,
+        policy=policy,
+        intake_events=events,
+        families=DEFAULT_FAMILIES,
+        provider=provider,
+        flow_provider=flow_provider,
+        oi_provider=oi_provider,
+        apply=True,
+        backend=args.backend,
+        data_days=args.data_days,
+        max_plan_events=min(8, max(1, int(args.max_plan_events))),
+        max_prepares=1,
+        max_enrich=0,
+        max_sweeps=1,
+        max_classify=2,
+        run_worker=True,
+        max_worker_jobs=1,
+        night_mode=args.night_mode,
+        allow_public_output=args.allow_public_output,
+        discovery_snapshot=None,
+        max_discovery=0,
+        run_validation=False,
+        run_followups=False,
+        max_followups=0,
+        sweep_tier=args.sweep_tier,
+    )
+
+
+def _slot_did_work(slot: dict) -> bool:
+    counters = slot.get("counters") or {}
+    return any(
+        int(counters.get(name) or 0) > 0
+        for name in (
+            "events_ingested",
+            "events_consumed",
+            "prepared_ok",
+            "sweeps_materialized",
+            "runs_completed",
+            "classified",
+            "unblocked",
+        )
+    )
+
+
+def _write_priority_checkpoint(private_root: Path, slot: dict, *, sequence: int) -> Path:
+    """Persist the slot boundary; restart resumes from durable queue state."""
+    target = private_root / "state" / "farm_priority_checkpoint.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "FarmPriorityCheckpoint.v1",
+        "updated_at": time.time(),
+        "sequence": int(sequence),
+        "pivot": slot.get("pivot"),
+        "active_tasks": int(slot.get("active_tasks") or 0),
+        "queue": (slot.get("status") or {}).get("by_state", {}),
+        "counters": slot.get("counters") or {},
+        "errors": len(slot.get("errors") or []),
+        "resume_mode": "requeue_atomic_slot_from_durable_ledgers",
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        for attempt in range(5):
+            try:
+                temporary.replace(target)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
+def _write_priority_worker_status(
+    private_root: Path,
+    *,
+    stage: str,
+    started_at: float,
+    details: dict | None = None,
+) -> Path:
+    target = private_root / "state" / "farm_priority_worker_status.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "FarmPriorityWorkerStatus.v1",
+        "pid": os.getpid(),
+        "stage": stage,
+        "updated_at": time.time(),
+        "slot_started_at": started_at,
+        "slot_age_seconds": round(max(0.0, time.time() - started_at), 3),
+        "paper_only": True,
+        "execution_allowed": False,
+        "details": details or {},
+    }
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        for attempt in range(5):
+            try:
+                temporary.replace(target)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
+def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event: threading.Event) -> None:
+    """Continuously drain urgent/background numeric work beside the full cycle."""
+    worker_tasks = FarmTasksDB(tasks_db_path(private_root))
+    from src.research_lab.farm_journal import make_transition_sink
+    worker_tasks.on_transition = make_transition_sink(private_root)
+    sequence = 0
+    try:
+        while not stop_event.is_set():
+            if getattr(args, "stop_file", "") and Path(args.stop_file).exists():
+                break
+            slot_started = time.time()
+            try:
+                _write_priority_worker_status(
+                    private_root, stage="running_slot", started_at=slot_started,
+                    details={"sequence": sequence + 1},
+                )
+                slot = _run_priority_slot(args, worker_tasks, profiles, policy, private_root)
+                sequence += 1
+                _write_priority_checkpoint(private_root, slot, sequence=sequence)
+                did_work = _slot_did_work(slot)
+                eligible = worker_tasks.eligible_count()
+                errors = len(slot.get("errors") or [])
+                _write_priority_worker_status(
+                    private_root,
+                    stage="busy" if did_work or eligible else "idle",
+                    started_at=slot_started,
+                    details={
+                        "sequence": sequence,
+                        "did_work": did_work,
+                        "eligible_now": eligible,
+                        "pivot": slot.get("pivot"),
+                        "active_tasks": slot.get("active_tasks"),
+                        "queue": (slot.get("status") or {}).get("by_state", {}),
+                        "errors": errors,
+                    },
+                )
+                if did_work or errors:
+                    print(
+                        f"  priority-worker did_work={did_work} eligible={eligible} "
+                        f"pivot={slot.get('pivot')} errors={errors}"
+                    )
+                delay = args.busy_slot_seconds if eligible or did_work else args.idle_poll_seconds
+            except Exception as exc:  # noqa: BLE001 - worker must report and retry, not kill full cycle
+                delay = args.idle_poll_seconds
+                _write_priority_worker_status(
+                    private_root, stage="error", started_at=slot_started,
+                    details={"sequence": sequence, "error": str(exc)[:300]},
+                )
+                print(f"  priority-worker error: {exc}")
+            stop_event.wait(max(0.1, float(delay)))
+    finally:
+        _write_priority_worker_status(
+            private_root, stage="stopped", started_at=time.time(),
+            details={"sequence": sequence},
+        )
+        worker_tasks.close()
 
 
 def main() -> None:
@@ -1422,6 +1725,8 @@ def main() -> None:
                     help="max validator rows reviewed per cycle")
     ap.add_argument("--agent-role-max-sources", type=int, default=1,
                     help="max scanner/source rows reviewed per cycle")
+    ap.add_argument("--agent-role-max-analyst", type=int, default=1,
+                    help="max completed role results reviewed by System Analyst per cycle")
     ap.add_argument("--agent-role-sleep-seconds", type=float, default=0.0,
                     help="sleep between role-review provider calls")
     ap.add_argument("--true-forward-max-candidates", type=int, default=20,
@@ -1451,6 +1756,9 @@ def main() -> None:
                           "default matches the visible launcher caps 20+12+12"))
     ap.add_argument("--paper-signals-fetch-timeout", type=float, default=10.0,
                     help="per-request public OKX timeout used by --run-paper-signals")
+    ap.add_argument("--paper-signals-max-seconds", type=float,
+                    default=float(os.getenv("STRATEGY_LAB_PAPER_SIGNALS_MAX_SECONDS", "45")),
+                    help="wall-clock budget for one paper-signal stage; checked between atomic fetches")
     ap.add_argument("--paper-signals-timeframes", default="15m,1h,4h",
                     help="comma-separated paper-signal timeframes; default includes validator-heavy 4h PFR")
     ap.add_argument("--live-universe-ttl-seconds", type=int,
@@ -1504,6 +1812,10 @@ def main() -> None:
                     help="never auto-refresh the discovery snapshot in apply mode (warn loudly if stale)")
     ap.add_argument("--night-mode", action="store_true")
     ap.add_argument("--sleep-seconds", type=int, default=180)
+    ap.add_argument("--busy-slot-seconds", type=float, default=1.0,
+                    help="pause between short compute slots while work is available")
+    ap.add_argument("--idle-poll-seconds", type=float, default=5.0,
+                    help="poll interval for new urgent/scanner work between full cycles")
     ap.add_argument("--stop-file", default="")
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
@@ -1565,12 +1877,23 @@ def main() -> None:
         lock_path = None
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
 
+    priority_stop = threading.Event()
+    priority_thread = None
     try:
         if not args.loop:
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
             _print_cycle(out)  # a single explicit cycle is always shown
             return
         prev_sig = None
+        args.priority_worker_active = bool(apply)
+        if apply:
+            priority_thread = threading.Thread(
+                target=_priority_worker_loop,
+                args=(args, profiles, policy, private_root, priority_stop),
+                name="farm-priority-worker",
+                daemon=True,
+            )
+            priority_thread.start()
         while True:
             if args.stop_file and Path(args.stop_file).exists():
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
@@ -1590,11 +1913,15 @@ def main() -> None:
                 lock_path.write_text(str(os.getpid()), encoding="utf-8")  # keep the lock fresh
                 _write_loop_status(
                     private_root,
-                    stage="sleep",
+                    stage="priority_slots",
                     apply=apply,
                     loop=True,
                     cycle_started_at=time.time(),
-                    details={"sleep_seconds": args.sleep_seconds},
+                    details={
+                        "full_cycle_seconds": args.sleep_seconds,
+                        "busy_slot_seconds": args.busy_slot_seconds,
+                        "idle_poll_seconds": args.idle_poll_seconds,
+                    },
                 )
             if not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
@@ -1602,6 +1929,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\ninterrupted - graceful stop")
     finally:
+        priority_stop.set()
+        if priority_thread is not None:
+            priority_thread.join(timeout=15)
         tasks.close()
         if apply and args.loop and lock_path is not None:
             try:

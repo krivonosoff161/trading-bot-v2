@@ -34,6 +34,9 @@ from src.research_lab.outcome_learning import build_outcome_review_pack, learnin
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
+MAX_REVIEW_ATTEMPTS = 3
+
+
 def _env(name: str, default: str = "") -> str:
     return str(os.environ.get(name, "") or default).strip()
 
@@ -91,17 +94,31 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _accepted_source_refs(path: Path, role_id: str) -> set[str]:
+def _review_state(path: Path, role_id: str) -> tuple[set[str], dict[str, int]]:
     refs: set[str] = set()
+    failed: dict[str, int] = {}
     for row in _read_jsonl(path):
         if str(row.get("role_id") or "") != role_id:
             continue
-        if not bool(row.get("accepted")):
-            continue
         source_ref = str(row.get("source_ref") or "")
-        if source_ref:
+        if not source_ref:
+            continue
+        if bool(row.get("accepted")):
             refs.add(source_ref)
-    return refs
+            continue
+        problems = {str(item) for item in (row.get("problems") or [])}
+        # A missing provider is an operator/configuration state, not a bad
+        # research item. Once configuration is restored the item may be tried.
+        if problems == {"provider_not_configured"}:
+            continue
+        failed[source_ref] = failed.get(source_ref, 0) + 1
+    return refs, failed
+
+
+def _eligible_source_refs(path: Path, role_id: str) -> tuple[set[str], dict[str, int]]:
+    accepted, failed = _review_state(path, role_id)
+    exhausted = {ref for ref, attempts in failed.items() if attempts >= MAX_REVIEW_ATTEMPTS}
+    return accepted | exhausted, failed
 
 
 def _load_unreviewed_training_rows(private_root: Path, limit: int) -> list[dict[str, Any]]:
@@ -109,14 +126,14 @@ def _load_unreviewed_training_rows(private_root: Path, limit: int) -> list[dict[
         return []
     training_path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
     rows = _read_jsonl(training_path)
-    accepted_refs = _accepted_source_refs(
+    completed_refs, _ = _eligible_source_refs(
         private_root / "state" / "llm_advice" / "outcome_reviews.jsonl",
         "outcome_reviewer",
     )
     missing = []
     for row in rows:
         source_ref = str(row.get("training_row_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
-        if source_ref and source_ref in accepted_refs:
+        if source_ref and source_ref in completed_refs:
             continue
         missing.append(row)
     return missing[-limit:]
@@ -137,7 +154,50 @@ def _load_validator_memory(private_root: Path, limit: int) -> list[dict[str, Any
         row for row in rows
         if str(row.get("outcome_class") or row.get("lite_status") or row.get("validation_status") or "")
     ]
-    return (interesting or rows)[-limit:]
+    completed_refs, _ = _eligible_source_refs(
+        private_root / "state" / "llm_advice" / "validator_reviews.jsonl",
+        "validator_reviewer",
+    )
+    eligible = [
+        row for row in (interesting or rows)
+        if str(row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or "")
+        not in completed_refs
+    ]
+    return eligible[-limit:]
+
+
+def _load_unreviewed_source_rows(private_root: Path, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    rows = _read_jsonl(
+        private_root / "state" / "lineage" / "scanner_events.jsonl"
+    )
+    completed_refs, _ = _eligible_source_refs(
+        private_root / "state" / "llm_advice" / "source_trust_events.jsonl",
+        "source_trust_reviewer",
+    )
+    eligible = [
+        row for row in rows
+        if str(row.get("scanner_event_id") or row.get("symbol") or "")
+        not in completed_refs
+    ]
+    return eligible[-limit:]
+
+
+def _load_unreviewed_system_results(private_root: Path, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    rows = _read_jsonl(
+        private_root / "state" / "derived" / "system_analyst_result_inbox.jsonl"
+    )
+    completed_refs, _ = _eligible_source_refs(
+        private_root / "state" / "llm_advice" / "system_analyst_drafts.jsonl",
+        "system_analyst",
+    )
+    return [
+        row for row in rows
+        if str(row.get("result_id") or "") not in completed_refs
+    ][-limit:]
 
 
 def _pick(row: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
@@ -213,9 +273,9 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     provider = _make_provider(args)
     training_rows = _load_unreviewed_training_rows(private_root, args.max_outcomes)
     validator_rows = _load_validator_memory(private_root, args.max_validator)
-    source_rows = _read_jsonl_tail(
-        private_root / "state" / "lineage" / "scanner_events.jsonl",
-        args.max_sources,
+    source_rows = _load_unreviewed_source_rows(private_root, args.max_sources)
+    analyst_rows = _load_unreviewed_system_results(
+        private_root, int(getattr(args, "max_analyst", 1))
     )
 
     reviews = []
@@ -255,6 +315,18 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         time.sleep(args.sleep_seconds)
+    for row in analyst_rows:
+        source_ref = str(row.get("result_id") or "")
+        reviews.append(
+            request_role_review(
+                private_root,
+                role_id="system_analyst",
+                source_ref=source_ref or f"system_result_{len(reviews)}",
+                source_payload=row,
+                provider=provider,
+            )
+        )
+        time.sleep(args.sleep_seconds)
 
     accepted = sum(1 for row in reviews if row.accepted)
     summary = {
@@ -266,6 +338,7 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             "outcomes": len(training_rows),
             "validator": len(validator_rows),
             "sources": len(source_rows),
+            "analyst_results": len(analyst_rows),
         },
         "outcome_learning": learning_summary(training_rows),
         "reviews": len(reviews),
@@ -294,6 +367,7 @@ def main() -> None:
     parser.add_argument("--max-outcomes", type=int, default=3)
     parser.add_argument("--max-validator", type=int, default=2)
     parser.add_argument("--max-sources", type=int, default=2)
+    parser.add_argument("--max-analyst", type=int, default=1)
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

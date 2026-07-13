@@ -9,11 +9,50 @@ from __future__ import annotations
 
 import json
 import asyncio
+import threading
 from argparse import Namespace
 from pathlib import Path
 
 from scripts.strategy_lab import farm_loop
 from src.research_lab import farm_journal
+
+
+def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_path) -> None:
+    seen = {"closed": False, "slots": 0, "statuses": []}
+
+    class FakeTasks:
+        on_transition = None
+
+        def eligible_count(self):
+            return 0
+
+        def close(self):
+            seen["closed"] = True
+
+    stop = threading.Event()
+
+    def fake_slot(*args, **kwargs):
+        seen["slots"] += 1
+        stop.set()
+        return {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}, "errors": []}
+
+    monkeypatch.setattr(farm_loop, "FarmTasksDB", lambda path: FakeTasks())
+    monkeypatch.setattr(farm_loop, "_run_priority_slot", fake_slot)
+    monkeypatch.setattr(farm_loop, "_write_priority_checkpoint", lambda *args, **kwargs: tmp_path / "cp")
+    monkeypatch.setattr(
+        farm_loop, "_write_priority_worker_status",
+        lambda root, **kwargs: seen["statuses"].append(kwargs["stage"]),
+    )
+    monkeypatch.setattr(farm_journal, "make_transition_sink", lambda root: None)
+
+    farm_loop._priority_worker_loop(
+        Namespace(stop_file="", busy_slot_seconds=0.1, idle_poll_seconds=0.1),
+        {}, {}, tmp_path, stop,
+    )
+
+    assert seen["slots"] == 1
+    assert seen["closed"] is True
+    assert seen["statuses"] == ["running_slot", "idle", "stopped"]
 
 
 def _args(**over) -> Namespace:
@@ -24,6 +63,28 @@ def _args(**over) -> Namespace:
 
 
 class TestStageStatus:
+    def test_priority_checkpoint_is_resumable_and_paper_only(self, tmp_path: Path) -> None:
+        target = farm_loop._write_priority_checkpoint(
+            tmp_path,
+            {
+                "pivot": "advanced_lifecycle",
+                "active_tasks": 3,
+                "status": {"by_state": {"queued": 2, "running": 1}},
+                "counters": {"runs_completed": 1},
+                "errors": [],
+            },
+            sequence=7,
+        )
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["sequence"] == 7
+        assert payload["resume_mode"] == "requeue_atomic_slot_from_durable_ledgers"
+        assert payload["paper_only"] is True
+        assert payload["execution_allowed"] is False
+
+    def test_slot_did_work_uses_real_transition_counters(self) -> None:
+        assert farm_loop._slot_did_work({"counters": {"runs_completed": 1}}) is True
+        assert farm_loop._slot_did_work({"counters": {"runs_completed": 0}}) is False
+
     def test_pid_probe_treats_windows_system_error_as_dead(self, monkeypatch) -> None:
         def bad_kill(_pid: int, _sig: int) -> None:
             raise SystemError("<built-in function kill> returned a result with an exception set")
@@ -124,9 +185,10 @@ class TestPrintWarning:
             lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
         )
 
-        def fake_refresh(args, private_root, *, apply, loop, cycle_started_at, out, provider=None):
+        def fake_refresh(args, private_root, *, tasks, apply, loop, cycle_started_at, out, provider=None):
             seen["called"] = True
             seen["provider"] = provider
+            seen["tasks"] = tasks
             out["main_paper_bridge"] = {"instructions": 1}
 
         monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", fake_refresh)
@@ -162,7 +224,9 @@ class TestPrintWarning:
 
         out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
-        assert seen == {"called": True, "provider": "provider"}
+        assert seen["called"] is True
+        assert seen["provider"] == "provider"
+        assert seen["tasks"] is not None
         assert out["paper"]["counters"]["cards"] == 1
         assert out["main_paper_bridge"]["instructions"] == 1
 
@@ -580,6 +644,7 @@ class TestCycleLogStages:
         assert "'--paper-signals-max-live-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_LIVE_FETCHES%'" in bat
         assert "'--paper-signals-max-network-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_NETWORK_FETCHES%'" in bat
         assert "'--paper-signals-max-pfr-fetches','%STRATEGY_LAB_PAPER_SIGNALS_MAX_PFR_FETCHES%'" in bat
+        assert "'--paper-signals-max-seconds','%STRATEGY_LAB_PAPER_SIGNALS_MAX_SECONDS%'" in bat
         assert "'--live-universe-ttl-seconds','%STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS%'" in bat
         assert "'--live-universe-top-n','%STRATEGY_LAB_LIVE_UNIVERSE_TOP_N%'" in bat
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat

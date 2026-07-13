@@ -19,7 +19,7 @@ import aiohttp
 from src.utils import llm_budget_guard as budget_guard
 
 # ── провайдер ────────────────────────────────────────────────────────────────
-PROVIDER = os.getenv("LLM_PROVIDER", "yandex").strip().lower()
+PROVIDER = os.getenv("LLM_PROVIDER", "alibaba").strip().lower()
 
 _YANDEX_KEY = os.getenv("YANDEX_API_KEY", "").strip("'\"")
 _YANDEX_URL = "https://ai.api.cloud.yandex.net/v1/chat/completions"

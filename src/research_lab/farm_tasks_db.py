@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.farm_priority import priority_value
+
 SCHEMA = "farm_tasks.v1"
 
 # Task types in the research lifecycle (full graph; the coordinator creates the
@@ -57,6 +59,7 @@ class FarmTasksDB:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout = 30000")
         self._conn.execute("PRAGMA journal_mode = WAL")
         # Optional audit hook: set to a callable(record: dict) to log every state change.
         self.on_transition = None
@@ -115,10 +118,29 @@ class FarmTasksDB:
                 regime_bucket TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS farm_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
+        self._migrate_priority_scale()
         self._migrate_unique_candidate_columns()
         self._conn.commit()
+
+    def _migrate_priority_scale(self) -> None:
+        """Translate legacy 1..4 rows; the new scale never emits those values."""
+        mapping = "CASE priority WHEN 1 THEN 20 WHEN 2 THEN 30 WHEN 3 THEN 40 WHEN 4 THEN 90 END"
+        self._conn.execute(
+            f"UPDATE tasks SET priority={mapping} WHERE priority BETWEEN 1 AND 4"
+        )
+        self._conn.execute(
+            f"UPDATE intake_events SET priority={mapping} WHERE priority BETWEEN 1 AND 4"
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO farm_meta(key, value) VALUES('priority_scale', 'v2')"
+        )
 
     def _migrate_unique_candidate_columns(self) -> None:
         existing = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(unique_candidates)")}
@@ -142,7 +164,7 @@ class FarmTasksDB:
                  ingested_at, consumed)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
             (eid, event.get("symbol"), event.get("source"), event.get("reason"),
-             event.get("observed_at"), int(event.get("priority") or 100),
+             event.get("observed_at"), priority_value(event.get("priority")),
              event.get("asset_class"), json.dumps(event.get("suggested_timeframes") or []),
              json.dumps(event.get("evidence") or {}), json.dumps(event.get("raw_ref") or {}), now),
         )
@@ -189,10 +211,17 @@ class FarmTasksDB:
         """
         now = time.time() if now is None else now
         active = self._conn.execute(
-            f"SELECT task_id FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
+            f"SELECT task_id, priority FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
             "ORDER BY task_id ASC LIMIT 1", (task_key,),
         ).fetchone()
         if active is not None:
+            if int(priority) < int(active["priority"]):
+                self._conn.execute(
+                    "UPDATE tasks SET priority=?, source_event_id=COALESCE(?, source_event_id), "
+                    "updated_at=? WHERE task_id=?",
+                    (int(priority), source_event_id, now, int(active["task_id"])),
+                )
+                self._conn.commit()
             return int(active["task_id"]), False
         done = self._conn.execute(
             "SELECT task_id, updated_at FROM tasks WHERE task_key=? AND state='completed' "
@@ -212,10 +241,17 @@ class FarmTasksDB:
             )
         except sqlite3.IntegrityError:
             active = self._conn.execute(
-                f"SELECT task_id FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
+                f"SELECT task_id, priority FROM tasks WHERE task_key=? AND state IN {ACTIVE_STATES} "
                 "ORDER BY task_id ASC LIMIT 1", (task_key,),
             ).fetchone()
             if active is not None:
+                if int(priority) < int(active["priority"]):
+                    self._conn.execute(
+                        "UPDATE tasks SET priority=?, source_event_id=COALESCE(?, source_event_id), "
+                        "updated_at=? WHERE task_id=?",
+                        (int(priority), source_event_id, now, int(active["task_id"])),
+                    )
+                    self._conn.commit()
                 return int(active["task_id"]), False
             raise
         self._conn.commit()
@@ -364,6 +400,26 @@ class FarmTasksDB:
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (int(task_id),)).fetchone()
         return dict(row) if row is not None else None
+
+    def tasks_for_role_environment(self, environment_id: str) -> list[dict[str, Any]]:
+        """Return tasks explicitly bound to one adaptive environment request."""
+        needle = str(environment_id or "")
+        if not needle:
+            return []
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE payload_json LIKE ? ORDER BY task_id ASC",
+            (f'%"role_environment_id": "{needle}"%',),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                payload = json.loads(item.get("payload_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if str(payload.get("role_environment_id") or "") == needle:
+                out.append(item)
+        return out
 
     def tasks_in_state(self, state: str, *, task_type: str | None = None) -> list[dict[str, Any]]:
         if task_type:

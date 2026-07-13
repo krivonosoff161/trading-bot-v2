@@ -55,22 +55,20 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     llm_boundaries = report["llm_surface_boundaries"]
     assert llm_boundaries["scanner_uses_llm_provider_env"] is True
     assert llm_boundaries["scanner_supports_alibaba"] is True
-    assert llm_boundaries["telegram_chart_formatter_provider"] == "yandex_only"
+    assert llm_boundaries["telegram_chart_formatter_provider"] == "shared_llm_client_opt_in"
     formatter_status = llm_boundaries["telegram_chart_formatter_status"]
     assert formatter_status["schema"] == "llm_formatter_provider.v1"
-    assert formatter_status["provider"] == "yandex"
-    assert formatter_status["provider_scope"] == "yandex_only"
+    assert formatter_status["provider"] == "alibaba"
+    assert formatter_status["provider_scope"] == "shared_llm_client_opt_in"
     assert isinstance(formatter_status["api_key_set"], bool)
     assert isinstance(formatter_status["folder_id_set"], bool)
-    assert formatter_status["configured"] == (
-        formatter_status["api_key_set"] and formatter_status["folder_id_set"]
-    )
+    assert formatter_status["configured"] == formatter_status["api_key_set"]
     assert formatter_status["telegram_send_authority"] is False
     assert formatter_status["execution_authority"] is False
     assert "qwen3-235b" in formatter_status["model_label"]
     assert "b1git" not in str(formatter_status)
     assert llm_boundaries["telegram_chart_formatter_configured"] == formatter_status["configured"]
-    assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is False
+    assert llm_boundaries["telegram_chart_formatter_uses_llm_provider_env"] is True
     assert llm_boundaries["telegram_chart_formatter_launcher_sets_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_shared_router"] is True
     assert llm_boundaries["telegram_chart_formatter_effective_provider"] == "alibaba"
@@ -122,7 +120,7 @@ def test_operational_health_does_not_expose_secret_values(tmp_path, monkeypatch)
     assert launch_contract["text_card_shared_router_entrypoint"] == "generate_client_text"
     assert launch_contract["educational_qa_shared_router_entrypoint"] == "generate_edu_text"
     assert launch_contract["shared_router_opt_in_env"] == "PRODUCT_ANALYZER_LLM_ROUTER"
-    assert launch_contract["shared_router_active"] is False
+    assert launch_contract["shared_router_active"] is True
     assert launch_contract["start_bat_sets_shared_router"] is True
     assert launch_contract["start_telegram_bot_bat_sets_shared_router"] is True
     assert launch_contract["launcher_sets_shared_router"] is True

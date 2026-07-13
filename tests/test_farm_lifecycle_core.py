@@ -18,6 +18,29 @@ from src.research_lab.intake_adapter import (  # noqa: E402
 )
 
 
+def test_legacy_priority_scale_migrates_once(tmp_path):
+    path = tmp_path / "farm_tasks.sqlite"
+    db = FarmTasksDB(path)
+    db.enqueue_task(task_type="prepare_data", task_key="legacy", priority=1)
+    db.upsert_intake_event({"event_id": "legacy-event", "priority": 2})
+    db._conn.execute("DELETE FROM farm_meta WHERE key='priority_scale'")
+    db._conn.commit()
+    db.close()
+
+    migrated = FarmTasksDB(path)
+    try:
+        task_priority = migrated._conn.execute(
+            "SELECT priority FROM tasks WHERE task_key='legacy'"
+        ).fetchone()[0]
+        event_priority = migrated._conn.execute(
+            "SELECT priority FROM intake_events WHERE event_id='legacy-event'"
+        ).fetchone()[0]
+        assert task_priority == 20
+        assert event_priority == 30
+    finally:
+        migrated.close()
+
+
 # ── data_fingerprint ────────────────────────────────────────────────────────
 def test_fingerprint_stable_and_data_sensitive():
     a = DF.compute_fingerprint("BTC-USDT-SWAP", "1h", 200, 1000, 2000)
@@ -84,6 +107,27 @@ def test_claim_respects_priority_and_deferral():
     assert db.claim_next_task(now=now + 100) is None
     woke = db.claim_next_task(now=now + 600)
     assert woke["task_id"] == rest["task_id"]
+    db.close()
+
+
+def test_active_duplicate_promotes_existing_task_to_urgent():
+    db = FarmTasksDB(":memory:")
+    now = 1000.0
+    background, created = db.enqueue_task(
+        task_type="run_sweep", task_key="same-work", priority=90, now=now,
+    )
+    db.enqueue_task(task_type="run_sweep", task_key="other-work", priority=40, now=now)
+
+    promoted, duplicate = db.enqueue_task(
+        task_type="run_sweep", task_key="same-work", priority=0,
+        source_event_id="manual-urgent", now=now + 1,
+    )
+
+    assert created and not duplicate and promoted == background
+    claimed = db.claim_next_task(now=now + 1)
+    assert claimed["task_id"] == background
+    assert claimed["priority"] == 0
+    assert claimed["source_event_id"] == "manual-urgent"
     db.close()
 
 
@@ -182,7 +226,7 @@ def test_watch_to_intake_contract():
     assert ev["source"] == "okx_announcement"
     assert ev["asset_class"] == "crypto_major"
     assert ev["suggested_timeframes"] == ["1h"]
-    assert ev["priority"] == 2  # okx_announcement tier
+    assert ev["priority"] == 30  # official-announcement tier
     assert ev["raw_ref"]["watch_id"] == "watch_abc"
     assert ev["evidence"]["materiality_score"] == 0.8
 
@@ -208,7 +252,7 @@ def test_discovery_events_skip_covered():
     syms = {e["symbol"] for e in events}
     assert syms == {"DOGE_USDT_SWAP"}
     assert events[0]["asset_class"] == "meme"  # group->asset_class mapping
-    assert events[0]["priority"] == 4
+    assert events[0]["priority"] == 90  # background sweep tier
 
 
 def test_discovery_events_limit_zero_returns_no_events():

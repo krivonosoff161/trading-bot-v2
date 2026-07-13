@@ -33,7 +33,24 @@ AUTO = "auto"
 # Deliberately NOT listed: volatility_squeeze_breakout_v2 — its ATR-percentile gate is
 # a sequential Wilder recurrence (not data-parallel), so a kernel would add risk with
 # no real speedup; it stays on the CPU signal path with an honest cpu_fallback record.
-GPU_SUPPORTED_FAMILIES = ("momentum_breakout", "range_volume_breakout", "pump_dump_scalp")
+GPU_SUPPORTED_FAMILIES = (
+    "momentum_breakout",
+    "donchian_breakout",
+    "range_breakout",
+    "volatility_squeeze_breakout",
+    "mean_reversion_fade",
+    "volume_shock_continuation",
+    "impulse_continuation",
+    "range_volume_breakout",
+    "pump_dump_scalp",
+)
+AUTO_GPU_MIN_WORK_ITEMS = 8_000
+
+
+def auto_gpu_worthwhile(n_bars: int, n_variants: int, *, threshold: int | None = None) -> bool:
+    """Use GPU automatically only for a sufficiently large reusable batch."""
+    limit = AUTO_GPU_MIN_WORK_ITEMS if threshold is None else max(1, int(threshold))
+    return max(0, int(n_bars)) * max(0, int(n_variants)) >= limit
 
 
 @dataclass(frozen=True)

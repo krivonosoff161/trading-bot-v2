@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
 from src.research_lab.lineage_contract import scanner_event_from_mover, write_cycle_link, write_scanner_event
@@ -511,8 +511,23 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               pfr_reserved_new: int = 0,
               max_observe: int | None = None,
               max_live_fetches: int | None = 12,
-              max_network_fetches: int | None = None) -> dict[str, Any]:
+              max_network_fetches: int | None = None,
+              max_wall_seconds: float | None = None,
+              should_stop: Callable[[], bool] | None = None) -> dict[str, Any]:
     private_root = Path(private_root)
+    started_mono = time.monotonic()
+    deadline = (
+        started_mono + max(0.1, float(max_wall_seconds))
+        if max_wall_seconds is not None and float(max_wall_seconds) > 0
+        else None
+    )
+
+    def yield_requested() -> bool:
+        return bool(
+            (deadline is not None and time.monotonic() >= deadline)
+            or (should_stop is not None and should_stop())
+        )
+
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
         provider = OkxPublicMarketDataProvider()
@@ -556,6 +571,9 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     active_seen = 0
     # (1) re-observe active signals on fresh bars (+ wall-clock / no-data age-out so none strand)
     for s in existing:
+        if yield_requested():
+            gate_counts["wall_or_stop_limit_reached"] = gate_counts.get("wall_or_stop_limit_reached", 0) + 1
+            break
         if s.status not in ("armed", "opened_paper"):
             continue
         if max_observe is not None and active_seen >= max_observe:
@@ -606,7 +624,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     pfr_gap_samples: list[dict[str, Any]] = []
     new_sigs = []
     pfr_new_keys: set[str] = set()
-    if pfr_db_path is not None and max_new > 0:
+    if pfr_db_path is not None and max_new > 0 and not yield_requested():
         pfr_cap = max_new if pfr_reserved <= 0 else pfr_reserved
         if pfr_reserved:
             pfr_counts["pfr_reserved_slots"] = pfr_reserved
@@ -661,6 +679,7 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
             max_pfr_scan=max_pfr_scan,
             max_pfr_fetches=max_pfr_fetches,
             gap_samples=pfr_gap_samples,
+            should_stop=yield_requested,
         )
         new_sigs.extend(pfr_sigs)
         for sig, _ in pfr_sigs:
@@ -678,11 +697,18 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
     live_fetches = 0
     live_fetch_limit_reached = False
     for mv in movers:
+        if yield_requested():
+            gate_counts["wall_or_stop_limit_reached"] = gate_counts.get("wall_or_stop_limit_reached", 0) + 1
+            break
         if len(new_sigs) >= live_new_cap or live_fetch_limit_reached:
             break
         inst = str(mv.get("inst_id") or "")
         symbol = str(mv.get("symbol") or inst.replace("-", "_"))
         for tf in timeframes:
+            if yield_requested():
+                gate_counts["wall_or_stop_limit_reached"] = gate_counts.get("wall_or_stop_limit_reached", 0) + 1
+                live_fetch_limit_reached = True
+                break
             if len(new_sigs) >= live_new_cap:
                 break
             if max_live_fetches is not None and live_fetches >= max(0, int(max_live_fetches)):
@@ -791,6 +817,9 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
               "max_live_fetches": max_live_fetches,
               "network_fetches": network_fetches,
               "max_network_fetches": max_network_fetches,
+              "elapsed_seconds": round(time.monotonic() - started_mono, 3),
+              "max_wall_seconds": max_wall_seconds,
+              "yield_requested": yield_requested(),
               "pipeline_counts": _pipeline_counts(gate_counts, generated=len(new_sigs), observed=observed),
               "resource_caps": default_caps().to_dict(),
               "pfr_counts": pfr_counts,

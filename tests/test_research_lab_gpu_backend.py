@@ -19,6 +19,7 @@ from src.research_lab.gpu_runtime import GpuCapability, resolve_backend
 from src.research_lab.outputs import write_run_outputs
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.strategies.breakout import signals_momentum_breakout
+from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_compile import compile_sweep
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.timeframes import load_timeframe_profiles
@@ -161,6 +162,35 @@ def test_numpy_kernel_parity_with_scalar(syn_glob):
         scalar = signals_momentum_breakout(candles, params)
         vec = generate_signals_vectorized(candles, "momentum_breakout", params, xp=np)
         assert scalar == vec
+
+
+@pytest.mark.parametrize(
+    ("family", "params"),
+    [
+        ("donchian_breakout", {"lookback": 12}),
+        ("range_breakout", {"lookback": 15, "max_range_pct": 20.0}),
+        ("volatility_squeeze_breakout", {"lookback": 10, "squeeze_ratio": 0.8}),
+        ("mean_reversion_fade", {"lookback": 5, "move_pct": 4.0}),
+        ("volume_shock_continuation", {"lookback": 12, "vol_mult": 1.0, "min_body_pct": 2.0}),
+        ("impulse_continuation", {"min_body_pct": 2.0, "min_close_pos": 0.6}),
+        ("range_volume_breakout", {
+            "range_lookback": 10, "max_range_pct": 30.0, "min_accumulation": 0.5,
+            "min_vol_ratio": 0.5, "vol_period": 10,
+        }),
+        ("pump_dump_scalp", {
+            "min_body_pct": 2.0, "vol_mult": 0.5, "vol_period": 10, "min_close_pos": 0.6,
+        }),
+    ],
+)
+def test_all_vectorized_signal_families_match_scalar(syn_glob, family, params):
+    import glob
+    from pathlib import Path
+
+    path = glob.glob(syn_glob.format(symbol="SYN_USDT_SWAP"))[0]
+    candles = load_candles(Path(path))
+    scalar = get_strategy(family).generate_signals(candles, params)
+    vectorized = generate_signals_vectorized(candles, family, params, xp=np)
+    assert scalar == vectorized
 
 
 @pytest.mark.skipif(not gpu_runtime.gpu_available(), reason="no real GPU backend installed")

@@ -9,12 +9,15 @@ processes and keep their output visible in one window.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes
 import json
 import os
 from pathlib import Path
 import queue
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -103,12 +106,16 @@ def contour_specs() -> tuple[ContourSpec, ...]:
     return (
         ContourSpec(
             "ollama",
-            "Ollama / GPU-калькулятор",
-            "Локальная модель для расчётной фермы",
+            "Ollama / CPU-калькулятор",
+            "Локальная LLM на CPU; видеокарта оставлена числовому перебору",
             (str(ollama), "serve"),
             env={
-                "OLLAMA_VULKAN": "1",
+                "OLLAMA_LLM_LIBRARY": "cpu",
+                "CUDA_VISIBLE_DEVICES": "-1",
+                "GGML_VK_VISIBLE_DEVICES": "-1",
                 "OLLAMA_HOST": "127.0.0.1:11434",
+                "OLLAMA_KEEP_ALIVE": "5m",
+                "OLLAMA_NUM_PARALLEL": "1",
             },
         ),
         ContourSpec(
@@ -144,7 +151,7 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             network=True,
             graceful_stop=_request_farm_stop,
             owner_group="canonical_farm",
-            graceful_seconds=900.0,
+            graceful_seconds=120.0,
             env={
                 "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM": "0",
                 "STRATEGY_LAB_CALCULATOR_BASE_URL": "http://127.0.0.1:11434/v1",
@@ -164,7 +171,7 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             telegram=True,
             graceful_stop=_request_farm_stop,
             owner_group="canonical_farm",
-            graceful_seconds=900.0,
+            graceful_seconds=120.0,
         ),
         ContourSpec(
             "telegram_bot",
@@ -177,6 +184,8 @@ def contour_specs() -> tuple[ContourSpec, ...]:
                 "AUTO_TRADE": "0",
                 "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE": "0",
                 "PRODUCT_ANALYZER_LLM_ROUTER": "llm_client",
+                "LLM_PROVIDER": "alibaba",
+                "PREMIUM_VISION_PROVIDER": "alibaba",
             },
         ),
         ContourSpec(
@@ -232,7 +241,7 @@ class ManagedContour:
             errors="replace",
             creationflags=flags,
         )
-        self.started_at = time.time()
+        self.started_at = _process_started_at(self.process.pid) or time.time()
         self.events.put((self.spec.key, "state", f"работает · PID {self.process.pid}"))
         threading.Thread(target=self._read_output, daemon=True).start()
 
@@ -259,7 +268,14 @@ class ManagedContour:
             while self.running and time.monotonic() < deadline:
                 time.sleep(0.2)
             if self.running:
-                self.process.terminate()
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                        capture_output=True, text=True, timeout=15, check=False,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                else:
+                    self.process.terminate()
         finally:
             self.stopping = False
 
@@ -292,6 +308,62 @@ class SingleInstance:
         self.handle.close()
 
 
+def _process_started_at(pid: int) -> float | None:
+    """Return process creation time without invoking another shell process."""
+    if pid <= 0:
+        return None
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return 0.0
+        except OSError:
+            return None
+    process_query_limited_information = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        process_query_limited_information, False, int(pid)
+    )
+    if not handle:
+        return None
+    try:
+        creation = ctypes.wintypes.FILETIME()
+        exit_time = ctypes.wintypes.FILETIME()
+        kernel = ctypes.wintypes.FILETIME()
+        user = ctypes.wintypes.FILETIME()
+        if not ctypes.windll.kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return ticks / 10_000_000.0 - 11_644_473_600.0
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _load_external_contours(path: Path) -> dict[str, dict]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("contours") if isinstance(payload, dict) else None
+    if not isinstance(rows, dict):
+        return {}
+    external: dict[str, dict] = {}
+    for key, row in rows.items():
+        if not isinstance(row, dict):
+            continue
+        pid = int(row.get("pid") or 0)
+        expected = float(row.get("started_at") or 0.0)
+        actual = _process_started_at(pid)
+        if actual is None or expected <= 0 or abs(actual - expected) > 5.0:
+            continue
+        external[str(key)] = {"pid": pid, "started_at": actual}
+    return external
+
+
 class ControlCenter(tk.Tk):
     def __init__(self, instance: SingleInstance, autostart: tuple[str, ...] = ()) -> None:
         super().__init__()
@@ -302,12 +374,18 @@ class ControlCenter(tk.Tk):
         self._configure_style()
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.instance = instance
+        self.external_contours = _load_external_contours(STATE_DIR / "heartbeat.json")
         self.contours = {spec.key: ManagedContour(spec, self.events) for spec in contour_specs()}
         self.status_vars: dict[str, tk.StringVar] = {}
         self.buttons: dict[str, ttk.Button] = {}
         self.selected_key = "ollama"
         self._closing = False
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
+        self.system_var = tk.StringVar(value="Состояние фермы загружается…")
+        self.learning_var = tk.StringVar(value="Контур обучения загружается…")
+        self.manual_symbol = tk.StringVar(value="BTC")
+        self.manual_timeframe = tk.StringVar(value="15m")
+        self.manual_reason = tk.StringVar(value="срочная ручная проверка")
         self._build()
         self.after(150, self._poll)
         self.after(1000, self._heartbeat)
@@ -322,6 +400,10 @@ class ControlCenter(tk.Tk):
         style.configure("TLabel", background="#0f172a", foreground="#dbeafe", font=("Segoe UI", 10))
         style.configure("Header.TLabel", foreground="#f8fafc", font=("Segoe UI", 22, "bold"))
         style.configure("Muted.TLabel", foreground="#93a4b8", font=("Segoe UI", 9))
+        style.configure(
+            "Status.TLabel", background="#132238", foreground="#a7f3d0",
+            font=("Segoe UI", 10, "bold"), padding=(10, 8),
+        )
         style.configure("Card.TLabelframe", background="#172033", foreground="#e2e8f0", borderwidth=1)
         style.configure("Card.TLabelframe.Label", background="#172033", foreground="#7dd3fc", font=("Segoe UI", 10, "bold"))
         style.configure("Card.TLabel", background="#172033", foreground="#dbeafe")
@@ -341,6 +423,12 @@ class ControlCenter(tk.Tk):
             text="Paper/research only · сделки, AUTO_TRADE и private endpoints отсутствуют",
         ).pack(anchor="w", padx=18, pady=(0, 6))
         ttk.Label(self, text=f"Приватные данные: {PRIVATE_ROOT}", style="Muted.TLabel").pack(anchor="w", padx=18, pady=(0, 10))
+        ttk.Label(self, textvariable=self.system_var, style="Status.TLabel", wraplength=1120).pack(
+            anchor="w", fill=tk.X, padx=18, pady=(0, 4)
+        )
+        ttk.Label(self, textvariable=self.learning_var, style="Status.TLabel", wraplength=1120).pack(
+            anchor="w", fill=tk.X, padx=18, pady=(0, 10)
+        )
         actions = ttk.Frame(self)
         actions.pack(fill=tk.X, padx=18, pady=(0, 10))
         ttk.Button(
@@ -355,6 +443,21 @@ class ControlCenter(tk.Tk):
             command=self._stop_research_profile,
             style="Danger.TButton",
         ).pack(side=tk.LEFT, padx=8)
+        urgent = ttk.LabelFrame(self, text="Срочный ручной расчёт (paper-only)", padding=9, style="Card.TLabelframe")
+        urgent.pack(fill=tk.X, padx=18, pady=(0, 8))
+        ttk.Label(urgent, text="Монета", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Entry(urgent, textvariable=self.manual_symbol, width=14).grid(row=0, column=1, padx=(6, 12))
+        ttk.Label(urgent, text="Таймфрейм", style="Card.TLabel").grid(row=0, column=2, sticky="w")
+        ttk.Combobox(
+            urgent, textvariable=self.manual_timeframe, values=("15m", "1h", "4h", "1d"),
+            state="readonly", width=7,
+        ).grid(row=0, column=3, padx=(6, 12))
+        ttk.Label(urgent, text="Причина", style="Card.TLabel").grid(row=0, column=4, sticky="w")
+        ttk.Entry(urgent, textvariable=self.manual_reason).grid(row=0, column=5, padx=6, sticky="ew")
+        ttk.Button(urgent, text="Поставить первой", command=self._enqueue_manual_urgent, style="Accent.TButton").grid(
+            row=0, column=6, padx=(8, 0)
+        )
+        urgent.columnconfigure(5, weight=1)
         body = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=14, pady=8)
         left = ttk.Frame(body)
@@ -405,6 +508,39 @@ class ControlCenter(tk.Tk):
     def _select(self, key: str) -> None:
         self.selected_key = key
         self._render_log()
+
+    def _enqueue_manual_urgent(self) -> None:
+        symbol = self.manual_symbol.get().strip()
+        timeframe = self.manual_timeframe.get().strip()
+        reason = self.manual_reason.get().strip()
+        if not symbol:
+            messagebox.showwarning("Срочный расчёт", "Укажи монету, например BTC.")
+            return
+
+        def enqueue() -> None:
+            command = _python(
+                "-m", "scripts.strategy_lab.enqueue_manual_urgent", symbol,
+                "--timeframe", timeframe, "--reason", reason,
+                "--private-root", str(PRIVATE_ROOT),
+            )
+            env = os.environ.copy()
+            env["PYTHONUTF8"] = "1"
+            env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
+            completed = subprocess.run(
+                command, cwd=ROOT, env=env, text=True, encoding="utf-8", errors="replace",
+                capture_output=True, timeout=15, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            if completed.returncode == 0:
+                self.after(0, lambda: messagebox.showinfo(
+                    "Срочный расчёт",
+                    f"{symbol.upper()} {timeframe} поставлен первым в очередь. Сделки не исполняются.",
+                ))
+            else:
+                error = (completed.stderr or completed.stdout or "неизвестная ошибка").strip()[:300]
+                self.after(0, lambda: messagebox.showerror("Срочный расчёт", error))
+
+        threading.Thread(target=enqueue, daemon=True).start()
 
     def _toggle(self, key: str) -> None:
         item = self.contours[key]
@@ -584,7 +720,26 @@ class ControlCenter(tk.Tk):
             return self._port_open(11434)
         if key == "dashboard":
             return self._port_open(8765)
+        related = ("farm", "paper_cards") if key in {"farm", "paper_cards"} else (key,)
+        for candidate in related:
+            external_contours = getattr(self, "external_contours", {})
+            row = external_contours.get(candidate)
+            if not row:
+                continue
+            actual = _process_started_at(int(row.get("pid") or 0))
+            if actual is not None and abs(actual - float(row.get("started_at") or 0.0)) <= 5.0:
+                return True
+            external_contours.pop(candidate, None)
         return False
+
+    def _external_descriptor(self, key: str) -> dict[str, object] | None:
+        """Return heartbeat-safe metadata for a contour owned elsewhere."""
+        recovered = self.external_contours.get(key)
+        if recovered and self._external_running(key):
+            return recovered
+        if key in {"ollama", "dashboard"} and self._external_running(key):
+            return {"pid": None, "started_at": None}
+        return None
 
     def _render_log(self) -> None:
         self.log.configure(state="normal")
@@ -599,21 +754,202 @@ class ControlCenter(tk.Tk):
                 age = int(time.time() - item.started_at)
                 self.status_vars[key].set(f"работает · PID {item.process.pid} · {format_age(age)}")
 
+    @staticmethod
+    def _read_json(path: Path) -> dict:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        try:
+            return [
+                row for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and isinstance((row := json.loads(line)), dict)
+            ]
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return []
+
+    def _learning_snapshot(self) -> str:
+        state = PRIVATE_ROOT / "state"
+        role_counts: dict[str, int] = {}
+        work_counts: dict[str, dict[str, int]] = {}
+        max_generation = 0
+        for recipient in ("farm", "validator", "trader"):
+            env_dir = state / "role_environments" / recipient
+            role_counts[recipient] = len(list(env_dir.glob("env_*.json"))) if env_dir.exists() else 0
+            counters = {"waiting": 0, "queued": 0, "completed": 0, "deduped": 0}
+            work_dir = state / "role_work_queue" / recipient
+            if work_dir.exists():
+                for path in work_dir.glob("env_*.json"):
+                    row = self._read_json(path)
+                    status = str(row.get("status") or "waiting")
+                    counters[status] = counters.get(status, 0) + 1
+                    spec = row.get("task_spec") if isinstance(row.get("task_spec"), dict) else {}
+                    max_generation = max(max_generation, int(spec.get("generation") or 0))
+            work_counts[recipient] = counters
+        results = self._read_jsonl(state / "derived" / "system_analyst_result_inbox.jsonl")
+        drafts = self._read_jsonl(state / "llm_advice" / "system_analyst_drafts.jsonl")
+        reviewed = {
+            str(row.get("source_ref") or "") for row in drafts
+            if row.get("accepted") and str(row.get("role_id") or "") == "system_analyst"
+        }
+        result_ids = {str(row.get("result_id") or "") for row in results}
+        pending_review = len(result_ids - reviewed)
+        labels = {"farm": "ферма", "validator": "валидатор", "trader": "paper-наблюдатель"}
+        role_text = []
+        for recipient in ("farm", "validator", "trader"):
+            counts = work_counts[recipient]
+            role_text.append(
+                f"{labels[recipient]}: заданий {role_counts[recipient]}, "
+                f"в очереди {counts.get('queued', 0)}, ждут данных {counts.get('waiting', 0)}, "
+                f"готово {counts.get('completed', 0)}"
+            )
+        return (
+            "Обучение · Alibaba · " + " | ".join(role_text) +
+            f" | вернулось аналитику {len(results)}, ждут разбора {pending_review}, "
+            f"поколение {max_generation}/2"
+        )
+
+    @staticmethod
+    def _open_readonly_db(path: Path) -> sqlite3.Connection | None:
+        if not path.is_file():
+            return None
+        try:
+            conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=0.2)
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.Error:
+            return None
+
+    def _queue_snapshot(self) -> dict:
+        conn = self._open_readonly_db(PRIVATE_ROOT / "state" / "farm_tasks.sqlite")
+        if conn is None:
+            return {}
+        try:
+            row = conn.execute(
+                """SELECT
+                     SUM(CASE WHEN state IN ('queued','running') AND priority<=0 THEN 1 ELSE 0 END) manual,
+                     SUM(CASE WHEN state IN ('queued','running') AND priority BETWEEN 1 AND 10 THEN 1 ELSE 0 END) go_n,
+                     SUM(CASE WHEN state IN ('queued','running') AND priority BETWEEN 11 AND 20 THEN 1 ELSE 0 END) watch_n,
+                     SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END) queued,
+                     SUM(CASE WHEN state='running' THEN 1 ELSE 0 END) running
+                   FROM tasks"""
+            ).fetchone()
+            current = conn.execute(
+                "SELECT task_type, symbol, timeframe, family, priority FROM tasks "
+                "WHERE state='running' ORDER BY priority, updated_at LIMIT 1"
+            ).fetchone()
+            waiting_manual = conn.execute(
+                "SELECT COUNT(*) FROM intake_events WHERE consumed=0 AND priority<=0"
+            ).fetchone()[0]
+            return {
+                "manual": int(row["manual"] or 0) + int(waiting_manual or 0),
+                "go": int(row["go_n"] or 0),
+                "watch": int(row["watch_n"] or 0), "queued": int(row["queued"] or 0),
+                "running": int(row["running"] or 0), "current": dict(current) if current else {},
+            }
+        except sqlite3.Error:
+            return {}
+        finally:
+            conn.close()
+
+    def _backend_snapshot(self) -> dict:
+        conn = self._open_readonly_db(PRIVATE_ROOT / "state" / "strategy_lab.sqlite")
+        if conn is None:
+            return {}
+        try:
+            row = conn.execute(
+                "SELECT effective_backend, signal_backend, simulation_backend, accelerated_runs, created_at "
+                "FROM runtime_stats ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else {}
+        except sqlite3.Error:
+            return {}
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _gpu_snapshot() -> str:
+        try:
+            completed = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                text=True, encoding="utf-8", errors="replace", capture_output=True,
+                timeout=2, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            parts = [part.strip() for part in completed.stdout.strip().split(",")]
+            if completed.returncode == 0 and len(parts) >= 4:
+                return f"GPU {parts[0]}% · VRAM {parts[1]}/{parts[2]} МБ · {parts[3]}°C"
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return "GPU: нет данных"
+
+    def _system_snapshot(self) -> str:
+        queue_state = self._queue_snapshot()
+        backend = self._backend_snapshot()
+        farm = self._read_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
+        priority_worker = self._read_json(PRIVATE_ROOT / "state" / "farm_priority_worker_status.json")
+        stage = (
+            str(farm.get("stage") or "работает")
+            if self.contours.get("farm") and self.contours["farm"].running
+            else "остановлена"
+        )
+        current = queue_state.get("current") or {}
+        current_text = "нет активного слота"
+        if current:
+            target = "/".join(
+                str(current.get(key) or "") for key in ("symbol", "timeframe", "family")
+            ).strip("/")
+            current_text = f"{current.get('task_type')} {target} · приоритет {current.get('priority')}"
+        queue_text = (
+            f"очередь {queue_state.get('queued', 0)} · работа {queue_state.get('running', 0)} · "
+            f"ручные {queue_state.get('manual', 0)} · GO {queue_state.get('go', 0)} · "
+            f"WATCH {queue_state.get('watch', 0)}"
+        )
+        backend_text = (
+            f"backend {backend.get('effective_backend') or '?'} "
+            f"(сигналы {backend.get('signal_backend') or '?'}, "
+            f"симуляция {backend.get('simulation_backend') or '?'})"
+        )
+        return (
+            f"{self._gpu_snapshot()}  |  {queue_text}  |  этап: {stage}  |  "
+            f"priority worker: {priority_worker.get('stage') or 'остановлен'}  |  "
+            f"сейчас: {current_text}  |  {backend_text}"
+        )
+
     def _heartbeat(self) -> None:
+        self.system_var.set(self._system_snapshot())
+        self.learning_var.set(self._learning_snapshot())
+        contour_rows = {}
+        for key, item in self.contours.items():
+            external = None if item.running else self._external_descriptor(key)
+            external_pid = external.get("pid") if external else None
+            external_started_at = external.get("started_at") if external else None
+            contour_rows[key] = {
+                "running": item.running or bool(external),
+                "owned": item.running,
+                "external": bool(external),
+                "pid": item.process.pid if item.running and item.process else (
+                    int(external_pid) if external_pid else None
+                ),
+                "started_at": item.started_at if item.running else (
+                    float(external_started_at) if external_started_at else None
+                ),
+                "status": self._health_text(key, item) if item.running else (
+                    "работает вне центра" if external else "выключен"
+                ),
+            }
         payload = {
             "schema": "ResearchControlCenterHeartbeat.v1",
             "updated_at": time.time(),
             "pid": os.getpid(),
             "paper_only": True,
             "execution_allowed": False,
-            "contours": {
-                key: {
-                    "running": item.running,
-                    "pid": item.process.pid if item.running and item.process else None,
-                    "status": self._health_text(key, item) if item.running else "выключен",
-                }
-                for key, item in self.contours.items()
-            },
+            "contours": contour_rows,
         }
         target = STATE_DIR / "heartbeat.json"
         temporary = target.with_suffix(".tmp")

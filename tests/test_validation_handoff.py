@@ -114,6 +114,42 @@ def test_refresh_handoff_marks_exported_and_verdict(tmp_path):
     conn.close()
 
 
+def test_refresh_handoff_can_limit_writer_work_to_current_batch(tmp_path):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    conn.execute("INSERT INTO runs(run_id, experiment_id, created_at, artifact_label, imported_at) "
+                 "VALUES('r','e','t','l','t')")
+    for candidate_id in ("current", "historical"):
+        conn.execute(
+            "INSERT INTO farm_results(run_id, candidate_id, symbol, family, decision, hard_status) "
+            "VALUES('r',?,'BTC_USDT_SWAP','range_breakout','OBSERVE',?)",
+            (candidate_id, "OLD" if candidate_id == "historical" else ""),
+        )
+    conn.commit()
+    base = tmp_path / "hard_validation"
+    (base / "requests").mkdir(parents=True)
+    (base / "verdicts").mkdir(parents=True)
+    for candidate_id, status in (("current", "HARD_REJECT"), ("historical", "FAILED_COSTS")):
+        (base / "requests" / f"{candidate_id}.json").write_text("{}", encoding="utf-8")
+        (base / "verdicts" / f"{candidate_id}.json").write_text(
+            json.dumps({"candidate_id": candidate_id, "hard_status": status}), encoding="utf-8",
+        )
+
+    result = refresh_from_artifacts(conn, tmp_path, candidate_ids=["current"])
+
+    assert result["request_files"] == 1
+    assert result["verdict_files"] == 1
+    current = conn.execute(
+        "SELECT validation_exported, hard_status FROM farm_results WHERE candidate_id='current'"
+    ).fetchone()
+    historical = conn.execute(
+        "SELECT validation_exported, hard_status FROM farm_results WHERE candidate_id='historical'"
+    ).fetchone()
+    assert tuple(current) == (1, "HARD_REJECT")
+    assert tuple(historical) == (0, "OLD")
+    conn.close()
+
+
 def test_validation_state_mapping():
     assert validation_state("REGIME_SPECIFIC", "PAPER_FORWARD_READY", True) == "VALIDATION_PASSED"
     assert validation_state("OBSERVE", "FAILED_COSTS", True) == "VALIDATION_FAILED"

@@ -10,7 +10,7 @@ import shutil
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -135,6 +135,7 @@ class Recommendation:
     action: str
     reason: str
     evidence_refs: tuple[str, ...] = ()
+    task_spec: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -244,6 +245,15 @@ def validate_schema(payload: Mapping[str, Any]) -> tuple[bool, list[str]]:
                 problems.append("recommendation_action_not_allowlisted")
             if not str(item.get("reason") or "").strip():
                 problems.append("recommendation_reason_required")
+            task_spec = item.get("task_spec")
+            if not isinstance(task_spec, Mapping):
+                problems.append("recommendation_task_spec_required")
+            elif task_spec.get("schema") != "RoleTaskSpec.v1":
+                problems.append("recommendation_task_spec_schema_invalid")
+            elif task_spec.get("kind") not in {
+                "bounded_sweep", "untouched_validation", "paper_replay"
+            }:
+                problems.append("recommendation_task_kind_invalid")
         recommendation_recipients = [str(item.get("recipient") or "") for item in recommendations if isinstance(item, Mapping)]
         if len(recommendation_recipients) != len(set(recommendation_recipients)):
             problems.append("duplicate_recommendation_recipient")
@@ -323,6 +333,7 @@ def build_feedback(payload: Mapping[str, Any], *, now: str | None = None) -> Sys
                 action=str(item["action"]),
                 reason=str(item["reason"]),
                 evidence_refs=tuple(item["evidence_refs"]),
+                task_spec=dict(item["task_spec"]),
             )
             for item in payload["recommendations"]
         ),
@@ -420,7 +431,17 @@ def _load_events_unlocked(private_root: Path) -> list[dict[str, Any]]:
             raise ValueError("feedback ledger event hash mismatch")
         if row.get("event") == "quality_accepted":
             feedback = row.get("feedback")
-            if not isinstance(feedback, Mapping) or not validate_schema(feedback)[0]:
+            schema_valid, schema_problems = (
+                validate_schema(feedback) if isinstance(feedback, Mapping) else (False, [])
+            )
+            # RoleTaskSpec was added after the first accepted ledger generation.
+            # Historical hash-bound events remain readable only when this is the
+            # sole incompatibility; every authority/provenance invariant must
+            # still pass the current validator.
+            legacy_task_spec_only = bool(schema_problems) and set(schema_problems) == {
+                "recommendation_task_spec_required"
+            }
+            if not isinstance(feedback, Mapping) or not (schema_valid or legacy_task_spec_only):
                 raise ValueError("invalid accepted feedback event")
             if row.get("payload_hash") != _canonical_hash(feedback):
                 raise ValueError("accepted feedback payload hash mismatch")

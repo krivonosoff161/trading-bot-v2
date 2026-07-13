@@ -6,6 +6,7 @@ from src.research_lab.role_environment import gate_role_environment
 from tests.test_role_environment import _gate_artifacts
 from src.research_lab.system_analyst_cycle import (
     feedback_payloads_from_outcomes,
+    feedback_payloads_from_system_results,
     run_system_analyst_cycle,
 )
 
@@ -150,3 +151,41 @@ def test_cycle_recovers_request_projection_after_ack_succeeded(tmp_path, monkeyp
     monkeypatch.setattr(role_environment, "_write_state", original_write)
     recovered = run_system_analyst_cycle(tmp_path, apply=True)
     assert recovered["accepted_role_requests"]["farm"] == 1
+
+
+def test_completed_role_result_creates_one_bounded_next_generation():
+    result = {
+        "result_id": "role_result::env_1::farm",
+        "environment_id": "env_1",
+        "feedback_id": "feedback_1",
+        "recipient": "farm",
+        "result": {"status": "completed", "task_type": "run_sweep"},
+        "task_spec": {
+            "generation": 0,
+            "source_ref": "training-1",
+            "subject": {"symbol": "BTC_USDT_SWAP", "timeframe": "15m"},
+        },
+    }
+    draft = {
+        "role_id": "system_analyst",
+        "review_id": "review-system-1",
+        "source_ref": result["result_id"],
+        "accepted": True,
+        "created_at": "2026-07-13T08:00:00+00:00",
+        "payload": {
+            "summary": "One bounded follow-up is justified.",
+            "next_test_dimensions": ["exit_policy"],
+            "counterfactual_tests": ["later_exit"],
+        },
+    }
+
+    payloads = feedback_payloads_from_system_results([result], [draft])
+
+    assert len(payloads) == 1
+    specs = [item["task_spec"] for item in payloads[0]["recommendations"]]
+    assert {spec["generation"] for spec in specs} == {1}
+    assert {spec["kind"] for spec in specs} == {
+        "bounded_sweep", "untouched_validation", "paper_replay"
+    }
+    result["task_spec"]["generation"] = 2
+    assert feedback_payloads_from_system_results([result], [draft]) == []

@@ -168,6 +168,7 @@ def materialize_role_environment(
             "parent_environment_id": parent_environment_id,
             "action": str(recommendation["action"]),
             "evidence_refs": list(recommendation.get("evidence_refs") or []),
+            "task_spec": dict(recommendation.get("task_spec") or {}),
         }
         environment_id = _stable_id(basis)
         row = {
@@ -180,6 +181,7 @@ def materialize_role_environment(
             "proposed_action": basis["action"],
             "reason": str(recommendation.get("reason") or ""),
             "evidence_refs": basis["evidence_refs"],
+            "task_spec": basis["task_spec"],
             "status": "candidate",
             "created_at": utc_now(),
             "requires_deterministic_gate": True,
@@ -199,6 +201,7 @@ def materialize_role_environment(
                 "parent_environment_id": existing.get("parent_environment_id"),
                 "action": existing.get("proposed_action"),
                 "evidence_refs": existing.get("evidence_refs"),
+                "task_spec": existing.get("task_spec") or {},
             }
             if existing_basis != basis:
                 raise ValueError("role environment id conflict")
