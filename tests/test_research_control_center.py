@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 from pathlib import Path
 import sys
 
@@ -74,6 +76,37 @@ def test_only_known_local_ports_are_probed():
     assert MODULE.ControlCenter._external_running(object(), "unknown") is False
 
 
+def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
+    started_at = MODULE._process_started_at(os.getpid())
+    assert started_at is not None
+    heartbeat = tmp_path / "heartbeat.json"
+    heartbeat.write_text(json.dumps({
+        "contours": {
+            "telegram_bot": {"pid": os.getpid(), "started_at": started_at},
+            "public_news": {"pid": os.getpid(), "started_at": started_at - 60},
+        }
+    }), encoding="utf-8")
+
+    recovered = MODULE._load_external_contours(heartbeat)
+
+    assert recovered["telegram_bot"]["pid"] == os.getpid()
+    assert "public_news" not in recovered
+
+
+def test_port_owned_external_service_is_present_in_heartbeat_metadata():
+    class FakeCenter:
+        external_contours = {}
+
+        @staticmethod
+        def _external_running(key):
+            return key == "ollama"
+
+    external = MODULE.ControlCenter._external_descriptor(FakeCenter(), "ollama")
+
+    assert external == {"pid": None, "started_at": None}
+    assert MODULE.ControlCenter._external_descriptor(FakeCenter(), "dashboard") is None
+
+
 def test_farm_and_paper_cards_share_graceful_stop_owner():
     specs = {item.key: item for item in MODULE.contour_specs()}
     assert specs["farm"].graceful_stop is not None
@@ -96,6 +129,28 @@ def test_research_profile_methods_are_explicit_ui_actions():
     assert callable(MODULE.ControlCenter._system_snapshot)
     assert callable(MODULE.ControlCenter._queue_snapshot)
     assert callable(MODULE.ControlCenter._backend_snapshot)
+    assert callable(MODULE.ControlCenter._learning_snapshot)
+
+
+def test_learning_snapshot_explains_closed_loop_in_plain_language(monkeypatch, tmp_path):
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", tmp_path)
+    work = tmp_path / "state" / "role_work_queue" / "farm"
+    work.mkdir(parents=True)
+    (work / "env_1.json").write_text(json.dumps({
+        "status": "queued", "task_spec": {"generation": 1}
+    }), encoding="utf-8")
+    inbox = tmp_path / "state" / "derived" / "system_analyst_result_inbox.jsonl"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_text(json.dumps({"result_id": "result-1"}) + "\n", encoding="utf-8")
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    text = center._learning_snapshot()
+
+    assert "Alibaba" in text
+    assert "ферма: заданий" in text
+    assert "вернулось аналитику 1" in text
+    assert "ждут разбора 1" in text
+    assert "поколение 1/2" in text
 
 
 def test_scanner_delivery_environment_gate(monkeypatch):

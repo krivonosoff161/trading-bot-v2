@@ -16,17 +16,20 @@ from src.research_lab.llm_invocation_ledger import preflight_invocation, record_
 OUTCOME_SCHEMA = "OutcomeReview.v1"
 VALIDATOR_SCHEMA = "ValidatorReview.v1"
 SOURCE_TRUST_SCHEMA = "SourceTrustEvent.v1"
+SYSTEM_ANALYST_DRAFT_SCHEMA = "SystemAnalystFeedbackDraft.v1"
 
 ROLE_TO_SCHEMA = {
     "outcome_reviewer": OUTCOME_SCHEMA,
     "validator_reviewer": VALIDATOR_SCHEMA,
     "source_trust_reviewer": SOURCE_TRUST_SCHEMA,
+    "system_analyst": SYSTEM_ANALYST_DRAFT_SCHEMA,
 }
 
 ROLE_TO_PATH = {
     "outcome_reviewer": ("state", "llm_advice", "outcome_reviews.jsonl"),
     "validator_reviewer": ("state", "llm_advice", "validator_reviews.jsonl"),
     "source_trust_reviewer": ("state", "llm_advice", "source_trust_events.jsonl"),
+    "system_analyst": ("state", "llm_advice", "system_analyst_drafts.jsonl"),
 }
 
 ROLE_SYSTEM_PROMPTS = {
@@ -70,6 +73,16 @@ ROLE_SYSTEM_PROMPTS = {
         "validator verdicts, orders, sizes, or execution."
         " Keep the object compact: summary, source_class, trust_delta, confidence, evidence, "
         "warnings, followup_window. Confidence must be a number from 0 to 1."
+    ),
+    "system_analyst": (
+        "You are the advisory System Analyst for a paper-only research loop. "
+        "Return JSON only. Review one completed farm, validator, or paper-trader "
+        "work result against its frozen task specification. Explain what the result "
+        "supports, what remains unknown, and which bounded dimensions should be tested "
+        "next. Do not emit trade direction, levels, verdicts, orders, execution fields, "
+        "or policy changes. Keep the object compact: summary, diagnosis, confidence, "
+        "evidence, warnings, next_test_dimensions, counterfactual_summary, learning_tags. "
+        "Confidence must be a number from 0 to 1."
     ),
 }
 

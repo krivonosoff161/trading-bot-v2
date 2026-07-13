@@ -22,7 +22,9 @@ LOCAL_PROVIDER_NAMES = {"ollama", "ollama-local"}
 TEST_PROVIDER_NAMES = {"synthetic"}
 DEFAULT_LOCAL_MODEL_ALLOWLIST = ("calculator-swarm",)
 CIRCUIT_FAILURE_LIMIT = 3
-TERMINAL_CALL_STATUSES = {"accepted", "schema_rejected", "blocked"}
+MAX_RETRYABLE_ATTEMPTS = 3
+TERMINAL_CALL_STATUSES = {"accepted"}
+RETRYABLE_CALL_STATUSES = {"provider_error", "schema_rejected"}
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,10 @@ def preflight_invocation(
         length=24,
     )
     rows = _rows(private_root)
+    matching = [
+        row for row in rows
+        if str(row.get("invocation_id") or "") == invocation_id
+    ]
     if any(
         str(row.get("invocation_id") or "") == invocation_id
         and str(row.get("status") or "") in TERMINAL_CALL_STATUSES
@@ -118,6 +124,14 @@ def preflight_invocation(
     if local_only and provider_name in LOCAL_PROVIDER_NAMES and not _local_model_allowed(model, local_model_allowlist):
         return InvocationPermit(
             invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "local_model_not_allowlisted"
+        )
+    retryable_attempts = sum(
+        1 for row in matching
+        if str(row.get("status") or "") in RETRYABLE_CALL_STATUSES
+    )
+    if retryable_attempts >= MAX_RETRYABLE_ATTEMPTS:
+        return InvocationPermit(
+            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "retry_exhausted"
         )
     recent = [
         row

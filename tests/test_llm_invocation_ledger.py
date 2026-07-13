@@ -108,3 +108,51 @@ def test_circuit_opens_after_three_provider_errors(tmp_path):
     rows = [json.loads(line) for line in (tmp_path / "state" / "llm_advice" / "invocations.jsonl").read_text().splitlines()]
     assert len(rows) == 3
     assert all(row["secrets_exposed"] is False for row in rows)
+
+
+def test_schema_rejection_gets_bounded_retries(tmp_path):
+    provider = _Provider("alibaba", "qwen-plus")
+    for attempt in range(3):
+        permit = preflight_invocation(
+            tmp_path,
+            role_id="outcome_reviewer",
+            source_ref="case-retry",
+            input_payload={"same": True},
+            provider=provider,
+        )
+        assert permit.allowed is True
+        record_invocation(tmp_path, permit, status="schema_rejected", problems=["bad schema"])
+
+    exhausted = preflight_invocation(
+        tmp_path,
+        role_id="outcome_reviewer",
+        source_ref="case-retry",
+        input_payload={"same": True},
+        provider=provider,
+    )
+    assert exhausted.allowed is False
+    assert exhausted.reason == "retry_exhausted"
+
+
+def test_provider_configuration_failure_can_recover(tmp_path):
+    provider = _Provider("alibaba", "qwen-plus")
+    provider.configured = False
+    blocked = preflight_invocation(
+        tmp_path,
+        role_id="outcome_reviewer",
+        source_ref="case-config",
+        input_payload={"same": True},
+        provider=provider,
+    )
+    assert blocked.reason == "provider_not_configured"
+    record_invocation(tmp_path, blocked, status="blocked", problems=[blocked.reason])
+
+    provider.configured = True
+    recovered = preflight_invocation(
+        tmp_path,
+        role_id="outcome_reviewer",
+        source_ref="case-config",
+        input_payload={"same": True},
+        provider=provider,
+    )
+    assert recovered.allowed is True

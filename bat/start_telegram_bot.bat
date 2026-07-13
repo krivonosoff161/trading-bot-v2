@@ -6,6 +6,8 @@ if not exist "scripts\tape" mkdir scripts\tape
 echo [%date% %time%] Bot started >> logs\telegram_bot.log
 set PYTHONUTF8=1
 if "%PRODUCT_ANALYZER_LLM_ROUTER%"=="" set PRODUCT_ANALYZER_LLM_ROUTER=llm_client
+if "%LLM_PROVIDER%"=="" set LLM_PROVIDER=alibaba
+if "%PREMIUM_VISION_PROVIDER%"=="" set PREMIUM_VISION_PROVIDER=alibaba
 python -u scripts\telegram_bot.py
 echo [%date% %time%] Bot stopped >> logs\telegram_bot.log
 echo.

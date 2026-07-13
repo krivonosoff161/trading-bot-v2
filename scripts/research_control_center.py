@@ -9,6 +9,8 @@ processes and keep their output visible in one window.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes
 import json
 import os
 from pathlib import Path
@@ -182,6 +184,8 @@ def contour_specs() -> tuple[ContourSpec, ...]:
                 "AUTO_TRADE": "0",
                 "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE": "0",
                 "PRODUCT_ANALYZER_LLM_ROUTER": "llm_client",
+                "LLM_PROVIDER": "alibaba",
+                "PREMIUM_VISION_PROVIDER": "alibaba",
             },
         ),
         ContourSpec(
@@ -237,7 +241,7 @@ class ManagedContour:
             errors="replace",
             creationflags=flags,
         )
-        self.started_at = time.time()
+        self.started_at = _process_started_at(self.process.pid) or time.time()
         self.events.put((self.spec.key, "state", f"работает · PID {self.process.pid}"))
         threading.Thread(target=self._read_output, daemon=True).start()
 
@@ -304,6 +308,62 @@ class SingleInstance:
         self.handle.close()
 
 
+def _process_started_at(pid: int) -> float | None:
+    """Return process creation time without invoking another shell process."""
+    if pid <= 0:
+        return None
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return 0.0
+        except OSError:
+            return None
+    process_query_limited_information = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        process_query_limited_information, False, int(pid)
+    )
+    if not handle:
+        return None
+    try:
+        creation = ctypes.wintypes.FILETIME()
+        exit_time = ctypes.wintypes.FILETIME()
+        kernel = ctypes.wintypes.FILETIME()
+        user = ctypes.wintypes.FILETIME()
+        if not ctypes.windll.kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return ticks / 10_000_000.0 - 11_644_473_600.0
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _load_external_contours(path: Path) -> dict[str, dict]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("contours") if isinstance(payload, dict) else None
+    if not isinstance(rows, dict):
+        return {}
+    external: dict[str, dict] = {}
+    for key, row in rows.items():
+        if not isinstance(row, dict):
+            continue
+        pid = int(row.get("pid") or 0)
+        expected = float(row.get("started_at") or 0.0)
+        actual = _process_started_at(pid)
+        if actual is None or expected <= 0 or abs(actual - expected) > 5.0:
+            continue
+        external[str(key)] = {"pid": pid, "started_at": actual}
+    return external
+
+
 class ControlCenter(tk.Tk):
     def __init__(self, instance: SingleInstance, autostart: tuple[str, ...] = ()) -> None:
         super().__init__()
@@ -314,6 +374,7 @@ class ControlCenter(tk.Tk):
         self._configure_style()
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.instance = instance
+        self.external_contours = _load_external_contours(STATE_DIR / "heartbeat.json")
         self.contours = {spec.key: ManagedContour(spec, self.events) for spec in contour_specs()}
         self.status_vars: dict[str, tk.StringVar] = {}
         self.buttons: dict[str, ttk.Button] = {}
@@ -321,6 +382,7 @@ class ControlCenter(tk.Tk):
         self._closing = False
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
         self.system_var = tk.StringVar(value="Состояние фермы загружается…")
+        self.learning_var = tk.StringVar(value="Контур обучения загружается…")
         self.manual_symbol = tk.StringVar(value="BTC")
         self.manual_timeframe = tk.StringVar(value="15m")
         self.manual_reason = tk.StringVar(value="срочная ручная проверка")
@@ -362,6 +424,9 @@ class ControlCenter(tk.Tk):
         ).pack(anchor="w", padx=18, pady=(0, 6))
         ttk.Label(self, text=f"Приватные данные: {PRIVATE_ROOT}", style="Muted.TLabel").pack(anchor="w", padx=18, pady=(0, 10))
         ttk.Label(self, textvariable=self.system_var, style="Status.TLabel", wraplength=1120).pack(
+            anchor="w", fill=tk.X, padx=18, pady=(0, 4)
+        )
+        ttk.Label(self, textvariable=self.learning_var, style="Status.TLabel", wraplength=1120).pack(
             anchor="w", fill=tk.X, padx=18, pady=(0, 10)
         )
         actions = ttk.Frame(self)
@@ -655,7 +720,26 @@ class ControlCenter(tk.Tk):
             return self._port_open(11434)
         if key == "dashboard":
             return self._port_open(8765)
+        related = ("farm", "paper_cards") if key in {"farm", "paper_cards"} else (key,)
+        for candidate in related:
+            external_contours = getattr(self, "external_contours", {})
+            row = external_contours.get(candidate)
+            if not row:
+                continue
+            actual = _process_started_at(int(row.get("pid") or 0))
+            if actual is not None and abs(actual - float(row.get("started_at") or 0.0)) <= 5.0:
+                return True
+            external_contours.pop(candidate, None)
         return False
+
+    def _external_descriptor(self, key: str) -> dict[str, object] | None:
+        """Return heartbeat-safe metadata for a contour owned elsewhere."""
+        recovered = self.external_contours.get(key)
+        if recovered and self._external_running(key):
+            return recovered
+        if key in {"ollama", "dashboard"} and self._external_running(key):
+            return {"pid": None, "started_at": None}
+        return None
 
     def _render_log(self) -> None:
         self.log.configure(state="normal")
@@ -677,6 +761,57 @@ class ControlCenter(tk.Tk):
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return {}
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        try:
+            return [
+                row for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and isinstance((row := json.loads(line)), dict)
+            ]
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return []
+
+    def _learning_snapshot(self) -> str:
+        state = PRIVATE_ROOT / "state"
+        role_counts: dict[str, int] = {}
+        work_counts: dict[str, dict[str, int]] = {}
+        max_generation = 0
+        for recipient in ("farm", "validator", "trader"):
+            env_dir = state / "role_environments" / recipient
+            role_counts[recipient] = len(list(env_dir.glob("env_*.json"))) if env_dir.exists() else 0
+            counters = {"waiting": 0, "queued": 0, "completed": 0, "deduped": 0}
+            work_dir = state / "role_work_queue" / recipient
+            if work_dir.exists():
+                for path in work_dir.glob("env_*.json"):
+                    row = self._read_json(path)
+                    status = str(row.get("status") or "waiting")
+                    counters[status] = counters.get(status, 0) + 1
+                    spec = row.get("task_spec") if isinstance(row.get("task_spec"), dict) else {}
+                    max_generation = max(max_generation, int(spec.get("generation") or 0))
+            work_counts[recipient] = counters
+        results = self._read_jsonl(state / "derived" / "system_analyst_result_inbox.jsonl")
+        drafts = self._read_jsonl(state / "llm_advice" / "system_analyst_drafts.jsonl")
+        reviewed = {
+            str(row.get("source_ref") or "") for row in drafts
+            if row.get("accepted") and str(row.get("role_id") or "") == "system_analyst"
+        }
+        result_ids = {str(row.get("result_id") or "") for row in results}
+        pending_review = len(result_ids - reviewed)
+        labels = {"farm": "ферма", "validator": "валидатор", "trader": "paper-наблюдатель"}
+        role_text = []
+        for recipient in ("farm", "validator", "trader"):
+            counts = work_counts[recipient]
+            role_text.append(
+                f"{labels[recipient]}: заданий {role_counts[recipient]}, "
+                f"в очереди {counts.get('queued', 0)}, ждут данных {counts.get('waiting', 0)}, "
+                f"готово {counts.get('completed', 0)}"
+            )
+        return (
+            "Обучение · Alibaba · " + " | ".join(role_text) +
+            f" | вернулось аналитику {len(results)}, ждут разбора {pending_review}, "
+            f"поколение {max_generation}/2"
+        )
 
     @staticmethod
     def _open_readonly_db(path: Path) -> sqlite3.Connection | None:
@@ -788,20 +923,33 @@ class ControlCenter(tk.Tk):
 
     def _heartbeat(self) -> None:
         self.system_var.set(self._system_snapshot())
+        self.learning_var.set(self._learning_snapshot())
+        contour_rows = {}
+        for key, item in self.contours.items():
+            external = None if item.running else self._external_descriptor(key)
+            external_pid = external.get("pid") if external else None
+            external_started_at = external.get("started_at") if external else None
+            contour_rows[key] = {
+                "running": item.running or bool(external),
+                "owned": item.running,
+                "external": bool(external),
+                "pid": item.process.pid if item.running and item.process else (
+                    int(external_pid) if external_pid else None
+                ),
+                "started_at": item.started_at if item.running else (
+                    float(external_started_at) if external_started_at else None
+                ),
+                "status": self._health_text(key, item) if item.running else (
+                    "работает вне центра" if external else "выключен"
+                ),
+            }
         payload = {
             "schema": "ResearchControlCenterHeartbeat.v1",
             "updated_at": time.time(),
             "pid": os.getpid(),
             "paper_only": True,
             "execution_allowed": False,
-            "contours": {
-                key: {
-                    "running": item.running,
-                    "pid": item.process.pid if item.running and item.process else None,
-                    "status": self._health_text(key, item) if item.running else "выключен",
-                }
-                for key, item in self.contours.items()
-            },
+            "contours": contour_rows,
         }
         target = STATE_DIR / "heartbeat.json"
         temporary = target.with_suffix(".tmp")

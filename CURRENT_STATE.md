@@ -1,6 +1,6 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-11.
+Status: **ACTIVE**. Updated 2026-07-13.
 
 This page states what the public repository supports. It is deliberately not a
 runtime dashboard: process IDs, current balances, private journals, signal
@@ -21,6 +21,11 @@ rows, provider state, and local findings belong outside public Git.
 - The adaptive research-center contracts are implemented as paper-only,
   versioned candidate flows. They create inspectable next-test requests; they
   do not silently tune a model or promote a strategy.
+- The adaptive loop dispatches accepted typed requests to the existing farm,
+  validator, and deterministic paper replay owners. Completed results return to
+  the System Analyst and can create at most two bounded follow-up generations.
+- Alibaba is the fail-closed default cloud route. Yandex is not an automatic
+  fallback.
 - New validation requests fail closed unless they carry an untouched evaluation
   epoch distinct from the farm selection data. Existing selection-only evidence
   therefore needs fresh data before it can become paper-forward ready.
@@ -40,7 +45,8 @@ rows, provider state, and local findings belong outside public Git.
 |---|---|
 | Market data | The system can only reason over available public/local data. Missing OI or microstructure remains an explicit gate, not a guessed value. |
 | Validation | A passing historical result is evidence only; paper outcomes are still needed. |
-| LLM providers | Providers are optional and disabled/limited by configuration; deterministic code remains authoritative. |
+| LLM providers | Alibaba is the default advisory route. Provider failures retry only within a bounded budget; deterministic code remains authoritative. |
+| Local GPU | Numeric kernels may use the supported GPU backend. Local Ollama remains CPU-pinned on this 3 GiB GPU to avoid VRAM contention; CuPy warns when `CUDA_PATH` is not discoverable. |
 | Telegram | Delivery is opt-in and deduplicated; it must never be mistaken for execution. |
 | Legacy surfaces | Old engine, `start_all.bat`, and execution-adjacent scripts are isolated references, not supported farm paths. |
 
@@ -57,9 +63,9 @@ into an issue, PR, or public document; produce a sanitized aggregate instead.
 
 ## Next Public Work
 
-1. Complete the documentation and Git-hygiene rebuild.
-2. Accumulate bounded paper evidence and review it locally.
-3. Run the independent review and private acceptance window for issue #172
+1. Review and merge the verified adaptive-loop implementation.
+2. Run a staged paper-only smoke cycle and inspect the learning status.
+3. Accumulate bounded paper evidence and run the private acceptance window for issue #172
    before using any environment candidate as research input.
 
 The development sequence is maintained in [ROADMAP.md](ROADMAP.md).

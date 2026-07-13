@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **ACTIVE**. Updated 2026-07-11.
+Status: **ACTIVE**. Updated 2026-07-13.
 
 This file is the current architectural source of truth. Dated reports and
 older plans under `docs/` are historical evidence unless the
@@ -72,6 +72,11 @@ the recipient-owned request-contract gate and acknowledges the resulting
 research request. Applying any policy still requires a later deterministic gate
 and untouched evaluation. See [Adaptive Research Center Contract](docs/adaptive-research-center-contract.md).
 
+The return path is explicit: accepted `RoleTaskSpec.v1` requests map to the
+existing `schedule_retest`, `export_validation`, and deterministic paper-replay
+owners. Terminal results become `SystemAnalystResultInput.v1`, are reviewed
+once, and may create one bounded next generation. Generation two is terminal.
+
 This architecture does not revive `main.py`, enable live trading, or permit a
 model to edit code, weights, verdicts, levels, or process configuration.
 
@@ -88,6 +93,8 @@ interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
 separate process owners. The UI starts with every contour disabled, prevents a
 second control-center instance and duplicate canonical-farm ownership, records a
 private heartbeat, and contains no execution or private-exchange entrypoint.
+Its second status line explains per-role work issued, queued, waiting,
+completed, returned to the analyst, and the current bounded generation.
 
 ## Storage
 

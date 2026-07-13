@@ -425,6 +425,8 @@ def _drain_retest_task(
         "proposed_changes": spec_row.get("proposed_changes") or [],
         "sweep_spec": _sweep_payload(sweep),
         "followup_depth": depth + 1,
+        "role_environment_id": payload.get("role_environment_id"),
+        "feedback_id": payload.get("feedback_id"),
         "paper_only": True,
         "execution_allowed": False,
     }

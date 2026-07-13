@@ -1,6 +1,6 @@
 # Adaptive Research Center Contract
 
-Status: implementation contract for issue #172. Updated 2026-07-11.
+Status: implementation contract for issue #172. Updated 2026-07-13.
 
 This document defines the paper-only adaptive loop shared by the calculation
 farm, independent validator, Trader Supervisor, and System Analyst. It does not
@@ -87,6 +87,12 @@ The canonical cycle acknowledges only that a recipient accepted a bounded
 research request. That acknowledgement is not policy application. A separate
 recipient gate may mark an environment accepted only after it cites the
 deterministic gate result and an untouched evaluation artifact.
+
+Accepted requests are dispatched to existing deterministic owners rather than
+parallel engines: farm retests use `schedule_retest`, untouched validation uses
+`export_validation`, and trader work is a paper-only FSM replay. Terminal work
+is normalized into `SystemAnalystResultInput.v1`; each result is reviewed once.
+Follow-up generation two is terminal and cannot recursively create more work.
 
 ## Role Environment Versions
 

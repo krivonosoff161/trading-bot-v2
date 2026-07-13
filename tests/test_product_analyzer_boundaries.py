@@ -183,12 +183,12 @@ def test_chart_formatter_provider_status_is_sanitized():
     rendered = str(status)
 
     assert status["schema"] == "llm_formatter_provider.v1"
-    assert status["provider"] == "yandex"
-    assert status["provider_scope"] == "yandex_only"
-    assert status["follows_llm_provider_env"] is False
-    assert status["api_key_set"] is True
+    assert status["provider"] == "alibaba"
+    assert status["provider_scope"] == "shared_llm_client_opt_in"
+    assert status["follows_llm_provider_env"] is True
+    assert status["api_key_set"] is False
     assert status["folder_id_set"] is True
-    assert status["configured"] is True
+    assert status["configured"] is False
     assert status["supports_vision"] is False
     assert status["telegram_send_authority"] is False
     assert status["execution_authority"] is False
@@ -247,7 +247,7 @@ def test_premium_vision_status_is_sanitized():
     assert status["requested_provider"] == "auto"
     assert status["configured"] is True
     assert status["model_label"] == "qwen-vl-plus"
-    assert status["fallback_provider"] == "yandex"
+    assert status["fallback_provider"] == ""
     assert status["shared_router_active"] is False
     assert status["telegram_send_authority"] is False
     assert status["execution_authority"] is False
@@ -461,3 +461,5 @@ def test_manual_analyzer_and_latest_wrapper_boundaries():
     assert "scanner moved to scripts/ws/ws_scanner.py" in main_body
     assert "PRODUCT_ANALYZER_LLM_ROUTER=llm_client" in start_bat
     assert "PRODUCT_ANALYZER_LLM_ROUTER=llm_client" in start_tg_bat
+    assert "LLM_PROVIDER=alibaba" in start_tg_bat
+    assert "PREMIUM_VISION_PROVIDER=alibaba" in start_tg_bat

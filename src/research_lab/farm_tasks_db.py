@@ -401,6 +401,26 @@ class FarmTasksDB:
         row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (int(task_id),)).fetchone()
         return dict(row) if row is not None else None
 
+    def tasks_for_role_environment(self, environment_id: str) -> list[dict[str, Any]]:
+        """Return tasks explicitly bound to one adaptive environment request."""
+        needle = str(environment_id or "")
+        if not needle:
+            return []
+        rows = self._conn.execute(
+            "SELECT * FROM tasks WHERE payload_json LIKE ? ORDER BY task_id ASC",
+            (f'%"role_environment_id": "{needle}"%',),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                payload = json.loads(item.get("payload_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if str(payload.get("role_environment_id") or "") == needle:
+                out.append(item)
+        return out
+
     def tasks_in_state(self, state: str, *, task_type: str | None = None) -> list[dict[str, Any]]:
         if task_type:
             rows = self._conn.execute(

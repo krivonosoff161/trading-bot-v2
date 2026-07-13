@@ -185,9 +185,10 @@ class TestPrintWarning:
             lambda root, apply, limit: {"counters": {"cards": 1}, "readiness": {}, "results": []},
         )
 
-        def fake_refresh(args, private_root, *, apply, loop, cycle_started_at, out, provider=None):
+        def fake_refresh(args, private_root, *, tasks, apply, loop, cycle_started_at, out, provider=None):
             seen["called"] = True
             seen["provider"] = provider
+            seen["tasks"] = tasks
             out["main_paper_bridge"] = {"instructions": 1}
 
         monkeypatch.setattr(farm_loop, "_run_main_paper_derived_chain", fake_refresh)
@@ -223,7 +224,9 @@ class TestPrintWarning:
 
         out = farm_loop._run_once(args, object(), {}, {}, tmp_path, apply=True)
 
-        assert seen == {"called": True, "provider": "provider"}
+        assert seen["called"] is True
+        assert seen["provider"] == "provider"
+        assert seen["tasks"] is not None
         assert out["paper"]["counters"]["cards"] == 1
         assert out["main_paper_bridge"]["instructions"] == 1
 

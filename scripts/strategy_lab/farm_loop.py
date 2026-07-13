@@ -274,6 +274,7 @@ def _run_main_paper_derived_chain(
     args,
     private_root: Path,
     *,
+    tasks: FarmTasksDB,
     apply: bool,
     loop: bool,
     cycle_started_at: float,
@@ -464,6 +465,27 @@ def _run_main_paper_derived_chain(
         out["system_analyst_feedback"] = run_system_analyst_cycle(private_root, apply=apply)
     except Exception as exc:  # noqa: BLE001 - advisory feedback must not break the cycle
         out.setdefault("errors", []).append({"where": "system_analyst_feedback", "error": str(exc)})
+    try:
+        _write_loop_status(
+            private_root,
+            stage="role_environment_dispatch",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
+        from src.research_lab.role_environment_dispatch import (
+            dispatch_role_environments,
+            reconcile_role_work_results,
+        )
+
+        out["role_environment_dispatch"] = dispatch_role_environments(
+            private_root, tasks, apply=apply, limit_per_role=20
+        )
+        out["role_work_result_reconciliation"] = reconcile_role_work_results(
+            private_root, tasks, apply=apply
+        )
+    except Exception as exc:  # noqa: BLE001 - role work must not break the cycle
+        out.setdefault("errors", []).append({"where": "role_environment_dispatch", "error": str(exc)})
     try:
         _write_loop_status(
             private_root,
@@ -1183,6 +1205,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             _run_main_paper_derived_chain(
                 args,
                 private_root,
+                tasks=tasks,
                 apply=apply,
                 loop=loop,
                 cycle_started_at=cycle_started_at,
@@ -1310,6 +1333,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                 _run_main_paper_derived_chain(
                     args,
                     private_root,
+                    tasks=tasks,
                     apply=apply,
                     loop=loop,
                     cycle_started_at=cycle_started_at,
@@ -1408,6 +1432,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
                             max_outcomes=int(getattr(args, "agent_role_max_outcomes", 1)),
                             max_validator=int(getattr(args, "agent_role_max_validator", 1)),
                             max_sources=int(getattr(args, "agent_role_max_sources", 1)),
+                            max_analyst=int(getattr(args, "agent_role_max_analyst", 1)),
                             sleep_seconds=float(getattr(args, "agent_role_sleep_seconds", 0.0)),
                         ))
                     except Exception as exc:  # noqa: BLE001 - advisory reviews must not break the cycle
@@ -1700,6 +1725,8 @@ def main() -> None:
                     help="max validator rows reviewed per cycle")
     ap.add_argument("--agent-role-max-sources", type=int, default=1,
                     help="max scanner/source rows reviewed per cycle")
+    ap.add_argument("--agent-role-max-analyst", type=int, default=1,
+                    help="max completed role results reviewed by System Analyst per cycle")
     ap.add_argument("--agent-role-sleep-seconds", type=float, default=0.0,
                     help="sleep between role-review provider calls")
     ap.add_argument("--true-forward-max-candidates", type=int, default=20,

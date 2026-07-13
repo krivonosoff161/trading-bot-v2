@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,6 +24,63 @@ from src.research_lab.system_analyst_feedback import (
 
 
 DEFAULT_MAX_FEEDBACK_PER_CYCLE = 20
+
+
+def _string_list(value: Any, *, limit: int = 8) -> list[str]:
+    if isinstance(value, dict):
+        rows = [f"{key}:{value[key]}" for key in sorted(value)]
+    elif isinstance(value, (list, tuple)):
+        rows = [str(item) for item in value]
+    elif value:
+        rows = [str(value)]
+    else:
+        rows = []
+    return [row[:240] for row in rows if row.strip()][:limit]
+
+
+def _task_spec(
+    review_payload: dict[str, Any], recipient: str, source_row: dict[str, Any], source_ref: str
+) -> dict[str, Any]:
+    prior_spec = source_row.get("task_spec") if isinstance(source_row.get("task_spec"), dict) else {}
+    subject_source = prior_spec.get("subject") if isinstance(prior_spec.get("subject"), dict) else source_row
+    generation = int(prior_spec.get("generation", -1)) + 1
+    return {
+        "schema": "RoleTaskSpec.v1",
+        "kind": {
+            "farm": "bounded_sweep",
+            "validator": "untouched_validation",
+            "trader": "paper_replay",
+        }[recipient],
+        "dimensions": _string_list(review_payload.get("next_test_dimensions")),
+        "tests": _string_list(review_payload.get("counterfactual_tests")),
+        "hypotheses": _string_list(review_payload.get("parameter_hypotheses")),
+        "subject": {
+            key: subject_source.get(key)
+            for key in ("symbol", "timeframe", "family", "candidate_id", "training_row_id")
+            if subject_source.get(key)
+        },
+        "source_ref": source_ref,
+        "generation": generation,
+        "requires_deterministic_mapping": True,
+        "requires_untouched_evaluation": True,
+        "paper_only": True,
+    }
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
 
 
 def _iso(value: Any, fallback: dt.datetime) -> str:
@@ -85,7 +143,11 @@ def feedback_payloads_from_outcomes(
         }
         feedback_id = stable_id(
             "system_feedback",
-            {"source_ref": source_ref, "review_id": review.get("review_id")},
+            {
+                "source_ref": source_ref,
+                "review_id": review.get("review_id"),
+                "contract": "typed_role_tasks_v1",
+            },
             length=24,
         )
         payloads.append({
@@ -108,12 +170,117 @@ def feedback_payloads_from_outcomes(
                 "source_hash": source_refs_hash(source_refs, evidence_hashes),
             },
             "recommendations": [
-                {"recipient": "farm", "action": "retest_candidate", "reason": "Run a bounded next-window experiment.", "evidence_refs": source_refs},
-                {"recipient": "validator", "action": "retest_candidate", "reason": "Evaluate independently on an untouched window.", "evidence_refs": source_refs},
-                {"recipient": "trader", "action": "review_paper_outcome", "reason": "Review the paper lifecycle without changing state authority.", "evidence_refs": source_refs},
+                {
+                    "recipient": "farm", "action": "retest_candidate",
+                    "reason": "Run a bounded next-window experiment over the analyst dimensions.",
+                    "evidence_refs": source_refs,
+                    "task_spec": _task_spec(review_payload, "farm", row, source_ref),
+                },
+                {
+                    "recipient": "validator", "action": "retest_candidate",
+                    "reason": "Evaluate the candidate independently on an untouched window.",
+                    "evidence_refs": source_refs,
+                    "task_spec": _task_spec(review_payload, "validator", row, source_ref),
+                },
+                {
+                    "recipient": "trader", "action": "review_paper_outcome",
+                    "reason": "Replay the paper lifecycle against the analyst tests.",
+                    "evidence_refs": source_refs,
+                    "task_spec": _task_spec(review_payload, "trader", row, source_ref),
+                },
             ],
             "quality_score": 0.9,
             "quality_reasons": ["accepted bounded outcome review", "training lineage present"],
+            "advisory_only": True,
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+    return payloads
+
+
+def feedback_payloads_from_system_results(
+    result_rows: Iterable[dict[str, Any]],
+    draft_rows: Iterable[dict[str, Any]],
+    *,
+    max_generation: int = 2,
+) -> list[dict[str, Any]]:
+    results = {str(row.get("result_id") or ""): row for row in result_rows}
+    payloads: list[dict[str, Any]] = []
+    for draft in draft_rows:
+        if str(draft.get("role_id") or "") != "system_analyst" or not draft.get("accepted"):
+            continue
+        source_ref = str(draft.get("source_ref") or "")
+        result = results.get(source_ref)
+        if not result:
+            continue
+        prior_spec = result.get("task_spec") if isinstance(result.get("task_spec"), dict) else {}
+        if int(prior_spec.get("generation", 0)) >= max_generation:
+            continue
+        draft_payload = draft.get("payload") if isinstance(draft.get("payload"), dict) else {}
+        generated = dt.datetime.fromisoformat(_iso(draft.get("created_at"), dt.datetime.now(dt.timezone.utc)))
+        refs = [f"role_result:{source_ref}", f"system_review:{draft.get('review_id') or ''}"]
+        raw_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+        result_evidence = {
+            "result_id": source_ref,
+            "environment_id": result.get("environment_id"),
+            "feedback_id": result.get("feedback_id"),
+            "recipient": result.get("recipient"),
+            "task_spec": result.get("task_spec") or {},
+            "status": raw_result.get("status") or "completed",
+            "reason": raw_result.get("reason") or "",
+            "task_id": raw_result.get("task_id") or 0,
+            "task_type": raw_result.get("task_type") or "paper_replay",
+            "result_ref": raw_result.get("result_ref") or "",
+        }
+        draft_evidence = {
+            "review_id": draft.get("review_id"),
+            "source_ref": source_ref,
+            "created_at": draft.get("created_at"),
+            "payload": draft_payload,
+            "accepted": True,
+        }
+        evidence = {refs[0]: result_evidence, refs[1]: draft_evidence}
+        hashes = {ref: evidence_content_hash(value) for ref, value in evidence.items()}
+        feedback_id = stable_id(
+            "system_feedback",
+            {
+                "source_ref": source_ref,
+                "review_id": draft.get("review_id"),
+                "contract": "typed_role_tasks_v1",
+            },
+            length=24,
+        )
+        payloads.append({
+            "schema": "SystemAnalystFeedback.v1",
+            "feedback_id": feedback_id,
+            "subject_ref": f"role_result:{source_ref}",
+            "summary": str(draft_payload.get("summary") or "Completed role work requires bounded follow-up."),
+            "recipients": ["farm", "validator", "trader"],
+            "provenance": {
+                "observed_at": generated.isoformat(),
+                "hypothesis_frozen_at": generated.isoformat(),
+                "outcome_window_end": generated.isoformat(),
+                "knowledge_cutoff_at": generated.isoformat(),
+                "generated_at": generated.isoformat(),
+                "evaluation_started_at": (generated + dt.timedelta(microseconds=1)).isoformat(),
+                "valid_until": (generated + dt.timedelta(days=7)).isoformat(),
+                "source_refs": refs,
+                "source_evidence_hashes": hashes,
+                "source_evidence": evidence,
+                "source_hash": source_refs_hash(refs, hashes),
+            },
+            "recommendations": [
+                {
+                    "recipient": recipient,
+                    "action": "review_paper_outcome" if recipient == "trader" else "retest_candidate",
+                    "reason": "Use the completed role result for the next bounded evidence step.",
+                    "evidence_refs": refs,
+                    "task_spec": _task_spec(draft_payload, recipient, result, source_ref),
+                }
+                for recipient in ("farm", "validator", "trader")
+            ],
+            "quality_score": 0.9,
+            "quality_reasons": ["completed role result", "accepted bounded system review"],
             "advisory_only": True,
             "paper_only": True,
             "execution_allowed": False,
@@ -133,6 +300,10 @@ def run_system_analyst_cycle(
     all_payloads = feedback_payloads_from_outcomes(
         load_training_rows(private_root), load_outcome_reviews(private_root)
     )
+    all_payloads.extend(feedback_payloads_from_system_results(
+        _read_jsonl(Path(private_root) / "state" / "derived" / "system_analyst_result_inbox.jsonl"),
+        _read_jsonl(Path(private_root) / "state" / "llm_advice" / "system_analyst_drafts.jsonl"),
+    ))
     payloads = sorted(
         all_payloads,
         key=lambda payload: str(payload.get("provenance", {}).get("generated_at") or ""),

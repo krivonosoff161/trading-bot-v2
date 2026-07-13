@@ -32,6 +32,13 @@ class _Provider:
                 "failure_mode": "thin_sample",
                 "confidence": 0.8,
             }
+        elif role == "system_analyst":
+            payload = {
+                "summary": "Completed role work supports one bounded follow-up.",
+                "next_test_dimensions": ["exit_policy"],
+                "counterfactual_summary": "Compare the frozen exit policy.",
+                "confidence": 0.8,
+            }
         else:
             payload = {
                 "summary": "Source needs later outcome confirmation.",
@@ -195,6 +202,48 @@ def test_agent_role_review_cycle_prefers_unreviewed_training_rows(monkeypatch, t
     ]
     new_refs = [row["source_ref"] for row in rows if row.get("review_id") != "llmr_existing"]
     assert new_refs == ["training_2", "training_3"]
+
+
+def test_agent_role_cycle_skips_exhausted_item_and_advances(monkeypatch, tmp_path):
+    rows = []
+    for index in range(4):
+        rows.append({
+            "training_row_id": f"training_{index}",
+            "symbol": "BTC_USDT_SWAP",
+            "timeframe": "15m",
+            "family": "continuation",
+            "diagnosis": "needs_review",
+            "paper_only": True,
+            "execution_allowed": False,
+        })
+    _write_jsonl(tmp_path / "state" / "derived" / "paper_signal_training.jsonl", rows)
+    _write_jsonl(
+        tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl",
+        [
+            {
+                "review_id": f"failed_{index}",
+                "role_id": "outcome_reviewer",
+                "source_ref": "training_3",
+                "accepted": False,
+                "problems": ["schema mismatch"],
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+            for index in range(3)
+        ],
+    )
+    monkeypatch.setattr("scripts.strategy_lab.agent_role_review_cycle._make_provider", lambda args: _Provider())
+    args = type("Args", (), {
+        "private_root": tmp_path, "provider": "fake", "max_outcomes": 1,
+        "max_validator": 0, "max_sources": 0, "sleep_seconds": 0,
+    })()
+    summary = run_cycle(args)
+    assert summary["accepted"] == 1
+    written = [
+        json.loads(line) for line in
+        (tmp_path / "state" / "llm_advice" / "outcome_reviews.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert written[-1]["source_ref"] == "training_2"
 def test_agent_role_review_cycle_does_not_load_dotenv():
     source_path = (
         Path(__file__).resolve().parents[1]
@@ -217,6 +266,44 @@ def test_agent_role_review_cycle_does_not_load_dotenv():
 
     assert "dotenv" not in imported
     assert "load_dotenv" not in called
+
+
+def test_agent_role_cycle_reviews_completed_role_result_once(monkeypatch, tmp_path):
+    result = {
+        "schema": "SystemAnalystResultInput.v1",
+        "result_id": "role_result::env_1::farm",
+        "environment_id": "env_1",
+        "feedback_id": "feedback_1",
+        "recipient": "farm",
+        "result": {"status": "completed", "task_type": "run_sweep"},
+        "task_spec": {"generation": 0, "paper_only": True},
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    _write_jsonl(
+        tmp_path / "state" / "derived" / "system_analyst_result_inbox.jsonl",
+        [result],
+    )
+    monkeypatch.setattr("scripts.strategy_lab.agent_role_review_cycle._make_provider", lambda args: _Provider())
+    args = type("Args", (), {
+        "private_root": tmp_path, "provider": "fake", "max_outcomes": 0,
+        "max_validator": 0, "max_sources": 0, "max_analyst": 1,
+        "sleep_seconds": 0,
+    })()
+
+    first = run_cycle(args)
+    second = run_cycle(args)
+
+    assert first["inputs"]["analyst_results"] == 1
+    assert first["accepted"] == 1
+    assert second["inputs"]["analyst_results"] == 0
+    drafts = [
+        json.loads(line)
+        for line in (tmp_path / "state" / "llm_advice" / "system_analyst_drafts.jsonl")
+        .read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert drafts[-1]["source_ref"] == result["result_id"]
 
 
 def test_local_outcome_review_uses_compact_contract(tmp_path):
