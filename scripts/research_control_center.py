@@ -343,6 +343,67 @@ def _process_started_at(pid: int) -> float | None:
         ctypes.windll.kernel32.CloseHandle(handle)
 
 
+def _process_executable(pid: int) -> Path | None:
+    """Return an executable path without reading process arguments."""
+    if os.name != "nt" or pid <= 0:
+        return None
+    process_query_limited_information = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        process_query_limited_information, False, int(pid)
+    )
+    if not handle:
+        return None
+    try:
+        buffer = ctypes.create_unicode_buffer(32_768)
+        size = ctypes.wintypes.DWORD(len(buffer))
+        if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+            handle, 0, buffer, ctypes.byref(size)
+        ):
+            return None
+        return Path(buffer.value)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _listening_pid(port: int) -> int | None:
+    """Return the Windows PID listening on a known local TCP port."""
+    if os.name != "nt" or port <= 0:
+        return None
+    try:
+        completed = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[0].upper() != "TCP":
+            continue
+        local, state, raw_pid = fields[1], fields[3].upper(), fields[4]
+        if state != "LISTENING" or not local.rsplit(":", 1)[-1].isdigit():
+            continue
+        if int(local.rsplit(":", 1)[-1]) != port or not raw_pid.isdigit():
+            continue
+        pid = int(raw_pid)
+        return pid if pid > 0 else None
+    return None
+
+
+def _same_live_process(pid: int, started_at: float | int | None) -> bool:
+    expected = float(started_at or 0.0)
+    actual = _process_started_at(pid)
+    return bool(actual is not None and expected > 0 and abs(actual - expected) <= 5.0)
+
+
 def _load_external_contours(path: Path) -> dict[str, dict]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -548,6 +609,10 @@ class ControlCenter(tk.Tk):
             self.status_vars[key].set("останавливается…")
             threading.Thread(target=item.stop, daemon=True).start()
             return
+        external = self._external_descriptor(key)
+        if external:
+            self._request_external_stop(key, external)
+            return
         if item.spec.owner_group:
             conflict = next(
                 (
@@ -607,11 +672,12 @@ class ControlCenter(tk.Tk):
             for key in ("telegram_bot", "paper_cards", "farm", "scanner", "public_news", "ollama")
             if self.contours[key].running
         ]
-        if not owned:
+        external = self._external_profile_contours()
+        if not owned and not external:
             return
         if not messagebox.askyesno(
             "Остановка рабочего комплекса",
-            "Запросить штатную остановку всех работающих контуров?",
+            "Остановить все работающие контуры, включая обнаруженные внешние процессы?",
         ):
             return
 
@@ -621,6 +687,8 @@ class ControlCenter(tk.Tk):
                 worker.start()
             for worker in workers:
                 worker.join()
+            for key, descriptor in external:
+                self._stop_external(key, descriptor)
 
         threading.Thread(target=stop_owned, daemon=True).start()
 
@@ -651,10 +719,18 @@ class ControlCenter(tk.Tk):
                 self.buttons[key].configure(text="Останавливается…", state="disabled")
                 self.status_vars[key].set("штатная остановка…")
                 continue
-            external = not item.running and self._external_running(key)
+            external = None if item.running else self._external_descriptor(key)
             if external:
-                self.buttons[key].configure(text="Работает вне центра", state="disabled")
-                self.status_vars[key].set("работает вне центра")
+                pid = external.get("pid")
+                if pid and external.get("stoppable"):
+                    self.buttons[key].configure(text=f"Остановить внешний PID {pid}", state="normal")
+                    self.status_vars[key].set(f"работает вне центра · PID {pid}")
+                elif pid:
+                    self.buttons[key].configure(text=f"Внешний PID {pid}: владелец не подтверждён", state="disabled")
+                    self.status_vars[key].set("порт занят неизвестным процессом; автоматическая остановка запрещена")
+                else:
+                    self.buttons[key].configure(text="Внешний процесс: PID не найден", state="disabled")
+                    self.status_vars[key].set("порт занят внешним процессом; безопасная остановка недоступна")
             else:
                 self.buttons[key].configure(
                     text="Выключить" if item.running else "Включить",
@@ -716,30 +792,100 @@ class ControlCenter(tk.Tk):
             return False
 
     def _external_running(self, key: str) -> bool:
-        if key == "ollama":
-            return self._port_open(11434)
-        if key == "dashboard":
-            return self._port_open(8765)
+        return self._external_descriptor(key) is not None
+
+    def _external_descriptor(self, key: str) -> dict[str, object] | None:
+        """Return verified metadata for a contour owned by another center."""
         related = ("farm", "paper_cards") if key in {"farm", "paper_cards"} else (key,)
         for candidate in related:
             external_contours = getattr(self, "external_contours", {})
             row = external_contours.get(candidate)
             if not row:
                 continue
-            actual = _process_started_at(int(row.get("pid") or 0))
-            if actual is not None and abs(actual - float(row.get("started_at") or 0.0)) <= 5.0:
-                return True
+            pid = int(row.get("pid") or 0)
+            if _same_live_process(pid, row.get("started_at")):
+                return {
+                    "pid": pid,
+                    "started_at": float(row["started_at"]),
+                    "source": "heartbeat",
+                    "stoppable": True,
+                }
             external_contours.pop(candidate, None)
-        return False
-
-    def _external_descriptor(self, key: str) -> dict[str, object] | None:
-        """Return heartbeat-safe metadata for a contour owned elsewhere."""
-        recovered = self.external_contours.get(key)
-        if recovered and self._external_running(key):
-            return recovered
-        if key in {"ollama", "dashboard"} and self._external_running(key):
-            return {"pid": None, "started_at": None}
+        port = {"ollama": 11434, "dashboard": 8765}.get(key)
+        if port and self._port_open(port):
+            pid = _listening_pid(port)
+            started_at = _process_started_at(pid or 0)
+            executable = _process_executable(pid or 0)
+            expected_ollama = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+            stoppable = bool(
+                key == "ollama"
+                and executable
+                and os.path.normcase(str(executable)) == os.path.normcase(str(expected_ollama))
+            )
+            return {
+                "pid": pid,
+                "started_at": started_at,
+                "source": "port",
+                "stoppable": stoppable,
+            }
         return None
+
+    def _external_profile_contours(self) -> list[tuple[str, dict[str, object]]]:
+        rows: list[tuple[str, dict[str, object]]] = []
+        seen: set[int] = set()
+        for key in ("telegram_bot", "paper_cards", "farm", "scanner", "public_news", "ollama"):
+            if self.contours[key].running:
+                continue
+            descriptor = self._external_descriptor(key)
+            pid = int((descriptor or {}).get("pid") or 0)
+            if descriptor and descriptor.get("stoppable") and pid > 0 and pid not in seen:
+                rows.append((key, descriptor))
+                seen.add(pid)
+        return rows
+
+    def _request_external_stop(self, key: str, descriptor: dict[str, object]) -> None:
+        pid = int(descriptor.get("pid") or 0)
+        started_at = descriptor.get("started_at")
+        if not descriptor.get("stoppable") or pid <= 0 or not _same_live_process(pid, started_at):
+            messagebox.showwarning(
+                "Внешний процесс",
+                "PID внешнего процесса не подтверждён. Центр не будет останавливать неизвестный процесс.",
+            )
+            return
+        if not messagebox.askyesno(
+            "Остановка внешнего процесса",
+            f"Остановить «{self.contours[key].spec.title}» · PID {pid}?",
+        ):
+            return
+        self.buttons[key].configure(text="Останавливается…", state="disabled")
+        threading.Thread(target=self._stop_external, args=(key, descriptor), daemon=True).start()
+
+    def _stop_external(self, key: str, descriptor: dict[str, object]) -> None:
+        pid = int(descriptor.get("pid") or 0)
+        started_at = descriptor.get("started_at")
+        if not descriptor.get("stoppable") or pid <= 0 or not _same_live_process(pid, started_at):
+            self.events.put((key, "state", "внешний процесс уже завершён или PID изменился"))
+            return
+        spec = self.contours[key].spec
+        if spec.graceful_stop:
+            spec.graceful_stop()
+            deadline = time.monotonic() + spec.graceful_seconds
+            while _same_live_process(pid, started_at) and time.monotonic() < deadline:
+                time.sleep(0.2)
+        if _same_live_process(pid, started_at):
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        if not _same_live_process(pid, started_at):
+            self.external_contours.pop(key, None)
+            self.events.put((key, "state", f"внешний PID {pid} остановлен"))
+        else:
+            self.events.put((key, "state", f"не удалось остановить внешний PID {pid}"))
 
     def _render_log(self) -> None:
         self.log.configure(state="normal")
@@ -967,12 +1113,13 @@ class ControlCenter(tk.Tk):
         if self._closing:
             return
         running = [item for item in self.contours.values() if item.running]
-        if running and not messagebox.askyesno(
+        external = self._external_profile_contours()
+        if (running or external) and not messagebox.askyesno(
             "Закрыть центр",
-            "Есть работающие контуры. Запросить их штатную остановку и закрыть окно?",
+            "Есть работающие контуры. Остановить их, включая подтверждённые внешние процессы, и закрыть окно?",
         ):
             return
-        if not running:
+        if not running and not external:
             self.instance.close()
             self.destroy()
             return
@@ -985,6 +1132,8 @@ class ControlCenter(tk.Tk):
                 worker.start()
             for worker in workers:
                 worker.join()
+            for key, descriptor in external:
+                self._stop_external(key, descriptor)
             self.events.put(("__app__", "close", ""))
 
         threading.Thread(target=stop_all, daemon=True).start()
