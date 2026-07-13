@@ -68,8 +68,10 @@ def test_ollama_is_local_and_gpu_environment_is_explicit():
     assert MODULE.GPU_MASK_ENV_NAMES == ("CUDA_VISIBLE_DEVICES", "GGML_VK_VISIBLE_DEVICES")
 
 
-def test_runtime_assets_stay_outside_task_worktree():
-    assert MODULE.RUNTIME_ROOT != ROOT
+def test_canonical_code_root_and_private_runtime_state_are_separate():
+    assert MODULE.RUNTIME_ROOT == Path.home() / "trading-bot-v2"
+    assert MODULE.PRIVATE_ROOT != ROOT
+    assert MODULE.STATE_DIR.is_relative_to(MODULE.PRIVATE_ROOT)
 
 
 def test_only_known_local_ports_are_probed():
