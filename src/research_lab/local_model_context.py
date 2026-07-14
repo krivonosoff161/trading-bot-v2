@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -50,25 +51,38 @@ def _tokens(text: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[A-Za-zА-Яа-я0-9_]{4,}", text)}
 
 
-def build_local_model_context(role_id: str, query: str = "") -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def _public_corpus() -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str, frozenset[str]], ...],
+]:
+    """Read and split immutable public RAG documents once per process."""
     root = Path(__file__).resolve().parents[2]
-    wanted = _tokens(f"{role_id} {query}")
-    candidates: list[tuple[int, str, str]] = []
-    documents: list[dict[str, str]] = []
+    documents: list[tuple[str, str]] = []
+    corpus_chunks: list[tuple[str, str, frozenset[str]]] = []
     for relative in PUBLIC_RAG_PATHS:
         path = root / relative
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
         document_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        documents.append({"path": relative, "sha256": document_hash})
+        documents.append((relative, document_hash))
         for index, paragraph in enumerate(re.split(r"\n\s*\n", text)):
             compact = " ".join(paragraph.split())[:MAX_CHARS_PER_CHUNK]
             if not compact:
                 continue
-            score = len(wanted & _tokens(compact))
             chunk_id = f"rag_{_sha256({'path': relative, 'index': index, 'text': compact})}"
-            candidates.append((score, chunk_id, compact))
+            corpus_chunks.append((chunk_id, compact, frozenset(_tokens(compact))))
+    return tuple(sorted(documents)), tuple(corpus_chunks)
+
+
+def build_local_model_context(role_id: str, query: str = "") -> dict[str, Any]:
+    wanted = _tokens(f"{role_id} {query}")
+    documents, corpus_chunks = _public_corpus()
+    candidates = [
+        (len(wanted & chunk_tokens), chunk_id, text)
+        for chunk_id, text, chunk_tokens in corpus_chunks
+    ]
     candidates.sort(key=lambda row: (-row[0], row[1]))
     chunks = [
         {"chunk_id": chunk_id, "text": text}
@@ -76,7 +90,10 @@ def build_local_model_context(role_id: str, query: str = "") -> dict[str, Any]:
     ]
     manifest = {
         "rag_version": RAG_VERSION,
-        "documents": sorted(documents, key=lambda row: row["path"]),
+        "documents": [
+            {"path": path, "sha256": document_hash}
+            for path, document_hash in documents
+        ],
         "chunk_ids": [row["chunk_id"] for row in chunks],
     }
     return {
