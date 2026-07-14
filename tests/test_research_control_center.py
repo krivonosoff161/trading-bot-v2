@@ -186,6 +186,21 @@ def test_learning_snapshot_explains_closed_loop_in_plain_language(monkeypatch, t
     assert "поколение 1/2" in text
 
 
+def test_optional_sqlite_sidecar_size_tolerates_disappearance(monkeypatch, tmp_path):
+    sidecar = tmp_path / "candles.sqlite3-shm"
+    sidecar.write_bytes(b"transient")
+    original_stat = Path.stat
+
+    def disappearing_stat(path, *args, **kwargs):
+        if path == sidecar:
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", disappearing_stat)
+
+    assert MODULE.ControlCenter._optional_file_size(sidecar) == 0
+
+
 def test_scanner_delivery_environment_gate(monkeypatch):
     from src.scout.delivery_policy import scanner_telegram_enabled
 
