@@ -29,14 +29,14 @@ def test_local_first_provider_reads_private_cache_before_fallback(tmp_path):
         rows,
         symbol="BTC_USDT_SWAP",
         start_ts=0,
-        end_ts=29 * 60_000,
+        end_ts=29 * hour,
         timeframe="1h",
         data_dir=market_data_dir(tmp_path, "1h"),
     )
     fallback = FallbackProvider()
     provider = LocalFirstMarketDataProvider(tmp_path, fallback, min_rows=20)
 
-    out = provider.fetch_ohlcv("BTC-USDT-SWAP", "1h", 5 * 60_000, 25 * 60_000)
+    out = provider.fetch_ohlcv("BTC-USDT-SWAP", "1h", 5 * hour, 25 * hour)
 
     assert fallback.calls == 0
     assert len(out) == 21

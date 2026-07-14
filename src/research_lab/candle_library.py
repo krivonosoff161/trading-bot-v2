@@ -44,7 +44,12 @@ def load_canonical_candles(
     if path is None:
         return CandleSlice([], "missing", "")
     rows = load_candles(path)
-    return CandleSlice(rows, "json", path.name)
+    root = Path(private_root).resolve()
+    try:
+        label = path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        label = path.name
+    return CandleSlice(rows, "json", label)
 
 
 def sync_json_to_store(

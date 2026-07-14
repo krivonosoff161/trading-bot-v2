@@ -59,8 +59,11 @@ def test_e2e_smoke_verifies_private_artifact_chain(tmp_path, monkeypatch):
     lineage.mkdir(parents=True)
     derived.mkdir(parents=True)
     advice_dir.mkdir(parents=True)
-    for name in ("scanner_events", "data_packets", "feature_packets", "cycle_links"):
+    for name in ("scanner_events", "data_packets", "cycle_links"):
         (lineage / f"{name}.jsonl").write_text(json.dumps({"schema": name}) + "\n", encoding="utf-8")
+    (lineage / "decision_feature_packets.jsonl").write_text(
+        json.dumps({"schema": "DecisionFeaturePacket.v1"}) + "\n", encoding="utf-8",
+    )
     (advice_dir / "calculator_advice.jsonl").write_text(
         json.dumps({"schema": "CalculatorAdvice.v1", "accepted": True}) + "\n",
         encoding="utf-8",

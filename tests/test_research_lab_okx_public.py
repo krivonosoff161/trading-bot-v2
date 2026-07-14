@@ -193,7 +193,9 @@ def test_supports_5m_15m_1h_4h_1d():
 
 def test_rejects_absurd_window():
     with pytest.raises(ValueError):
-        _provider(_make_http_get([])).fetch_ohlcv("BTC_USDT_SWAP", "1m", 0, 10_000 * MINUTE)
+        _provider(_make_http_get([]), max_pages=3).fetch_ohlcv(
+            "BTC_USDT_SWAP", "1m", 0, 901 * MINUTE,
+        )
 
 
 def test_get_provider_returns_okx_public():

@@ -142,8 +142,9 @@ def test_evaluate_gpu_available_accelerates_and_matches_cpu(monkeypatch, syn_glo
 
     _patch_gpu(monkeypatch, available=False)
     cpu_results = evaluate_spec(_spec(syn_glob, "cpu"), {})
-    # same run_ids, same metrics -> the GPU path did not change the numbers
-    assert [r.run_id for r in gpu_results] == [r.run_id for r in cpu_results]
+    # Different experiment ids intentionally produce different strong run ids;
+    # numerical evidence must still match across compute backends.
+    assert [r.run_id for r in gpu_results] != [r.run_id for r in cpu_results]
     for g, c in zip(gpu_results, cpu_results):
         assert g.metrics["n_trades"] == c.metrics["n_trades"]
         assert g.metrics["total_net_pct"] == c.metrics["total_net_pct"]
@@ -280,7 +281,7 @@ def test_gpu_simulation_backend_used_and_matches_cpu(monkeypatch, syn_glob):
 
     _patch_gpu(monkeypatch, available=False)
     cpu = evaluate_spec(_spec(syn_glob, "cpu"), {})
-    assert [r.run_id for r in gpu] == [r.run_id for r in cpu]
+    assert [r.run_id for r in gpu] != [r.run_id for r in cpu]
     for g, c in zip(gpu, cpu):
         assert g.metrics["n_trades"] == c.metrics["n_trades"]
         assert g.metrics["total_net_pct"] == c.metrics["total_net_pct"]

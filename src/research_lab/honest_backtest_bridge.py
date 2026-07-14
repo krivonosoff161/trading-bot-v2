@@ -575,6 +575,7 @@ def _check_overfit(
         "sufficient": mtrl["sufficient"],
         "search_bias_metrics_mode": "shadow_only",
     }
+    search_evidence_valid = True
     trial_sharpes = candidate.metrics.get("trial_sharpes")
     if isinstance(trial_sharpes, list) and len(trial_sharpes) >= 2:
         try:
@@ -584,6 +585,7 @@ def _check_overfit(
         except ValueError as exc:
             details["dsr_error"] = str(exc)
             details["dsr_shadow_pass"] = False
+            search_evidence_valid = False
     trial_returns = candidate.metrics.get("trial_returns")
     if isinstance(trial_returns, list) and trial_returns:
         try:
@@ -593,6 +595,8 @@ def _check_overfit(
         except ValueError as exc:
             details["pbo_error"] = str(exc)
             details["pbo_shadow_pass"] = False
+            search_evidence_valid = False
+    passed = passed and search_evidence_valid
     return {
         "check_name": "overfit_psr",
         "passed": passed,

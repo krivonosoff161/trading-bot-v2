@@ -174,13 +174,18 @@ def materialize_role_environment(
         recommendation = _recommendation(feedback, recipient)
         if recommendation is None or recommendation.get("action") not in allowed:
             continue
+        task_spec = dict(recommendation.get("task_spec") or {})
+        task_spec.setdefault("subject", {"subject_ref": str(feedback.get("subject_ref") or "")})
+        task_spec.setdefault("source_ref", str(feedback["feedback_id"]))
+        task_spec.setdefault("generation", 0)
+        task_spec.setdefault("adaptive_trial_id", adaptive_trial_id(task_spec))
         basis = {
             "feedback_id": str(feedback["feedback_id"]),
             "recipient": recipient,
             "parent_environment_id": parent_environment_id,
             "action": str(recommendation["action"]),
             "evidence_refs": list(recommendation.get("evidence_refs") or []),
-            "task_spec": dict(recommendation.get("task_spec") or {}),
+            "task_spec": task_spec,
         }
         trial_id = str(basis["task_spec"].get("adaptive_trial_id") or "")
         expected_trial_id = adaptive_trial_id(basis["task_spec"])
