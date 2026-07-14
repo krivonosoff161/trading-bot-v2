@@ -171,12 +171,13 @@ def test_no_api_key_in_request_url():
 
 def test_pagination_is_bounded_by_max_pages():
     calls = []
-    # 1000 contiguous candles; window asks for all of them, but max_pages=3 caps it.
+    # Never silently return a truncated series when the configured pager cannot
+    # cover the requested window.
     rows = [_okx_row(START + i * MINUTE) for i in range(1000)]
     p = _provider(_make_http_get(list(reversed(rows)), calls=calls), max_pages=3)
-    out = p.fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + 999 * MINUTE)
-    assert len(calls) <= 3  # no infinite pagination
-    assert len(out) <= 900  # <= max_pages * PAGE_LIMIT (300)
+    with pytest.raises(ValueError, match="configured fetch capacity"):
+        p.fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + 999 * MINUTE)
+    assert calls == []
 
 
 def test_rejects_unsupported_timeframe():
