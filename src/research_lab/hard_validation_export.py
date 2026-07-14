@@ -13,10 +13,12 @@ import datetime as dt
 import hashlib
 import json
 import sqlite3
+import statistics
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.candidate_registry import load_entries
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.data_inventory import normalize_timeframe, timeframe_from_filename
 from src.research_lab.experiment import (
@@ -122,7 +124,7 @@ def validation_id_for_unique_candidate(row: dict[str, Any]) -> str:
             str(row.get(k) or "")
             for k in ("symbol", "timeframe", "family", "params_hash", "data_fingerprint")
         )
-    digest = hashlib.sha1(uc_key.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(uc_key.encode("utf-8")).hexdigest()
     return f"fv_{digest}"
 
 
@@ -353,7 +355,19 @@ def _load_experiment_metrics(
                 else data.get("slippage_bps", entry.get("slippage_bps"))
             ),
             "_timeframe": str(data.get("timeframe") or entry.get("timeframe") or ""),
+            "search_trial_evidence_id": str(data.get("search_trial_evidence_id") or ""),
+            "multiple_testing_family_hash": str(
+                data.get("multiple_testing_family_hash") or ""
+            ),
         }
+        evidence_file = run_dir / "search_trial_evidence.json"
+        if evidence_file.exists():
+            try:
+                trial_evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                trial_evidence = {}
+            search_space = trial_evidence.get("search_space") or {}
+            context["n_variants_evaluated"] = int(search_space.get("evaluated") or 0)
         results = data.get("results") or []
         candidate_id = str(entry.get("candidate_id") or "")
         source_candidate_id = str(entry.get("source_candidate_id") or "")
@@ -374,6 +388,14 @@ def _load_experiment_metrics(
             if exact_scope and (exact_id or exact_hash):
                 out = dict(r.get("metrics") or {})
                 out.update(context)
+                trial_returns = _comparable_trial_returns(
+                    results, symbol=row_symbol, family=row_family,
+                )
+                if len(trial_returns) >= 2:
+                    out["trial_returns"] = trial_returns
+                    out["trial_sharpes"] = [
+                        _simple_sharpe(values) for values in trial_returns
+                    ]
                 out["_params"] = _params_from_result(r)
                 trades = list(r.get("_trades") or r.get("trades") or [])
                 if not trades and int(out.get("n_trades") or 0) > 0:
@@ -397,6 +419,31 @@ def _load_experiment_metrics(
     return dict(entry.get("metrics_summary") or {})
 
 
+def _comparable_trial_returns(
+    results: list[dict[str, Any]], *, symbol: str, family: str,
+) -> list[list[float]]:
+    comparable: list[list[float]] = []
+    for row in results:
+        row_symbol = str(row.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        if row_symbol != symbol or str(row.get("family") or "") != family:
+            continue
+        values = [
+            float(trade["net_pct"])
+            for trade in (row.get("trades") or [])
+            if trade.get("net_pct") is not None
+        ]
+        if len(values) >= 3:
+            comparable.append(values)
+    return comparable
+
+
+def _simple_sharpe(returns: list[float]) -> float:
+    if len(returns) < 2:
+        return 0.0
+    deviation = statistics.stdev(returns)
+    return statistics.mean(returns) / deviation if deviation > 0 else 0.0
+
+
 def _params_from_result(row: dict[str, Any]) -> dict[str, Any]:
     return dict(row.get("params") or {})
 
@@ -415,18 +462,24 @@ def _rebuild_trades_from_result(
     old candidates to NEEDS_MORE_DATA forever.
     """
     label = str(metrics.get("data_file_label") or "")
-    if not label:
-        return []
     tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
-    candidates = []
-    if tf:
-        candidates.append(Path(private_root) / "market_data" / tf / label)
-    candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
-    path = next((p for p in candidates if p.exists()), None)
-    if path is None:
+    symbol = str(row.get("symbol") or context.get("_symbol") or "")
+    candles: list[dict[str, Any]] = []
+    if tf and symbol:
+        candles = load_canonical_candles(private_root, symbol, tf).rows
+    if not candles and not label:
         return []
+    candidates = []
+    if not candles and tf:
+        candidates.append(Path(private_root) / "market_data" / tf / label)
+    if not candles:
+        candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
+        path = next((p for p in candidates if p.exists()), None)
+        if path is None:
+            return []
     try:
-        candles = load_candles(path)
+        if not candles:
+            candles = load_candles(path)
         family = str(row.get("family") or "")
         params = dict(row.get("params") or {})
         signals = generate_signals(candles, family, params)

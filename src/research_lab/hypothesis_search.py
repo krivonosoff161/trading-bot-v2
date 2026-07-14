@@ -19,7 +19,7 @@ from statistics import median
 from typing import Any
 
 from src.research_lab.exit_phase2 import _exit_modes, simulate_exit_mode
-from src.research_lab.experiment import generate_signals, load_candles, simulate_trades
+from src.research_lab.experiment import generate_signals, simulate_trades
 from src.research_lab.mover_validation import _mover_symbols, ensure_candles
 
 FEES_BPS = 7.0
@@ -98,10 +98,10 @@ def run(private_root: Path, *, limit_symbols: int = 16, timeframes: tuple[str, .
     acc: dict[str, dict[str, Any]] = {}
     for sym in symbols:
         for tf in timeframes:
-            path = ensure_candles(private_root, sym, tf, provider=provider)
-            if not path:
+            if not ensure_candles(private_root, sym, tf, provider=provider):
                 continue
-            candles = load_candles(path)
+            from src.research_lab.candle_library import load_canonical_candles
+            candles = load_canonical_candles(private_root, sym, tf).rows
             if len(candles) < 80:
                 continue
             for combo in grid:

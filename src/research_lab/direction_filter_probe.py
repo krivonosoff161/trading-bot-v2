@@ -23,7 +23,7 @@ from statistics import mean
 from typing import Any
 
 from src.research_lab.exit_phase2 import _exit_modes, simulate_exit_mode
-from src.research_lab.experiment import generate_signals, load_candles
+from src.research_lab.experiment import generate_signals
 from src.research_lab.mover_validation import _mover_symbols, ensure_candles
 from src.research_lab.strategies._helpers import sma, vols
 
@@ -63,10 +63,10 @@ def collect_entries(private_root: Path, *, limit_symbols: int = 30, timeframe: s
     early_tp = dict(_exit_modes(PARAMS))["early_tp"]
     rows: list[dict[str, Any]] = []
     for sym in _mover_symbols(private_root, limit=limit_symbols):
-        path = ensure_candles(private_root, sym, timeframe, provider=provider)
-        if not path:
+        if not ensure_candles(private_root, sym, timeframe, provider=provider):
             continue
-        candles = load_candles(path)
+        from src.research_lab.candle_library import load_canonical_candles
+        candles = load_canonical_candles(private_root, sym, timeframe).rows
         if len(candles) < MA_LONG + 30:
             continue
         closes = [float(c["close"]) for c in candles]

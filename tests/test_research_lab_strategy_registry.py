@@ -94,5 +94,5 @@ def test_registry_summary_is_public_safe():
         assert set(row) == {
             "strategy_id", "display_name", "family", "description",
             "compatible_asset_classes", "compatible_timeframes",
-            "parameter_defaults", "risk_notes",
+            "parameter_defaults", "risk_notes", "required_data", "history_formulas",
         }

@@ -4,7 +4,12 @@ from types import SimpleNamespace
 from src.research_lab.calculator_advisor import normalize_advice_payload, request_calculator_advice, validate_advice_payload
 from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals, schedule_advisor_sweep_tasks
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
-from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
+from src.research_lab.feature_packet import (
+    build_feature_packet,
+    build_outcome_feature_packet,
+    write_feature_packet,
+    write_outcome_feature_packet,
+)
 from src.research_lab.human_feedback import create_feedback, feedback_summary, record_feedback
 from src.research_lab.lineage_backfill import build_lineage_backfill
 from src.research_lab.lineage_contract import scanner_event_from_intake, write_cycle_link, write_cycle_links
@@ -87,7 +92,7 @@ def test_feature_packet_is_deterministic_and_contains_geometry(tmp_path):
     assert path.exists()
 
 
-def test_validation_packet_may_include_future_window_and_outcome_features():
+def test_validation_packet_physically_separates_decision_and_outcome_features(tmp_path):
     data_packet = build_market_data_packet(
         scanner_event_id="se1",
         symbol="BTC_USDT_SWAP",
@@ -104,8 +109,20 @@ def test_validation_packet_may_include_future_window_and_outcome_features():
         take_profit_plan=[{"label": "tp1", "price": 105.0}],
     )
 
+    outcome_packet = build_outcome_feature_packet(
+        data_packet, feature_packet, side="long",
+    )
+
     assert data_packet.future_window
-    assert feature_packet.features["mfe_pct"] >= 0
+    assert feature_packet.schema == "DecisionFeaturePacket.v1"
+    assert feature_packet.no_lookahead is True
+    assert "mfe_pct" not in feature_packet.features
+    assert outcome_packet is not None
+    assert outcome_packet.schema == "OutcomeFeaturePacket.v1"
+    assert outcome_packet.outcome_features["mfe_pct"] >= 0
+    assert outcome_packet.label_quality["decision_role_eligible"] is False
+    assert write_feature_packet(tmp_path, feature_packet).parent.name == "decision"
+    assert write_outcome_feature_packet(tmp_path, outcome_packet).parent.name == "outcome"
 
 
 def test_calculator_advice_rejects_forbidden_trade_fields():
@@ -314,9 +331,9 @@ def test_advisor_sweep_tasks_bind_to_active_paper_signal(tmp_path):
     compile_sweep_proposals(tmp_path, advice)
     lineage = tmp_path / "state" / "lineage"
     lineage.mkdir(parents=True)
-    (lineage / "feature_packets.jsonl").write_text(
+    (lineage / "decision_feature_packets.jsonl").write_text(
         json.dumps({
-            "schema": "FeaturePacketIndex.v1",
+            "schema": "DecisionFeaturePacketIndex.v1",
             "feature_packet_id": "fp4",
             "symbol": "BTC_USDT_SWAP",
             "instrument": "BTC-USDT-SWAP",
@@ -371,9 +388,9 @@ def test_advisor_sweep_tasks_map_product_family_to_executable_family(tmp_path):
     compile_sweep_proposals(tmp_path, advice)
     lineage = tmp_path / "state" / "lineage"
     lineage.mkdir(parents=True)
-    (lineage / "feature_packets.jsonl").write_text(
+    (lineage / "decision_feature_packets.jsonl").write_text(
         json.dumps({
-            "schema": "FeaturePacketIndex.v1",
+            "schema": "DecisionFeaturePacketIndex.v1",
             "feature_packet_id": "fp5",
             "symbol": "HMSTR_USDT_SWAP",
             "instrument": "HMSTR-USDT-SWAP",

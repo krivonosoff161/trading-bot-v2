@@ -18,6 +18,10 @@ from src.research_lab.candidate_registry import build_entry, registry_path, upse
 from src.research_lab.experiment import ExperimentSpec, RunResult
 from src.research_lab.paths import resolve_private_root
 from src.research_lab.reducer import reduce_results
+from src.research_lab.search_trial_evidence import (
+    build_search_trial_evidence,
+    write_search_trial_evidence,
+)
 
 VALIDATION_ORDER = ["FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE", "REJECT"]
 REGISTRY_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
@@ -37,6 +41,7 @@ def write_run_outputs(
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     run_dir = out_root / "experiments" / "completed" / f"{stamp}_{spec.experiment_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
+    trial_evidence = build_search_trial_evidence(spec, results, runtime_meta)
     payload = {
         "schema": "strategy_lab_results.v1",
         "experiment_id": spec.experiment_id,
@@ -49,9 +54,12 @@ def write_run_outputs(
         "plan_meta": dict(spec.plan_meta or {}),
         "fees_bps": spec.fees_bps,
         "slippage_bps": spec.slippage_bps,
+        "search_trial_evidence_id": trial_evidence["search_trial_evidence_id"],
+        "multiple_testing_family_hash": trial_evidence["multiple_testing_family_hash"],
         "results": [result_dict(r, include_trades=True) for r in results],
     }
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_search_trial_evidence(run_dir, trial_evidence)
     _write_candidates_csv(run_dir / "candidates.csv", results)
     _write_graph_edges(run_dir / "graph_edges.csv", results)
     reduce_report = reduce_results(results)

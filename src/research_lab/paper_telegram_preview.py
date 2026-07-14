@@ -19,8 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.experiment import choose_symbol_file, load_candles
-from src.research_lab.paths import market_data_glob
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.providers.okx_public import MarketDataError, OkxPublicMarketDataProvider, _httpx_get_direct
 from src.strategy.chart_renderer import generate_chart_png
 
@@ -384,13 +383,12 @@ def _prepared_candles_chart_path(
     timeframe = str(record.get("timeframe") or "").strip().lower()
     if not symbol or not timeframe:
         return None
-    path = choose_symbol_file(market_data_glob(private_root, timeframe), symbol, timeframe=timeframe)
-    prepared_candles: list[dict[str, Any]] = []
-    if path is not None:
-        try:
-            prepared_candles = load_candles(path)
-        except Exception:  # noqa: BLE001 - card rendering must not break preview generation
-            prepared_candles = []
+    try:
+        prepared_candles = load_canonical_candles(
+            private_root, symbol, timeframe,
+        ).rows
+    except Exception:  # noqa: BLE001 - card rendering must not break preview generation
+        prepared_candles = []
     record_ms = _record_epoch_ms(record)
     candles = _candles_near_record(prepared_candles, record_ms, timeframe) if len(prepared_candles) >= 30 else []
     if len(candles) < 30:

@@ -49,7 +49,7 @@ def prompt_contracts() -> list[PromptContract]:
             version=CALCULATOR_PROMPT_VERSION,
             prompt_hash=prompt_hash(CALCULATOR_SYSTEM_PROMPT),
             purpose="Classify a FeaturePacket and suggest bounded sweep dimensions.",
-            input_contract="FeaturePacket.v1 + hard_rules",
+            input_contract="DecisionFeaturePacket.v1 + hard_rules",
             output_contract="CalculatorAdvice.v1 JSON object",
             forbidden=[
                 "entry",

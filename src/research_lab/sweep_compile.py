@@ -56,6 +56,7 @@ def expand_grids_bounded(
     *grids: dict[str, list[Any]], cap: int, seed_material: str,
     baseline: dict[str, Any] | None = None,
     strategy_id: str = "",
+    audit: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Sample a Cartesian grid without materializing the full search space."""
     merged: dict[str, list[Any]] = {}
@@ -83,6 +84,16 @@ def expand_grids_bounded(
     if not valid_indices:
         raise ValueError("parameter grid has no variants satisfying cross-axis dependencies")
     limit = min(len(valid_indices), max(1, int(cap)))
+    if audit is not None:
+        audit.update(
+            {
+                "cartesian_total": int(total),
+                "eligible_total": len(valid_indices),
+                "selected_total": int(limit),
+                "omitted_invalid": int(total - len(valid_indices)),
+                "omitted_by_variant_cap": int(len(valid_indices) - limit),
+            }
+        )
     if len(valid_indices) <= limit:
         indices: list[int] = valid_indices
     else:
@@ -158,12 +169,14 @@ def compile_sweep(
         for key, values in grid.items()
         if values
     }
+    search_space: dict[str, int] = {}
     variants = expand_grids_bounded(
         spec.setup_grid, spec.entry_grid, spec.exit_grid,
         cap=result.effective_max_variants,
         seed_material=f"{spec.sweep_id}|{spec.setup_family}|{spec.timeframe}",
         baseline=baseline,
         strategy_id=spec.setup_family,
+        audit=search_space,
     )
     filters = {
         str(key): [str(value) for value in values]
@@ -189,4 +202,13 @@ def compile_sweep(
         timeframe=spec.timeframe,
         filters=filters,
         backend=spec.backend,
+        plan_meta={
+            "search_space": {
+                **search_space,
+                "symbol_total": len(symbols),
+                "selected_run_total": runs,
+                "execution_cap": int(job_cap),
+                "omitted_by_execution_cap": max(0, runs - int(job_cap)),
+            }
+        },
     )

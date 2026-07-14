@@ -29,9 +29,9 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
 _SUPPORTED = ("15m", "1h", "4h", "1d")
-_DEFAULT_DAYS = {"15m": 14, "1h": 60, "4h": 180, "1d": 1000}
+_DEFAULT_DAYS = {"15m": 30, "1h": 365, "4h": 730, "1d": 3650}
 _TF_SECONDS = {"15m": 15 * 60, "1h": 60 * 60, "4h": 4 * 60 * 60, "1d": 24 * 60 * 60}
-_MAX_BARS_PER_WINDOW = 2_000
+_MAX_BARS_PER_WINDOW = 18_000
 
 
 def _parse_utc(value: str) -> dt.datetime:

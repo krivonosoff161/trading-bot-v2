@@ -242,10 +242,10 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
     compile_sweep_proposals(tmp_path, advice)
     lineage = tmp_path / "state" / "lineage"
     lineage.mkdir(parents=True)
-    (lineage / "feature_packets.jsonl").write_text(
+    (lineage / "decision_feature_packets.jsonl").write_text(
         json.dumps(
             {
-                "schema": "FeaturePacketIndex.v1",
+                "schema": "DecisionFeaturePacketIndex.v1",
                 "feature_packet_id": "fp-advisor",
                 "symbol": "BTC_USDT_SWAP",
                 "instrument": "BTC-USDT-SWAP",

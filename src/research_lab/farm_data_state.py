@@ -12,7 +12,8 @@ import glob as _glob
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.data_fingerprint import fingerprint_for_file, present_enrichment
+from src.research_lab.data_fingerprint import fingerprint_for_file, fingerprint_for_rows, present_enrichment
+from src.research_lab.candle_store import CandleStore
 from src.research_lab.data_inventory import inspect_file
 from src.research_lab.data_readiness_selector import min_rows_for
 from src.research_lab.experiment import choose_symbol_file
@@ -30,6 +31,24 @@ def _best_existing(pattern: str, symbol: str) -> Path | None:
 
 def data_state(private_root: Path, symbol: str, timeframe: str) -> dict[str, Any]:
     """Local readiness facts for one (symbol, timeframe). No fetch."""
+    store = CandleStore(private_root)
+    coverage = store.coverage(symbol, timeframe)
+    if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
+        rows = store.read(symbol, timeframe, coverage.first_ts, coverage.last_ts)
+        enrichment = tuple(
+            field for field in ("funding", "oi", "obi_top5", "spread_bps", "trade_delta_100")
+            if any(row.get(field) is not None for row in rows)
+        )
+        minimum = min_rows_for(timeframe)
+        return {
+            "status": "usable" if len(rows) >= minimum and coverage.gap_count == 0 else "too_short",
+            "rows": len(rows),
+            "gaps": coverage.gap_count,
+            "fingerprint": fingerprint_for_rows(symbol, timeframe, rows),
+            "enrichment": enrichment,
+            "oi_available": oi_slot_path(private_root, symbol) is not None,
+            "source": "sqlite",
+        }
     pattern = market_data_glob(private_root, timeframe)
     oi_available = oi_slot_path(private_root, symbol) is not None
     usable = choose_symbol_file(pattern, symbol, timeframe=timeframe)

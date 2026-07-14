@@ -2,6 +2,7 @@
 
 import json
 
+from src.research_lab.candle_store import CandleStore
 from src.research_lab.data_cache import CacheCheck
 from src.research_lab.data_prepare import (
     prepare,
@@ -85,6 +86,9 @@ def test_apply_fake_provider_writes_canonical_sorted_unique(tmp_path):
     data = json.loads(files[0].read_text(encoding="utf-8"))
     ts = [r["ts"] for r in data]
     assert ts == sorted(set(ts))  # sorted, no duplicates
+    stored = CandleStore(tmp_path).read("BTC_USDT_SWAP", "1m", 60_000, 180_000)
+    assert [row["ts"] for row in stored] == ts
+    assert rep.items[0]["store_rows"] == len(stored)
 
 
 def test_present_requirement_is_skipped(tmp_path):

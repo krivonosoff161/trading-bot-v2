@@ -15,11 +15,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.experiment import choose_symbol_file
-from src.research_lab.paths import market_data_glob
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.universe import Universe
 
-SCHEMA = "okx_instrument_discovery.v1"
+SCHEMA = "okx_instrument_discovery.v2"
 GROUPS = ("crypto_major", "meme_or_high_beta", "tokenized_equity", "commodity", "crypto_alt", "unknown")
 
 _MAJORS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
@@ -60,11 +59,35 @@ def _is_live_usdt_perp(raw: dict[str, Any]) -> bool:
             and str(raw.get("state")).lower() == "live")
 
 
+def _is_usdt_perp(raw: dict[str, Any]) -> bool:
+    return (str(raw.get("instType")) == "SWAP"
+            and str(raw.get("settleCcy")).upper() == "USDT")
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_snapshot(raw_instruments: list[dict[str, Any]], *, generated_at: str, inst_type: str = "SWAP") -> dict[str, Any]:
     """Filter to live USDT perps + classify into bounded groups."""
     instruments: dict[str, dict[str, Any]] = {}
+    catalog: dict[str, dict[str, Any]] = {}
     groups: dict[str, list[str]] = {g: [] for g in GROUPS}
     for raw in raw_instruments:
+        if _is_usdt_perp(raw):
+            inst_id = str(raw.get("instId") or "")
+            symbol = _norm(inst_id)
+            if symbol:
+                catalog[symbol] = {
+                    "inst_id": inst_id,
+                    "inst_type": str(raw.get("instType") or ""),
+                    "state": str(raw.get("state") or ""),
+                    "settle_ccy": str(raw.get("settleCcy") or ""),
+                    "list_time_ms": _as_int(raw.get("listTime")),
+                }
         if not _is_live_usdt_perp(raw):
             continue
         inst_id = str(raw.get("instId") or "")
@@ -72,14 +95,18 @@ def build_snapshot(raw_instruments: list[dict[str, Any]], *, generated_at: str, 
         if not symbol or symbol in instruments:
             continue
         group = classify_symbol(symbol)
-        instruments[symbol] = {"group": group, "inst_id": inst_id,
-                               "state": str(raw.get("state")), "settle_ccy": str(raw.get("settleCcy"))}
+        instruments[symbol] = {
+            "group": group,
+            **catalog[symbol],
+        }
         groups[group].append(symbol)
     return {
         "schema": SCHEMA, "generated_at": generated_at, "inst_type": inst_type,
         "count": len(instruments),
+        "catalog_count": len(catalog),
         "groups": {g: sorted(v) for g, v in groups.items()},
         "instruments": instruments,
+        "catalog": catalog,
     }
 
 
@@ -158,8 +185,8 @@ def discovered_universe(snapshot: dict[str, Any]) -> Universe:
 
 def farm_readiness(symbols: list[str], private_root: Path, timeframe: str) -> dict[str, list[str]]:
     """Split discovered symbols into those with usable candle data and those missing it."""
-    glob = market_data_glob(private_root, timeframe)
     ready, missing = [], []
     for symbol in symbols:
-        (ready if choose_symbol_file(glob, symbol, timeframe=timeframe) else missing).append(symbol)
+        rows = load_canonical_candles(private_root, symbol, timeframe).rows
+        (ready if rows else missing).append(symbol)
     return {"ready": ready, "missing": missing}

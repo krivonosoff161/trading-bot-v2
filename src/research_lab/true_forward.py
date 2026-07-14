@@ -21,13 +21,11 @@ from typing import Any
 
 from src.research_lab.exit_phase2 import _exit_modes, simulate_exit_mode
 from src.research_lab.experiment import (
-    choose_symbol_file,
     generate_signals,
-    load_candles,
     simulate_trades,
 )
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.param_schemas import executable_exit_params
-from src.research_lab.paths import market_data_glob
 from src.research_lab.stop_intent import is_stop_requested
 
 FEES_BPS = 7.0
@@ -100,10 +98,7 @@ def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CAN
 
 
 def _last_bar_ts(private_root: Path, symbol: str, timeframe: str) -> int:
-    path = choose_symbol_file(market_data_glob(private_root, timeframe), symbol, timeframe=timeframe)
-    if not path:
-        return 0
-    candles = load_candles(path)
+    candles = load_canonical_candles(private_root, symbol, timeframe).rows
     return int(candles[-1].get("ts") or 0) if candles else 0
 
 
@@ -163,11 +158,11 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     row = reg.get(uc_key)
     if not row:
         return {"uc_key": uc_key, "skipped": "not_registered"}
-    path = choose_symbol_file(market_data_glob(private_root, row["timeframe"]), row["symbol"],
-                              timeframe=row["timeframe"])
-    if not path:
+    candles = load_canonical_candles(
+        private_root, row["symbol"], row["timeframe"],
+    ).rows
+    if not candles:
         return {"uc_key": uc_key, "skipped": "no_candles"}
-    candles = load_candles(path)
     boundary = int(row.get("last_collected_ts") or row.get("boundary_ts") or 0)
     new_bars = [c for c in candles if int(c.get("ts") or 0) > boundary]
     if not new_bars:

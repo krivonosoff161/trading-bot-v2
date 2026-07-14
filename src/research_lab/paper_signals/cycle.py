@@ -17,12 +17,22 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from src.research_lab.feature_packet import build_feature_packet, write_feature_packet
+from src.research_lab.feature_packet import (
+    build_feature_packet,
+    build_outcome_feature_packet,
+    write_feature_packet,
+    write_outcome_feature_packet,
+)
 from src.research_lab.lineage_contract import scanner_event_from_mover, write_cycle_link, write_scanner_event
 from src.research_lab.market_data_packet import build_market_data_packet, write_market_data_packet
 from src.research_lab.paper_signals import families, lane, pfr_bridge, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.pipeline_policy import add_reason, default_caps, new_stage_counts
+from src.research_lab.research_envelope import (
+    build_decision_envelope,
+    extend_with_outcome,
+    write_research_envelope,
+)
 
 REGEN_TTL_SECONDS = 3600        # do not regenerate the same dedup_key within this window
 FETCH_WINDOW_BARS = 220         # enough for ATR/trend/lifecycle, bounded so OKX paging stays cheap
@@ -217,9 +227,32 @@ def _attach_lineage(
         take_profit_plan=sig.take_profit_plan,
     )
     write_feature_packet(private_root, feature_packet)
+    outcome_packet = build_outcome_feature_packet(
+        data_packet, feature_packet, side=sig.side,
+    )
+    if outcome_packet is not None:
+        write_outcome_feature_packet(private_root, outcome_packet)
+    decision_envelope = build_decision_envelope(
+        event,
+        data_packet,
+        feature_packet,
+        setup_candidate_id=setup_id,
+        sweep_run_id=sweep_run_id,
+        validation_id=validation_id,
+        paper_signal_id=sig.signal_id,
+    )
+    write_research_envelope(private_root, decision_envelope)
+    outcome_envelope = None
+    if outcome_packet is not None:
+        outcome_envelope = extend_with_outcome(decision_envelope, outcome_packet)
+        write_research_envelope(private_root, outcome_envelope)
     sig.scanner_event_id = event.scanner_event_id
     sig.data_packet_id = data_packet.data_packet_id
     sig.feature_packet_id = feature_packet.feature_packet_id
+    sig.research_envelope_id = decision_envelope.research_envelope_id
+    sig.outcome_envelope_id = (
+        outcome_envelope.research_envelope_id if outcome_envelope is not None else ""
+    )
     sig.setup_candidate_id = setup_id
     sig.sweep_run_id = sweep_run_id
     sig.validation_id = validation_id
@@ -229,6 +262,11 @@ def _attach_lineage(
             "scanner_event_id": sig.scanner_event_id,
             "data_packet_id": sig.data_packet_id,
             "feature_packet_id": sig.feature_packet_id,
+            "research_envelope_id": sig.research_envelope_id,
+            "outcome_envelope_id": sig.outcome_envelope_id,
+            "outcome_feature_packet_id": (
+                outcome_packet.outcome_packet_id if outcome_packet is not None else ""
+            ),
             "setup_candidate_id": sig.setup_candidate_id,
             "sweep_run_id": sig.sweep_run_id,
             "validation_id": sig.validation_id,

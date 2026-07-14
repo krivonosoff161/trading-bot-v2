@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.entry_timing import event_anchored_timing
+from src.research_lab.candle_identity import candle_slice_fingerprint
 from src.research_lab.regime import regime_at, regime_breakdown, regime_matches
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.validator import validate_candidate
@@ -159,6 +160,42 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
                     pass
         out.append(candle)
     return sorted(out, key=lambda r: int(r["ts"]))
+
+
+def _candle_identity(
+    symbol: str, timeframe: str, candles: list[dict[str, Any]],
+) -> str:
+    """Stable identity for the exact bounded series handed to every variant."""
+    return candle_slice_fingerprint(symbol, timeframe, candles) or ""
+
+
+def _load_experiment_candles(
+    data_glob: str,
+    symbol: str,
+    *,
+    timeframe: str | None,
+    candle_store: Any | None,
+) -> tuple[list[dict[str, Any]], str, str] | None:
+    """Load once from the canonical store, with JSON as migration fallback."""
+    wanted_tf = str(timeframe or "").strip().lower()
+    if candle_store is not None and wanted_tf:
+        coverage = candle_store.coverage(symbol, wanted_tf)
+        if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
+            rows = candle_store.read(
+                symbol, wanted_tf, coverage.first_ts, coverage.last_ts,
+            )
+            if rows:
+                label = f"sqlite:{str(symbol).replace('-', '_').upper()}:{wanted_tf}"
+                return rows, label, _candle_identity(symbol, wanted_tf, rows)
+
+    path = choose_symbol_file(data_glob, symbol, timeframe=timeframe)
+    if not path:
+        return None
+    rows = load_candles(path)
+    if not rows:
+        return None
+    resolved_tf = wanted_tf or _derive_timeframe(rows)
+    return rows, path.name, _candle_identity(symbol, resolved_tf, rows)
 
 
 def _derive_timeframe(candles: list[dict[str, Any]]) -> str:
@@ -405,7 +442,10 @@ def _partial_dynamic_trade(
     second_ret = direction * (exit_price / entry - 1) * 100
     ret_pct = first_fraction * first_ret + (1 - first_fraction) * second_ret
     net_pct = ret_pct - cost_pct * 100
-    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(candles, idx, exit_idx, entry, side)
+    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(
+        candles, idx, exit_idx, entry, side,
+        exit_price=exit_price, outcome=outcome,
+    )
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
     return {
         "entry_ts": candles[idx]["ts"],
@@ -429,6 +469,7 @@ def _partial_dynamic_trade(
         "adverse_before_favorable": bool(mae_off < mfe_off),
         "path_quality": _path_quality(mfe_pct, capture, mae_off < mfe_off),
         "partial_exit_fraction": first_fraction,
+        "path_observation": _path_observation(outcome),
     }
 
 
@@ -488,7 +529,10 @@ def finalize_trade(
     direction = 1 if side == "long" else -1
     ret_pct = direction * (exit_price / entry - 1) * 100
     net_pct = ret_pct - cost_pct * 100
-    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(candles, idx, actual_exit_idx, entry, side)
+    mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(
+        candles, idx, actual_exit_idx, entry, side,
+        exit_price=exit_price, outcome=outcome,
+    )
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
     bars_held = int(actual_exit_idx - idx)
     adverse_first = mae_off < mfe_off
@@ -515,7 +559,15 @@ def finalize_trade(
         "bars_to_sl": bars_held if outcome == "stop" else None,
         "adverse_before_favorable": bool(adverse_first),
         "path_quality": _path_quality(mfe_pct, capture, adverse_first),
+        "path_observation": _path_observation(outcome),
     }
+
+
+def _path_observation(outcome: str) -> str:
+    return (
+        "full_ohlc_through_close"
+        if str(outcome) == "time_exit" else "exit_bar_censored_to_exit_price"
+    )
 
 
 def _path_quality(mfe_pct: float, capture: float, adverse_before_favorable: bool) -> str:
@@ -535,14 +587,27 @@ def _trade_path(
     exit_idx: int,
     entry: float,
     side: str,
+    *,
+    exit_price: float | None = None,
+    outcome: str = "time_exit",
 ) -> tuple[float, float, int, int]:
     """MFE/MAE magnitude (pct of entry) AND the bar offset where each occurred, over the
     realized hold window [entry_idx, exit_idx]. Descriptive only — no look-ahead beyond the
     already-decided exit. Returns (mfe_pct, mae_pct, mfe_bar_offset, mae_bar_offset)."""
     hi = lo = None
     hi_off = lo_off = 0
-    for off, j in enumerate(range(entry_idx, exit_idx + 1)):
+    intrabar_exit = str(outcome) != "time_exit" and exit_price is not None
+    last_full_idx = exit_idx - 1 if intrabar_exit else exit_idx
+    for off, j in enumerate(range(entry_idx, last_full_idx + 1)):
         h, low = float(candles[j]["high"]), float(candles[j]["low"])
+        if hi is None or h > hi:
+            hi, hi_off = h, off
+        if lo is None or low < lo:
+            lo, lo_off = low, off
+    if intrabar_exit:
+        off = max(0, exit_idx - entry_idx)
+        known = [float(entry), float(exit_price)] if exit_idx == entry_idx else [float(exit_price)]
+        h, low = max(known), min(known)
         if hi is None or h > hi:
             hi, hi_off = h, off
         if lo is None or low < lo:
@@ -715,12 +780,41 @@ def grade_candidate(metrics: dict[str, Any]) -> tuple[str, list[str]]:
     return "REJECT", reasons
 
 
-def stable_run_id(symbol: str, family: str, params: dict[str, Any]) -> str:
-    raw = json.dumps({"symbol": symbol, "family": family, "params": params}, sort_keys=True)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+def stable_run_id(
+    symbol: str,
+    family: str,
+    params: dict[str, Any],
+    *,
+    experiment_id: str = "",
+    data_fingerprint: str = "",
+    timeframe: str = "",
+    fees_bps: float = 0.0,
+    slippage_bps: float = 0.0,
+    split_ratio: float = 0.0,
+    filters: dict[str, list[str]] | None = None,
+) -> str:
+    payload = {
+        "experiment_id": experiment_id,
+        "symbol": symbol,
+        "family": family,
+        "params": params,
+        "data_fingerprint": data_fingerprint,
+        "timeframe": timeframe,
+        "fees_bps": fees_bps,
+        "slippage_bps": slippage_bps,
+        "split_ratio": split_ratio,
+        "filters": filters or {},
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = None) -> list[RunResult]:
+def evaluate_spec(
+    spec: ExperimentSpec,
+    runtime_meta: dict[str, Any] | None = None,
+    *,
+    candle_store: Any | None = None,
+) -> list[RunResult]:
     """Run a spec. ``backend`` decides the signal-generation path:
 
     cpu  -> the scalar reference path (unchanged).
@@ -752,11 +846,19 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
     results = []
     tf = spec.timeframe if spec.timeframe else None
+    loaded: dict[tuple[str, str], tuple[list[dict[str, Any]], str, str]] = {}
     for symbol, family in itertools.product(spec.symbols, spec.families):
-        path = choose_symbol_file(spec.data_glob, symbol, timeframe=tf)
-        if not path:
+        cache_key = (symbol, str(tf or ""))
+        candle_bundle = loaded.get(cache_key)
+        if candle_bundle is None:
+            candle_bundle = _load_experiment_candles(
+                spec.data_glob, symbol, timeframe=tf, candle_store=candle_store,
+            )
+            if candle_bundle is not None:
+                loaded[cache_key] = candle_bundle
+        if candle_bundle is None:
             continue
-        candles = load_candles(path)
+        candles, data_label, data_fingerprint = candle_bundle
         # Record the resolved timeframe so downstream provenance (candidate
         # registry -> hard validation -> setup cards) never loses it. When the
         # spec carries no explicit timeframe, derive it from the candle spacing
@@ -765,10 +867,17 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
         needs = missing_required_data(family, candles)
         if needs is not None:
             zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
-            zero["data_file_label"] = path.name
+            zero["data_file_label"] = data_label
             zero["data_file_timeframe"] = file_tf or ""
+            zero["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
+            zero["data_fingerprint"] = data_fingerprint
             results.append(RunResult(
-                run_id=stable_run_id(symbol, family, {}), symbol=symbol, family=family,
+                run_id=stable_run_id(
+                    symbol, family, {}, experiment_id=spec.experiment_id,
+                    data_fingerprint=data_fingerprint, timeframe=file_tf or "",
+                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                    split_ratio=spec.split_ratio, filters=spec.filters,
+                ), symbol=symbol, family=family,
                 params={}, metrics=zero, decision=needs, reasons=["missing_required_data"],
                 trades=[],
                 validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
@@ -819,8 +928,10 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
                     fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
                 )
             metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
-            metrics["data_file_label"] = path.name
+            metrics["data_file_label"] = data_label
             metrics["data_file_timeframe"] = file_tf or ""
+            metrics["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
+            metrics["data_fingerprint"] = data_fingerprint
             if spec.event_context:
                 event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
                 if event_timing:
@@ -829,7 +940,12 @@ def evaluate_spec(spec: ExperimentSpec, runtime_meta: dict[str, Any] | None = No
             validation = validate_candidate(metrics, decision)
             results.append(
                 RunResult(
-                    run_id=stable_run_id(symbol, family, params),
+                    run_id=stable_run_id(
+                        symbol, family, params, experiment_id=spec.experiment_id,
+                        data_fingerprint=data_fingerprint, timeframe=file_tf or "",
+                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                        split_ratio=spec.split_ratio, filters=spec.filters,
+                    ),
                     symbol=symbol,
                     family=family,
                     params=params,
@@ -876,6 +992,13 @@ def _finalize_runtime_meta(
     runtime_meta["accelerated_simulation_runs"] = accelerated_simulation_runs
     runtime_meta["signal_backend"] = GPU if accelerated_signal_runs > 0 else "cpu"
     runtime_meta["simulation_backend"] = GPU if accelerated_simulation_runs > 0 else "cpu"
+    resolved_backend = str(runtime_meta.get("effective_backend") or "cpu")
+    runtime_meta["resolved_backend"] = resolved_backend
+    runtime_meta["effective_backend"] = (
+        GPU if accelerated_signal_runs > 0 or accelerated_simulation_runs > 0 else "cpu"
+    )
+    if resolved_backend == GPU and runtime_meta["effective_backend"] == "cpu":
+        sim_fallback_reasons.add("no_workload_executed_on_gpu")
     runtime_meta["simulation_fallback_reason"] = "; ".join(sorted(sim_fallback_reasons))
     runtime_meta["gpu_supported_simulation_modes"] = list(GPU_SUPPORTED_SIMULATION_MODES)
     runtime_meta["cpu_fallback_families"] = sorted(cpu_fallback_families)

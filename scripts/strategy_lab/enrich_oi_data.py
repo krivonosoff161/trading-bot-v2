@@ -28,6 +28,7 @@ from src.research_lab.experiment import choose_symbol_file, load_candles  # noqa
 from src.research_lab.flow_merge import coverage, merge_oi  # noqa: E402
 from src.research_lab.oi_slot import load_oi_series  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, market_data_glob  # noqa: E402
+from src.research_lab.candle_library import sync_json_to_store  # noqa: E402
 
 
 def enrich(symbol: str, timeframe: str, private_root: Path, *, apply: bool) -> dict:
@@ -48,6 +49,7 @@ def enrich(symbol: str, timeframe: str, private_root: Path, *, apply: bool) -> d
               "source": series["source"], "coverage": cov, "file": path.name}
     if apply:
         path.write_text(json.dumps(enriched, ensure_ascii=False), encoding="utf-8")
+        sync_json_to_store(private_root, symbol, timeframe, path, source="oi_enrichment")
         # confirm the loader carries the field through to the feature layer
         result["loaded_with_oi"] = any(c.get("oi") is not None for c in load_candles(path))
     return result

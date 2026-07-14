@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.candle_store import CandleStore, CandleStoreError
 from src.research_lab.experiment import load_candles
 from src.research_lab.paths import market_data_dir, resolve_private_root
 
@@ -40,15 +41,29 @@ class LocalFirstMarketDataProvider:
     ) -> None:
         self.private_root = resolve_private_root(private_root)
         self.fallback = fallback
+        self.store = CandleStore(self.private_root)
         self.min_rows = max(1, int(min_rows))
         self.max_stale_bars = max(1, int(max_stale_bars))
         self.name = f"local-cache+{getattr(fallback, 'name', 'fallback')}"
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
         cached = self._fetch_cached(symbol, timeframe, int(start_ts), int(end_ts))
-        if len(cached) >= self.min_rows and self._is_fresh(cached, timeframe, int(end_ts)):
+        if (len(cached) >= self.min_rows
+                and self._is_fresh(cached, timeframe, int(end_ts))
+                and self._covers_without_gaps(cached, timeframe, int(start_ts))):
             return cached
         return self.fallback.fetch_ohlcv(symbol, timeframe, start_ts, end_ts)
+
+    def _covers_without_gaps(
+        self, rows: list[dict[str, Any]], timeframe: str, start_ts: int,
+    ) -> bool:
+        tf_ms = _TF_MS.get(str(timeframe).strip().lower())
+        if tf_ms is None or not rows:
+            return False
+        stamps = [int(row["ts"]) for row in rows]
+        if stamps[0] > start_ts + tf_ms:
+            return False
+        return all(b - a == tf_ms for a, b in zip(stamps, stamps[1:]))
 
     def _is_fresh(self, rows: list[dict[str, Any]], timeframe: str, end_ts: int) -> bool:
         try:
@@ -61,6 +76,13 @@ class LocalFirstMarketDataProvider:
     def _fetch_cached(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
         tf = str(timeframe).strip().lower()
         norm = str(symbol).replace("-", "_").replace("/", "_")
+        if self.store.exists:
+            try:
+                stored = self.store.read(norm, tf, start_ts, end_ts)
+            except (CandleStoreError, ValueError):
+                stored = []
+            if stored:
+                return stored
         data_dir = market_data_dir(self.private_root, tf)
         if not data_dir.exists():
             return []

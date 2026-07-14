@@ -14,12 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.experiment import (
-    choose_symbol_file,
-    finalize_trade,
-    generate_signals,
-    load_candles,
-)
+from src.research_lab.experiment import finalize_trade, generate_signals
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.paper_contract import (
     PaperPlanError,
@@ -30,7 +26,6 @@ from src.research_lab.paper_contract import (
 )
 from src.research_lab.paper_journal import append_paper_outcome, load_seen_trade_ids
 from src.research_lab.paper_readiness import summarize_paper_readiness
-from src.research_lab.paths import market_data_glob
 
 
 @dataclass(frozen=True)
@@ -66,11 +61,9 @@ def load_ready_setup_cards(private_root: Path, *, limit: int = 50) -> list[Setup
 
 
 def local_candles_for_plan(private_root: Path, plan: PaperTradePlan) -> list[dict[str, Any]]:
-    glob_pattern = market_data_glob(private_root, plan.timeframe)
-    path = choose_symbol_file(glob_pattern, plan.symbol, timeframe=plan.timeframe)
-    if path is None:
-        return []
-    return load_candles(path)
+    return load_canonical_candles(
+        private_root, plan.symbol, plan.timeframe,
+    ).rows
 
 
 def _candidate_signals_no_lookahead(

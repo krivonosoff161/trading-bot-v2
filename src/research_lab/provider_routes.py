@@ -29,7 +29,7 @@ def provider_route_table(environ: Mapping[str, str] | None = None) -> list[dict[
             "surface": "farm_calculator_advisor",
             "provider": strategy_provider if strategy_enabled else "disabled",
             "model": strategy_model if strategy_enabled else "",
-            "input": "FeaturePacket.v1",
+            "input": "DecisionFeaturePacket.v1",
             "output": "CalculatorAdvice.v1",
             "cost_logging": "strategy-lab/reports/llm_usage/llm_usage.jsonl",
             "fallback": "deterministic sweep only; advice row records llm_disabled",

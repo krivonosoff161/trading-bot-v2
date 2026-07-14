@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
+from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
@@ -30,7 +31,8 @@ def main() -> None:
     args = ap.parse_args()
 
     spec = ExperimentSpec.from_json(Path(args.spec))
-    results = evaluate_spec(spec)
+    out_root = resolve_private_root(args.out_root, allow_public_output=args.allow_public_output)
+    results = evaluate_spec(spec, candle_store=CandleStore(out_root))
     promoted = sum(1 for r in results if r.decision == "PROMOTE_FOR_PRESSURE_TEST")
     observed = sum(1 for r in results if r.decision == "OBSERVE")
     rejected = sum(1 for r in results if r.decision == "REJECT")
@@ -40,7 +42,6 @@ def main() -> None:
     )
     if args.dry_run:
         return
-    out_root = resolve_private_root(args.out_root, allow_public_output=args.allow_public_output)
     out_dir = write_run_outputs(
         spec,
         results,

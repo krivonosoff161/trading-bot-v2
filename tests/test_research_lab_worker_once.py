@@ -46,7 +46,7 @@ def test_worker_once_reports_running_before_evaluate(tmp_path, monkeypatch):
     monkeypatch.setattr(worker_once, "reap_stale_jobs", lambda _: 0)
     monkeypatch.setattr(worker_once, "claim_next_job", lambda _: {"job_id": 7, "spec_path": str(spec_path)})
     monkeypatch.setattr(worker_once, "write_worker_status", lambda _path, **fields: status_events.append(fields))
-    monkeypatch.setattr(worker_once, "evaluate_spec", lambda _spec, _runtime_meta: [])
+    monkeypatch.setattr(worker_once, "evaluate_spec", lambda _spec, _runtime_meta, **_kwargs: [])
     monkeypatch.setattr(worker_once, "write_run_outputs", lambda *_args, **_kwargs: tmp_path / "runs" / "r1")
     monkeypatch.setattr(worker_once, "import_run_dir", lambda *_args: None)
     monkeypatch.setattr(worker_once, "complete_job", lambda *_args: None)
