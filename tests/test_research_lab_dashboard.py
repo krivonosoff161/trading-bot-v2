@@ -231,7 +231,7 @@ def test_lineage_summary_counts_private_indexes(tmp_path):
         json.dumps({"timeframe": "15m"}) + "\n",
         encoding="utf-8",
     )
-    (lineage / "feature_packets.jsonl").write_text(
+    (lineage / "decision_feature_packets.jsonl").write_text(
         json.dumps({"timeframe": "15m"}) + "\n",
         encoding="utf-8",
     )
@@ -254,7 +254,7 @@ def test_paper_research_status_is_sanitized(tmp_path):
     lineage.mkdir(parents=True)
     (lineage / "scanner_events.jsonl").write_text(json.dumps({"source": "farm"}) + "\n", encoding="utf-8")
     (lineage / "data_packets.jsonl").write_text(json.dumps({"timeframe": "15m"}) + "\n", encoding="utf-8")
-    (lineage / "feature_packets.jsonl").write_text(json.dumps({"timeframe": "15m"}) + "\n", encoding="utf-8")
+    (lineage / "decision_feature_packets.jsonl").write_text(json.dumps({"timeframe": "15m"}) + "\n", encoding="utf-8")
     (lineage / "cycle_links.jsonl").write_text(json.dumps({"source": "farm"}) + "\n", encoding="utf-8")
     (lineage / "backfill_summary.json").write_text(
         json.dumps({"schema": "LineageBackfillSummary.v1", "rows": 1, "paper_only": True}),

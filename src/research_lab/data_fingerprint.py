@@ -20,6 +20,7 @@ from typing import Any
 
 from src.research_lab.data_inventory import inspect_file
 from src.research_lab.experiment import choose_symbol_file
+from src.research_lab.candle_identity import candle_slice_fingerprint
 
 # Optional fields whose presence changes a file's meaning for data-gated families.
 ENRICHMENT_FIELDS = ("funding", "oi", "obi_top5", "spread_bps", "trade_delta_100")
@@ -47,6 +48,13 @@ def compute_fingerprint(
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def fingerprint_for_rows(
+    symbol: str, timeframe: str, rows: list[dict[str, Any]],
+) -> str | None:
+    """Content-sensitive identity for the exact canonical candle slice."""
+    return candle_slice_fingerprint(symbol, timeframe, rows)
+
+
 def present_enrichment(path: Path) -> tuple[str, ...]:
     """Which enrichment fields are present on a prepared file (peek last candle)."""
     try:
@@ -72,9 +80,17 @@ def fingerprint_for_file(path: Path, *, with_enrichment: bool = True) -> str | N
 
 
 def fingerprint_for_symbol(
-    data_glob: str, symbol: str, timeframe: str, *, with_enrichment: bool = True
+    data_glob: str, symbol: str, timeframe: str, *, with_enrichment: bool = True,
+    private_root: str | Path | None = None,
 ) -> str | None:
     """Fingerprint the prepared file the experiment loader would pick, or None."""
+    if private_root is not None:
+        from src.research_lab.candle_store import CandleStore
+        store = CandleStore(private_root)
+        coverage = store.coverage(symbol, timeframe)
+        if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
+            rows = store.read(symbol, timeframe, coverage.first_ts, coverage.last_ts)
+            return fingerprint_for_rows(symbol, timeframe, rows)
     path = choose_symbol_file(data_glob, symbol, timeframe=timeframe)
     if not path:
         return None

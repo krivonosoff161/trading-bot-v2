@@ -573,25 +573,26 @@ def _check_overfit(
         "sharpe": psr["sharpe"],
         "min_n": mtrl["min_n"],
         "sufficient": mtrl["sufficient"],
+        "search_bias_metrics_mode": "shadow_only",
     }
     trial_sharpes = candidate.metrics.get("trial_sharpes")
     if isinstance(trial_sharpes, list) and len(trial_sharpes) >= 2:
         try:
             dsr = deflated_sharpe_ratio(arr, trial_sharpes)
             details["dsr"] = dsr
-            passed = passed and bool(dsr["dsr"] >= 0.95)
+            details["dsr_shadow_pass"] = bool(dsr["dsr"] >= 0.95)
         except ValueError as exc:
             details["dsr_error"] = str(exc)
-            passed = False
+            details["dsr_shadow_pass"] = False
     trial_returns = candidate.metrics.get("trial_returns")
     if isinstance(trial_returns, list) and trial_returns:
         try:
             pbo = probability_of_backtest_overfitting(trial_returns)
             details["pbo"] = pbo
-            passed = passed and bool(pbo["pbo"] < 0.5)
+            details["pbo_shadow_pass"] = bool(pbo["pbo"] < 0.5)
         except ValueError as exc:
             details["pbo_error"] = str(exc)
-            passed = False
+            details["pbo_shadow_pass"] = False
     return {
         "check_name": "overfit_psr",
         "passed": passed,

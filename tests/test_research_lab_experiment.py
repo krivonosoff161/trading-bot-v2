@@ -49,6 +49,23 @@ def test_simulate_trades_supports_dynamic_trailing_exit():
     assert abs(trades[0]["exit"] - 101.2) < 1e-6
 
 
+def test_intrabar_exit_censors_post_exit_high_low_from_learning_path():
+    candles = [
+        {"ts": 0, "open": 100, "high": 100, "low": 100, "close": 100},
+        # Stop at 95 is assumed first. High=150 may have happened after that exit.
+        {"ts": 1, "open": 100, "high": 150, "low": 90, "close": 120},
+    ]
+    trade = simulate_trades(
+        candles, [{"idx": 0, "side": "long", "reason": "unit"}],
+        {"hold_bars": 1, "stop_pct": 5, "take_pct": 20},
+        fees_bps=0, slippage_bps=0,
+    )[0]
+    assert trade["outcome"] == "stop"
+    assert trade["mfe_pct"] == 0.0
+    assert trade["mae_pct"] == 5.0
+    assert trade["path_observation"] == "exit_bar_censored_to_exit_price"
+
+
 def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     data = tmp_path / "ABC_USDT_SWAP_80d.json"
     _write_candles(data)

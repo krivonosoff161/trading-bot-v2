@@ -13,14 +13,15 @@ edge or paper-ready. Keyless public candles, read-only; no order/money/live path
 """
 from __future__ import annotations
 
-import glob
 import json
 import time
 from pathlib import Path
 from statistics import median
 from typing import Any
 
-from src.research_lab.experiment import generate_signals, load_candles, simulate_trades
+from src.research_lab.experiment import generate_signals, simulate_trades
+from src.research_lab.candle_library import load_canonical_candles
+from src.research_lab.data_prepare import MarketDataPrepareItem, prepare_market_data
 from src.research_lab.param_schemas import executable_exit_params
 
 FEES_BPS = 7.0
@@ -48,26 +49,27 @@ def _mover_symbols(private_root: Path, *, limit: int) -> list[str]:
     return seen[:limit]
 
 
-def ensure_candles(private_root: Path, symbol: str, timeframe: str, *, provider, days: int = 30) -> Path | None:
-    """Return a candle file for symbol/tf, fetching keyless public candles if absent (bounded)."""
+def ensure_candles(private_root: Path, symbol: str, timeframe: str, *, provider,
+                   days: int | None = None) -> bool:
+    """Materialize through the canonical public-data preparation path."""
     private_root = Path(private_root)
-    existing = glob.glob(str(private_root / "market_data" / timeframe / f"{symbol}_*_{timeframe}.json"))
-    if existing:
-        return Path(existing[0])
+    if load_canonical_candles(private_root, symbol, timeframe).rows:
+        return True
     if provider is None:
-        return None
+        return False
+    lookback_days = int(days or {"15m": 30, "1h": 365, "4h": 730, "1d": 3650}.get(timeframe, 7))
     now = int(time.time() * 1000)
-    try:
-        candles = provider.fetch_ohlcv(symbol, timeframe, now - days * 86_400_000, now)
-    except Exception:  # noqa: BLE001 - network/parse error must not crash the cycle
-        return None
-    if len(candles) < 60:
-        return None
-    d = private_root / "market_data" / timeframe
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / f"{symbol}_{candles[0]['ts']}_{candles[-1]['ts']}_{timeframe}.json"
-    path.write_text(json.dumps(candles), encoding="utf-8")
-    return path
+    item = MarketDataPrepareItem(
+        symbol=symbol, timeframe=timeframe,
+        start_ts=now - lookback_days * 86_400_000, end_ts=now,
+    )
+    report = prepare_market_data(
+        [item], provider=provider, private_root=private_root,
+        timeframe=timeframe, apply=True,
+    )
+    if report.downloaded <= 0:
+        return False
+    return bool(load_canonical_candles(private_root, symbol, timeframe).rows)
 
 
 def _split_nets(candles: list[dict[str, Any]], family: str, params: dict[str, Any],
@@ -95,10 +97,10 @@ def run(private_root: Path, *, families: tuple[str, ...] = DEFAULT_FAMILIES,
     per_symbol: list[dict[str, Any]] = []
     for sym in symbols:
         for tf in timeframes:
-            path = ensure_candles(private_root, sym, tf, provider=provider)
-            if not path:
+            ensure_candles(private_root, sym, tf, provider=provider)
+            candles = load_canonical_candles(private_root, sym, tf).rows
+            if not candles:
                 continue
-            candles = load_candles(path)
             if len(candles) < 80:
                 continue
             for fam in families:

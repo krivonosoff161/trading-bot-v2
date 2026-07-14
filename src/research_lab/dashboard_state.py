@@ -295,6 +295,10 @@ def load_lineage_summary(private_root: Path) -> dict[str, Any]:
     events = load_jsonl_counts(scanner_events_path(private_root), key="source")
     data_packets = load_jsonl_counts(market_data_packet_index_path(private_root), key="timeframe")
     feature_packets = load_jsonl_counts(feature_packet_index_path(private_root), key="timeframe")
+    from src.research_lab.feature_packet import outcome_packet_index_path
+    outcome_feature_packets = load_jsonl_counts(
+        outcome_packet_index_path(private_root), key="timeframe",
+    )
     links = load_jsonl_counts(cycle_links_path(private_root), key="source")
     advice = load_jsonl_counts(private_root / "state" / "llm_advice" / "calculator_advice.jsonl", key="accepted")
     return {
@@ -302,6 +306,7 @@ def load_lineage_summary(private_root: Path) -> dict[str, Any]:
         "scanner_events": events,
         "data_packets": data_packets,
         "feature_packets": feature_packets,
+        "outcome_feature_packets": outcome_feature_packets,
         "cycle_links": links,
         "calculator_advice": advice,
         "paper_only": True,
@@ -309,7 +314,8 @@ def load_lineage_summary(private_root: Path) -> dict[str, Any]:
         "labels": {
             "scanner_events": "strategy-lab/state/lineage/scanner_events.jsonl",
             "data_packets": "strategy-lab/state/lineage/data_packets.jsonl",
-            "feature_packets": "strategy-lab/state/lineage/feature_packets.jsonl",
+            "feature_packets": "strategy-lab/state/lineage/decision_feature_packets.jsonl",
+            "outcome_feature_packets": "strategy-lab/state/lineage/outcome_feature_packets.jsonl",
             "cycle_links": "strategy-lab/state/lineage/cycle_links.jsonl",
             "calculator_advice": "strategy-lab/state/llm_advice/calculator_advice.jsonl",
         },

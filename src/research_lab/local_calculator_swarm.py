@@ -19,6 +19,8 @@ from src.research_lab.feature_packet import FeaturePacket
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
 from src.research_lab.llm_invocation_ledger import preflight_invocation, record_invocation
 from src.research_lab.llm_provider import LLMProviderError, ProposalProvider, record_usage
+from src.research_lab.local_model_context import build_local_model_context
+from src.research_lab.local_model_eval import evaluate_role_output
 
 SCHEMA = "LocalCalculatorSwarm.v1"
 NORMALIZER_VERSION = "local_calculator_swarm_normalizer.v2"
@@ -141,6 +143,9 @@ def request_local_calculator_swarm(
     model_name = str(getattr(provider, "model_name", "") or "")
     for role_id, system_prompt in PASS_SPECS:
         input_payload = _input(packet, passes)
+        input_payload["versioned_context"] = build_local_model_context(
+            role_id, query=json.dumps(packet.features, ensure_ascii=False, sort_keys=True),
+        )
         input_payload["prompt_hash"] = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
         input_payload["normalizer_version"] = NORMALIZER_VERSION
         permit = preflight_invocation(
@@ -227,6 +232,11 @@ def request_local_calculator_swarm(
                 "provider": provider_name,
                 "model": model_name,
                 "passes": [asdict(item) for item in passes],
+                "evals": [
+                    evaluate_role_output(item.role_id, item.payload)
+                    for item in passes
+                    if item.payload
+                ],
                 "accepted": accepted,
                 "problems": problems,
                 "paper_only": True,

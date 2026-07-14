@@ -176,7 +176,7 @@ def test_pagination_is_bounded_by_max_pages():
     p = _provider(_make_http_get(list(reversed(rows)), calls=calls), max_pages=3)
     out = p.fetch_ohlcv("BTC_USDT_SWAP", "1m", START, START + 999 * MINUTE)
     assert len(calls) <= 3  # no infinite pagination
-    assert len(out) <= 300  # <= max_pages * PAGE_LIMIT
+    assert len(out) <= 900  # <= max_pages * PAGE_LIMIT (300)
 
 
 def test_rejects_unsupported_timeframe():

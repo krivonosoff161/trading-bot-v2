@@ -629,6 +629,11 @@ def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_d
             tasks.defer_task(task["task_id"], until=_defer_until(now, task["timeframe"], rows),
                              reason=status, now=now)
             _bump(counters, "prepared_deferred")
+        elif status in ("provider_transient", "preopen"):
+            attempts = max(1, int(task.get("attempts") or 1))
+            delay = min(6 * 3600, 15 * 60 * (2 ** min(attempts - 1, 4)))
+            tasks.defer_task(task["task_id"], until=now + delay, reason=status, now=now)
+            _bump(counters, "prepared_deferred")
         elif int(task.get("attempts") or 0) >= 3:
             tasks.block_task(task["task_id"], reason=f"prepare_backoff:{status}", now=now)
             _bump(counters, "prepared_blocked")
@@ -638,6 +643,7 @@ def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_d
 
 
 def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, limit, counters, now) -> None:
+    from src.research_lab.candle_library import sync_json_to_store
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import COUNTER_KEYS, FlowEnrichState, _enrich_one
     for _ in range(limit):
@@ -660,6 +666,10 @@ def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, li
                     now_ms=now_ms, ttl_seconds=12 * 3600, cooldown_seconds=6 * 3600, max_attempts=3,
                     budget=1, counters=cc)
         if cc.get("enriched"):
+            sync_json_to_store(
+                private_root, task["symbol"], task["timeframe"], path,
+                source="funding_enrichment",
+            )
             tasks.complete_task(task["task_id"], reason="enriched", now=now)
             _bump(counters, "enriched_ok")
         else:
@@ -691,6 +701,7 @@ def _mark_oi_unmeasured_sweeps(tasks: FarmTasksDB, symbol: str, timeframe: str, 
 
 
 def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now) -> None:
+    from src.research_lab.candle_library import sync_json_to_store
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import enrich_oi_one
     from src.research_lab.oi_status import OI_MAX_ATTEMPTS
@@ -710,6 +721,10 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
             continue
         status, _n = enrich_oi_one(path, task["symbol"], task["timeframe"], provider=oi_provider, now_ms=now_ms)
         if status == "enriched":
+            sync_json_to_store(
+                private_root, task["symbol"], task["timeframe"], path,
+                source="oi_enrichment",
+            )
             tasks.complete_task(task["task_id"], reason="oi_loaded", now=now)
             _bump(counters, "enriched_oi_ok")
         elif status in _OI_STRUCTURAL and int(task.get("attempts") or 0) >= OI_MAX_ATTEMPTS:
@@ -736,7 +751,9 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
         except (TypeError, json.JSONDecodeError):
             payload = {}
         glob = market_data_glob(private_root, tf)
-        fp = fingerprint_for_symbol(glob, sym, tf) or task.get("data_fingerprint") or "nofp"
+        fp = fingerprint_for_symbol(
+            glob, sym, tf, private_root=private_root,
+        ) or task.get("data_fingerprint") or "nofp"
         if isinstance(payload.get("sweep_spec"), dict):
             spec = _sweep_from_payload(payload["sweep_spec"])
         else:

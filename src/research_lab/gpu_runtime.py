@@ -201,16 +201,24 @@ def _detect(force_cpu: bool) -> GpuCapability:
         )
 
     detail: dict[str, Any] = {"nvidia_smi_name": smi_name or ""}
-    for name, probe in (("cupy", _probe_cupy), ("torch", _probe_torch), ("numba", _probe_numba)):
-        ok, device, info = probe()
-        detail.update(info)
-        if ok:
-            return GpuCapability(True, name, device, "", CPU, smi_present, detail)
+    # The current kernels consume a NumPy-compatible ``xp`` module. CuPy is the
+    # only implemented device executor. Torch/Numba visibility is diagnostic
+    # information only and must never make this runtime claim GPU execution.
+    ok, device, info = _probe_cupy()
+    detail.update(info)
+    if ok:
+        return GpuCapability(True, "cupy", device, "", CPU, smi_present, detail)
+    for name, probe in (("torch", _probe_torch), ("numba", _probe_numba)):
+        visible, visible_device, probe_info = probe()
+        detail.update(probe_info)
+        detail[f"{name}_visible_but_not_executor"] = bool(visible)
+        if visible_device:
+            detail[f"{name}_device"] = visible_device
 
     if smi_present:
         reason = (
             f"GPU detected by nvidia-smi ({smi_name or 'unknown'}) but no usable GPU compute "
-            "backend is installed (cupy / torch / numba.cuda). Install one, e.g. "
+            "executor is installed (the implemented executor is CuPy). Install "
             "`pip install cupy-cuda12x`, to enable the GPU path."
         )
     else:
@@ -304,8 +312,8 @@ def resolve_backend(requested: str) -> BackendResolution:
 def array_module(backend_name: str):
     """Return the numpy-compatible array module for the resolved GPU backend.
 
-    cupy for the cupy backend; numpy otherwise (CPU). torch/numba GPU kernels are
-    not array-module compatible, so callers fall back to numpy for those.
+    CuPy for the implemented GPU backend. A different backend token is an error:
+    silently returning NumPy here would report CPU work as GPU acceleration.
     """
     if backend_name == "cupy":
         try:
@@ -313,5 +321,4 @@ def array_module(backend_name: str):
             return cupy
         except Exception:  # noqa: BLE001
             pass
-    import numpy
-    return numpy
+    raise RuntimeError(f"GPU backend '{backend_name}' has no implemented array executor")

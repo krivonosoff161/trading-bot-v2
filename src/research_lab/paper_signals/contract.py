@@ -47,6 +47,8 @@ class PaperActionSignal:
     scanner_event_id: str = ""
     data_packet_id: str = ""
     feature_packet_id: str = ""
+    research_envelope_id: str = ""
+    outcome_envelope_id: str = ""
     setup_candidate_id: str = ""
     sweep_run_id: str = ""
     validation_id: str = ""

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.candle_store import CandleStore, CandleStoreError
 from src.research_lab.data_cache import CacheCheck
 from src.research_lab.data_requirements import (
     MALFORMED,
@@ -34,6 +35,12 @@ from src.research_lab.paths import market_data_dir, one_minute_data_dir, resolve
 
 _REQUIRED_KEYS = ("ts", "open", "high", "low", "close", "vol")
 _NEEDS_DATA = {MISSING, TOO_SHORT, MALFORMED}
+
+
+def _provider_failure(exc: Exception) -> tuple[str, bool]:
+    reason = str(getattr(exc, "reason", "") or type(exc).__name__).strip().lower()
+    safe = "".join(ch for ch in reason if ch.isalnum() or ch in {"_", "-"})[:80] or "provider_error"
+    return safe, bool(getattr(exc, "transient", False))
 
 
 def _normalize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -158,6 +165,7 @@ def prepare(
     """Resolve each requirement into an action; only apply+configured writes data."""
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
     data_dir = one_minute_data_dir(private_root)
+    store = CandleStore(private_root)
     configured = bool(getattr(provider, "configured", False))
 
     counts: dict[str, int] = {}
@@ -193,22 +201,40 @@ def prepare(
                     rows = None
                 except Exception as exc:  # provider/runtime error: never crash the run
                     item["action"] = "provider_error"
-                    skipped.append({"symbol": req.symbol, "reason": f"provider_error:{type(exc).__name__}"})
+                    reason, transient = _provider_failure(exc)
+                    item["provider_error_reason"] = reason
+                    item["provider_error_transient"] = transient
+                    skipped.append({"symbol": req.symbol, "reason": f"provider_error:{reason}"})
                     rows = None
                 if rows is not None:
                     if not rows:
                         item["action"] = "no_data_returned"
                         skipped.append({"symbol": req.symbol, "reason": "no_data_returned"})
                     else:
-                        path, bars = write_1m_candles(
-                            rows, symbol=req.symbol, start_ts=req.start_ts, end_ts=req.end_ts, data_dir=data_dir,
-                        )
-                        label = f"market_data/1m/{path.name}"
-                        item["action"] = "downloaded"
-                        item["written_label"] = label
-                        item["bars_written"] = bars
-                        files_written.append(label)
-                        downloaded += 1
+                        try:
+                            stored = store.upsert_candles(
+                                req.symbol, "1m", rows,
+                                source=getattr(provider, "name", "provider"),
+                            )
+                            path, bars = write_1m_candles(
+                                rows, symbol=req.symbol, start_ts=req.start_ts,
+                                end_ts=req.end_ts, data_dir=data_dir,
+                            )
+                        except (CandleStoreError, OSError) as exc:
+                            item["action"] = "storage_error"
+                            skipped.append({
+                                "symbol": req.symbol,
+                                "reason": f"storage_error:{type(exc).__name__}",
+                            })
+                        else:
+                            label = f"market_data/1m/{path.name}"
+                            item["action"] = "downloaded"
+                            item["written_label"] = label
+                            item["bars_written"] = bars
+                            item["store_rows"] = stored.coverage.row_count
+                            item["store_gaps"] = stored.coverage.gap_count
+                            files_written.append(label)
+                            downloaded += 1
         else:
             item["action"] = "unknown"
         items.append(item)
@@ -359,6 +385,7 @@ def prepare_market_data(
     """Prepare candles for a specific timeframe (15m/1h/4h/1d)."""
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
     data_dir = market_data_dir(private_root, timeframe)
+    store = CandleStore(private_root)
     configured = bool(getattr(provider, "configured", False))
 
     would_download = 0
@@ -389,23 +416,40 @@ def prepare_market_data(
                 rows = None
             except Exception as exc:
                 d["action"] = "provider_error"
-                skipped.append({"symbol": item.symbol, "reason": f"provider_error:{type(exc).__name__}"})
+                reason, transient = _provider_failure(exc)
+                d["provider_error_reason"] = reason
+                d["provider_error_transient"] = transient
+                skipped.append({"symbol": item.symbol, "reason": f"provider_error:{reason}"})
                 rows = None
             if rows is not None:
                 if not rows:
                     d["action"] = "no_data_returned"
                     skipped.append({"symbol": item.symbol, "reason": "no_data_returned"})
                 else:
-                    path, bars = write_candles(
-                        rows, symbol=item.symbol, start_ts=item.start_ts,
-                        end_ts=item.end_ts, timeframe=timeframe, data_dir=data_dir,
-                    )
-                    label = f"market_data/{timeframe}/{path.name}"
-                    d["action"] = "downloaded"
-                    d["written_label"] = label
-                    d["bars_written"] = bars
-                    files_written.append(label)
-                    downloaded += 1
+                    try:
+                        stored = store.upsert_candles(
+                            item.symbol, timeframe, rows,
+                            source=getattr(provider, "name", "provider"),
+                        )
+                        path, bars = write_candles(
+                            rows, symbol=item.symbol, start_ts=item.start_ts,
+                            end_ts=item.end_ts, timeframe=timeframe, data_dir=data_dir,
+                        )
+                    except (CandleStoreError, OSError) as exc:
+                        d["action"] = "storage_error"
+                        skipped.append({
+                            "symbol": item.symbol,
+                            "reason": f"storage_error:{type(exc).__name__}",
+                        })
+                    else:
+                        label = f"market_data/{timeframe}/{path.name}"
+                        d["action"] = "downloaded"
+                        d["written_label"] = label
+                        d["bars_written"] = bars
+                        d["store_rows"] = stored.coverage.row_count
+                        d["store_gaps"] = stored.coverage.gap_count
+                        files_written.append(label)
+                        downloaded += 1
         out_items.append(d)
 
     return MarketDataPrepareReport(

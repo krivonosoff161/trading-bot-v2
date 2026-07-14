@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from src.research_lab.lineage_contract import stable_id
 from src.research_lab.lineage_contract import utc_now
+from src.research_lab.adaptive_trial import adaptive_trial_id
 from src.research_lab.outcome_learning import load_outcome_reviews, load_training_rows
 from src.research_lab.role_environment import (
     accept_role_request,
@@ -44,7 +45,14 @@ def _task_spec(
     prior_spec = source_row.get("task_spec") if isinstance(source_row.get("task_spec"), dict) else {}
     subject_source = prior_spec.get("subject") if isinstance(prior_spec.get("subject"), dict) else source_row
     generation = int(prior_spec.get("generation", -1)) + 1
-    return {
+    subject = {
+        key: subject_source.get(key)
+        for key in ("symbol", "timeframe", "family", "candidate_id", "training_row_id")
+        if subject_source.get(key)
+    }
+    if not subject:
+        subject = {"source_identity": stable_id("subject", {"source_ref": source_ref})}
+    task = {
         "schema": "RoleTaskSpec.v1",
         "kind": {
             "farm": "bounded_sweep",
@@ -54,17 +62,15 @@ def _task_spec(
         "dimensions": _string_list(review_payload.get("next_test_dimensions")),
         "tests": _string_list(review_payload.get("counterfactual_tests")),
         "hypotheses": _string_list(review_payload.get("parameter_hypotheses")),
-        "subject": {
-            key: subject_source.get(key)
-            for key in ("symbol", "timeframe", "family", "candidate_id", "training_row_id")
-            if subject_source.get(key)
-        },
+        "subject": subject,
         "source_ref": source_ref,
         "generation": generation,
         "requires_deterministic_mapping": True,
         "requires_untouched_evaluation": True,
         "paper_only": True,
     }
+    task["adaptive_trial_id"] = adaptive_trial_id(task)
+    return task
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

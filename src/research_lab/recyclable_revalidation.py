@@ -31,18 +31,16 @@ from src.research_lab.exit_recovery import (
     _exit_grid,
 )
 from src.research_lab.experiment import (
-    choose_symbol_file,
     generate_signals,
-    load_candles,
     simulate_trades,
 )
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import (
     CONTRACT_VERSION,
     CandidateForValidation,
     trade_evidence_hash,
 )
 from src.research_lab.honest_backtest_bridge import run_validation
-from src.research_lab.paths import market_data_glob
 from src.research_lab.trade_path_diagnostics import (
     _index_run_results,
     _load_rejected_uc,
@@ -98,11 +96,11 @@ def _select(private_root: Path, limit_per_bucket: int | None) -> list[dict[str, 
 
 def _resim(private_root: Path, item: dict[str, Any]) -> tuple[list[dict[str, Any]], str, int] | None:
     """Return (trades, exit_name, n_trials). wrong_exit -> best RECOVERED exit; else baseline."""
-    path = choose_symbol_file(market_data_glob(private_root, item["timeframe"]),
-                              item["symbol"], timeframe=item["timeframe"])
-    if not path:
+    candles = load_canonical_candles(
+        private_root, item["symbol"], item["timeframe"],
+    ).rows
+    if not candles:
         return None
-    candles = load_candles(path)
     signals = generate_signals(candles, item["family"], item["params"])
     if not signals:
         return None

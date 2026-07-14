@@ -268,7 +268,8 @@ def _load_recent_proposals(private_root: Path, *, limit: int) -> list[dict[str, 
 
 
 def _feature_index(private_root: Path) -> dict[str, dict[str, Any]]:
-    index = Path(private_root) / "state" / "lineage" / "feature_packets.jsonl"
+    from src.research_lab.feature_packet import packet_index_path
+    index = packet_index_path(private_root)
     out: dict[str, dict[str, Any]] = {}
     if not index.exists():
         return out

@@ -12,10 +12,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.experiment import choose_symbol_file
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.paper_contract import PaperPlanError, plan_from_setup_card
-from src.research_lab.paths import market_data_glob
 
 
 def _short_reason(reason: str, *, max_len: int = 120) -> str:
@@ -87,9 +86,10 @@ def summarize_paper_readiness(
         plan_ready += 1
         if not check_local_data:
             continue
-        path = choose_symbol_file(market_data_glob(Path(private_root), plan.timeframe), plan.symbol,
-                                  timeframe=plan.timeframe)
-        if path is None:
+        candles = load_canonical_candles(
+            Path(private_root), plan.symbol, plan.timeframe,
+        ).rows
+        if not candles:
             local_data_missing += 1
             reason = "local_candles_missing"
             reasons[reason] += 1

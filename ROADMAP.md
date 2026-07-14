@@ -1,9 +1,32 @@
 # Roadmap
 
-Status: **ACTIVE**. Updated 2026-07-11.
+Status: **ACTIVE**. Updated 2026-07-14.
 
 The project is a paper/research workbench. This roadmap is ordered by evidence
 and maintainability, not by a path to live trading.
+
+## Immediate Foundation Gate
+
+Before further product behavior changes, finish the shared 12-stage environment
+repair: one stable/product checkout plus at most one development worktree,
+fresh compact continuity, classified archives/runtime data, bounded local-state
+write amplification, and a verified Git integration path.
+
+After that gate, repair the research station in this dependency order:
+
+1. Candle truth, exact manifests and requirements owned by all 27 strategies.
+2. Physical separation of decision-time and post-outcome data.
+3. End-to-end source/news/data/code/experiment identity.
+4. Complete search-trial evidence and untouched independent validation.
+5. Honest GPU telemetry, reference simulation and unambiguous learning labels.
+6. One immutable AdaptiveTrial through farm, validator, paper and analyst.
+7. Prompt/tools/versioned-RAG/evals before any local-model weight training.
+
+Implementation status on `codex/market-data-storage` (2026-07-14): all seven
+items above are implemented for review. Verification is still in progress;
+private JSON migration, task requeue, runtime observation, push and merge have
+not occurred. DSR/PBO are intentionally shadow-only until measured evidence
+justifies a separate promotion decision. LoRA/adapter training remains deferred.
 
 ## Current: Documentation And Public-Safety Rebuild
 
@@ -50,6 +73,17 @@ the active contract is [docs/adaptive-research-center-contract.md](docs/adaptive
 - Explicit data-gate handling for OI and microstructure.
 - Independent validation improvements in `honest-backtest`.
 - Operator reports that summarize paper evidence without publishing raw data.
+
+## Deferred Decisions With Return Gates
+
+| Decision | Why deferred | Return condition |
+| --- | --- | --- |
+| Delete old worktrees, JSON candle files or duplicate-looking paths | Identity, ancestry, runtime ownership and reproducibility are not yet fully proved | Separate inventory and parity report passes; explicit deletion decision |
+| LoRA or adapter training | Zero accepted local-model advice has no proven root cause yet | Prompt/tools/RAG ablation leaves a stable measured residual failure |
+| GARCH, Kalman, OU or alternative search | Complex methods cannot be compared honestly on uncertain data/trial identity | Candle Truth, exact trial identity and untouched validation are complete |
+| Complex VRAM scheduler | GTX 1050 3 GB has no measured capacity benefit for concurrent LLM and numeric work | Hardware changes or profiling proves a real scheduling bottleneck |
+| External simulator or vectorbt integration | Independent semantics and licensing require separate review | Local reference simulator exists and a license/isolation decision is approved |
+| Automatic promotion or live execution | Paper/LLM agreement is not scientific or monetary authority | Remains out of scope unless a future explicit safety and product decision replaces this rule |
 
 ## Out Of Scope Without A New Decision
 

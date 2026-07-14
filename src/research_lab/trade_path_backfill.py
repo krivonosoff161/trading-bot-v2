@@ -20,12 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.experiment import (
-    choose_symbol_file,
     generate_signals,
-    load_candles,
     simulate_trades,
 )
-from src.research_lab.paths import market_data_glob
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.trade_path_diagnostics import (
     _RECYCLABLE,
     _index_run_results,
@@ -92,11 +90,11 @@ def _path_agg(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
 def backfill_one(private_root: Path, item: dict[str, Any]) -> dict[str, Any]:
     """Re-simulate one candidate's signals and return its aggregated path record."""
-    path = choose_symbol_file(market_data_glob(private_root, item["timeframe"]),
-                              item["symbol"], timeframe=item["timeframe"])
-    if not path:
+    candles = load_canonical_candles(
+        private_root, item["symbol"], item["timeframe"],
+    ).rows
+    if not candles:
         return {"uc_key": item["uc_key"], "skipped": "no_candles"}
-    candles = load_candles(path)
     signals = generate_signals(candles, item["family"], item["params"])
     if not signals:
         return {"uc_key": item["uc_key"], "skipped": "no_signals"}

@@ -9,17 +9,31 @@ from typing import Any
 
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
 from src.research_lab.market_data_packet import MarketDataPacket
+from src.research_lab.candle_identity import candle_slice_fingerprint
 from src.research_lab.trade_math import CostAssumptions, capture, geometry
 
-SCHEMA = "FeaturePacket.v1"
+SCHEMA = "DecisionFeaturePacket.v1"
+OUTCOME_SCHEMA = "OutcomeFeaturePacket.v1"
+_OUTCOME_ONLY_FIELDS = {
+    "mfe_pct", "mae_pct", "capture_at_entry", "net_pct", "pnl_pct",
+    "outcome", "r_multiple", "tp_before_sl", "bars_to_tp", "bars_to_sl",
+}
 
 
 def packet_dir(private_root: Path) -> Path:
-    return Path(private_root) / "features" / "packets"
+    return Path(private_root) / "features" / "decision"
+
+
+def outcome_packet_dir(private_root: Path) -> Path:
+    return Path(private_root) / "features" / "outcome"
 
 
 def packet_index_path(private_root: Path) -> Path:
-    return Path(private_root) / "state" / "lineage" / "feature_packets.jsonl"
+    return Path(private_root) / "state" / "lineage" / "decision_feature_packets.jsonl"
+
+
+def outcome_packet_index_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "lineage" / "outcome_feature_packets.jsonl"
 
 
 def _float(row: dict[str, Any], key: str) -> float:
@@ -106,7 +120,11 @@ class FeaturePacket:
     schema: str = SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        leaked = sorted(_OUTCOME_ONLY_FIELDS.intersection(payload.get("features") or {}))
+        if leaked:
+            raise ValueError(f"decision feature packet contains outcome-only fields: {leaked}")
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FeaturePacket":
@@ -120,7 +138,32 @@ def load_feature_packet(path: Path) -> FeaturePacket:
         raise ValueError("feature packet must be a JSON object")
     if data.get("schema") != SCHEMA:
         raise ValueError(f"unsupported feature packet schema: {data.get('schema')!r}")
-    return FeaturePacket.from_dict(data)
+    packet = FeaturePacket.from_dict(data)
+    packet.to_dict()  # enforce the decision/outcome boundary on persisted input
+    return packet
+
+
+DecisionFeaturePacket = FeaturePacket
+
+
+@dataclass(frozen=True)
+class OutcomeFeaturePacket:
+    outcome_packet_id: str
+    decision_packet_id: str
+    scanner_event_id: str
+    data_packet_id: str
+    symbol: str
+    instrument: str
+    timeframe: str
+    mode: str
+    outcome_features: dict[str, Any]
+    temporal_provenance: dict[str, Any]
+    label_quality: dict[str, Any]
+    created_at: str = field(default_factory=utc_now)
+    schema: str = OUTCOME_SCHEMA
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def latest_feature_packet_path(private_root: Path) -> Path | None:
@@ -158,9 +201,6 @@ def build_feature_packet(
     swing_lows = [_float(c, "low") for c in candles[-20:]]
     swing_highs = [_float(c, "high") for c in candles[-20:]]
     geom = geometry(entry_zone or [], stop_loss, take_profit_plan or [], side) if side else {}
-    future = _future_metrics(packet, side, float(geom.get("entry_mid") or 0.0)) if side else {}
-    if future:
-        future["capture_at_entry"] = capture(0.0, float(future.get("mfe_pct") or 0.0))
     features = {
         "last_close": price,
         "atr": atr,
@@ -175,7 +215,6 @@ def build_feature_packet(
         "rsi_14": _rsi(closes),
         "volume_spike": _volume_spike(candles),
         "fees_slippage": CostAssumptions().to_dict(),
-        **future,
     }
     payload = {
         "scanner_event_id": packet.scanner_event_id,
@@ -199,9 +238,57 @@ def build_feature_packet(
         data_quality={
             "flags": list(packet.data_quality_flags),
             "past_bars": len(packet.ohlcv_window),
-            "future_bars": len(packet.future_window),
+            "as_of_ts": packet.ohlcv_window[-1].get("ts") if packet.ohlcv_window else None,
         },
-        no_lookahead=packet.no_lookahead,
+        no_lookahead=True,
+    )
+
+
+def build_outcome_feature_packet(
+    packet: MarketDataPacket,
+    decision_packet: FeaturePacket,
+    *,
+    side: str = "",
+) -> OutcomeFeaturePacket | None:
+    """Build a physically separate post-decision packet; never used by decision roles."""
+    entry = float(decision_packet.geometry.get("entry_mid") or 0.0)
+    outcome = _future_metrics(packet, side, entry) if side else {}
+    if not packet.future_window or not outcome:
+        return None
+    outcome["capture_at_entry"] = capture(0.0, float(outcome.get("mfe_pct") or 0.0))
+    outcome_content_hash = candle_slice_fingerprint(
+        packet.symbol, packet.timeframe, packet.future_window,
+    )
+    payload = {
+        "decision_packet_id": decision_packet.feature_packet_id,
+        "data_packet_id": packet.data_packet_id,
+        "future_first_ts": packet.future_window[0].get("ts"),
+        "future_last_ts": packet.future_window[-1].get("ts"),
+        "outcome_content_hash": outcome_content_hash,
+        "outcome_features": outcome,
+    }
+    return OutcomeFeaturePacket(
+        outcome_packet_id=stable_id("ofp", payload),
+        decision_packet_id=decision_packet.feature_packet_id,
+        scanner_event_id=packet.scanner_event_id,
+        data_packet_id=packet.data_packet_id,
+        symbol=packet.symbol,
+        instrument=packet.instrument,
+        timeframe=packet.timeframe,
+        mode=packet.mode,
+        outcome_features=outcome,
+        temporal_provenance={
+            "decision_last_ts": packet.ohlcv_window[-1].get("ts") if packet.ohlcv_window else None,
+            "outcome_first_ts": packet.future_window[0].get("ts"),
+            "outcome_last_ts": packet.future_window[-1].get("ts"),
+            "outcome_content_hash": outcome_content_hash,
+            "available_after_decision": True,
+        },
+        label_quality={
+            "trajectory_precision": "ohlc_window_unknown_intrabar_order",
+            "decision_role_eligible": False,
+            "outcome_role_eligible": True,
+        },
     )
 
 
@@ -212,7 +299,7 @@ def write_feature_packet(private_root: Path, packet: FeaturePacket) -> Path:
     append_jsonl(
         packet_index_path(private_root),
         {
-            "schema": "FeaturePacketIndex.v1",
+            "schema": "DecisionFeaturePacketIndex.v1",
             "feature_packet_id": packet.feature_packet_id,
             "data_packet_id": packet.data_packet_id,
             "scanner_event_id": packet.scanner_event_id,
@@ -223,6 +310,32 @@ def write_feature_packet(private_root: Path, packet: FeaturePacket) -> Path:
             "path": str(out),
             "regime": packet.features.get("regime"),
             "data_quality_flags": packet.data_quality.get("flags") or [],
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
+    return out
+
+
+def write_outcome_feature_packet(private_root: Path, packet: OutcomeFeaturePacket) -> Path:
+    out = outcome_packet_dir(private_root) / f"{packet.outcome_packet_id}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps(packet.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    append_jsonl(
+        outcome_packet_index_path(private_root),
+        {
+            "schema": "OutcomeFeaturePacketIndex.v1",
+            "outcome_packet_id": packet.outcome_packet_id,
+            "decision_packet_id": packet.decision_packet_id,
+            "data_packet_id": packet.data_packet_id,
+            "scanner_event_id": packet.scanner_event_id,
+            "symbol": packet.symbol,
+            "timeframe": packet.timeframe,
+            "path": str(out),
+            "decision_role_eligible": False,
             "paper_only": True,
             "execution_allowed": False,
         },

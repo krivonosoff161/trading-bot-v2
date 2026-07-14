@@ -29,6 +29,13 @@ def stable_id(prefix: str, payload: dict[str, Any], *, length: int = 16) -> str:
     return f"{prefix}_{digest}"
 
 
+def content_sha256(payload: Any) -> str:
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def append_jsonl(path: Path, row: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -51,6 +58,7 @@ def cycle_links_path(private_root: Path) -> Path:
 def _lineage_link_id(row: dict[str, Any]) -> str:
     keys = (
         "scanner_event_id",
+        "research_envelope_id",
         "data_packet_id",
         "feature_packet_id",
         "setup_candidate_id",
@@ -111,6 +119,9 @@ class ScannerEvent:
     context_refs: dict[str, Any] = field(default_factory=dict)
     data_freshness: dict[str, Any] = field(default_factory=dict)
     raw_ref: dict[str, Any] = field(default_factory=dict)
+    source_event_id: str = ""
+    source_available_at: str = ""
+    source_content_hash: str = ""
     schema: str = SCANNER_EVENT_SCHEMA
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,9 +137,10 @@ def scanner_event_from_mover(
     mode: str,
     timestamp: str | None = None,
 ) -> ScannerEvent:
+    available_at = timestamp or utc_now()
     source = str(mover.get("source") or "live_universe")
     reason = str(mover.get("_reason") or mover.get("reason") or "ranked_live_mover")
-    payload = {
+    source_payload = {
         "symbol": symbol,
         "instrument": instrument,
         "timeframe": timeframe,
@@ -136,8 +148,23 @@ def scanner_event_from_mover(
         "reason": reason,
         "bucket": mover.get("_bucket"),
         "score": mover.get("score"),
+        "priority": mover.get("_priority"),
+        "move_pct": mover.get("move_pct"),
+        "vol_usd": mover.get("vol_usd"),
+        "spread_bps": mover.get("spread_bps"),
+        "source_ts": mover.get("ts") or mover.get("updated_at"),
         "mode": mode,
     }
+    source_content_hash = content_sha256(source_payload)
+    payload = {
+        **source_payload,
+        "source_event_id": mover.get("event_id") or mover.get("watch_id"),
+        "source_available_at": available_at,
+        "source_content_hash": source_content_hash,
+    }
+    source_event_id = str(
+        mover.get("event_id") or mover.get("watch_id") or f"source_{source_content_hash}"
+    )
     return ScannerEvent(
         scanner_event_id=stable_id("se", payload),
         symbol=symbol,
@@ -145,7 +172,7 @@ def scanner_event_from_mover(
         timeframe=timeframe,
         source=source,
         reason=reason,
-        timestamp=timestamp or utc_now(),
+        timestamp=available_at,
         mode=mode,
         movement_stats={
             "score": mover.get("score"),
@@ -159,6 +186,9 @@ def scanner_event_from_mover(
         context_refs={"bucket": mover.get("_bucket")},
         data_freshness={"source_ts": mover.get("ts") or mover.get("updated_at")},
         raw_ref={k: mover.get(k) for k in ("symbol", "inst_id", "group") if k in mover},
+        source_event_id=source_event_id,
+        source_available_at=available_at,
+        source_content_hash=source_content_hash,
     )
 
 
@@ -175,6 +205,13 @@ def scanner_event_from_intake(event: dict[str, Any], *, mode: str = "live", time
         if isinstance(observed, (int, float)) and float(observed) > 0
         else utc_now()
     )
+    evidence = event.get("evidence") or {}
+    raw_ref = event.get("raw_ref") or {}
+    source_payload = {
+        "event_id": event.get("event_id"), "source": source, "reason": reason,
+        "observed_at": observed, "raw_ref": raw_ref, "evidence": evidence,
+    }
+    source_content_hash = content_sha256(source_payload)
     payload = {
         "event_id": event.get("event_id"),
         "symbol": symbol,
@@ -182,9 +219,9 @@ def scanner_event_from_intake(event: dict[str, Any], *, mode: str = "live", time
         "source": source,
         "reason": reason,
         "mode": mode,
+        "source_available_at": timestamp,
+        "source_content_hash": source_content_hash,
     }
-    evidence = event.get("evidence") or {}
-    raw_ref = event.get("raw_ref") or {}
     return ScannerEvent(
         scanner_event_id=stable_id("se", payload),
         symbol=symbol,
@@ -213,6 +250,9 @@ def scanner_event_from_intake(event: dict[str, Any], *, mode: str = "live", time
         },
         data_freshness={"observed_at": observed},
         raw_ref={k: v for k, v in raw_ref.items() if v is not None},
+        source_event_id=str(event.get("event_id") or f"source_{source_content_hash}"),
+        source_available_at=timestamp,
+        source_content_hash=source_content_hash,
     )
 
 

@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.exit_recovery import _exit_grid
-from src.research_lab.experiment import generate_signals, load_candles, simulate_trades
+from src.research_lab.experiment import generate_signals, simulate_trades
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.farm_tasks_db import tasks_db_path
-from src.research_lab.paths import market_data_glob
 
 SHADOW_STATUS = "shadow_forward_candidate"
 FEES_BPS = 7.0
@@ -185,12 +185,11 @@ def record_observation(private_root: Path, uc_key: str, *, after_ts: int) -> dic
     cand = _load_registry(private_root).get(uc_key)
     if not cand:
         return {"uc_key": uc_key, "skipped": "not_registered"}
-    from src.research_lab.experiment import choose_symbol_file
-    path = choose_symbol_file(market_data_glob(private_root, cand["timeframe"]), cand["symbol"],
-                              timeframe=cand["timeframe"])
-    if not path:
+    candles = load_canonical_candles(
+        private_root, cand["symbol"], cand["timeframe"],
+    ).rows
+    if not candles:
         return {"uc_key": uc_key, "skipped": "no_candles"}
-    candles = load_candles(path)
     forward_bars = sum(1 for c in candles if int(c.get("ts") or 0) > int(after_ts))
     params = dict(cand.get("params") or {})
     override = _exit_override(params, str(cand.get("recovered_exit") or "baseline"))

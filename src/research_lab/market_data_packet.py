@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
+from src.research_lab.candle_identity import candle_slice_fingerprint
 from src.research_lab.pipeline_policy import default_caps
 
 SCHEMA = "MarketDataPacket.v1"
@@ -29,13 +30,7 @@ def packet_index_path(private_root: Path) -> Path:
 
 
 def _fingerprint(candles: list[dict[str, Any]]) -> str:
-    payload = {
-        "n": len(candles),
-        "first": candles[0].get("ts") if candles else None,
-        "last": candles[-1].get("ts") if candles else None,
-        "tail": [(c.get("ts"), c.get("close")) for c in candles[-8:]],
-    }
-    return stable_id("cdfp", payload, length=12)
+    return candle_slice_fingerprint("packet", "packet", candles) or ""
 
 
 def split_window(candles: list[dict[str, Any]], timeframe: str, mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -62,6 +57,9 @@ class MarketDataPacket:
     timeframe: str
     mode: str
     ohlcv_window: list[dict[str, Any]]
+    content_hash: str = ""
+    as_of_ts: int | None = None
+    available_at: str = ""
     future_window: list[dict[str, Any]] = field(default_factory=list)
     scanner_reason: str = ""
     liquidity: dict[str, Any] = field(default_factory=dict)
@@ -101,13 +99,28 @@ def build_market_data_packet(
         future = []
     if not past:
         flags.append("empty_ohlcv_window")
+    content_hash = _fingerprint(past)
+    available_at = utc_now()
+    resolved_liquidity = liquidity or {}
+    resolved_context_refs = context_refs or {}
+    provider_metadata = {
+        "provider": provider_name,
+        "window_policy": spec,
+        "past_bars": len(past),
+        "future_bars": len(future),
+    }
     payload = {
         "scanner_event_id": scanner_event_id,
         "symbol": symbol,
         "instrument": instrument,
         "timeframe": timeframe,
         "mode": mode,
-        "fingerprint": _fingerprint(past),
+        "content_hash": content_hash,
+        "available_at": available_at,
+        "scanner_reason": scanner_reason,
+        "liquidity": resolved_liquidity,
+        "context_refs": resolved_context_refs,
+        "provider_metadata": provider_metadata,
     }
     return MarketDataPacket(
         data_packet_id=stable_id("mdp", payload),
@@ -117,16 +130,14 @@ def build_market_data_packet(
         timeframe=timeframe,
         mode=mode,
         ohlcv_window=past,
+        content_hash=content_hash,
+        as_of_ts=int(past[-1]["ts"]) if past else None,
+        available_at=available_at,
         future_window=future,
         scanner_reason=scanner_reason,
-        liquidity=liquidity or {},
-        context_refs=context_refs or {},
-        provider_metadata={
-            "provider": provider_name,
-            "window_policy": spec,
-            "past_bars": len(past),
-            "future_bars": len(future),
-        },
+        liquidity=resolved_liquidity,
+        context_refs=resolved_context_refs,
+        provider_metadata=provider_metadata,
         data_quality_flags=flags,
         no_lookahead=(mode == "live" and not future),
     )
@@ -134,8 +145,15 @@ def build_market_data_packet(
 
 def write_market_data_packet(private_root: Path, packet: MarketDataPacket) -> Path:
     out = packet_dir(private_root) / f"{packet.data_packet_id}.json"
+    payload = json.dumps(packet.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if out.exists():
+        if out.read_text(encoding="utf-8") != payload:
+            raise ValueError("immutable market data packet id collision")
+        return out
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(packet.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary = out.with_suffix(".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(out)
     append_jsonl(
         packet_index_path(private_root),
         {

@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
+from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.runtime_policy import (  # noqa: E402
     cadence_path,
@@ -172,7 +173,11 @@ def run_worker_once(
                     )
                 spec = dataclasses.replace(spec, max_runs=cap)
             runtime_meta: dict = {}
-            results = evaluate_spec(spec, runtime_meta)
+            # The worker reads one immutable bounded series from the canonical
+            # candle library for all variants. JSON remains a migration fallback.
+            results = evaluate_spec(
+                spec, runtime_meta, candle_store=CandleStore(private_root),
+            )
             if verbose:
                 print(f"backend requested={runtime_meta.get('requested_backend')} "
                       f"effective={runtime_meta.get('effective_backend')} "

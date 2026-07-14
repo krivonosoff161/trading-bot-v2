@@ -444,6 +444,7 @@ class ControlCenter(tk.Tk):
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
         self.system_var = tk.StringVar(value="Состояние фермы загружается…")
         self.learning_var = tk.StringVar(value="Контур обучения загружается…")
+        self.candles_var = tk.StringVar(value="Библиотека свечей загружается…")
         self.manual_symbol = tk.StringVar(value="BTC")
         self.manual_timeframe = tk.StringVar(value="15m")
         self.manual_reason = tk.StringVar(value="срочная ручная проверка")
@@ -488,6 +489,9 @@ class ControlCenter(tk.Tk):
             anchor="w", fill=tk.X, padx=18, pady=(0, 4)
         )
         ttk.Label(self, textvariable=self.learning_var, style="Status.TLabel", wraplength=1120).pack(
+            anchor="w", fill=tk.X, padx=18, pady=(0, 4)
+        )
+        ttk.Label(self, textvariable=self.candles_var, style="Status.TLabel", wraplength=1120).pack(
             anchor="w", fill=tk.X, padx=18, pady=(0, 10)
         )
         actions = ttk.Frame(self)
@@ -1067,9 +1071,39 @@ class ControlCenter(tk.Tk):
             f"сейчас: {current_text}  |  {backend_text}"
         )
 
+    def _candle_snapshot(self) -> str:
+        path = PRIVATE_ROOT / "market_data" / "candles.sqlite3"
+        conn = self._open_readonly_db(path)
+        if conn is None:
+            return "Свечи · единая библиотека ещё не создана · используется переходный JSON"
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(row_count),0), COALESCE(SUM(gap_count),0) FROM series"
+            ).fetchone()
+            by_tf = conn.execute(
+                "SELECT timeframe, COUNT(*), COALESCE(SUM(row_count),0) "
+                "FROM series GROUP BY timeframe ORDER BY timeframe"
+            ).fetchall()
+        except sqlite3.Error:
+            return "Свечи · библиотека недоступна для чтения"
+        finally:
+            conn.close()
+        parts = [f"{row[0]}: серий {int(row[1])}, свечей {int(row[2])}" for row in by_tf]
+        size_mb = sum(
+            p.stat().st_size
+            for p in (path, Path(f"{path}-wal"), Path(f"{path}-shm"))
+            if p.is_file()
+        ) / (1024 * 1024)
+        return (
+            f"Свечи · единая SQLite-библиотека · серий {int(total[0])} · "
+            f"свечей {int(total[1])} · разрывов {int(total[2])} · {size_mb:.1f} МБ"
+            + (" | " + " | ".join(parts) if parts else "")
+        )
+
     def _heartbeat(self) -> None:
         self.system_var.set(self._system_snapshot())
         self.learning_var.set(self._learning_snapshot())
+        self.candles_var.set(self._candle_snapshot())
         contour_rows = {}
         for key, item in self.contours.items():
             external = None if item.running else self._external_descriptor(key)

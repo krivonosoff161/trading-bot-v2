@@ -20,16 +20,21 @@ import time
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.candle_store import CandleStore
 from src.research_lab.data_inventory import inspect_file
 from src.research_lab.data_prepare import MarketDataPrepareItem, prepare_market_data, timeframe_ms
+from src.research_lab.data_readiness_selector import min_rows_for
 from src.research_lab.experiment import choose_symbol_file
 from src.research_lab.farm_scheduler import plan_jobs
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.pipeline_state import PipelineState
+from src.research_lab.listing_policy import plan_listing_window
 from src.research_lab.scanner_bridge import watch_to_sweep
+from src.research_lab.strategy_registry import get_strategy
+from src.research_lab.strategy_requirements import derive_requirement
 
-MAX_BARS = 2000
-DEFAULT_DATA_DAYS = {"15m": 14, "1h": 60, "4h": 180, "1d": 1000}
+MAX_BARS = 18_000
+DEFAULT_DATA_DAYS = {"15m": 30, "1h": 365, "4h": 730, "1d": 3650}
 DEFAULT_REFILL_TIMEFRAME = "1h"
 
 
@@ -62,35 +67,74 @@ def _synth_backlog_watch(symbol: str, timeframe: str) -> dict:
 
 def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provider: Any,
                        apply: bool, now_ms: int, data_days: int | None,
-                       prepares_left: int, allow_public_output: bool) -> tuple[str, int]:
+                       prepares_left: int, allow_public_output: bool,
+                       minimum_bars: int | None = None) -> tuple[str, int]:
     """Materialize candles if absent. Returns (status, rows).
 
     status: usable | would_prepare | prepared | too_short | missing_prepared_data
-            | provider_error | provider_not_configured | data_prepare_failed | prepare_cap_reached
+            | fresh_listing_pending | preopen | invalid_instrument | provider_error
+            | provider_not_configured | data_prepare_failed | prepare_cap_reached
     """
     glob = market_data_glob(private_root, timeframe)
-    if choose_symbol_file(glob, symbol, timeframe=timeframe):
-        return "usable", 0
+    desired_start, end = _prepare_window(timeframe, now_ms, data_days)
+    store = CandleStore(private_root)
+    passport = store.instrument(symbol) or {}
+    listing = plan_listing_window(
+        timeframe,
+        desired_start,
+        end,
+        minimum_bars=max(min_rows_for(timeframe), int(minimum_bars or 0)),
+        list_time_ms=passport.get("list_time_ms"),
+        state=passport.get("state") or "live",
+    )
+    required_rows = max(min_rows_for(timeframe), int(minimum_bars or 0))
+    if not listing.may_fetch:
+        return listing.status, 0
+    coverage = store.coverage(symbol, timeframe)
+    if coverage.row_count >= required_rows and coverage.gap_count == 0:
+        return "usable", coverage.row_count
+    existing = choose_symbol_file(glob, symbol, timeframe=timeframe)
+    if existing:
+        existing_rows = int(inspect_file(existing).get("rows") or 0)
+        if existing_rows >= required_rows:
+            return "usable", existing_rows
     if not apply:
         return "would_prepare", 0
     if prepares_left <= 0:
         return "prepare_cap_reached", 0
-    start, end = _prepare_window(timeframe, now_ms, data_days)
-    item = MarketDataPrepareItem(symbol=symbol, timeframe=timeframe, start_ts=start, end_ts=end)
+    item = MarketDataPrepareItem(
+        symbol=symbol,
+        timeframe=timeframe,
+        start_ts=listing.start_ts,
+        end_ts=listing.end_ts,
+        status=listing.status,
+    )
     report = prepare_market_data([item], provider=provider, private_root=private_root,
                                  timeframe=timeframe, apply=True, allow_public_output=allow_public_output)
     if report.skipped:
         reason = str(report.skipped[0].get("reason") or "")
         if reason.startswith("provider_error"):
-            return "provider_error", 0
+            item = report.items[0] if report.items else {}
+            return ("provider_transient" if item.get("provider_error_transient") else "provider_error"), 0
         if reason == "no_data_returned":
             return "missing_prepared_data", 0
         if reason == "provider_not_configured":
             return "provider_not_configured", 0
         return "data_prepare_failed", 0
+    coverage = store.coverage(symbol, timeframe)
+    if coverage.row_count:
+        rows = coverage.row_count
+        if not listing.may_full_validate:
+            return "fresh_listing_pending", rows
+        return (
+            "prepared" if rows >= required_rows and coverage.gap_count == 0 else "too_short"
+        ), rows
     path = choose_symbol_file(glob, symbol, timeframe=timeframe)
     if path:
-        return "prepared", int(inspect_file(path).get("rows") or 0)
+        rows = int(inspect_file(path).get("rows") or 0)
+        if not listing.may_full_validate:
+            return "fresh_listing_pending", rows
+        return ("prepared" if rows >= required_rows else "too_short"), rows
     return "too_short", 0  # downloaded but not enough confirmed bars to be 'usable'
 
 
@@ -127,16 +171,38 @@ def _compile_and_queue(res, *, private_root: Path, profiles, policy, data_glob: 
 _LOOP_COUNTERS = ("jobs_queued", "data_prepared", "would_prepare", "would_queue",
                   "already_queued", "prepare_failed", "prepare_deferred")
 # prepare statuses that consumed a real download attempt (budget) — config errors do not.
-_CONSUMES_PREPARE = {"prepared", "provider_error", "too_short", "missing_prepared_data", "data_prepare_failed"}
+_CONSUMES_PREPARE = {
+    "prepared", "provider_error", "provider_transient", "too_short", "missing_prepared_data",
+    "data_prepare_failed", "fresh_listing_pending",
+}
 _RETRYABLE_SKIP_REASONS = {
     "queue_cap_reached",
     "prepare_cap_reached",
     "provider_error",
+    "provider_transient",
     "provider_not_configured",
     "missing_prepared_data",
     "data_prepare_failed",
     "too_short",
+    "fresh_listing_pending",
+    "preopen",
 }
+
+
+def _sweep_minimum_bars(sweep: Any) -> int:
+    definition = get_strategy(sweep.setup_family)
+    params = dict(definition.parameter_defaults)
+    for grid in (sweep.setup_grid, sweep.exit_grid):
+        for key, values in (grid or {}).items():
+            numeric = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+            if numeric:
+                params[key] = max(numeric)
+    return derive_requirement(
+        sweep.setup_family,
+        sweep.anchor_symbol,
+        sweep.timeframe,
+        params=params,
+    ).min_rows
 
 
 def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, cycle,
@@ -162,7 +228,8 @@ def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, c
         return eff
     status, rows = _ensure_local_data(inst, tf, private_root=private_root, provider=provider, apply=apply,
                                       now_ms=now_ms, data_days=data_days, prepares_left=prepares_left,
-                                      allow_public_output=allow_public_output)
+                                      allow_public_output=allow_public_output,
+                                      minimum_bars=_sweep_minimum_bars(res.sweep))
     eff["consumed_prepare"] = status in _CONSUMES_PREPARE
     if status == "would_prepare":
         eff["would_prepare"] = eff["would_queue"] = 1

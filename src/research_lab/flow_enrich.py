@@ -190,7 +190,14 @@ def run_flow_enrich(
             if not apply:
                 counters["would_enrich"] += 1
                 continue
+            enriched_before = counters.get("enriched", 0)
             budget = _enrich_one(path, key, symbol, provider=provider, state=state, now_ms=now_ms,
                                  ttl_seconds=ttl_seconds, cooldown_seconds=cooldown_seconds,
                                  max_attempts=max_attempts, budget=budget, counters=counters)
+            if counters.get("enriched", 0) > enriched_before:
+                from src.research_lab.candle_library import sync_json_to_store
+                sync_json_to_store(
+                    private_root, symbol, unit.timeframe, path,
+                    source="funding_enrichment",
+                )
     return {"counters": counters}

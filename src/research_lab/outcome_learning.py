@@ -13,10 +13,9 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.research_lab.experiment import choose_symbol_file, load_candles
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab import feedback_reader as fr
 from src.research_lab.lineage_contract import stable_id
-from src.research_lab.paths import market_data_glob
 
 SCHEMA = "OutcomeLearningCase.v1"
 
@@ -329,26 +328,19 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
             "reason": "missing_symbol_or_timeframe",
             "candles": [],
         }
-    path = choose_symbol_file(market_data_glob(private_root, timeframe), symbol, timeframe=timeframe)
-    if path is None:
+    try:
+        candle_slice = load_canonical_candles(private_root, symbol, timeframe)
+        candles = candle_slice.rows
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        candle_slice = None
+        candles = []
+    if not candles:
         return {
             "schema": "OutcomeMarketContext.v1",
             "status": "not_available",
             "reason": "prepared_candles_not_found",
             "symbol": symbol,
             "timeframe": timeframe,
-            "candles": [],
-        }
-    try:
-        candles = load_candles(path)
-    except (OSError, json.JSONDecodeError, ValueError, TypeError):
-        return {
-            "schema": "OutcomeMarketContext.v1",
-            "status": "not_available",
-            "reason": "prepared_candles_unreadable",
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "source_label": f"market_data/{timeframe}/{path.name}",
             "candles": [],
         }
     boundary = _int(row, "boundary_ts")
@@ -374,7 +366,8 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
         "reason": "" if window else "no_candles_in_signal_window",
         "symbol": symbol,
         "timeframe": timeframe,
-        "source_label": f"market_data/{timeframe}/{path.name}",
+        "source_label": candle_slice.label,
+        "candle_source": candle_slice.source,
         "boundary_ts": boundary,
         "pre_bars": pre_bars,
         "post_bars": max(0, len(window) - pre_bars),

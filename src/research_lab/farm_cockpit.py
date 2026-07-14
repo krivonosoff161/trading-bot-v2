@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.paths import market_data_dir
+from src.research_lab.candle_store import CandleStore
 from src.research_lab.state_db import default_db_path
 
 
@@ -113,8 +114,13 @@ def _data_readiness(private_root: Path) -> dict[str, Any]:
         s = str(entry.get("status") or "unknown")
         funding_status[s] = funding_status.get(s, 0) + 1
     oi_dir = private_root / "market_data" / "oi"
+    try:
+        candle_library = CandleStore(private_root).series_summary()
+    except Exception:  # noqa: BLE001 - read-only cockpit must degrade, never crash
+        candle_library = {"available": False, "error": "unreadable"}
     return {
         "prepared_files_by_timeframe": prepared,
+        "candle_library": candle_library,
         "funding_enrich_status": funding_status,
         "oi_slot_files": len(list(oi_dir.glob("*_oi.*"))) if oi_dir.exists() else 0,
     }

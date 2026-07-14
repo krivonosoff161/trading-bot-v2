@@ -50,6 +50,81 @@ _ADAPTIVE_AXES_BY_STRATEGY = {
 
 
 @dataclass(frozen=True)
+class HistoryFormula:
+    """One candidate warm-up expression; the strategy uses the maximum candidate."""
+
+    terms: tuple[tuple[str, int], ...] = ()
+    offset: int = 0
+
+    def evaluate(self, params: dict[str, Any]) -> int:
+        return max(1, int(self.offset) + sum(
+            int(params.get(key, 0) or 0) * int(multiplier)
+            for key, multiplier in self.terms
+        ))
+
+    def label(self) -> str:
+        chunks = [f"{multiplier}*{key}" for key, multiplier in self.terms]
+        if self.offset:
+            chunks.append(str(self.offset))
+        return "+".join(chunks) or "1"
+
+
+def _hf(*terms: tuple[str, int], offset: int = 0) -> HistoryFormula:
+    return HistoryFormula(tuple(terms), int(offset))
+
+
+# These formulas mirror the actual first usable index in each signal generator.
+# Keeping all 27 here makes an omitted manifest a construction-time error rather
+# than a silent fallback to a guessed parameter name.
+_HISTORY_FORMULAS_BY_STRATEGY: dict[str, tuple[HistoryFormula, ...]] = {
+    "momentum_breakout": (_hf(("lookback", 1)),),
+    "donchian_breakout": (_hf(("lookback", 1)),),
+    "range_breakout": (_hf(("lookback", 1)),),
+    "volatility_squeeze_breakout": (_hf(("lookback", 2)),),
+    "breakout_retest": (_hf(("lookback", 1), ("retest_window", 1)),),
+    "mean_reversion_fade": (_hf(("lookback", 1)),),
+    "rsi_reversal": (_hf(("period", 1), offset=1),),
+    "volume_exhaustion_fade": (
+        _hf(("lookback", 1)), _hf(("move_bars", 1)),
+    ),
+    "trend_pullback": (_hf(("trend_ma", 1)), _hf(("pullback_ma", 1))),
+    "moving_average_reclaim": (_hf(("ma", 1), ("below_bars", 1)),),
+    "volume_shock_continuation": (_hf(("lookback", 1)),),
+    "impulse_continuation": (_hf(offset=1),),
+    "main_fast_swing_regime": (
+        _hf(("adx_period", 2)), _hf(("ema_slow", 1)),
+        _hf(("breakout_lookback", 1)), _hf(("vol_period", 1)),
+    ),
+    "range_volume_breakout": (
+        _hf(("range_lookback", 2)), _hf(("vol_period", 1)),
+    ),
+    "volatility_squeeze_breakout_v2": (
+        _hf(("squeeze_lookback", 2)), _hf(("atr_period", 1), offset=12),
+        _hf(("vol_period", 1)),
+    ),
+    "vwap_reclaim_reject": (
+        _hf(("vwap_period", 1), offset=1), _hf(("ema_slow", 1)),
+    ),
+    "fvg_reclaim_reject": (_hf(("fvg_lookback", 1)), _hf(offset=3)),
+    "fractal_swing_break_retest": (
+        _hf(("swing_lookback", 2), ("retest_window", 1)),
+    ),
+    "exhaustion_fade": (_hf(("run_lookback", 1)),),
+    "sfp_liquidity_sweep": (_hf(("lookback", 1)),),
+    "oi_funding_squeeze": (_hf(("oi_lookback", 1)),),
+    "oi_price_quadrant": (_hf(("oi_lookback", 1)),),
+    "oi_price_quadrant_continuation": (_hf(("oi_lookback", 1)),),
+    "oi_price_quadrant_trap_fade": (_hf(("oi_lookback", 1)),),
+    "bb_volume_fade": (
+        _hf(("bb_period", 1)), _hf(("adx_period", 2)),
+        _hf(("vol_period", 1)),
+    ),
+    "pump_dump_scalp": (_hf(("vol_period", 1)),),
+    "microstructure_confirmed_breakout": (_hf(("range_lookback", 1)),),
+}
+
+
+@dataclass(frozen=True)
 class StrategyDef:
     strategy_id: str
     display_name: str
@@ -65,15 +140,31 @@ class StrategyDef:
     # farm classifies the result as NEEDS_<...>_DATA instead of pretending it's active.
     # Tokens: "oi" | "funding" | "microstructure".
     required_data: tuple[str, ...] = ()
+    history_formulas: tuple[HistoryFormula, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.adaptive_parameter_axes:
-            return
-        axes = _ADAPTIVE_AXES_BY_STRATEGY.get(self.strategy_id, ())
+        axes = self.adaptive_parameter_axes or _ADAPTIVE_AXES_BY_STRATEGY.get(self.strategy_id, ())
         unknown = set(axes) - set(self.parameter_defaults)
         if unknown:
             raise ValueError(f"unknown adaptive axes for {self.strategy_id}: {sorted(unknown)}")
         object.__setattr__(self, "adaptive_parameter_axes", axes)
+        formulas = self.history_formulas or _HISTORY_FORMULAS_BY_STRATEGY.get(self.strategy_id, ())
+        if not formulas:
+            raise ValueError(f"missing candle-history manifest for {self.strategy_id}")
+        formula_keys = {key for formula in formulas for key, _ in formula.terms}
+        unknown_history = formula_keys - set(self.parameter_defaults)
+        if unknown_history:
+            raise ValueError(
+                f"unknown history parameters for {self.strategy_id}: {sorted(unknown_history)}"
+            )
+        object.__setattr__(self, "history_formulas", formulas)
+
+    def required_history_bars(self, params: dict[str, Any] | None = None) -> int:
+        merged = {**self.parameter_defaults, **(params or {})}
+        return max(formula.evaluate(merged) for formula in self.history_formulas)
+
+    def history_formula_labels(self) -> tuple[str, ...]:
+        return tuple(formula.label() for formula in self.history_formulas)
 
 
 _DEFS: list[StrategyDef] = [
@@ -171,6 +262,7 @@ _DEFS: list[StrategyDef] = [
         s.signals_main_fast_swing_regime,
         parameter_defaults={"ema_fast": 20, "ema_slow": 50, "adx_period": 14, "adx_trend": 22.0,
                             "di_trend": 10.0, "breakout_lookback": 20, "min_vol_ratio": 1.2,
+                            "vol_period": 20,
                             "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
         risk_notes="Research candidate. Audit: 15m scalp entry-timing & RR were NOT levers; "
                    "DRIFT/RANGING-fade were NO-GO. Validate OOS before any interpretation.",
@@ -339,6 +431,8 @@ def registry_summary() -> list[dict[str, Any]]:
             "compatible_asset_classes": list(d.compatible_asset_classes),
             "compatible_timeframes": list(d.compatible_timeframes),
             "parameter_defaults": dict(d.parameter_defaults),
+            "history_formulas": list(d.history_formula_labels()),
+            "required_data": list(d.required_data),
             "risk_notes": d.risk_notes,
         }
         for d in list_strategies()

@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import utc_now
+from src.research_lab.adaptive_trial import (
+    adaptive_trial_id,
+    write_adaptive_trial_record,
+)
 from src.research_lab.hard_validation_contract import trade_evidence_hash
 from src.research_lab.paths import resolve_private_child
 from src.research_lab.system_analyst_feedback import (
@@ -48,6 +52,14 @@ def _candidate_path(private_root: Path, recipient: str, environment_id: str) -> 
 def _stable_id(payload: dict[str, Any]) -> str:
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "env_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _adaptive_trial_id_from_row(row: dict[str, Any]) -> str:
+    expected = adaptive_trial_id(dict(row.get("task_spec") or {}))
+    actual = str(row.get("adaptive_trial_id") or expected)
+    if actual != expected:
+        raise ValueError("adaptive trial identity mismatch")
+    return actual
 
 
 def environment_dir(private_root: Path, recipient: str) -> Path:
@@ -170,6 +182,11 @@ def materialize_role_environment(
             "evidence_refs": list(recommendation.get("evidence_refs") or []),
             "task_spec": dict(recommendation.get("task_spec") or {}),
         }
+        trial_id = str(basis["task_spec"].get("adaptive_trial_id") or "")
+        expected_trial_id = adaptive_trial_id(basis["task_spec"])
+        if trial_id and trial_id != expected_trial_id:
+            raise ValueError("adaptive trial identity mismatch")
+        trial_id = expected_trial_id
         environment_id = _stable_id(basis)
         row = {
             "schema": SCHEMA,
@@ -178,6 +195,7 @@ def materialize_role_environment(
             "recipient": recipient,
             "request_kind": REQUEST_KIND[recipient],
             "feedback_id": basis["feedback_id"],
+            "adaptive_trial_id": trial_id,
             "proposed_action": basis["action"],
             "reason": str(recommendation.get("reason") or ""),
             "evidence_refs": basis["evidence_refs"],
@@ -211,6 +229,14 @@ def materialize_role_environment(
                 encoding="utf-8",
             )
         materialized.append(row)
+        write_adaptive_trial_record(
+            private_root,
+            trial_id=trial_id,
+            stage="role_candidate",
+            role=recipient,
+            artifact_id=environment_id,
+            evidence_refs=tuple(basis["evidence_refs"]),
+        )
     return materialized
 
 
@@ -279,6 +305,17 @@ def gate_role_environment(
         "untouched_evaluation_hash": evaluation_hash,
         "gated_at": gated["gated_at"],
     })
+    write_adaptive_trial_record(
+        private_root,
+        trial_id=_adaptive_trial_id_from_row(row),
+        stage="final_gate_accepted" if accepted else "final_gate_rejected",
+        role=recipient,
+        artifact_id=environment_id,
+        evidence_refs=(
+            _bound_ref(Path(gate_path), gate_hash),
+            _bound_ref(Path(evaluation_path), evaluation_hash),
+        ),
+    )
     return gated
 
 
@@ -321,4 +358,12 @@ def accept_role_request(
         "deterministic_gate_result": "recipient_contract_passed",
         "accepted_at": accepted["accepted_at"],
     })
+    write_adaptive_trial_record(
+        private_root,
+        trial_id=_adaptive_trial_id_from_row(row),
+        stage="request_accepted",
+        role=recipient,
+        artifact_id=environment_id,
+        evidence_refs=tuple(row.get("evidence_refs") or ()),
+    )
     return accepted

@@ -35,6 +35,7 @@ from src.research_lab.instrument_discovery import (  # noqa: E402
     load_snapshot,
     save_snapshot,
 )
+from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.providers.okx_instruments import InstrumentsError, OkxPublicInstrumentsProvider  # noqa: E402
 
@@ -44,6 +45,14 @@ def _summary_from_snapshot(snapshot: dict) -> dict:
         "count": int(snapshot.get("count") or 0),
         "group_sizes": {g: len(v) for g, v in (snapshot.get("groups") or {}).items()},
     }
+
+
+def _persist_passports(private_root: Path, snapshot: dict, now_ms: int) -> int:
+    catalog = snapshot.get("catalog") or snapshot.get("instruments") or {}
+    return CandleStore(private_root).upsert_instruments(
+        [row for row in catalog.values() if isinstance(row, dict)],
+        updated_at_ms=now_ms,
+    )
 
 
 def discover(
@@ -57,6 +66,7 @@ def discover(
 ) -> dict:
     old = load_snapshot(private_root)
     if old.get("instruments") and not force_refresh and is_fresh(old, now_ms, ttl_seconds):
+        passports = _persist_passports(private_root, old, now_ms) if apply else 0
         summary = _summary_from_snapshot(old)
         return {
             "status": "cached",
@@ -66,6 +76,7 @@ def discover(
             "diff": {"new": 0, "delisted": 0, "group_changes": 0},
             "new_sample": [],
             "delisted": [],
+            "passports_written": passports,
         }
     provider = provider or OkxPublicInstrumentsProvider()
     try:
@@ -78,6 +89,9 @@ def discover(
     if apply:
         private_root = resolve_private_root(private_root)
         save_snapshot(private_root, snapshot)
+        passports = _persist_passports(private_root, snapshot, now_ms)
+    else:
+        passports = 0
     summary = _summary_from_snapshot(snapshot)
     return {
         "status": "discovered" if apply else "would_discover",
@@ -87,6 +101,7 @@ def discover(
                  "group_changes": len(diff["group_changes"])},
         "new_sample": diff["new_instruments"][:10],
         "delisted": diff["delisted"][:10],
+        "passports_written": passports,
     }
 
 
