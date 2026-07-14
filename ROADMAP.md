@@ -5,12 +5,13 @@ Status: **ACTIVE**. Updated 2026-07-14.
 The project is a paper/research workbench. This roadmap is ordered by evidence
 and maintainability, not by a path to live trading.
 
-## Immediate Foundation Gate
+## Completed Foundation Gate
 
-Before further product behavior changes, finish the shared 12-stage environment
-repair: one stable/product checkout plus at most one development worktree,
-fresh compact continuity, classified archives/runtime data, bounded local-state
-write amplification, and a verified Git integration path.
+The shared environment repair now has one stable/product checkout plus one
+development worktree, compact replace-in-place continuity, classified
+archives/runtime data, bounded local-state write amplification, and a reviewed
+Git integration path. Runtime authority remains separate from documentation and
+Git state.
 
 After that gate, repair the research station in this dependency order:
 
@@ -22,10 +23,12 @@ After that gate, repair the research station in this dependency order:
 6. One immutable AdaptiveTrial through farm, validator, paper and analyst.
 7. Prompt/tools/versioned-RAG/evals before any local-model weight training.
 
-Implementation status on `codex/market-data-storage` (2026-07-14): all seven
-items above are implemented for review. Verification is still in progress;
-private JSON migration, task requeue, runtime observation, push and merge have
-not occurred. DSR/PBO are intentionally shadow-only until measured evidence
+Implementation status (2026-07-14): all seven items above were reviewed in PR
+[#178](https://github.com/krivonosoff161/trading-bot-v2/pull/178), passed the
+non-live server checks, and were squash-merged into `main`. The private candle
+store was migrated non-destructively with the JSON sources retained, and the
+supported paper/research cycle was started under separate operator authority
+for observation. DSR/PBO are intentionally shadow-only until measured evidence
 justifies a separate promotion decision. LoRA/adapter training remains deferred.
 
 ## Current: Documentation And Public-Safety Rebuild

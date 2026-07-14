@@ -1,6 +1,6 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-13.
+Status: **ACTIVE**. Updated 2026-07-14.
 
 This page states what the public repository supports. It is deliberately not a
 runtime dashboard: process IDs, current balances, private journals, signal
@@ -63,8 +63,9 @@ into an issue, PR, or public document; produce a sanitized aggregate instead.
 
 ## Next Public Work
 
-1. Review and merge the verified adaptive-loop implementation.
-2. Run a staged paper-only smoke cycle and inspect the learning status.
+1. Observe the merged adaptive loop through the supported paper-only surface.
+2. Inspect learning status and sanitized operational aggregates without
+   publishing private runtime data.
 3. Accumulate bounded paper evidence and run the private acceptance window for issue #172
    before using any environment candidate as research input.
 
