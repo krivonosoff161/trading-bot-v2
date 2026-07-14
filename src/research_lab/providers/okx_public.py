@@ -313,8 +313,12 @@ class OkxPublicMarketDataProvider:
         start_ts, end_ts = int(start_ts), int(end_ts)
         if end_ts < start_ts:
             raise ValueError("end_ts before start_ts")
-        if (end_ts - start_ts) // interval_ms + 1 > MAX_WINDOW_BARS:
-            raise ValueError(f"window exceeds {MAX_WINDOW_BARS} bars; refuse unbounded fetch")
+        requested_bars = (end_ts - start_ts) // interval_ms + 1
+        fetch_capacity = min(MAX_WINDOW_BARS, self.max_pages * PAGE_LIMIT)
+        if requested_bars > fetch_capacity:
+            raise ValueError(
+                f"window exceeds configured fetch capacity ({fetch_capacity} bars)",
+            )
 
         inst_id = to_inst_id(symbol)
         collected: dict[int, dict[str, Any]] = {}
