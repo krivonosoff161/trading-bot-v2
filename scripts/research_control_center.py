@@ -1090,15 +1090,22 @@ class ControlCenter(tk.Tk):
             conn.close()
         parts = [f"{row[0]}: серий {int(row[1])}, свечей {int(row[2])}" for row in by_tf]
         size_mb = sum(
-            p.stat().st_size
+            self._optional_file_size(p)
             for p in (path, Path(f"{path}-wal"), Path(f"{path}-shm"))
-            if p.is_file()
         ) / (1024 * 1024)
         return (
             f"Свечи · единая SQLite-библиотека · серий {int(total[0])} · "
             f"свечей {int(total[1])} · разрывов {int(total[2])} · {size_mb:.1f} МБ"
             + (" | " + " | ".join(parts) if parts else "")
         )
+
+    @staticmethod
+    def _optional_file_size(path: Path) -> int:
+        """Return a transient SQLite file size without racing its deletion."""
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
 
     def _heartbeat(self) -> None:
         self.system_var.set(self._system_snapshot())
