@@ -25,7 +25,6 @@ from src.research_lab.experiment import (
     annotate_signals_with_regime,
     filter_signals,
     generate_signals,
-    load_candles,
     simulate_trades,
 )
 from src.research_lab.farm_tasks_db import tasks_db_path
@@ -454,32 +453,28 @@ def _rebuild_trades_from_result(
     metrics: dict[str, Any],
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Backward-compatible trade-series recovery for old run artifacts.
+    """Recover trades only when the exact experiment snapshot can be re-selected.
 
-    Early farm artifacts stored aggregate metrics but not the per-trade series that
-    hard validation needs. Rebuild the same deterministic CPU simulation from the
-    recorded params, family, filters and candle file label instead of degrading those
-    old candidates to NEEDS_MORE_DATA forever.
+    Aggregate-only legacy artifacts did not bind a point-in-time candle snapshot.
+    Replaying them against the current local series would create different evidence
+    under the old result identity, so those artifacts now fail closed.
     """
-    label = str(metrics.get("data_file_label") or "")
     tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
     symbol = str(row.get("symbol") or context.get("_symbol") or "")
-    candles: list[dict[str, Any]] = []
-    if tf and symbol:
-        candles = load_canonical_candles(private_root, symbol, tf).rows
-    if not candles and not label:
+    expected_snapshot_id = str(metrics.get("data_snapshot_id") or "")
+    if not tf or not symbol or not expected_snapshot_id:
         return []
-    candidates = []
-    if not candles and tf:
-        candidates.append(Path(private_root) / "market_data" / tf / label)
-    if not candles:
-        candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
-        path = next((p for p in candidates if p.exists()), None)
-        if path is None:
-            return []
+    selected = load_canonical_candles(
+        private_root, symbol, tf, purpose="experiment", coverage_policy="gap_free",
+    )
+    if (
+        not selected.rows
+        or selected.manifest.snapshot_id != expected_snapshot_id
+        or selected.manifest.provenance_status != "complete"
+    ):
+        return []
     try:
-        if not candles:
-            candles = load_candles(path)
+        candles = selected.rows
         family = str(row.get("family") or "")
         params = dict(row.get("params") or {})
         signals = generate_signals(candles, family, params)

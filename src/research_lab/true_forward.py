@@ -97,9 +97,11 @@ def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CAN
     return out[:max_candidates]
 
 
-def _last_bar_ts(private_root: Path, symbol: str, timeframe: str) -> int:
-    candles = load_canonical_candles(private_root, symbol, timeframe).rows
-    return int(candles[-1].get("ts") or 0) if candles else 0
+def _boundary_snapshot(private_root: Path, symbol: str, timeframe: str):
+    return load_canonical_candles(
+        private_root, symbol, timeframe,
+        purpose="true_forward_registration", coverage_policy="gap_free",
+    )
 
 
 def register(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES) -> dict[str, Any]:
@@ -110,8 +112,12 @@ def register(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
     for w in build_watchlist(private_root, max_candidates=max_candidates):
         if w.uc_key in reg:
             continue  # keep the original boundary
-        boundary = _last_bar_ts(private_root, w.symbol, w.timeframe)
+        selected = _boundary_snapshot(private_root, w.symbol, w.timeframe)
+        boundary = int(selected.rows[-1].get("ts") or 0) if selected.rows else 0
         reg[w.uc_key] = {**w.to_dict(), "boundary_ts": boundary, "last_collected_ts": boundary,
+                         "boundary_snapshot_id": selected.manifest.snapshot_id,
+                         "boundary_evidence_hash": selected.manifest.evidence_hash,
+                         "boundary_provenance_status": selected.manifest.provenance_status,
                          "status": STATUS_PENDING, "forward_trades": 0, "forward_net_sum": 0.0,
                          "forward_tp_before_sl": 0, "forward_mfe_sum": 0.0, "forward_mae_sum": 0.0}
     _write_registry(private_root, reg)
@@ -158,9 +164,11 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     row = reg.get(uc_key)
     if not row:
         return {"uc_key": uc_key, "skipped": "not_registered"}
-    candles = load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, row["symbol"], row["timeframe"],
-    ).rows
+        purpose="true_forward_collection", coverage_policy="gap_free",
+    )
+    candles = selected.rows
     if not candles:
         return {"uc_key": uc_key, "skipped": "no_candles"}
     boundary = int(row.get("last_collected_ts") or row.get("boundary_ts") or 0)
@@ -172,10 +180,15 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
                if int(candles[int(s["idx"])].get("ts") or 0) > boundary]
     trades = _simulate(candles, signals, params, str(row.get("exit") or "baseline"))
     _accumulate(row, trades, len(new_bars), int(candles[-1].get("ts") or 0))
+    row["last_snapshot_id"] = selected.manifest.snapshot_id
+    row["last_evidence_hash"] = selected.manifest.evidence_hash
+    row["last_provenance_status"] = selected.manifest.provenance_status
     reg[uc_key] = row
     _write_registry(private_root, reg)
     return {"uc_key": uc_key, "status": row["status"], "new_bars": len(new_bars),
-            "forward_trades": row["forward_trades"]}
+            "forward_trades": row["forward_trades"],
+            "data_snapshot_id": selected.manifest.snapshot_id,
+            "data_provenance_status": selected.manifest.provenance_status}
 
 
 def _accumulate(row: dict[str, Any], trades: list[dict[str, Any]], new_bars: int, last_ts: int) -> None:

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.entry_timing import event_anchored_timing
-from src.research_lab.candle_identity import candle_slice_fingerprint
+from src.research_lab.candle_identity import candle_evidence_fingerprint
 from src.research_lab.regime import regime_at, regime_breakdown, regime_matches
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.validator import validate_candidate
@@ -87,6 +87,8 @@ class ExperimentSpec:
     plan_meta: dict[str, Any] = field(default_factory=dict)
     timeframe: str = "1d"
     backend: str = "cpu"
+    data_snapshot_id: str = ""
+    data_evidence_hash: str = ""
 
     @classmethod
     def from_json(cls, path: Path) -> "ExperimentSpec":
@@ -108,6 +110,10 @@ class ExperimentSpec:
             plan_meta=dict(data.get("plan_meta") or {}),
             timeframe=str(data.get("timeframe") or "1d"),
             backend=str(data.get("backend") or "cpu"),
+            data_snapshot_id=str(data.get("data_snapshot_id") or ""),
+            data_evidence_hash=str(
+                data.get("data_evidence_hash") or data.get("data_fingerprint") or ""
+            ),
         )
 
 
@@ -133,14 +139,17 @@ class RunResult:
 _OPTIONAL_CANDLE_FIELDS = ("funding", "oi", "index_px", "obi_top5", "spread_bps", "trade_delta_100")
 
 
-def load_candles(path: Path) -> list[dict[str, float | int | str]]:
+def load_candles(path: Path) -> list[dict[str, Any]]:
     rows = json.loads(path.read_text(encoding="utf-8"))
-    out: list[dict[str, float | int | str]] = []
+    out: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
+        confirm = str(row.get("confirm", "1")).strip().lower()
+        if confirm in {"0", "false", "no"}:
+            continue
         try:
-            candle: dict[str, float | int | str] = {
+            candle: dict[str, Any] = {
                 "ts": int(row["ts"]),
                 "date": str(row.get("date") or ""),
                 "open": float(row["open"]),
@@ -158,6 +167,8 @@ def load_candles(path: Path) -> list[dict[str, float | int | str]]:
                     candle[flow_field] = float(value)
                 except (TypeError, ValueError):
                     pass
+        known = {"ts", "date", "open", "high", "low", "close", "vol", *_OPTIONAL_CANDLE_FIELDS}
+        candle.update({str(key): value for key, value in row.items() if key not in known})
         out.append(candle)
     return sorted(out, key=lambda r: int(r["ts"]))
 
@@ -166,7 +177,7 @@ def _candle_identity(
     symbol: str, timeframe: str, candles: list[dict[str, Any]],
 ) -> str:
     """Stable identity for the exact bounded series handed to every variant."""
-    return candle_slice_fingerprint(symbol, timeframe, candles) or ""
+    return candle_evidence_fingerprint(symbol, timeframe, candles) or ""
 
 
 def _load_experiment_candles(
@@ -175,18 +186,27 @@ def _load_experiment_candles(
     *,
     timeframe: str | None,
     candle_store: Any | None,
-) -> tuple[list[dict[str, Any]], str, str] | None:
+) -> tuple[list[dict[str, Any]], str, str, str] | None:
     """Load once from the canonical store, with JSON as migration fallback."""
     wanted_tf = str(timeframe or "").strip().lower()
     if candle_store is not None and wanted_tf:
-        coverage = candle_store.coverage(symbol, wanted_tf)
-        if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
-            rows = candle_store.read(
-                symbol, wanted_tf, coverage.first_ts, coverage.last_ts,
+        from src.research_lab.candle_library import load_canonical_candles
+
+        selected = load_canonical_candles(
+            candle_store.private_root,
+            symbol,
+            wanted_tf,
+            fallback_glob=data_glob,
+            purpose="experiment",
+            coverage_policy="gap_free",
+        )
+        if selected.rows:
+            return (
+                selected.rows,
+                selected.label,
+                selected.manifest.evidence_hash,
+                selected.manifest.snapshot_id,
             )
-            if rows:
-                label = f"sqlite:{str(symbol).replace('-', '_').upper()}:{wanted_tf}"
-                return rows, label, _candle_identity(symbol, wanted_tf, rows)
 
     path = choose_symbol_file(data_glob, symbol, timeframe=timeframe)
     if not path:
@@ -195,7 +215,29 @@ def _load_experiment_candles(
     if not rows:
         return None
     resolved_tf = wanted_tf or _derive_timeframe(rows)
-    return rows, path.name, _candle_identity(symbol, resolved_tf, rows)
+    from src.research_lab.candle_snapshot import build_snapshot
+
+    legacy_rows = []
+    for row in rows:
+        item = dict(row)
+        item["_source"] = "legacy-json"
+        item["_provenance_status"] = "legacy_unknown"
+        legacy_rows.append(item)
+    snapshot = build_snapshot(
+        symbol=symbol,
+        timeframe=resolved_tf,
+        rows=legacy_rows,
+        start_ts=int(legacy_rows[0]["ts"]),
+        end_ts=int(legacy_rows[-1]["ts"]),
+        as_of_ms=None,
+        purpose="experiment",
+        coverage_policy="gap_free",
+        source_backend="json",
+    )
+    return (
+        snapshot.rows, path.name, snapshot.manifest.evidence_hash,
+        snapshot.manifest.snapshot_id,
+    )
 
 
 def _derive_timeframe(candles: list[dict[str, Any]]) -> str:
@@ -846,7 +888,7 @@ def evaluate_spec(
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
     results = []
     tf = spec.timeframe if spec.timeframe else None
-    loaded: dict[tuple[str, str], tuple[list[dict[str, Any]], str, str]] = {}
+    loaded: dict[tuple[str, str], tuple[list[dict[str, Any]], str, str, str]] = {}
     for symbol, family in itertools.product(spec.symbols, spec.families):
         cache_key = (symbol, str(tf or ""))
         candle_bundle = loaded.get(cache_key)
@@ -858,7 +900,17 @@ def evaluate_spec(
                 loaded[cache_key] = candle_bundle
         if candle_bundle is None:
             continue
-        candles, data_label, data_fingerprint = candle_bundle
+        candles, data_label, data_fingerprint, data_snapshot_id = candle_bundle
+        if (
+            spec.data_snapshot_id
+            and data_snapshot_id != spec.data_snapshot_id
+        ) or (
+            spec.data_evidence_hash
+            and data_fingerprint != spec.data_evidence_hash
+        ):
+            raise RuntimeError(
+                "queued candle snapshot drift: selected evidence no longer matches the queued spec"
+            )
         # Record the resolved timeframe so downstream provenance (candidate
         # registry -> hard validation -> setup cards) never loses it. When the
         # spec carries no explicit timeframe, derive it from the candle spacing
@@ -871,6 +923,7 @@ def evaluate_spec(
             zero["data_file_timeframe"] = file_tf or ""
             zero["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
             zero["data_fingerprint"] = data_fingerprint
+            zero["data_snapshot_id"] = data_snapshot_id
             results.append(RunResult(
                 run_id=stable_run_id(
                     symbol, family, {}, experiment_id=spec.experiment_id,
@@ -932,6 +985,7 @@ def evaluate_spec(
             metrics["data_file_timeframe"] = file_tf or ""
             metrics["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
             metrics["data_fingerprint"] = data_fingerprint
+            metrics["data_snapshot_id"] = data_snapshot_id
             if spec.event_context:
                 event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
                 if event_timing:

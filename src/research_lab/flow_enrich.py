@@ -198,6 +198,6 @@ def run_flow_enrich(
                 from src.research_lab.candle_library import sync_json_to_store
                 sync_json_to_store(
                     private_root, symbol, unit.timeframe, path,
-                    source="funding_enrichment",
+                    source="funding_enrichment", available_at_ms=now_ms,
                 )
     return {"counters": counters}

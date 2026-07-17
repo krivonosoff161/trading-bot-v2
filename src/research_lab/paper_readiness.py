@@ -52,6 +52,8 @@ def summarize_paper_readiness(
     plan_ready = 0
     local_data_ready = 0
     local_data_missing = 0
+    local_data_unproven = 0
+    data_manifests: dict[str, dict[str, Any]] = {}
 
     for card in cards:
         hard_status = str(card.hard_status or "missing").strip() or "missing"
@@ -86,12 +88,30 @@ def summarize_paper_readiness(
         plan_ready += 1
         if not check_local_data:
             continue
-        candles = load_canonical_candles(
+        selected = load_canonical_candles(
             Path(private_root), plan.symbol, plan.timeframe,
-        ).rows
-        if not candles:
+            purpose="paper_readiness", coverage_policy="gap_free",
+        )
+        data_manifests[card.setup_id] = {
+            "snapshot_id": selected.manifest.snapshot_id,
+            "evidence_hash": selected.manifest.evidence_hash,
+            "provenance_status": selected.manifest.provenance_status,
+            "coverage_status": selected.manifest.coverage_status,
+        }
+        if not selected.rows:
             local_data_missing += 1
             reason = "local_candles_missing"
+            reasons[reason] += 1
+            if len(sample_blockers) < 10:
+                sample_blockers.append({
+                    "setup_id": card.setup_id,
+                    "symbol": card.symbol,
+                    "timeframe": card.timeframe,
+                    "reason": reason,
+                })
+        elif selected.manifest.provenance_status != "complete":
+            local_data_unproven += 1
+            reason = "local_candles_provenance_unknown"
             reasons[reason] += 1
             if len(sample_blockers) < 10:
                 sample_blockers.append({
@@ -110,6 +130,8 @@ def summarize_paper_readiness(
         "plan_ready": plan_ready,
         "local_data_ready": local_data_ready,
         "local_data_missing": local_data_missing,
+        "local_data_unproven": local_data_unproven,
+        "data_manifests": data_manifests,
         "by_hard_status": dict(sorted(hard.items())),
         "by_lite_status": dict(sorted(lite.items())),
         "blocked_reasons": dict(sorted(reasons.items())),

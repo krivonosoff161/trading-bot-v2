@@ -152,6 +152,7 @@ class OutcomeFeaturePacket:
     decision_packet_id: str
     scanner_event_id: str
     data_packet_id: str
+    future_evidence_id: str
     symbol: str
     instrument: str
     timeframe: str
@@ -239,6 +240,8 @@ def build_feature_packet(
             "flags": list(packet.data_quality_flags),
             "past_bars": len(packet.ohlcv_window),
             "as_of_ts": packet.ohlcv_window[-1].get("ts") if packet.ohlcv_window else None,
+            "snapshot_manifest_id": packet.snapshot_manifest_id,
+            "snapshot_provenance_status": packet.snapshot_manifest.get("provenance_status"),
         },
         no_lookahead=True,
     )
@@ -262,6 +265,7 @@ def build_outcome_feature_packet(
     payload = {
         "decision_packet_id": decision_packet.feature_packet_id,
         "data_packet_id": packet.data_packet_id,
+        "future_evidence_id": packet.future_evidence_id,
         "future_first_ts": packet.future_window[0].get("ts"),
         "future_last_ts": packet.future_window[-1].get("ts"),
         "outcome_content_hash": outcome_content_hash,
@@ -272,6 +276,7 @@ def build_outcome_feature_packet(
         decision_packet_id=decision_packet.feature_packet_id,
         scanner_event_id=packet.scanner_event_id,
         data_packet_id=packet.data_packet_id,
+        future_evidence_id=packet.future_evidence_id,
         symbol=packet.symbol,
         instrument=packet.instrument,
         timeframe=packet.timeframe,
@@ -282,6 +287,7 @@ def build_outcome_feature_packet(
             "outcome_first_ts": packet.future_window[0].get("ts"),
             "outcome_last_ts": packet.future_window[-1].get("ts"),
             "outcome_content_hash": outcome_content_hash,
+            "future_evidence_id": packet.future_evidence_id,
             "available_after_decision": True,
         },
         label_quality={

@@ -10,11 +10,26 @@ if str(_ROOT) not in sys.path:
 
 from src.research_lab.farm_coordinator import run_coordinator_cycle  # noqa: E402
 from src.research_lab.farm_tasks_db import FarmTasksDB  # noqa: E402
+from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
 PROFILES = load_timeframe_profiles()
 POLICY = load_resource_policy()
+
+
+def _seed_candles(root, symbol="BTC_USDT_SWAP"):
+    rows = [
+        {
+            "ts": index * 3_600_000, "open": 100.0 + index,
+            "high": 101.0 + index, "low": 99.0 + index,
+            "close": 100.5 + index, "vol": 10.0,
+        }
+        for index in range(200)
+    ]
+    CandleStore(root).upsert_candles(
+        symbol, "1h", rows, source="fixture", available_at_ms=100,
+    )
 
 
 def _usable_state(*, oi=False, enrichment=()):
@@ -233,6 +248,7 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
     from src.research_lab.advisor_sweep_bridge import compile_sweep_proposals
 
     tasks = FarmTasksDB(":memory:")
+    _seed_candles(tmp_path)
     advice = SimpleNamespace(
         accepted=True,
         advisor_ref="advisor_1",
@@ -317,6 +333,7 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
 
 def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     tasks = FarmTasksDB(":memory:")
+    _seed_candles(tmp_path, "BTC")
     tasks.upsert_unique_candidate({
         "uc_key": "BTC::1h::momentum_breakout::ph::fp",
         "symbol": "BTC", "timeframe": "1h", "family": "momentum_breakout",

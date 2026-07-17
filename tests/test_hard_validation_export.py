@@ -201,7 +201,7 @@ class TestBuildCandidate:
             assert c.metrics["source_candidate_id"] == "raw-1"
             assert c.metrics["data_fingerprint"] == "fp"
 
-    def test_build_candidate_rebuilds_trades_for_legacy_aggregate_artifact(self) -> None:
+    def test_build_candidate_fails_closed_for_unbound_legacy_aggregate_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             private = Path(td)
             data_dir = private / "market_data" / "1h"
@@ -249,7 +249,8 @@ class TestBuildCandidate:
             c = _build_candidate(entry, private)
             assert c is not None
             assert c.params["stop_pct"] == 2
-            assert len(c.trades) >= 3
+            assert c.trades == []
+            assert c.data_window == {"start_ts": 0, "end_ts": 0, "n_bars": 0}
             assert c.data_window["n_bars"] == len(c.trades)
 
 

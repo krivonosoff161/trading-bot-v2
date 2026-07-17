@@ -668,7 +668,7 @@ def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, li
         if cc.get("enriched"):
             sync_json_to_store(
                 private_root, task["symbol"], task["timeframe"], path,
-                source="funding_enrichment",
+                source="funding_enrichment", available_at_ms=now_ms,
             )
             tasks.complete_task(task["task_id"], reason="enriched", now=now)
             _bump(counters, "enriched_ok")
@@ -723,7 +723,7 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
         if status == "enriched":
             sync_json_to_store(
                 private_root, task["symbol"], task["timeframe"], path,
-                source="oi_enrichment",
+                source="oi_enrichment", available_at_ms=now_ms,
             )
             tasks.complete_task(task["task_id"], reason="oi_loaded", now=now)
             _bump(counters, "enriched_oi_ok")
@@ -740,7 +740,7 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
 
 def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
                      priority_base, limit, counters, now, sweep_tier="normal") -> None:
-    from src.research_lab.data_fingerprint import fingerprint_for_symbol
+    from src.research_lab.candle_library import load_canonical_candles
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("run_sweep",), now=now)
         if task is None:
@@ -751,9 +751,18 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
         except (TypeError, json.JSONDecodeError):
             payload = {}
         glob = market_data_glob(private_root, tf)
-        fp = fingerprint_for_symbol(
-            glob, sym, tf, private_root=private_root,
-        ) or task.get("data_fingerprint") or "nofp"
+        selected = load_canonical_candles(
+            private_root, sym, tf, fallback_glob=glob,
+            purpose="experiment", coverage_policy="gap_free",
+        )
+        if not selected.rows or not selected.manifest.evidence_hash:
+            tasks.defer_task(
+                task["task_id"], until=now + 3600,
+                reason="snapshot_missing_before_queue", now=now,
+            )
+            _bump(counters, "sweeps_snapshot_drift")
+            continue
+        fp = selected.manifest.evidence_hash or task.get("data_fingerprint") or "nofp"
         if isinstance(payload.get("sweep_spec"), dict):
             spec = _sweep_from_payload(payload["sweep_spec"])
         else:
@@ -768,6 +777,8 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             fingerprint=fp,
             priority=priority_base + priority_value(task.get("priority")),
             event_context=_event_context_from_payload(payload),
+            data_snapshot_id=selected.manifest.snapshot_id,
+            data_evidence_hash=selected.manifest.evidence_hash,
         )
         if created:
             tasks.materialize_task(task["task_id"], job_id, now=now)

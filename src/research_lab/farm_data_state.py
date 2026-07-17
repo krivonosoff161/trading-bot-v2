@@ -12,8 +12,8 @@ import glob as _glob
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.data_fingerprint import fingerprint_for_file, fingerprint_for_rows, present_enrichment
-from src.research_lab.candle_store import CandleStore
+from src.research_lab.candle_library import load_canonical_candles
+from src.research_lab.data_fingerprint import present_enrichment
 from src.research_lab.data_inventory import inspect_file
 from src.research_lab.data_readiness_selector import min_rows_for
 from src.research_lab.experiment import choose_symbol_file
@@ -31,34 +31,45 @@ def _best_existing(pattern: str, symbol: str) -> Path | None:
 
 def data_state(private_root: Path, symbol: str, timeframe: str) -> dict[str, Any]:
     """Local readiness facts for one (symbol, timeframe). No fetch."""
-    store = CandleStore(private_root)
-    coverage = store.coverage(symbol, timeframe)
-    if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
-        rows = store.read(symbol, timeframe, coverage.first_ts, coverage.last_ts)
+    oi_available = oi_slot_path(private_root, symbol) is not None
+    selected = load_canonical_candles(
+        private_root, symbol, timeframe,
+        purpose="farm_readiness", coverage_policy="gap_free",
+    )
+    if selected.rows:
+        rows = selected.rows
         enrichment = tuple(
             field for field in ("funding", "oi", "obi_top5", "spread_bps", "trade_delta_100")
             if any(row.get(field) is not None for row in rows)
         )
         minimum = min_rows_for(timeframe)
         return {
-            "status": "usable" if len(rows) >= minimum and coverage.gap_count == 0 else "too_short",
+            "status": "usable" if len(rows) >= minimum else "too_short",
             "rows": len(rows),
-            "gaps": coverage.gap_count,
-            "fingerprint": fingerprint_for_rows(symbol, timeframe, rows),
+            "gaps": selected.manifest.gap_count,
+            "fingerprint": selected.manifest.evidence_hash,
+            "snapshot_id": selected.manifest.snapshot_id,
+            "provenance_status": selected.manifest.provenance_status,
             "enrichment": enrichment,
-            "oi_available": oi_slot_path(private_root, symbol) is not None,
-            "source": "sqlite",
+            "oi_available": oi_available,
+            "source": selected.source,
         }
     pattern = market_data_glob(private_root, timeframe)
-    oi_available = oi_slot_path(private_root, symbol) is not None
     usable = choose_symbol_file(pattern, symbol, timeframe=timeframe)
     if usable:
+        fallback = load_canonical_candles(
+            private_root, symbol, timeframe,
+            purpose="farm_readiness_diagnostic", coverage_policy="available",
+        )
         return {
-            "status": "usable",
-            "rows": int(inspect_file(usable).get("rows") or 0),
-            "fingerprint": fingerprint_for_file(usable),
+            "status": "too_short",
+            "rows": len(fallback.rows),
+            "fingerprint": fallback.manifest.evidence_hash if fallback.rows else None,
+            "snapshot_id": fallback.manifest.snapshot_id if fallback.rows else "",
+            "provenance_status": fallback.manifest.provenance_status,
             "enrichment": present_enrichment(usable),
             "oi_available": oi_available,
+            "source": fallback.source,
         }
     existing = _best_existing(pattern, symbol)
     if existing is None:

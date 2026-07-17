@@ -53,7 +53,10 @@ def ensure_candles(private_root: Path, symbol: str, timeframe: str, *, provider,
                    days: int | None = None) -> bool:
     """Materialize through the canonical public-data preparation path."""
     private_root = Path(private_root)
-    if load_canonical_candles(private_root, symbol, timeframe).rows:
+    if load_canonical_candles(
+        private_root, symbol, timeframe,
+        purpose="mover_validation_data_check", coverage_policy="gap_free",
+    ).rows:
         return True
     if provider is None:
         return False
@@ -69,7 +72,10 @@ def ensure_candles(private_root: Path, symbol: str, timeframe: str, *, provider,
     )
     if report.downloaded <= 0:
         return False
-    return bool(load_canonical_candles(private_root, symbol, timeframe).rows)
+    return bool(load_canonical_candles(
+        private_root, symbol, timeframe,
+        purpose="mover_validation_data_check", coverage_policy="gap_free",
+    ).rows)
 
 
 def _split_nets(candles: list[dict[str, Any]], family: str, params: dict[str, Any],
@@ -98,7 +104,11 @@ def run(private_root: Path, *, families: tuple[str, ...] = DEFAULT_FAMILIES,
     for sym in symbols:
         for tf in timeframes:
             ensure_candles(private_root, sym, tf, provider=provider)
-            candles = load_canonical_candles(private_root, sym, tf).rows
+            selected = load_canonical_candles(
+                private_root, sym, tf,
+                purpose="mover_validation", coverage_policy="gap_free",
+            )
+            candles = selected.rows
             if not candles:
                 continue
             if len(candles) < 80:
@@ -118,7 +128,10 @@ def run(private_root: Path, *, families: tuple[str, ...] = DEFAULT_FAMILIES,
                 cell["oos_positive"] += int(oosm > 0)
                 per_symbol.append({"symbol": sym, "family": fam, "timeframe": tf,
                                    "is_median_net": round(ism, 3), "oos_median_net": round(oosm, 3),
-                                   "is_n": len(is_nets), "oos_n": len(oos_nets)})
+                                   "is_n": len(is_nets), "oos_n": len(oos_nets),
+                                   "data_snapshot_id": selected.manifest.snapshot_id,
+                                   "data_evidence_hash": selected.manifest.evidence_hash,
+                                   "data_provenance_status": selected.manifest.provenance_status})
     return {"symbols_considered": len(symbols), "evaluated_cells": len(per_symbol),
             "summary": _summarize(cells), "per_symbol": per_symbol}
 

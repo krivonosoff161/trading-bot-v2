@@ -171,9 +171,13 @@ def build_sweep_spec(symbol: str, timeframe: str, family: str, *, fingerprint: s
 
 
 def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, data_glob: str,
-                priority: int, fingerprint: str | None, event_context: dict[str, Any] | None = None
+                priority: int, fingerprint: str | None,
+                data_snapshot_id: str, data_evidence_hash: str,
+                event_context: dict[str, Any] | None = None,
                 ) -> tuple[str, int, bool]:
     """Compile + write spec file + idempotently enqueue. Returns (experiment_id, job_id, created)."""
+    if not data_snapshot_id or not data_evidence_hash:
+        raise ValueError("farm sweep queue requires a bound candle snapshot manifest")
     exp = compile_sweep(spec, data_glob=data_glob, timeframe_profiles=profiles,
                         resource_policy=policy, event_context=event_context or {})
     out_dir = event_spec_dir(private_root)
@@ -205,6 +209,8 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
         "slippage_bps": exp.slippage_bps, "min_trades": exp.min_trades, "split_ratio": exp.split_ratio,
         "max_runs": exp.max_runs, "parameter_grid": exp.parameter_grid, "filters": exp.filters,
         "event_context": exp.event_context, "backend": exp.backend, "data_fingerprint": fingerprint,
+        "data_snapshot_id": str(data_snapshot_id),
+        "data_evidence_hash": str(data_evidence_hash or fingerprint or ""),
         "variant_tier": getattr(spec, "variant_tier", "smoke"), "variant_count": len(variants),
         "parameter_search_contract": search_contract.version,
         "search_axes": [

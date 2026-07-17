@@ -61,9 +61,13 @@ def load_ready_setup_cards(private_root: Path, *, limit: int = 50) -> list[Setup
 
 
 def local_candles_for_plan(private_root: Path, plan: PaperTradePlan) -> list[dict[str, Any]]:
-    return load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, plan.symbol, plan.timeframe,
-    ).rows
+        purpose="paper_runtime", coverage_policy="gap_free",
+    )
+    if selected.manifest.provenance_status != "complete":
+        return []
+    return selected.rows
 
 
 def _candidate_signals_no_lookahead(

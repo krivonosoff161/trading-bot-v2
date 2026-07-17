@@ -384,9 +384,14 @@ def _prepared_candles_chart_path(
     if not symbol or not timeframe:
         return None
     try:
-        prepared_candles = load_canonical_candles(
+        selected = load_canonical_candles(
             private_root, symbol, timeframe,
-        ).rows
+            purpose="paper_chart", coverage_policy="gap_free",
+        )
+        record["chart_data_snapshot_id"] = selected.manifest.snapshot_id
+        record["chart_data_evidence_hash"] = selected.manifest.evidence_hash
+        record["chart_data_provenance_status"] = selected.manifest.provenance_status
+        prepared_candles = selected.rows
     except Exception:  # noqa: BLE001 - card rendering must not break preview generation
         prepared_candles = []
     record_ms = _record_epoch_ms(record)

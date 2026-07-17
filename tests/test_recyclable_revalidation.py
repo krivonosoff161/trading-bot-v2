@@ -99,7 +99,10 @@ class TestSummary:
                  "hypothesis_frozen_at": "2026-07-01T00:00:00+00:00",
                  "selection_cutoff_ts": 2,
                  "selection_data_fingerprint": "selection-fp",
-                 "selection_evidence": [{"entry_ts": 1, "exit_ts": 2, "net_pct": 0.2}]}]
+                 "selection_evidence": [{"entry_ts": 1, "exit_ts": 2, "net_pct": 0.2}],
+                 "data_snapshot_id": "csm_fixture",
+                 "data_evidence_hash": "evidence-fixture",
+                 "data_provenance_status": "complete"}]
         s = summarize_revalidation(rows)
         assert s["survivors"] == 1 and "human GO" in s["verdict"]
         assert s["survivor_rows"][0]["uc_key"] == "c"

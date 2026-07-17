@@ -94,19 +94,22 @@ def _select(private_root: Path, limit_per_bucket: int | None) -> list[dict[str, 
     return out
 
 
-def _resim(private_root: Path, item: dict[str, Any]) -> tuple[list[dict[str, Any]], str, int] | None:
+def _resim(private_root: Path, item: dict[str, Any]) -> tuple[list[dict[str, Any]], str, int, dict[str, Any]] | None:
     """Return (trades, exit_name, n_trials). wrong_exit -> best RECOVERED exit; else baseline."""
-    candles = load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, item["symbol"], item["timeframe"],
-    ).rows
+        purpose="recyclable_revalidation", coverage_policy="gap_free",
+    )
+    candles = selected.rows
     if not candles:
         return None
     signals = generate_signals(candles, item["family"], item["params"])
     if not signals:
         return None
     if item["subreason"] != "wrong_exit":
-        return simulate_trades(candles, signals, item["params"],
-                               fees_bps=FEES_BPS, slippage_bps=SLIP_BPS), "baseline", 1
+        return (simulate_trades(candles, signals, item["params"],
+                                fees_bps=FEES_BPS, slippage_bps=SLIP_BPS),
+                "baseline", 1, selected.manifest.to_dict())
     grid = _exit_grid(item["params"])
     variants = {name: simulate_trades(candles, signals, {**item["params"], **ov},
                                       fees_bps=FEES_BPS, slippage_bps=SLIP_BPS) for name, ov in grid}
@@ -117,10 +120,13 @@ def _resim(private_root: Path, item: dict[str, Any]) -> tuple[list[dict[str, Any
     if not (_avg_net(others[best]) > COST_PCT and _avg_net(others[best]) > _avg_net(base) + RECOVER_MARGIN
             and len(base) >= MIN_TRADES_RECOVER):
         return None
-    return variants[best], best, len(grid)
+    return variants[best], best, len(grid), selected.manifest.to_dict()
 
 
-def _candidate(item: dict[str, Any], trades: list[dict[str, Any]], n_trials: int) -> CandidateForValidation:
+def _candidate(
+    item: dict[str, Any], trades: list[dict[str, Any]], n_trials: int,
+    snapshot_manifest: dict[str, Any] | None = None,
+) -> CandidateForValidation:
     """Build a validation candidate from re-simulated trades; lite_status FORWARD_PAPER isolates
     the STATISTICAL question (these were lite-rejected; we re-test the stats, not the lite gate)."""
     return CandidateForValidation.from_dict({
@@ -144,6 +150,9 @@ def _candidate(item: dict[str, Any], trades: list[dict[str, Any]], n_trials: int
                         "hypothesis_frozen_at": str(item.get("hypothesis_frozen_at") or ""),
                         "evaluation_started_at": str(item.get("evaluation_started_at") or ""),
                     },
+                    "data_snapshot_id": str((snapshot_manifest or {}).get("snapshot_id") or ""),
+                    "data_evidence_hash": str((snapshot_manifest or {}).get("evidence_hash") or ""),
+                    "data_provenance_status": str((snapshot_manifest or {}).get("provenance_status") or "legacy_unknown"),
                     "runtime": {"n_variants_evaluated": int(n_trials)}},
         "trades": [
             {"net_pct": float(t.get("net_pct") or 0.0), "entry_ts": t.get("entry_ts"),
@@ -161,12 +170,17 @@ def revalidate(private_root: Path, *, limit_per_bucket: int | None = None) -> li
         rs = _resim(private_root, it)
         if rs is None:
             continue
-        trades, exit_name, n_trials = rs
-        verdict = run_validation(_candidate(it, trades, n_trials), private_root, dry_run=True)
+        trades, exit_name, n_trials, snapshot_manifest = rs
+        verdict = run_validation(
+            _candidate(it, trades, n_trials, snapshot_manifest), private_root, dry_run=True,
+        )
         bucket = "exit_recovered" if it["subreason"] == "wrong_exit" else it["subreason"]
         rows.append({"uc_key": it["uc_key"], "symbol": it["symbol"], "timeframe": it["timeframe"],
                      "family": it["family"], "bucket": bucket, "n_trades": len(trades),
                      "exit": exit_name, "n_trials": n_trials,
+                     "data_snapshot_id": str(snapshot_manifest.get("snapshot_id") or ""),
+                     "data_evidence_hash": str(snapshot_manifest.get("evidence_hash") or ""),
+                     "data_provenance_status": str(snapshot_manifest.get("provenance_status") or ""),
                      "revalidation_status": str(verdict.get("hard_status") or ""),
                      "hypothesis_frozen_at": str(it.get("hypothesis_frozen_at") or ""),
                      "selection_cutoff_ts": max(
@@ -184,7 +198,8 @@ def summarize_revalidation(rows: list[dict[str, Any]]) -> dict[str, Any]:
     survivor_fields = (
         "uc_key", "symbol", "timeframe", "family", "bucket", "n_trades", "exit",
         "hypothesis_frozen_at", "selection_cutoff_ts", "selection_data_fingerprint",
-        "selection_evidence",
+        "selection_evidence", "data_snapshot_id", "data_evidence_hash",
+        "data_provenance_status",
     )
     for r in rows:
         b = by_bucket.setdefault(r["bucket"], {})

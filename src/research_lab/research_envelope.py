@@ -89,10 +89,15 @@ def build_decision_envelope(
         reasons.append("missing_source_content_hash")
     if not data_packet.content_hash:
         reasons.append("missing_data_content_hash")
+    if not data_packet.snapshot_manifest_id:
+        reasons.append("missing_data_snapshot_manifest_id")
+    if data_packet.snapshot_manifest.get("provenance_status") != "complete":
+        reasons.append("data_availability_provenance_unknown")
     if not decision_packet.no_lookahead:
         reasons.append("decision_packet_not_causal")
     identities = {
         "data_packet_id": data_packet.data_packet_id,
+        "data_snapshot_manifest_id": data_packet.snapshot_manifest_id,
         "decision_packet_id": decision_packet.feature_packet_id,
         "setup_candidate_id": str(setup_candidate_id),
         "sweep_run_id": str(sweep_run_id),
@@ -105,6 +110,7 @@ def build_decision_envelope(
         "data_content_hash": data_packet.content_hash,
         "data_as_of_ts": data_packet.as_of_ts,
         "data_available_at": data_packet.available_at,
+        "data_snapshot_manifest": dict(data_packet.snapshot_manifest),
         "decision_as_of_ts": decision_packet.data_quality.get("as_of_ts"),
         "outcome_packet_id": "",
     }
@@ -144,6 +150,7 @@ def extend_with_outcome(
     evidence = {
         **parent.evidence,
         "outcome_packet_id": outcome_packet.outcome_packet_id,
+        "future_evidence_id": outcome_packet.future_evidence_id,
         "outcome_temporal_provenance": dict(outcome_packet.temporal_provenance),
         "outcome_label_quality": dict(outcome_packet.label_quality),
     }

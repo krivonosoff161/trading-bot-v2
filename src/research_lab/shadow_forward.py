@@ -185,9 +185,11 @@ def record_observation(private_root: Path, uc_key: str, *, after_ts: int) -> dic
     cand = _load_registry(private_root).get(uc_key)
     if not cand:
         return {"uc_key": uc_key, "skipped": "not_registered"}
-    candles = load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, cand["symbol"], cand["timeframe"],
-    ).rows
+        purpose="shadow_forward", coverage_policy="gap_free",
+    )
+    candles = selected.rows
     if not candles:
         return {"uc_key": uc_key, "skipped": "no_candles"}
     forward_bars = sum(1 for c in candles if int(c.get("ts") or 0) > int(after_ts))
@@ -200,7 +202,10 @@ def record_observation(private_root: Path, uc_key: str, *, after_ts: int) -> dic
     obs = _observe(trades)
     record = {"uc_key": uc_key, "symbol": cand["symbol"], "timeframe": cand["timeframe"],
               "after_ts": int(after_ts), "forward_bars": forward_bars, "status": SHADOW_STATUS,
-              "paper_forward_ready": False, **obs}
+              "paper_forward_ready": False,
+              "data_snapshot_id": selected.manifest.snapshot_id,
+              "data_evidence_hash": selected.manifest.evidence_hash,
+              "data_provenance_status": selected.manifest.provenance_status, **obs}
     _append_observation(private_root, record)
     return record
 

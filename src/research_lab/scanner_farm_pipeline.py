@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candle_store import CandleStore
+from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.data_inventory import inspect_file
 from src.research_lab.data_prepare import MarketDataPrepareItem, prepare_market_data, timeframe_ms
 from src.research_lab.data_readiness_selector import min_rows_for
@@ -90,14 +91,12 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
     required_rows = max(min_rows_for(timeframe), int(minimum_bars or 0))
     if not listing.may_fetch:
         return listing.status, 0
-    coverage = store.coverage(symbol, timeframe)
-    if coverage.row_count >= required_rows and coverage.gap_count == 0:
-        return "usable", coverage.row_count
-    existing = choose_symbol_file(glob, symbol, timeframe=timeframe)
-    if existing:
-        existing_rows = int(inspect_file(existing).get("rows") or 0)
-        if existing_rows >= required_rows:
-            return "usable", existing_rows
+    selected = load_canonical_candles(
+        private_root, symbol, timeframe, fallback_glob=glob,
+        purpose="scanner_farm_readiness", coverage_policy="gap_free",
+    )
+    if len(selected.rows) >= required_rows:
+        return "usable", len(selected.rows)
     if not apply:
         return "would_prepare", 0
     if prepares_left <= 0:
@@ -121,13 +120,16 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
         if reason == "provider_not_configured":
             return "provider_not_configured", 0
         return "data_prepare_failed", 0
-    coverage = store.coverage(symbol, timeframe)
-    if coverage.row_count:
-        rows = coverage.row_count
+    selected = load_canonical_candles(
+        private_root, symbol, timeframe, fallback_glob=glob,
+        purpose="scanner_farm_post_prepare", coverage_policy="gap_free",
+    )
+    if selected.rows:
+        rows = len(selected.rows)
         if not listing.may_full_validate:
             return "fresh_listing_pending", rows
         return (
-            "prepared" if rows >= required_rows and coverage.gap_count == 0 else "too_short"
+            "prepared" if rows >= required_rows else "too_short"
         ), rows
     path = choose_symbol_file(glob, symbol, timeframe=timeframe)
     if path:
@@ -139,7 +141,8 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
 
 
 def _compile_and_queue(res, *, private_root: Path, profiles, policy, data_glob: str,
-                       priority: int, conn) -> tuple[str, bool]:
+                       priority: int, conn,
+                       data_snapshot_manifest: dict[str, Any]) -> tuple[str, bool]:
     """Compile the sweep at the prepared-root glob and idempotently queue it.
 
     Returns (experiment_id, created) — created is False when the farm queue already
@@ -152,19 +155,27 @@ def _compile_and_queue(res, *, private_root: Path, profiles, policy, data_glob: 
 
     exp = compile_sweep(res.sweep, data_glob=data_glob, timeframe_profiles=profiles,
                         resource_policy=policy, event_context=res.context)
+    snapshot_id = str(data_snapshot_manifest.get("snapshot_id") or "")
+    evidence_hash = str(data_snapshot_manifest.get("evidence_hash") or "")
+    if not snapshot_id or not evidence_hash:
+        raise ValueError("scanner farm queue requires a bound candle snapshot manifest")
+    bound_experiment_id = f"{exp.experiment_id}__{snapshot_id[:16]}"
     out_dir = event_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = out_dir / f"{exp.experiment_id}.json"
+    spec_path = out_dir / f"{bound_experiment_id}.json"
     payload = {
-        "experiment_id": exp.experiment_id, "data_glob": exp.data_glob, "symbols": exp.symbols,
+        "experiment_id": bound_experiment_id, "data_glob": exp.data_glob, "symbols": exp.symbols,
         "timeframe": exp.timeframe, "families": exp.families, "fees_bps": exp.fees_bps,
         "slippage_bps": exp.slippage_bps, "min_trades": exp.min_trades, "split_ratio": exp.split_ratio,
         "max_runs": exp.max_runs, "parameter_grid": exp.parameter_grid, "filters": exp.filters,
         "event_context": exp.event_context, "backend": exp.backend,
+        "data_fingerprint": evidence_hash,
+        "data_snapshot_id": snapshot_id,
+        "data_evidence_hash": evidence_hash,
     }
     spec_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _job_id, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=int(priority))
-    return exp.experiment_id, bool(created)
+    return bound_experiment_id, bool(created)
 
 
 # Counter keys the loop adds on top of plan_jobs' watch-level triage counters.
@@ -251,9 +262,18 @@ def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, c
         eff["would_queue"] = 1
         eff["decision"] = {"symbol": inst, "timeframe": tf, "family": family, "action": "would_queue"}
         return eff
+    selected = load_canonical_candles(
+        private_root, inst, tf, fallback_glob=market_data_glob(private_root, tf),
+        purpose="experiment", coverage_policy="gap_free",
+    )
+    if not selected.rows:
+        eff["prepare_failed"] = 1
+        eff["skip"] = {"symbol": inst, "reason": "snapshot_missing_before_queue", "timeframe": tf}
+        return eff
     exp_id, created = _compile_and_queue(res, private_root=private_root, profiles=profiles, policy=policy,
                                          data_glob=market_data_glob(private_root, tf),
-                                         priority=priority_base + job.priority, conn=conn)
+                                         priority=priority_base + job.priority, conn=conn,
+                                         data_snapshot_manifest=selected.manifest.to_dict())
     state.mark_job_queued(job_key, symbol=inst, timeframe=tf, family=family, experiment_id=exp_id, cycle=cycle)
     if created:
         eff["jobs_queued"] = 1
@@ -262,7 +282,10 @@ def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, c
         eff["already_queued"] = 1
         action = "already_in_farm_queue"
     eff["decision"] = {"symbol": inst, "timeframe": tf, "family": family,
-                       "experiment_id": exp_id, "action": action}
+                       "experiment_id": exp_id, "action": action,
+                       "data_snapshot_id": selected.manifest.snapshot_id,
+                       "data_evidence_hash": selected.manifest.evidence_hash,
+                       "data_provenance_status": selected.manifest.provenance_status}
     return eff
 
 

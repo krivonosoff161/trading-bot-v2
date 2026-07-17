@@ -19,9 +19,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from src.research_lab.candle_identity import candle_revision_id, candle_row_content_hash
 from src.research_lab.paths import resolve_private_root
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_MAX_READ_ROWS = 50_000
 WARNING_BUDGET_BYTES = 1_500_000_000
 HARD_BUDGET_BYTES = 2_000_000_000
@@ -176,6 +177,42 @@ class CandleStore:
                 ) WITHOUT ROWID;
                 CREATE INDEX IF NOT EXISTS idx_candles_time
                     ON candles(timeframe, ts);
+                CREATE TABLE IF NOT EXISTS candle_revisions (
+                    revision_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    vol REAL NOT NULL,
+                    date TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    funding REAL,
+                    oi REAL,
+                    index_px REAL,
+                    obi_top5 REAL,
+                    spread_bps REAL,
+                    trade_delta_100 REAL,
+                    extra_json TEXT NOT NULL DEFAULT '{}',
+                    content_hash TEXT NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    available_at_ms INTEGER NOT NULL,
+                    acquired_at_ms INTEGER NOT NULL,
+                    acquisition_order INTEGER NOT NULL,
+                    parent_revision_id TEXT,
+                    field_provenance_json TEXT NOT NULL,
+                    CHECK (high >= low),
+                    CHECK (vol >= 0),
+                    CHECK (observed_at_ms <= available_at_ms),
+                    CHECK (available_at_ms <= acquired_at_ms)
+                );
+                CREATE INDEX IF NOT EXISTS idx_candle_revisions_asof
+                    ON candle_revisions(
+                        symbol, timeframe, ts, available_at_ms,
+                        acquired_at_ms, acquisition_order
+                    );
                 CREATE TABLE IF NOT EXISTS series (
                     symbol TEXT NOT NULL,
                     timeframe TEXT NOT NULL,
@@ -276,6 +313,9 @@ class CandleStore:
         source: str = "",
         strict: bool = True,
         ingested_at_ms: int | None = None,
+        observed_at_ms: int | None = None,
+        available_at_ms: int | None = None,
+        acquired_at_ms: int | None = None,
     ) -> UpsertResult:
         if self.storage_usage_bytes() >= HARD_BUDGET_BYTES:
             raise CandleStoreError(
@@ -283,18 +323,55 @@ class CandleStore:
             )
         sym = normalize_symbol(symbol)
         tf = normalize_timeframe(timeframe)
-        now = int(ingested_at_ms if ingested_at_ms is not None else time.time() * 1000)
-        normalized: dict[int, tuple[Any, ...]] = {}
+        if ingested_at_ms is not None and acquired_at_ms is not None:
+            if int(ingested_at_ms) != int(acquired_at_ms):
+                raise ValueError("ingested_at_ms and acquired_at_ms disagree")
+        now = int(
+            acquired_at_ms if acquired_at_ms is not None else (
+                ingested_at_ms if ingested_at_ms is not None else time.time() * 1000
+            )
+        )
+        default_available = int(available_at_ms if available_at_ms is not None else now)
+        default_observed = int(observed_at_ms if observed_at_ms is not None else default_available)
+        _validate_provenance_times(default_observed, default_available, now)
+        normalized: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        accepted_ts: set[int] = set()
         rejected = 0
-        for row in rows:
+        for order, row in enumerate(rows):
             try:
-                clean = _normalize_row(row, source=source, ingested_at_ms=now)
+                row_acquired = _row_time(row, "acquired_at_ms", now)
+                row_available = _row_time(row, "available_at_ms", default_available)
+                row_observed = _row_time(row, "observed_at_ms", default_observed)
+                _validate_provenance_times(row_observed, row_available, row_acquired)
+                row_source = str(row.get("_source") or row.get("source") or source)
+                clean = _normalize_row(row, source=row_source, ingested_at_ms=row_acquired)
             except CandleValidationError:
                 if strict:
                     raise
                 rejected += 1
                 continue
-            normalized[int(clean[0])] = clean
+            content = _clean_to_candle(clean)
+            content_hash = candle_row_content_hash(content)
+            revision_id = candle_revision_id(
+                sym, tf, int(clean[0]), content_hash, row_source,
+                row_observed, row_available,
+            )
+            field_provenance = _field_provenance(
+                content, revision_id=revision_id, source=row_source,
+                observed_at_ms=row_observed, available_at_ms=row_available,
+            )
+            normalized.append((clean, {
+                "revision_id": revision_id,
+                "content_hash": content_hash,
+                "observed_at_ms": row_observed,
+                "available_at_ms": row_available,
+                "acquired_at_ms": row_acquired,
+                "acquisition_order": order,
+                "field_provenance_json": json.dumps(
+                    field_provenance, sort_keys=True, separators=(",", ":"),
+                ),
+            }))
+            accepted_ts.add(int(clean[0]))
 
         self.initialize()
         statement = """INSERT INTO candles
@@ -306,31 +383,89 @@ class CandleStore:
               open=excluded.open, high=excluded.high, low=excluded.low,
               close=excluded.close, vol=excluded.vol, date=excluded.date,
               source=excluded.source,
-              funding=COALESCE(excluded.funding, candles.funding),
-              oi=COALESCE(excluded.oi, candles.oi),
-              index_px=COALESCE(excluded.index_px, candles.index_px),
-              obi_top5=COALESCE(excluded.obi_top5, candles.obi_top5),
-              spread_bps=COALESCE(excluded.spread_bps, candles.spread_bps),
-              trade_delta_100=COALESCE(excluded.trade_delta_100, candles.trade_delta_100),
+              funding=excluded.funding,
+              oi=excluded.oi,
+              index_px=excluded.index_px,
+              obi_top5=excluded.obi_top5,
+              spread_bps=excluded.spread_bps,
+              trade_delta_100=excluded.trade_delta_100,
               extra_json=excluded.extra_json,
               ingested_at_ms=excluded.ingested_at_ms"""
         with self._connect(write=True) as conn:
             if normalized:
-                conn.executemany(
-                    statement,
-                    [(sym, tf, *values) for values in normalized.values()],
-                )
+                for clean, meta in normalized:
+                    parent = conn.execute(
+                        """SELECT revision_id FROM candle_revisions
+                           WHERE symbol=? AND timeframe=? AND ts=?
+                           ORDER BY available_at_ms DESC, acquired_at_ms DESC,
+                                    acquisition_order DESC, revision_id DESC
+                           LIMIT 1""",
+                        (sym, tf, int(clean[0])),
+                    ).fetchone()
+                    conn.execute(
+                        """INSERT OR IGNORE INTO candle_revisions
+                           (revision_id, symbol, timeframe, ts, open, high, low, close,
+                            vol, date, source, funding, oi, index_px, obi_top5,
+                            spread_bps, trade_delta_100, extra_json, content_hash,
+                            observed_at_ms, available_at_ms, acquired_at_ms,
+                            acquisition_order, parent_revision_id, field_provenance_json)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                   ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            meta["revision_id"], sym, tf, *clean[:-1],
+                            meta["content_hash"], meta["observed_at_ms"],
+                            meta["available_at_ms"], meta["acquired_at_ms"],
+                            meta["acquisition_order"],
+                            str(parent[0]) if parent is not None else None,
+                            meta["field_provenance_json"],
+                        ),
+                    )
+                for ts in sorted(accepted_ts):
+                    latest = conn.execute(
+                        """SELECT ts, open, high, low, close, vol, date, source,
+                                  funding, oi, index_px, obi_top5, spread_bps,
+                                  trade_delta_100, extra_json, acquired_at_ms
+                           FROM candle_revisions
+                           WHERE symbol=? AND timeframe=? AND ts=?
+                           ORDER BY available_at_ms DESC, acquired_at_ms DESC,
+                                    acquisition_order DESC, revision_id DESC
+                           LIMIT 1""",
+                        (sym, tf, ts),
+                    ).fetchone()
+                    if latest is not None:
+                        conn.execute(statement, (sym, tf, *tuple(latest)))
             coverage = self._refresh_series(conn, sym, tf, source=str(source), now_ms=now)
         return UpsertResult(
             symbol=sym,
             timeframe=tf,
-            accepted=len(normalized),
-            inserted_or_updated=len(normalized),
+            accepted=len(accepted_ts),
+            inserted_or_updated=len(accepted_ts),
             rejected=rejected,
             coverage=coverage,
         )
 
     def read(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        limit: int | None = None,
+        reader_version: str = "v2",
+    ) -> list[dict[str, Any]]:
+        version = str(reader_version).strip().lower()
+        if version not in {"v1", "v2"}:
+            raise ValueError(f"unsupported candle reader version: {reader_version!r}")
+        if version == "v2":
+            return self.read_snapshot(
+                symbol, timeframe, start_ts, end_ts,
+                as_of_ms=None, purpose="compat_read", coverage_policy="available",
+                limit=limit,
+            ).rows
+        return self._read_v1(symbol, timeframe, start_ts, end_ts, limit=limit)
+
+    def _read_v1(
         self,
         symbol: str,
         timeframe: str,
@@ -364,6 +499,82 @@ class CandleStore:
                 f"requested range exceeds bounded read cap ({cap} rows); split the range"
             )
         return [_row_to_candle(row) for row in rows]
+
+    def read_snapshot(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        as_of_ms: int | None,
+        purpose: str,
+        coverage_policy: str,
+        limit: int | None = None,
+    ):
+        from src.research_lab.candle_snapshot import build_snapshot
+
+        sym = normalize_symbol(symbol)
+        tf = normalize_timeframe(timeframe)
+        start, end = int(start_ts), int(end_ts)
+        if end < start:
+            raise ValueError("end_ts must be >= start_ts")
+        cap = self.max_read_rows if limit is None else int(limit)
+        if cap < 1 or cap > self.max_read_rows:
+            raise ValueError(f"read limit must be between 1 and {self.max_read_rows}")
+        rows: list[dict[str, Any]] = []
+        if self.exists:
+            with self._connect() as conn:
+                has_v2 = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='candle_revisions'"
+                ).fetchone() is not None
+                if has_v2:
+                    boundary = int(as_of_ms) if as_of_ms is not None else 9_223_372_036_854_775_807
+                    selected = conn.execute(
+                        """WITH ranked AS (
+                               SELECT *, ROW_NUMBER() OVER (
+                                   PARTITION BY ts
+                                   ORDER BY available_at_ms DESC, acquired_at_ms DESC,
+                                            acquisition_order DESC, revision_id DESC
+                               ) AS revision_rank
+                               FROM candle_revisions
+                               WHERE symbol=? AND timeframe=? AND ts BETWEEN ? AND ?
+                                 AND available_at_ms <= ?
+                           )
+                           SELECT ts, date, open, high, low, close, vol, source,
+                                  funding, oi, index_px, obi_top5, spread_bps,
+                                  trade_delta_100, extra_json, revision_id, content_hash,
+                                  observed_at_ms, available_at_ms, acquired_at_ms,
+                                  parent_revision_id, field_provenance_json
+                           FROM ranked WHERE revision_rank=1
+                           ORDER BY ts ASC LIMIT ?""",
+                        (sym, tf, start, end, boundary, cap + 1),
+                    ).fetchall()
+                    if len(selected) > cap:
+                        raise CandleStoreError(
+                            f"requested range exceeds bounded read cap ({cap} rows); split the range"
+                        )
+                    rows = [_row_to_candle(row) for row in selected]
+        if as_of_ms is None:
+            legacy_rows = self._read_v1(sym, tf, start, end, limit=limit)
+            by_ts: dict[int, dict[str, Any]] = {}
+            for row in legacy_rows:
+                row["_provenance_status"] = "legacy_unknown"
+                by_ts[int(row["ts"])] = row
+            for row in rows:
+                by_ts[int(row["ts"])] = row
+            rows = [by_ts[ts] for ts in sorted(by_ts)]
+        return build_snapshot(
+            symbol=sym,
+            timeframe=tf,
+            rows=rows,
+            start_ts=start,
+            end_ts=end,
+            as_of_ms=as_of_ms,
+            purpose=purpose,
+            coverage_policy=coverage_policy,
+            source_backend="sqlite",
+        )
 
     def coverage(self, symbol: str, timeframe: str) -> Coverage:
         sym = normalize_symbol(symbol)
@@ -521,8 +732,15 @@ def _normalize_row(
         if not math.isfinite(number):
             raise CandleValidationError(f"non-finite optional candle field: {field}")
         optional.append(number)
-    known = {"ts", "date", "open", "high", "low", "close", "vol", "confirm", *_OPTIONAL_FIELDS}
-    extras = {str(key): value for key, value in row.items() if key not in known}
+    known = {
+        "ts", "date", "open", "high", "low", "close", "vol", "confirm", "source",
+        "observed_at_ms", "available_at_ms", "acquired_at_ms", "ingested_at_ms",
+        *_OPTIONAL_FIELDS,
+    }
+    extras = {
+        str(key): value for key, value in row.items()
+        if key not in known and not str(key).startswith("_")
+    }
     try:
         extra_json = json.dumps(extras, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
@@ -531,6 +749,58 @@ def _normalize_row(
         ts, open_, high, low, close, vol, date, str(source),
         *optional, extra_json, int(ingested_at_ms),
     )
+
+
+def _row_time(row: dict[str, Any], field: str, default: int) -> int:
+    value = row.get(f"_{field}", row.get(field, default))
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise CandleValidationError(f"invalid candle provenance field: {field}") from exc
+
+
+def _validate_provenance_times(observed: int, available: int, acquired: int) -> None:
+    if min(observed, available, acquired) < 0:
+        raise CandleValidationError("candle provenance timestamps must be non-negative")
+    if observed > available:
+        raise CandleValidationError("observed_at_ms must be <= available_at_ms")
+    if available > acquired:
+        raise CandleValidationError("available_at_ms must be <= acquired_at_ms")
+
+
+def _clean_to_candle(clean: tuple[Any, ...]) -> dict[str, Any]:
+    row = {
+        "ts": int(clean[0]),
+        "date": str(clean[6]),
+        "open": float(clean[1]),
+        "high": float(clean[2]),
+        "low": float(clean[3]),
+        "close": float(clean[4]),
+        "vol": float(clean[5]),
+    }
+    for field, value in zip(_OPTIONAL_FIELDS, clean[8:14]):
+        if value is not None:
+            row[field] = float(value)
+    try:
+        extras = json.loads(clean[14] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        extras = {}
+    if isinstance(extras, dict):
+        row.update({key: value for key, value in extras.items() if key not in row})
+    return row
+
+
+def _field_provenance(
+    row: dict[str, Any], *, revision_id: str, source: str,
+    observed_at_ms: int, available_at_ms: int,
+) -> dict[str, dict[str, Any]]:
+    common = {
+        "revision_id": revision_id,
+        "source": str(source),
+        "observed_at_ms": int(observed_at_ms),
+        "available_at_ms": int(available_at_ms),
+    }
+    return {str(field): dict(common) for field in sorted(row)}
 
 
 def _row_to_candle(row: sqlite3.Row) -> dict[str, Any]:
@@ -552,6 +822,22 @@ def _row_to_candle(row: sqlite3.Row) -> dict[str, Any]:
         extras = {}
     if isinstance(extras, dict):
         candle.update({key: value for key, value in extras.items() if key not in candle})
+    keys = set(row.keys())
+    if "source" in keys and row["source"]:
+        candle["_source"] = str(row["source"])
+    if "revision_id" in keys:
+        candle["_revision_id"] = str(row["revision_id"])
+        candle["_content_hash"] = str(row["content_hash"])
+        candle["_observed_at_ms"] = int(row["observed_at_ms"])
+        candle["_available_at_ms"] = int(row["available_at_ms"])
+        candle["_acquired_at_ms"] = int(row["acquired_at_ms"])
+        candle["_parent_revision_id"] = str(row["parent_revision_id"] or "")
+        try:
+            provenance = json.loads(row["field_provenance_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            provenance = {}
+        candle["_field_provenance"] = provenance if isinstance(provenance, dict) else {}
+        candle["_provenance_status"] = "complete"
     return candle
 
 

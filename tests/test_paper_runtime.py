@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from src.research_lab.hard_validation_contract import SetupCard
+from src.research_lab.candle_store import CandleStore
 from src.research_lab.paper_contract import PaperRuntimeState, plan_from_setup_card
 from src.research_lab.paper_journal import read_paper_outcomes
 from src.research_lab.paper_runtime import (
@@ -152,6 +153,10 @@ def test_execute_plan_once_accepts_both_side_plan(monkeypatch):
 def test_run_paper_cycle_writes_once_and_deduplicates(monkeypatch, tmp_path):
     write_setup_library(tmp_path, [_card()], dry_run=False)
     _write_data(tmp_path, _candles_for_take())
+    CandleStore(tmp_path).upsert_candles(
+        "ABC_USDT_SWAP", "1h", _candles_for_take(),
+        source="paper-runtime-fixture", available_at_ms=1,
+    )
 
     def fake_generate(visible, family, params):
         return [{"idx": 1, "side": "long", "reason": "unit"}] if len(visible) >= 2 else []

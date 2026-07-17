@@ -2,11 +2,15 @@
 """Tests for farm sweep materialization contracts."""
 from __future__ import annotations
 
-from src.research_lab.farm_sweep_runner import build_sweep_spec
+import json
+from pathlib import Path
+
+from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.param_schemas import parameter_search_contract
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.sweep_compile import compile_sweep
 from src.research_lab.timeframes import load_timeframe_profiles
+from src.research_lab.state_db import connect, init_db
 
 
 def test_farm_sweep_variants_include_executable_exit_params():
@@ -100,3 +104,27 @@ def test_zero_default_adaptive_axes_receive_absolute_search_levels():
         spec = build_sweep_spec("BTC_USDT_SWAP", "1h", family, fingerprint="fp")
         assert len(spec.setup_grid[axis_name]) > 1
         assert any(float(value) > 0 for value in spec.setup_grid[axis_name])
+
+
+def test_queue_sweep_binds_snapshot_manifest_into_worker_spec(tmp_path):
+    conn = connect(tmp_path / "state" / "strategy_lab.sqlite")
+    init_db(conn)
+    spec = build_sweep_spec(
+        "BTC_USDT_SWAP", "1h", "momentum_breakout", fingerprint="evidence-1",
+    )
+
+    _exp_id, job_id, created = queue_sweep(
+        conn, spec, private_root=tmp_path,
+        profiles=load_timeframe_profiles(), policy=load_resource_policy(),
+        data_glob=str(tmp_path / "market_data" / "1h" / "{symbol}_*.json"),
+        priority=100, fingerprint="evidence-1",
+        data_snapshot_id="csm_queued", data_evidence_hash="evidence-1",
+    )
+    spec_path = Path(conn.execute(
+        "SELECT spec_path FROM queue WHERE job_id=?", (job_id,),
+    ).fetchone()[0])
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+
+    assert created is True
+    assert payload["data_snapshot_id"] == "csm_queued"
+    assert payload["data_evidence_hash"] == "evidence-1"

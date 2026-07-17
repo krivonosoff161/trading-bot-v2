@@ -90,9 +90,11 @@ def _path_agg(trades: list[dict[str, Any]]) -> dict[str, Any]:
 
 def backfill_one(private_root: Path, item: dict[str, Any]) -> dict[str, Any]:
     """Re-simulate one candidate's signals and return its aggregated path record."""
-    candles = load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, item["symbol"], item["timeframe"],
-    ).rows
+        purpose="trade_path_backfill", coverage_policy="gap_free",
+    )
+    candles = selected.rows
     if not candles:
         return {"uc_key": item["uc_key"], "skipped": "no_candles"}
     signals = generate_signals(candles, item["family"], item["params"])
@@ -100,7 +102,11 @@ def backfill_one(private_root: Path, item: dict[str, Any]) -> dict[str, Any]:
         return {"uc_key": item["uc_key"], "skipped": "no_signals"}
     trades = simulate_trades(candles, signals, item["params"], fees_bps=FEES_BPS, slippage_bps=SLIP_BPS)
     return {"uc_key": item["uc_key"], "symbol": item["symbol"], "timeframe": item["timeframe"],
-            "family": item["family"], "subreason": item["subreason"], **_path_agg(trades)}
+            "family": item["family"], "subreason": item["subreason"],
+            "data_snapshot_id": selected.manifest.snapshot_id,
+            "data_evidence_hash": selected.manifest.evidence_hash,
+            "data_provenance_status": selected.manifest.provenance_status,
+            **_path_agg(trades)}
 
 
 def run_backfill(private_root: Path, *, subreasons: tuple[str, ...] | None = None,
