@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import src.research_lab.search_trial_evidence as evidence_module
 
 from scripts.strategy_lab.apply_feedback_recommendations import _exp_to_dict as feedback_exp_to_dict
 from scripts.strategy_lab.generate_event_sweeps import _exp_to_dict as event_exp_to_dict
@@ -408,7 +409,15 @@ def test_bound_data_identity_cannot_be_replaced_with_recomputed_evidence_id() ->
         validate_search_trial_evidence(evidence, require_complete=True)
 
 
-def test_coherent_cpu_signal_cannot_replace_required_gpu_family_kernel() -> None:
+def test_coherent_cpu_signal_cannot_replace_required_gpu_family_kernel(
+    monkeypatch,
+) -> None:
+    real_library_version = evidence_module._library_version
+    monkeypatch.setattr(
+        evidence_module,
+        "_library_version",
+        lambda name: "synthetic-cupy" if name == "cupy" else real_library_version(name),
+    )
     spec = ExperimentSpec(
         experiment_id="gpu-path-binding",
         data_glob="unused",
@@ -475,7 +484,15 @@ def test_coherent_cpu_signal_cannot_replace_required_gpu_family_kernel() -> None
         validate_search_trial_evidence(forged, require_complete=True)
 
 
-def test_auto_signal_path_recomputes_batch_eligibility_from_bound_row_count() -> None:
+def test_auto_signal_path_recomputes_batch_eligibility_from_bound_row_count(
+    monkeypatch,
+) -> None:
+    real_library_version = evidence_module._library_version
+    monkeypatch.setattr(
+        evidence_module,
+        "_library_version",
+        lambda name: "synthetic-cupy" if name == "cupy" else real_library_version(name),
+    )
     binding = {
         "symbol": "BTC",
         "timeframe": "1d",
