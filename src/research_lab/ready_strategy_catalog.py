@@ -119,7 +119,7 @@ def build_ready_strategy_catalog(
     write: bool = True,
 ) -> dict[str, Any]:
     """Build private ready/rejected catalog rows from the hard-validator PFR DB."""
-    records = load_pfr_records(pfr_db_path)
+    records = load_pfr_records(pfr_db_path, private_root=private_root)
     passed, rejected = apply_quality_policy(records, policy=policy)
 
     rows: list[ReadyStrategyCatalogRow] = []

@@ -96,8 +96,25 @@ def _load_unique_candidates(private_root: Path) -> list[dict[str, Any]]:
 
 
 def _request_contexts(private_root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    from src.research_lab.validation_generation import (
+        current_candidate_ids,
+        read_current_validation_artifact,
+    )
+
     by_candidate: dict[str, dict[str, Any]] = {}
     candidate_to_uc: dict[str, str] = {}
+    active_ids = current_candidate_ids(private_root)
+    if active_ids is not None:
+        for cid in active_ids:
+            data = read_current_validation_artifact(private_root, cid, "request") or {}
+            if not data:
+                continue
+            by_candidate[cid] = data
+            metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+            uc_key = str(metrics.get("uc_key") or "")
+            if uc_key:
+                candidate_to_uc[cid] = uc_key
+        return by_candidate, candidate_to_uc
     req_dir = private_root / "hard_validation" / "requests"
     if not req_dir.exists():
         return by_candidate, candidate_to_uc
@@ -115,7 +132,19 @@ def _request_contexts(private_root: Path) -> tuple[dict[str, dict[str, Any]], di
 
 
 def _verdicts(private_root: Path) -> dict[str, str]:
+    from src.research_lab.validation_generation import (
+        current_candidate_ids,
+        read_current_validation_artifact,
+    )
+
     out: dict[str, str] = {}
+    active_ids = current_candidate_ids(private_root)
+    if active_ids is not None:
+        for cid in active_ids:
+            data = read_current_validation_artifact(private_root, cid, "verdict") or {}
+            if data:
+                out[cid] = str(data.get("hard_status") or "")
+        return out
     vdir = private_root / "hard_validation" / "verdicts"
     if not vdir.exists():
         return out
@@ -128,12 +157,14 @@ def _verdicts(private_root: Path) -> dict[str, str]:
 
 
 def _cards(private_root: Path) -> dict[str, dict[str, Any]]:
+    from src.research_lab.validation_generation import read_current_setup_card
+
     out: dict[str, dict[str, Any]] = {}
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return out
     for path in cards_dir.glob("*.json"):
-        data = _read_json(path)
+        data = read_current_setup_card(private_root, path) or {}
         cid = str(data.get("candidate_id") or "")
         if cid:
             out[cid] = data

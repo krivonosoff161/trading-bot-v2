@@ -19,6 +19,12 @@ from src.research_lab.paper_signals.lane import (
     ARM_WINDOW_BARS, MAX_RISK_PCT, TF_MINUTES,
     _atr, _round, fingerprint,
 )
+from src.research_lab.validation_generation import (
+    current_candidate_ids,
+    load_current_generation,
+    read_current_setup_card_for_candidate,
+    read_current_validation_artifact,
+)
 from src.research_lab.strategies._helpers import window_high, window_low
 from src.research_lab.strategies.detectors import (
     detect_mean_reversion_fade as _detect_mrf,
@@ -77,7 +83,60 @@ def _ready_strategy_id(row: dict[str, Any]) -> str:
     return stable_id("ready", payload, length=20)
 
 
-def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
+def _current_pfr_authorizations(private_root: Path) -> dict[tuple[str, str], dict[str, Any]] | None:
+    """Map source DB identity to a fully verified current validation chain.
+
+    ``None`` means the explicit pre-manifest legacy state.  Any present but
+    pending, malformed, code-stale, or empty generation yields an empty map.
+    """
+    manifest = load_current_generation(private_root)
+    if manifest is None:
+        return None
+    candidate_ids = current_candidate_ids(private_root)
+    if not candidate_ids:
+        return {}
+    authorized: dict[tuple[str, str], dict[str, Any]] = {}
+    ambiguous: set[tuple[str, str]] = set()
+    for validation_id in sorted(candidate_ids):
+        request = read_current_validation_artifact(private_root, validation_id, "request")
+        card = read_current_setup_card_for_candidate(private_root, validation_id)
+        if request is None or card is None:
+            continue
+        metrics = request.get("metrics") if isinstance(request.get("metrics"), dict) else {}
+        source_candidate_id = str(
+            request.get("source_candidate_id")
+            or metrics.get("source_candidate_id")
+            or ""
+        )
+        source_run_id = Path(str(request.get("source_run_id") or "").replace("\\", "/")).name
+        if (
+            not source_run_id
+            or not source_candidate_id
+            or card.get("paper_forward_ready") is not True
+            or str(card.get("hard_status") or "") != "PAPER_FORWARD_READY"
+        ):
+            continue
+        key = (source_run_id, source_candidate_id)
+        if key in ambiguous:
+            continue
+        if key in authorized:
+            # Ambiguous source identity never grants paper authority.
+            authorized.pop(key, None)
+            ambiguous.add(key)
+            continue
+        authorized[key] = {
+            "validation_id": validation_id,
+            "generation_id": str(manifest.get("generation_id") or ""),
+            "card": card,
+        }
+    return authorized
+
+
+def load_pfr_records(
+    db_path: Path | str,
+    *,
+    private_root: Path,
+) -> list[dict[str, Any]]:
     """Load all PAPER_FORWARD_READY records from strategy_lab.sqlite.
 
     Joins farm_results with candidates to get actual validated params (params_json).
@@ -85,6 +144,9 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
     """
     db = Path(db_path)
     if not db.exists():
+        return []
+    authorizations = _current_pfr_authorizations(Path(private_root))
+    if authorizations == {}:
         return []
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
@@ -117,8 +179,25 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
                 d["params"] = json.loads(d.pop("params_json") or "{}")
             except (json.JSONDecodeError, TypeError):
                 d["params"] = {}
+            if authorizations is not None:
+                key = (str(d.get("run_id") or ""), str(d.get("candidate_id") or ""))
+                authorization = authorizations.get(key)
+                if authorization is None:
+                    continue
+                card = authorization["card"]
+                if (
+                    d["params"] != (card.get("params") or {})
+                    or str(d.get("symbol") or "") != str(card.get("symbol") or "")
+                    or str(d.get("timeframe") or "") != str(card.get("timeframe") or "")
+                    or str(d.get("family") or "") != str(card.get("strategy_id") or "")
+                ):
+                    continue
+                d["source_candidate_id"] = d["candidate_id"]
+                d["candidate_id"] = authorization["validation_id"]
+                d["setup_id"] = str(card.get("setup_id") or "")
+                d["validation_generation_id"] = authorization["generation_id"]
             d["params_hash"] = _params_hash(d["params"])
-            d["setup_id"] = f"setup-{d['candidate_id']}"
+            d.setdefault("setup_id", f"setup-{d['candidate_id']}")
             out.append(d)
         return out
     finally:

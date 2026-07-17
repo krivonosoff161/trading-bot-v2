@@ -7,7 +7,6 @@ or does not contain runnable paper inputs.
 """
 from __future__ import annotations
 
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from typing import Any
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.paper_contract import PaperPlanError, plan_from_setup_card
+from src.research_lab.validation_generation import read_current_setup_card
 
 
 def _short_reason(reason: str, *, max_len: int = 120) -> str:
@@ -30,8 +30,12 @@ def _load_cards(private_root: Path, *, limit: int = 500) -> tuple[list[SetupCard
     unreadable = 0
     for path in sorted(cards_dir.glob("*.json"))[: max(0, int(limit))]:
         try:
-            cards.append(SetupCard.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            payload = read_current_setup_card(private_root, path)
+            if payload is None:
+                unreadable += 1
+                continue
+            cards.append(SetupCard.from_dict(payload))
+        except (OSError, KeyError, TypeError, ValueError):
             unreadable += 1
     return cards, unreadable
 

@@ -45,15 +45,16 @@ DEFAULT_DATA_GLOB = "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{
 
 
 def _load_cards(private_root: Path) -> list[dict]:
+    from src.research_lab.validation_generation import read_current_setup_card
+
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return []
     out = []
     for path in sorted(cards_dir.glob("*.json")):
-        try:
-            out.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
-            continue
+        payload = read_current_setup_card(private_root, path)
+        if payload is not None:
+            out.append(payload)
     return out
 
 

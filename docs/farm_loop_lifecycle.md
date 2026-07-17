@@ -67,13 +67,19 @@ clears, for example `NEEDS_OI_DATA`.
    in-process, stamps verdicts back into `farm_results` and `unique_candidates`, and
    writes `setup_library` cards. The handoff uses bounded stored trade records in
    `metrics.json`; legacy aggregate-only artifacts are rebuilt from local candles when
-   possible, never guessed from averages.
+   possible, never guessed from averages. Only IDs exported and completed in this exact
+   invocation may be stamped or activated. A pending manifest revokes the prior generation
+   before producer side effects begin; the completed atomic `HardValidationGeneration.v1`
+   manifest content-binds tasks, requests, producer/validator and paper-reader code,
+   reports, verdicts, and cards. Zero current exports validate nothing and invalidate old
+   cards and old PFR database rows as current.
 8. **Follow-up:** hard-validation feedback is converted into bounded
    `schedule_followup` tasks. Queueable actions (`NARROW_PARAMS`, `WIDEN_PARAMS`,
    `REGIME_SWEEP`) become ordinary typed `run_sweep` tasks and then use the same
    worker path as every other calculation. Follow-ups are capped, deduped, TTL-bound,
    and can be disabled with `--no-followups`.
-9. **Paper:** `--run-paper` reads only `PAPER_FORWARD_READY` setup cards, builds
+9. **Paper:** `--run-paper` reads only current-generation `PAPER_FORWARD_READY` setup
+   cards (or explicitly legacy cards before the first generation manifest), builds
    `PaperTradePlan`, simulates against local prepared candles, writes
    `paper/paper_trades.jsonl`, and upserts `paper_outcomes`. A setup card is paper-ready
    only if hard validation passed and executable params include `hold_bars`, `stop_pct`,

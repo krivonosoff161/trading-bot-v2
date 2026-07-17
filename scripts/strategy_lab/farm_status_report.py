@@ -430,7 +430,10 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
         try:  # PFR bridge: how many canonical records survive quality + risk gates
             from src.research_lab.paper_signals import pfr_bridge
             from src.research_lab.paper_signals.lane import MAX_RISK_PCT
-            pfr_recs = pfr_bridge.load_pfr_records(db_path)
+            pfr_recs = pfr_bridge.load_pfr_records(
+                db_path,
+                private_root=db_path.parent.parent,
+            )
             pfr_passed, pfr_rej = pfr_bridge.apply_quality_policy(pfr_recs)
             report["pfr_bridge"] = {
                 "records_loaded": len(pfr_recs),

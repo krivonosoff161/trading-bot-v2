@@ -224,15 +224,14 @@ MAX_FOLLOWUP_DEPTH = 2
 
 
 def _load_setup_cards(private_root: Path) -> list[dict[str, Any]]:
+    from src.research_lab.validation_generation import read_current_setup_card
+
     cards_dir = Path(private_root) / "setup_library" / "cards"
     if not cards_dir.exists():
         return []
     out: list[dict[str, Any]] = []
     for path in sorted(cards_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+        data = read_current_setup_card(private_root, path)
         if isinstance(data, dict):
             out.append(data)
     return out
