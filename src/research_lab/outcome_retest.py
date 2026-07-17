@@ -243,6 +243,11 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
         return None, [], "missing_symbol_timeframe_or_family"
     if family not in REGISTRY:
         return None, [], "family_not_in_strategy_registry"
+    parent_family_id = str(row.get("search_family_id") or "")
+    parent_trial_id = str(row.get("search_trial_id") or "")
+    parent_effective_n_trials = int(row.get("effective_n_trials") or 0)
+    if not (parent_family_id and parent_trial_id and parent_effective_n_trials > 0):
+        return None, [], "unbound_parent_search_family"
     exit_grid, exit_changes = _exit_grid(row, dimensions)
     entry_grid, entry_changes = _entry_grid(row, dimensions)
     if not exit_grid and not entry_grid:
@@ -264,6 +269,10 @@ def _sweep_for_row(row: dict[str, Any], dimensions: list[str], retest_id: str) -
         resource_class="normal",
         private_output_policy="private_only",
         variant_tier="normal",
+        parent_family_id=parent_family_id,
+        parent_trial_id=parent_trial_id,
+        parent_effective_n_trials=parent_effective_n_trials,
+        cumulative_family_policy="cumulative",
     )
     return sweep, mapping_note + exit_changes + entry_changes + budget_changes, ""
 

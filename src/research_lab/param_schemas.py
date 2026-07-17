@@ -104,14 +104,21 @@ def parameter_search_contract(strategy_id: str) -> ParameterSearchContract:
     )
 
 
-def search_variant_is_valid(strategy_id: str, params: dict[str, Any]) -> bool:
-    """Enforce cross-axis semantics before a variant can enter the executable sample."""
+def search_variant_validity(strategy_id: str, params: dict[str, Any]) -> tuple[bool, str]:
+    """Return cross-axis validity plus one deterministic disposition reason."""
     if strategy_id == "rsi_reversal":
         try:
-            return float(params["oversold"]) < float(params["overbought"])
+            if float(params["oversold"]) < float(params["overbought"]):
+                return True, "dependency_rules_passed"
+            return False, "oversold_must_be_less_than_overbought"
         except (KeyError, TypeError, ValueError):
-            return False
-    return True
+            return False, "rsi_threshold_dependency_inputs_invalid"
+    return True, "dependency_rules_passed"
+
+
+def search_variant_is_valid(strategy_id: str, params: dict[str, Any]) -> bool:
+    """Backward-compatible boolean cross-axis validity check."""
+    return search_variant_validity(strategy_id, params)[0]
 
 
 @dataclass(frozen=True)

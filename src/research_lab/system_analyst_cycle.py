@@ -65,6 +65,14 @@ def _task_spec(
         "subject": subject,
         "source_ref": source_ref,
         "generation": generation,
+        "parent_family_id": str(source_row.get("search_family_id") or ""),
+        "parent_trial_id": str(source_row.get("search_trial_id") or ""),
+        "parent_effective_n_trials": int(source_row.get("effective_n_trials") or 0),
+        "cumulative_family_policy": (
+            "cumulative"
+            if source_row.get("search_family_id") and source_row.get("search_trial_id")
+            else "independent"
+        ),
         "requires_deterministic_mapping": True,
         "requires_untouched_evaluation": True,
         "paper_only": True,

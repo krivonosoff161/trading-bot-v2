@@ -32,7 +32,8 @@ def main() -> None:
 
     spec = ExperimentSpec.from_json(Path(args.spec))
     out_root = resolve_private_root(args.out_root, allow_public_output=args.allow_public_output)
-    results = evaluate_spec(spec, candle_store=CandleStore(out_root))
+    runtime_meta: dict = {}
+    results = evaluate_spec(spec, runtime_meta, candle_store=CandleStore(out_root))
     promoted = sum(1 for r in results if r.decision == "PROMOTE_FOR_PRESSURE_TEST")
     observed = sum(1 for r in results if r.decision == "OBSERVE")
     rejected = sum(1 for r in results if r.decision == "REJECT")
@@ -48,6 +49,7 @@ def main() -> None:
         out_root,
         allow_public_output=args.allow_public_output,
         include_rejects=args.include_rejects,
+        runtime_meta=runtime_meta,
     )
     print(f"wrote experiments/completed/{out_dir.name}")
 

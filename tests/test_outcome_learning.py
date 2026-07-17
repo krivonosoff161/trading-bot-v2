@@ -50,6 +50,9 @@ def _row(**overrides):
         "final_card_text": "private human card text",
         "paper_only": True,
         "execution_allowed": False,
+        "search_family_id": "sfd_parent",
+        "search_trial_id": "stept_parent",
+        "effective_n_trials": 4,
     }
     row.update(overrides)
     return row

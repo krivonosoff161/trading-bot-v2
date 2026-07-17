@@ -132,52 +132,45 @@ def test_choose_symbol_file_returns_none_when_no_timeframe_match(tmp_path):
 
 def test_experiment_spec_from_json_loads_timeframe(tmp_path):
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps({
-        "experiment_id": "x",
-        "data_glob": "data/{symbol}.json",
-        "symbols": ["BTC_USDT_SWAP"],
-        "families": ["momentum_breakout"],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
-        "timeframe": "15m",
-    }), encoding="utf-8")
+    ExperimentSpec(
+        experiment_id="x",
+        data_glob="data/{symbol}.json",
+        symbols=["BTC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 3}]},
+        timeframe="15m",
+    ).write_json(spec_path)
     spec = ExperimentSpec.from_json(spec_path)
     assert spec.timeframe == "15m"
 
 
 def test_experiment_spec_from_json_defaults_timeframe(tmp_path):
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps({
-        "experiment_id": "x",
-        "data_glob": "data/{symbol}.json",
-        "symbols": ["BTC_USDT_SWAP"],
-        "families": ["momentum_breakout"],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
-    }), encoding="utf-8")
+    ExperimentSpec(
+        experiment_id="x",
+        data_glob="data/{symbol}.json",
+        symbols=["BTC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 3}]},
+    ).write_json(spec_path)
     spec = ExperimentSpec.from_json(spec_path)
     assert spec.timeframe == "1d"
 
 
 def test_experiment_spec_json_roundtrip_preserves_timeframe(tmp_path):
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps({
-        "experiment_id": "x",
-        "data_glob": "data/{symbol}.json",
-        "symbols": ["BTC_USDT_SWAP"],
-        "families": ["momentum_breakout"],
-        "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
-        "timeframe": "4h",
-    }), encoding="utf-8")
+    ExperimentSpec(
+        experiment_id="x",
+        data_glob="data/{symbol}.json",
+        symbols=["BTC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 3}]},
+        timeframe="4h",
+    ).write_json(spec_path)
     spec = ExperimentSpec.from_json(spec_path)
     assert spec.timeframe == "4h"
     out_path = tmp_path / "spec_out.json"
-    out_path.write_text(json.dumps({
-        "experiment_id": spec.experiment_id,
-        "data_glob": spec.data_glob,
-        "symbols": spec.symbols,
-        "families": spec.families,
-        "parameter_grid": spec.parameter_grid,
-        "timeframe": spec.timeframe,
-    }), encoding="utf-8")
+    spec.write_json(out_path)
     spec2 = ExperimentSpec.from_json(out_path)
     assert spec2.timeframe == "4h"
 

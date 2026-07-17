@@ -42,6 +42,10 @@ class SweepSpec:
     resource_class: str = "normal"
     private_output_policy: str = "private_only"
     variant_tier: str = "smoke"  # smoke=profile cap as-is; normal=x2; deep=x4 (abs-capped)
+    parent_family_id: str = ""
+    parent_trial_id: str = ""
+    parent_effective_n_trials: int = 0
+    cumulative_family_policy: str = "independent"
 
     def symbol_scope(self) -> int:
         return 1 + len(self.related_symbols)

@@ -55,7 +55,22 @@ class SearchTrialEvidenceTest(unittest.TestCase):
             symbol="BTC",
             family=family,
             params=params,
-            metrics={"data_fingerprint": "data-a"},
+            metrics={
+                "data_fingerprint": "data-a",
+                "execution_identity": {
+                    "requested_backend": "cpu",
+                    "resolved_backend": "cpu",
+                    "backend_name": "numpy",
+                    "signal_backend": "cpu",
+                    "signal_kernel": "strategy_generator",
+                    "signal_backend_reason": "resolved_cpu",
+                    "signal_candle_count": 100,
+                    "signal_family_variant_count": 2,
+                    "simulation_backend": "cpu",
+                    "simulator": "cpu_simulator",
+                    "terminal_phase": "completed",
+                },
+            },
             decision="REJECT",
             reasons=[],
         )

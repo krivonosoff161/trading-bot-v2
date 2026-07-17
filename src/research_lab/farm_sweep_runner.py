@@ -12,10 +12,6 @@ no order path, writes only the private spec file + the queue row.
 """
 from __future__ import annotations
 
-import json
-import hashlib
-import itertools
-import math
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +20,6 @@ from src.research_lab.state_db import ensure_experiment_queued
 from src.research_lab.param_schemas import (
     executable_exit_params,
     parameter_search_contract,
-    search_variant_is_valid,
 )
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_compile import compile_sweep
@@ -173,73 +168,25 @@ def build_sweep_spec(symbol: str, timeframe: str, family: str, *, fingerprint: s
 def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, data_glob: str,
                 priority: int, fingerprint: str | None,
                 data_snapshot_id: str, data_evidence_hash: str,
+                data_snapshot_bindings: list[dict[str, Any]],
                 event_context: dict[str, Any] | None = None,
                 ) -> tuple[str, int, bool]:
     """Compile + write spec file + idempotently enqueue. Returns (experiment_id, job_id, created)."""
-    if not data_snapshot_id or not data_evidence_hash:
+    if not data_snapshot_id or not data_evidence_hash or not data_snapshot_bindings:
         raise ValueError("farm sweep queue requires a bound candle snapshot manifest")
-    exp = compile_sweep(spec, data_glob=data_glob, timeframe_profiles=profiles,
-                        resource_policy=policy, event_context=event_context or {})
+    exp = compile_sweep(
+        spec,
+        data_glob=data_glob,
+        timeframe_profiles=profiles,
+        resource_policy=policy,
+        event_context=event_context or {},
+        data_snapshot_id=data_snapshot_id,
+        data_evidence_hash=data_evidence_hash or str(fingerprint or ""),
+        data_snapshot_bindings=data_snapshot_bindings,
+    )
     out_dir = event_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = out_dir / f"{exp.experiment_id}.json"
-    variants = (exp.parameter_grid or {}).get(spec.setup_family, [])
-    raw_space_size = math.prod(
-        len(values)
-        for values in {**spec.setup_grid, **spec.entry_grid, **spec.exit_grid}.values()
-    )
-    merged_grid = {**spec.setup_grid, **spec.entry_grid, **spec.exit_grid}
-    grid_keys = sorted(merged_grid)
-    valid_space_size = sum(
-        1
-        for values in itertools.product(*(merged_grid[key] for key in grid_keys))
-        if search_variant_is_valid(spec.setup_family, dict(zip(grid_keys, values)))
-    )
-    search_contract = parameter_search_contract(spec.setup_family)
-    seed_material = f"{spec.sweep_id}|{spec.setup_family}|{spec.timeframe}"
-    variant_hashes = [
-        hashlib.sha256(
-            json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        for row in variants
-    ]
-    payload = {
-        "experiment_id": exp.experiment_id, "data_glob": exp.data_glob, "symbols": exp.symbols,
-        "timeframe": exp.timeframe, "families": exp.families, "fees_bps": exp.fees_bps,
-        "slippage_bps": exp.slippage_bps, "min_trades": exp.min_trades, "split_ratio": exp.split_ratio,
-        "max_runs": exp.max_runs, "parameter_grid": exp.parameter_grid, "filters": exp.filters,
-        "event_context": exp.event_context, "backend": exp.backend, "data_fingerprint": fingerprint,
-        "data_snapshot_id": str(data_snapshot_id),
-        "data_evidence_hash": str(data_evidence_hash or fingerprint or ""),
-        "variant_tier": getattr(spec, "variant_tier", "smoke"), "variant_count": len(variants),
-        "parameter_search_contract": search_contract.version,
-        "search_axes": [
-            {
-                "name": axis.name,
-                "value_type": axis.value_type,
-                "minimum": axis.minimum,
-                "maximum": axis.maximum,
-                "default": axis.default,
-                "unit": axis.unit,
-                "searchable": axis.searchable,
-                "dependencies": list(axis.dependencies),
-            }
-            for axis in search_contract.adaptive_axes
-        ],
-        "raw_search_space_size": raw_space_size,
-        "dependency_valid_space_size": valid_space_size,
-        "dependency_rejected_count": max(0, raw_space_size - valid_space_size),
-        "raw_grids": {
-            "setup": spec.setup_grid,
-            "entry": spec.entry_grid,
-            "exit": spec.exit_grid,
-        },
-        "sampler_version": search_contract.sampler_version,
-        "sampler_seed_material": seed_material,
-        "tested_variant_hashes": variant_hashes,
-        "tested_variant_count": len(variants),
-        "omitted_variant_count": max(0, valid_space_size - len(variants)),
-    }
-    spec_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    spec_path = out_dir / f"{exp.search_family_id}.json"
+    exp.write_json(spec_path)
     job_id, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=int(priority))
     return exp.experiment_id, int(job_id), bool(created)

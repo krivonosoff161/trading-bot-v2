@@ -35,6 +35,7 @@ from src.research_lab.hard_validation_contract import (
     write_json,
 )
 from src.research_lab.honest_backtest_bridge import _artifact_stem
+from src.research_lab.search_trial_evidence import validate_search_trial_evidence
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
@@ -242,6 +243,13 @@ def _build_candidate(
     metrics = _load_experiment_metrics(private_root, artifact_label, entry)
     if metrics is None:
         return None
+    evidence = metrics.get("search_trial_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    try:
+        validate_search_trial_evidence(evidence, require_complete=True)
+    except (TypeError, ValueError):
+        return None
 
     trades = metrics.pop("_trades", [])
     filters = dict(entry.get("filters") or metrics.pop("_filters", {}) or {})
@@ -358,15 +366,28 @@ def _load_experiment_metrics(
             "multiple_testing_family_hash": str(
                 data.get("multiple_testing_family_hash") or ""
             ),
+            "runtime": dict(data.get("runtime") or {}),
         }
         evidence_file = run_dir / "search_trial_evidence.json"
-        if evidence_file.exists():
-            try:
-                trial_evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                trial_evidence = {}
-            search_space = trial_evidence.get("search_space") or {}
-            context["n_variants_evaluated"] = int(search_space.get("evaluated") or 0)
+        if not evidence_file.exists():
+            return None
+        try:
+            trial_evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+            counts = validate_search_trial_evidence(
+                trial_evidence,
+                require_complete=True,
+            )
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return None
+        if (
+            context["search_trial_evidence_id"]
+            != str(trial_evidence.get("search_trial_evidence_id") or "")
+            or context["multiple_testing_family_hash"]
+            != str(trial_evidence.get("multiple_testing_family_hash") or "")
+        ):
+            return None
+        context["search_trial_evidence"] = trial_evidence
+        context["n_variants_evaluated"] = counts["effective_n_trials"]
         results = data.get("results") or []
         candidate_id = str(entry.get("candidate_id") or "")
         source_candidate_id = str(entry.get("source_candidate_id") or "")
@@ -387,14 +408,17 @@ def _load_experiment_metrics(
             if exact_scope and (exact_id or exact_hash):
                 out = dict(r.get("metrics") or {})
                 out.update(context)
-                trial_returns = _comparable_trial_returns(
-                    results, symbol=row_symbol, family=row_family,
+                trial_panel = _comparable_trial_panel(
+                    results,
+                    trial_evidence,
+                    symbol=row_symbol,
+                    family=row_family,
                 )
-                if len(trial_returns) >= 2:
-                    out["trial_returns"] = trial_returns
-                    out["trial_sharpes"] = [
-                        _simple_sharpe(values) for values in trial_returns
-                    ]
+                out["pbo_dsr_family_coverage"] = trial_panel["coverage"]
+                out["trial_returns"] = trial_panel["trial_returns"]
+                out["trial_sharpes"] = [
+                    _simple_sharpe(values) for values in trial_panel["trial_returns"]
+                ]
                 out["_params"] = _params_from_result(r)
                 trades = list(r.get("_trades") or r.get("trades") or [])
                 if not trades and int(out.get("n_trades") or 0) > 0:
@@ -418,22 +442,99 @@ def _load_experiment_metrics(
     return dict(entry.get("metrics_summary") or {})
 
 
-def _comparable_trial_returns(
-    results: list[dict[str, Any]], *, symbol: str, family: str,
-) -> list[list[float]]:
-    comparable: list[list[float]] = []
-    for row in results:
-        row_symbol = str(row.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
-        if row_symbol != symbol or str(row.get("family") or "") != family:
+def _comparable_trial_panel(
+    results: list[dict[str, Any]],
+    evidence: dict[str, Any],
+    *,
+    symbol: str,
+    family: str,
+) -> dict[str, Any]:
+    by_run_id = {
+        str(row.get("run_id") or row.get("candidate_id") or ""): row
+        for row in results
+    }
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    trial_returns: list[list[float]] = []
+    for trial in evidence.get("trials") or []:
+        trial_symbol = (
+            str(trial.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        )
+        execution_id = str(trial.get("execution_id") or "")
+        run_id = str(trial.get("run_id") or "")
+        if trial_symbol != symbol:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "different_symbol_scope",
+                }
+            )
+            continue
+        if str(trial.get("family") or "") != family:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "different_family_scope",
+                }
+            )
+            continue
+        disposition = str(trial.get("terminal_disposition") or "")
+        if disposition != "evaluated":
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": f"terminal_{disposition or 'unknown'}",
+                }
+            )
+            continue
+        row = by_run_id.get(run_id)
+        if row is None:
+            excluded.append(
+                {"execution_id": execution_id, "run_id": run_id, "reason": "result_missing"}
+            )
             continue
         values = [
             float(trade["net_pct"])
             for trade in (row.get("trades") or [])
             if trade.get("net_pct") is not None
         ]
-        if len(values) >= 3:
-            comparable.append(values)
-    return comparable
+        if len(values) < 3:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "fewer_than_3_trades",
+                }
+            )
+            continue
+        included.append(
+            {
+                "execution_id": execution_id,
+                "run_id": run_id,
+                "trade_count": len(values),
+            }
+        )
+        trial_returns.append(values)
+    selected = len(included) + len(excluded)
+    expected_selected = int(
+        (evidence.get("search_space") or {}).get("selected_executions") or 0
+    )
+    return {
+        "trial_returns": trial_returns,
+        "coverage": {
+            "schema": "PboDsrFamilyCoverage.v1",
+            "search_family_id": str(evidence.get("search_family_id") or ""),
+            "selected_executions": selected,
+            "included_count": len(included),
+            "excluded_count": len(excluded),
+            "included": included,
+            "excluded": excluded,
+            "complete": selected > 0 and selected == expected_selected,
+        },
+    }
 
 
 def _simple_sharpe(returns: list[float]) -> float:

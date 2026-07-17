@@ -27,9 +27,32 @@ def adaptive_trial_id(task_spec: dict[str, Any]) -> str:
         "subject": dict(task_spec.get("subject") or {}),
         "source_ref": str(task_spec.get("source_ref") or ""),
         "generation": int(task_spec.get("generation") or 0),
+        "dimensions": list(task_spec.get("dimensions") or []),
+        "tests": list(task_spec.get("tests") or []),
+        "hypotheses": list(task_spec.get("hypotheses") or []),
+        "parent_family_id": str(task_spec.get("parent_family_id") or ""),
+        "parent_trial_id": str(task_spec.get("parent_trial_id") or ""),
+        "parent_effective_n_trials": int(
+            task_spec.get("parent_effective_n_trials") or 0
+        ),
+        "cumulative_family_policy": str(
+            task_spec.get("cumulative_family_policy") or "independent"
+        ),
     }
     if not identity["subject"] or not identity["source_ref"]:
         raise ValueError("adaptive trial subject and source_ref are required")
+    if identity["cumulative_family_policy"] != "independent" and not (
+        identity["parent_family_id"]
+        and identity["parent_trial_id"]
+        and identity["parent_effective_n_trials"] > 0
+    ):
+        raise ValueError("adaptive follow-up requires parent search-family accounting")
+    if identity["cumulative_family_policy"] == "independent" and (
+        identity["parent_family_id"]
+        or identity["parent_trial_id"]
+        or identity["parent_effective_n_trials"]
+    ):
+        raise ValueError("independent adaptive trial cannot inherit parent accounting")
     return f"atrial_{_sha256(identity)}"
 
 
@@ -60,7 +83,9 @@ def write_adaptive_trial_record(
         "paper_only": True,
         "execution_allowed": False,
     }
-    directory = Path(private_root) / "state" / "adaptive_trials" / trial_id
+    # Keep the full content-addressed record name, but avoid nesting the equally
+    # long trial id: Windows temp/private roots can otherwise exceed MAX_PATH.
+    directory = Path(private_root) / "state" / "adaptive_trials"
     path = directory / f"{record_id}.json"
     if path.exists():
         existing = json.loads(path.read_text(encoding="utf-8"))

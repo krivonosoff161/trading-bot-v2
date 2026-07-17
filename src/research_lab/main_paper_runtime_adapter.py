@@ -86,6 +86,9 @@ class MainPaperRuntimeQueueItem:
     validation_tier: str = FARM_CALCULATED_TIER
     ready_strategy_id: str = ""
     source_validation_verdict: str = ""
+    search_family_id: str = ""
+    search_trial_id: str = ""
+    effective_n_trials: int = 0
     setup_id: str = ""
     candidate_id: str = ""
     validation_id: str = ""
@@ -286,6 +289,9 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         validation_tier=validation_tier,
         ready_strategy_id=str(meta.get("ready_strategy_id") or ""),
         source_validation_verdict=str(meta.get("source_validation_verdict") or ""),
+        search_family_id=str(meta.get("search_family_id") or ""),
+        search_trial_id=str(meta.get("search_trial_id") or ""),
+        effective_n_trials=int(meta.get("effective_n_trials") or 0),
         setup_id=str(meta.get("setup_id") or ""),
         candidate_id=str(meta.get("candidate_id") or ""),
         validation_id=str(meta.get("validation_id") or ""),

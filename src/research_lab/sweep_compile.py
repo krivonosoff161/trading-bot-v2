@@ -18,9 +18,16 @@ import random
 from typing import Any
 
 from src.research_lab.experiment import ExperimentSpec
-from src.research_lab.param_schemas import executable_exit_params, search_variant_is_valid
+from src.research_lab.param_schemas import (
+    PARAMETER_SEARCH_CONTRACT_VERSION,
+    SAMPLER_VERSION,
+    executable_exit_params,
+    search_variant_validity,
+    validate_params,
+)
 from src.research_lab.resource_policy import ResourcePolicy
 from src.research_lab.runtime_policy import effective_variant_cap
+from src.research_lab.search_family_definition import build_sweep_family_definition
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.timeframes import TimeframeProfiles
@@ -56,7 +63,7 @@ def expand_grids_bounded(
     *grids: dict[str, list[Any]], cap: int, seed_material: str,
     baseline: dict[str, Any] | None = None,
     strategy_id: str = "",
-    audit: dict[str, int] | None = None,
+    audit: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Sample a Cartesian grid without materializing the full search space."""
     merged: dict[str, list[Any]] = {}
@@ -65,6 +72,33 @@ def expand_grids_bounded(
             if values:
                 merged[key] = list(values)
     if not merged:
+        if strategy_id:
+            defaults = dict(get_strategy(strategy_id).parameter_defaults)
+            schema = validate_params(strategy_id, defaults)
+            valid, reason = search_variant_validity(strategy_id, defaults)
+            if not schema.ok or not valid:
+                detail = ";".join(schema.errors) if not schema.ok else reason
+                raise ValueError(f"baseline parameters are invalid: {detail}")
+        if audit is not None:
+            audit.update(
+                {
+                    "axis_order": [],
+                    "cartesian_total": 1,
+                    "eligible_total": 1,
+                    "selected_total": 1,
+                    "omitted_invalid": 0,
+                    "omitted_by_variant_cap": 0,
+                    "selected_flat_indices": [0],
+                    "points": [
+                        {
+                            "flat_index": 0,
+                            "params": {},
+                            "pre_disposition": "selected",
+                            "reason": "selected_by_sampler",
+                        }
+                    ],
+                }
+            )
         return [{}]
     keys = sorted(merged)
     axes = [merged[key] for key in keys]
@@ -77,23 +111,30 @@ def expand_grids_bounded(
             values[pos] = axes[pos][offset]
         return dict(zip(keys, values))
 
-    valid_indices = [
-        index for index in range(total)
-        if not strategy_id or search_variant_is_valid(strategy_id, decode(index))
-    ]
+    invalid: dict[int, tuple[str, str]] = {}
+    if not strategy_id:
+        # Keep the low-level sampler usable for very large synthetic Cartesian
+        # spaces without materializing range(total). Complete point ledgers are
+        # created by compile_sweep, which always supplies a strategy id + audit.
+        valid_indices: Any = range(total)
+    else:
+        valid_indices = []
+        strategy_defaults = dict(get_strategy(strategy_id).parameter_defaults)
+        for index in range(total):
+            params = decode(index)
+            complete_params = {**strategy_defaults, **params}
+            schema = validate_params(strategy_id, complete_params)
+            if not schema.ok:
+                invalid[index] = ("schema_invalid", ";".join(schema.errors))
+                continue
+            valid, reason = search_variant_validity(strategy_id, complete_params)
+            if not valid:
+                invalid[index] = ("dependency_invalid", reason)
+                continue
+            valid_indices.append(index)
     if not valid_indices:
         raise ValueError("parameter grid has no variants satisfying cross-axis dependencies")
     limit = min(len(valid_indices), max(1, int(cap)))
-    if audit is not None:
-        audit.update(
-            {
-                "cartesian_total": int(total),
-                "eligible_total": len(valid_indices),
-                "selected_total": int(limit),
-                "omitted_invalid": int(total - len(valid_indices)),
-                "omitted_by_variant_cap": int(len(valid_indices) - limit),
-            }
-        )
     if len(valid_indices) <= limit:
         indices: list[int] = valid_indices
     else:
@@ -132,6 +173,37 @@ def expand_grids_bounded(
     variants: list[dict[str, Any]] = []
     for flat_index in indices:
         variants.append(decode(flat_index))
+    if audit is not None:
+        selected = set(indices)
+        points = []
+        for flat_index in range(total):
+            params = decode(flat_index)
+            if flat_index in invalid:
+                disposition, reason = invalid[flat_index]
+            elif flat_index in selected:
+                disposition, reason = "selected", "selected_by_sampler"
+            else:
+                disposition, reason = "omitted_variant_cap", "eligible_not_selected_by_cap"
+            points.append(
+                {
+                    "flat_index": flat_index,
+                    "params": params,
+                    "pre_disposition": disposition,
+                    "reason": reason,
+                }
+            )
+        audit.update(
+            {
+                "axis_order": keys,
+                "cartesian_total": int(total),
+                "eligible_total": len(valid_indices),
+                "selected_total": int(limit),
+                "omitted_invalid": int(total - len(valid_indices)),
+                "omitted_by_variant_cap": int(len(valid_indices) - limit),
+                "selected_flat_indices": list(indices),
+                "points": points,
+            }
+        )
     return variants
 
 
@@ -145,6 +217,9 @@ def compile_sweep(
     slippage_bps: float = 3.0,
     min_trades: int = 20,
     event_context: dict[str, Any] | None = None,
+    data_snapshot_id: str = "",
+    data_evidence_hash: str = "",
+    data_snapshot_bindings: list[dict[str, Any]] | None = None,
 ) -> ExperimentSpec:
     """Validate safety gates, expand grids (bounded by cap), build an ExperimentSpec.
 
@@ -188,6 +263,23 @@ def compile_sweep(
     runs = len(symbols) * len(variants)
     job_cap, _ = effective_variant_cap(resource_policy, runs)
 
+    family_definition, family_id = build_sweep_family_definition(
+        spec,
+        symbols=symbols,
+        filters=filters,
+        search_space=search_space,
+        effective_max_variants=result.effective_max_variants,
+        execution_cap=job_cap,
+        seed_material=f"{spec.sweep_id}|{spec.setup_family}|{spec.timeframe}",
+        sampler_version=SAMPLER_VERSION,
+        validity_version=PARAMETER_SEARCH_CONTRACT_VERSION,
+        resource_policy_contract=resource_policy,
+        timeframe_profile=timeframe_profiles.get(spec.timeframe),
+        data_snapshot_id=data_snapshot_id,
+        data_evidence_hash=data_evidence_hash,
+        data_snapshot_bindings=data_snapshot_bindings,
+    )
+
     return ExperimentSpec(
         experiment_id=f"sweep_{spec.sweep_id}",
         data_glob=data_glob,
@@ -202,6 +294,11 @@ def compile_sweep(
         timeframe=spec.timeframe,
         filters=filters,
         backend=spec.backend,
+        data_snapshot_id=str(data_snapshot_id or ""),
+        data_evidence_hash=str(data_evidence_hash or ""),
+        data_snapshot_bindings=list(data_snapshot_bindings or []),
+        search_family_definition=family_definition,
+        search_family_id=family_id,
         plan_meta={
             "search_space": {
                 **search_space,

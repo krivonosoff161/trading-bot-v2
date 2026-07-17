@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 
-import json
-
 import scripts.strategy_lab.worker_once as worker_once
 from scripts.strategy_lab.worker_once import run_worker_once
+from src.research_lab.experiment import ExperimentSpec
 
 
 def test_worker_once_defers_when_lock_exists(tmp_path):
@@ -19,19 +18,14 @@ def test_worker_once_defers_when_lock_exists(tmp_path):
 
 def test_worker_once_reports_running_before_evaluate(tmp_path, monkeypatch):
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(
-        json.dumps(
-            {
-                "experiment_id": "exp-visible",
-                "data_glob": "missing/*.json",
-                "symbols": ["A"],
-                "families": ["momentum_breakout"],
-                "parameter_grid": {"momentum_breakout": [{}]},
-                "max_runs": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
+    ExperimentSpec(
+        experiment_id="exp-visible",
+        data_glob="missing/*.json",
+        symbols=["A"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{}]},
+        max_runs=1,
+    ).write_json(spec_path)
     status_events: list[dict] = []
 
     class FakeConn:

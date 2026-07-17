@@ -89,10 +89,120 @@ class ExperimentSpec:
     backend: str = "cpu"
     data_snapshot_id: str = ""
     data_evidence_hash: str = ""
+    data_snapshot_bindings: list[dict[str, Any]] = field(default_factory=list)
+    search_family_definition: dict[str, Any] = field(default_factory=dict)
+    search_family_id: str = ""
+
+    def __post_init__(self) -> None:
+        from src.research_lab.search_family_definition import (
+            build_declared_grid_definition,
+            validate_experiment_spec_binding,
+            validate_search_family_definition,
+        )
+
+        if bool(self.search_family_definition) != bool(self.search_family_id):
+            raise ValueError("search family definition and id must be supplied together")
+        if self.search_family_definition:
+            validate_search_family_definition(
+                self.search_family_definition,
+                expected_id=self.search_family_id,
+            )
+            validate_experiment_spec_binding(self)
+            return
+        definition, definition_id = build_declared_grid_definition(self)
+        object.__setattr__(self, "search_family_definition", definition)
+        object.__setattr__(self, "search_family_id", definition_id)
+        validate_experiment_spec_binding(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "experiment_id": self.experiment_id,
+            "data_glob": self.data_glob,
+            "symbols": list(self.symbols),
+            "families": list(self.families),
+            "parameter_grid": dict(self.parameter_grid),
+            "fees_bps": self.fees_bps,
+            "slippage_bps": self.slippage_bps,
+            "min_trades": self.min_trades,
+            "split_ratio": self.split_ratio,
+            "max_runs": self.max_runs,
+            "filters": dict(self.filters),
+            "regime_params": dict(self.regime_params),
+            "event_context": dict(self.event_context),
+            "plan_meta": dict(self.plan_meta),
+            "timeframe": self.timeframe,
+            "backend": self.backend,
+            "data_snapshot_id": self.data_snapshot_id,
+            "data_evidence_hash": self.data_evidence_hash,
+            "data_snapshot_bindings": list(self.data_snapshot_bindings),
+            "search_family_definition": dict(self.search_family_definition),
+            "search_family_id": self.search_family_id,
+        }
+
+    def write_json(self, path: Path) -> Path:
+        path = Path(path)
+        payload = json.dumps(
+            self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True
+        ) + "\n"
+        if path.exists():
+            if path.read_text(encoding="utf-8") != payload:
+                raise ValueError("immutable experiment spec collision")
+            return path
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(payload, encoding="utf-8")
+        temporary.replace(path)
+        return path
 
     @classmethod
     def from_json(cls, path: Path) -> "ExperimentSpec":
         data = json.loads(path.read_text(encoding="utf-8"))
+        has_definition = bool(
+            data.get("search_family_definition") and data.get("search_family_id")
+        )
+        legacy_lineage_keys = {
+            "raw_grids",
+            "search_axes",
+            "sampler_version",
+            "sampler_seed_material",
+            "parameter_search_contract",
+            "tested_variant_hashes",
+        }
+        if legacy_lineage_keys.intersection(data):
+            raise ValueError("unbound search-family lineage in unknown JSON extras")
+        allowed_keys = {
+            "experiment_id",
+            "data_glob",
+            "symbols",
+            "families",
+            "parameter_grid",
+            "fees_bps",
+            "slippage_bps",
+            "min_trades",
+            "split_ratio",
+            "max_runs",
+            "filters",
+            "regime_params",
+            "event_context",
+            "plan_meta",
+            "timeframe",
+            "backend",
+            "data_snapshot_id",
+            "data_evidence_hash",
+            "data_snapshot_bindings",
+            "search_family_definition",
+            "search_family_id",
+        }
+        unknown_keys = sorted(set(data) - allowed_keys)
+        if unknown_keys:
+            raise ValueError(
+                "unknown ExperimentSpec JSON fields cannot be dropped: "
+                + ", ".join(unknown_keys)
+            )
+        if not has_definition:
+            raise ValueError(
+                "legacy compiled ExperimentSpec is compiled_subspace_only; "
+                "an explicit SearchFamilyDefinition.v2 is required"
+            )
         return cls(
             experiment_id=str(data["experiment_id"]),
             data_glob=str(data["data_glob"]),
@@ -111,9 +221,12 @@ class ExperimentSpec:
             timeframe=str(data.get("timeframe") or "1d"),
             backend=str(data.get("backend") or "cpu"),
             data_snapshot_id=str(data.get("data_snapshot_id") or ""),
-            data_evidence_hash=str(
-                data.get("data_evidence_hash") or data.get("data_fingerprint") or ""
-            ),
+            data_evidence_hash=str(data.get("data_evidence_hash") or ""),
+            data_snapshot_bindings=[
+                dict(item) for item in data.get("data_snapshot_bindings", [])
+            ],
+            search_family_definition=dict(data.get("search_family_definition") or {}),
+            search_family_id=str(data.get("search_family_id") or ""),
         )
 
 
@@ -132,6 +245,65 @@ class RunResult:
     risk_flags: list[str] = field(default_factory=list)
     next_action: str = ""
     regime_summary: dict[str, Any] = field(default_factory=dict)
+
+
+def _execution_error_result(
+    spec: ExperimentSpec,
+    *,
+    symbol: str,
+    family: str,
+    params: dict[str, Any],
+    data_label: str,
+    data_fingerprint: str,
+    data_snapshot_id: str,
+    family_data_snapshot_id: str,
+    family_data_evidence_hash: str,
+    execution_identity: dict[str, Any],
+    timeframe: str,
+    stress_extra: float,
+    error: Exception,
+) -> RunResult:
+    metrics = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
+    metrics.update(
+        {
+            "data_file_label": data_label,
+            "data_file_timeframe": timeframe,
+            "data_source": "sqlite" if data_label.startswith("sqlite:") else "json",
+            "data_fingerprint": data_fingerprint,
+            "data_snapshot_id": data_snapshot_id,
+            "data_evidence_hash": data_fingerprint,
+            "family_data_snapshot_id": family_data_snapshot_id,
+            "family_data_evidence_hash": family_data_evidence_hash,
+            "execution_identity": dict(execution_identity),
+            "execution_error_type": type(error).__name__,
+        }
+    )
+    return RunResult(
+        run_id=stable_run_id(
+            symbol,
+            family,
+            params,
+            experiment_id=spec.experiment_id,
+            data_fingerprint=data_fingerprint,
+            timeframe=timeframe,
+            fees_bps=spec.fees_bps,
+            slippage_bps=spec.slippage_bps,
+            split_ratio=spec.split_ratio,
+            filters=spec.filters,
+        ),
+        symbol=symbol,
+        family=family,
+        params=params,
+        metrics=metrics,
+        decision="ERROR",
+        reasons=[f"execution_error:{type(error).__name__}"],
+        trades=[],
+        validation_status="ERROR",
+        validation_reasons=["variant_execution_failed"],
+        risk_flags=["execution_error"],
+        next_action="inspect deterministic synthetic failure evidence before retry",
+        regime_summary={},
+    )
 
 
 # Optional flow/microstructure fields carried through to the feature layer when the
@@ -889,6 +1061,50 @@ def evaluate_spec(
     results = []
     tf = spec.timeframe if spec.timeframe else None
     loaded: dict[tuple[str, str], tuple[list[dict[str, Any]], str, str, str]] = {}
+    for symbol in spec.symbols:
+        cache_key = (symbol, str(tf or ""))
+        candle_bundle = _load_experiment_candles(
+            spec.data_glob, symbol, timeframe=tf, candle_store=candle_store,
+        )
+        if candle_bundle is not None:
+            loaded[cache_key] = candle_bundle
+    if (spec.data_snapshot_id or spec.data_evidence_hash) and len(loaded) != len(spec.symbols):
+        raise RuntimeError("queued candle snapshot drift: a scheduled symbol is unavailable")
+    resolved_snapshot_id = ""
+    resolved_evidence_hash = ""
+    resolved_snapshot_bindings: list[dict[str, Any]] = []
+    if loaded:
+        from src.research_lab.search_family_definition import (
+            normalize_snapshot_bindings,
+            snapshot_set_identity,
+        )
+
+        resolved_snapshot_bindings = normalize_snapshot_bindings(
+            [
+                {
+                    "symbol": symbol,
+                    "timeframe": str(tf or _derive_timeframe(bundle[0])),
+                    "snapshot_id": bundle[3],
+                    "evidence_hash": bundle[2],
+                    "row_count": len(bundle[0]),
+                }
+                for (symbol, _timeframe), bundle in loaded.items()
+            ]
+        )
+        resolved_snapshot_id, resolved_evidence_hash = snapshot_set_identity(
+            resolved_snapshot_bindings
+        )
+    if (
+        spec.data_snapshot_id and resolved_snapshot_id != spec.data_snapshot_id
+    ) or (
+        spec.data_evidence_hash and resolved_evidence_hash != spec.data_evidence_hash
+    ) or (
+        spec.data_snapshot_bindings
+        and resolved_snapshot_bindings != list(spec.data_snapshot_bindings)
+    ):
+        raise RuntimeError(
+            "queued candle snapshot drift: selected evidence no longer matches the queued spec"
+        )
     for symbol, family in itertools.product(spec.symbols, spec.families):
         cache_key = (symbol, str(tf or ""))
         candle_bundle = loaded.get(cache_key)
@@ -901,43 +1117,59 @@ def evaluate_spec(
         if candle_bundle is None:
             continue
         candles, data_label, data_fingerprint, data_snapshot_id = candle_bundle
-        if (
-            spec.data_snapshot_id
-            and data_snapshot_id != spec.data_snapshot_id
-        ) or (
-            spec.data_evidence_hash
-            and data_fingerprint != spec.data_evidence_hash
-        ):
-            raise RuntimeError(
-                "queued candle snapshot drift: selected evidence no longer matches the queued spec"
-            )
         # Record the resolved timeframe so downstream provenance (candidate
         # registry -> hard validation -> setup cards) never loses it. When the
         # spec carries no explicit timeframe, derive it from the candle spacing
         # instead of leaving it blank (the old behavior that produced "unknown").
         file_tf = tf or _derive_timeframe(candles)
+        family_variants = spec.parameter_grid.get(family, [])
+        strategy_defaults = dict(get_strategy(family).parameter_defaults)
         needs = missing_required_data(family, candles)
         if needs is not None:
-            zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
-            zero["data_file_label"] = data_label
-            zero["data_file_timeframe"] = file_tf or ""
-            zero["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
-            zero["data_fingerprint"] = data_fingerprint
-            zero["data_snapshot_id"] = data_snapshot_id
-            results.append(RunResult(
-                run_id=stable_run_id(
-                    symbol, family, {}, experiment_id=spec.experiment_id,
-                    data_fingerprint=data_fingerprint, timeframe=file_tf or "",
-                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
-                    split_ratio=spec.split_ratio, filters=spec.filters,
-                ), symbol=symbol, family=family,
-                params={}, metrics=zero, decision=needs, reasons=["missing_required_data"],
-                trades=[],
-                validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
-                next_action="provide the required OI/funding/microstructure data, then re-run",
-                regime_summary={}))
+            for raw_params in family_variants:
+                params = {**strategy_defaults, **dict(raw_params or {})}
+                zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
+                zero["data_file_label"] = data_label
+                zero["data_file_timeframe"] = file_tf or ""
+                zero["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
+                zero["data_fingerprint"] = data_fingerprint
+                zero["data_snapshot_id"] = data_snapshot_id
+                zero["data_evidence_hash"] = data_fingerprint
+                zero["family_data_snapshot_id"] = resolved_snapshot_id
+                zero["family_data_evidence_hash"] = resolved_evidence_hash
+                zero["execution_identity"] = {
+                    "requested_backend": spec.backend,
+                    "resolved_backend": resolution.effective_backend,
+                    "backend_name": "not_executed",
+                    "signal_backend": "not_executed",
+                    "signal_kernel": "not_executed_data_gate",
+                    "signal_backend_reason": "data_gate",
+                    "signal_candle_count": len(candles),
+                    "signal_family_variant_count": len(family_variants),
+                    "simulation_backend": "not_executed",
+                    "simulator": "not_executed_data_gate",
+                    "terminal_phase": "data_gate",
+                }
+                results.append(RunResult(
+                    run_id=stable_run_id(
+                        symbol, family, params, experiment_id=spec.experiment_id,
+                        data_fingerprint=data_fingerprint, timeframe=file_tf or "",
+                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                        split_ratio=spec.split_ratio, filters=spec.filters,
+                    ), symbol=symbol, family=family,
+                    params=params, metrics=zero, decision=needs,
+                    reasons=["missing_required_data"], trades=[],
+                    validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
+                    next_action="provide the required OI/funding/microstructure data, then re-run",
+                    regime_summary={}))
+                if spec.max_runs and len(results) >= spec.max_runs:
+                    _finalize_runtime_meta(
+                        runtime_meta, started, accelerated_signal_runs,
+                        accelerated_simulation_runs, cpu_fallback_families,
+                        sim_fallback_reasons, n_variants=len(results),
+                    )
+                    return results
             continue
-        family_variants = spec.parameter_grid.get(family, [])
         auto_batch_ok = spec.backend != "auto" or auto_gpu_worthwhile(len(candles), len(family_variants))
         gpu_family = use_gpu and auto_batch_ok and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
@@ -945,55 +1177,132 @@ def evaluate_spec(
                 f"{family}:auto_batch_too_small" if not auto_batch_ok else family
             )
         prepared_arrays = gpu_kernels.prepare_candle_arrays(candles, xp=xp) if gpu_family else None
-        strategy_defaults = dict(get_strategy(family).parameter_defaults)
         for raw_params in family_variants:
             params = {**strategy_defaults, **dict(raw_params or {})}
-            if gpu_family:
-                signals = gpu_kernels.generate_signals_vectorized(
-                    candles, family, params, xp=xp, arrays=prepared_arrays,
+            trial_identity = {
+                "requested_backend": spec.backend,
+                "resolved_backend": resolution.effective_backend,
+                "backend_name": (
+                    str(resolution.backend_name) if gpu_family else "numpy"
+                ),
+                "signal_backend": "gpu" if gpu_family else "cpu",
+                "signal_kernel": "gpu_kernels" if gpu_family else "strategy_generator",
+                "signal_backend_reason": (
+                    "gpu_eligible"
+                    if gpu_family
+                    else "resolved_cpu"
+                    if not use_gpu
+                    else "auto_batch_too_small"
+                    if not auto_batch_ok
+                    else "unsupported_family"
+                ),
+                "signal_candle_count": len(candles),
+                "signal_family_variant_count": len(family_variants),
+                "simulation_backend": "not_executed",
+                "simulator": "not_executed_before_simulation",
+                "terminal_phase": "signal_generation",
+            }
+            try:
+                if gpu_family:
+                    signals = gpu_kernels.generate_signals_vectorized(
+                        candles, family, params, xp=xp, arrays=prepared_arrays,
+                    )
+                    accelerated_signal_runs += 1
+                else:
+                    signals = generate_signals(candles, family, params)
+            except Exception as exc:
+                results.append(
+                    _execution_error_result(
+                        spec,
+                        symbol=symbol,
+                        family=family,
+                        params=params,
+                        data_label=data_label,
+                        data_fingerprint=data_fingerprint,
+                        data_snapshot_id=data_snapshot_id,
+                        family_data_snapshot_id=resolved_snapshot_id,
+                        family_data_evidence_hash=resolved_evidence_hash,
+                        execution_identity=trial_identity,
+                        timeframe=file_tf or "",
+                        stress_extra=stress_extra,
+                        error=exc,
+                    )
                 )
-                accelerated_signal_runs += 1
-            else:
-                signals = generate_signals(candles, family, params)
-            signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
-            signals = filter_signals(signals, spec.filters)
-            # Simulation backend is decided per variant: GPU only for the supported
-            # exit mode and a batch that fits the VRAM cap; otherwise CPU with a
-            # recorded reason (never a silent wrong-GPU result).
-            use_gpu_sim = use_gpu
-            if use_gpu:
-                ok_mode, mode_reason = gpu_simulator.supported_simulation_mode(params)
-                if not ok_mode:
-                    use_gpu_sim, reason = False, mode_reason
-                elif not gpu_simulator.within_memory_cap(len(signals), int(params.get("hold_bars", 5))):
-                    use_gpu_sim, reason = False, "gpu_batch_exceeds_vram_cap"
-                if not use_gpu_sim:
-                    sim_fallback_reasons.add(reason)
-            if use_gpu_sim:
-                trades = gpu_simulator.simulate_trades_batched(
-                    candles, signals, params,
-                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps, xp=xp,
+                if spec.max_runs and len(results) >= spec.max_runs:
+                    _finalize_runtime_meta(
+                        runtime_meta,
+                        started,
+                        accelerated_signal_runs,
+                        accelerated_simulation_runs,
+                        cpu_fallback_families,
+                        sim_fallback_reasons,
+                        n_variants=len(results),
+                    )
+                    return results
+                continue
+            try:
+                signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
+                signals = filter_signals(signals, spec.filters)
+                # Simulation backend is decided per variant: GPU only for the supported
+                # exit mode and a batch that fits the VRAM cap; otherwise CPU with a
+                # recorded reason (never a silent wrong-GPU result).
+                use_gpu_sim = use_gpu
+                if use_gpu:
+                    ok_mode, mode_reason = gpu_simulator.supported_simulation_mode(params)
+                    if not ok_mode:
+                        use_gpu_sim, reason = False, mode_reason
+                    elif not gpu_simulator.within_memory_cap(
+                        len(signals), int(params.get("hold_bars", 5))
+                    ):
+                        use_gpu_sim, reason = False, "gpu_batch_exceeds_vram_cap"
+                    if not use_gpu_sim:
+                        sim_fallback_reasons.add(reason)
+                if use_gpu_sim:
+                    trial_identity.update(
+                        backend_name=str(resolution.backend_name),
+                        simulation_backend="gpu",
+                        simulator="gpu_simulator",
+                        terminal_phase="simulation",
+                    )
+                    trades = gpu_simulator.simulate_trades_batched(
+                        candles, signals, params,
+                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps, xp=xp,
+                    )
+                    accelerated_simulation_runs += 1
+                else:
+                    trial_identity.update(
+                        simulation_backend="cpu",
+                        simulator="cpu_simulator",
+                        terminal_phase="simulation",
+                    )
+                    trades = simulate_trades(
+                        candles, signals, params,
+                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                    )
+                metrics = compute_metrics(
+                    trades, spec.split_ratio, spec.min_trades, stress_extra
                 )
-                accelerated_simulation_runs += 1
-            else:
-                trades = simulate_trades(
-                    candles, signals, params,
-                    fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                metrics["data_file_label"] = data_label
+                metrics["data_file_timeframe"] = file_tf or ""
+                metrics["data_source"] = (
+                    "sqlite" if data_label.startswith("sqlite:") else "json"
                 )
-            metrics = compute_metrics(trades, spec.split_ratio, spec.min_trades, stress_extra)
-            metrics["data_file_label"] = data_label
-            metrics["data_file_timeframe"] = file_tf or ""
-            metrics["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
-            metrics["data_fingerprint"] = data_fingerprint
-            metrics["data_snapshot_id"] = data_snapshot_id
-            if spec.event_context:
-                event_timing = event_entry_timing_for_run(candles, trades, spec.event_context)
-                if event_timing:
-                    metrics["event_entry_timing"] = event_timing
-            decision, reasons = grade_candidate(metrics)
-            validation = validate_candidate(metrics, decision)
-            results.append(
-                RunResult(
+                metrics["data_fingerprint"] = data_fingerprint
+                metrics["data_snapshot_id"] = data_snapshot_id
+                metrics["data_evidence_hash"] = data_fingerprint
+                metrics["family_data_snapshot_id"] = resolved_snapshot_id
+                metrics["family_data_evidence_hash"] = resolved_evidence_hash
+                trial_identity["terminal_phase"] = "completed"
+                metrics["execution_identity"] = dict(trial_identity)
+                if spec.event_context:
+                    event_timing = event_entry_timing_for_run(
+                        candles, trades, spec.event_context
+                    )
+                    if event_timing:
+                        metrics["event_entry_timing"] = event_timing
+                decision, reasons = grade_candidate(metrics)
+                validation = validate_candidate(metrics, decision)
+                result = RunResult(
                     run_id=stable_run_id(
                         symbol, family, params, experiment_id=spec.experiment_id,
                         data_fingerprint=data_fingerprint, timeframe=file_tf or "",
@@ -1013,7 +1322,23 @@ def evaluate_spec(
                     next_action=validation.next_action,
                     regime_summary=_regime_summary(metrics),
                 )
-            )
+            except Exception as exc:
+                result = _execution_error_result(
+                    spec,
+                    symbol=symbol,
+                    family=family,
+                    params=params,
+                    data_label=data_label,
+                    data_fingerprint=data_fingerprint,
+                    data_snapshot_id=data_snapshot_id,
+                    family_data_snapshot_id=resolved_snapshot_id,
+                    family_data_evidence_hash=resolved_evidence_hash,
+                    execution_identity=trial_identity,
+                    timeframe=file_tf or "",
+                    stress_extra=stress_extra,
+                    error=exc,
+                )
+            results.append(result)
             if spec.max_runs and len(results) >= spec.max_runs:
                 _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                                        accelerated_simulation_runs, cpu_fallback_families,

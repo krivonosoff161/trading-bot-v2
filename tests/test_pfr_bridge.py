@@ -238,6 +238,46 @@ class TestPFRReservation:
 # ── Category 1: non-PFR records excluded ─────────────────────────────────────
 
 class TestPFRBridgeLoad:
+    def test_search_family_lineage_is_loaded_from_candidate_metrics(self, tmp_path):
+        db = tmp_path / "lineage.sqlite"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE farm_results (run_id TEXT, candidate_id TEXT, symbol TEXT, "
+            "family TEXT, timeframe TEXT, avg_net_pct REAL, win_rate REAL, n_trades INTEGER, "
+            "max_drawdown_pct REAL, hard_status TEXT, paper_status TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE candidates (run_id TEXT, candidate_id TEXT, params_json TEXT, "
+            "metrics_json TEXT, PRIMARY KEY (run_id, candidate_id))"
+        )
+        conn.execute(
+            "INSERT INTO farm_results VALUES "
+            "('R1','C1','X','mean_reversion_fade','1h',1.0,0.6,20,10.0,"
+            "'PAPER_FORWARD_READY','')"
+        )
+        conn.execute(
+            "INSERT INTO candidates VALUES (?,?,?,?)",
+            (
+                "R1",
+                "C1",
+                json.dumps(_MRF_PARAMS),
+                json.dumps(
+                    {
+                        "search_family_id": "sfd_parent",
+                        "search_trial_id": "stept_parent",
+                        "effective_n_trials": 4,
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        row = pfr_bridge.load_pfr_records(db)[0]
+        assert row["search_family_id"] == "sfd_parent"
+        assert row["search_trial_id"] == "stept_parent"
+        assert row["effective_n_trials"] == 4
+
     def test_non_pfr_hard_status_excluded(self, tmp_path):
         db = tmp_path / "sl.sqlite"
         _make_db(db, [

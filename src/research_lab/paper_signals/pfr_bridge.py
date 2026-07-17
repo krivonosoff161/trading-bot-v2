@@ -90,7 +90,15 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
-        cur.execute("""
+        candidate_columns = {
+            str(row[1]) for row in cur.execute("PRAGMA table_info(candidates)").fetchall()
+        }
+        metrics_select = (
+            "c.metrics_json AS metrics_json"
+            if "metrics_json" in candidate_columns
+            else "'{}' AS metrics_json"
+        )
+        cur.execute(f"""
             SELECT fr.run_id,
                    fr.candidate_id,
                    fr.symbol,
@@ -102,7 +110,8 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
                    fr.max_drawdown_pct,
                    fr.hard_status,
                    fr.paper_status,
-                   c.params_json
+                   c.params_json,
+                   {metrics_select}
             FROM farm_results fr
             LEFT JOIN candidates c ON fr.run_id = c.run_id AND fr.candidate_id = c.candidate_id
             WHERE fr.hard_status = 'PAPER_FORWARD_READY'
@@ -117,6 +126,13 @@ def load_pfr_records(db_path: Path | str) -> list[dict[str, Any]]:
                 d["params"] = json.loads(d.pop("params_json") or "{}")
             except (json.JSONDecodeError, TypeError):
                 d["params"] = {}
+            try:
+                metrics = json.loads(d.pop("metrics_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                metrics = {}
+            d["search_family_id"] = str(metrics.get("search_family_id") or "")
+            d["search_trial_id"] = str(metrics.get("search_trial_id") or "")
+            d["effective_n_trials"] = int(metrics.get("effective_n_trials") or 0)
             d["params_hash"] = _params_hash(d["params"])
             d["setup_id"] = f"setup-{d['candidate_id']}"
             out.append(d)
@@ -182,6 +198,9 @@ def _common_validator_context(row: dict[str, Any], symbol: str, tf: str) -> dict
         "run_id": str(row.get("run_id") or ""),
         "params_hash": row["params_hash"],
         "source_validation_verdict": str(row.get("hard_status") or ""),
+        "search_family_id": str(row.get("search_family_id") or ""),
+        "search_trial_id": str(row.get("search_trial_id") or ""),
+        "effective_n_trials": int(row.get("effective_n_trials") or 0),
         "family": row["family"],
         "timeframe": tf,
         "symbol": symbol,

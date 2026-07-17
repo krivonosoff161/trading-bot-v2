@@ -20,7 +20,14 @@ def _rec(action, *, status="", symbol="DOGE-USDT-SWAP", tf="1d", strategy="mean_
     )
 
 
-PARAMS = {"lookback": 8, "hold_bars": 4, "move_pct": 8.0}
+PARAMS = {
+    "lookback": 8,
+    "hold_bars": 4,
+    "move_pct": 8.0,
+    "search_family_id": "sfd_parent",
+    "search_trial_id": "stept_parent",
+    "effective_n_trials": 4,
+}
 
 
 def test_narrow_params_queues_bounded_valid_sweep():
@@ -150,7 +157,15 @@ def test_narrow_followup_is_idempotent_sweep_id():
 
 
 def test_followup_uses_family_axis_without_inventing_lookback():
-    params = {"period": 14, "oversold": 30, "overbought": 70, "hold_bars": 4}
+    params = {
+        "period": 14,
+        "oversold": 30,
+        "overbought": 70,
+        "hold_bars": 4,
+        "search_family_id": "sfd_parent",
+        "search_trial_id": "stept_parent",
+        "effective_n_trials": 4,
+    }
     plan = plan_followup(
         _rec(fr.NARROW_PARAMS, strategy="rsi_reversal"), params, max_variants=8
     )

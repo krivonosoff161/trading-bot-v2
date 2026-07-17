@@ -2,6 +2,7 @@
 """Coordinator cycle: planning, OI block/unblock, anti-saturation pivot (no real compute)."""
 import json
 import sys
+from dataclasses import asdict, replace
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,7 @@ if str(_ROOT) not in sys.path:
 
 from src.research_lab.farm_coordinator import run_coordinator_cycle  # noqa: E402
 from src.research_lab.farm_tasks_db import FarmTasksDB  # noqa: E402
+from src.research_lab.farm_sweep_runner import build_sweep_spec  # noqa: E402
 from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -213,6 +215,8 @@ def test_feedback_followup_becomes_typed_run_sweep_task(tmp_path):
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "FAILED_FRAGILITY",
         "candidate_id": "c-follow",
+        "search_family_id": "sfd_parent", "search_trial_id": "stept_parent",
+        "effective_n_trials": 4,
         "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
     }, now=1.0)
     report = HardValidationReport(
@@ -331,6 +335,57 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
     tasks.close()
 
 
+def test_multi_symbol_farm_payload_freezes_complete_snapshot_set(tmp_path):
+    tasks = FarmTasksDB(":memory:")
+    _seed_candles(tmp_path, "BTC_USDT_SWAP")
+    _seed_candles(tmp_path, "ETH_USDT_SWAP")
+    sweep = replace(
+        build_sweep_spec(
+            "BTC_USDT_SWAP", "1h", "momentum_breakout", fingerprint="anchor-fp"
+        ),
+        related_symbols=("ETH_USDT_SWAP",),
+        max_variants=1,
+    )
+    tasks.enqueue_task(
+        task_type="run_sweep",
+        task_key="run_sweep::multi-symbol-binding",
+        symbol="BTC_USDT_SWAP",
+        timeframe="1h",
+        family="momentum_breakout",
+        data_fingerprint="anchor-fp",
+        payload={"sweep_spec": asdict(sweep)},
+        now=900.0,
+    )
+
+    out = run_coordinator_cycle(
+        tasks,
+        private_root=tmp_path,
+        profiles=PROFILES,
+        policy=POLICY,
+        intake_events=[],
+        data_state_fn=_usable_state(),
+        apply=True,
+        now=1000.0,
+        run_worker=False,
+        run_validation=False,
+        run_followups=False,
+        max_sweeps=1,
+    )
+
+    assert out["counters"]["sweeps_materialized"] == 1
+    spec_paths = list((tmp_path / "plans" / "event_specs").glob("*.json"))
+    assert len(spec_paths) == 1
+    queued = json.loads(spec_paths[0].read_text(encoding="utf-8"))
+    binding = queued["search_family_definition"]["data_binding"]
+    assert binding["status"] == "bound"
+    assert binding["snapshot_id"].startswith("csmset_")
+    assert {member["symbol"] for member in binding["members"]} == {
+        "BTC_USDT_SWAP",
+        "ETH_USDT_SWAP",
+    }
+    tasks.close()
+
+
 def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     tasks = FarmTasksDB(":memory:")
     _seed_candles(tmp_path, "BTC")
@@ -340,6 +395,8 @@ def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "PAPER_FORWARD_READY",
         "candidate_id": "candidate_1",
+        "search_family_id": "sfd_parent", "search_trial_id": "stept_parent",
+        "effective_n_trials": 4,
         "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 8, "take_pct": 16},
     }, now=1.0)
     derived = tmp_path / "state" / "derived"
@@ -352,7 +409,10 @@ def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
                 "schema": "TrainingRow.v2",
                 "training_row_id": "training_s1",
                 "paper_signal_id": "s1",
-                "candidate_id": "candidate_1",
+                    "candidate_id": "candidate_1",
+                    "search_family_id": "sfd_parent",
+                    "search_trial_id": "stept_parent",
+                    "effective_n_trials": 4,
                 "symbol": "BTC",
                 "timeframe": "1h",
                 "family": "momentum_breakout",

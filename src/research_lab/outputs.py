@@ -42,6 +42,26 @@ def write_run_outputs(
     run_dir = out_root / "experiments" / "completed" / f"{stamp}_{spec.experiment_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
     trial_evidence = build_search_trial_evidence(spec, results, runtime_meta)
+    trial_by_run_id = {
+        str(row.get("run_id") or ""): row
+        for row in trial_evidence.get("trials") or []
+        if row.get("run_id")
+    }
+    result_rows = []
+    for result in results:
+        row = result_dict(result, include_trades=True)
+        trial = trial_by_run_id.get(result.run_id) or {}
+        row["search_family_id"] = spec.search_family_id
+        row["search_trial_id"] = str(trial.get("execution_id") or "")
+        row["metrics"] = {
+            **dict(row.get("metrics") or {}),
+            "search_family_id": spec.search_family_id,
+            "search_trial_id": str(trial.get("execution_id") or ""),
+            "effective_n_trials": int(
+                trial_evidence["search_space"]["effective_n_trials"]
+            ),
+        }
+        result_rows.append(row)
     payload = {
         "schema": "strategy_lab_results.v1",
         "experiment_id": spec.experiment_id,
@@ -56,7 +76,7 @@ def write_run_outputs(
         "slippage_bps": spec.slippage_bps,
         "search_trial_evidence_id": trial_evidence["search_trial_evidence_id"],
         "multiple_testing_family_hash": trial_evidence["multiple_testing_family_hash"],
-        "results": [result_dict(r, include_trades=True) for r in results],
+        "results": result_rows,
     }
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     write_search_trial_evidence(run_dir, trial_evidence)
@@ -83,7 +103,16 @@ def write_run_outputs(
     registrable = [
         r for r in results if include_rejects or r.validation_status in REGISTRY_STATUSES
     ]
-    entries = [build_entry(spec.experiment_id, r, artifact_label, spec=spec) for r in registrable]
+    entries = [
+        build_entry(
+            spec.experiment_id,
+            r,
+            artifact_label,
+            spec=spec,
+            search_trial_evidence=trial_evidence,
+        )
+        for r in registrable
+    ]
     if entries:
         upsert_entries(registry_path(out_root), entries)
     return run_dir
@@ -95,7 +124,7 @@ def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str,
         "symbol": result.symbol,
         "family": result.family,
         "params": result.params,
-        "metrics": result.metrics,
+        "metrics": dict(result.metrics),
         "decision": result.decision,
         "reasons": result.reasons,
         "validation_status": result.validation_status,

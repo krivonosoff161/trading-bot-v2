@@ -27,6 +27,7 @@ from src.research_lab.event_sweeps import build_event_sweeps, event_context_for,
 from src.research_lab.experiment import choose_symbol_file, load_candles  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.search_family_definition import resolve_snapshot_set  # noqa: E402
 from src.research_lab.scanner_bridge import DEFAULT_FAMILIES as SCANNER_FAMILIES  # noqa: E402
 from src.research_lab.scanner_bridge import watches_to_sweeps  # noqa: E402
 from src.research_lab.sweep_compile import compile_sweep  # noqa: E402
@@ -224,12 +225,20 @@ def _apply(capped, args, profiles, policy) -> dict:
     queued, already = 0, 0
     try:
         for context, sweep in capped:
+            snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
+                private_root=private_root,
+                symbols=[sweep.anchor_symbol, *sweep.related_symbols],
+                timeframe=sweep.timeframe,
+                data_glob=args.data_glob,
+            )
             exp = compile_sweep(
                 sweep, data_glob=args.data_glob, timeframe_profiles=profiles,
                 resource_policy=policy, event_context=context,
+                data_snapshot_id=snapshot_id, data_evidence_hash=evidence_hash,
+                data_snapshot_bindings=snapshot_bindings,
             )
-            spec_path = out_dir / f"{exp.experiment_id}.json"
-            spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            spec_path = out_dir / f"{exp.search_family_id}.json"
+            exp.write_json(spec_path)
             _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=args.priority)
             queued += int(created)
             already += int(not created)
@@ -239,22 +248,7 @@ def _apply(capped, args, profiles, policy) -> dict:
 
 
 def _exp_to_dict(exp) -> dict:
-    return {
-        "experiment_id": exp.experiment_id,
-        "data_glob": exp.data_glob,
-        "symbols": exp.symbols,
-        "timeframe": exp.timeframe,
-        "families": exp.families,
-        "fees_bps": exp.fees_bps,
-        "slippage_bps": exp.slippage_bps,
-        "min_trades": exp.min_trades,
-        "split_ratio": exp.split_ratio,
-        "max_runs": exp.max_runs,
-        "parameter_grid": exp.parameter_grid,
-        "filters": exp.filters,
-        "event_context": exp.event_context,
-        "backend": exp.backend,
-    }
+    return exp.to_dict()
 
 
 if __name__ == "__main__":

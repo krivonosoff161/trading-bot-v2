@@ -225,6 +225,9 @@ def training_row(
         "setup_id": str(validator_context.get("setup_id") or ""),
         "candidate_id": str(validator_context.get("candidate_id") or ""),
         "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
+        "search_family_id": str(validator_context.get("search_family_id") or ""),
+        "search_trial_id": str(validator_context.get("search_trial_id") or ""),
+        "effective_n_trials": int(validator_context.get("effective_n_trials") or 0),
         "farm_geometry_profile_id": geometry_profile_id,
         "farm_geometry_profile_reason": geometry_profile_reason,
         "farm_geometry_entry_scale": validator_context.get("geometry_entry_scale")

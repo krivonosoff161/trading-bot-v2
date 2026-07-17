@@ -251,6 +251,9 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
         out[cid] = {
             "params": params if isinstance(params, dict) else {},
             "validation_status": str(row.get("validation_status") or ""),
+            "search_family_id": str(row.get("search_family_id") or ""),
+            "search_trial_id": str(row.get("search_trial_id") or ""),
+            "effective_n_trials": int(row.get("effective_n_trials") or 0),
             # carry the stored dominant regime bucket so REGIME_SWEEP follow-ups can
             # actually build a filter (Phase 1.3) instead of no-oping on missing_regime_filter.
             "regime_summary": {"dominant_bucket": str(row.get("regime_bucket") or "")},
@@ -334,6 +337,10 @@ def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
         resource_class=str(data.get("resource_class") or "normal"),
         private_output_policy=str(data.get("private_output_policy") or "private_only"),
         variant_tier=str(data.get("variant_tier") or "smoke"),
+        parent_family_id=str(data.get("parent_family_id") or ""),
+        parent_trial_id=str(data.get("parent_trial_id") or ""),
+        parent_effective_n_trials=int(data.get("parent_effective_n_trials") or 0),
+        cumulative_family_policy=str(data.get("cumulative_family_policy") or "independent"),
     )
 
 
@@ -359,6 +366,13 @@ _SWEEP_EVENT_CONTEXT_KEYS = {
     "source_signal_id",
     "paper_only",
     "execution_allowed",
+    "adaptive_trial_id",
+    "parent_family_id",
+    "parent_trial_id",
+    "parent_effective_n_trials",
+    "cumulative_family_policy",
+    "role_environment_id",
+    "feedback_id",
 }
 
 
@@ -741,6 +755,7 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
 def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
                      priority_base, limit, counters, now, sweep_tier="normal") -> None:
     from src.research_lab.candle_library import load_canonical_candles
+    from src.research_lab.search_family_definition import resolve_snapshot_set
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("run_sweep",), now=now)
         if task is None:
@@ -767,6 +782,20 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             spec = _sweep_from_payload(payload["sweep_spec"])
         else:
             spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier=sweep_tier)
+        try:
+            snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
+                private_root=private_root,
+                symbols=[spec.anchor_symbol, *spec.related_symbols],
+                timeframe=spec.timeframe,
+                data_glob=glob,
+            )
+        except ValueError:
+            tasks.defer_task(
+                task["task_id"], until=now + 3600,
+                reason="snapshot_set_incomplete_before_queue", now=now,
+            )
+            _bump(counters, "sweeps_snapshot_drift")
+            continue
         exp_id, job_id, created = queue_sweep(
             conn,
             spec,
@@ -777,8 +806,9 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             fingerprint=fp,
             priority=priority_base + priority_value(task.get("priority")),
             event_context=_event_context_from_payload(payload),
-            data_snapshot_id=selected.manifest.snapshot_id,
-            data_evidence_hash=selected.manifest.evidence_hash,
+            data_snapshot_id=snapshot_id,
+            data_evidence_hash=evidence_hash,
+            data_snapshot_bindings=snapshot_bindings,
         )
         if created:
             tasks.materialize_task(task["task_id"], job_id, now=now)

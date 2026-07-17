@@ -59,18 +59,17 @@ class TestCandidate:
 class TestBridgeWiring:
     def test_thin_series_fails_oos(self, tmp_path):
         c = _candidate(_ITEM, _evaluation_trades([0.5] * 4), n_trials=1)  # n<10 -> split analysis fails
-        assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "FAILED_OOS"
+        assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "FAILED_DATA_QUALITY"
 
     def test_one_two_trade_needs_more_data(self, tmp_path):
         c = _candidate(_ITEM, _evaluation_trades([1.5]), n_trials=1)
-        assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "NEEDS_MORE_DATA"
+        assert run_validation(c, tmp_path, dry_run=True)["hard_status"] == "FAILED_DATA_QUALITY"
 
     def test_strong_series_can_pass(self, tmp_path):
-        # A clearly positive, consistent series with enough trades and n_trials=1 should clear the
-        # honest checks -> PAPER_FORWARD_READY (proves the wiring CAN pass, not just always-fail).
+        # A strong return series cannot bypass missing immutable search-family evidence.
         trades = _evaluation_trades([0.5, 0.4, 0.6] * 9)  # n=27, mean 0.5%, low variance
         status = run_validation(_candidate(_ITEM, trades, n_trials=1), tmp_path, dry_run=True)["hard_status"]
-        assert status == "PAPER_FORWARD_READY"
+        assert status == "FAILED_DATA_QUALITY"
 
     def test_sidak_deflation_makes_it_harder(self, tmp_path):
         # The SAME borderline series is harder to pass when deflated by a big trial count.

@@ -451,7 +451,7 @@ class TestRunValidation:
         with tempfile.TemporaryDirectory() as td:
             c = _make_candidate(trades=[], equity_curve=[])
             result = run_validation(c, Path(td), dry_run=False)
-            assert result["hard_status"] == "NEEDS_MORE_DATA"
+            assert result["hard_status"] == "FAILED_DATA_QUALITY"
             stem = _artifact_stem("c-001")
             report = Path(td) / "hard_validation" / "reports" / f"{stem}.json"
             verdict = Path(td) / "hard_validation" / "verdicts" / f"{stem}.json"

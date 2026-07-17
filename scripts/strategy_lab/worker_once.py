@@ -8,7 +8,6 @@ periodically, while the worker itself handles one job and exits.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import os
 import sys
@@ -43,6 +42,10 @@ from src.research_lab.state_db import (  # noqa: E402
     reap_stale_jobs,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.search_trial_evidence import (  # noqa: E402
+    build_search_trial_evidence,
+    write_search_trial_evidence,
+)
 
 _WORKER_LOCK_MAX_AGE_SECONDS = 6 * 3600
 
@@ -142,6 +145,8 @@ def run_worker_once(
 
         record_start(cad_path, now)
         job_id = int(job["job_id"])
+        spec = None
+        runtime_meta: dict = {}
         try:
             spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
             write_worker_status(
@@ -164,15 +169,11 @@ def run_worker_once(
                 )
             cap, capped = effective_variant_cap(policy, spec.max_runs)
             if capped:
-                if verbose:
-                    print(
-                        f"variant cap applied job_id={job_id} "
-                        f"max_runs={spec.max_runs or 'unlimited'} -> {cap} "
-                        f"mode={policy.mode}",
-                        flush=True,
-                    )
-                spec = dataclasses.replace(spec, max_runs=cap)
-            runtime_meta: dict = {}
+                raise RuntimeError(
+                    "queued search-family resource policy drift: "
+                    f"bound execution_cap={spec.max_runs or 'unlimited'} current_cap={cap}; "
+                    "recompile instead of mutating the family at the worker"
+                )
             # The worker reads one immutable bounded series from the canonical
             # candle library for all variants. JSON remains a migration fallback.
             results = evaluate_spec(
@@ -204,6 +205,28 @@ def run_worker_once(
                     "results": len(results), "mode": policy.mode}
         except Exception as exc:
             reason = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            if spec is not None:
+                try:
+                    failed_dir = (
+                        Path(private_root)
+                        / "experiments"
+                        / "failed"
+                        / f"job_{job_id}_{spec.search_family_id[:16]}"
+                    )
+                    failed_dir.mkdir(parents=True, exist_ok=True)
+                    failure_runtime = {
+                        **runtime_meta,
+                        "worker_failure_type": type(exc).__name__,
+                        "worker_failure_stage": "before_complete_outputs",
+                    }
+                    failure_evidence = build_search_trial_evidence(
+                        spec, [], failure_runtime
+                    )
+                    write_search_trial_evidence(failed_dir, failure_evidence)
+                except Exception:
+                    # Preserve the original job failure. A failure to write the
+                    # secondary ledger must not impersonate a successful run.
+                    pass
             fail_job(conn, job_id, reason)
             write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
             if verbose:

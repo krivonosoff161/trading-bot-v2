@@ -15,6 +15,8 @@ from src.research_lab.hard_validation_contract import (
 )
 from src.research_lab.hard_validation_export import export_requests
 from src.research_lab.honest_backtest_bridge import _artifact_stem, run_validation_batch
+from src.research_lab.experiment import ExperimentSpec, RunResult
+from src.research_lab.search_trial_evidence import build_search_trial_evidence
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
 
@@ -27,8 +29,8 @@ def _seed_candidate(private_root: Path, status: str = "FORWARD_PAPER") -> dict:
         "candidate_id": "smoke-001",
         "experiment_id": "smoke-exp",
         "symbol": "BTC-USDT-SWAP",
-        "strategy_id": "trend",
-        "params": {"ma_window": 20, "hold_bars": 10},
+        "strategy_id": "momentum_breakout",
+        "params": {"lookback": 20, "hold_bars": 10},
         "metrics_summary": {"n_trades": 30, "profit_factor": 1.8, "avg_net_pct": 0.5},
         "decision": "PROMOTE_FOR_PRESSURE_TEST",
         "validation_status": status,
@@ -50,19 +52,73 @@ def _seed_experiment_output(private_root: Path) -> None:
          "net_pct": 0.5 if i % 3 != 0 else -0.3, "side": "long"}
         for i in range(30)
     ]
+    spec = ExperimentSpec(
+        experiment_id="smoke-exp",
+        data_glob="unused",
+        symbols=["BTC-USDT-SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 20, "hold_bars": 10}]},
+        max_runs=1,
+        timeframe="15m",
+        backend="cpu",
+        data_snapshot_id="csnap-smoke",
+        data_evidence_hash="evidence-smoke",
+    )
+    run_result = RunResult(
+        run_id="smoke-001",
+        symbol="BTC-USDT-SWAP",
+        family="momentum_breakout",
+        params={"lookback": 20, "hold_bars": 10},
+        metrics={
+            "data_snapshot_id": spec.data_snapshot_id,
+            "data_evidence_hash": spec.data_evidence_hash,
+            "family_data_snapshot_id": spec.data_snapshot_id,
+            "family_data_evidence_hash": spec.data_evidence_hash,
+            "execution_identity": {
+                "requested_backend": "cpu",
+                "resolved_backend": "cpu",
+                "backend_name": "numpy",
+                "signal_backend": "cpu",
+                "signal_kernel": "strategy_generator",
+                "signal_backend_reason": "resolved_cpu",
+                "signal_candle_count": 100,
+                "signal_family_variant_count": 1,
+                "simulation_backend": "cpu",
+                "simulator": "cpu_simulator",
+                "terminal_phase": "completed",
+            },
+        },
+        decision="PROMOTE_FOR_PRESSURE_TEST",
+        reasons=[],
+    )
+    runtime = {
+        "n_variants_evaluated": 1,
+        "effective_backend": "cpu",
+        "resolved_backend": "cpu",
+        "signal_backend": "cpu",
+        "simulation_backend": "cpu",
+    }
+    evidence = build_search_trial_evidence(spec, [run_result], runtime)
     metrics = {
         "schema": "strategy_lab_results.v1",
+        "runtime": runtime,
+        "search_trial_evidence_id": evidence["search_trial_evidence_id"],
+        "multiple_testing_family_hash": evidence["multiple_testing_family_hash"],
         "results": [{
             "run_id": "smoke-001",
             "symbol": "BTC-USDT-SWAP",
-            "family": "trend",
-            "params": {"ma_window": 20, "hold_bars": 10},
+            "family": "momentum_breakout",
+            "params": {"lookback": 20, "hold_bars": 10},
             "metrics": {"n_trades": 30, "profit_factor": 1.8,
-                        "data_file_timeframe": "15m"},
+                        "data_file_timeframe": "15m",
+                        "data_snapshot_id": spec.data_snapshot_id,
+                        "data_evidence_hash": spec.data_evidence_hash,
+                        "data_fingerprint": spec.data_evidence_hash},
             "trades": trades,
         }],
     }
     (run_dir / "metrics.json").write_text(json.dumps(metrics))
+    (run_dir / "search_trial_evidence.json").write_text(json.dumps(evidence))
 
 
 def test_full_pipeline_smoke() -> None:
@@ -119,7 +175,7 @@ def test_full_pipeline_smoke() -> None:
         assert (lib_dir / "setup_index.jsonl").exists()
         assert (lib_dir / "by_symbol" / "BTC-USDT-SWAP").exists()
         assert (lib_dir / "by_timeframe" / "15m").exists()
-        assert (lib_dir / "by_strategy" / "trend").exists()
+        assert (lib_dir / "by_strategy" / "momentum_breakout").exists()
 
         # Verify no private artifacts in public repo
         # (we only wrote to temp dir, not to trading-bot-v2)

@@ -116,6 +116,9 @@ class FarmTasksDB:
                 params_json TEXT NOT NULL DEFAULT '{}',
                 task_id INTEGER, paper_status TEXT NOT NULL DEFAULT '',
                 regime_bucket TEXT NOT NULL DEFAULT '',
+                search_family_id TEXT NOT NULL DEFAULT '',
+                search_trial_id TEXT NOT NULL DEFAULT '',
+                effective_n_trials INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL
             );
 
@@ -150,6 +153,12 @@ class FarmTasksDB:
             self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN params_json TEXT NOT NULL DEFAULT '{}'")
         if "regime_bucket" not in existing:
             self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN regime_bucket TEXT NOT NULL DEFAULT ''")
+        if "search_family_id" not in existing:
+            self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN search_family_id TEXT NOT NULL DEFAULT ''")
+        if "search_trial_id" not in existing:
+            self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN search_trial_id TEXT NOT NULL DEFAULT ''")
+        if "effective_n_trials" not in existing:
+            self._conn.execute("ALTER TABLE unique_candidates ADD COLUMN effective_n_trials INTEGER NOT NULL DEFAULT 0")
 
     # ── intake events ───────────────────────────────────────────────────────
     def upsert_intake_event(self, event: dict[str, Any], *, now: float | None = None) -> tuple[str, bool]:
@@ -438,8 +447,8 @@ class FarmTasksDB:
             """INSERT INTO unique_candidates(uc_key, symbol, timeframe, family, params_hash,
                  data_fingerprint, decision, validation_status, hard_status, n_trades,
                  avg_net_pct, candidate_id, run_dir_label, params_json, task_id, paper_status,
-                 regime_bucket, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 regime_bucket, search_family_id, search_trial_id, effective_n_trials, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(uc_key) DO UPDATE SET
                  decision=excluded.decision, validation_status=excluded.validation_status,
                  hard_status=excluded.hard_status, n_trades=excluded.n_trades,
@@ -448,6 +457,10 @@ class FarmTasksDB:
                  params_json=excluded.params_json,
                  paper_status=COALESCE(NULLIF(excluded.paper_status, ''), unique_candidates.paper_status),
                  regime_bucket=COALESCE(NULLIF(excluded.regime_bucket, ''), unique_candidates.regime_bucket),
+                 search_family_id=COALESCE(NULLIF(excluded.search_family_id, ''), unique_candidates.search_family_id),
+                 search_trial_id=COALESCE(NULLIF(excluded.search_trial_id, ''), unique_candidates.search_trial_id),
+                 effective_n_trials=CASE WHEN excluded.effective_n_trials > 0
+                   THEN excluded.effective_n_trials ELSE unique_candidates.effective_n_trials END,
                  updated_at=excluded.updated_at""",
             (cand["uc_key"], cand.get("symbol"), cand.get("timeframe"), cand.get("family"),
              cand.get("params_hash"), cand.get("data_fingerprint"), cand.get("decision"),
@@ -455,7 +468,10 @@ class FarmTasksDB:
              float(cand.get("avg_net_pct") or 0), cand.get("candidate_id"),
              cand.get("run_dir_label"), json.dumps(cand.get("params") or {}),
              cand.get("task_id"), cand.get("paper_status") or "",
-             str(cand.get("regime_bucket") or ""), now),
+             str(cand.get("regime_bucket") or ""),
+             str(cand.get("search_family_id") or ""),
+             str(cand.get("search_trial_id") or ""),
+             int(cand.get("effective_n_trials") or 0), now),
         )
         self._conn.commit()
 

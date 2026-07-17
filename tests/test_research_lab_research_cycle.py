@@ -4,6 +4,7 @@ import json
 
 from scripts.strategy_lab.research_cycle import run_research_cycle
 from src.research_lab.candidate_registry import registry_path
+from src.research_lab.experiment import ExperimentSpec
 from src.research_lab.event_microscope import MicroscopeLimits  # noqa: F401 (kept for clarity)
 from src.research_lab.paths import one_minute_data_dir
 from src.research_lab.research_cycle import (
@@ -64,11 +65,16 @@ def _seed_queued_job(root):
     _write_daily_candles(data / "ABC_USDT_SWAP_80d.json")
     spec_dir = root / "plans" / "specs"
     spec_dir.mkdir(parents=True, exist_ok=True)
-    spec = {"experiment_id": "unit_cycle_job", "data_glob": str(data / "{symbol}_*.json"),
-            "symbols": ["ABC_USDT_SWAP"], "families": ["momentum_breakout"],
-            "parameter_grid": {"momentum_breakout": [{"lookback": 5, "hold_bars": 2}]}, "min_trades": 1}
     sp = spec_dir / "unit_cycle_job.json"
-    sp.write_text(json.dumps(spec), encoding="utf-8")
+    ExperimentSpec(
+        experiment_id="unit_cycle_job",
+        data_glob=str(data / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 5, "hold_bars": 2}]},
+        min_trades=1,
+        max_runs=1,
+    ).write_json(sp)
     conn = connect(default_db_path(root))
     init_db(conn)
     ensure_experiment_queued(conn, sp.resolve(), priority=80)

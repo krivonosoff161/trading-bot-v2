@@ -28,6 +28,11 @@ from src.research_lab.timeframes import load_timeframe_profiles
 PROFILES = load_timeframe_profiles()
 POLICY = load_resource_policy()
 BUCKET = "high_vol|trending"
+PARENT = {
+    "search_family_id": "sfd_parent",
+    "search_trial_id": "stept_parent",
+    "effective_n_trials": 4,
+}
 
 
 def _write_metrics(tmp_path: Path) -> str:
@@ -37,7 +42,9 @@ def _write_metrics(tmp_path: Path) -> str:
         "symbol": "BTC-USDT-SWAP", "family": "momentum_breakout",
         "params": {"lookback": 20, "hold_bars": 5, "stop_pct": 1.0, "take_pct": 2.0},
         "decision": "REGIME_SPECIFIC", "validation_status": "REGIME_SPECIFIC",
-        "metrics": {"n_trades": 12, "avg_net_pct": 0.4}, "run_id": "r1",
+        "metrics": {"n_trades": 12, "avg_net_pct": 0.4, "effective_n_trials": 4},
+        "search_family_id": "sfd_parent", "search_trial_id": "stept_parent",
+        "run_id": "r1",
         "regime_summary": {"dominant_bucket": BUCKET, "bucket_count": 3},
     }]}
     (run_dir / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
@@ -76,7 +83,7 @@ class TestRegimeChain:
 
 class TestRegimeSweepRevived:
     def test_queues_with_bucket(self) -> None:
-        ctx = {"params": {"lookback": 20, "hold_bars": 5},
+        ctx = {"params": {"lookback": 20, "hold_bars": 5, **PARENT},
                "regime_summary": {"dominant_bucket": BUCKET}}
         plan = plan_followup(_regime_rec(), ctx)
         assert plan.queued is True
@@ -84,7 +91,7 @@ class TestRegimeSweepRevived:
         assert plan.sweep.filter_grid  # a real regime filter was built
 
     def test_noops_without_bucket(self) -> None:
-        ctx = {"params": {"lookback": 20, "hold_bars": 5},
+        ctx = {"params": {"lookback": 20, "hold_bars": 5, **PARENT},
                "regime_summary": {"dominant_bucket": ""}}
         plan = plan_followup(_regime_rec(), ctx)
         assert plan.queued is False

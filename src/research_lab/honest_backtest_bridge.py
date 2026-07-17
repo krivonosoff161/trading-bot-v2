@@ -302,26 +302,42 @@ def _candidate_contract_errors(candidate: CandidateForValidation) -> list[str]:
         for trade in candidate.trades
     ):
         errors.append("returns_basis_field_missing")
+    try:
+        _n_trials(candidate)
+    except (TypeError, ValueError) as exc:
+        errors.append(f"invalid_search_family_evidence:{exc}")
     return errors
 
 
 def _n_trials(candidate: CandidateForValidation) -> int:
-    """Number of parameter variants the candidate was selected from (>=1).
+    """Recompute the effective family count from verified immutable evidence."""
+    from src.research_lab.search_trial_evidence import validate_search_trial_evidence
 
-    This is the multiple-testing trial count used to deflate significance: picking the
-    best of N variants inflates apparent significance, so a deeper sweep is penalized.
-    """
     m = candidate.metrics or {}
+    evidence = m.get("search_trial_evidence")
+    if not isinstance(evidence, dict):
+        raise ValueError("verified search family evidence is required")
+    counts = validate_search_trial_evidence(evidence, require_complete=True)
+    n = counts["effective_n_trials"]
     runtime = m.get("runtime") if isinstance(m.get("runtime"), dict) else {}
-    for value in (runtime.get("n_variants_evaluated"), m.get("n_variants_evaluated"),
-                  m.get("variant_count"), m.get("n_trials")):
-        try:
-            n = int(value)
-        except (TypeError, ValueError):
+    claims = (
+        ("runtime.n_variants_evaluated", runtime.get("n_variants_evaluated"), counts["attempted_executions"]),
+        ("n_variants_evaluated", m.get("n_variants_evaluated"), counts["attempted_executions"]),
+        ("variant_count", m.get("variant_count"), counts["selected_points"]),
+        ("n_trials", m.get("n_trials"), n),
+    )
+    for label, value, expected in claims:
+        if value is None:
             continue
-        if n >= 1:
-            return n
-    return 1
+        try:
+            claimed = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("producer n_trials is not an integer") from None
+        if claimed != expected:
+            raise ValueError(
+                f"producer {label} mismatch: claimed={claimed}, recomputed={expected}"
+            )
+    return n
 
 
 def _run_all_checks(
@@ -576,6 +592,17 @@ def _check_overfit(
         "search_bias_metrics_mode": "shadow_only",
     }
     search_evidence_valid = True
+    if isinstance(candidate.metrics.get("search_trial_evidence"), dict):
+        coverage = candidate.metrics.get("pbo_dsr_family_coverage")
+        if not isinstance(coverage, dict) or not coverage.get("complete"):
+            details["family_coverage_error"] = "missing_or_incomplete_family_coverage"
+            search_evidence_valid = False
+        elif int(coverage.get("included_count") or 0) < 2:
+            details["family_coverage_error"] = "fewer_than_two_comparable_family_trials"
+            details["family_coverage"] = coverage
+            search_evidence_valid = False
+        else:
+            details["family_coverage"] = coverage
     trial_sharpes = candidate.metrics.get("trial_sharpes")
     if isinstance(trial_sharpes, list) and len(trial_sharpes) >= 2:
         try:

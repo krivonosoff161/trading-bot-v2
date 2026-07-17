@@ -60,6 +60,13 @@ def classify_run(
             "candidate_id": str(row.get("run_id") or row.get("candidate_id") or ""),
             "params": dict(row.get("params") or {}),
             "regime_bucket": str(regime.get("dominant_bucket") or ""),
+            "search_family_id": str(
+                row.get("search_family_id") or metrics.get("search_family_id") or ""
+            ),
+            "search_trial_id": str(
+                row.get("search_trial_id") or metrics.get("search_trial_id") or ""
+            ),
+            "effective_n_trials": int(metrics.get("effective_n_trials") or 0),
             "run_dir_label": run_dir_label, "task_id": task_id,
         })
     return out
