@@ -16,6 +16,9 @@ from src.research_lab.paper_runtime import (
 )
 from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.setup_library import write_setup_library
+from src.research_lab.simulator_contract import legacy_fixture_manifest
+
+_SIMULATOR_MANIFEST = legacy_fixture_manifest()
 
 
 def _card(**overrides) -> SetupCard:
@@ -35,6 +38,9 @@ def _card(**overrides) -> SetupCard:
         risk_flags=[],
         entry_exit_summary="ready",
         regime_tags=[],
+        simulator_manifest=_SIMULATOR_MANIFEST,
+        unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+        simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
         paper_forward_ready=True,
     )
     base.update(overrides)

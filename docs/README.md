@@ -79,6 +79,8 @@ architecture.
 
 - [Validation bridge contract](validation-bridge-contract.md): public-safe
   candidate, verdict, and authority boundary with `honest-backtest`.
+- [Simulator truth tiers](simulator-truth-tiers.md): immutable OHLC fixture/scenario
+  assumptions, metric states, unsupported execution dimensions, and claim ceilings.
 - [Storage boundaries](storage_boundaries.md): public, private, and local-only
   artifacts.
 - [Public artifact policy](public-artifact-policy.md): staging and historical

@@ -21,6 +21,9 @@ from src.research_lab.paper_contract import (
     PaperTradePlan,
     plan_from_setup_card,
 )
+from src.research_lab.simulator_contract import build_cost_ledger, legacy_fixture_manifest
+
+_SIMULATOR_MANIFEST = legacy_fixture_manifest()
 
 _ROOT = Path(__file__).resolve().parents[1]
 _MODULE = "src/research_lab/paper_contract.py"
@@ -49,6 +52,9 @@ def _pass_card(**overrides) -> SetupCard:
         risk_flags=[],
         entry_exit_summary="long breakout",
         regime_tags=["trend"],
+        simulator_manifest=_SIMULATOR_MANIFEST,
+        unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+        simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
         paper_forward_ready=True,
     )
     base.update(overrides)
@@ -202,6 +208,9 @@ def test_plan_dataclass_rejects_missing_or_invalid_fields(field_overrides):
         invalidation={"type": "none"},
         max_hold={"bars": 4},
         source_validation_verdict={"lite": "FORWARD_PAPER", "hard": "PAPER_FORWARD_READY"},
+        simulator_manifest=_SIMULATOR_MANIFEST,
+        unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+        simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
     )
     good.update(field_overrides)
     with pytest.raises(PaperPlanError):
@@ -232,7 +241,7 @@ def test_outcome_serialization_roundtrips():
         r_multiple=1.93,
     )
     d = outcome.to_dict()
-    assert d["schema"] == "PaperTradeOutcome.v1"
+    assert d["schema"] == "PaperTradeOutcome.v2"
     assert d["candidate_id"] == plan.candidate_id  # join key carried forward
     assert d["state"] == "closed_tp"
     assert PaperTradeOutcome.from_dict(d) == outcome
@@ -259,6 +268,10 @@ def _good_outcome_kwargs(**overrides) -> dict:
         data_fingerprint="cafef00d",
         params_hash="deadbeef",
         state="closed_tp",
+        simulator_manifest=_SIMULATOR_MANIFEST,
+        unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+        simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
+        cost_ledger=build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
     )
     base.update(overrides)
     return base
@@ -282,7 +295,7 @@ def test_outcome_rejects_missing_required_fields(override):
         PaperTradeOutcome(**_good_outcome_kwargs(**override))
 
 
-@pytest.mark.parametrize("schema", ["", "PaperTradeOutcome.v2", "other"])
+@pytest.mark.parametrize("schema", ["", "PaperTradeOutcome.v1", "other"])
 def test_outcome_rejects_wrong_schema(schema):
     with pytest.raises(PaperPlanError):
         PaperTradeOutcome(**_good_outcome_kwargs(schema=schema))

@@ -11,6 +11,11 @@ if str(_ROOT) not in sys.path:
 
 from src.research_lab.honest_backtest_bridge import bridge_available, run_validation  # noqa: E402
 from src.research_lab.hard_validation_contract import trade_evidence_hash  # noqa: E402
+from src.research_lab.simulator_contract import (  # noqa: E402
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
 from src.research_lab.recyclable_revalidation import (  # noqa: E402
     _avg_net,
     _candidate,
@@ -34,16 +39,23 @@ _ITEM["selection_evidence_hash"] = trade_evidence_hash(_ITEM["selection_evidence
 
 def _evaluation_trades(values):
     start = 1782950400  # 2026-07-02T00:00:00+00:00
+    manifest = legacy_fixture_manifest()
     return [
-        {"net_pct": value, "entry_ts": start + index * 60, "exit_ts": start + index * 60 + 30,
-         "side": "long"}
+        {"net_pct": value, "gross_pct": value + 0.1,
+         "entry_ts": start + index * 60, "exit_ts": start + index * 60 + 30,
+         "side": "long", "simulator_manifest": manifest,
+         "simulator_model_id": manifest["simulator_model_id"],
+         "simulator_evidence_tier": manifest["evidence_tier"],
+         "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+         "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+         "quantity_ledger": build_trade_quantity_ledger()}
         for index, value in enumerate(values)
     ]
 
 
 class TestCandidate:
     def test_isolates_statistical_question(self):
-        trades = [{"net_pct": 0.5}, {"net_pct": -0.2}]
+        trades = _evaluation_trades([0.5, -0.2])
         c = _candidate(_ITEM, trades, n_trials=8)
         assert c.lite_status == "FORWARD_PAPER"          # so forward_readiness is not the blocker
         assert c.metrics["n_trades"] == 2

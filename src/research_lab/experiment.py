@@ -31,6 +31,14 @@ from src.research_lab.gpu_runtime import (
     array_module,
     resolve_backend,
 )
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_legacy_combined_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+    profit_factor_state,
+    reconcile_partial_fills,
+)
 
 # Descriptor of the exit mode the GPU/batched simulator faithfully reproduces.
 GPU_SUPPORTED_SIMULATION_MODES = ("fixed_sl_tp_hold_long_short",)
@@ -489,12 +497,14 @@ def simulate_trades(
     *,
     fees_bps: float,
     slippage_bps: float,
+    require_complete_horizon: bool = False,
 ) -> list[dict[str, Any]]:
     exit_mode = str(params.get("exit_mode") or "baseline").strip().lower()
     if exit_mode and exit_mode != "baseline":
         return simulate_dynamic_exit_trades(
             candles, signals, params, exit_mode=exit_mode,
             fees_bps=fees_bps, slippage_bps=slippage_bps,
+            require_complete_horizon=require_complete_horizon,
         )
     hold_bars = int(params.get("hold_bars", 5))
     stop_pct = float(params.get("stop_pct", 0.0))
@@ -503,7 +513,8 @@ def simulate_trades(
     trades = []
     for sig in signals:
         idx = int(sig["idx"])
-        exit_idx = min(idx + hold_bars, len(candles) - 1)
+        horizon_end = idx + hold_bars
+        exit_idx = min(horizon_end, len(candles) - 1)
         if idx >= len(candles) or exit_idx <= idx:
             continue
         side = str(sig["side"])
@@ -534,9 +545,13 @@ def simulate_trades(
                 if take and low <= take:
                     exit_price, outcome, actual_exit_idx = take, "take", j
                     break
-        trades.append(
-            finalize_trade(candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct)
-        )
+        if require_complete_horizon and outcome == "time_exit" and horizon_end >= len(candles):
+            continue
+        trades.append(finalize_trade(
+            candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct,
+            simulator_manifest=legacy_fixture_manifest(),
+            cost_ledger=build_cost_ledger(fees_bps=fees_bps, slippage_bps=slippage_bps),
+        ))
     return trades
 
 
@@ -667,6 +682,7 @@ def _partial_dynamic_trade(
         "side": side,
         "entry": round(entry, 10),
         "exit": round(exit_price, 10),
+        "gross_pct": round(ret_pct, 4),
         "net_pct": round(net_pct, 4),
         "outcome": outcome,
         "reason": sig.get("reason"),
@@ -683,6 +699,9 @@ def _partial_dynamic_trade(
         "adverse_before_favorable": bool(mae_off < mfe_off),
         "path_quality": _path_quality(mfe_pct, capture, mae_off < mfe_off),
         "partial_exit_fraction": first_fraction,
+        "partial_leg_prices": (
+            [float(first_exit), float(exit_price)] if first_fraction else [float(exit_price)]
+        ),
         "path_observation": _path_observation(outcome),
     }
 
@@ -695,6 +714,7 @@ def simulate_dynamic_exit_trades(
     exit_mode: str,
     fees_bps: float,
     slippage_bps: float,
+    require_complete_horizon: bool = False,
 ) -> list[dict[str, Any]]:
     mode = _dynamic_mode_params(params, exit_mode)
     hold_bars = int(mode.get("hold_bars", params.get("hold_bars", 5)))
@@ -704,7 +724,8 @@ def simulate_dynamic_exit_trades(
     trades: list[dict[str, Any]] = []
     for sig in signals:
         idx = int(sig["idx"])
-        cap = min(idx + hold_bars, len(candles) - 1)
+        horizon_end = idx + hold_bars
+        cap = min(horizon_end, len(candles) - 1)
         if idx >= len(candles) or cap <= idx:
             continue
         side = str(sig["side"])
@@ -714,12 +735,52 @@ def simulate_dynamic_exit_trades(
         if mode["kind"] == "partial":
             trade = _partial_dynamic_trade(candles, idx, cap, entry, side, stop_pct, mode, sig, cost_pct)
             if trade is not None:
+                if require_complete_horizon and trade.get("outcome") == "time_exit" and horizon_end >= len(candles):
+                    continue
+                manifest = legacy_fixture_manifest()
+                fraction = float(trade.get("partial_exit_fraction") or 0.0)
+                quantities = [fraction, 1.0 - fraction] if fraction else [1.0]
+                reconciliation = reconcile_partial_fills(
+                    1.0,
+                    [
+                        {"quantity": quantity, "price": price, "cost_pct": cost_pct * 100.0}
+                        for quantity, price in zip(quantities, trade["partial_leg_prices"])
+                    ],
+                    entry_price=entry,
+                    side=side,
+                )
+                if abs(float(reconciliation["net_return_pct"]) - float(trade["net_pct"])) > 1e-3:
+                    raise ValueError("partial fill reconciliation does not match trade return")
+                trade.update({
+                    "simulator_manifest": manifest,
+                    "simulator_model_id": manifest["simulator_model_id"],
+                    "simulator_evidence_tier": manifest["evidence_tier"],
+                    "unsupported_simulator_dimensions": list(manifest["unsupported_dimensions"]),
+                    "cost_ledger": build_cost_ledger(
+                        fees_bps=fees_bps, slippage_bps=slippage_bps,
+                    ),
+                    "quantity_ledger": build_trade_quantity_ledger(
+                        closed_legs=(
+                            (float(trade.get("partial_exit_fraction") or 0.0),
+                             1.0 - float(trade.get("partial_exit_fraction") or 0.0))
+                            if float(trade.get("partial_exit_fraction") or 0.0) > 0
+                            else (1.0,)
+                        ),
+                    ),
+                    "fill_reconciliation": reconciliation,
+                })
                 trades.append(trade)
             continue
         exit_price, outcome, exit_idx = _scan_dynamic_exit(
             candles, idx, cap, entry, side, stop_pct, take_pct, mode
         )
-        trades.append(finalize_trade(candles, idx, exit_idx, side, entry, exit_price, outcome, sig, cost_pct))
+        if require_complete_horizon and outcome == "time_exit" and horizon_end >= len(candles):
+            continue
+        trades.append(finalize_trade(
+            candles, idx, exit_idx, side, entry, exit_price, outcome, sig, cost_pct,
+            simulator_manifest=legacy_fixture_manifest(),
+            cost_ledger=build_cost_ledger(fees_bps=fees_bps, slippage_bps=slippage_bps),
+        ))
     return trades
 
 
@@ -733,6 +794,9 @@ def finalize_trade(
     outcome: str,
     sig: dict[str, Any],
     cost_pct: float,
+    *,
+    simulator_manifest: dict[str, Any] | None = None,
+    cost_ledger: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one trade dict from a decided exit (entry, exit_price, outcome, bars).
 
@@ -750,6 +814,10 @@ def finalize_trade(
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
     bars_held = int(actual_exit_idx - idx)
     adverse_first = mae_off < mfe_off
+    manifest = simulator_manifest or legacy_fixture_manifest()
+    ledger = cost_ledger or build_legacy_combined_cost_ledger(cost_pct)
+    if abs(float(ledger.get("total_pct") or 0.0) - cost_pct * 100.0) > 1e-9:
+        raise ValueError("trade cost ledger does not reconcile to deducted cost")
     return {
         "entry_ts": candles[idx]["ts"],
         "exit_ts": candles[actual_exit_idx]["ts"],
@@ -774,6 +842,12 @@ def finalize_trade(
         "adverse_before_favorable": bool(adverse_first),
         "path_quality": _path_quality(mfe_pct, capture, adverse_first),
         "path_observation": _path_observation(outcome),
+        "simulator_manifest": manifest,
+        "simulator_model_id": manifest["simulator_model_id"],
+        "simulator_evidence_tier": manifest["evidence_tier"],
+        "unsupported_simulator_dimensions": list(manifest["unsupported_dimensions"]),
+        "cost_ledger": ledger,
+        "quantity_ledger": build_trade_quantity_ledger(),
     }
 
 
@@ -932,21 +1006,20 @@ def compute_metrics(
     n = len(trades)
     returns = [float(t["net_pct"]) for t in trades]
     wins = [r for r in returns if r > 0]
-    losses = [r for r in returns if r <= 0]
     split = max(1, min(n, int(n * split_ratio))) if n else 0
     train = returns[:split]
     test = returns[split:]
     total = sum(returns)
-    gross_win = sum(wins)
-    gross_loss = abs(sum(losses))
     best_share = max((abs(r) for r in returns), default=0.0) / abs(total) if total else 0.0
     avg = total / n if n else 0.0
+    pf_state = profit_factor_state(returns)
     return {
         "n_trades": n,
         "win_rate": round(len(wins) / n, 4) if n else 0.0,
         "avg_net_pct": round(avg, 4),
         "total_net_pct": round(total, 4),
-        "profit_factor": round(gross_win / gross_loss, 4) if gross_loss else (99.0 if wins else 0.0),
+        "profit_factor": pf_state["value"],
+        "profit_factor_state": pf_state,
         "max_drawdown_pct": round(_max_drawdown(returns), 4),
         "best_trade_share": round(best_share, 4),
         "train_avg_net_pct": round(sum(train) / len(train), 4) if train else 0.0,
@@ -956,6 +1029,8 @@ def compute_metrics(
         "stress_avg_net_pct": round(avg - stress_extra_cost_pct, 4),
         "regime_breakdown": regime_breakdown(trades),
         "entry_timing": _entry_timing_metrics(trades),
+        "aggregate_basis": "independent_what_if_additive_v1",
+        "portfolio_metrics_status": "unavailable_without_chronological_account_allocation",
     }
 
 
@@ -974,7 +1049,11 @@ def grade_candidate(metrics: dict[str, Any]) -> tuple[str, list[str]]:
     reasons = []
     if metrics["n_trades"] < metrics["min_trades"]:
         reasons.append("too_few_trades")
-    if metrics["profit_factor"] < 1.15:
+    pf_state = metrics.get("profit_factor_state") or {}
+    pf_value = metrics.get("profit_factor")
+    if pf_state.get("state") not in {"finite", "positive_infinity"}:
+        reasons.append("profit_factor_unavailable")
+    elif pf_value is not None and float(pf_value) < 1.15:
         reasons.append("weak_profit_factor")
     if metrics["avg_net_pct"] <= 0:
         reasons.append("negative_or_flat_average")

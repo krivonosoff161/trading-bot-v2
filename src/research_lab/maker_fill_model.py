@@ -3,7 +3,7 @@
 
 The cost-mode mining flipped ~1112 taker-dead results positive by ARITHMETIC: net + saved cost. That is
 optimistic and possibly a mirage, because a maker (limit) entry can simply NOT FILL, and a stop exit is
-always a taker. This module replaces the arithmetic with a real re-simulation:
+always a taker. This module replaces the arithmetic with a deterministic OHLC touch fixture:
 
   * entry = a limit at the prior bar's close. It fills on the next bar ONLY if the bar trades through
     the limit (low<=limit for long, high>=limit for short); otherwise NO-FILL and the trade is skipped
@@ -14,7 +14,8 @@ always a taker. This module replaces the arithmetic with a real re-simulation:
 
 Per side: taker 5bps (fee+slip blended), maker 2bps (fee, no slip) -> taker round-trip 0.10pp matches
 the ledger; maker+take = 0.04pp, maker+stop = 0.07pp. Skeptic framing: we look for where the hypothesis
-breaks. Nothing here is edge or paper-ready; read-only, no order/money/live path.
+breaks. A wick touch still does not prove quantity, queue order, or intrabar event
+order. Nothing here is edge or paper-ready; read-only, no order/money/live path.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from typing import Any
 from src.research_lab.experiment import generate_signals, load_candles
 from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.paths import market_data_glob
+from src.research_lab.simulator_contract import legacy_fixture_manifest
 
 TAKER_SIDE_BPS = 5.0   # fee + slippage, per side (blended; taker round-trip = 0.10pp = the ledger cost)
 MAKER_SIDE_BPS = 2.0   # maker fee, per side, no slippage (filled at the limit)
@@ -162,7 +164,10 @@ def run(private_root: Path, *, limit: int | None = None) -> dict[str, Any]:
                      "honest_maker_positive": mk["maker_avg_net_pct"] > 0,
                      # the real flip: taker-dead on the SAME re-sim basis, but honest-maker positive
                      "honest_flip": tk["taker_resim_net_pct"] <= 0 and mk["maker_avg_net_pct"] > 0})
-    return {"pool_size": len(pool), "evaluated": len(rows), "summary": _summarize(rows), "rows": rows}
+    manifest = legacy_fixture_manifest()
+    return {"pool_size": len(pool), "evaluated": len(rows), "summary": _summarize(rows), "rows": rows,
+            "simulator_manifest": manifest,
+            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"]}
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -193,10 +198,12 @@ def write_snapshot(private_root: Path, report: dict[str, Any] | None = None) -> 
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "maker_fill_model.json"
+    manifest = legacy_fixture_manifest()
     payload = {"schema": "maker_fill_model.v1",
-               "disclaimer": "Honest maker-fill stress test of the cost-bound hypothesis. Research-only; "
-                             "maker fills are modeled conservatively (no-fill possible, stop=taker). "
-                             "Survival != edge; nothing paper-ready.",
+               "disclaimer": "Deterministic OHLC maker-touch stress fixture. A wick is not observed "
+                             "quantity, queue order or execution. Survival != edge; nothing paper-ready.",
+               "simulator_manifest": manifest,
+               "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
                "pool_size": report.get("pool_size"), "summary": report.get("summary")}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

@@ -41,6 +41,10 @@ from src.research_lab.hard_validation_contract import (
     trade_evidence_hash,
 )
 from src.research_lab.honest_backtest_bridge import run_validation
+from src.research_lab.simulator_contract import (
+    validate_simulator_assumption_manifest,
+    validate_trade_contract,
+)
 from src.research_lab.trade_path_diagnostics import (
     _index_run_results,
     _load_rejected_uc,
@@ -129,12 +133,22 @@ def _candidate(
 ) -> CandidateForValidation:
     """Build a validation candidate from re-simulated trades; lite_status FORWARD_PAPER isolates
     the STATISTICAL question (these were lite-rejected; we re-test the stats, not the lite gate)."""
+    if not trades:
+        raise ValueError("revalidation candidate requires simulator-bound trades")
+    simulator_manifest = validate_simulator_assumption_manifest(
+        dict(trades[0].get("simulator_manifest") or {})
+    )
+    for trade in trades:
+        validate_trade_contract(trade, simulator_manifest)
+    unsupported = list(simulator_manifest["unsupported_dimensions"])
     return CandidateForValidation.from_dict({
         "contract_version": CONTRACT_VERSION,
         "candidate_id": f"reval::{item['uc_key']}", "source_run_id": "recyclable_revalidation",
         "symbol": item["symbol"], "normalized_symbol": item["symbol"], "timeframe": item["timeframe"],
         "strategy_id": item["family"], "params": item["params"], "fees_bps": FEES_BPS,
         "slippage_bps": SLIP_BPS, "lite_status": "FORWARD_PAPER",
+        "simulator_manifest": simulator_manifest,
+        "unsupported_simulator_dimensions": unsupported,
         "metrics": {"n_trades": len(trades), "data_fingerprint": (
                         item.get("data_fingerprint") or str(item["uc_key"]).rsplit("::", 1)[-1]
                     ),
@@ -153,12 +167,12 @@ def _candidate(
                     "data_snapshot_id": str((snapshot_manifest or {}).get("snapshot_id") or ""),
                     "data_evidence_hash": str((snapshot_manifest or {}).get("evidence_hash") or ""),
                     "data_provenance_status": str((snapshot_manifest or {}).get("provenance_status") or "legacy_unknown"),
+                    "simulator_manifest": simulator_manifest,
+                    "simulator_model_id": simulator_manifest["simulator_model_id"],
+                    "simulator_evidence_tier": simulator_manifest["evidence_tier"],
+                    "unsupported_simulator_dimensions": unsupported,
                     "runtime": {"n_variants_evaluated": int(n_trials)}},
-        "trades": [
-            {"net_pct": float(t.get("net_pct") or 0.0), "entry_ts": t.get("entry_ts"),
-             "exit_ts": t.get("exit_ts"), "side": t.get("side")}
-            for t in trades
-        ],
+        "trades": [dict(t) for t in trades],
     })
 
 

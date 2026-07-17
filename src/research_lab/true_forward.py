@@ -27,6 +27,7 @@ from src.research_lab.experiment import (
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.param_schemas import executable_exit_params
 from src.research_lab.stop_intent import is_stop_requested
+from src.research_lab.simulator_contract import legacy_fixture_manifest, validate_trade_contract
 
 FEES_BPS = 7.0
 SLIP_BPS = 3.0
@@ -120,6 +121,15 @@ def register(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
                          "boundary_provenance_status": selected.manifest.provenance_status,
                          "status": STATUS_PENDING, "forward_trades": 0, "forward_net_sum": 0.0,
                          "forward_tp_before_sl": 0, "forward_mfe_sum": 0.0, "forward_mae_sum": 0.0}
+        manifest = legacy_fixture_manifest()
+        reg[w.uc_key].update({
+            "simulator_manifest": manifest,
+            "simulator_model_id": manifest["simulator_model_id"],
+            "simulator_evidence_tier": manifest["evidence_tier"],
+            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+            "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
+        })
+        reg[w.uc_key]["pending_signals"] = []
     _write_registry(private_root, reg)
     return {"registered": len(reg), "boundaries_pinned": True}
 
@@ -153,8 +163,54 @@ def _simulate(candles: list[dict[str, Any]], signals: list[dict[str, Any]], para
     if exit_name and exit_name != "baseline":
         mode = dict(_exit_modes(params)).get(exit_name)
         if mode is not None:
-            return simulate_exit_mode(candles, signals, params, mode, fees_bps=FEES_BPS, slip_bps=SLIP_BPS)
-    return simulate_trades(candles, signals, params, fees_bps=FEES_BPS, slippage_bps=SLIP_BPS)
+            return simulate_exit_mode(
+                candles, signals, params, mode, fees_bps=FEES_BPS, slip_bps=SLIP_BPS,
+                require_complete_horizon=True,
+            )
+    return simulate_trades(
+        candles, signals, params, fees_bps=FEES_BPS, slippage_bps=SLIP_BPS,
+        require_complete_horizon=True,
+    )
+
+
+def _rehydrate_pending_signals(
+    candles: list[dict[str, Any]], pending: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    by_ts = {int(candle.get("ts") or 0): idx for idx, candle in enumerate(candles)}
+    signals: list[dict[str, Any]] = []
+    for item in pending:
+        idx = by_ts.get(int(item.get("entry_ts") or 0))
+        if idx is None:
+            continue
+        signals.append({
+            "idx": idx, "side": str(item.get("side") or ""),
+            "reason": item.get("reason"), "regime": dict(item.get("regime") or {}),
+        })
+    return signals
+
+
+def _pending_forward_signals(
+    candles: list[dict[str, Any]], signals: list[dict[str, Any]],
+    trades: list[dict[str, Any]], hold_bars: int,
+) -> list[dict[str, Any]]:
+    completed = {
+        (int(trade.get("entry_ts") or 0), str(trade.get("side") or ""))
+        for trade in trades
+    }
+    pending: dict[tuple[int, str], dict[str, Any]] = {}
+    for signal in signals:
+        idx = int(signal["idx"])
+        if idx < 0 or idx >= len(candles) or idx + int(hold_bars) < len(candles):
+            continue
+        entry_ts = int(candles[idx].get("ts") or 0)
+        key = (entry_ts, str(signal.get("side") or ""))
+        if key in completed:
+            continue
+        pending[key] = {
+            "entry_ts": entry_ts, "side": key[1], "reason": signal.get("reason"),
+            "regime": dict(signal.get("regime") or {}),
+        }
+    return [pending[key] for key in sorted(pending)]
 
 
 def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
@@ -176,9 +232,21 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     if not new_bars:
         return {"uc_key": uc_key, "status": STATUS_PENDING, "new_bars": 0}
     params = dict(row.get("params") or {}) or executable_exit_params(row["family"])
-    signals = [s for s in generate_signals(candles, row["family"], params)
-               if int(candles[int(s["idx"])].get("ts") or 0) > boundary]
+    new_signals = [s for s in generate_signals(candles, row["family"], params)
+                   if int(candles[int(s["idx"])].get("ts") or 0) > boundary]
+    prior_pending = _rehydrate_pending_signals(
+        candles, list(row.get("pending_signals") or []),
+    )
+    by_key: dict[tuple[int, str], dict[str, Any]] = {}
+    for signal in [*prior_pending, *new_signals]:
+        key = (int(candles[int(signal["idx"])].get("ts") or 0), str(signal.get("side") or ""))
+        by_key[key] = signal
+    signals = [by_key[key] for key in sorted(by_key)]
     trades = _simulate(candles, signals, params, str(row.get("exit") or "baseline"))
+    exit_name = str(row.get("exit") or "baseline")
+    mode = dict(_exit_modes(params)).get(exit_name) if exit_name != "baseline" else None
+    hold_bars = int((mode or {}).get("hold_bars", params.get("hold_bars", 5)))
+    row["pending_signals"] = _pending_forward_signals(candles, signals, trades, hold_bars)
     _accumulate(row, trades, len(new_bars), int(candles[-1].get("ts") or 0))
     row["last_snapshot_id"] = selected.manifest.snapshot_id
     row["last_evidence_hash"] = selected.manifest.evidence_hash
@@ -187,12 +255,15 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     _write_registry(private_root, reg)
     return {"uc_key": uc_key, "status": row["status"], "new_bars": len(new_bars),
             "forward_trades": row["forward_trades"],
+            "forward_open": len(row["pending_signals"]),
             "data_snapshot_id": selected.manifest.snapshot_id,
             "data_provenance_status": selected.manifest.provenance_status}
 
 
 def _accumulate(row: dict[str, Any], trades: list[dict[str, Any]], new_bars: int, last_ts: int) -> None:
+    manifest = legacy_fixture_manifest()
     for t in trades:
+        validate_trade_contract(t, manifest)
         row["forward_trades"] += 1
         row["forward_net_sum"] = round(row["forward_net_sum"] + float(t.get("net_pct") or 0.0), 4)
         row["forward_mfe_sum"] = round(row["forward_mfe_sum"] + float(t.get("mfe_pct") or 0.0), 4)
@@ -202,6 +273,13 @@ def _accumulate(row: dict[str, Any], trades: list[dict[str, Any]], new_bars: int
     row["last_collected_ts"] = last_ts
     row["status"] = STATUS_MATURED if row["forward_trades"] >= MATURE_TRADES else STATUS_COLLECTING
     row["paper_forward_ready"] = False
+    row.update({
+        "simulator_manifest": manifest,
+        "simulator_model_id": manifest["simulator_model_id"],
+        "simulator_evidence_tier": manifest["evidence_tier"],
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+        "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
+    })
 
 
 def collect_once(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES) -> dict[str, Any]:

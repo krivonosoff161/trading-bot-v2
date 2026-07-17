@@ -89,6 +89,8 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
     from src.research_lab.honest_backtest_bridge import _artifact_stem
     from src.research_lab.validation_orchestrator import run_due_validations
+    from src.research_lab.simulator_contract import legacy_fixture_manifest
+    manifest = legacy_fixture_manifest()
     uc_key = "X::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
@@ -119,6 +121,8 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
             "params": {"direction": "long", "lookback": 20, "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
             "data_window": {"fingerprint": "fp", "n_bars": 10, "start_ts": 1, "end_ts": 10},
             "metrics": {"uc_key": uc_key},
+            "simulator_manifest": manifest,
+            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
         }), encoding="utf-8")
     reports = tmp_path / "hard_validation" / "reports"
     reports.mkdir(parents=True)
@@ -128,6 +132,9 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "symbol": "X",
         "timeframe": "1h",
         "strategy_id": "momentum_breakout",
+        "simulator_manifest": manifest,
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+        "simulator_claim_ceiling": manifest["claim_ceiling"],
         "verdict": {
             "candidate_id": validation_id,
             "hard_status": "PAPER_FORWARD_READY",

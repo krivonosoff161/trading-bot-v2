@@ -22,6 +22,7 @@ from src.research_lab.hard_validation_contract import (
     write_json,
 )
 from src.research_lab.param_schemas import executable_params_ready
+from src.research_lab.simulator_contract import validate_simulator_assumption_manifest
 
 LIBRARY_DIR = "setup_library"
 INDEX_FILE = "setup_index.jsonl"
@@ -32,6 +33,8 @@ def build_setup_card(
     candidate: dict[str, Any] | None = None,
 ) -> SetupCard:
     """Build a SetupCard from a HardValidationReport dict and optional candidate."""
+    if not _simulator_report_ready(report):
+        raise ValueError("hard validation report has invalid simulator provenance")
     verdict = report.get("verdict") or {}
     hard_status = verdict.get("hard_status", "UNKNOWN")
     candidate_id = report.get("candidate_id", "")
@@ -50,11 +53,19 @@ def build_setup_card(
         checks_summary=report.get("checks_summary", {}),
         failed_checks=verdict.get("failed_checks", []),
         risk_flags=(candidate or {}).get("risk_flags", []),
-        entry_exit_summary=_entry_exit_summary(verdict),
+        entry_exit_summary=_entry_exit_summary(
+            verdict, str(report.get("simulator_claim_ceiling") or "unavailable")
+        ),
         regime_tags=_extract_regime_tags(candidate),
+        simulator_manifest=dict(report.get("simulator_manifest") or {}),
+        unsupported_simulator_dimensions=list(
+            report.get("unsupported_simulator_dimensions") or []
+        ),
+        simulator_claim_ceiling=str(report.get("simulator_claim_ceiling") or "unavailable"),
         paper_forward_ready=(
             hard_status == "PAPER_FORWARD_READY"
             and _paper_params_ready(report.get("strategy_id", ""), params)
+            and _simulator_report_ready(report)
         ),
         main_engine_ready=False,
         created_at=report.get("created_at", ""),
@@ -153,7 +164,9 @@ def _write_group_link(group_dir: Path, setup_id: str) -> None:
     link_path.write_text(json.dumps({"setup_id": setup_id}), encoding="utf-8")
 
 
-def _entry_exit_summary(verdict: dict[str, Any]) -> str:
+def _entry_exit_summary(
+    verdict: dict[str, Any], simulator_claim_ceiling: str = "unavailable"
+) -> str:
     hard_status = str(verdict.get("hard_status") or "")
     if hard_status == "NEEDS_MORE_DATA":
         msg = str(verdict.get("message") or "More validation data is required.")
@@ -165,7 +178,10 @@ def _entry_exit_summary(verdict: dict[str, Any]) -> str:
         return f"Hard validation status: {hard_status}."
     failed = verdict.get("failed_checks") or []
     if not failed:
-        return "All checks passed — paper forward ready."
+        return (
+            "All statistical checks passed — eligible for bounded paper observation; "
+            f"simulator claim ceiling remains {simulator_claim_ceiling}."
+        )
     return f"Failed checks: {', '.join(failed)}."
 
 
@@ -174,6 +190,20 @@ def _paper_params_ready(strategy_id: str, params: dict[str, Any]) -> bool:
     if not strategy_id:
         return False
     return executable_params_ready(str(strategy_id), params)
+
+
+def _simulator_report_ready(report: dict[str, Any]) -> bool:
+    try:
+        manifest = validate_simulator_assumption_manifest(
+            dict(report.get("simulator_manifest") or {})
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        list(report.get("unsupported_simulator_dimensions") or [])
+        == manifest["unsupported_dimensions"]
+        and str(report.get("simulator_claim_ceiling") or "") == manifest["claim_ceiling"]
+    )
 
 
 def _extract_regime_tags(candidate: dict[str, Any] | None) -> list[str]:
@@ -196,6 +226,8 @@ def _card_to_markdown(card: SetupCard) -> str:
         f"**Hard Status:** `{card.hard_status}`",
         f"**Paper Forward Ready:** {card.paper_forward_ready}",
         f"**Main Engine Ready:** {card.main_engine_ready} (disabled by design)",
+        f"**Simulator:** `{card.simulator_manifest.get('simulator_model_id', 'unavailable')}`",
+        f"**Simulator Claim Ceiling:** `{card.simulator_claim_ceiling}`",
         "",
         "## Parameters",
         "",

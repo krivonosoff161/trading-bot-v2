@@ -131,13 +131,7 @@ def _metrics(trades: list[dict[str, Any]], bar_count: int) -> dict[str, Any]:
 
 
 def _evidence(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "entry_ts": t.get("entry_ts"), "exit_ts": t.get("exit_ts"),
-            "side": t.get("side"), "net_pct": float(t.get("net_pct") or 0.0),
-        }
-        for t in trades
-    ]
+    return [dict(t, net_pct=float(t.get("net_pct") or 0.0)) for t in trades]
 
 
 def _iso_ts(value: Any) -> str:
@@ -160,6 +154,10 @@ def _oos_bridge_status(
         CONTRACT_VERSION, CandidateForValidation, trade_evidence_hash,
     )
     from src.research_lab.honest_backtest_bridge import run_validation
+    from src.research_lab.simulator_contract import (
+        validate_simulator_assumption_manifest,
+        validate_trade_contract,
+    )
     selection_evidence = list(cand.get("selection_evidence") or [])
     evidence = _evidence(oos_trades)
     if not selection_evidence or not evidence:
@@ -176,14 +174,26 @@ def _oos_bridge_status(
         return "NEEDS_MORE_DATA"
     if not (frozen_at <= cutoff_at < evaluation_started_at):
         return "NEEDS_MORE_DATA"
+    simulator_manifest = validate_simulator_assumption_manifest(
+        dict(evidence[0].get("simulator_manifest") or {})
+    )
+    for trade in evidence:
+        validate_trade_contract(trade, simulator_manifest)
+    unsupported = list(simulator_manifest["unsupported_dimensions"])
     c = CandidateForValidation.from_dict({
         "contract_version": CONTRACT_VERSION,
         "candidate_id": f"oos::{cand['symbol']}::{cand['timeframe']}::{cand['family']}::{cand['exit']}",
         "source_run_id": "shadow_oos", "symbol": cand["symbol"], "normalized_symbol": cand["symbol"],
         "timeframe": cand["timeframe"], "strategy_id": cand["family"], "params": cand.get("params") or {},
         "fees_bps": FEES_BPS, "slippage_bps": SLIP_BPS, "lite_status": "FORWARD_PAPER",
+        "simulator_manifest": simulator_manifest,
+        "unsupported_simulator_dimensions": unsupported,
         "metrics": {"n_trades": len(oos_trades), "data_fingerprint": f"sha256:{evaluation_hash}",
                     "returns_basis": "net_pct", "costs_applied": True,
+                    "simulator_manifest": simulator_manifest,
+                    "simulator_model_id": simulator_manifest["simulator_model_id"],
+                    "simulator_evidence_tier": simulator_manifest["evidence_tier"],
+                    "unsupported_simulator_dimensions": unsupported,
                     "validation_epoch": {"schema": "ValidationEpoch.v1",
                         "evidence_stage": "untouched_evaluation",
                         "selection_data_fingerprint": selection_fp,

@@ -144,7 +144,7 @@ def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str,
 def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:
     fields = [
         "run_id", "symbol", "family", "decision", "reasons", "n_trades",
-        "win_rate", "avg_net_pct", "total_net_pct", "profit_factor",
+        "win_rate", "avg_net_pct", "total_net_pct", "profit_factor", "profit_factor_state",
         "max_drawdown_pct", "test_avg_net_pct", "best_trade_share",
         "validation_status", "validation_reasons", "next_action",
     ]
@@ -164,6 +164,9 @@ def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:
                 "avg_net_pct": m["avg_net_pct"],
                 "total_net_pct": m["total_net_pct"],
                 "profit_factor": m["profit_factor"],
+                "profit_factor_state": json.dumps(
+                    m.get("profit_factor_state") or {}, sort_keys=True, separators=(",", ":")
+                ),
                 "max_drawdown_pct": m["max_drawdown_pct"],
                 "test_avg_net_pct": m["test_avg_net_pct"],
                 "best_trade_share": m["best_trade_share"],
@@ -405,6 +408,7 @@ def _write_candidate_note(path: Path, result: RunResult, run_name: str) -> None:
         f"- avg_net_pct: {m['avg_net_pct']}",
         f"- test_avg_net_pct: {m['test_avg_net_pct']}",
         f"- profit_factor: {m['profit_factor']}",
+        f"- profit_factor_state: {json.dumps(m.get('profit_factor_state') or {}, sort_keys=True)}",
         f"- max_drawdown_pct: {m['max_drawdown_pct']}",
         f"- best_trade_share: {m['best_trade_share']}",
         f"- stress_avg_net_pct: {m.get('stress_avg_net_pct', 'n/a')}",
@@ -456,14 +460,14 @@ def _summary_md(spec: ExperimentSpec, results: list[RunResult]) -> str:
         "",
     ]
     top = sorted(results, key=lambda r: r.metrics["avg_net_pct"], reverse=True)[:12]
-    lines.append("| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | reasons |")
+    lines.append("| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | pf_state | reasons |")
     lines.append("|---|---|---|---|---|---:|---:|---:|---:|---|")
     for r in top:
         m = r.metrics
         lines.append(
             f"| {r.run_id} | {r.symbol} | {r.family} | {r.decision} | {r.validation_status} | "
             f"{m['n_trades']} | {m['avg_net_pct']} | {m['test_avg_net_pct']} | "
-            f"{m['profit_factor']} | {'; '.join(r.reasons)} |"
+            f"{m['profit_factor']} | {str((m.get('profit_factor_state') or {}).get('state') or '')} | {'; '.join(r.reasons)} |"
         )
     lines.append("")
     return "\n".join(lines)

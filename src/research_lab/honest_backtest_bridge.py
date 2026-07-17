@@ -311,6 +311,24 @@ def _candidate_contract_errors(candidate: CandidateForValidation) -> list[str]:
     ):
         errors.append("returns_basis_field_missing")
     try:
+        from src.research_lab.simulator_contract import (
+            validate_simulator_assumption_manifest,
+            validate_trade_contract,
+        )
+
+        validate_simulator_assumption_manifest(candidate.simulator_manifest)
+        expected_unsupported = candidate.simulator_manifest.get("unsupported_dimensions") or []
+        if candidate.unsupported_simulator_dimensions != expected_unsupported:
+            errors.append("simulator_unsupported_dimensions_mismatch")
+        if (candidate.metrics or {}).get("simulator_model_id") not in {
+            None, candidate.simulator_manifest.get("simulator_model_id")
+        }:
+            errors.append("simulator_model_identity_mismatch")
+        for trade in candidate.trades:
+            validate_trade_contract(trade, candidate.simulator_manifest)
+    except (TypeError, ValueError):
+        errors.append("invalid_simulator_or_trade_manifest")
+    try:
         _n_trials(candidate)
     except (TypeError, ValueError) as exc:
         errors.append(f"invalid_search_family_evidence:{exc}")
@@ -991,6 +1009,9 @@ def _build_report(
             "passed": passed,
             "failed": len(checks) - passed,
         },
+        simulator_manifest=dict(candidate.simulator_manifest),
+        unsupported_simulator_dimensions=list(candidate.unsupported_simulator_dimensions),
+        simulator_claim_ceiling=str(candidate.simulator_manifest.get("claim_ceiling") or "unavailable"),
         created_at=verdict.created_at,
     )
 

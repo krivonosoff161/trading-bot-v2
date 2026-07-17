@@ -106,6 +106,7 @@ docs/*.md
 !docs/entrypoints.md
 !docs/project-map.md
 !docs/validation-bridge-contract.md
+!docs/simulator-truth-tiers.md
 !docs/adaptive-research-center-contract.md
 !docs/storage_boundaries.md
 !docs/REMOTE_DATA_MANIFEST.md

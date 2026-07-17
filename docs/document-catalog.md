@@ -21,6 +21,7 @@ instruction. When documents conflict, use the authority order in
 | Farm lifecycle | [farm_loop_lifecycle.md](farm_loop_lifecycle.md) |
 | Storage/public boundary | [storage_boundaries.md](storage_boundaries.md) |
 | Cross-repository validation contract | [validation-bridge-contract.md](validation-bridge-contract.md) |
+| Simulator evidence tiers and claim ceilings | [simulator-truth-tiers.md](simulator-truth-tiers.md) |
 | Adaptive role and feedback contract | [adaptive-research-center-contract.md](adaptive-research-center-contract.md) |
 | Local-only artifact request rules | [REMOTE_DATA_MANIFEST.md](REMOTE_DATA_MANIFEST.md) |
 

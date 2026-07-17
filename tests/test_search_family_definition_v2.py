@@ -817,6 +817,9 @@ def test_adaptive_trial_identity_binds_hypothesis_and_parentage() -> None:
 
 
 def test_hard_export_recomputes_evidence_and_rejects_tampering(tmp_path) -> None:
+    from src.research_lab.simulator_contract import legacy_fixture_manifest
+
+    manifest = legacy_fixture_manifest()
     spec = ExperimentSpec(
         experiment_id="hard-export-family",
         data_glob="unused",
@@ -858,6 +861,10 @@ def test_hard_export_recomputes_evidence_and_rejects_tampering(tmp_path) -> None
                         "metrics": {
                             **result.metrics,
                             "data_fingerprint": spec.data_evidence_hash,
+                            "simulator_manifest": manifest,
+                            "simulator_model_id": manifest["simulator_model_id"],
+                            "simulator_evidence_tier": manifest["evidence_tier"],
+                            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
                         },
                         "trades": [],
                     }

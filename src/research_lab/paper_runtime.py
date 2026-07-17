@@ -26,6 +26,7 @@ from src.research_lab.paper_contract import (
 )
 from src.research_lab.paper_journal import append_paper_outcome, load_seen_trade_ids
 from src.research_lab.paper_readiness import summarize_paper_readiness
+from src.research_lab.simulator_contract import build_cost_ledger, legacy_fixture_manifest
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,8 @@ def _decide_trade(
 ) -> dict[str, Any] | None:
     idx = int(sig["idx"])
     hold_bars = int(plan.max_hold["bars"])
-    exit_idx = min(idx + hold_bars, len(candles) - 1)
+    horizon_end = idx + hold_bars
+    exit_idx = min(horizon_end, len(candles) - 1)
     if idx >= len(candles) or exit_idx <= idx:
         return None
     side = str(sig["side"])
@@ -128,9 +130,15 @@ def _decide_trade(
             if take and low <= take:
                 exit_price, outcome, actual_exit_idx = take, "take", j
                 break
+    if outcome == "time_exit" and horizon_end >= len(candles):
+        return None
     cost_pct = (float(plan.fees_bps) + float(plan.slippage_bps)) / 10000.0
     return finalize_trade(
-        candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct
+        candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct,
+        simulator_manifest=legacy_fixture_manifest(),
+        cost_ledger=build_cost_ledger(
+            fees_bps=float(plan.fees_bps), slippage_bps=float(plan.slippage_bps),
+        ),
     )
 
 
@@ -166,6 +174,11 @@ def execute_plan_once(plan: PaperTradePlan, candles: list[dict[str, Any]]) -> Pa
         trade = _decide_trade(candles, plan, sig)
         if trade is None:
             continue
+        if (
+            (trade.get("simulator_manifest") or {}).get("manifest_id")
+            != plan.simulator_manifest.get("manifest_id")
+        ):
+            raise PaperPlanError("paper runtime simulator manifest differs from validated plan")
         trade_id = _trade_id(plan, trade)
         stop_pct = float(plan.stop_loss["value"])
         net_pct = float(trade.get("net_pct") or 0.0)
@@ -189,6 +202,7 @@ def execute_plan_once(plan: PaperTradePlan, candles: list[dict[str, Any]]) -> Pa
             r_multiple=r_multiple,
             net_pct=net_pct,
             pnl_paper_pct=net_pct,
+            cost_ledger=dict(trade.get("cost_ledger") or {}),
             recorded_at=utc_now(),
         )
         return PaperRunResult(plan.setup_id, "completed", trade_id=trade_id, outcome=outcome)

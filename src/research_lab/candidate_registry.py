@@ -156,7 +156,7 @@ def _metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
     keys = [
         "n_trades", "win_rate", "avg_net_pct", "total_net_pct", "profit_factor",
         "max_drawdown_pct", "train_avg_net_pct", "test_avg_net_pct", "test_trades",
-        "best_trade_share", "stress_avg_net_pct",
+        "best_trade_share", "stress_avg_net_pct", "profit_factor_state",
     ]
     summary = {k: metrics.get(k) for k in keys if k in metrics}
     if isinstance(metrics.get("entry_timing"), dict):

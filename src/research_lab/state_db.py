@@ -111,6 +111,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             avg_net_pct REAL NOT NULL DEFAULT 0,
             test_avg_net_pct REAL NOT NULL DEFAULT 0,
             profit_factor REAL NOT NULL DEFAULT 0,
+            profit_factor_state_json TEXT NOT NULL DEFAULT '{}',
             data_file TEXT NOT NULL DEFAULT '',
             data_quality TEXT NOT NULL DEFAULT '',
             next_action TEXT NOT NULL DEFAULT '',
@@ -198,6 +199,7 @@ def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
         "hard_status": "TEXT NOT NULL DEFAULT ''",
         "validation_exported": "INTEGER NOT NULL DEFAULT 0",
         "paper_status": "TEXT NOT NULL DEFAULT ''",
+        "profit_factor_state_json": "TEXT NOT NULL DEFAULT '{}'",
     }
     for column, decl in additions.items():
         if column not in existing:
@@ -634,9 +636,10 @@ def _import_farm_results(
             INSERT INTO farm_results(
                 run_id, candidate_id, symbol, asset_group, timeframe, family, decision,
                 validation_status, backend, n_trades, win_rate, avg_net_pct,
-                test_avg_net_pct, profit_factor, data_file, data_quality, next_action, created_at,
+                test_avg_net_pct, profit_factor, profit_factor_state_json,
+                data_file, data_quality, next_action, created_at,
                 max_drawdown_pct, gpu_signal_supported
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id,
@@ -653,6 +656,10 @@ def _import_farm_results(
                 _as_float(_row_metric(row, "avg_net_pct")),
                 _as_float(_row_metric(row, "test_avg_net_pct")),
                 _as_float(_row_metric(row, "profit_factor")),
+                json.dumps(
+                    _row_metric(row, "profit_factor_state") or {},
+                    ensure_ascii=False, sort_keys=True,
+                ),
                 str(_row_metric(row, "data_file_label") or ""),
                 _data_quality(n_trades, min_trades),
                 str(row.get("next_action") or ""),
@@ -713,11 +720,19 @@ def _metrics_from_csv_row(row: dict[str, Any]) -> dict[str, Any]:
         "avg_net_pct",
         "total_net_pct",
         "profit_factor",
+        "profit_factor_state",
         "max_drawdown_pct",
         "test_avg_net_pct",
         "best_trade_share",
     ]
-    return {k: row.get(k) for k in keys if k in row}
+    metrics = {k: row.get(k) for k in keys if k in row}
+    raw_state = row.get("profit_factor_state")
+    if isinstance(raw_state, str) and raw_state:
+        try:
+            metrics["profit_factor_state"] = json.loads(raw_state)
+        except json.JSONDecodeError:
+            metrics["profit_factor_state"] = {}
+    return metrics
 
 
 def _experiment_from_run_name(name: str) -> str:

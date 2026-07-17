@@ -1,10 +1,12 @@
 # Validation Bridge Contract
 
-Status: **REFERENCE CONTRACT**. Version: `1.2.0`.
+Status: **REFERENCE CONTRACT**. Version: `1.3.0`.
 
-Version `1.2.0` adds time-aware observation, complete-family panel, split, and
-dependence-evidence profiles. Legacy `1.0.0` and `1.1.0` request files are not
-silently upgraded: they must be regenerated from their source candidate. The
+Version `1.3.0` adds immutable simulator-assumption identity, evidence-tier
+claim ceilings, unsupported execution dimensions and tagged metric state.
+Version `1.2.0` added time-aware observation, complete-family panel, split, and
+dependence-evidence profiles. Legacy request files are not silently upgraded:
+they must be regenerated from their source candidate. The
 bridge cannot guess cost ownership, PBO orientation, common timestamps,
 feature horizons, family exclusions, or a dependence model.
 
@@ -30,7 +32,7 @@ unless an operator explicitly permits an inconclusive degraded mode.
 
 ## Evidence Channels
 
-The outer request is `CandidateForValidation` version `1.2.0`. Its validation
+The outer request is `CandidateForValidation` version `1.3.0`. Its validation
 metrics may carry these content-bound nested objects:
 
 - `ValidationObservationSet.v2`: one explicitly timestamped per-period return
@@ -71,6 +73,12 @@ A malformed or missing shadow metric cannot change the authoritative
 its own named hard check and prevents `PAPER_FORWARD_READY`. PBO/DSR remain
 shadow-only; promotion requires a separate approved policy and migration.
 
+Every request and report also carries an exact `SimulatorAssumptionManifest.v2`
+identity plus its unsupported dimensions. Validation may measure returns but
+cannot raise their claim ceiling: `deterministic_fixture` remains fixture
+evidence even when statistical checks pass. Unknown, missing or content-tampered
+simulator identities fail the outer contract. See [Simulator Truth Tiers](simulator-truth-tiers.md).
+
 The current IID bootstrap/sign-flip path is a cheap non-authoritative kill
 test for dependent or overlapping trades. An accepted interval/block-aware
 generic method must be implemented upstream in `honest-backtest`, then
@@ -101,7 +109,7 @@ performance claims and not an execution interface.
 
 ## Migration And Rollback
 
-Regeneration from immutable source evidence is the only v1.2 migration. No
+Regeneration from immutable source evidence is the only v1.3 migration. No
 private validation history is rewritten and no legacy PBO value is inferred.
-Rollback may disable v1.2 consumption while retaining its evidence; it must not
+Rollback may disable v1.3 consumption while retaining its evidence; it must not
 restore a legacy trial-major PBO artifact as accepted evidence.

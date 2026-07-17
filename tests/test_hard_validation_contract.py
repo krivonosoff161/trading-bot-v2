@@ -23,6 +23,13 @@ from src.research_lab.hard_validation_contract import (
     read_json,
     write_json,
 )
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
+
+_SIMULATOR_MANIFEST = legacy_fixture_manifest()
 
 CANDIDATE_DICT = {
     "contract_version": CONTRACT_VERSION,
@@ -50,7 +57,16 @@ CANDIDATE_DICT = {
     ],
     "data_window": {"start_ts": 0, "end_ts": 3000, "n_bars": 200},
     "created_at": "2026-06-14T00:00:00Z",
+    "simulator_manifest": _SIMULATOR_MANIFEST,
+    "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
 }
+CANDIDATE_DICT["trades"][0].update({
+    "simulator_manifest": _SIMULATOR_MANIFEST,
+    "simulator_model_id": _SIMULATOR_MANIFEST["simulator_model_id"],
+    "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
+    "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+    "quantity_ledger": build_trade_quantity_ledger(),
+})
 
 
 def _make_candidate() -> CandidateForValidation:
@@ -157,6 +173,9 @@ class TestHardValidationReport:
             strategy_id="trend",
             verdict=_make_verdict("FAILED_COSTS").to_dict(),
             checks_summary={"total": 1, "passed": 0, "failed": 1},
+            simulator_manifest=_SIMULATOR_MANIFEST,
+            unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+            simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
             created_at="2026-06-14T00:00:00Z",
         )
         md = report.to_markdown()
@@ -175,6 +194,9 @@ class TestHardValidationReport:
             strategy_id="trend",
             verdict=_make_verdict().to_dict(),
             checks_summary={"total": 1, "passed": 1, "failed": 0},
+            simulator_manifest=_SIMULATOR_MANIFEST,
+            unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+            simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
         )
         d = report.to_dict()
         r2 = HardValidationReport.from_dict(d)
@@ -200,6 +222,9 @@ class TestSetupCard:
             risk_flags=[],
             entry_exit_summary="",
             regime_tags=[],
+            simulator_manifest=_SIMULATOR_MANIFEST,
+            unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+            simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
             main_engine_ready=True,
         )
         d = card.to_dict()
@@ -223,6 +248,9 @@ class TestSetupCard:
             risk_flags=[],
             entry_exit_summary="trend following",
             regime_tags=["trending"],
+            simulator_manifest=_SIMULATOR_MANIFEST,
+            unsupported_simulator_dimensions=_SIMULATOR_MANIFEST["unsupported_dimensions"],
+            simulator_claim_ceiling=_SIMULATOR_MANIFEST["claim_ceiling"],
             paper_forward_ready=True,
         )
         d = card.to_dict()

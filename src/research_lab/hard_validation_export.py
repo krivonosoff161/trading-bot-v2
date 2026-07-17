@@ -40,6 +40,10 @@ from src.research_lab.time_aware_validation import (
     build_dependence_evidence,
     classify_legacy_search_bias_evidence,
 )
+from src.research_lab.simulator_contract import (
+    validate_simulator_assumption_manifest,
+    validate_trade_contract,
+)
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
@@ -272,6 +276,25 @@ def _build_candidate(
         metrics.get("params_hash") or entry.get("params_hash") or ""
     )
     metrics["validation_evidence_profile"] = "time_aware_v2"
+    simulator_manifest = dict(metrics.get("simulator_manifest") or {})
+    if not simulator_manifest and trades:
+        simulator_manifest = dict(trades[0].get("simulator_manifest") or {})
+    if not simulator_manifest:
+        return None
+    try:
+        validate_simulator_assumption_manifest(simulator_manifest)
+    except (TypeError, ValueError):
+        return None
+    for trade in trades:
+        try:
+            validate_trade_contract(trade, simulator_manifest)
+        except (TypeError, ValueError):
+            return None
+    unsupported_dimensions = list(simulator_manifest["unsupported_dimensions"])
+    metrics["simulator_manifest"] = simulator_manifest
+    metrics["simulator_model_id"] = simulator_manifest["simulator_model_id"]
+    metrics["simulator_evidence_tier"] = simulator_manifest["evidence_tier"]
+    metrics["unsupported_simulator_dimensions"] = unsupported_dimensions
     metrics.setdefault(
         "validation_observation_status",
         {
@@ -337,6 +360,8 @@ def _build_candidate(
             entry.get("created_at")
             or dt.datetime.now(dt.timezone.utc).isoformat()
         ),
+        simulator_manifest=simulator_manifest,
+        unsupported_simulator_dimensions=unsupported_dimensions,
         contract_version=CONTRACT_VERSION,
     )
 

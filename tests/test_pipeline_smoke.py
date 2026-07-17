@@ -19,6 +19,11 @@ from src.research_lab.experiment import ExperimentSpec, RunResult
 from src.research_lab.search_trial_evidence import build_search_trial_evidence
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
 
 
 def _seed_candidate(private_root: Path, status: str = "FORWARD_PAPER") -> dict:
@@ -47,9 +52,17 @@ def _seed_experiment_output(private_root: Path) -> None:
     """Create synthetic experiment output with trades."""
     run_dir = private_root / "experiments" / "completed" / "20260614_smoke-exp"
     run_dir.mkdir(parents=True)
+    manifest = legacy_fixture_manifest()
     trades = [
         {"entry_ts": i * 1000, "exit_ts": (i + 1) * 1000,
-         "net_pct": 0.5 if i % 3 != 0 else -0.3, "side": "long"}
+         "net_pct": 0.5 if i % 3 != 0 else -0.3,
+         "gross_pct": 0.6 if i % 3 != 0 else -0.2, "side": "long",
+         "simulator_manifest": manifest,
+         "simulator_model_id": manifest["simulator_model_id"],
+         "simulator_evidence_tier": manifest["evidence_tier"],
+         "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+         "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+         "quantity_ledger": build_trade_quantity_ledger()}
         for i in range(30)
     ]
     spec = ExperimentSpec(
@@ -113,7 +126,11 @@ def _seed_experiment_output(private_root: Path) -> None:
                         "data_file_timeframe": "15m",
                         "data_snapshot_id": spec.data_snapshot_id,
                         "data_evidence_hash": spec.data_evidence_hash,
-                        "data_fingerprint": spec.data_evidence_hash},
+                        "data_fingerprint": spec.data_evidence_hash,
+                        "simulator_manifest": manifest,
+                        "simulator_model_id": manifest["simulator_model_id"],
+                        "simulator_evidence_tier": manifest["evidence_tier"],
+                        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"]},
             "trades": trades,
         }],
     }

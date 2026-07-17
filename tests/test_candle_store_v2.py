@@ -24,6 +24,7 @@ from src.research_lab.experiment import (
     _load_experiment_candles,
     evaluate_spec,
 )
+from src.research_lab.simulator_contract import legacy_fixture_manifest
 
 MINUTE = 60_000
 HOUR = 60 * MINUTE
@@ -454,6 +455,7 @@ def test_outcome_market_context_binds_snapshot_manifest(tmp_path):
 
 
 def test_paper_readiness_fails_closed_for_legacy_unknown_candles(tmp_path):
+    manifest = legacy_fixture_manifest()
     card = SetupCard(
         setup_id="setup-c1", candidate_id="c1", symbol="BTC_USDT_SWAP",
         timeframe="1h", strategy_id="momentum_breakout",
@@ -462,6 +464,9 @@ def test_paper_readiness_fails_closed_for_legacy_unknown_candles(tmp_path):
         lite_status="FORWARD_PAPER", hard_status="PAPER_FORWARD_READY",
         checks_summary={}, failed_checks=[], risk_flags=[], entry_exit_summary="ready",
         regime_tags=[], paper_forward_ready=True,
+        simulator_manifest=manifest,
+        unsupported_simulator_dimensions=manifest["unsupported_dimensions"],
+        simulator_claim_ceiling=manifest["claim_ceiling"],
     )
     write_setup_library(tmp_path, [card], dry_run=False)
     _write_json(tmp_path, _rows(30))

@@ -24,8 +24,12 @@ from typing import Any
 from src.research_lab.data_fingerprint import compute_fingerprint, params_hash
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.param_schemas import validate_params
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    validate_simulator_assumption_manifest,
+)
 
-PAPER_CONTRACT_VERSION = "paper.v1"
+PAPER_CONTRACT_VERSION = "paper.v2"
 
 # The ONLY validation verdicts that may become a paper plan.
 REQUIRED_LITE_STATUS = "FORWARD_PAPER"
@@ -36,7 +40,7 @@ _DEFAULT_FEES_BPS = 7.0
 _DEFAULT_SLIPPAGE_BPS = 3.0
 _DEFAULT_FUNDING_HANDLING = "accrue_public"
 _DEFAULT_ENTRY_RULE = "next_bar_open"
-_OUTCOME_SCHEMA = "PaperTradeOutcome.v1"
+_OUTCOME_SCHEMA = "PaperTradeOutcome.v2"
 
 
 class PaperPlanError(ValueError):
@@ -134,6 +138,9 @@ class PaperTradePlan:
     max_hold: dict[str, Any]
     # provenance gate (must be FORWARD_PAPER + PAPER_FORWARD_READY)
     source_validation_verdict: dict[str, Any]
+    simulator_manifest: dict[str, Any]
+    unsupported_simulator_dimensions: list[str]
+    simulator_claim_ceiling: str
     # costs / carry (paper model only)
     fees_bps: float = _DEFAULT_FEES_BPS
     slippage_bps: float = _DEFAULT_SLIPPAGE_BPS
@@ -164,6 +171,14 @@ class PaperTradePlan:
         if self.fees_bps < 0 or self.slippage_bps < 0:
             raise PaperPlanError("fees_bps and slippage_bps must be >= 0")
         _require_verdict(self.source_validation_verdict)
+        try:
+            manifest = validate_simulator_assumption_manifest(self.simulator_manifest)
+        except (TypeError, ValueError) as exc:
+            raise PaperPlanError(f"invalid simulator manifest: {exc}") from exc
+        if self.unsupported_simulator_dimensions != manifest["unsupported_dimensions"]:
+            raise PaperPlanError("simulator unsupported dimensions mismatch")
+        if self.simulator_claim_ceiling != manifest["claim_ceiling"]:
+            raise PaperPlanError("simulator claim ceiling mismatch")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -186,6 +201,11 @@ class PaperTradePlan:
             invalidation=dict(d.get("invalidation") or {}),
             max_hold=dict(d.get("max_hold") or {}),
             source_validation_verdict=dict(d.get("source_validation_verdict") or {}),
+            simulator_manifest=dict(d.get("simulator_manifest") or {}),
+            unsupported_simulator_dimensions=list(
+                d.get("unsupported_simulator_dimensions") or []
+            ),
+            simulator_claim_ceiling=str(d.get("simulator_claim_ceiling") or ""),
             fees_bps=float(d.get("fees_bps", _DEFAULT_FEES_BPS)),
             slippage_bps=float(d.get("slippage_bps", _DEFAULT_SLIPPAGE_BPS)),
             funding_handling=str(d.get("funding_handling") or _DEFAULT_FUNDING_HANDLING),
@@ -286,6 +306,14 @@ def plan_from_setup_card(
     stop_pct = _require_param_pct(params, "stop_pct")
     take_pct = _require_param_pct(params, "take_pct")
     hold_bars = _require_param_int(params, "hold_bars")
+    try:
+        manifest = validate_simulator_assumption_manifest(card.simulator_manifest)
+    except (TypeError, ValueError) as exc:
+        raise PaperPlanError(f"SetupCard has invalid simulator manifest: {exc}") from exc
+    if card.unsupported_simulator_dimensions != manifest["unsupported_dimensions"]:
+        raise PaperPlanError("SetupCard simulator unsupported dimensions mismatch")
+    if card.simulator_claim_ceiling != manifest["claim_ceiling"]:
+        raise PaperPlanError("SetupCard simulator claim ceiling mismatch")
     return PaperTradePlan(
         setup_id=card.setup_id,
         candidate_id=card.candidate_id,
@@ -302,6 +330,9 @@ def plan_from_setup_card(
         invalidation={"type": "none"},
         max_hold={"bars": hold_bars},
         source_validation_verdict={"lite": card.lite_status, "hard": card.hard_status},
+        simulator_manifest=dict(manifest),
+        unsupported_simulator_dimensions=list(card.unsupported_simulator_dimensions),
+        simulator_claim_ceiling=card.simulator_claim_ceiling,
         fees_bps=float(fees_bps),
         slippage_bps=float(slippage_bps),
         funding_handling=str(funding_handling),
@@ -330,6 +361,10 @@ class PaperTradeOutcome:
     family: str
     direction: str
     state: str
+    simulator_manifest: dict[str, Any]
+    unsupported_simulator_dimensions: list[str]
+    simulator_claim_ceiling: str
+    cost_ledger: dict[str, Any]
     # lifecycle / result (defaulted: a skeleton may be stamped incrementally)
     reason: str = ""
     outcome: str = ""
@@ -375,6 +410,16 @@ class PaperTradeOutcome:
             raise PaperPlanError(
                 f"schema must be {_OUTCOME_SCHEMA!r}, got {self.schema!r}"
             )
+        try:
+            manifest = validate_simulator_assumption_manifest(self.simulator_manifest)
+        except (TypeError, ValueError) as exc:
+            raise PaperPlanError(f"invalid outcome simulator manifest: {exc}") from exc
+        if self.unsupported_simulator_dimensions != manifest["unsupported_dimensions"]:
+            raise PaperPlanError("outcome simulator unsupported dimensions mismatch")
+        if self.simulator_claim_ceiling != manifest["claim_ceiling"]:
+            raise PaperPlanError("outcome simulator claim ceiling mismatch")
+        if self.cost_ledger.get("schema") != "TradeCostLedger.v2":
+            raise PaperPlanError("outcome cost ledger is required")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -406,6 +451,12 @@ class PaperTradeOutcome:
             "state": state_value,
             "data_fingerprint": plan.data_fingerprint,
             "params_hash": plan.params_hash,
+            "simulator_manifest": dict(plan.simulator_manifest),
+            "unsupported_simulator_dimensions": list(plan.unsupported_simulator_dimensions),
+            "simulator_claim_ceiling": plan.simulator_claim_ceiling,
+            "cost_ledger": build_cost_ledger(
+                fees_bps=plan.fees_bps, slippage_bps=plan.slippage_bps,
+            ),
         }
         base.update(overrides)
         return cls(**base)
