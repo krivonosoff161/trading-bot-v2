@@ -25,7 +25,7 @@ from src.research_lab.honest_backtest_bridge import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _CANDIDATE_DICT = {
-    "contract_version": "1.1.0",
+    "contract_version": "1.2.0",
     "candidate_id": "c-repro",
     "source_run_id": "run-repro",
     "symbol": "BTC-USDT-SWAP",

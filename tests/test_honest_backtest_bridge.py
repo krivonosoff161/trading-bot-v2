@@ -28,6 +28,8 @@ from src.research_lab.honest_backtest_bridge import (
     _check_robustness,
     _check_significance,
     _check_splits,
+    _check_search_family_evidence,
+    _check_time_dependence_suitability,
     _extract_returns,
     _map_failed_to_status,
     bridge_available,
@@ -36,7 +38,7 @@ from src.research_lab.honest_backtest_bridge import (
 )
 
 CANDIDATE_DICT = {
-    "contract_version": "1.1.0",
+    "contract_version": "1.2.0",
     "candidate_id": "c-001",
     "source_run_id": "run-abc",
     "symbol": "BTC-USDT-SWAP",
@@ -276,25 +278,51 @@ class TestCheckOverfit:
         result = _check_overfit(_make_candidate(), [1.0, 2.0])
         assert result["passed"] is False
 
-    def test_malformed_available_dsr_evidence_fails_closed(self) -> None:
+    def test_malformed_legacy_dsr_evidence_does_not_change_authoritative_psr(self) -> None:
         metrics = {
             **CANDIDATE_DICT["metrics"],
             "trial_sharpes": [1.0, float("nan")],
         }
         returns = [0.5, 1.0, 0.8, 1.2, 0.9, 1.1] * 4
         result = _check_overfit(_make_candidate(metrics=metrics), returns)
-        assert result["passed"] is False
-        assert "dsr_error" in result["details"]
+        assert result["passed"] is True
+        assert result["details"]["shadow_metrics"]["dsr"]["status"] == "unavailable"
 
-    def test_malformed_available_pbo_evidence_fails_closed(self) -> None:
+    def test_legacy_trial_major_pbo_is_invalid_shadow_not_hard_failure(self) -> None:
         metrics = {
             **CANDIDATE_DICT["metrics"],
             "trial_returns": [[0.1, 0.2]],
         }
         returns = [0.5, 1.0, 0.8, 1.2, 0.9, 1.1] * 4
         result = _check_overfit(_make_candidate(metrics=metrics), returns)
+        assert result["passed"] is True
+        shadow = result["details"]["shadow_metrics"]
+        assert shadow["pbo"]["status"] == "invalid"
+        assert shadow["pbo"]["reason_codes"] == ["invalid_legacy_orientation"]
+
+
+class TestEvidenceChannelSeparation:
+    def test_missing_family_panel_is_a_separate_named_hard_check(self) -> None:
+        result = _check_search_family_evidence(_make_candidate())
+        assert result["check_name"] == "search_family_evidence"
         assert result["passed"] is False
-        assert "pbo_error" in result["details"]
+        assert result["details"]["status"] == "unavailable"
+
+    def test_missing_interval_and_dependence_method_is_separate(self) -> None:
+        result = _check_time_dependence_suitability(_make_candidate())
+        assert result["check_name"] == "time_dependence_suitability"
+        assert result["passed"] is False
+        assert "validation_observation_set_missing" in result["details"]["errors"]
+
+    def test_shadow_invalid_cannot_map_to_failed_overfit(self) -> None:
+        candidate = _make_candidate()
+        checks = [
+            {"check_name": "overfit_psr", "passed": True},
+            {"check_name": "search_family_evidence", "passed": False},
+        ]
+        verdict = _build_verdict(candidate, checks)
+        assert verdict.hard_status == "NEEDS_MORE_DATA"
+        assert "overfit_psr" not in verdict.failed_checks
 
 
 class TestReturnConcentration:
@@ -477,6 +505,18 @@ class TestRunValidation:
 
 
 class TestRunValidationBatch:
+    def test_v11_contract_is_not_silently_reinterpreted_as_time_aware(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            req_dir = Path(td) / "requests"
+            req_dir.mkdir()
+            data = _make_candidate().to_dict()
+            data["contract_version"] = "1.1.0"
+            (req_dir / "c-001.json").write_text(json.dumps(data))
+            result = run_validation_batch(req_dir, Path(td), dry_run=True)
+            assert result["validated"] == 0
+            assert result["errors"] == 1
+            assert "1.1.0" in result["results"][0]["error"]
+
     def test_missing_contract_version_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             req_dir = Path(td) / "requests"

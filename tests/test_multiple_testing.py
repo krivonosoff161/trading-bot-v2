@@ -13,7 +13,12 @@ import pytest
 
 from src.research_lab.experiment import ExperimentSpec, RunResult, _finalize_runtime_meta
 from src.research_lab.hard_validation_contract import CandidateForValidation
-from src.research_lab.honest_backtest_bridge import _check_overfit, _check_significance, _n_trials
+from src.research_lab.honest_backtest_bridge import (
+    _check_overfit,
+    _check_search_family_evidence,
+    _check_significance,
+    _n_trials,
+)
 from src.research_lab.search_trial_evidence import build_search_trial_evidence
 
 
@@ -187,33 +192,30 @@ class TestSignificanceAdjustment:
 class TestFamilyCoverageGate:
     RETURNS = [3.0, 2.0, 4.0, -1.0, 3.0, 2.0, 5.0, -2.0, 3.0, 2.0, 4.0, 1.0]
 
-    def test_v2_evidence_without_coverage_fails_closed(self) -> None:
-        result = _check_overfit(
-            _candidate({"search_trial_evidence": {"schema": "SearchTrialEvidence.v2"}}),
-            self.RETURNS,
+    def test_v2_evidence_without_panel_is_a_separate_gate(self) -> None:
+        candidate = _candidate(
+            {"search_trial_evidence": {"schema": "SearchTrialEvidence.v2"}}
         )
+        assert _check_overfit(candidate, self.RETURNS)["passed"] is True
+        result = _check_search_family_evidence(candidate)
         assert result["passed"] is False
-        assert result["details"]["family_coverage_error"] == (
-            "missing_or_incomplete_family_coverage"
-        )
+        assert "search_trial_panel_missing" in result["details"]["errors"]
 
-    def test_fewer_than_two_comparable_trials_fails_closed(self) -> None:
-        result = _check_overfit(
-            _candidate(
-                {
-                    "search_trial_evidence": {"schema": "SearchTrialEvidence.v2"},
-                    "pbo_dsr_family_coverage": {
-                        "complete": True,
-                        "included_count": 1,
-                    },
-                }
-            ),
-            self.RETURNS,
+    def test_legacy_survivor_coverage_cannot_enter_authoritative_overfit(self) -> None:
+        candidate = _candidate(
+            {
+                "search_trial_evidence": {"schema": "SearchTrialEvidence.v2"},
+                "pbo_dsr_family_coverage": {
+                    "complete": True,
+                    "included_count": 1,
+                },
+                "trial_returns": [[1.0, 2.0, 3.0]],
+            }
         )
+        assert _check_overfit(candidate, self.RETURNS)["passed"] is True
+        result = _check_search_family_evidence(candidate)
         assert result["passed"] is False
-        assert result["details"]["family_coverage_error"] == (
-            "fewer_than_two_comparable_family_trials"
-        )
+        assert result["details"]["errors"] == ["invalid_legacy_orientation"]
 
 
 class TestRuntimeRecordsVariants:

@@ -13,7 +13,6 @@ import datetime as dt
 import hashlib
 import json
 import sqlite3
-import statistics
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +35,11 @@ from src.research_lab.hard_validation_contract import (
 )
 from src.research_lab.honest_backtest_bridge import _artifact_stem
 from src.research_lab.search_trial_evidence import validate_search_trial_evidence
+from src.research_lab.time_aware_validation import (
+    PANEL_STATUS_SCHEMA,
+    build_dependence_evidence,
+    classify_legacy_search_bias_evidence,
+)
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
@@ -267,6 +271,36 @@ def _build_candidate(
     metrics["params_hash"] = str(
         metrics.get("params_hash") or entry.get("params_hash") or ""
     )
+    metrics["validation_evidence_profile"] = "time_aware_v2"
+    metrics.setdefault(
+        "validation_observation_status",
+        {
+            "schema": "ValidationObservationStatus.v2",
+            "status": "unavailable",
+            "reason_codes": [
+                "explicit_period_and_feature_horizon_evidence_not_exported"
+            ],
+        },
+    )
+    if trades:
+        metrics.setdefault(
+            "dependence_evidence",
+            build_dependence_evidence(
+                method="iid_bootstrap_kill_test",
+                seed=42,
+                block_length=None,
+                effective_n=len(trades),
+            ),
+        )
+    else:
+        metrics.setdefault(
+            "dependence_evidence_status",
+            {
+                "schema": "DependenceEvidenceStatus.v2",
+                "status": "unavailable",
+                "reason_codes": ["no_return_observations"],
+            },
+        )
     metrics.setdefault("validation_epoch", {
         "schema": "ValidationEpoch.v1",
         "evidence_stage": "selection_only",
@@ -415,10 +449,17 @@ def _load_experiment_metrics(
                     family=row_family,
                 )
                 out["pbo_dsr_family_coverage"] = trial_panel["coverage"]
-                out["trial_returns"] = trial_panel["trial_returns"]
-                out["trial_sharpes"] = [
-                    _simple_sharpe(values) for values in trial_panel["trial_returns"]
-                ]
+                legacy = classify_legacy_search_bias_evidence(
+                    trial_panel["trial_returns"]
+                )
+                out["search_trial_panel"] = {
+                    **legacy,
+                    "schema": PANEL_STATUS_SCHEMA,
+                    "search_family_id": str(
+                        trial_evidence.get("search_family_id") or ""
+                    ),
+                    "coverage": trial_panel["coverage"],
+                }
                 out["_params"] = _params_from_result(r)
                 trades = list(r.get("_trades") or r.get("trades") or [])
                 if not trades and int(out.get("n_trades") or 0) > 0:
@@ -535,13 +576,6 @@ def _comparable_trial_panel(
             "complete": selected > 0 and selected == expected_selected,
         },
     }
-
-
-def _simple_sharpe(returns: list[float]) -> float:
-    if len(returns) < 2:
-        return 0.0
-    deviation = statistics.stdev(returns)
-    return statistics.mean(returns) / deviation if deviation > 0 else 0.0
 
 
 def _params_from_result(row: dict[str, Any]) -> dict[str, Any]:

@@ -889,6 +889,12 @@ def test_hard_export_recomputes_evidence_and_rejects_tampering(tmp_path) -> None
         "fewer_than_3_trades",
         "fewer_than_3_trades",
     ]
+    assert candidate.metrics["search_trial_panel"]["status"] == "invalid"
+    assert candidate.metrics["search_trial_panel"]["reason_codes"] == [
+        "invalid_legacy_orientation"
+    ]
+    assert "trial_returns" not in candidate.metrics
+    assert "trial_sharpes" not in candidate.metrics
 
     registry = tmp_path / "candidate-registry" / "candidates.jsonl"
     registry.parent.mkdir(parents=True)

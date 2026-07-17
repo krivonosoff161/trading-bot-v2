@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 
 
 def trade_evidence_hash(trades: list[dict[str, Any]]) -> str:

@@ -1,11 +1,12 @@
 # Validation Bridge Contract
 
-Status: **REFERENCE CONTRACT**. Version: `1.1.0`.
+Status: **REFERENCE CONTRACT**. Version: `1.2.0`.
 
-Version `1.1.0` makes return basis, cost ownership, data fingerprint, and
-contract provenance explicit. Legacy `1.0.0` request files are not silently
-upgraded: they must be regenerated from their source candidate so the bridge
-cannot guess whether costs were already applied.
+Version `1.2.0` adds time-aware observation, complete-family panel, split, and
+dependence-evidence profiles. Legacy `1.0.0` and `1.1.0` request files are not
+silently upgraded: they must be regenerated from their source candidate. The
+bridge cannot guess cost ownership, PBO orientation, common timestamps,
+feature horizons, family exclusions, or a dependence model.
 
 `trading-bot-v2` produces bounded research candidates and consumes validation
 reports. [`honest-backtest`](https://github.com/krivonosoff161/honest-backtest)
@@ -26,6 +27,54 @@ The bridge invokes the vendored `backtest_sanity` statistical core and writes a
 `HardValidationReport` plus `HardValidationVerdict` under the private research
 root. Validation is fail-loud when the required statistical core is absent,
 unless an operator explicitly permits an inconclusive degraded mode.
+
+## Evidence Channels
+
+The outer request is `CandidateForValidation` version `1.2.0`. Its validation
+metrics may carry these content-bound nested objects:
+
+- `ValidationObservationSet.v2`: one explicitly timestamped per-period return
+  series with entry, exit, feature-information horizon, return basis, data
+  snapshot plus evidence hash, computed evaluation-window identity, trial,
+  symbol, timeframe, and family identity;
+- `SearchTrialPanel.v2`: an explicit time-major `(time, trials)` matrix whose
+  stable columns reconcile to the complete `SearchTrialEvidence.v2` ledger;
+- `IntervalSplitManifest.v2`: retained, purged, and embargoed observation IDs
+  derived from actual intervals and reproducible from the observation set;
+- `DependenceEvidence.v2`: method, seed, block policy, effective count, and an
+  explicit statement of whether the method is authoritative-suitable.
+
+Numeric shape or equal list length is not panel evidence. Trial-major
+per-trade ordinal vectors are `invalid_legacy_orientation`; they are never
+transposed, padded, zero-filled, inner-joined, or backfilled from current data.
+Duplicate or undeclared gaps fail the fixed time grid.
+Feature information must be available no later than the observation entry;
+post-entry labels cannot be disguised as decision-time features. A split with
+no retained train or no retained test observations is invalid.
+
+The panel count must equal both its columns and the immutable effective family
+count. Cumulative parent multiplicity or a cross-symbol family therefore makes
+a current-only panel unavailable unless all required parent/scope observation
+series are independently bound; survivor/current columns are never presented
+as the complete PBO/DSR family.
+
+The verdict keeps four separate channels:
+
+1. authoritative PSR/MinTRL and existing deterministic checks;
+2. shadow PBO/DSR (`valid`, `invalid`, `unavailable`, or justified
+   `not_applicable`);
+3. complete-search-family evidence;
+4. time/dependence suitability.
+
+A malformed or missing shadow metric cannot change the authoritative
+`overfit_psr` result. Missing family or time/dependence evidence instead fails
+its own named hard check and prevents `PAPER_FORWARD_READY`. PBO/DSR remain
+shadow-only; promotion requires a separate approved policy and migration.
+
+The current IID bootstrap/sign-flip path is a cheap non-authoritative kill
+test for dependent or overlapping trades. An accepted interval/block-aware
+generic method must be implemented upstream in `honest-backtest`, then
+deliberately re-vendored. This repository does not patch the vendored method.
 
 ## Authority Boundary
 
@@ -49,3 +98,10 @@ are in the sibling [Validation Bridge Contract](https://github.com/krivonosoff16
 Paper lifecycle and outcome-learning artifacts preserve lineage in the private
 research root. They are evidence for future bounded research, not public
 performance claims and not an execution interface.
+
+## Migration And Rollback
+
+Regeneration from immutable source evidence is the only v1.2 migration. No
+private validation history is rewritten and no legacy PBO value is inferred.
+Rollback may disable v1.2 consumption while retaining its evidence; it must not
+restore a legacy trial-major PBO artifact as accepted evidence.
