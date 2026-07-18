@@ -27,3 +27,33 @@ Use local storage for raw artifacts:
 Research that should become durable can be summarized in `docs/` or moved to the
 private `trading-bot-research` repository after sanitization. The raw data stays
 outside this repository.
+
+## Destructive maintenance boundary
+
+Automatic scanner and farm maintenance is report-only. The legacy storage-policy
+helpers do not unlink cache files, prune event specs, truncate logs, or delete farm task
+history even when an outer research command is in apply mode. Research `apply` is not
+storage-destruction authority.
+
+The public v2 quarantine proof is intentionally narrower:
+
+- activation is supported only for a fresh dedicated child of the OS temporary
+  directory using the fixed `synthetic_temporary_storage.v2` policy;
+- production, repository, current private-root, and caller-defined activation are
+  unsupported;
+- a reserved `.storage-v2` manifest, marker, operation journal, lock, staging, and
+  quarantine tree are never cache candidates;
+- quarantine preserves exact bytes and relative paths on the same volume and supports
+  content-bound restore; it never deletes evidence or overwrites an occupied path;
+- moving bytes to same-volume quarantine reduces only a logical active-cache count.
+  It reports `physical_bytes_reclaimed=0` and does not free disk space.
+
+Event-spec reachability can be reported from synthetic copies of the farm-task and
+strategy-lab databases, but cannot authorize a move: legacy producers and readers do not
+share a reference epoch. Existing logs are `legacy_uncoordinated_storage`; safe append
+segments and rotation require a separately frozen Package 08B and a later explicit
+runtime rollout.
+
+No public command activates quarantine for current private data. A future rollout needs
+an exact path inventory, backup, quiescence/writer adoption, dry reachability/parity
+report, abort metrics, rollback, and a new owner decision.

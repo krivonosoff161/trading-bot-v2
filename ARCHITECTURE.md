@@ -137,3 +137,10 @@ small deterministic fixtures. Local/private storage holds data, logs,
 credentials, model conversations, candidate rankings, journals, and raw
 research output. The binding repository policy is
 [docs/storage_boundaries.md](docs/storage_boundaries.md).
+
+Automatic scanner/farm storage maintenance is report-only: outer research `apply` does
+not authorize cache unlink, log truncation, event-spec pruning, or farm-history deletion.
+The v2 quarantine API is an off-by-default synthetic OS-temp proof with a fixed root
+capability and durable restore evidence; it is not activated for private storage and
+does not reclaim physical bytes. Legacy append logs remain uncoordinated until a
+separately specified segmented-writer package and explicit rollout.

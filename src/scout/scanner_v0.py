@@ -1533,7 +1533,7 @@ async def run(limit: int, dry: bool, use_buffer: bool = False) -> None:
         try:
             from src.research_lab import storage_policy as SPOL
             SPOL.maintain([J.JOURNAL, J.INGEST, J.DROPS, J.BUDGET, J.EVENT_AUDIT, J.ROUTING_AUDIT],
-                          apply=True)
+                          apply=False)
         except Exception as exc:
             print(f"  storage-maintain: {exc}")
     print(f"\n=== готово: {made} карточек · seen={len(seen)}"

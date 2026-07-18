@@ -1193,33 +1193,21 @@ class FarmTasksDB:
 
     def prune_terminal_tasks(self, *, keep: int = 5000, apply: bool = False) -> int:
         """Bound history: keep the newest ``keep`` terminal tasks, drop older. Returns removed."""
+        if apply:
+            raise ValueError("terminal task pruning is report-only")
         total = int(self._conn.execute(
             f"SELECT COUNT(*) FROM tasks WHERE state IN {TERMINAL_STATES}").fetchone()[0])
         excess = max(0, total - int(keep))
         if not excess:
             return 0
-        if not apply:
-            return excess
-        self._conn.execute(
-            f"""DELETE FROM tasks WHERE task_id IN (
-                  SELECT task_id FROM tasks WHERE state IN {TERMINAL_STATES}
-                  ORDER BY updated_at ASC, task_id ASC LIMIT ?)""",
-            (excess,))
-        self._conn.execute("DELETE FROM intake_events WHERE consumed=1")
-        self._conn.commit()
         return excess
 
     def prune_unique_candidates(self, *, keep: int = 5000, apply: bool = False) -> int:
         """Bound the unique-candidate history (re-arm adds a row per new fingerprint)."""
+        if apply:
+            raise ValueError("unique candidate pruning is report-only")
         total = int(self._conn.execute("SELECT COUNT(*) FROM unique_candidates").fetchone()[0])
         excess = max(0, total - int(keep))
-        if not excess or not apply:
-            return excess
-        self._conn.execute(
-            """DELETE FROM unique_candidates WHERE uc_key IN (
-                 SELECT uc_key FROM unique_candidates ORDER BY updated_at ASC LIMIT ?)""",
-            (excess,))
-        self._conn.commit()
         return excess
 
     def unique_candidates_for_gate(self) -> list[dict[str, Any]]:

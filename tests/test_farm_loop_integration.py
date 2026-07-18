@@ -171,7 +171,7 @@ def test_validation_dry_run_is_noop(tmp_path):
     tasks.close()
 
 
-def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
+def test_storage_reports_event_specs_and_terminal_tasks_without_deleting(tmp_path):
     from src.research_lab.storage_policy import bound_farm_artifacts, prune_event_specs
     spec_dir = tmp_path / "plans" / "event_specs"
     spec_dir.mkdir(parents=True)
@@ -181,7 +181,8 @@ def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
     assert dry["present"] == 10 and dry["removed"] == 6
     assert len(list(spec_dir.glob("*.json"))) == 10  # dry-run removed nothing
     applied = prune_event_specs(tmp_path, keep=4, apply=True)
-    assert applied["removed"] == 6 and len(list(spec_dir.glob("*.json"))) == 4
+    assert applied["removed"] == 6 and len(list(spec_dir.glob("*.json"))) == 10
+    assert applied["reason"] == "event_spec_apply_unsupported"
     # terminal-task retention
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
     for i in range(6):
@@ -190,8 +191,9 @@ def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
     tasks.close()
     res = bound_farm_artifacts(tmp_path, keep_specs=4, keep_terminal=3, apply=True)
     assert res["terminal_tasks_pruned"] == 3
+    assert res["applied"] is False
     tasks2 = FarmTasksDB(tasks_db_path(tmp_path))
-    assert len(tasks2.tasks_in_state("completed")) == 3
+    assert len(tasks2.tasks_in_state("completed")) == 6
     tasks2.close()
 
 

@@ -105,7 +105,8 @@ rejected with explicit reason codes.
 
 ## Logs
 
-Structured logs live under `<private_root>/logs/farm/` and are rotated:
+Structured legacy logs live under `<private_root>/logs/farm/`. Automatic maintenance
+reports their size but does not rotate or truncate them:
 
 - `cycle_log.jsonl` - one row per cycle.
 - `task_transitions.jsonl` - one row per state change.
@@ -113,6 +114,9 @@ Structured logs live under `<private_root>/logs/farm/` and are rotated:
 
 Operators should use `status` and `farm_status_report`; raw logs are audit material, not
 the normal dashboard.
+
+Safe coordinated segmentation is not implemented yet. Do not infer rotation authority
+from a normal farm `apply` cycle; it deliberately keeps storage maintenance report-only.
 
 ## Commands
 

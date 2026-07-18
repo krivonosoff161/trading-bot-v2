@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Tests for the hot/cold storage policy (LRU hot-cache budget + log rotation)."""
-import gzip
 import os
 import sys
 import time
@@ -38,14 +37,15 @@ def test_lru_budget_dry_run_lists_without_deleting(tmp_path):
     assert (root / "old.json").exists()           # but not actually removed in dry-run
 
 
-def test_lru_budget_apply_evicts_oldest_first(tmp_path):
+def test_lru_budget_apply_request_remains_report_only(tmp_path):
     root = tmp_path / "hot"
     _write(root / "old.json", 2 * 1024 * 1024, mtime=time.time() - 1000)
     _write(root / "new.json", 2 * 1024 * 1024, mtime=time.time())
     res = SP.enforce_lru_budget(root, max_mb=3, apply=True)
-    assert res["applied"] is True
-    assert not (root / "old.json").exists()       # oldest evicted
-    assert (root / "new.json").exists()           # newest kept
+    assert res["applied"] is False
+    assert res["reason"] == "report_only_protected_root"
+    assert (root / "old.json").exists()
+    assert (root / "new.json").exists()
     assert res["after_mb"] <= 3
 
 
@@ -63,15 +63,17 @@ def test_rotate_under_cap_is_noop(tmp_path):
     assert res["rotated"] is False
 
 
-def test_rotate_large_log_archives_and_resets(tmp_path):
+def test_rotate_large_log_is_report_only(tmp_path):
     log = tmp_path / "scanner.log"
     _write(log, 3 * 1024 * 1024)
     arch = tmp_path / "arch"
     res = SP.rotate_if_large(log, max_mb=1, archive_root=arch, apply=True)
-    assert res["rotated"] is True
-    assert log.stat().st_size == 0                 # live log reset
-    gz = list(arch.glob("scanner.log.*.gz"))
-    assert gz and gzip.open(gz[0], "rb").read()    # archived content present
+    assert res["rotated"] is False
+    assert res["would_rotate"] is True
+    assert log.stat().st_size == 3 * 1024 * 1024
+    assert not arch.exists()
+    assert res["applied"] is False
+    assert res["reason"] == "legacy_rotation_report_only"
 
 
 def test_rotate_absent_log(tmp_path):
@@ -79,7 +81,7 @@ def test_rotate_absent_log(tmp_path):
     assert res["rotated"] is False
 
 
-def test_maintain_rotates_logs_and_bounds_hot_cache(monkeypatch, tmp_path):
+def test_maintain_reports_logs_and_hot_cache_without_mutation(monkeypatch, tmp_path):
     monkeypatch.setenv("STRATEGY_LAB_HOT_ROOT", str(tmp_path / "hot"))
     monkeypatch.setenv("STRATEGY_LAB_HOT_CACHE_MAX_MB", "3")
     monkeypatch.setenv("SCANNER_LOG_ROTATE_MB", "1")
@@ -89,11 +91,32 @@ def test_maintain_rotates_logs_and_bounds_hot_cache(monkeypatch, tmp_path):
     _write(tmp_path / "hot" / "old.json", 2 * 1024 * 1024, mtime=time.time() - 1000)
     _write(tmp_path / "hot" / "new.json", 2 * 1024 * 1024, mtime=time.time())
 
-    report = SP.maintain([big_log], apply=True)
-    assert report["rotated"][0]["rotated"] is True
-    assert big_log.stat().st_size == 0                  # log rotated/reset
-    assert report["hot_cache"]["applied"] is True
-    assert not (tmp_path / "hot" / "old.json").exists()  # LRU evicted oldest
+    report = SP.maintain(
+        [big_log],
+        hot_cache_root=tmp_path / "hot",
+        hot_cache_budget_mb=3,
+        apply=True,
+    )
+    assert report["rotated"][0]["rotated"] is False
+    assert report["rotated"][0]["would_rotate"] is True
+    assert big_log.stat().st_size == 2 * 1024 * 1024
+    assert report["hot_cache"]["applied"] is False
+    assert (tmp_path / "hot" / "old.json").exists()
+    assert report["reason"] == "legacy_maintenance_report_only"
+
+
+def test_maintain_does_not_inventory_ambient_hot_root(monkeypatch, tmp_path):
+    ambient = tmp_path / "ambient"
+    _write(ambient / "evidence.json", 1024)
+    monkeypatch.setenv("STRATEGY_LAB_HOT_ROOT", str(ambient))
+
+    report = SP.maintain([], apply=True)
+
+    assert report["hot_cache"] == {
+        "status": "not_inventoried",
+        "applied": False,
+        "reason": "explicit_root_required",
+    }
 
 
 def test_maintain_never_raises_on_bad_path(tmp_path, monkeypatch):

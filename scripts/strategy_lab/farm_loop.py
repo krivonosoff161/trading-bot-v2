@@ -284,8 +284,8 @@ def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
     try:
         from src.research_lab.farm_journal import farm_log_paths
         from src.research_lab.storage_policy import bound_farm_artifacts, maintain
-        maintain(farm_log_paths(private_root), apply=True)  # rotate the farm logs too
-        bound_farm_artifacts(private_root, apply=True)
+        maintain(farm_log_paths(private_root), apply=False)
+        bound_farm_artifacts(private_root, apply=False)
     except Exception as exc:  # noqa: BLE001 - storage hygiene must never break the loop
         print(f"  storage: skipped ({type(exc).__name__})")
 

@@ -10,14 +10,14 @@ This machine has a small SSD (``C:``) and a larger HDD (``E:``). The rule is NOT
       -> ``STRATEGY_LAB_HOT_ROOT``, bounded by ``STRATEGY_LAB_HOT_CACHE_MAX_MB`` (LRU);
     * logs rotate/compress to ``SCANNER_LOG_ARCHIVE_ROOT`` past ``SCANNER_LOG_ROTATE_MB``.
 
-This module is config + small, safe, idempotent hooks (LRU budget + log rotate),
-dry-run by default. It does NOT migrate data and never touches order/.env paths.
+Legacy maintenance is report-only.  Destructive v1 eviction, truncating rotation,
+and count-only spec pruning are deliberately disabled; reversible v2 operations use
+an explicitly activated temporary-root capability instead.
 """
 from __future__ import annotations
 
-import gzip
 import os
-import shutil
+import sqlite3
 import time
 from pathlib import Path
 
@@ -80,7 +80,7 @@ def dir_size_mb(root: Path) -> float:
 
 def enforce_lru_budget(root: Path | None = None, max_mb: float | None = None,
                        *, apply: bool = False) -> dict:
-    """Evict oldest (LRU by mtime) hot-cache files until under budget. Dry-run by default."""
+    """Report oldest hot-cache candidates; legacy apply has no mutation authority."""
     root = root or hot_root()
     max_mb = hot_cache_max_mb() if max_mb is None else max_mb
     files = sorted(_files(root), key=lambda p: p.stat().st_mtime)  # oldest first
@@ -91,36 +91,59 @@ def enforce_lru_budget(root: Path | None = None, max_mb: float | None = None,
         if total <= budget:
             break
         size = path.stat().st_size
-        if apply:
-            try:
-                path.unlink()
-            except OSError:
-                continue
-        removed.append(path.name)
+        removed.append(path.relative_to(root).as_posix())
         total -= size
-    return {"root": str(root), "max_mb": max_mb, "removed": removed,
-            "after_mb": round(total / _MB, 3), "applied": apply}
+    return {
+        "root": str(root),
+        "max_mb": max_mb,
+        "removed": removed,
+        "after_mb": round(total / _MB, 3),
+        "applied": False,
+        "apply_requested": bool(apply),
+        "reason": "report_only_protected_root" if apply else "report_only",
+    }
 
 
 def rotate_if_large(path: Path, *, max_mb: float | None = None, archive_root: Path | None = None,
                     apply: bool = False) -> dict:
-    """Gzip-archive a log past the size cap and reset it. Dry-run by default."""
+    """Report oversized legacy logs; copy/truncate rotation is unsupported."""
     max_mb = log_rotate_mb() if max_mb is None else max_mb
     archive_root = archive_root or log_archive_root()
     if not path.exists():
-        return {"path": str(path), "rotated": False, "reason": "absent"}
+        return {
+            "path": str(path),
+            "rotated": False,
+            "would_rotate": False,
+            "applied": False,
+            "apply_requested": bool(apply),
+            "reason": "absent",
+            "storage_class": "legacy_uncoordinated_storage",
+        }
     size_mb = path.stat().st_size / _MB
     if size_mb < max_mb:
-        return {"path": str(path), "rotated": False, "reason": "under_cap", "size_mb": round(size_mb, 3)}
+        return {
+            "path": str(path),
+            "rotated": False,
+            "would_rotate": False,
+            "applied": False,
+            "apply_requested": bool(apply),
+            "reason": "under_cap",
+            "storage_class": "legacy_uncoordinated_storage",
+            "size_mb": round(size_mb, 3),
+        }
     stamp = int(time.time())
     dest = archive_root / f"{path.name}.{stamp}.gz"
-    if apply:
-        archive_root.mkdir(parents=True, exist_ok=True)
-        with path.open("rb") as src, gzip.open(dest, "wb") as out:
-            shutil.copyfileobj(src, out)
-        path.write_text("", encoding="utf-8")  # reset, keep the live path
-    return {"path": str(path), "rotated": True, "archive": str(dest),
-            "size_mb": round(size_mb, 3), "applied": apply}
+    return {
+        "path": str(path),
+        "rotated": False,
+        "would_rotate": True,
+        "archive": str(dest),
+        "size_mb": round(size_mb, 3),
+        "applied": False,
+        "apply_requested": bool(apply),
+        "reason": "legacy_rotation_report_only",
+        "storage_class": "legacy_uncoordinated_storage",
+    }
 
 
 def prune_event_specs(private_root: Path, *, keep: int = 500, apply: bool = False) -> dict:
@@ -131,56 +154,113 @@ def prune_event_specs(private_root: Path, *, keep: int = 500, apply: bool = Fals
     """
     spec_dir = Path(private_root) / "plans" / "event_specs"
     if not spec_dir.exists():
-        return {"present": 0, "removed": 0, "applied": apply}
+        return {
+            "present": 0,
+            "removed": 0,
+            "candidates": [],
+            "applied": False,
+            "apply_requested": bool(apply),
+            "reason": "event_spec_apply_unsupported" if apply else "report_only",
+        }
     files = sorted(spec_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     stale = files[keep:]
-    removed = 0
-    for path in stale:
-        if apply:
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                continue
-        else:
-            removed += 1
-    return {"present": len(files), "removed": removed, "applied": apply}
+    return {
+        "present": len(files),
+        "removed": len(stale),
+        "candidates": [path.relative_to(spec_dir).as_posix() for path in stale],
+        "applied": False,
+        "apply_requested": bool(apply),
+        "reason": "event_spec_apply_unsupported" if apply else "report_only",
+    }
 
 
 def bound_farm_artifacts(private_root: Path, *, keep_specs: int = 500,
                          keep_terminal: int = 5000, apply: bool = False) -> dict:
-    """Bound the continuous-farm growth surfaces: event specs + terminal task history."""
-    specs = prune_event_specs(private_root, keep=keep_specs, apply=apply)
+    """Read-only growth report for event specs and terminal task history."""
+    specs = prune_event_specs(private_root, keep=keep_specs, apply=False)
     tasks_pruned = 0
     try:
-        from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+        from src.research_lab.farm_tasks_db import tasks_db_path
         db_path = tasks_db_path(private_root)
         if db_path.exists():
-            db = FarmTasksDB(db_path)
-            tasks_pruned = db.prune_terminal_tasks(keep=keep_terminal, apply=apply)
-            uc_pruned = db.prune_unique_candidates(keep=keep_terminal, apply=apply)
-            db.close()
-            return {"event_specs": specs, "terminal_tasks_pruned": tasks_pruned,
-                    "unique_candidates_pruned": uc_pruned}
+            conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+            try:
+                terminal_total = int(conn.execute(
+                    "SELECT COUNT(*) FROM tasks "
+                    "WHERE state IN ('completed','skipped','failed')"
+                ).fetchone()[0])
+                unique_total = int(
+                    conn.execute("SELECT COUNT(*) FROM unique_candidates").fetchone()[0]
+                )
+            finally:
+                conn.close()
+            tasks_pruned = max(0, terminal_total - int(keep_terminal))
+            uc_pruned = max(0, unique_total - int(keep_terminal))
+            return {
+                "event_specs": specs,
+                "terminal_tasks_pruned": tasks_pruned,
+                "unique_candidates_pruned": uc_pruned,
+                "applied": False,
+                "apply_requested": bool(apply),
+                "reason": "database_prune_report_only",
+            }
     except Exception as exc:  # noqa: BLE001 - hygiene must never break a cycle
-        return {"event_specs": specs, "terminal_tasks_pruned": 0, "error": type(exc).__name__}
-    return {"event_specs": specs, "terminal_tasks_pruned": tasks_pruned, "unique_candidates_pruned": 0}
+        return {
+            "event_specs": specs,
+            "terminal_tasks_pruned": 0,
+            "unique_candidates_pruned": 0,
+            "applied": False,
+            "apply_requested": bool(apply),
+            "reason": "database_report_incomplete",
+            "error": type(exc).__name__,
+        }
+    return {
+        "event_specs": specs,
+        "terminal_tasks_pruned": tasks_pruned,
+        "unique_candidates_pruned": 0,
+        "applied": False,
+        "apply_requested": bool(apply),
+        "reason": "database_prune_report_only",
+    }
 
 
-def maintain(log_paths: list[Path] | None = None, *, apply: bool = True) -> dict:
+def maintain(
+    log_paths: list[Path] | None = None,
+    *,
+    hot_cache_root: Path | None = None,
+    hot_cache_budget_mb: float | None = None,
+    apply: bool = False,
+) -> dict:
     """One maintenance pass: rotate oversized append-only logs + LRU-bound the hot cache.
 
-    Safe to call at the tail of every scan pass — each hook is a no-op until a cap is
-    exceeded. Never raises into the caller (storage hygiene must not break a scan).
+    Safe to call at the tail of every scan pass: it never grants mutation authority.
+    Errors are reduced to report fields so storage reporting cannot break a scan.
     """
     rotated: list[dict] = []
     for path in log_paths or []:
         try:
-            rotated.append(rotate_if_large(Path(path), apply=apply))
+            rotated.append(rotate_if_large(Path(path), apply=False))
         except OSError as exc:
             rotated.append({"path": str(path), "rotated": False, "reason": f"error:{type(exc).__name__}"})
-    try:
-        hot = enforce_lru_budget(apply=apply)
-    except OSError as exc:
-        hot = {"error": type(exc).__name__}
-    return {"rotated": rotated, "hot_cache": hot}
+    if hot_cache_root is None:
+        hot = {
+            "status": "not_inventoried",
+            "applied": False,
+            "reason": "explicit_root_required",
+        }
+    else:
+        try:
+            hot = enforce_lru_budget(
+                root=Path(hot_cache_root),
+                max_mb=hot_cache_budget_mb,
+                apply=False,
+            )
+        except OSError as exc:
+            hot = {"error": type(exc).__name__, "applied": False}
+    return {
+        "rotated": rotated,
+        "hot_cache": hot,
+        "applied": False,
+        "apply_requested": bool(apply),
+        "reason": "legacy_maintenance_report_only",
+    }
