@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,27 +22,34 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
-from src.research_lab.state_db import connect, default_db_path, init_db  # noqa: E402
+from src.research_lab.state_db import (  # noqa: E402
+    connect,
+    default_db_path,
+    init_db,
+    reap_stale_jobs as reap_expired_claims,
+)
 from src.research_lab.stop_intent import read_stop_intent  # noqa: E402
 
 STALE_THRESHOLD_MINUTES = 30
 
 
 def find_stale_jobs(db_path: Path, threshold_minutes: int = STALE_THRESHOLD_MINUTES) -> list[dict]:
-    """Find jobs in 'running' status older than threshold."""
+    """Find running jobs whose fenced lease has expired (age is display-only)."""
     if not db_path.exists():
         return []
     conn = connect(db_path)
     try:
         init_db(conn)
         rows = conn.execute(
-            "SELECT job_id, spec_path, created_at, started_at FROM queue WHERE status = 'running'"
+            """SELECT job_id, spec_path, created_at, started_at, claim_expires_at
+               FROM queue WHERE status = 'running'"""
         ).fetchall()
         now = dt.datetime.now(dt.timezone.utc)
+        now_epoch = time.time()
         stale = []
         for row in rows:
             started = row["started_at"]
-            if started:
+            if float(row["claim_expires_at"] or 0) <= now_epoch:
                 try:
                     started_dt = dt.datetime.fromisoformat(started)
                     if started_dt.tzinfo is None:
@@ -63,36 +71,17 @@ def find_stale_jobs(db_path: Path, threshold_minutes: int = STALE_THRESHOLD_MINU
 
 
 def requeue_stale_jobs(db_path: Path, threshold_minutes: int = STALE_THRESHOLD_MINUTES) -> int:
-    """Requeue stale running jobs. Returns count of requeued jobs."""
+    """Requeue expired fenced claims; started_at age never grants authority."""
     if not db_path.exists():
         return 0
     conn = connect(db_path)
     try:
         init_db(conn)
-        rows = conn.execute(
-            "SELECT job_id, started_at FROM queue WHERE status = 'running'"
-        ).fetchall()
-        now = dt.datetime.now(dt.timezone.utc)
-        requeued = 0
-        for row in rows:
-            started = row["started_at"]
-            if not started:
-                continue
-            try:
-                started_dt = dt.datetime.fromisoformat(started)
-                if started_dt.tzinfo is None:
-                    started_dt = started_dt.replace(tzinfo=dt.timezone.utc)
-                age_minutes = (now - started_dt).total_seconds() / 60
-                if age_minutes >= threshold_minutes:
-                    conn.execute(
-                        "UPDATE queue SET status = 'queued', started_at = NULL WHERE job_id = ?",
-                        (row["job_id"],),
-                    )
-                    requeued += 1
-            except (ValueError, TypeError):
-                continue
-        conn.commit()
-        return requeued
+        return reap_expired_claims(
+            conn,
+            max_age_seconds=max(1, int(threshold_minutes)) * 60,
+            now=time.time(),
+        )
     finally:
         conn.close()
 

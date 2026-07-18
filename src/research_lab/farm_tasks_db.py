@@ -24,12 +24,30 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from src.research_lab.farm_priority import priority_value
 
-SCHEMA = "farm_tasks.v1"
+SCHEMA = "farm_tasks.v2"
+
+
+class StaleTaskClaimError(RuntimeError):
+    """The caller's task fence is absent, replaced, or expired."""
+
+
+class FarmFencingMigrationRequired(RuntimeError):
+    """An existing brain DB needs an explicitly authorized v2 activation."""
+
+
+_TASK_FENCING_COLUMNS = {
+    "claim_owner",
+    "claim_expires_at",
+    "fencing_token",
+    "mutation_protocol",
+    "mutation_seq",
+}
 
 # Task types in the research lifecycle (full graph; the coordinator creates the
 # ones it needs each cycle). intake_event/resolve_instrument are reserved for
@@ -50,22 +68,232 @@ def tasks_db_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "farm_tasks.sqlite"
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _farm_fencing_marker(conn: sqlite3.Connection) -> str | None:
+    if not _table_exists(conn, "farm_meta"):
+        return None
+    row = conn.execute(
+        "SELECT value FROM farm_meta WHERE key='fencing_protocol'"
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _require_farm_fencing(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "tasks"):
+        return
+    missing = _TASK_FENCING_COLUMNS - _column_names(conn, "tasks")
+    triggers = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+    }
+    required_triggers = {"tasks_fenced_v2_insert_guard", "tasks_fenced_v2_guard"}
+    missing_triggers = required_triggers - triggers
+    if missing or missing_triggers or _farm_fencing_marker(conn) != "v2":
+        if missing:
+            detail = ",".join(sorted(missing))
+        elif missing_triggers:
+            detail = "triggers:" + ",".join(sorted(missing_triggers))
+        else:
+            detail = "capability_marker"
+        raise FarmFencingMigrationRequired(
+            "brain DB requires explicit fencing v2 activation: " + detail
+        )
+
+
+def _install_farm_fencing_triggers(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS tasks_fenced_v2_insert_guard
+           BEFORE INSERT ON tasks
+           WHEN NEW.mutation_protocol != 'fenced.v2'
+           BEGIN
+               SELECT RAISE(ABORT, 'fenced v2 writer required');
+           END"""
+    )
+    conn.execute(
+        """CREATE TRIGGER IF NOT EXISTS tasks_fenced_v2_guard
+           BEFORE UPDATE ON tasks
+           WHEN (
+               NEW.state IS NOT OLD.state OR
+               NEW.attempts IS NOT OLD.attempts OR
+               NEW.claim_owner IS NOT OLD.claim_owner OR
+               NEW.claim_expires_at IS NOT OLD.claim_expires_at OR
+               NEW.fencing_token IS NOT OLD.fencing_token OR
+               NEW.materialized_queue_job_id IS NOT OLD.materialized_queue_job_id OR
+               NEW.last_result_ref IS NOT OLD.last_result_ref OR
+               NEW.run_dir_label IS NOT OLD.run_dir_label
+           ) AND (
+               NEW.mutation_protocol != 'fenced.v2' OR
+               NEW.mutation_seq != OLD.mutation_seq + 1
+           )
+           BEGIN
+               SELECT RAISE(ABORT, 'fenced v2 writer required');
+           END"""
+    )
+
+
+def activate_farm_fencing_v2(
+    path: Path | str, *, clock: Any = time.time
+) -> None:
+    """Explicitly activate brain fencing after an authorized quiesce.
+
+    Runtime constructors and status readers deliberately never call this.
+    """
+    db_path = str(path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("BEGIN IMMEDIATE")
+        if not _table_exists(conn, "tasks"):
+            raise FarmFencingMigrationRequired("brain DB has no legacy tasks to activate")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS farm_meta (
+                   key TEXT PRIMARY KEY,
+                   value TEXT NOT NULL
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS task_transitions (
+                   transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   task_id INTEGER NOT NULL,
+                   from_state TEXT NOT NULL,
+                   to_state TEXT NOT NULL,
+                   reason TEXT NOT NULL DEFAULT '',
+                   owner_id TEXT NOT NULL DEFAULT '',
+                   fencing_token INTEGER NOT NULL DEFAULT 0,
+                   mutation_seq INTEGER NOT NULL,
+                   transitioned_at REAL NOT NULL
+               )"""
+        )
+        existing = _column_names(conn, "tasks")
+        additions = {
+            "claim_owner": "TEXT",
+            "claim_expires_at": "REAL",
+            "fencing_token": "INTEGER NOT NULL DEFAULT 0",
+            "mutation_protocol": "TEXT NOT NULL DEFAULT 'legacy.v1'",
+            "mutation_seq": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in additions.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+        now = float(clock())
+        rows = conn.execute(
+            """SELECT task_id, mutation_seq, fencing_token FROM tasks
+               WHERE state='running' AND claim_owner IS NULL
+                 AND mutation_protocol='legacy.v1'"""
+        ).fetchall()
+        for row in rows:
+            seq = int(row["mutation_seq"] or 0) + 1
+            cur = conn.execute(
+                """UPDATE tasks SET state='blocked',
+                       machine_reason='legacy_running_unfenced',
+                       mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE task_id=? AND state='running' AND claim_owner IS NULL
+                     AND mutation_protocol='legacy.v1' AND mutation_seq=?""",
+                (seq, int(row["task_id"]), int(row["mutation_seq"] or 0)),
+            )
+            if cur.rowcount != 1:
+                raise FarmFencingMigrationRequired(
+                    "brain DB changed during explicit fencing activation"
+                )
+            conn.execute(
+                """INSERT INTO task_transitions(
+                       task_id, from_state, to_state, reason, owner_id,
+                       fencing_token, mutation_seq, transitioned_at)
+                   VALUES(?, 'running', 'blocked', 'legacy_running_unfenced',
+                          'migration', ?, ?, ?)""",
+                (int(row["task_id"]), int(row["fencing_token"] or 0), seq, now),
+            )
+        conn.execute(
+            """UPDATE tasks SET mutation_protocol='fenced.v2',
+                      mutation_seq=mutation_seq+1
+               WHERE mutation_protocol='legacy.v1'"""
+        )
+        conn.execute("DROP TRIGGER IF EXISTS tasks_fenced_v2_guard")
+        conn.execute("DROP TRIGGER IF EXISTS tasks_fenced_v2_insert_guard")
+        _install_farm_fencing_triggers(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO farm_meta(key, value) VALUES('fencing_protocol', 'v2')"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 class FarmTasksDB:
     """SQLite-backed typed-task lifecycle + intake events + unique candidates."""
 
-    def __init__(self, path: Path | str = ":memory:") -> None:
+    def __init__(
+        self,
+        path: Path | str = ":memory:",
+        *,
+        owner_id: str | None = None,
+        lease_seconds: float = 300.0,
+        clock: Any = time.time,
+        read_only: bool = False,
+    ) -> None:
         self.path = str(path)
-        if self.path != ":memory:":
+        self.owner_id = owner_id or f"farm-{uuid.uuid4().hex}"
+        self.lease_seconds = float(lease_seconds)
+        self._clock = clock
+        self._authority_time_floor = float(clock())
+        self.read_only = bool(read_only)
+        self._claims: dict[int, int] = {}
+        if self.lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        if self.read_only and self.path == ":memory:":
+            raise ValueError("read-only FarmTasksDB requires a filesystem path")
+        if self.path != ":memory:" and not self.read_only and Path(self.path).exists():
+            uri = Path(self.path).resolve().as_posix()
+            preflight = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+            preflight.row_factory = sqlite3.Row
+            try:
+                _require_farm_fencing(preflight)
+            finally:
+                preflight.close()
+        if self.path != ":memory:" and not self.read_only:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        if self.read_only:
+            uri = Path(self.path).resolve().as_posix()
+            self._conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        else:
+            self._conn = sqlite3.connect(self.path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA busy_timeout = 30000")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        if not self.read_only:
+            self._conn.execute("PRAGMA journal_mode = WAL")
         # Optional audit hook: set to a callable(record: dict) to log every state change.
         self.on_transition = None
-        self._init_db()
+        if not self.read_only:
+            self._init_db()
+
+    @property
+    def raw_connection(self) -> sqlite3.Connection:
+        return self._conn
+
+    def _effective_now(self, supplied: float | None) -> float:
+        """Never let a cached cycle timestamp roll lease authority backward."""
+        observed = float(self._clock())
+        candidate = observed if supplied is None else float(supplied)
+        self._authority_time_floor = max(
+            self._authority_time_floor, observed, candidate
+        )
+        return self._authority_time_floor
 
     def _init_db(self) -> None:
+        _require_farm_fencing(self._conn)
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -86,7 +314,12 @@ class FarmTasksDB:
                 run_dir_label TEXT,
                 payload_json TEXT NOT NULL DEFAULT '{}',
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                claim_owner TEXT,
+                claim_expires_at REAL,
+                fencing_token INTEGER NOT NULL DEFAULT 0,
+                mutation_protocol TEXT NOT NULL DEFAULT 'legacy.v1',
+                mutation_seq INTEGER NOT NULL DEFAULT 0
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_key
                 ON tasks(task_key)
@@ -126,11 +359,76 @@ class FarmTasksDB:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS task_transitions (
+                transition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                owner_id TEXT NOT NULL DEFAULT '',
+                fencing_token INTEGER NOT NULL DEFAULT 0,
+                mutation_seq INTEGER NOT NULL,
+                transitioned_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS materialization_outbox (
+                materialization_id TEXT PRIMARY KEY,
+                task_id INTEGER NOT NULL,
+                task_fencing_token INTEGER NOT NULL,
+                spec_path TEXT NOT NULL,
+                spec_digest TEXT NOT NULL,
+                spec_json TEXT NOT NULL,
+                priority INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                queue_job_id INTEGER,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             """
         )
+        self._install_fencing_trigger()
         self._migrate_priority_scale()
         self._migrate_unique_candidate_columns()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO farm_meta(key, value) VALUES('fencing_protocol', 'v2')"
+        )
         self._conn.commit()
+
+    def _migrate_fencing_columns(self) -> None:
+        existing = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(tasks)")}
+        additions = {
+            "claim_owner": "TEXT",
+            "claim_expires_at": "REAL",
+            "fencing_token": "INTEGER NOT NULL DEFAULT 0",
+            "mutation_protocol": "TEXT NOT NULL DEFAULT 'legacy.v1'",
+            "mutation_seq": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in additions.items():
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+        legacy_running = self._conn.execute(
+            """SELECT task_id, mutation_seq, fencing_token FROM tasks
+               WHERE state='running' AND claim_owner IS NULL
+                 AND mutation_protocol='legacy.v1'"""
+        ).fetchall()
+        for row in legacy_running:
+            seq = int(row["mutation_seq"] or 0) + 1
+            self._conn.execute(
+                """UPDATE tasks SET state='blocked',
+                       machine_reason='legacy_running_unfenced',
+                       mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE task_id=?""",
+                (seq, int(row["task_id"])),
+            )
+            self._record_transition(
+                int(row["task_id"]), "running", "blocked",
+                "legacy_running_unfenced", float(self._clock()),
+                "migration", int(row["fencing_token"] or 0), seq,
+            )
+
+    def _install_fencing_trigger(self) -> None:
+        _install_farm_fencing_triggers(self._conn)
 
     def _migrate_priority_scale(self) -> None:
         """Translate legacy 1..4 rows; the new scale never emits those values."""
@@ -242,8 +540,9 @@ class FarmTasksDB:
             cur = self._conn.execute(
                 """INSERT INTO tasks(task_key, task_type, state, priority, symbol, asset_group,
                      timeframe, family, params_hash, data_fingerprint, depends_on, machine_reason,
-                     deferred_until, source_event_id, payload_json, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     deferred_until, source_event_id, payload_json, created_at, updated_at,
+                     mutation_protocol)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'fenced.v2')""",
                 (task_key, task_type, state, int(priority), symbol, asset_group, timeframe, family,
                  params_hash, data_fingerprint, depends_on, machine_reason, deferred_until,
                  source_event_id, json.dumps(payload or {}), now, now),
@@ -273,27 +572,54 @@ class FarmTasksDB:
         Eligible = queued, or deferred whose deferred_until has elapsed; and whose
         depends_on (if any) is completed. Never returns blocked/running tasks.
         """
-        now = time.time() if now is None else now
+        now = self._effective_now(now)
         type_clause, params = "", [now]
         if task_types:
             type_clause = f" AND task_type IN ({','.join('?' * len(task_types))})"
             params.extend(task_types)
-        row = self._conn.execute(
-            f"""SELECT * FROM tasks
-                WHERE (state='queued' OR (state='deferred' AND deferred_until<=?))
-                  AND (depends_on IS NULL OR depends_on IN (SELECT task_id FROM tasks WHERE state='completed'))
-                  {type_clause}
-                ORDER BY priority ASC, created_at ASC, task_id ASC LIMIT 1""",
-            params,
-        ).fetchone()
-        if row is None:
-            return None
-        tid = int(row["task_id"])
-        self._conn.execute(
-            "UPDATE tasks SET state='running', attempts=attempts+1, updated_at=? WHERE task_id=?",
-            (now, tid),
-        )
-        self._conn.commit()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            now = self._effective_now(now)
+            row = self._conn.execute(
+                f"""SELECT * FROM tasks
+                    WHERE (state='queued' OR (state='deferred' AND deferred_until<=?))
+                      AND (depends_on IS NULL OR depends_on IN (SELECT task_id FROM tasks WHERE state='completed'))
+                      {type_clause}
+                    ORDER BY priority ASC, created_at ASC, task_id ASC LIMIT 1""",
+                params,
+            ).fetchone()
+            if row is None:
+                self._conn.commit()
+                return None
+            tid = int(row["task_id"])
+            fence = int(row["fencing_token"] or 0) + 1
+            mutation_seq = int(row["mutation_seq"] or 0) + 1
+            expires_at = now + self.lease_seconds
+            cur = self._conn.execute(
+                """UPDATE tasks
+                   SET state='running', attempts=attempts+1, updated_at=?,
+                       claim_owner=?, claim_expires_at=?, fencing_token=?,
+                       mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE task_id=? AND state=? AND claim_owner IS NULL
+                     AND fencing_token=? AND mutation_protocol='fenced.v2'
+                     AND mutation_seq=?""",
+                (
+                    now, self.owner_id, expires_at, fence, mutation_seq,
+                    tid, str(row["state"]), int(row["fencing_token"] or 0),
+                    int(row["mutation_seq"] or 0),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise StaleTaskClaimError("task changed during claim")
+            self._record_transition(
+                tid, str(row["state"]), "running", "claimed", now,
+                self.owner_id, fence, mutation_seq,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._claims[tid] = fence
         self._emit_transition(tid, "running", "claimed", now)
         return self.get_task(tid)
 
@@ -339,16 +665,80 @@ class FarmTasksDB:
 
     def _set_state(self, task_id: int, state: str, *, reason: str = "",
                    now: float | None = None, **fields: Any) -> None:
-        now = time.time() if now is None else now
-        cols = ["state=?", "machine_reason=?", "updated_at=?"]
-        vals: list[Any] = [state, reason, now]
+        now = self._effective_now(now)
+        tid = int(task_id)
+        row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (tid,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown task {tid}")
+        claim_owner = row["claim_owner"]
+        fence = int(row["fencing_token"] or 0)
+        if claim_owner is None and (row["state"] == "running" or state == "running"):
+            raise StaleTaskClaimError(
+                f"running transition for task {tid} requires a fenced claim"
+            )
+        if claim_owner is not None:
+            if (
+                str(claim_owner) != self.owner_id
+                or self._claims.get(tid) != fence
+                or float(row["claim_expires_at"] or 0) <= now
+            ):
+                raise StaleTaskClaimError(f"stale claim for task {tid}")
+        mutation_seq = int(row["mutation_seq"] or 0) + 1
+        now = self._effective_now(now)
+        cols = [
+            "state=?", "machine_reason=?", "updated_at=?",
+            "mutation_protocol='fenced.v2'", "mutation_seq=?",
+        ]
+        vals: list[Any] = [state, reason, now, mutation_seq]
         for key, value in fields.items():
             cols.append(f"{key}=?")
             vals.append(value)
-        vals.append(int(task_id))
-        self._conn.execute(f"UPDATE tasks SET {', '.join(cols)} WHERE task_id=?", vals)
-        self._conn.commit()
-        self._emit_transition(int(task_id), state, reason, now)
+        if state != "running":
+            cols.extend(["claim_owner=NULL", "claim_expires_at=NULL"])
+        predicate = (
+            "task_id=? AND state=? AND fencing_token=? "
+            "AND mutation_protocol='fenced.v2' AND mutation_seq=?"
+        )
+        vals.extend([
+            tid, str(row["state"]), fence, int(row["mutation_seq"] or 0),
+        ])
+        if claim_owner is None:
+            predicate += " AND claim_owner IS NULL"
+        else:
+            predicate += " AND claim_owner=? AND claim_expires_at>?"
+            vals.extend([self.owner_id, now])
+        try:
+            cur = self._conn.execute(
+                f"UPDATE tasks SET {', '.join(cols)} WHERE {predicate}", vals
+            )
+            if cur.rowcount != 1:
+                raise StaleTaskClaimError(f"task {tid} changed during transition")
+            self._record_transition(
+                tid, str(row["state"]), state, reason, now,
+                str(claim_owner or self.owner_id), fence, mutation_seq,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if state != "running":
+            self._claims.pop(tid, None)
+        self._emit_transition(tid, state, reason, now)
+
+    def _record_transition(
+        self, task_id: int, from_state: str, to_state: str, reason: str,
+        now: float, owner_id: str, fencing_token: int, mutation_seq: int,
+    ) -> None:
+        self._conn.execute(
+            """INSERT INTO task_transitions(
+                   task_id, from_state, to_state, reason, owner_id,
+                   fencing_token, mutation_seq, transitioned_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                task_id, from_state, to_state, reason, owner_id,
+                fencing_token, mutation_seq, now,
+            ),
+        )
 
     def _emit_transition(self, task_id: int, state: str, reason: str, now: float) -> None:
         """Fire the optional audit hook with the post-update task identity (best-effort)."""
@@ -378,6 +768,276 @@ class FarmTasksDB:
         self._set_state(task_id, "running", reason="materialized_awaiting_worker", now=now,
                         materialized_queue_job_id=int(queue_job_id))
 
+    def prepare_materialization(
+        self,
+        task_id: int,
+        *,
+        materialization_id: str,
+        spec_path: str,
+        spec_digest: str,
+        spec_json: str,
+        priority: int,
+        now: float | None = None,
+    ) -> None:
+        """Persist a content-bound intent before any spec/compute side effect."""
+        current = self._effective_now(now)
+        tid = int(task_id)
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            current = self._effective_now(current)
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (tid,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"unknown task {tid}")
+            fence = int(row["fencing_token"] or 0)
+            if (
+                row["state"] != "running"
+                or str(row["claim_owner"] or "") != self.owner_id
+                or self._claims.get(tid) != fence
+                or float(row["claim_expires_at"] or 0) <= current
+            ):
+                raise StaleTaskClaimError(f"stale claim for task {tid}")
+            existing = self._conn.execute(
+                "SELECT * FROM materialization_outbox WHERE materialization_id=?",
+                (materialization_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    int(existing["task_id"]) != tid
+                    or int(existing["task_fencing_token"]) != fence
+                    or str(existing["spec_digest"]) != spec_digest
+                    or str(existing["spec_path"]) != spec_path
+                ):
+                    raise ValueError(
+                        "materialization id is already bound to different content"
+                    )
+                self._conn.commit()
+                return
+            self._conn.execute(
+                """UPDATE materialization_outbox SET state='superseded', updated_at=?
+                   WHERE task_id=? AND state IN ('pending','dispatched')
+                     AND task_fencing_token<>?""",
+                (current, tid, fence),
+            )
+            self._conn.execute(
+                """INSERT INTO materialization_outbox(
+                       materialization_id, task_id, task_fencing_token, spec_path,
+                       spec_digest, spec_json, priority, state, created_at, updated_at)
+                   VALUES(?,?,?,?,?,?,?,'pending',?,?)""",
+                (
+                    materialization_id, tid, fence, spec_path, spec_digest,
+                    spec_json, int(priority), current, current,
+                ),
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def commit_materialization(
+        self,
+        task_id: int,
+        *,
+        materialization_id: str,
+        queue_job_id: int,
+        now: float | None = None,
+    ) -> None:
+        """Atomically link the brain task and mark its durable outbox delivered."""
+        current = self._effective_now(now)
+        tid = int(task_id)
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            current = self._effective_now(current)
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?", (tid,)
+            ).fetchone()
+            outbox = self._conn.execute(
+                "SELECT * FROM materialization_outbox WHERE materialization_id=?",
+                (materialization_id,),
+            ).fetchone()
+            if row is None or outbox is None or int(outbox["task_id"]) != tid:
+                raise StaleTaskClaimError(
+                    "materialization intent is missing or mismatched"
+                )
+            fence = int(row["fencing_token"] or 0)
+            if (
+                row["state"] != "running"
+                or str(row["claim_owner"] or "") != self.owner_id
+                or self._claims.get(tid) != fence
+                or int(outbox["task_fencing_token"]) != fence
+                or float(row["claim_expires_at"] or 0) <= current
+            ):
+                raise StaleTaskClaimError(
+                    f"stale materialization claim for task {tid}"
+                )
+            seq = int(row["mutation_seq"] or 0) + 1
+            cur = self._conn.execute(
+                """UPDATE tasks SET materialized_queue_job_id=?,
+                       machine_reason='materialized_awaiting_worker', updated_at=?,
+                       mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE task_id=? AND state='running' AND claim_owner=?
+                     AND fencing_token=? AND claim_expires_at>?
+                     AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+                (
+                    int(queue_job_id), current, seq, tid, self.owner_id,
+                    fence, current, int(row["mutation_seq"] or 0),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise StaleTaskClaimError("task changed during materialization commit")
+            outbox_cur = self._conn.execute(
+                """UPDATE materialization_outbox SET state='acknowledged',
+                       queue_job_id=?, updated_at=?
+                   WHERE materialization_id=? AND task_id=?
+                     AND task_fencing_token=? AND state IN ('pending','dispatched')""",
+                (int(queue_job_id), current, materialization_id, tid, fence),
+            )
+            if outbox_cur.rowcount != 1:
+                raise StaleTaskClaimError("materialization outbox changed during commit")
+            self._record_transition(
+                tid, "running", "running", "materialized_awaiting_worker",
+                current, self.owner_id, fence, seq,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._emit_transition(
+            tid, "running", "materialized_awaiting_worker", current
+        )
+
+    def mark_materialization_dispatched(
+        self, materialization_id: str, queue_job_id: int, *, now: float | None = None
+    ) -> None:
+        current = self._effective_now(now)
+        self._assert_materialization_authority(materialization_id, current)
+        current = self._effective_now(current)
+        cur = self._conn.execute(
+            """UPDATE materialization_outbox SET state='dispatched',
+                   queue_job_id=?, updated_at=?
+               WHERE materialization_id=? AND state IN ('pending','dispatched')
+                 AND EXISTS(
+                     SELECT 1 FROM tasks t
+                     WHERE t.task_id=materialization_outbox.task_id
+                       AND t.state='running' AND t.claim_owner=?
+                       AND t.fencing_token=materialization_outbox.task_fencing_token
+                       AND t.claim_expires_at>?
+                       AND t.mutation_protocol='fenced.v2'
+                 )""",
+            (int(queue_job_id), current, materialization_id, self.owner_id, current),
+        )
+        if cur.rowcount != 1:
+            self._conn.rollback()
+            raise StaleTaskClaimError("materialization cannot be marked dispatched")
+        self._conn.commit()
+
+    def mark_materialization_ambiguous(
+        self, materialization_id: str, *, now: float | None = None
+    ) -> None:
+        current = self._effective_now(now)
+        self._assert_materialization_authority(materialization_id, current)
+        current = self._effective_now(current)
+        cur = self._conn.execute(
+            """UPDATE materialization_outbox SET state='ambiguous', updated_at=?
+               WHERE materialization_id=? AND state IN ('pending','dispatched')
+                 AND EXISTS(
+                     SELECT 1 FROM tasks t
+                     WHERE t.task_id=materialization_outbox.task_id
+                       AND t.state='running' AND t.claim_owner=?
+                       AND t.fencing_token=materialization_outbox.task_fencing_token
+                       AND t.claim_expires_at>?
+                       AND t.mutation_protocol='fenced.v2'
+                 )""",
+            (current, materialization_id, self.owner_id, current),
+        )
+        if cur.rowcount != 1:
+            self._conn.rollback()
+            raise StaleTaskClaimError("materialization cannot be marked ambiguous")
+        self._conn.commit()
+
+    def _assert_materialization_authority(
+        self, materialization_id: str, now: float
+    ) -> None:
+        row = self._conn.execute(
+            """SELECT o.task_id, o.task_fencing_token, t.claim_owner,
+                      t.claim_expires_at, t.fencing_token
+               FROM materialization_outbox o
+               JOIN tasks t ON t.task_id=o.task_id
+               WHERE o.materialization_id=?""",
+            (materialization_id,),
+        ).fetchone()
+        if row is None:
+            raise StaleTaskClaimError("materialization intent is missing")
+        tid = int(row["task_id"])
+        fence = int(row["task_fencing_token"])
+        if (
+            str(row["claim_owner"] or "") != self.owner_id
+            or int(row["fencing_token"] or 0) != fence
+            or self._claims.get(tid) != fence
+            or float(row["claim_expires_at"] or 0) <= now
+        ):
+            raise StaleTaskClaimError("materialization intent has a stale task fence")
+
+    def authorize_materialization_replay(
+        self, materialization_id: str, *, now: float | None = None
+    ) -> dict[str, Any]:
+        """Return the current intent only while its exact task fence is valid."""
+        current = self._effective_now(now)
+        self._assert_materialization_authority(materialization_id, current)
+        row = self._conn.execute(
+            """SELECT * FROM materialization_outbox
+               WHERE materialization_id=? AND state IN ('pending','dispatched')""",
+            (materialization_id,),
+        ).fetchone()
+        if row is None:
+            raise StaleTaskClaimError("materialization intent is not replayable")
+        return dict(row)
+
+    def pending_materializations(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """SELECT * FROM materialization_outbox
+               WHERE state IN ('pending','dispatched') ORDER BY created_at"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def renew_task_claim(
+        self, task_id: int, *, lease_seconds: float | None = None,
+        now: float | None = None,
+    ) -> float:
+        current = self._effective_now(now)
+        tid = int(task_id)
+        row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (tid,)).fetchone()
+        fence = int(row["fencing_token"] or 0) if row is not None else 0
+        if (
+            row is None
+            or str(row["claim_owner"] or "") != self.owner_id
+            or self._claims.get(tid) != fence
+            or float(row["claim_expires_at"] or 0) <= current
+        ):
+            raise StaleTaskClaimError(f"stale claim for task {tid}")
+        expires = current + float(lease_seconds or self.lease_seconds)
+        current = self._effective_now(current)
+        if float(row["claim_expires_at"] or 0) <= current:
+            raise StaleTaskClaimError(f"stale claim for task {tid}")
+        expires = current + float(lease_seconds or self.lease_seconds)
+        cur = self._conn.execute(
+            """UPDATE tasks SET claim_expires_at=?, mutation_protocol='fenced.v2',
+                   mutation_seq=mutation_seq+1
+               WHERE task_id=? AND state='running' AND claim_owner=?
+                 AND fencing_token=? AND claim_expires_at>?
+                 AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+            (
+                expires, tid, self.owner_id, fence, current,
+                int(row["mutation_seq"] or 0),
+            ),
+        )
+        if cur.rowcount != 1:
+            self._conn.rollback()
+            raise StaleTaskClaimError(f"task {tid} changed during renewal")
+        self._conn.commit()
+        return expires
+
     def skip_task(self, task_id: int, reason: str, *, now: float | None = None) -> None:
         self._set_state(task_id, "skipped", reason=reason, now=now)
 
@@ -395,16 +1055,47 @@ class FarmTasksDB:
 
     def reconcile_orphan_running(self, *, reason: str = "orphan_running_requeued",
                                  now: float | None = None) -> int:
-        """Requeue tasks stuck in 'running' left by a previous process stop. Safe ONLY when no worker
-        is active (e.g. at loop startup): the single-process loop has no live worker at boot, so any
-        'running' task is stale (materialized into the compute queue but never finished). Returns the
-        count requeued so the next cycle re-drains them instead of masking them as active work. The
-        worker's compute-memory dedup skips anything already computed, so this never double-counts."""
-        now = time.time() if now is None else now
-        rows = self._conn.execute("SELECT task_id FROM tasks WHERE state='running'").fetchall()
-        for r in rows:
-            self.requeue_task(int(r["task_id"]), reason=reason, now=now)
-        return len(rows)
+        """Requeue only exact expired fenced claims under one write transaction."""
+        now = self._effective_now(now)
+        requeued = 0
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            now = self._effective_now(now)
+            rows = self._conn.execute(
+                """SELECT * FROM tasks
+                   WHERE state='running' AND mutation_protocol='fenced.v2'
+                     AND claim_owner IS NOT NULL AND claim_expires_at<=?""",
+                (now,),
+            ).fetchall()
+            for row in rows:
+                tid = int(row["task_id"])
+                owner = str(row["claim_owner"])
+                fence = int(row["fencing_token"] or 0)
+                seq = int(row["mutation_seq"] or 0) + 1
+                cur = self._conn.execute(
+                    """UPDATE tasks SET state='queued', machine_reason=?, updated_at=?,
+                           claim_owner=NULL, claim_expires_at=NULL,
+                           mutation_protocol='fenced.v2', mutation_seq=?
+                       WHERE task_id=? AND state='running' AND claim_owner=?
+                         AND fencing_token=? AND claim_expires_at<=?
+                         AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+                    (
+                        reason, now, seq, tid, owner, fence, now,
+                        int(row["mutation_seq"] or 0),
+                    ),
+                )
+                if cur.rowcount != 1:
+                    continue
+                self._record_transition(
+                    tid, "running", "queued", reason, now, owner, fence, seq,
+                )
+                self._claims.pop(tid, None)
+                requeued += 1
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return requeued
 
     def get_task(self, task_id: int) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (int(task_id),)).fetchone()

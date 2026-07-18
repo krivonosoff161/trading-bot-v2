@@ -12,8 +12,10 @@ no order path, writes only the private spec file + the queue row.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.scanner_farm_pipeline import event_spec_dir
 from src.research_lab.state_db import ensure_experiment_queued
@@ -170,6 +172,8 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
                 data_snapshot_id: str, data_evidence_hash: str,
                 data_snapshot_bindings: list[dict[str, Any]],
                 event_context: dict[str, Any] | None = None,
+                materialization_id: str | None = None,
+                prepare_intent: Callable[[Path, str, str], None] | None = None,
                 ) -> tuple[str, int, bool]:
     """Compile + write spec file + idempotently enqueue. Returns (experiment_id, job_id, created)."""
     if not data_snapshot_id or not data_evidence_hash or not data_snapshot_bindings:
@@ -187,6 +191,18 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
     out_dir = event_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     spec_path = out_dir / f"{exp.search_family_id}.json"
+    payload = json.dumps(
+        exp.to_dict(), ensure_ascii=False, indent=2, sort_keys=True
+    ) + "\n"
+    digest = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if prepare_intent is not None:
+        prepare_intent(spec_path.resolve(), payload, digest)
     exp.write_json(spec_path)
-    job_id, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=int(priority))
+    job_id, created = ensure_experiment_queued(
+        conn,
+        spec_path.resolve(),
+        priority=int(priority),
+        materialization_id=materialization_id,
+        materialization_digest=digest if materialization_id else None,
+    )
     return exp.experiment_id, int(job_id), bool(created)

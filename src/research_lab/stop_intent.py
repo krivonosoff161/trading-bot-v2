@@ -22,6 +22,11 @@ def _stop_path(private_root: Path) -> Path:
     return private_root / "state" / _STOP_FILENAME
 
 
+def stop_intent_path(private_root: Path) -> Path:
+    """Return the bounded stop-intent path for owner-bound acknowledgement."""
+    return _stop_path(Path(private_root))
+
+
 def request_stop(
     private_root: Path,
     *,

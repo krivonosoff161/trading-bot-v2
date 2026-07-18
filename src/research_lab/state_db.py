@@ -9,12 +9,43 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import hashlib
 import json
 import sqlite3
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+
+class StaleJobClaimError(RuntimeError):
+    """The worker's queue fence is absent, replaced, or expired."""
+
+
+class FencingMigrationRequired(RuntimeError):
+    """An existing compute DB needs an explicitly authorized v2 activation."""
+
+
+_COMPAT_OWNERS: dict[int, str] = {}
+
+_QUEUE_FENCING_COLUMNS = {
+    "claim_owner",
+    "claim_expires_at",
+    "fencing_token",
+    "mutation_protocol",
+    "mutation_seq",
+    "materialization_id",
+    "materialization_digest",
+}
+
+
+class ResearchStateConnection(sqlite3.Connection):
+    """SQLite connection carrying the monotonic authority clock for tests/runtime."""
+
+    authority_clock: Any
+    authority_time_floor: float
 
 
 def utc_now() -> str:
@@ -25,9 +56,19 @@ def default_db_path(private_root: Path) -> Path:
     return private_root / "state" / "strategy_lab.sqlite"
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, *, clock: Any = time.time) -> sqlite3.Connection:
+    if db_path.exists():
+        uri = db_path.resolve().as_posix()
+        preflight = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        preflight.row_factory = sqlite3.Row
+        try:
+            _require_activated_fencing(preflight)
+        finally:
+            preflight.close()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), factory=ResearchStateConnection)
+    conn.authority_clock = clock
+    conn.authority_time_floor = float(clock())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
@@ -35,7 +76,53 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _fencing_marker(conn: sqlite3.Connection) -> str | None:
+    if not _table_exists(conn, "meta"):
+        return None
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key='fencing_protocol'"
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _trigger_names(conn: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+    }
+
+
+def _require_activated_fencing(conn: sqlite3.Connection) -> None:
+    """Reject legacy runtime DBs without mutating them."""
+    if not _table_exists(conn, "queue"):
+        return
+    missing = _QUEUE_FENCING_COLUMNS - _column_names(conn, "queue")
+    required_triggers = {"queue_fenced_v2_insert_guard", "queue_fenced_v2_guard"}
+    missing_triggers = required_triggers - _trigger_names(conn)
+    if missing or missing_triggers or _fencing_marker(conn) != "v2":
+        if missing:
+            detail = ",".join(sorted(missing))
+        elif missing_triggers:
+            detail = "triggers:" + ",".join(sorted(missing_triggers))
+        else:
+            detail = "capability_marker"
+        raise FencingMigrationRequired(
+            "compute DB requires explicit fencing v2 activation: " + detail
+        )
+
+
 def init_db(conn: sqlite3.Connection) -> None:
+    _require_activated_fencing(conn)
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS meta (
@@ -84,7 +171,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             finished_at TEXT,
             attempts INTEGER NOT NULL DEFAULT 0,
             run_dir_label TEXT,
-            last_error TEXT
+            last_error TEXT,
+            claim_owner TEXT,
+            claim_expires_at REAL,
+            fencing_token INTEGER NOT NULL DEFAULT 0,
+            mutation_protocol TEXT NOT NULL DEFAULT 'legacy.v1',
+            mutation_seq INTEGER NOT NULL DEFAULT 0,
+            materialization_id TEXT,
+            materialization_digest TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_queue_status_priority
@@ -92,6 +186,51 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_spec_active
             ON queue(spec_path)
             WHERE status IN ('queued', 'running');
+        CREATE TABLE IF NOT EXISTS job_attempts (
+            attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            owner_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            claimed_at REAL NOT NULL,
+            executing_at REAL,
+            finished_at REAL,
+            detail TEXT NOT NULL DEFAULT '',
+            UNIQUE(job_id, fencing_token),
+            FOREIGN KEY(job_id) REFERENCES queue(job_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS artifact_publications (
+            publication_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            provisional_path TEXT NOT NULL,
+            final_label TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            published_at REAL,
+            UNIQUE(job_id, fencing_token),
+            FOREIGN KEY(job_id) REFERENCES queue(job_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS queue_materializations (
+            materialization_id TEXT PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            spec_path TEXT NOT NULL,
+            spec_digest TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES queue(job_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS stale_claim_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            owner_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            observed_at REAL NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES queue(job_id) ON DELETE CASCADE
+        );
 
         -- Schema v3 (additive): a richer per-candidate result row for the
         -- universe farm + a per-run backend/runtime ledger. New tables only, so
@@ -171,13 +310,111 @@ def init_db(conn: sqlite3.Connection) -> None:
             ON paper_outcomes(candidate_id, recorded_at);
         """
     )
+    _install_queue_fencing_trigger(conn)
     _migrate_candidate_columns(conn)
     _migrate_farm_results_columns(conn)
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('fencing_protocol', 'v2')"
+    )
     conn.commit()
+
+
+def activate_fencing_v2(conn: sqlite3.Connection) -> None:
+    """Explicitly activate compute fencing after a separately authorized quiesce.
+
+    Runtime launchers and status readers must never call this function.  It is a
+    deliberately separate rollout operation so a live private DB is not migrated
+    merely because a process or dashboard opened it.
+    """
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not _table_exists(conn, "queue"):
+            raise FencingMigrationRequired("compute DB has no legacy queue to activate")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        _migrate_queue_fencing(conn)
+        conn.execute("DROP TRIGGER IF EXISTS queue_fenced_v2_guard")
+        conn.execute("DROP TRIGGER IF EXISTS queue_fenced_v2_insert_guard")
+        _install_queue_fencing_trigger(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('fencing_protocol', 'v2')"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _migrate_queue_fencing(conn: sqlite3.Connection) -> None:
+    existing = _column_names(conn, "queue")
+    additions = {
+        "claim_owner": "TEXT",
+        "claim_expires_at": "REAL",
+        "fencing_token": "INTEGER NOT NULL DEFAULT 0",
+        "mutation_protocol": "TEXT NOT NULL DEFAULT 'legacy.v1'",
+        "mutation_seq": "INTEGER NOT NULL DEFAULT 0",
+        "materialization_id": "TEXT",
+        "materialization_digest": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE queue ADD COLUMN {name} {declaration}")
+    conn.execute(
+        """UPDATE queue SET status='legacy_running_unfenced',
+                  last_error='legacy_running_unfenced',
+                  mutation_protocol='fenced.v2', mutation_seq=mutation_seq+1
+           WHERE status='running' AND claim_owner IS NULL
+             AND mutation_protocol='legacy.v1'"""
+    )
+    conn.execute(
+        """UPDATE queue SET mutation_protocol='fenced.v2', mutation_seq=mutation_seq+1
+           WHERE mutation_protocol='legacy.v1'"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_materialization
+           ON queue(materialization_id) WHERE materialization_id IS NOT NULL"""
+    )
+
+
+def _install_queue_fencing_trigger(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS queue_fenced_v2_insert_guard
+        BEFORE INSERT ON queue
+        WHEN NEW.mutation_protocol != 'fenced.v2'
+        BEGIN
+            SELECT RAISE(ABORT, 'fenced v2 writer required');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS queue_fenced_v2_guard
+        BEFORE UPDATE ON queue
+        WHEN (
+            NEW.status IS NOT OLD.status OR
+            NEW.attempts IS NOT OLD.attempts OR
+            NEW.claim_owner IS NOT OLD.claim_owner OR
+            NEW.claim_expires_at IS NOT OLD.claim_expires_at OR
+            NEW.fencing_token IS NOT OLD.fencing_token OR
+            NEW.materialization_id IS NOT OLD.materialization_id OR
+            NEW.materialization_digest IS NOT OLD.materialization_digest OR
+            NEW.run_dir_label IS NOT OLD.run_dir_label OR
+            NEW.last_error IS NOT OLD.last_error
+        ) AND (
+            NEW.mutation_protocol != 'fenced.v2' OR
+            NEW.mutation_seq != OLD.mutation_seq + 1
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'fenced v2 writer required');
+        END
+        """
+    )
 
 
 def _migrate_candidate_columns(conn: sqlite3.Connection) -> None:
@@ -227,7 +464,13 @@ def import_completed_runs(private_root: Path, db_path: Path | None = None) -> di
     return stats
 
 
-def import_run_dir(conn: sqlite3.Connection, private_root: Path, run_dir: Path) -> int:
+def import_run_dir(
+    conn: sqlite3.Connection,
+    private_root: Path,
+    run_dir: Path,
+    *,
+    artifact_label_override: str | None = None,
+) -> int:
     run_dir = run_dir.resolve()
     run_dir.relative_to(private_root.resolve())
     payload = _load_json(run_dir / "metrics.json")
@@ -238,7 +481,7 @@ def import_run_dir(conn: sqlite3.Connection, private_root: Path, run_dir: Path) 
     run_id = run_dir.name
     experiment_id = str(payload.get("experiment_id") or _experiment_from_run_name(run_id))
     created_at = str(payload.get("created_at") or "")
-    artifact_label = _artifact_label(private_root, run_dir)
+    artifact_label = artifact_label_override or _artifact_label(private_root, run_dir)
     now = utc_now()
     conn.execute(
         """
@@ -305,67 +548,262 @@ def enqueue_experiment(
     *,
     priority: int = 100,
     status: str = "queued",
+    materialization_id: str | None = None,
+    materialization_digest: str | None = None,
 ) -> int:
     now = utc_now()
     cur = conn.execute(
         """
-        INSERT INTO queue(spec_path, status, priority, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO queue(
+            spec_path, status, priority, created_at, mutation_protocol,
+            materialization_id, materialization_digest)
+        VALUES (?, ?, ?, ?, 'fenced.v2', ?, ?)
         """,
-        (str(spec_path), status, int(priority), now),
+        (
+            str(spec_path), status, int(priority), now,
+            materialization_id, materialization_digest,
+        ),
     )
+    job_id = int(cur.lastrowid)
+    if materialization_id is not None:
+        conn.execute(
+            """INSERT INTO queue_materializations(
+                   materialization_id, job_id, spec_path, spec_digest, created_at)
+               VALUES(?,?,?,?,?)""",
+            (
+                materialization_id, job_id, str(spec_path),
+                str(materialization_digest or ""), now,
+            ),
+        )
     conn.commit()
-    return int(cur.lastrowid)
+    return job_id
 
 
-def ensure_experiment_queued(conn: sqlite3.Connection, spec_path: Path, *, priority: int = 100) -> tuple[int, bool]:
+def ensure_experiment_queued(
+    conn: sqlite3.Connection,
+    spec_path: Path,
+    *,
+    priority: int = 100,
+    materialization_id: str | None = None,
+    materialization_digest: str | None = None,
+) -> tuple[int, bool]:
     normalized = str(spec_path)
+    incoming_digest = str(materialization_digest or "")
+
+    def assert_current_content() -> None:
+        if materialization_id is None:
+            return
+        try:
+            actual = "sha256:" + hashlib.sha256(
+                Path(normalized).read_text(encoding="utf-8").encode("utf-8")
+            ).hexdigest()
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("materialization spec content is unreadable") from exc
+        if actual != incoming_digest:
+            raise ValueError("materialization digest does not match spec content")
+
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            """
-            SELECT job_id FROM queue
-            WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
-            ORDER BY job_id ASC
-            LIMIT 1
-            """,
-            (normalized,),
-        ).fetchone()
+        if materialization_id is not None:
+            binding = conn.execute(
+                """SELECT qm.job_id, qm.spec_path, qm.spec_digest,
+                          q.materialization_digest AS queue_digest
+                   FROM queue_materializations qm
+                   JOIN queue q ON q.job_id=qm.job_id
+                   WHERE qm.materialization_id=?""",
+                (materialization_id,),
+            ).fetchone()
+            if binding is not None:
+                if (
+                    str(binding["spec_path"]) != normalized
+                    or str(binding["spec_digest"]) != str(materialization_digest or "")
+                    or str(binding["queue_digest"] or "") != incoming_digest
+                ):
+                    raise ValueError("materialization id is bound to different spec content")
+                assert_current_content()
+                conn.commit()
+                return int(binding["job_id"]), False
+            assert_current_content()
+        if materialization_id is not None:
+            active = conn.execute(
+                """SELECT job_id, status, materialization_digest FROM queue
+                   WHERE spec_path=? AND status IN ('queued','running')
+                   ORDER BY job_id ASC LIMIT 1""",
+                (normalized,),
+            ).fetchone()
+            if active is not None:
+                if str(active["materialization_digest"] or "") != incoming_digest:
+                    raise ValueError(
+                        "active spec path is bound to different materialization content"
+                    )
+                row = active
+            else:
+                row = conn.execute(
+                    """SELECT job_id, status, materialization_digest FROM queue
+                       WHERE spec_path=? AND status='completed'
+                         AND materialization_digest=?
+                       ORDER BY job_id ASC LIMIT 1""",
+                    (normalized, incoming_digest),
+                ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT job_id, status, materialization_digest FROM queue
+                   WHERE spec_path=? AND status IN ('queued','running','completed')
+                   ORDER BY job_id ASC LIMIT 1""",
+                (normalized,),
+            ).fetchone()
         if row is not None:
+            if materialization_id is not None:
+                conn.execute(
+                    """INSERT INTO queue_materializations(
+                           materialization_id, job_id, spec_path, spec_digest, created_at)
+                       VALUES(?,?,?,?,?)""",
+                    (
+                        materialization_id, int(row["job_id"]), normalized,
+                        incoming_digest, utc_now(),
+                    ),
+                )
             conn.commit()
             return int(row["job_id"]), False
         now = utc_now()
         cur = conn.execute(
             """
-            INSERT INTO queue(spec_path, status, priority, created_at)
-            VALUES (?, 'queued', ?, ?)
+            INSERT INTO queue(
+                spec_path, status, priority, created_at,
+                mutation_protocol, materialization_id, materialization_digest)
+            VALUES (?, 'queued', ?, ?, 'fenced.v2', ?, ?)
             """,
-            (normalized, int(priority), now),
+            (
+                normalized, int(priority), now,
+                materialization_id, incoming_digest if materialization_id else None,
+            ),
         )
+        job_id = int(cur.lastrowid)
+        if materialization_id is not None:
+            conn.execute(
+                """INSERT INTO queue_materializations(
+                       materialization_id, job_id, spec_path, spec_digest, created_at)
+                   VALUES(?,?,?,?,?)""",
+                (
+                    materialization_id, job_id, normalized,
+                    incoming_digest, now,
+                ),
+            )
         conn.commit()
-        return int(cur.lastrowid), True
+        return job_id, True
     except sqlite3.IntegrityError:
         conn.rollback()
-        row = conn.execute(
-            """
-            SELECT job_id FROM queue
-            WHERE spec_path = ? AND status IN ('queued', 'running', 'completed')
-            ORDER BY job_id ASC
-            LIMIT 1
-            """,
-            (normalized,),
-        ).fetchone()
+        if materialization_id is not None:
+            binding = conn.execute(
+                """SELECT qm.job_id, qm.spec_path, qm.spec_digest,
+                          q.materialization_digest AS queue_digest
+                   FROM queue_materializations qm
+                   JOIN queue q ON q.job_id=qm.job_id
+                   WHERE qm.materialization_id=?""",
+                (materialization_id,),
+            ).fetchone()
+            if binding is not None:
+                if (
+                    str(binding["spec_path"]) != normalized
+                    or str(binding["spec_digest"]) != str(materialization_digest or "")
+                    or str(binding["queue_digest"] or "") != incoming_digest
+                ):
+                    raise ValueError("materialization id is bound to different spec content")
+                assert_current_content()
+                return int(binding["job_id"]), False
+            assert_current_content()
+        if materialization_id is not None:
+            active = conn.execute(
+                """SELECT job_id, materialization_digest FROM queue
+                   WHERE spec_path=? AND status IN ('queued','running')
+                   ORDER BY job_id LIMIT 1""",
+                (normalized,),
+            ).fetchone()
+            if active is not None:
+                if str(active["materialization_digest"] or "") != incoming_digest:
+                    raise ValueError(
+                        "active spec path is bound to different materialization content"
+                    )
+                row = active
+            else:
+                row = conn.execute(
+                    """SELECT job_id FROM queue
+                       WHERE spec_path=? AND status='completed'
+                         AND materialization_digest=?
+                       ORDER BY job_id LIMIT 1""",
+                    (normalized, incoming_digest),
+                ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT job_id FROM queue
+                   WHERE spec_path=? AND status IN ('queued','running','completed')
+                   ORDER BY job_id LIMIT 1""",
+                (normalized,),
+            ).fetchone()
         if row is None:
             raise
+        if materialization_id is not None:
+            conn.execute(
+                """INSERT OR IGNORE INTO queue_materializations(
+                       materialization_id, job_id, spec_path, spec_digest, created_at)
+                   VALUES(?,?,?,?,?)""",
+                (
+                    materialization_id, int(row["job_id"]), normalized,
+                    incoming_digest, utc_now(),
+                ),
+            )
+            conn.commit()
+            binding = conn.execute(
+                """SELECT qm.job_id, qm.spec_path, qm.spec_digest,
+                          q.materialization_digest AS queue_digest
+                   FROM queue_materializations qm
+                   JOIN queue q ON q.job_id=qm.job_id
+                   WHERE qm.materialization_id=?""",
+                (materialization_id,),
+            ).fetchone()
+            if binding is None or (
+                str(binding["spec_path"]) != normalized
+                or str(binding["spec_digest"]) != str(materialization_digest or "")
+                or str(binding["queue_digest"] or "") != incoming_digest
+            ):
+                raise ValueError("materialization id is bound to different spec content")
+            return int(binding["job_id"]), False
         return int(row["job_id"]), False
     except Exception:
         conn.rollback()
         raise
 
 
-def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
+def _compat_owner(conn: sqlite3.Connection) -> str:
+    return _COMPAT_OWNERS.setdefault(id(conn), f"compat-worker-{uuid.uuid4().hex}")
+
+
+def _epoch(conn: sqlite3.Connection, now: float | None) -> float:
+    clock = getattr(conn, "authority_clock", time.time)
+    observed = float(clock())
+    supplied = observed if now is None else float(now)
+    current = max(
+        observed, supplied, float(getattr(conn, "authority_time_floor", observed))
+    )
+    if hasattr(conn, "authority_time_floor"):
+        conn.authority_time_floor = current
+    return current
+
+
+def claim_next_job(
+    conn: sqlite3.Connection,
+    *,
+    owner_id: str | None = None,
+    lease_seconds: float = 300.0,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    if lease_seconds <= 0:
+        raise ValueError("lease_seconds must be positive")
+    owner = owner_id or _compat_owner(conn)
+    current = _epoch(conn, now)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        current = _epoch(conn, current)
         row = conn.execute(
             """
             SELECT * FROM queue
@@ -378,13 +816,31 @@ def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
             conn.commit()
             return None
         job_id = int(row["job_id"])
-        conn.execute(
+        fence = int(row["fencing_token"] or 0) + 1
+        mutation_seq = int(row["mutation_seq"] or 0) + 1
+        cur = conn.execute(
             """
             UPDATE queue
-            SET status = 'running', started_at = ?, attempts = attempts + 1
-            WHERE job_id = ? AND status = 'queued'
+            SET status = 'running', started_at = ?, attempts = attempts + 1,
+                claim_owner=?, claim_expires_at=?, fencing_token=?,
+                mutation_protocol='fenced.v2', mutation_seq=?
+            WHERE job_id = ? AND status = 'queued' AND claim_owner IS NULL
+              AND fencing_token=? AND mutation_protocol='fenced.v2'
+              AND mutation_seq=?
             """,
-            (utc_now(), job_id),
+            (
+                utc_now(), owner, current + float(lease_seconds), fence,
+                mutation_seq, job_id, int(row["fencing_token"] or 0),
+                int(row["mutation_seq"] or 0),
+            ),
+        )
+        if cur.rowcount != 1:
+            raise StaleJobClaimError("job changed during claim")
+        conn.execute(
+            """INSERT INTO job_attempts(
+                   job_id, owner_id, fencing_token, state, claimed_at)
+               VALUES(?,?,?,'claimed',?)""",
+            (job_id, owner, fence, current),
         )
         conn.commit()
         claimed = conn.execute("SELECT * FROM queue WHERE job_id = ?", (job_id,)).fetchone()
@@ -394,56 +850,454 @@ def claim_next_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
         raise
 
 
-def reap_stale_jobs(conn: sqlite3.Connection, *, max_age_seconds: int = 3600) -> int:
-    """Requeue jobs left in running state after a worker crash."""
-    cutoff = (
-        dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=max(1, int(max_age_seconds)))
-    ).isoformat()
+def _assert_job_claim(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    now: float,
+) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM queue WHERE job_id=?", (int(job_id),)).fetchone()
+    if (
+        row is None
+        or row["status"] != "running"
+        or str(row["claim_owner"] or "") != owner_id
+        or int(row["fencing_token"] or 0) != int(fencing_token)
+        or float(row["claim_expires_at"] or 0) <= now
+    ):
+        raise StaleJobClaimError(f"stale claim for job {job_id}")
+    return row
+
+
+def _record_stale_claim(
+    conn: sqlite3.Connection,
+    job_id: int,
+    owner_id: str,
+    fencing_token: int,
+    operation: str,
+    now: float,
+) -> None:
+    conn.execute(
+        """INSERT INTO stale_claim_events(
+               job_id, owner_id, fencing_token, operation, observed_at)
+           VALUES(?,?,?,?,?)""",
+        (int(job_id), owner_id, int(fencing_token), operation, now),
+    )
+    conn.commit()
+
+
+def mark_job_executing(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    now: float | None = None,
+) -> None:
+    current = _epoch(conn, now)
+    _assert_job_claim(
+        conn, job_id, owner_id=owner_id,
+        fencing_token=fencing_token, now=current,
+    )
+    current = _epoch(conn, current)
     cur = conn.execute(
-        """
-        UPDATE queue
-        SET status = 'queued',
-            started_at = NULL,
-            last_error = ?
-        WHERE status = 'running'
-          AND started_at IS NOT NULL
-          AND started_at < ?
-        """,
-        (f"requeued stale running job after {max_age_seconds}s", cutoff),
+        """UPDATE job_attempts SET state='executing', executing_at=?
+           WHERE job_id=? AND owner_id=? AND fencing_token=? AND state='claimed'
+             AND EXISTS(
+                 SELECT 1 FROM queue q WHERE q.job_id=job_attempts.job_id
+                   AND q.status='running' AND q.claim_owner=?
+                   AND q.fencing_token=? AND q.claim_expires_at>?
+                   AND q.mutation_protocol='fenced.v2'
+             )""",
+        (
+            current, int(job_id), owner_id, int(fencing_token), owner_id,
+            int(fencing_token), current,
+        ),
     )
-    conn.commit()
-    return int(cur.rowcount or 0)
-
-
-def complete_job(conn: sqlite3.Connection, job_id: int, run_dir_label: str) -> None:
-    conn.execute(
-        """
-        UPDATE queue
-        SET status = 'completed', finished_at = ?, run_dir_label = ?, last_error = NULL
-        WHERE job_id = ?
-        """,
-        (utc_now(), run_dir_label, int(job_id)),
-    )
+    if cur.rowcount != 1:
+        conn.rollback()
+        raise StaleJobClaimError(f"attempt changed for job {job_id}")
     conn.commit()
 
 
-def fail_job(conn: sqlite3.Connection, job_id: int, error: str) -> None:
-    conn.execute(
-        """
-        UPDATE queue
-        SET status = 'failed', finished_at = ?, last_error = ?
-        WHERE job_id = ?
-        """,
-        (utc_now(), error[:1000], int(job_id)),
+def renew_job_lease(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    lease_seconds: float,
+    now: float | None = None,
+) -> float:
+    if lease_seconds <= 0:
+        raise ValueError("lease_seconds must be positive")
+    current = _epoch(conn, now)
+    row = _assert_job_claim(
+        conn, job_id, owner_id=owner_id,
+        fencing_token=fencing_token, now=current,
     )
+    expires = current + float(lease_seconds)
+    current = _epoch(conn, current)
+    _assert_job_claim(
+        conn, job_id, owner_id=owner_id,
+        fencing_token=fencing_token, now=current,
+    )
+    expires = current + float(lease_seconds)
+    cur = conn.execute(
+        """UPDATE queue SET claim_expires_at=?, mutation_protocol='fenced.v2',
+                  mutation_seq=mutation_seq+1
+           WHERE job_id=? AND status='running' AND claim_owner=?
+             AND fencing_token=? AND claim_expires_at>?
+             AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+        (
+            expires, int(job_id), owner_id, int(fencing_token), current,
+            int(row["mutation_seq"] or 0),
+        ),
+    )
+    if cur.rowcount != 1:
+        conn.rollback()
+        raise StaleJobClaimError(f"job {job_id} changed during renewal")
+    conn.commit()
+    return expires
+
+
+def reap_stale_jobs(
+    conn: sqlite3.Connection,
+    *,
+    max_age_seconds: int = 3600,
+    now: float | None = None,
+) -> int:
+    """Requeue only expired claims, retaining executing attempts as ambiguous."""
+    current = _epoch(conn, now)
+    count = 0
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = _epoch(conn, current)
+        rows = conn.execute(
+            """SELECT * FROM queue
+               WHERE status='running' AND mutation_protocol='fenced.v2'
+                 AND claim_owner IS NOT NULL AND claim_expires_at<=?""",
+            (current,),
+        ).fetchall()
+        for row in rows:
+            job_id = int(row["job_id"])
+            fence = int(row["fencing_token"] or 0)
+            owner = str(row["claim_owner"])
+            seq = int(row["mutation_seq"] or 0) + 1
+            cur = conn.execute(
+                """UPDATE queue SET status='queued', started_at=NULL,
+                       claim_owner=NULL, claim_expires_at=NULL,
+                       last_error=?, mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE job_id=? AND status='running' AND claim_owner=?
+                     AND fencing_token=? AND claim_expires_at<=?
+                     AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+                (
+                    "requeued stale running job: expired fenced lease",
+                    seq, job_id, owner, fence, current,
+                    int(row["mutation_seq"] or 0),
+                ),
+            )
+            if cur.rowcount != 1:
+                continue
+            attempt = conn.execute(
+                "SELECT state FROM job_attempts WHERE job_id=? AND fencing_token=?",
+                (job_id, fence),
+            ).fetchone()
+            if attempt is not None:
+                next_attempt_state = "ambiguous" if attempt["state"] == "executing" else "superseded"
+                conn.execute(
+                    """UPDATE job_attempts SET state=?, finished_at=?, detail=?
+                       WHERE job_id=? AND fencing_token=?""",
+                    (
+                        next_attempt_state, current, "lease expired before terminal publication",
+                        job_id, fence,
+                    ),
+                )
+            count += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return count
+
+
+def complete_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    run_dir_label: str,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    now: float | None = None,
+) -> None:
+    _finish_job(
+        conn, job_id, "completed", run_dir_label=run_dir_label,
+        owner_id=owner_id, fencing_token=fencing_token, now=now,
+    )
+
+
+def fail_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    error: str,
+    *,
+    owner_id: str,
+    fencing_token: int,
+    now: float | None = None,
+) -> None:
+    _finish_job(
+        conn, job_id, "failed", error=error,
+        owner_id=owner_id, fencing_token=fencing_token, now=now,
+    )
+
+
+def _finish_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    status: str,
+    *,
+    run_dir_label: str | None = None,
+    error: str = "",
+    owner_id: str,
+    fencing_token: int,
+    now: float | None,
+) -> None:
+    current = _epoch(conn, now)
+    row = conn.execute("SELECT * FROM queue WHERE job_id=?", (int(job_id),)).fetchone()
+    if row is None:
+        raise KeyError(f"unknown job {job_id}")
+    owner = str(owner_id)
+    fence = int(fencing_token)
+    try:
+        row = _assert_job_claim(
+            conn, job_id, owner_id=owner, fencing_token=fence, now=current,
+        )
+    except StaleJobClaimError:
+        _record_stale_claim(
+            conn, job_id, owner, fence, status, current,
+        )
+        raise
+    seq = int(row["mutation_seq"] or 0) + 1
+    try:
+        current = _epoch(conn, current)
+        cur = conn.execute(
+            """UPDATE queue
+               SET status=?, finished_at=?, run_dir_label=?, last_error=?,
+                   claim_owner=NULL, claim_expires_at=NULL,
+                   mutation_protocol='fenced.v2', mutation_seq=?
+               WHERE job_id=? AND status='running' AND claim_owner=?
+                 AND fencing_token=? AND claim_expires_at>?
+                 AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+            (
+                status, utc_now(), run_dir_label,
+                None if status == "completed" else error[:1000],
+                seq, int(job_id), owner, fence, current,
+                int(row["mutation_seq"] or 0),
+            ),
+        )
+        if cur.rowcount != 1:
+            raise StaleJobClaimError(f"job {job_id} changed during finish")
+        conn.execute(
+            """UPDATE job_attempts SET state=?, finished_at=?, detail=?
+               WHERE job_id=? AND fencing_token=? AND state IN ('claimed','executing')""",
+            (
+                status, current, error[:1000], int(job_id),
+                int(row["fencing_token"] or 0),
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def publish_completed_job(
+    conn: sqlite3.Connection,
+    private_root: Path,
+    provisional_dir: Path,
+    *,
+    job_id: int,
+    owner_id: str,
+    fencing_token: int,
+    now: float | None = None,
+) -> tuple[Path, int]:
+    """Atomically import a provisional run and complete its fenced queue row.
+
+    The filesystem promotion follows the database commit and is tracked by a
+    durable publication row, so a crash cannot make an unfenced worker's output
+    authoritative and an interrupted final rename remains recoverable.
+    """
+    current = _epoch(conn, now)
+    private_root = Path(private_root).resolve()
+    provisional_dir = Path(provisional_dir).resolve()
+    provisional_dir.relative_to((private_root / "experiments" / "provisional").resolve())
+    generation_path = provisional_dir / "publication_generation.json"
+    try:
+        generation = json.loads(generation_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, json.JSONDecodeError) as exc:
+        raise StaleJobClaimError("provisional generation identity is missing") from exc
+    if (
+        generation.get("schema") != "strategy_lab_publication_generation.v1"
+        or int(generation.get("job_id") or 0) != int(job_id)
+        or str(generation.get("owner_id") or "") != owner_id
+        or int(generation.get("fencing_token") or 0) != int(fencing_token)
+    ):
+        raise StaleJobClaimError("provisional generation identity does not match claim")
+    final_dir = private_root / "experiments" / "completed" / provisional_dir.name
+    final_label = f"experiments/completed/{provisional_dir.name}"
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = _epoch(conn, current)
+        row = _assert_job_claim(
+            conn, job_id, owner_id=owner_id,
+            fencing_token=fencing_token, now=current,
+        )
+        imported = import_run_dir(
+            conn, private_root, provisional_dir,
+            artifact_label_override=final_label,
+        )
+        # Recheck at the publication boundary. Expiry immediately removes
+        # authority even when no replacement worker has claimed the row yet.
+        boundary_now = _epoch(conn, now)
+        row = _assert_job_claim(
+            conn, job_id, owner_id=owner_id,
+            fencing_token=fencing_token, now=boundary_now,
+        )
+        seq = int(row["mutation_seq"] or 0) + 1
+        cur = conn.execute(
+            """UPDATE queue SET status='completed', finished_at=?, run_dir_label=?,
+                      last_error=NULL, claim_owner=NULL, claim_expires_at=NULL,
+                      mutation_protocol='fenced.v2', mutation_seq=?
+               WHERE job_id=? AND status='running' AND claim_owner=?
+                 AND fencing_token=? AND claim_expires_at>?
+                 AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+            (
+                utc_now(), final_label, seq, int(job_id), owner_id,
+                int(fencing_token), boundary_now, int(row["mutation_seq"] or 0),
+            ),
+        )
+        if cur.rowcount != 1:
+            raise StaleJobClaimError(f"job {job_id} changed during publication")
+        conn.execute(
+            """UPDATE job_attempts SET state='completed', finished_at=?
+               WHERE job_id=? AND owner_id=? AND fencing_token=?
+                 AND state IN ('claimed','executing')""",
+            (boundary_now, int(job_id), owner_id, int(fencing_token)),
+        )
+        conn.execute(
+            """INSERT INTO artifact_publications(
+                   job_id, fencing_token, provisional_path, final_label, state, created_at)
+               VALUES(?,?,?,?, 'pending_rename', ?)
+               ON CONFLICT(job_id, fencing_token) DO UPDATE SET
+                   provisional_path=excluded.provisional_path,
+                   final_label=excluded.final_label""",
+            (int(job_id), int(fencing_token), str(provisional_dir), final_label, boundary_now),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    recover_pending_publications(
+        conn,
+        private_root,
+        job_id=job_id,
+        fencing_token=fencing_token,
+        now=now,
+    )
+    return final_dir, imported
+
+
+def recover_pending_publications(
+    conn: sqlite3.Connection,
+    private_root: Path,
+    *,
+    job_id: int | None = None,
+    fencing_token: int | None = None,
+    now: float | None = None,
+) -> int:
+    """Finalize committed publication renames without requiring a live claim.
+
+    Authority comes from the exact committed ``(job_id, fencing_token)``
+    generation in ``artifact_publications``.  This function never re-imports a
+    run and never changes the terminal queue row.
+    """
+    private_root = Path(private_root).resolve()
+    provisional_root = (private_root / "experiments" / "provisional").resolve()
+    completed_root = (private_root / "experiments" / "completed").resolve()
+    where = "state='pending_rename'"
+    params: list[Any] = []
+    if job_id is not None:
+        where += " AND job_id=?"
+        params.append(int(job_id))
+    if fencing_token is not None:
+        where += " AND fencing_token=?"
+        params.append(int(fencing_token))
+    rows = conn.execute(
+        f"SELECT * FROM artifact_publications WHERE {where} ORDER BY publication_id",
+        params,
+    ).fetchall()
+    recovered = 0
+    for row in rows:
+        provisional_dir = Path(str(row["provisional_path"])).resolve()
+        provisional_dir.relative_to(provisional_root)
+        label_path = Path(str(row["final_label"]))
+        if label_path.is_absolute():
+            raise RuntimeError("publication final label must be relative")
+        final_dir = (private_root / label_path).resolve()
+        final_dir.relative_to(completed_root)
+        if final_dir.name != provisional_dir.name:
+            raise RuntimeError("publication paths identify different generations")
+        if provisional_dir.exists() and final_dir.exists():
+            raise RuntimeError("publication has both provisional and final directories")
+        if provisional_dir.exists():
+            final_dir.parent.mkdir(parents=True, exist_ok=True)
+            provisional_dir.replace(final_dir)
+        if not final_dir.exists():
+            continue
+        cur = conn.execute(
+            """UPDATE artifact_publications
+               SET state='directory_published', published_at=?
+               WHERE publication_id=? AND state='pending_rename'
+                 AND job_id=? AND fencing_token=?""",
+            (
+                _epoch(conn, now), int(row["publication_id"]), int(row["job_id"]),
+                int(row["fencing_token"]),
+            ),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            recovered += 1
+        else:
+            conn.rollback()
+    return recovered
+
+
+def mark_publication_indexes_published(
+    conn: sqlite3.Connection,
+    job_id: int,
+    fencing_token: int,
+    *,
+    now: float | None = None,
+) -> None:
+    cur = conn.execute(
+        """UPDATE artifact_publications SET state='published', published_at=?
+           WHERE job_id=? AND fencing_token=?
+             AND state IN ('directory_published','published')""",
+        (_epoch(conn, now), int(job_id), int(fencing_token)),
+    )
+    if cur.rowcount != 1:
+        conn.rollback()
+        raise RuntimeError("publication generation is not ready for secondary indexes")
     conn.commit()
 
 
 def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
     if not db_path.exists():
         return {"exists": False, "runs": [], "queue": [], "totals": {}}
-    conn = connect(db_path)
-    init_db(conn)
+    uri = Path(db_path).resolve().as_posix()
+    conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     runs = [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY run_id DESC LIMIT 20")]
     candidates = [
         {

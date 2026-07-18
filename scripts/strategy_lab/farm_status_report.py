@@ -5,8 +5,8 @@ Reads strategy_lab.sqlite (runs / candidates / farm_results / runtime_stats) and
 prints a clear operator summary: how much was computed, which assets/groups/timeframes,
 the CPU/GPU backend split, the decision + validation breakdown, what was promoted vs
 rejected and why, the queue state + age, flow coverage, and which candidates are ready
-for hard validation (deduped). Migration-safe: it runs init_db so an old DB without the
-v3 tables is upgraded non-destructively instead of crashing.
+for hard validation (deduped). It opens both lifecycle databases read-only and reports
+legacy schemas without migrating them.
 
     python -m scripts.strategy_lab.farm_status_report --fast
     python -m scripts.strategy_lab.farm_status_report
@@ -32,15 +32,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
-from src.research_lab.state_db import default_db_path, init_db  # noqa: E402
+from src.research_lab.state_db import default_db_path  # noqa: E402
 
 READY_FOR_VALIDATION = ("FORWARD_PAPER", "REGIME_SPECIFIC")
-
-
-def _connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def _connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -50,15 +44,15 @@ def _connect_readonly(db_path: Path) -> sqlite3.Connection:
 
 
 def _connect_for_report(db_path: Path) -> tuple[sqlite3.Connection, str | None]:
-    conn = _connect(db_path)
+    conn = _connect_readonly(db_path)
     try:
-        init_db(conn)  # migration-safe: upgrade old DBs, non-destructive
-        return conn, None
-    except sqlite3.OperationalError as exc:
-        conn.close()
-        if "locked" not in str(exc).lower():
-            raise
-        return _connect_readonly(db_path), "database_locked_readonly"
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='fencing_protocol'"
+        ).fetchone()
+        activated = row is not None and str(row[0]) == "v2"
+    except sqlite3.Error:
+        activated = False
+    return conn, None if activated else "legacy_schema_readonly"
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -88,12 +82,18 @@ def _label(value) -> str:
 
 
 def _counts(conn: sqlite3.Connection, sql: str) -> dict[str, int]:
-    return {_label(r[0]): int(r[1]) for r in conn.execute(sql)}
+    try:
+        return {_label(r[0]): int(r[1]) for r in conn.execute(sql)}
+    except sqlite3.Error:
+        return {}
 
 
 def _scalar(conn: sqlite3.Connection, sql: str, default=0):
-    row = conn.execute(sql).fetchone()
-    return row[0] if row and row[0] is not None else default
+    try:
+        row = conn.execute(sql).fetchone()
+        return row[0] if row and row[0] is not None else default
+    except sqlite3.Error:
+        return default
 
 
 def _has_rows(conn: sqlite3.Connection, table: str) -> bool:
@@ -329,7 +329,7 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
                 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
                 from src.research_lab.setup_outcome_memory import (
                     build_gate_index, build_memory_index, knowledge_base_counts)
-                db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
+                db = FarmTasksDB(tasks_db_path(db_path.parent.parent), read_only=True)
                 try:
                     gate_idx = build_gate_index(db.unique_candidates_for_gate())
                 finally:
@@ -357,7 +357,7 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
         try:  # decode blocked/deferred tails into structural reasons (read-only)
             from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
             from src.research_lab.tail_diagnostics import load_universe_symbols, summarize_tails
-            db = FarmTasksDB(tasks_db_path(db_path.parent.parent))
+            db = FarmTasksDB(tasks_db_path(db_path.parent.parent), read_only=True)
             try:
                 blocked = db.tasks_in_state("blocked")
                 deferred = db.tasks_in_state("deferred")

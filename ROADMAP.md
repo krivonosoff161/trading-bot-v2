@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **ACTIVE**. Updated 2026-07-14.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 The project is a paper/research workbench. This roadmap is ordered by evidence
 and maintainability, not by a path to live trading.
@@ -43,6 +43,14 @@ justifies a separate promotion decision. LoRA/adapter training remains deferred.
 Exit gate: a new contributor or search agent can identify the supported paper
 path, distinguish it from legacy code, and avoid private data without relying
 on a private handoff.
+
+## Current: Owner, Claim And Fencing Review
+
+The public-code implementation adds exact process leases, fenced brain/compute
+claims, append-preserving attempts, content-bound materialization replay and
+provisional worker publication. Review and synthetic tests do not authorize a
+private runtime migration. The rollout gate remains quiescence, backup, legacy
+row disposition, v2-only writers and a separate operator decision.
 
 ## Current: Verified Adaptive Research Center
 

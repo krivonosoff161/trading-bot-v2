@@ -36,11 +36,22 @@ def write_run_outputs(
     allow_public_output: bool = False,
     include_rejects: bool = False,
     runtime_meta: dict[str, Any] | None = None,
+    output_state: str = "completed",
+    publication_generation: dict[str, Any] | None = None,
 ) -> Path:
+    if output_state not in {"completed", "provisional"}:
+        raise ValueError("output_state must be completed or provisional")
+    if output_state == "provisional" and not publication_generation:
+        raise ValueError("provisional output requires an owner/fence generation")
     out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-    run_dir = out_root / "experiments" / "completed" / f"{stamp}_{spec.experiment_id}"
+    run_dir = out_root / "experiments" / output_state / f"{stamp}_{spec.experiment_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
+    if publication_generation:
+        (run_dir / "publication_generation.json").write_text(
+            json.dumps(publication_generation, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
     trial_evidence = build_search_trial_evidence(spec, results, runtime_meta)
     trial_by_run_id = {
         str(row.get("run_id") or ""): row
@@ -95,8 +106,34 @@ def write_run_outputs(
         _llm_review_prompt(spec, results, reduce_report), encoding="utf-8"
     )
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
+    if output_state == "completed":
+        publish_run_indexes(
+            spec, results, out_root, run_dir,
+            include_rejects=include_rejects,
+            allow_public_output=allow_public_output,
+        )
+    return run_dir
+
+
+def publish_run_indexes(
+    spec: ExperimentSpec,
+    results: list[RunResult],
+    out_root: Path,
+    run_dir: Path,
+    *,
+    include_rejects: bool = False,
+    allow_public_output: bool = False,
+) -> None:
+    """Publish secondary indexes only after a fenced run becomes authoritative."""
+    out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     _write_obsidian_notes(spec, results, out_root, run_dir.name)
     artifact_label = f"experiments/completed/{run_dir.name}"
+    evidence_path = run_dir / "search_trial_evidence.json"
+    trial_evidence = (
+        json.loads(evidence_path.read_text(encoding="utf-8"))
+        if evidence_path.exists()
+        else build_search_trial_evidence(spec, results, None)
+    )
     # The registry tracks candidates worth revisiting. REJECT rows stay in the
     # full run artifacts (metrics.json / candidates.csv) but do not pollute the
     # registry unless explicitly requested for debugging.
@@ -115,7 +152,6 @@ def write_run_outputs(
     ]
     if entries:
         upsert_entries(registry_path(out_root), entries)
-    return run_dir
 
 
 def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str, Any]:

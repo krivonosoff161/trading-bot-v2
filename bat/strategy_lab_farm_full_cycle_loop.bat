@@ -115,8 +115,6 @@ if errorlevel 1 (
 )
 echo.
 
-if exist "%STOP_FILE%" del "%STOP_FILE%"
-
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Continue';" ^
   "$env:PYTHONUTF8='1';" ^

@@ -13,7 +13,13 @@ import json
 import sqlite3
 from pathlib import Path
 
-from src.research_lab.state_db import connect, default_db_path, init_db
+from src.research_lab.state_db import (
+    claim_next_job,
+    connect,
+    default_db_path,
+    enqueue_experiment,
+    init_db,
+)
 from src.research_lab.stop_intent import (
     clear_stop,
     is_stop_requested,
@@ -36,9 +42,24 @@ def _make_db(private_root: Path) -> Path:
 
 
 def _insert_running_job(conn: sqlite3.Connection, job_id_val: int, spec_path: str, started_at: str) -> None:
+    created = enqueue_experiment(conn, Path(spec_path))
+    assert created == job_id_val
+    started = dt.datetime.fromisoformat(started_at)
+    claim = claim_next_job(
+        conn,
+        owner_id="test-worker",
+        lease_seconds=30 * 60,
+    )
+    assert claim is not None
     conn.execute(
-        "INSERT INTO queue (job_id, spec_path, status, created_at, started_at) VALUES (?, ?, 'running', ?, ?)",
-        (job_id_val, spec_path, "2026-01-01T00:00:00+00:00", started_at),
+        """UPDATE queue SET started_at=?, claim_expires_at=?,
+                  mutation_protocol='fenced.v2', mutation_seq=mutation_seq+1
+           WHERE job_id=? AND status='running' AND claim_owner='test-worker'
+             AND fencing_token=?""",
+        (
+            started_at, started.timestamp() + (30 * 60), job_id_val,
+            int(claim["fencing_token"]),
+        ),
     )
     conn.commit()
 
@@ -78,9 +99,6 @@ def test_requeue_stale_dry_run_writes_nothing(tmp_path):
     stale = find_stale_jobs(db_path, threshold_minutes=30)
     assert len(stale) == 1
     assert stale[0]["job_id"] == 1
-
-    requeued = requeue_stale_jobs(db_path, threshold_minutes=9999)
-    assert requeued == 0
 
     conn = connect(db_path)
     row = conn.execute("SELECT status FROM queue WHERE job_id = 1").fetchone()

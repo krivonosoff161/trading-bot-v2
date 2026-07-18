@@ -1,6 +1,6 @@
 # Entrypoint Catalog
 
-Status: **ACTIVE**. Reviewed: 2026-07-10.
+Status: **ACTIVE**. Reviewed: 2026-07-18.
 
 This catalog is the authority for Windows batch entrypoints. It separates the
 supported paper/product paths from diagnostic, legacy, and network/cost surfaces.
@@ -142,3 +142,7 @@ file is catalogued and that public documentation links resolve locally.
 5. The unified control center supervises existing owners; it does not merge the
    public-news publisher, scanner queue, canonical farm, Telegram bot, or visual
    surfaces into one runtime process.
+6. Recovered heartbeat/port processes are display-only. Executable matching is
+   an identity check, not authority to stop an external process.
+7. Every farm apply mode and standalone worker loop must acquire its durable
+   owner lease; file age and `--once` never bypass the owner group.

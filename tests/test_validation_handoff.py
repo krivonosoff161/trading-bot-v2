@@ -49,7 +49,7 @@ def test_schema_v4_migration_adds_columns(tmp_path):
     assert "paper_outcomes" in {
         str(r["name"]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 5
+    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 6
     conn.close()
 
 

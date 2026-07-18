@@ -44,7 +44,7 @@ def _completed_retest(root: Path, *, n_trades: int = 20, avg_net_pct: float = 0.
         json.dumps({"training_row_id": "training_1", "candidate_id": "candidate_1"}) + "\n",
         encoding="utf-8",
     )
-    db = FarmTasksDB(tasks_db_path(root))
+    db = FarmTasksDB(tasks_db_path(root), clock=lambda: 1.0)
     task_id, _ = db.enqueue_task(
         task_type="run_sweep",
         task_key="retest_1",

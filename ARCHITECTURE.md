@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **ACTIVE**. Updated 2026-07-13.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This file is the current architectural source of truth. Dated reports and
 older plans under `docs/` are historical evidence unless the
@@ -93,11 +93,27 @@ interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
 separate process owners. The UI starts with every contour disabled, prevents a
 second control-center instance and duplicate canonical-farm ownership, records a
 private heartbeat, and contains no execution or private-exchange entrypoint.
-If a prior center left a verified local process running, the UI exposes its PID
-and requires a separate confirmation before stopping it. A port owned by an
-unverified executable is reported but never terminated automatically.
+If a prior center left a local process running, recovered heartbeat or port
+evidence is display-only. PID/start time and even an expected executable prove
+liveness and identity checks, not stop ownership; only a process retained by
+the current center's own `Popen` handle is stoppable.
 Its second status line explains per-role work issued, queued, waiting,
 completed, returned to the analyst, and the current bounded generation.
+
+Canonical farm and standalone-worker mutation authority is persisted in
+`ownership.sqlite` as an exact process identity, random owner instance,
+renewable expiry and monotonically increasing fence. All apply modes, including
+one-shot farm runs, acquire the same canonical resource. A stop intent can be
+acknowledged only by that current owner/fence; mutable lock files and heartbeat
+bytes are never authority.
+
+Brain tasks and compute jobs use separate fenced claims. State transitions,
+attempt history and audit rows commit transactionally. An executing attempt
+whose lease expires remains `ambiguous`; a later fence cannot rewrite it.
+Sweep dispatch uses a content-bound brain outbox because two SQLite databases
+cannot share one atomic commit. Worker output remains provisional until a final
+owner/fence check; run import and queue completion then commit together before
+secondary indexes are published.
 
 ## Storage
 

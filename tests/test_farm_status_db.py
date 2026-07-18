@@ -25,7 +25,7 @@ def test_v3_tables_created_and_idempotent(tmp_path):
     init_db(conn)  # idempotent
     names = _table_names(conn)
     assert {"runs", "candidates", "queue", "farm_results", "runtime_stats", "paper_outcomes"} <= names
-    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 5
+    assert int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]) == 6
     conn.close()
 
 
@@ -238,22 +238,17 @@ def test_status_report_fast_skips_heavy_derived_rebuilds(tmp_path, monkeypatch):
     assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
 
 
-def test_status_report_falls_back_to_readonly_when_db_locked(tmp_path, monkeypatch):
+def test_status_report_uses_readonly_connection_for_current_db(tmp_path):
     conn = connect(default_db_path(tmp_path))
     init_db(conn)
     import_run_dir(conn, tmp_path, _write_run(tmp_path))
     conn.commit()
     conn.close()
 
-    def _locked(_conn):
-        raise sqlite3.OperationalError("database is locked")
-
-    monkeypatch.setattr(farm_status_report, "init_db", _locked)
-
     report = collect(default_db_path(tmp_path), fast=True)
 
     assert report["exists"] is True
-    assert report["migration_note"] == "database_locked_readonly"
+    assert report["migration_note"] is None
     assert report["totals"]["farm_results"] == 2
 
 
@@ -470,7 +465,7 @@ def test_status_report_missing_db(tmp_path):
 
 
 def test_status_report_old_db_without_v3_does_not_crash(tmp_path):
-    """A v2-shaped DB (no farm_results/runtime_stats) must be migrated, not crash."""
+    """A legacy DB is reported without DDL, DML, or a migration side effect."""
     db = default_db_path(tmp_path)
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
@@ -494,11 +489,24 @@ def test_status_report_old_db_without_v3_does_not_crash(tmp_path):
     )
     conn.commit()
     conn.close()
-    report = collect(db)  # init_db inside upgrades to current schema; must not crash
+    report = collect(db, fast=True)
     assert report["exists"] is True
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 2
+    assert report["migration_note"] == "legacy_schema_readonly"
     assert report["totals"]["farm_results"] == 0
     assert "BTC_USDT_SWAP" in {r["symbol"] for r in report["ready_for_validation"]}
+    verify = sqlite3.connect(str(db))
+    tables = {
+        row[0] for row in verify.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    queue_columns = {
+        row[1] for row in verify.execute("PRAGMA table_info(queue)")
+    }
+    verify.close()
+    assert "farm_results" not in tables
+    assert "claim_owner" not in queue_columns
 
 
 def test_ready_for_validation_deduped(tmp_path):

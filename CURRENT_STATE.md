@@ -1,6 +1,6 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-14.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This page states what the public repository supports. It is deliberately not a
 runtime dashboard: process IDs, current balances, private journals, signal
@@ -29,6 +29,10 @@ rows, provider state, and local findings belong outside public Git.
 - New validation requests fail closed unless they carry an untouched evaluation
   epoch distinct from the farm selection data. Existing selection-only evidence
   therefore needs fresh data before it can become paper-forward ready.
+- Public runtime code now models process, brain-task and compute-job authority
+  with renewable leases and monotonic fences. Cross-database sweep dispatch is
+  content-bound and replayable; worker results remain provisional until fenced
+  import and queue completion commit together.
 
 ## Explicitly Not Supported
 
@@ -49,6 +53,7 @@ rows, provider state, and local findings belong outside public Git.
 | Local GPU | Numeric kernels may use the supported GPU backend. Local Ollama remains CPU-pinned on this 3 GiB GPU to avoid VRAM contention; CuPy warns when `CUDA_PATH` is not discoverable. |
 | Telegram | Delivery is opt-in and deduplicated; it must never be mistaken for execution. |
 | Legacy surfaces | Old engine, `start_all.bat`, and execution-adjacent scripts are isolated references, not supported farm paths. |
+| Ownership rollout | Additive v2 schemas are public and tested, but applying them to private runtime databases requires a separate quiesced, backed-up operator rollout. |
 
 ## How To Verify A Local Run
 

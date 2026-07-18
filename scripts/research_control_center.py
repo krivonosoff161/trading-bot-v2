@@ -404,6 +404,49 @@ def _same_live_process(pid: int, started_at: float | int | None) -> bool:
     return bool(actual is not None and expected > 0 and abs(actual - expected) <= 5.0)
 
 
+def _external_process_descriptor(
+    *,
+    key: str,
+    pid: int | None,
+    started_at: float | None,
+    executable: str | None = None,
+    executable_matches: bool = False,
+    owned_child: bool = False,
+    source: str = "external",
+) -> dict[str, object]:
+    """Describe observed processes without upgrading observation into authority."""
+    del executable, executable_matches  # identity evidence is useful, but is not ownership
+    stoppable = bool(owned_child)
+    return {
+        "key": key,
+        "pid": int(pid or 0),
+        "started_at": started_at,
+        "source": source,
+        "stoppable": stoppable,
+        "authority": "owned_child" if stoppable else "display_only",
+    }
+
+
+def validate_owner_group_start(
+    specs: tuple[ContourSpec, ...], keys: tuple[str, ...]
+) -> None:
+    """Reject an entire multi-start request before starting any conflicting contour."""
+    by_key = {spec.key: spec for spec in specs}
+    groups: dict[str, str] = {}
+    for key in keys:
+        spec = by_key.get(key)
+        if spec is None:
+            raise ValueError(f"unknown contour: {key}")
+        if not spec.owner_group:
+            continue
+        prior = groups.get(spec.owner_group)
+        if prior is not None and prior != key:
+            raise ValueError(
+                f"owner group {spec.owner_group!r} requested by both {prior!r} and {key!r}"
+            )
+        groups[spec.owner_group] = key
+
+
 def _load_external_contours(path: Path) -> dict[str, dict]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -421,7 +464,9 @@ def _load_external_contours(path: Path) -> dict[str, dict]:
         actual = _process_started_at(pid)
         if actual is None or expected <= 0 or abs(actual - expected) > 5.0:
             continue
-        external[str(key)] = {"pid": pid, "started_at": actual}
+        external[str(key)] = _external_process_descriptor(
+            key=str(key), pid=pid, started_at=actual, source="heartbeat"
+        )
     return external
 
 
@@ -646,6 +691,21 @@ class ControlCenter(tk.Tk):
 
     def _start_authorized(self, keys: tuple[str, ...]) -> None:
         """Start only contours explicitly named on this process command line."""
+        active_owned = tuple(
+            key for key, item in self.contours.items() if item.running
+        )
+        active_external = tuple(
+            key for key in getattr(self, "external_contours", {})
+            if key in self.contours
+        )
+        active = active_owned + active_external
+        try:
+            validate_owner_group_start(contour_specs(), keys + active)
+        except ValueError as exc:
+            for key in keys:
+                if key in self.status_vars:
+                    self.status_vars[key].set(f"start rejected: {exc}")
+            return
         for key in keys:
             item = self.contours[key]
             if not item.running and not self._external_running(key):
@@ -808,12 +868,12 @@ class ControlCenter(tk.Tk):
                 continue
             pid = int(row.get("pid") or 0)
             if _same_live_process(pid, row.get("started_at")):
-                return {
-                    "pid": pid,
-                    "started_at": float(row["started_at"]),
-                    "source": "heartbeat",
-                    "stoppable": True,
-                }
+                return _external_process_descriptor(
+                    key=candidate,
+                    pid=pid,
+                    started_at=float(row["started_at"]),
+                    source="heartbeat",
+                )
             external_contours.pop(candidate, None)
         port = {"ollama": 11434, "dashboard": 8765}.get(key)
         if port and self._port_open(port):
@@ -821,17 +881,19 @@ class ControlCenter(tk.Tk):
             started_at = _process_started_at(pid or 0)
             executable = _process_executable(pid or 0)
             expected_ollama = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
-            stoppable = bool(
+            executable_matches = bool(
                 key == "ollama"
                 and executable
                 and os.path.normcase(str(executable)) == os.path.normcase(str(expected_ollama))
             )
-            return {
-                "pid": pid,
-                "started_at": started_at,
-                "source": "port",
-                "stoppable": stoppable,
-            }
+            return _external_process_descriptor(
+                key=key,
+                pid=pid,
+                started_at=started_at,
+                executable=str(executable) if executable else None,
+                executable_matches=executable_matches,
+                source="port",
+            )
         return None
 
     def _external_profile_contours(self) -> list[tuple[str, dict[str, object]]]:

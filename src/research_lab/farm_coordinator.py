@@ -20,6 +20,7 @@ Paper/research only: no order path, no .env, no AUTO_TRADE, no Telegram.
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -30,7 +31,7 @@ from src.research_lab import farm_data_state
 from src.research_lab.data_planner import plan_symbol
 from src.research_lab.farm_classifier import VALIDATION_ELIGIBLE, classify_run
 from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
-from src.research_lab.farm_tasks_db import FarmTasksDB
+from src.research_lab.farm_tasks_db import FarmTasksDB, StaleTaskClaimError
 from src.research_lab.farm_priority import priority_value
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
@@ -38,6 +39,7 @@ from src.research_lab.outcome_retest import paper_to_executable_family
 from src.research_lab.outcome_retest import write_outcome_retest_specs
 from src.research_lab.paths import market_data_glob, resolve_private_root
 from src.research_lab.setup_outcome_memory import GateIndex, build_gate_index, lookup
+from src.research_lab.state_db import ensure_experiment_queued
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.tail_diagnostics import load_universe_symbols
@@ -62,6 +64,66 @@ _COUNTER_KEYS = (
     "advisor_proposals_loaded", "advisor_sweeps_scheduled",
     "advisor_sweeps_deduped", "advisor_sweep_invalid", "advisor_sweeps_planned",
 )
+
+
+def _replay_materialization_outbox(tasks: FarmTasksDB, conn, *, now: float) -> int:
+    """Idempotently finish intents that survived a spec/queue interruption."""
+    delivered = 0
+    for pending in tasks.pending_materializations():
+        materialization_id = str(pending["materialization_id"])
+        try:
+            # Authority is checked before the first filesystem or compute-DB
+            # side effect.  A pending record alone grants no replay authority.
+            intent = tasks.authorize_materialization_replay(
+                materialization_id, now=now
+            )
+        except StaleTaskClaimError:
+            continue
+        payload = str(intent["spec_json"])
+        digest = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        if digest != str(intent["spec_digest"]):
+            tasks.mark_materialization_ambiguous(
+                str(intent["materialization_id"]), now=now
+            )
+            continue  # fail closed: corrupted intent is never materialized
+        path = Path(str(intent["spec_path"]))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            if path.read_text(encoding="utf-8") != payload:
+                tasks.mark_materialization_ambiguous(
+                    str(intent["materialization_id"]), now=now
+                )
+                continue
+        else:
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.replace(path)
+        try:
+            # Revalidate at the cross-database publication boundary.
+            tasks.authorize_materialization_replay(materialization_id, now=now)
+        except StaleTaskClaimError:
+            continue
+        job_id, _ = ensure_experiment_queued(
+            conn,
+            path,
+            priority=int(intent["priority"]),
+            materialization_id=materialization_id,
+            materialization_digest=str(intent["spec_digest"]),
+        )
+        try:
+            tasks.mark_materialization_dispatched(
+                materialization_id, job_id, now=now
+            )
+            tasks.commit_materialization(
+                int(intent["task_id"]),
+                materialization_id=materialization_id,
+                queue_job_id=job_id,
+                now=now,
+            )
+        except StaleTaskClaimError:
+            continue
+        delivered += 1
+    return delivered
 
 
 def _norm(symbol: str) -> str:
@@ -756,6 +818,9 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                      priority_base, limit, counters, now, sweep_tier="normal") -> None:
     from src.research_lab.candle_library import load_canonical_candles
     from src.research_lab.search_family_definition import resolve_snapshot_set
+    replayed = _replay_materialization_outbox(tasks, conn, now=now)
+    if replayed:
+        _bump(counters, "sweeps_materialized", replayed)
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("run_sweep",), now=now)
         if task is None:
@@ -796,6 +861,21 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             )
             _bump(counters, "sweeps_snapshot_drift")
             continue
+        materialization_id = (
+            f"task:{int(task['task_id'])}:fence:{int(task['fencing_token'])}"
+        )
+
+        def prepare_intent(spec_path: Path, spec_json: str, spec_digest: str) -> None:
+            tasks.prepare_materialization(
+                int(task["task_id"]),
+                materialization_id=materialization_id,
+                spec_path=str(spec_path),
+                spec_digest=spec_digest,
+                spec_json=spec_json,
+                priority=priority_base + priority_value(task.get("priority")),
+                now=now,
+            )
+
         exp_id, job_id, created = queue_sweep(
             conn,
             spec,
@@ -809,13 +889,45 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             data_snapshot_id=snapshot_id,
             data_evidence_hash=evidence_hash,
             data_snapshot_bindings=snapshot_bindings,
+            materialization_id=materialization_id,
+            prepare_intent=prepare_intent,
+        )
+        tasks.mark_materialization_dispatched(
+            materialization_id, job_id, now=now
         )
         if created:
-            tasks.materialize_task(task["task_id"], job_id, now=now)
+            tasks.commit_materialization(
+                task["task_id"],
+                materialization_id=materialization_id,
+                queue_job_id=job_id,
+                now=now,
+            )
             _bump(counters, "sweeps_materialized")
         else:
-            tasks.complete_task(task["task_id"], reason="compute_deduped",
-                                materialized_queue_job_id=job_id, now=now)
+            # A content-identical existing compute row is still linked through
+            # this task fence's durable intent. Only an already-terminal queue
+            # row makes the brain task terminal here; queued/running rows stay
+            # linked for fenced completion sync.
+            tasks.commit_materialization(
+                task["task_id"],
+                materialization_id=materialization_id,
+                queue_job_id=job_id,
+                now=now,
+            )
+            existing = conn.execute(
+                "SELECT status, run_dir_label FROM queue WHERE job_id=?",
+                (int(job_id),),
+            ).fetchone()
+            if existing is not None and existing["status"] == "completed":
+                tasks.complete_task(
+                    task["task_id"], reason="compute_deduped",
+                    materialized_queue_job_id=job_id,
+                    last_result_ref=existing["run_dir_label"],
+                    run_dir_label=existing["run_dir_label"],
+                    now=now,
+                )
+            elif existing is not None and existing["status"] == "failed":
+                tasks.fail_task(task["task_id"], "compute_failed", now=now)
             _bump(counters, "sweeps_deduped")
 
 
@@ -824,8 +936,42 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
         job_id = task.get("materialized_queue_job_id")
         if not job_id:
             continue
-        row = conn.execute("SELECT status, run_dir_label FROM queue WHERE job_id=?", (int(job_id),)).fetchone()
+        intent = tasks.raw_connection.execute(
+            """SELECT materialization_id, task_fencing_token, spec_path, spec_digest
+               FROM materialization_outbox
+               WHERE task_id=? AND queue_job_id=? AND state='acknowledged'
+               ORDER BY updated_at DESC LIMIT 1""",
+            (int(task["task_id"]), int(job_id)),
+        ).fetchone()
+        if intent is None or int(intent["task_fencing_token"]) != int(task["fencing_token"]):
+            continue
+        row = conn.execute(
+            """SELECT q.status, q.run_dir_label, q.spec_path,
+                      q.materialization_digest AS queue_digest,
+                      qm.materialization_id, qm.spec_digest
+               FROM queue q
+               JOIN queue_materializations qm ON qm.job_id=q.job_id
+               WHERE q.job_id=? AND qm.materialization_id=?""",
+            (int(job_id), str(intent["materialization_id"])),
+        ).fetchone()
         if row is None:
+            continue
+        spec_path = Path(str(row["spec_path"]))
+        if not spec_path.exists():
+            continue
+        payload = spec_path.read_text(encoding="utf-8")
+        digest = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        if digest != str(intent["spec_digest"]):
+            continue
+        if (
+            str(row["materialization_id"]) != str(intent["materialization_id"])
+            or str(row["spec_digest"]) != str(intent["spec_digest"])
+            or str(row["queue_digest"] or "") != str(intent["spec_digest"])
+        ):
+            continue
+        try:
+            tasks.renew_task_claim(task["task_id"], now=now)
+        except StaleTaskClaimError:
             continue
         if row["status"] == "completed":
             label = row["run_dir_label"]
