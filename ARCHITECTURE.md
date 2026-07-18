@@ -115,6 +115,21 @@ cannot share one atomic commit. Worker output remains provisional until a final
 owner/fence check; run import and queue completion then commit together before
 secondary indexes are published.
 
+### Paper Evidence Authority
+
+The public v2 paper-evidence implementation separates immutable authority from
+replaceable views. A co-located SQLite store owns paper subject generations,
+exact observation batches, lifecycle and account events, revisions, run-stage
+manifests, writer fences, and the current-run pointer. A completed projection is
+a verified read view over one atomic run; JSON/JSONL files and legacy v1 output
+remain display-only and cannot become authority through filename presence.
+
+The coordinator API is dependency-injected and off by default. No supported
+launcher currently activates or migrates private v2 state. Future rollout must
+retain the canonical farm lease as an outer preflight and independently acquire
+the co-located paper writer fence. See
+[Paper Evidence Generations](docs/paper-evidence-generations.md).
+
 ## Storage
 
 Public Git holds source, tests, public-safe documentation, templates, and

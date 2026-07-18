@@ -59,6 +59,40 @@ def load_signals(private_root: Path) -> list[PaperActionSignal]:
     return [PaperActionSignal.from_dict(latest[sid]) for sid in order]
 
 
+def load_signals_strict(private_root: Path) -> list[PaperActionSignal]:
+    """Load every source row fail-closed for v2 producer-generation authority.
+
+    The legacy display loader intentionally tolerates damaged lines.  A completed
+    producer generation cannot: one omitted or malformed row would turn absence into
+    false withdrawal authority.
+    """
+    path = _jsonl_path(private_root)
+    if not path.exists():
+        return []
+    latest: dict[str, PaperActionSignal] = {}
+    order: list[str] = []
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"corrupt paper signal row {line_number}") from exc
+        if not isinstance(row, dict) or not str(row.get("signal_id") or ""):
+            raise ValueError(f"paper signal row {line_number} lacks identity")
+        try:
+            signal = PaperActionSignal.from_dict(row)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError(f"invalid paper signal row {line_number}") from exc
+        ok, problems = validate_signal(signal)
+        if not ok:
+            raise ValueError(f"invalid paper signal row {line_number}: {problems}")
+        if signal.signal_id not in latest:
+            order.append(signal.signal_id)
+        latest[signal.signal_id] = signal
+    return [latest[signal_id] for signal_id in order]
+
+
 def current_state_view(private_root: Path) -> dict[str, Any]:
     """Compact summary for the dashboard/graph: counts by status + the active cards."""
     sigs = load_signals(private_root)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from src.research_lab import trading_policy_calibration
 from src.research_lab.trading_policy_calibration import (
     build_trading_policy_calibration,
     profile_verdict,
@@ -29,10 +30,27 @@ def _row(*, profile="base", net=0.5, lifecycle="PaperSignalLifecycle.v2", captur
         "net_pct": net,
         "capture": capture,
         "diagnosis": "good_signal" if net > 0 else "valid_loss",
+        "immutable_terminal_evidence": True,
+        "paper_generation_run_id": "run-v2",
+        "terminal_lifecycle_event_id": "lifecycle-v2",
+        "account_generation_id": "account-v2",
     }
 
 
-def test_legacy_rows_are_visible_but_cannot_calibrate(tmp_path):
+def _enable_current(monkeypatch):
+    monkeypatch.setattr(
+        trading_policy_calibration,
+        "read_projection_view",
+        lambda *_args, **_kwargs: {
+            "current": True,
+            "paper_generation_run_id": "run-v2",
+            "generation_status": "completed",
+        },
+    )
+
+
+def test_legacy_rows_are_visible_but_cannot_calibrate(tmp_path, monkeypatch):
+    _enable_current(monkeypatch)
     _write_rows(tmp_path, [_row(lifecycle="legacy") for _ in range(50)])
 
     report = build_trading_policy_calibration(tmp_path)
@@ -44,7 +62,8 @@ def test_legacy_rows_are_visible_but_cannot_calibrate(tmp_path):
     assert report["by_profile"] == {}
 
 
-def test_profile_requires_sample_and_reports_uncertainty(tmp_path):
+def test_profile_requires_sample_and_reports_uncertainty(tmp_path, monkeypatch):
+    _enable_current(monkeypatch)
     rows = [_row(net=0.7) for _ in range(18)] + [_row(net=-0.3) for _ in range(2)]
     _write_rows(tmp_path, rows)
 
@@ -59,7 +78,8 @@ def test_profile_requires_sample_and_reports_uncertainty(tmp_path):
     assert report["comparison_kind"] == "observational_paper_outcomes_not_causal_attribution"
 
 
-def test_losing_profile_is_demoted_only_after_enough_evidence(tmp_path):
+def test_losing_profile_is_demoted_only_after_enough_evidence(tmp_path, monkeypatch):
+    _enable_current(monkeypatch)
     rows = [_row(profile="runner_probe", net=-0.8) for _ in range(18)]
     rows += [_row(profile="runner_probe", net=0.2) for _ in range(2)]
     _write_rows(tmp_path, rows)
@@ -71,7 +91,8 @@ def test_losing_profile_is_demoted_only_after_enough_evidence(tmp_path):
     assert report["execution_allowed"] is False
 
 
-def test_untrusted_or_execution_rows_are_excluded(tmp_path):
+def test_untrusted_or_execution_rows_are_excluded(tmp_path, monkeypatch):
+    _enable_current(monkeypatch)
     rows = [_row() for _ in range(20)]
     rows[0]["paper_only"] = False
     rows[1]["execution_allowed"] = True
@@ -83,18 +104,14 @@ def test_untrusted_or_execution_rows_are_excluded(tmp_path):
     assert report["by_profile"]["base"]["verdict"] == "insufficient_evidence"
 
 
-def test_reports_horizon_conflicts_account_and_kaito_acceptance(tmp_path):
+def test_reports_horizon_conflicts_account_and_kaito_acceptance(tmp_path, monkeypatch):
+    _enable_current(monkeypatch)
     rows = [_row() for _ in range(12)]
     for row in rows:
         row["symbol"] = "KAITO_USDT_SWAP"
+    rows[0]["paper_pnl_usdt"] = 2.5
     rows[1]["side"] = "short"
     _write_rows(tmp_path, rows)
-    events = tmp_path / "state" / "derived" / "paper_account_events.jsonl"
-    events.write_text(
-        json.dumps({"event_type": "position_closed", "pnl_usdt": 2.5}) + "\n",
-        encoding="utf-8",
-    )
-
     report = build_trading_policy_calibration(tmp_path)
 
     assert report["by_horizon"]["tactical"]["terminal_rows"] == 12

@@ -10,6 +10,8 @@ import time
 from typing import Any
 
 from src.research_lab.paper_account_ledger import audit_paper_account_ledger
+from src.research_lab.paper_evidence_store import PaperEvidenceStore
+from src.research_lab.paper_projection_reader import read_projection_view
 
 SCHEMA = "PaperAcceptanceSnapshot.v1"
 REPORT_SCHEMA = "PaperAcceptanceReport.v1"
@@ -41,7 +43,12 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _training_integrity(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    v2 = [row for row in rows if row.get("lifecycle_schema") == "PaperSignalLifecycle.v2"]
+    v2 = [
+        row
+        for row in rows
+        if row.get("lifecycle_schema") == "PaperSignalLifecycle.v2"
+        and row.get("immutable_terminal_evidence") is True
+    ]
     contradictions = sum(
         row.get("opened_at_bar_ts") not in (None, "") and row.get("result") == "expired_no_entry"
         for row in v2
@@ -85,7 +92,12 @@ def _artifact_sizes(derived: Path) -> dict[str, int]:
     return {name: (derived / name).stat().st_size if (derived / name).exists() else 0 for name in names}
 
 
-def capture_snapshot(private_root: Path, *, now: float | None = None) -> dict[str, Any]:
+def capture_snapshot(
+    private_root: Path,
+    *,
+    now: float | None = None,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = Path(private_root)
     now = time.time() if now is None else float(now)
     derived = private_root / "state" / "derived"
@@ -96,13 +108,39 @@ def capture_snapshot(private_root: Path, *, now: float | None = None) -> dict[st
     retest_specs = _read_json(derived / "outcome_retest_specs.json")
     calibration = _read_json(derived / "trading_policy_calibration.json")
     farm_status = _read_json(private_root / "state" / "farm_loop_status.json")
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=derived / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    if generation["authority_database_exists"]:
+        run_id = str(generation.get("paper_generation_run_id") or "")
+        training = [
+            row
+            for row in training
+            if row.get("paper_generation_run_id") == run_id
+            and row.get("immutable_terminal_evidence") is True
+        ]
+        thesis_events = []
+        if not (
+            lineage.get("current_generation_compatible") is True
+            and lineage.get("paper_generation_run_id") == run_id
+        ):
+            lineage = {}
+        account = PaperEvidenceStore.read_account_state(
+            generation["authority_database_path"],
+            account_generation_id=str(generation.get("account_generation_id") or ""),
+        )
+    else:
+        account = audit_paper_account_ledger(private_root)
     unsafe_env = str(os.environ.get("AUTO_TRADE") or "").strip().lower() in {"1", "true", "yes", "on"}
     return {
         "schema": SCHEMA,
         "captured_at": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
         "captured_at_epoch": now,
         "lifecycle": _training_integrity(training),
-        "account": audit_paper_account_ledger(private_root),
+        "account": account,
         "scenario": {
             "events": len(thesis_events),
             "closed_events": sum(row.get("event_type") == "scenario_closed" for row in thesis_events),
@@ -137,6 +175,14 @@ def capture_snapshot(private_root: Path, *, now: float | None = None) -> dict[st
             "paper_only": True,
             "execution_allowed": False,
         },
+        "generation": {
+            "paper_generation_run_id": str(
+                generation.get("paper_generation_run_id") or ""
+            ),
+            "generation_status": str(generation.get("generation_status") or ""),
+            "current_generation_compatible": bool(generation.get("current")),
+            "display_only": not bool(generation.get("current")),
+        },
     }
 
 
@@ -144,9 +190,19 @@ def _run_dir(private_root: Path, run_id: str) -> Path:
     return Path(private_root) / "reports" / "paper_acceptance" / run_id
 
 
-def start_acceptance(private_root: Path, *, hours: float = MIN_DURATION_HOURS, now: float | None = None) -> dict[str, Any]:
+def start_acceptance(
+    private_root: Path,
+    *,
+    hours: float = MIN_DURATION_HOURS,
+    now: float | None = None,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     now = time.time() if now is None else float(now)
-    snapshot = capture_snapshot(private_root, now=now)
+    snapshot = capture_snapshot(
+        private_root,
+        now=now,
+        evidence_database_path=evidence_database_path,
+    )
     if snapshot["safety"]["auto_trade_env_enabled"]:
         raise RuntimeError("AUTO_TRADE is enabled in the current process environment")
     if snapshot["farm"]["execution_allowed"]:
@@ -176,10 +232,19 @@ def load_active(private_root: Path) -> tuple[dict[str, Any], Path]:
     return baseline, run_dir
 
 
-def evaluate_acceptance(private_root: Path, *, now: float | None = None) -> dict[str, Any]:
+def evaluate_acceptance(
+    private_root: Path,
+    *,
+    now: float | None = None,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     baseline_doc, run_dir = load_active(private_root)
     baseline = baseline_doc["baseline"]
-    current = capture_snapshot(private_root, now=now)
+    current = capture_snapshot(
+        private_root,
+        now=now,
+        evidence_database_path=evidence_database_path,
+    )
     duration = (current["captured_at_epoch"] - baseline["captured_at_epoch"]) / 3600.0
     delta_v2 = current["lifecycle"]["v2_rows"] - baseline["lifecycle"]["v2_rows"]
     delta_closed = current["scenario"]["closed_events"] - baseline["scenario"]["closed_events"]
@@ -189,6 +254,7 @@ def evaluate_acceptance(private_root: Path, *, now: float | None = None) -> dict
         for name, size in current["artifact_sizes"].items()
     }
     checks = {
+        "generation_current": bool(current["generation"]["current_generation_compatible"]),
         "duration_met": duration >= float(baseline_doc["required_hours"]),
         "lifecycle_clean": current["lifecycle"]["valid"] and delta_v2 > 0,
         "account_reconciles": bool(current["account"].get("valid")),

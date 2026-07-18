@@ -50,6 +50,9 @@ architecture.
 - [Farm runbook](farm_runbook.md): supported paper/research operation.
 - [Paper runtime design](paper_runtime_design.md): validated setup observation
   and outcome recording.
+- [Paper evidence generations](paper-evidence-generations.md): immutable v2
+  event/account authority, current projections, legacy display, and rollout
+  boundary.
 - [Paper acceptance cycle](paper_acceptance_cycle_2026-07-10.md): acceptance
   criteria for a bounded paper run.
 - [Outcome learning loop](outcome_learning_loop_2026-07-05.md): paper outcome

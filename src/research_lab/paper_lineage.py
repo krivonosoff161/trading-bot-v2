@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id
+from src.research_lab.paper_projection_reader import read_projection_view
 
 SCHEMA = "PaperLineageEnvelope.v1"
 SUMMARY_SCHEMA = "paper_lineage_index.v1"
@@ -36,6 +37,10 @@ ID_FIELDS = (
     "outcome_id",
     "outcome_review_id",
     "training_row_id",
+    "paper_generation_run_id",
+    "paper_subject_generation_id",
+    "terminal_lifecycle_event_id",
+    "account_generation_id",
 )
 MULTI_ID_FIELDS = {"telegram_card_id"}
 
@@ -95,7 +100,11 @@ def _merge(bucket: dict[str, set[str]], row: dict[str, Any], *, aliases: dict[st
         _put(bucket, field, row.get(aliases.get(field, field)))
 
 
-def build_paper_lineage(private_root: Path) -> dict[str, Any]:
+def build_paper_lineage(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = Path(private_root)
     derived = _derived(private_root)
     preview_rows = _load_items(derived / "paper_telegram_card_ledger.json")
@@ -104,13 +113,29 @@ def build_paper_lineage(private_root: Path) -> dict[str, Any]:
     training_rows = _load_jsonl(derived / "paper_signal_training.jsonl")
     if not training_rows:
         training_rows = _load_items(derived / "paper_signal_training.json")
-    surfaces = {
-        "product": _load_items(derived / "paper_product_trades.json"),
-        "queue": _load_items(derived / "main_paper_runtime_queue.json"),
-        "trades": _load_items(derived / "main_paper_trades.json"),
-        "preview": preview_rows,
-        "training": training_rows,
-    }
+    trade_generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=derived / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    authoritative_trades = list(trade_generation.get("items") or [])
+    if trade_generation["authority_database_exists"]:
+        surfaces = {
+            "product": [],
+            "queue": authoritative_trades,
+            "trades": authoritative_trades,
+            "preview": [],
+            "training": [],
+        }
+    else:
+        surfaces = {
+            "product": _load_items(derived / "paper_product_trades.json"),
+            "queue": _load_items(derived / "main_paper_runtime_queue.json"),
+            "trades": authoritative_trades,
+            "preview": preview_rows,
+            "training": training_rows,
+        }
     thesis_payload = {}
     thesis_path = derived / "trade_thesis_supervisor.json"
     if thesis_path.exists():
@@ -118,13 +143,19 @@ def build_paper_lineage(private_root: Path) -> dict[str, Any]:
             thesis_payload = json.loads(thesis_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             thesis_payload = {}
-    thesis_events = _load_jsonl(derived / "trade_thesis_events.jsonl")
+    thesis_events = [] if trade_generation["authority_database_exists"] else _load_jsonl(
+        derived / "trade_thesis_events.jsonl"
+    )
     if not thesis_events:
         thesis_events = [row for row in thesis_payload.get("event_items") or [] if isinstance(row, dict)]
-    thesis_items = _load_jsonl(derived / "trade_theses.jsonl")
+    thesis_items = [] if trade_generation["authority_database_exists"] else _load_jsonl(
+        derived / "trade_theses.jsonl"
+    )
     if not thesis_items:
         thesis_items = [row for row in thesis_payload.get("items") or [] if isinstance(row, dict)]
-    account_events = _load_jsonl(derived / "paper_account_events.jsonl")
+    account_events = [] if trade_generation["authority_database_exists"] else _load_jsonl(
+        derived / "paper_account_events.jsonl"
+    )
 
     all_source_ids = {
         source_id
@@ -242,6 +273,12 @@ def build_paper_lineage(private_root: Path) -> dict[str, Any]:
         "jsonl_path": str(_jsonl_path(private_root)),
         "snapshot_path": str(_snapshot_path(private_root)),
         "items": envelopes,
+        "paper_generation_run_id": str(
+            trade_generation.get("paper_generation_run_id") or ""
+        ),
+        "generation_status": str(trade_generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(trade_generation.get("current")),
+        "display_only": not bool(trade_generation.get("current")),
     }
     _jsonl_path(private_root).parent.mkdir(parents=True, exist_ok=True)
     with _jsonl_path(private_root).open("w", encoding="utf-8") as fh:

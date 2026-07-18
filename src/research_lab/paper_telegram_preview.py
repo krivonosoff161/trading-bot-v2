@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.candle_library import load_canonical_candles
+from src.research_lab.paper_projection_reader import read_projection_view
 from src.research_lab.providers.okx_public import MarketDataError, OkxPublicMarketDataProvider, _httpx_get_direct
 from src.strategy.chart_renderer import generate_chart_png
 
@@ -126,6 +127,10 @@ class PaperTelegramPreview:
     farm_geometry_stop_scale: Any = None
     farm_geometry_tp_scale: Any = None
     farm_geometry_hold_scale: Any = None
+    paper_generation_run_id: str = ""
+    paper_subject_generation_id: str = ""
+    terminal_lifecycle_event_id: str = ""
+    account_generation_id: str = ""
     problems: list[str] = field(default_factory=list)
     card_template_version: str = CARD_TEMPLATE_VERSION
     paper_only: bool = True
@@ -1227,26 +1232,51 @@ def build_paper_telegram_preview(
     *,
     limit: int = 20,
     fetch_public_chart_candles: bool | None = None,
+    evidence_database_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    rows, source_path = _load_records(_trade_snapshot_path(private_root))
-    source_schema = "main_paper_trade_ledger.v1"
-    if rows and not any(str(row.get("status") or "") not in NON_ACTIONABLE_TRADE_STATUSES for row in rows):
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=_trade_snapshot_path(private_root),
+        evidence_database_path=evidence_database_path,
+    )
+    rows = list(generation.get("items") or [])
+    source_path = (
+        Path(generation["authority_database_path"])
+        if generation["authority_database_exists"]
+        else (_trade_snapshot_path(private_root) if _trade_snapshot_path(private_root).exists() else None)
+    )
+    source_schema = (
+        "PaperProjectionEnvelope.v2"
+        if generation.get("current")
+        else "main_paper_trade_ledger.v1"
+    )
+    authority_present = bool(generation["authority_database_exists"])
+    if (
+        not authority_present
+        and rows
+        and not any(
+            str(row.get("status") or "") not in NON_ACTIONABLE_TRADE_STATUSES for row in rows
+        )
+    ):
         product_rows, product_source_path = _load_records(_product_trade_snapshot_path(private_root))
         if product_rows:
             rows, source_path = product_rows, product_source_path
             source_schema = "paper_product_trade_ledger.v1"
-    if not rows:
+    if not rows and not authority_present:
         rows, source_path = _load_records(_product_trade_snapshot_path(private_root))
         source_schema = "paper_product_trade_ledger.v1"
-    if not rows:
+    if not rows and not authority_present:
         rows, source_path = _load_records(_consumer_snapshot_path(private_root))
         source_schema = "main_paper_consumer.v1"
-    if not rows:
+    if not rows and not authority_present:
         rows, source_path = _load_paper_signal_candidates(_paper_signal_snapshot_path(private_root))
         source_schema = "paper_signals.v1"
 
     records_read = len(rows)
-    scenario_close_cards = _scenario_close_previews(Path(private_root), limit=limit)
+    scenario_close_cards = (
+        [] if authority_present else _scenario_close_previews(Path(private_root), limit=limit)
+    )
     previews: list[PaperTelegramPreview] = list(scenario_close_cards)
     skipped_rejected = 0
     skipped_non_actionable = 0
@@ -1262,7 +1292,7 @@ def build_paper_telegram_preview(
     scenario_update_groups: dict[str, list[dict[str, Any]]] = {}
     main_rows_prefiltered = False
     product_rows_prefiltered = False
-    if source_schema == "main_paper_trade_ledger.v1":
+    if source_schema in {"main_paper_trade_ledger.v1", "PaperProjectionEnvelope.v2"}:
         main_rows_prefiltered = True
         filtered_rows = []
         for row in rows:
@@ -1270,15 +1300,18 @@ def build_paper_telegram_preview(
                 skipped_non_actionable += 1
                 continue
             filtered_rows.append(row)
-        (
-            rows,
-            scenario_context_rows,
-            skipped_scenario_gate,
-            scenario_gate_reasons,
-            scenario_ranked,
-            scenario_groups,
-            scenario_update_groups,
-        ) = _scenario_gate_rows(Path(private_root), filtered_rows)
+        if source_schema == "main_paper_trade_ledger.v1":
+            (
+                rows,
+                scenario_context_rows,
+                skipped_scenario_gate,
+                scenario_gate_reasons,
+                scenario_ranked,
+                scenario_groups,
+                scenario_update_groups,
+            ) = _scenario_gate_rows(Path(private_root), filtered_rows)
+        else:
+            rows = filtered_rows
     if source_schema == "paper_product_trade_ledger.v1":
         family_quality = _family_quality(Path(private_root))
         rows, quality_ranked = _rank_product_preview_rows(Path(private_root), rows)
@@ -1365,6 +1398,14 @@ def build_paper_telegram_preview(
                 farm_geometry_stop_scale=row.get("farm_geometry_stop_scale"),
                 farm_geometry_tp_scale=row.get("farm_geometry_tp_scale"),
                 farm_geometry_hold_scale=row.get("farm_geometry_hold_scale"),
+                paper_generation_run_id=str(row.get("paper_generation_run_id") or ""),
+                paper_subject_generation_id=str(
+                    row.get("paper_subject_generation_id") or ""
+                ),
+                terminal_lifecycle_event_id=str(
+                    row.get("terminal_lifecycle_event_id") or ""
+                ),
+                account_generation_id=str(row.get("account_generation_id") or ""),
                 problems=problems,
             )
         )
@@ -1423,6 +1464,10 @@ def build_paper_telegram_preview(
         "card_ledger_path": ledger_summary["snapshot_path"],
         "card_ledger_cards": ledger_summary["cards"],
         "card_ledger_signals": ledger_summary["signals"],
+        "paper_generation_run_id": str(generation.get("paper_generation_run_id") or ""),
+        "generation_status": str(generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(generation.get("current")),
+        "display_only": not bool(generation.get("current")),
     }
     out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary

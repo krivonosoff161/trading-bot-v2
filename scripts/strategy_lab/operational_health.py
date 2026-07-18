@@ -23,13 +23,6 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(ROOT / ".env")
-except Exception:
-    pass
-
 from src.research_lab.llm_provider import load_provider  # noqa: E402
 from src.research_lab.paper_signals.contract import PaperActionSignal  # noqa: E402
 from src.research_lab.paper_signals.training_export import TERMINAL_STATUSES  # noqa: E402
@@ -634,6 +627,20 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
     journals = report["journals"]
     training_data = report["training_data"]
     pfr = report["pfr"]["db"]
+    generation = report["paper_generation"]
+    if generation["authority_database_exists"]:
+        projection_items = list(generation.get("items") or [])
+        report["paper_chain"]["trade_ledger"] = {
+            "path": str(generation["authority_database_path"]),
+            "exists": True,
+            "items": len(projection_items),
+            "queue_rows": len(projection_items),
+            "trades": len(projection_items),
+            "invalid": 0 if generation.get("current") else len(projection_items),
+            "read_error": "" if generation.get("current") else str(
+                generation.get("generation_status") or "unavailable"
+            ),
+        }
     bridge = report["main_bridge"]
     chain = report["paper_chain"]
     surfaces = report["launch_surfaces"]
@@ -657,7 +664,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and product_launch["execution_allowed"] is False
     )
     paper_chain_ready = (
-        chain["instructions"]["instructions"] > 0
+        generation["current"]
+        and generation["stage_chain_compatible"]
+        and chain["instructions"]["instructions"] > 0
         and chain["consumer"]["accepted"] > 0
         and chain["runtime_queue"]["queued"] > 0
         and chain["telegram_preview"]["rendered"] > 0
@@ -666,7 +675,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and chain["telegram_preview"]["invalid"] == 0
     )
     runtime_observation_ready = (
-        chain["runtime_observation"]["rows_read"] > 0
+        generation["current"]
+        and generation["stage_chain_compatible"]
+        and chain["runtime_observation"]["rows_read"] > 0
         and chain["runtime_observation"]["invalid"] == 0
         and chain["runtime_observation"]["provider_error"] == 0
     )
@@ -1286,7 +1297,12 @@ def _main_bridge_status(
     return "not_connected"
 
 
-def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None) -> dict[str, Any]:
+def collect(
+    *,
+    private_root: Path | None = None,
+    pfr_db_path: Path | None = None,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = private_root or DEFAULT_PRIVATE_ROOT
     provider = load_provider(os.environ)
     pfr_db = pfr_db_path or (private_root / "state" / "strategy_lab.sqlite")
@@ -1310,6 +1326,57 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
     paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
     paper_telegram_delivery_snapshot = private_root / "state" / "derived" / "paper_telegram_delivery.json"
     paper_telegram_delivery_log = private_root / "state" / "derived" / "paper_telegram_delivery.jsonl"
+    from src.research_lab.paper_generation_contract import verify_stage_envelope
+    from src.research_lab.paper_projection_reader import read_projection_view
+
+    paper_generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=main_paper_trade_ledger_snapshot,
+        evidence_database_path=evidence_database_path,
+    )
+    stage_chain_compatible = False
+    if paper_generation.get("current"):
+        try:
+            run_id = str(paper_generation["paper_generation_run_id"])
+            bridge_context = verify_stage_envelope(
+                json.loads(main_paper_instruction_snapshot.read_text(encoding="utf-8")),
+                stage="bridge",
+                expected_run_id=run_id,
+            )
+            consumer_context = verify_stage_envelope(
+                json.loads(main_paper_consumed_snapshot.read_text(encoding="utf-8")),
+                stage="consumer",
+                expected_run_id=run_id,
+                expected_input_digest=bridge_context.input_digest,
+            )
+            queue_context = verify_stage_envelope(
+                json.loads(main_paper_runtime_queue_snapshot.read_text(encoding="utf-8")),
+                stage="queue",
+                expected_run_id=run_id,
+                expected_input_digest=consumer_context.input_digest,
+            )
+            observer_context = verify_stage_envelope(
+                json.loads(
+                    main_paper_runtime_observation_snapshot.read_text(encoding="utf-8")
+                ),
+                stage="observer",
+                expected_run_id=run_id,
+                expected_input_digest=queue_context.input_digest,
+            )
+            verify_stage_envelope(
+                json.loads(main_paper_trade_ledger_snapshot.read_text(encoding="utf-8")),
+                stage="account",
+                expected_run_id=run_id,
+                expected_input_digest=observer_context.input_digest,
+            )
+            stage_chain_compatible = True
+        except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
+            stage_chain_compatible = False
+    paper_generation = {
+        **paper_generation,
+        "stage_chain_compatible": stage_chain_compatible,
+    }
     main_signal_log = ROOT / "logs" / "signals" / "main_signals.jsonl"
     product_signal_events_log = ROOT / "logs" / "signals" / "signal_events.jsonl"
     old_main = ROOT / "main.py"
@@ -1511,6 +1578,7 @@ def collect(*, private_root: Path | None = None, pfr_db_path: Path | None = None
             "configured": bool(getattr(provider, "configured", False)),
         },
         "launch_surfaces": launch_surfaces,
+        "paper_generation": paper_generation,
         "paper_data_flow": {
             "schema": "paper_data_flow.v1",
             "current_owner": "scripts.strategy_lab.farm_loop with --run-paper-signals",
@@ -2114,6 +2182,15 @@ def exit_code_for_report(report: dict[str, Any], *, fail_on_blocked: bool) -> in
 
 
 def main() -> None:
+    # Importing this read-only report must not inspect operator credentials.  The
+    # command-line surface retains its historical opt-in environment loading,
+    # while library callers and tests remain free of .env side effects.
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT / ".env")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--private-root", type=Path, default=DEFAULT_PRIVATE_ROOT)
     ap.add_argument("--pfr-db-path", type=Path, default=None)

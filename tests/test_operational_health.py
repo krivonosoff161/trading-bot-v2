@@ -932,8 +932,8 @@ def test_operational_health_reports_main_paper_runtime_observation(tmp_path, mon
     assert report["main_bridge"]["status"] == "paper_runtime_observed"
     assert report["paper_chain"]["runtime_observation"]["observed"] == 2
     assert report["readiness"]["main_paper_runtime_observation_available"]["status"] == "pass"
-    assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"
-    assert report["readiness"]["paper_main_runtime_current"]["status"] == "pass"
+    assert report["readiness"]["paper_runtime_observed"]["status"] == "warn"
+    assert report["readiness"]["paper_main_runtime_current"]["status"] == "warn"
     assert report["readiness"]["main_runtime_consumer"]["status"] == "planned"
     assert report["paper_data_flow"]["current_main_compatible_runtime"] == "src.research_lab.main_paper_runtime"
 
@@ -1053,12 +1053,12 @@ def test_operational_health_reports_complete_paper_chain_counts(tmp_path, monkey
     assert report["paper_chain"]["runtime_queue"]["queued"] == 2
     assert report["paper_chain"]["runtime_observation"]["observed"] == 2
     assert report["paper_chain"]["telegram_preview"]["rendered"] == 2
-    assert report["readiness"]["paper_chain_counts"]["status"] == "pass"
-    assert report["readiness"]["paper_runtime_observed"]["status"] == "pass"
-    assert report["readiness"]["paper_main_runtime_current"]["status"] == "pass"
+    assert report["readiness"]["paper_chain_counts"]["status"] == "warn"
+    assert report["readiness"]["paper_runtime_observed"]["status"] == "warn"
+    assert report["readiness"]["paper_main_runtime_current"]["status"] == "warn"
     assert report["readiness"]["training_data_exports"]["status"] == "pass"
     assert report["readiness"]["paper_signal_training_export"]["status"] == "pass"
-    assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "pass"
+    assert report["readiness"]["ready_for_visible_paper_research_loop"]["status"] == "warn"
 
 
 def test_operational_health_treats_empty_pfr_trigger_cycle_as_ready_idle(tmp_path, monkeypatch):

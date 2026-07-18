@@ -16,6 +16,12 @@ from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, utc_now
 from src.research_lab.paper_account_ledger import build_paper_account_ledger
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    PaperGenerationMismatch,
+    stage_envelope,
+    verify_stage_envelope,
+)
 from src.research_lab.paper_money_model import paper_money_from_outcome, summarize_paper_money
 
 SCHEMA = "MainPaperTrade.v1"
@@ -74,6 +80,11 @@ class MainPaperTrade:
     farm_geometry_stop_scale: Any = None
     farm_geometry_tp_scale: Any = None
     farm_geometry_hold_scale: Any = None
+    paper_generation_run_id: str = ""
+    source_producer_generation_id: str = ""
+    source_member_payload_digest: str = ""
+    source_validation_generation_id: str = ""
+    observation_manifest_digest: str = ""
     created_at: str = field(default_factory=utc_now)
     paper_only: bool = True
     execution_allowed: bool = False
@@ -93,6 +104,15 @@ class MainPaperTrade:
                 raise ValueError("validated paper trade requires ready_strategy_id")
             if self.source_validation_verdict != "PAPER_FORWARD_READY":
                 raise ValueError("validated paper trade requires PAPER_FORWARD_READY source verdict")
+        generation_values = (
+            self.paper_generation_run_id,
+            self.source_producer_generation_id,
+            self.source_member_payload_digest,
+            self.source_validation_generation_id,
+            self.observation_manifest_digest,
+        )
+        if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+            raise ValueError("partial paper generation metadata is forbidden")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -114,11 +134,11 @@ def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_trades.json"
 
 
-def _load_items(path: Path) -> list[dict[str, Any]]:
+def _load_payload(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return []
+        return {}
     data = json.loads(path.read_text(encoding="utf-8"))
-    return list(data.get("items") or [])
+    return data if isinstance(data, dict) else {}
 
 
 def _ledger_status(queue_item: dict[str, Any], observed: dict[str, Any] | None) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
@@ -141,6 +161,21 @@ def _ledger_status(queue_item: dict[str, Any], observed: dict[str, Any] | None) 
 
 
 def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | None) -> MainPaperTrade:
+    if queue_item.get("paper_generation_run_id"):
+        if observed is None:
+            raise PaperGenerationMismatch("v2 queue item lacks generation-matched observation")
+        generation_fields = (
+            "source_signal_id",
+            "paper_generation_run_id",
+            "source_producer_generation_id",
+            "source_member_payload_digest",
+            "source_validation_generation_id",
+        )
+        if any(queue_item.get(field) != observed.get(field) for field in generation_fields):
+            raise PaperGenerationMismatch("queue/observation generation join mismatch")
+        manifest = observed.get("observation_manifest")
+        if not isinstance(manifest, dict) or not manifest.get("manifest_digest"):
+            raise PaperGenerationMismatch("v2 observation manifest is missing")
     status, signal_status, outcome, review = _ledger_status(queue_item, observed)
     paper_trade_id = stable_id(
         "papertrade",
@@ -148,6 +183,8 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
             "runtime_id": queue_item.get("runtime_id"),
             "ready_strategy_id": queue_item.get("ready_strategy_id"),
             "source_signal_id": queue_item.get("source_signal_id"),
+            "paper_generation_run_id": queue_item.get("paper_generation_run_id") or "",
+            "source_member_payload_digest": queue_item.get("source_member_payload_digest") or "",
         },
         length=20,
     )
@@ -204,13 +241,51 @@ def _trade_from_queue(queue_item: dict[str, Any], observed: dict[str, Any] | Non
         farm_geometry_stop_scale=queue_item.get("farm_geometry_stop_scale"),
         farm_geometry_tp_scale=queue_item.get("farm_geometry_tp_scale"),
         farm_geometry_hold_scale=queue_item.get("farm_geometry_hold_scale"),
+        paper_generation_run_id=str(queue_item.get("paper_generation_run_id") or ""),
+        source_producer_generation_id=str(
+            queue_item.get("source_producer_generation_id") or ""
+        ),
+        source_member_payload_digest=str(queue_item.get("source_member_payload_digest") or ""),
+        source_validation_generation_id=str(
+            queue_item.get("source_validation_generation_id") or ""
+        ),
+        observation_manifest_digest=str(
+            (observed or {}).get("observation_manifest", {}).get("manifest_digest") or ""
+        ),
     )
 
 
-def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
+def build_main_paper_trade_ledger(
+    private_root: Path,
+    *,
+    expected_run_id: str = "",
+    expected_input_digest: str = "",
+) -> dict[str, Any]:
     private_root = Path(private_root)
-    queue_items = _load_items(_queue_snapshot_path(private_root))
-    observation_items = _load_items(_observation_snapshot_path(private_root))
+    queue_payload = _load_payload(_queue_snapshot_path(private_root))
+    observation_payload = _load_payload(_observation_snapshot_path(private_root))
+    queue_items = list(queue_payload.get("items") or [])
+    observation_items = list(observation_payload.get("items") or [])
+    generation_context: PaperGenerationContext | None = None
+    if (
+        queue_payload.get("paper_stage_schema")
+        or observation_payload.get("paper_stage_schema")
+        or expected_run_id
+        or expected_input_digest
+    ):
+        queue_context = verify_stage_envelope(
+            queue_payload,
+            stage="queue",
+            expected_run_id=expected_run_id,
+        )
+        generation_context = verify_stage_envelope(
+            observation_payload,
+            stage="observer",
+            expected_run_id=queue_context.run_id,
+            expected_input_digest=queue_context.input_digest,
+        )
+        if expected_input_digest and generation_context.input_digest != expected_input_digest:
+            raise PaperGenerationMismatch("observer output digest mismatch")
     observations = {str(item.get("runtime_id") or ""): item for item in observation_items}
 
     trades: list[MainPaperTrade] = []
@@ -238,7 +313,17 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
         by_family[trade.setup_family] = by_family.get(trade.setup_family, 0) + 1
 
     items = [trade.to_dict() for trade in trades]
-    account = build_paper_account_ledger(private_root, items)
+    if generation_context is None:
+        account = build_paper_account_ledger(private_root, items)
+    else:
+        account = {
+            "schema": "paper_account_ledger.v2",
+            "generation_status": "pending_transactional_finalize",
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+    generation = stage_envelope("account", generation_context, items)
     summary = {
         "schema": SUMMARY_SCHEMA,
         "row_schema": SCHEMA,
@@ -257,6 +342,7 @@ def build_main_paper_trade_ledger(private_root: Path) -> dict[str, Any]:
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
         "items": items,
+        **generation,
     }
     out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary

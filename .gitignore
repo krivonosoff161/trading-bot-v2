@@ -108,6 +108,7 @@ docs/*.md
 !docs/validation-bridge-contract.md
 !docs/simulator-truth-tiers.md
 !docs/adaptive-research-center-contract.md
+!docs/paper-evidence-generations.md
 !docs/storage_boundaries.md
 !docs/REMOTE_DATA_MANIFEST.md
 !docs/farm_loop_lifecycle.md

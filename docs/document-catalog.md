@@ -1,6 +1,6 @@
 # Document Catalog
 
-Status: **ACTIVE**. Updated 2026-07-11.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This catalog prevents a dated report from silently becoming an operating
 instruction. When documents conflict, use the authority order in
@@ -23,6 +23,7 @@ instruction. When documents conflict, use the authority order in
 | Cross-repository validation contract | [validation-bridge-contract.md](validation-bridge-contract.md) |
 | Simulator evidence tiers and claim ceilings | [simulator-truth-tiers.md](simulator-truth-tiers.md) |
 | Adaptive role and feedback contract | [adaptive-research-center-contract.md](adaptive-research-center-contract.md) |
+| Immutable paper event/account authority | [paper-evidence-generations.md](paper-evidence-generations.md) |
 | Local-only artifact request rules | [REMOTE_DATA_MANIFEST.md](REMOTE_DATA_MANIFEST.md) |
 
 ## Reference Documents

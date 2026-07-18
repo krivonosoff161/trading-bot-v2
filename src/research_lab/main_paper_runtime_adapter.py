@@ -15,6 +15,12 @@ from typing import Any
 
 from src.research_lab.main_adaptive_policy import build_policy, write_policy_artifacts
 from src.research_lab.main_paper_consumer import SUMMARY_SCHEMA as CONSUMER_SCHEMA
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    PaperGenerationMismatch,
+    stage_envelope,
+    verify_stage_envelope,
+)
 from src.research_lab.paper_signals.contract import SOURCES
 
 SCHEMA = "MainPaperRuntimeQueueItem.v1"
@@ -98,6 +104,11 @@ class MainPaperRuntimeQueueItem:
     setup_candidate_id: str = ""
     sweep_run_id: str = ""
     priority_reasons: list[str] = field(default_factory=list)
+    paper_generation_run_id: str = ""
+    source_producer_generation_id: str = ""
+    source_member_payload_digest: str = ""
+    source_validation_generation_id: str = ""
+    consumer_output_digest: str = ""
     runtime_action: str = "watch_paper"
     source_consumer_status: str = "accepted_for_paper_watch"
     paper_only: bool = True
@@ -148,6 +159,15 @@ class MainPaperRuntimeQueueItem:
             raise ValueError("adaptive_policy_id required")
         if self.adaptive_policy_confidence < 0 or self.adaptive_policy_confidence > 1:
             raise ValueError("adaptive_policy_confidence must be in [0, 1]")
+        generation_values = (
+            self.paper_generation_run_id,
+            self.source_producer_generation_id,
+            self.source_member_payload_digest,
+            self.source_validation_generation_id,
+            self.consumer_output_digest,
+        )
+        if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+            raise ValueError("partial paper generation metadata is forbidden")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -169,22 +189,24 @@ def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_runtime_queue.json"
 
 
-def _load_consumer_rows(private_root: Path) -> tuple[list[dict[str, Any]], Path | None]:
+def _load_consumer_rows(
+    private_root: Path,
+) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
     snapshot = _consumer_snapshot_path(private_root)
     if snapshot.exists():
         data = json.loads(snapshot.read_text(encoding="utf-8"))
         items = data.get("items") if isinstance(data, dict) else None
-        return list(items or []), snapshot
+        return list(items or []), snapshot, data if isinstance(data, dict) else {}
 
     jsonl = _consumer_jsonl_path(private_root)
     if not jsonl.exists():
-        return [], None
+        return [], None, {}
     rows: list[dict[str, Any]] = []
     for line in jsonl.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
             rows.append(json.loads(line))
-    return rows, jsonl
+    return rows, jsonl, {}
 
 
 def _priority(row: dict[str, Any], contract: dict[str, Any]) -> tuple[int, list[str]]:
@@ -208,7 +230,11 @@ def _priority(row: dict[str, Any], contract: dict[str, Any]) -> tuple[int, list[
     return score, reasons
 
 
-def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
+def _item_from_row(
+    row: dict[str, Any],
+    *,
+    consumer_output_digest: str = "",
+) -> MainPaperRuntimeQueueItem | None:
     if row.get("consumer_status") != "accepted_for_paper_watch":
         return None
     if row.get("paper_only") is not True or row.get("execution_allowed") is not False:
@@ -301,11 +327,30 @@ def _item_from_row(row: dict[str, Any]) -> MainPaperRuntimeQueueItem | None:
         setup_candidate_id=str(meta.get("setup_candidate_id") or ""),
         sweep_run_id=str(meta.get("sweep_run_id") or ""),
         priority_reasons=priority_reasons,
+        paper_generation_run_id=str(row.get("paper_generation_run_id") or ""),
+        source_producer_generation_id=str(row.get("source_producer_generation_id") or ""),
+        source_member_payload_digest=str(row.get("source_member_payload_digest") or ""),
+        source_validation_generation_id=str(row.get("source_validation_generation_id") or ""),
+        consumer_output_digest=consumer_output_digest,
     )
 
 
-def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> dict[str, Any]:
-    rows, source_path = _load_consumer_rows(private_root)
+def build_main_paper_runtime_queue(
+    private_root: Path,
+    *,
+    limit: int = 50,
+    expected_run_id: str = "",
+    expected_input_digest: str = "",
+) -> dict[str, Any]:
+    rows, source_path, source_payload = _load_consumer_rows(private_root)
+    generation_context: PaperGenerationContext | None = None
+    if source_payload.get("paper_stage_schema") or expected_run_id or expected_input_digest:
+        generation_context = verify_stage_envelope(
+            source_payload,
+            stage="consumer",
+            expected_run_id=expected_run_id,
+            expected_input_digest=expected_input_digest,
+        )
     accepted_rows = [row for row in rows if row.get("consumer_status") == "accepted_for_paper_watch"]
     rejected_or_skipped = len(rows) - len(accepted_rows)
 
@@ -313,7 +358,12 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
     invalid = 0
     for row in accepted_rows:
         try:
-            item = _item_from_row(row)
+            item = _item_from_row(
+                row,
+                consumer_output_digest=(
+                    generation_context.input_digest if generation_context else ""
+                ),
+            )
             if item is None:
                 rejected_or_skipped += 1
                 continue
@@ -322,8 +372,16 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
             invalid += 1
 
     items.sort(key=lambda item: (item.priority, item.okx_inst_id, item.timeframe, item.source_signal_id))
-    if limit >= 0:
+    if limit >= 0 and generation_context is None:
         items = items[:limit]
+    if generation_context is not None:
+        for item in items:
+            if (
+                item.paper_generation_run_id != generation_context.run_id
+                or item.source_producer_generation_id
+                != generation_context.producer_generation_id
+            ):
+                raise PaperGenerationMismatch("consumer item generation does not match envelope")
     policies = []
     for item in items:
         policies.append(
@@ -348,6 +406,8 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
         for item in items:
             fh.write(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
 
+    item_rows = [item.to_dict() for item in items]
+    generation = stage_envelope("queue", generation_context, item_rows)
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": CONSUMER_SCHEMA,
@@ -359,6 +419,7 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
         "invalid": invalid,
         "rejected_or_skipped": rejected_or_skipped,
         "limit": limit,
+        "scheduling_limit_deferred_to_durable_cursor": generation_context is not None,
         "paper_only": True,
         "execution_allowed": False,
         "runtime_action": "watch_paper",
@@ -370,9 +431,10 @@ def build_main_paper_runtime_queue(private_root: Path, *, limit: int = 50) -> di
             "snapshot_path": policy_summary["snapshot_path"],
             "by_execution_profile": policy_summary["by_execution_profile"],
         },
+        **generation,
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": [item.to_dict() for item in items]},
+        json.dumps({**summary, "items": item_rows},
                    ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )

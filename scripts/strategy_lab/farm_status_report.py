@@ -174,7 +174,12 @@ def _skipped_fast() -> dict[str, object]:
     return {"available": False, "skipped": "fast_mode"}
 
 
-def collect(db_path: Path, *, fast: bool = False) -> dict:
+def collect(
+    db_path: Path,
+    *,
+    fast: bool = False,
+    evidence_database_path: Path | str | None = None,
+) -> dict:
     if not db_path.exists():
         return {"exists": False, "db": str(db_path)}
     conn, migration_note = _connect_for_report(db_path)
@@ -402,9 +407,50 @@ def collect(db_path: Path, *, fast: bool = False) -> dict:
             report["main_paper_runtime_observation"] = {}
         try:  # validated main-paper trade ledger (never orders)
             tr_path = db_path.parent.parent / "state" / "derived" / "main_paper_trades.json"
-            report["main_paper_trade_ledger"] = json.loads(tr_path.read_text(encoding="utf-8")) if tr_path.exists() else {}
+            from src.research_lab.paper_projection_reader import read_projection_view
+
+            generation = read_projection_view(
+                db_path.parent.parent,
+                "trades",
+                legacy_snapshot=tr_path,
+                evidence_database_path=evidence_database_path,
+            )
+            report["paper_generation"] = {
+                "paper_generation_run_id": str(
+                    generation.get("paper_generation_run_id") or ""
+                ),
+                "generation_status": str(generation.get("generation_status") or ""),
+                "current_generation_compatible": bool(generation.get("current")),
+                "display_only": not bool(generation.get("current")),
+                "authority_database_exists": bool(
+                    generation.get("authority_database_exists")
+                ),
+            }
+            if generation["authority_database_exists"]:
+                items = list(generation.get("items") or [])
+                by_status: dict[str, int] = {}
+                for item in items:
+                    status = str(item.get("status") or "missing")
+                    by_status[status] = by_status.get(status, 0) + 1
+                report["main_paper_trade_ledger"] = {
+                    "schema": "PaperProjectionEnvelope.v2",
+                    "trades": len(items),
+                    "by_status": by_status,
+                    "items": items,
+                    "paper_only": True,
+                    "execution_allowed": False,
+                }
+            else:
+                report["main_paper_trade_ledger"] = (
+                    json.loads(tr_path.read_text(encoding="utf-8")) if tr_path.exists() else {}
+                )
         except Exception:  # noqa: BLE001 - optional surface must not break status
             report["main_paper_trade_ledger"] = {}
+            report["paper_generation"] = {
+                "generation_status": "unreadable",
+                "current_generation_compatible": False,
+                "display_only": True,
+            }
         try:  # broad subscriber-facing paper product ledger (never orders)
             ptr_path = db_path.parent.parent / "state" / "derived" / "paper_product_trades.json"
             report["paper_product_trade_ledger"] = (

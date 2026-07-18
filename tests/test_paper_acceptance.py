@@ -59,7 +59,7 @@ def _seed(tmp_path):
     )
 
 
-def test_acceptance_starts_private_baseline_and_passes_after_required_evidence(tmp_path, monkeypatch):
+def test_legacy_acceptance_artifacts_cannot_pass_without_current_generation(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTO_TRADE", raising=False)
     _seed(tmp_path)
     started = start_acceptance(tmp_path, hours=24, now=1_000)
@@ -92,9 +92,10 @@ def test_acceptance_starts_private_baseline_and_passes_after_required_evidence(t
 
     report = evaluate_acceptance(tmp_path, now=1_000 + 24 * 3600)
 
-    assert report["passed"] is True
-    assert all(report["checks"].values())
-    assert report["deltas"]["trusted_lifecycle_rows"] == 1
+    assert report["passed"] is False
+    assert report["checks"]["generation_current"] is False
+    assert report["checks"]["lifecycle_clean"] is False
+    assert report["deltas"]["trusted_lifecycle_rows"] == 0
 
 
 def test_acceptance_blocks_auto_trade_environment(tmp_path, monkeypatch):
