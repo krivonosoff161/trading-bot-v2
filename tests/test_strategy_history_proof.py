@@ -93,6 +93,37 @@ def test_lookback_maximum_is_derived_from_registry_default_and_fallback_contract
     assert authority.maximum_source.endswith("#fallback_ranges.int")
 
 
+def test_no_signal_evidence_is_bound_to_each_family_generator_contract() -> None:
+    proofs = build_history_proofs()
+
+    for strategy_id, definition in REGISTRY.items():
+        proof = proofs[strategy_id]
+        predicate_source = (
+            f"{definition.generate_signals.__module__}."
+            f"{definition.generate_signals.__name__}"
+        )
+        no_signal_reason = (
+            f"{strategy_id}:entry_predicate_not_satisfied:{predicate_source}"
+        )
+        signal_reason = f"{strategy_id}:entry_predicate_satisfied:{predicate_source}"
+
+        assert proof.predicate_source == predicate_source
+        assert proof.predicate_contract == definition.description
+        if proof.boundary_status == "no_signal_predicate":
+            assert proof.boundary_reason == no_signal_reason
+        elif proof.boundary_status == "signals":
+            assert proof.boundary_reason == signal_reason
+
+        for check in proof.parameter_boundary_checks.values():
+            assert check.predicate_source == predicate_source
+            assert check.predicate_contract == definition.description
+            for status, reason in zip(check.history_statuses, check.history_reasons):
+                if status == "no_signal_predicate":
+                    assert reason == no_signal_reason
+                elif status == "signals":
+                    assert reason == signal_reason
+
+
 def test_data_requirements_use_exact_history_without_hiding_side_data() -> None:
     proofs = build_history_proofs()
 

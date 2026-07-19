@@ -141,25 +141,47 @@ def _load_sent_keys(private_root: Path) -> set[str]:
         return set()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return set()
-    return {str(item) for item in data.get("sent_keys", []) if str(item)}
+    except OSError as exc:
+        raise DeliveryOutboxUnavailable("delivery_sent_keys_unreadable") from exc
+    except json.JSONDecodeError as exc:
+        raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid") from exc
+    if not isinstance(data, dict) or data.get("schema") != "paper_telegram_sent_keys.v1":
+        raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid")
+    items = data.get("sent_keys")
+    if not isinstance(items, list) or any(not isinstance(item, str) or not item for item in items):
+        raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid")
+    return set(items)
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    with tmp_path.open("wb") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp_path.replace(path)
+    try:
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(directory_fd)
 
 
 def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
     path = _sent_keys_path(private_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(
-        json.dumps(
-            {"schema": "paper_telegram_sent_keys.v1", "sent_keys": sorted(sent_keys)},
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ) + "\n",
-        encoding="utf-8",
+    _atomic_write_json(
+        path,
+        {"schema": "paper_telegram_sent_keys.v1", "sent_keys": sorted(sent_keys)},
     )
-    tmp_path.replace(path)
 
 
 def _load_outbox(private_root: Path) -> dict[str, dict[str, Any]]:
@@ -196,21 +218,13 @@ def _load_outbox(private_root: Path) -> dict[str, dict[str, Any]]:
 
 def _save_outbox(private_root: Path, outbox: dict[str, dict[str, Any]]) -> None:
     path = _outbox_path(private_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(
-        json.dumps(
-            {
-                "schema": "paper_telegram_delivery_outbox.v1",
-                "items": [outbox[key] for key in sorted(outbox)],
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ) + "\n",
-        encoding="utf-8",
+    _atomic_write_json(
+        path,
+        {
+            "schema": "paper_telegram_delivery_outbox.v1",
+            "items": [outbox[key] for key in sorted(outbox)],
+        },
     )
-    tmp_path.replace(path)
 
 
 def _outbox_record(
@@ -473,13 +487,12 @@ async def _send_items(
                 else:
                     text_status = "acknowledged"
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
+                status = "external_ack_ambiguous"
+                text_status = "failed"
                 if chart_sent:
-                    status = "external_ack_ambiguous"
-                    text_status = "failed"
                     problem = f"photo_ack_text_failed:{type(exc).__name__}"
                 else:
-                    status = "error"
-                    problem = type(exc).__name__
+                    problem = f"text_ack_ambiguous:{type(exc).__name__}"
             if status == "sent":
                 completed_keys = sent_keys | {delivery_key}
                 try:
@@ -577,6 +590,32 @@ def _recipient_hash(recipient_id: str) -> str:
     return hashlib.sha256(recipient_id.encode("utf-8")).hexdigest()[:16] if recipient_id else ""
 
 
+def _delivery_content_identity(item: dict[str, Any]) -> str:
+    payload = {
+        key: item.get(key)
+        for key in (
+            "schema",
+            "preview_id",
+            "instruction_id",
+            "source_signal_id",
+            "telegram_card_id",
+            "pair",
+            "timeframe",
+            "side",
+            "setup_family",
+            "text",
+            "chart_path",
+        )
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
     return _delivery_keys(item, recipient_id)[0]
 
@@ -592,14 +631,19 @@ def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
     source_signal_id = str(item.get("source_signal_id") or "").strip()
     preview_id = str(item.get("preview_id") or "").strip()
     telegram_card_id = str(item.get("telegram_card_id") or "").strip()
+    content_identity = _delivery_content_identity(item)
 
     if source_signal_id and source_signal_id != "paper_status_digest":
         content_key = telegram_card_id or preview_id
-        candidates = [f"signal:{source_signal_id}:content:{content_key}:{rh}"] if content_key else []
+        candidates = [f"signal:{source_signal_id}:content-sha256:{content_identity}:{rh}"]
+        if content_key:
+            candidates.append(f"signal:{source_signal_id}:content:{content_key}:{rh}")
         candidates.append(f"signal:{source_signal_id}:{rh}")
     else:
         digest_key = preview_id or source_signal_id or telegram_card_id
-        candidates = [f"digest:{digest_key}:{rh}"] if digest_key else []
+        candidates = [f"digest:content-sha256:{content_identity}:{rh}"]
+        if digest_key:
+            candidates.append(f"digest:{digest_key}:{rh}")
 
     for legacy in (telegram_card_id, preview_id):
         if legacy:
@@ -922,6 +966,21 @@ def send_paper_telegram_previews(
                             )
                         )
                     )
+        except DeliveryOutboxUnavailable as exc:
+            deliveries.extend(
+                _delivery_from_preview(
+                    item,
+                    status="outbox_unavailable",
+                    problem=exc.problem,
+                    recipient_id=recipient_id,
+                    delivery_key=_delivery_key(item, recipient_id),
+                    transport_kind="telegram_text",
+                    chart_available=bool(_safe_chart_path(item, Path(private_root))[0]),
+                    chart_problem=_safe_chart_path(item, Path(private_root))[1],
+                )
+                for item in accepted
+                for recipient_id in recipient_ids
+            )
         except (DeliveryClaimConflict, OSError) as exc:
             claim_problem = (
                 "delivery_claim_held_by_other_process"

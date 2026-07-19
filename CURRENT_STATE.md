@@ -35,8 +35,10 @@ rows, provider state, and local findings belong outside public Git.
   Every history-formula term is exercised at its parameter-policy maximum, with
   parameter N-1/N/N+1 validation and candle required-1/required/required+1
   checks. Maxima are derived from registry defaults plus
-  `configs/strategy_lab/param_schemas.yaml`, not test-local constants. This does
-  not prove private historical completeness, profitability, or paper readiness.
+  `configs/strategy_lab/param_schemas.yaml`, not test-local constants. Signal and
+  no-signal outcomes are bound to each family's exact registered generator and
+  registry description instead of a shared generic predicate reason. This does not
+  prove private historical completeness, profitability, or paper readiness.
 - Public runtime code now models process, brain-task and compute-job authority
   with renewable leases and monotonic fences. Cross-database sweep dispatch is
   content-bound and replayable; worker results remain provisional until fenced
