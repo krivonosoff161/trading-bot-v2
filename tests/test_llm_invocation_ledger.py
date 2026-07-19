@@ -7,6 +7,7 @@ from src.research_lab.llm_invocation_ledger import (
     preflight_invocation,
     record_invocation,
 )
+from src.research_lab.llm_boundary_identity import endpoint_identity_from_url
 from src.research_lab.llm_provider import LLMUsage
 
 
@@ -111,6 +112,35 @@ def test_local_only_loopback_endpoint_is_bound_into_invocation_id(tmp_path):
     assert alias.allowed is True
     assert first.invocation_id == alias.invocation_id
     assert changed_endpoint.invocation_id != first.invocation_id
+
+
+def test_malformed_local_endpoint_fails_closed_without_value_error(tmp_path):
+    malformed = (
+        "http://127.0.0.1:99999/v1",
+        "http://127.0.0.1:not-a-port/v1",
+        "http://[::1/v1",
+    )
+
+    for index, base_url in enumerate(malformed):
+        identity = endpoint_identity_from_url(base_url)
+        assert identity.loopback_proven is False
+        assert identity.problems
+
+        permit = preflight_invocation(
+            tmp_path,
+            role_id="calculator_context_classifier",
+            source_ref=f"fp-malformed-{index}",
+            input_payload={"safe": 1},
+            provider=_EndpointProvider(base_url),
+            local_only=True,
+        )
+
+        assert permit.allowed is False
+        assert permit.reason == "invalid_endpoint"
+        assert any(
+            problem.startswith("invalid_endpoint")
+            for problem in permit.endpoint_identity["problems"]
+        )
 
 
 def test_preflight_deduplicates_completed_invocation(tmp_path):

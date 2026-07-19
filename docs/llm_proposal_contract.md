@@ -50,7 +50,10 @@ against real failures instead of blind.
 The advisory boundary is recursive: wrappers, nested parameter containers, and
 model-supplied lists do not hide forbidden authority fields. Normalized key
 variants such as `Auto-Trade`, `execution allowed`, and `TakeProfitPlan` are
-treated as the same deny-listed authority fields.
+treated as the same deny-listed authority fields. Key normalization applies
+NFKC and a bounded Cyrillic/Greek homoglyph skeleton before deny-list matching;
+unmapped non-ASCII identifiers fail closed at every nesting depth. Unicode in
+field values remains permitted and is not treated as an identifier.
 
 The registry ([strategy_registry.py](../src/research_lab/strategy_registry.py)) stays the single source
 of truth; `param_schemas.yaml` is validation/ranges/horizon **over** it, never a second catalog.

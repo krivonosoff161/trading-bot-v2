@@ -177,6 +177,22 @@ def test_onboarding_report_includes_new_sources():
     assert "Чеклист оценки 24–48ч" in md and "enabled: false" in md
 
 
+def test_onboarding_report_treats_unavailable_sqlite_as_empty(monkeypatch, tmp_path):
+    db_path = tmp_path / "news_buffer.sqlite"
+    db_path.write_bytes(b"not a usable sqlite database")
+
+    class UnavailableConnection:
+        def execute(self, query):
+            raise OR.sqlite3.OperationalError("unable to open database file")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(OR.sqlite3, "connect", lambda path: UnavailableConnection())
+
+    assert OR.sqlite_stats(db_path) == {}
+
+
 def test_onboarding_recommendations_honest():
     # needs_key/needs_provider не превращаются в keep; disabled помечен роллбэком
     assert "needs key/provider" in OR.recommend({"onboarding_status": "needs_key",
