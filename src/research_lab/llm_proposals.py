@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from src.research_lab.advisory_payload_validator import contains_forbidden_advisory_field
 from src.research_lab.llm_provider import SCANNER_ENV_PROVIDER, load_provider
 from src.research_lab.llm_review_sender import (
     NullReviewSender,
@@ -326,7 +327,7 @@ class LLMProposalBatch:
 
 
 def _has_unsafe_field(item: dict[str, Any]) -> bool:
-    return any(str(k).strip().lower() in _DENY_KEYS for k in item.keys())
+    return contains_forbidden_advisory_field(item, _DENY_KEYS) is not None
 
 
 def _normalize_candidate(item: dict[str, Any]) -> dict[str, Any]:

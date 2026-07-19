@@ -138,6 +138,31 @@ def test_unsafe_wording_candidate_rejected_not_executed():
     assert not batch.validated and batch.rejected  # unsafe wording -> rejected
 
 
+def test_nested_unsafe_proposal_field_rejected_not_executed():
+    universe, profiles, policy = _ctx()
+    items = [{
+        "hypothesis": "bounded retest",
+        "setup_family": "momentum_breakout",
+        "requested_timeframe": "1d",
+        "symbols": ["BTC_USDT_SWAP"],
+        "parameter_grid": {
+            "momentum_breakout": [
+                {"lookback": 20, "hold_bars": 5, "nested": {"Auto-Trade": True}}
+            ]
+        },
+    }]
+    batch = validate_llm_candidates(
+        items,
+        universe=universe,
+        timeframe_profiles=profiles,
+        resource_policy=policy,
+        created_at=_AT,
+    )
+
+    assert not batch.validated
+    assert batch.rejected[0]["reason"] == "unsafe_field"
+
+
 def test_candidate_cap_applied():
     universe, profiles, policy = _ctx()
     items = [

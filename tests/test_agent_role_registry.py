@@ -35,6 +35,48 @@ def test_review_role_rejects_trade_authority_fields():
     assert "forbidden field: execute" in problems
 
 
+def test_review_role_rejects_nested_trade_authority_fields():
+    ok, problems = validate_role_payload(
+        "outcome_reviewer",
+        {
+            "summary": "Advisory text only.",
+            "warnings": [
+                {
+                    "execute": True,
+                    "order": "BUY",
+                    "nested": {"stop_loss": 123.0},
+                }
+            ],
+            "confidence": 0.7,
+        },
+    )
+
+    assert ok is False
+    assert any("execute" in problem for problem in problems)
+    assert any("order" in problem for problem in problems)
+    assert any("stop_loss" in problem for problem in problems)
+
+
+def test_review_role_normalizes_forbidden_key_variants_recursively():
+    ok, problems = validate_role_payload(
+        "validator_reviewer",
+        {
+            "summary": "No authority.",
+            "evidence": [
+                {"Auto-Trade": False},
+                {"execution allowed": False},
+                {"TakeProfitPlan": "promote"},
+            ],
+            "confidence": 0.5,
+        },
+    )
+
+    assert ok is False
+    assert any("auto_trade" in problem or "Auto-Trade" in problem for problem in problems)
+    assert any("execution_allowed" in problem or "execution allowed" in problem for problem in problems)
+    assert any("take_profit_plan" in problem or "TakeProfitPlan" in problem for problem in problems)
+
+
 def test_outcome_reviewer_accepts_learning_fields_but_not_authority():
     ok, problems = validate_role_payload(
         "outcome_reviewer",

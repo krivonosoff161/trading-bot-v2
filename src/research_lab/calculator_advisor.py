@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.feature_packet import FeaturePacket
+from src.research_lab.advisory_payload_validator import validate_advisory_payload
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
 from src.research_lab.llm_provider import LLMProviderError, ProposalProvider, record_usage
 from src.research_lab.llm_invocation_ledger import preflight_invocation, record_invocation
@@ -38,6 +39,8 @@ FORBIDDEN_KEYS = {
     "take_profit_plan",
     "side",
     "paper_ready",
+    "execution_allowed",
+    "auto_trade",
     "validator_verdict",
     "order",
     "size",
@@ -123,17 +126,14 @@ def normalize_advice_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def validate_advice_payload(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     payload = normalize_advice_payload(payload)
-    problems: list[str] = []
-    for key in payload:
-        if key in FORBIDDEN_KEYS:
-            problems.append(f"forbidden field: {key}")
-        elif key not in ALLOWED_KEYS:
-            problems.append(f"unknown field: {key}")
-    confidence = payload.get("confidence")
-    if confidence is not None and not isinstance(confidence, (int, float)):
-        problems.append("confidence must be numeric")
-    if isinstance(confidence, (int, float)) and not 0 <= float(confidence) <= 1:
-        problems.append("confidence must be in [0, 1]")
+    result = validate_advisory_payload(
+        "farm_calculator_advisor",
+        payload,
+        allowed_fields=ALLOWED_KEYS,
+        forbidden_fields=FORBIDDEN_KEYS,
+        container_fields={"sweep_suggestions", "warnings", "missing_data"},
+    )
+    problems: list[str] = list(result.problems)
     suggestions = payload.get("sweep_suggestions")
     if suggestions is not None and not isinstance(suggestions, list):
         problems.append("sweep_suggestions must be a list")
@@ -143,7 +143,7 @@ def validate_advice_payload(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     warnings = payload.get("warnings")
     if warnings is not None and not isinstance(warnings, list):
         problems.append("warnings must be a list")
-    return (not problems, problems)
+    return (not problems, list(dict.fromkeys(problems)))
 
 
 def _user_payload(packet: FeaturePacket) -> str:

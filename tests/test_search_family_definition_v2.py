@@ -802,6 +802,8 @@ def test_adaptive_trial_identity_binds_hypothesis_and_parentage() -> None:
         "kind": "bounded_sweep",
         "subject": {"symbol": "BTC", "family": "momentum_breakout"},
         "source_ref": "source:1",
+        "source_content_sha256": "a" * 64,
+        "producer_completion_id": "completion-1",
         "generation": 1,
         "dimensions": ["lookback"],
         "tests": ["test-a"],
