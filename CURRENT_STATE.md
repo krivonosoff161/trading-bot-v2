@@ -29,6 +29,11 @@ rows, provider state, and local findings belong outside public Git.
 - New validation requests fail closed unless they carry an untouched evaluation
   epoch distinct from the farm selection data. Existing selection-only evidence
   therefore needs fresh data before it can become paper-forward ready.
+- The public registry can build a deterministic synthetic history-boundary proof
+  for all 27 strategy families. This proves formula/generator/history alignment
+  for public synthetic OHLCV fixtures and declared side-data boundaries only; it
+  does not prove private historical completeness, profitability, or paper
+  readiness.
 - Public runtime code now models process, brain-task and compute-job authority
   with renewable leases and monotonic fences. Cross-database sweep dispatch is
   content-bound and replayable; worker results remain provisional until fenced

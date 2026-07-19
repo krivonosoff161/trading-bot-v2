@@ -82,6 +82,8 @@ the active contract is [docs/adaptive-research-center-contract.md](docs/adaptive
 
 - Scanner source-quality and context calibration.
 - Explicit data-gate handling for OI and microstructure.
+- Extend the 27-family synthetic history-boundary proof with separately authorized
+  private-history coverage manifests if that evidence campaign is approved.
 - Independent validation improvements in `honest-backtest`.
 - Operator reports that summarize paper evidence without publishing raw data.
 
