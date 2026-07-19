@@ -30,6 +30,8 @@ class ParameterBoundaryCheck:
     status: str
     reason: str
     signal_count: int
+    predicate_source: str
+    predicate_contract: str
     boundary_source: str
     boundary_rule: str
     limit_values: tuple[int, int, int]
@@ -50,6 +52,8 @@ class StrategyHistoryProof:
     before_boundary_status: str
     boundary_status: str
     boundary_reason: str
+    predicate_source: str
+    predicate_contract: str
     required_data: tuple[str, ...]
     required_data_missing_status: str
     required_data_missing_reason: str
@@ -94,6 +98,11 @@ def synthetic_candles(
     return out
 
 
+def _predicate_source(definition: StrategyDef) -> str:
+    generator = definition.generate_signals
+    return f"{generator.__module__}.{generator.__name__}"
+
+
 def _signals_status(
     definition: StrategyDef,
     rows: int,
@@ -114,11 +123,16 @@ def _signals_status(
             "generator_returned_signal_outside_fixture_rows",
             len(signals),
         )
+    predicate_source = _predicate_source(definition)
     if signals:
-        return "signals", "synthetic_fixture_satisfied_entry_predicate", len(signals)
+        return (
+            "signals",
+            f"{definition.strategy_id}:entry_predicate_satisfied:{predicate_source}",
+            len(signals),
+        )
     return (
         "no_signal_predicate",
-        "synthetic_fixture_evaluated_but_entry_predicate_was_not_satisfied",
+        f"{definition.strategy_id}:entry_predicate_not_satisfied:{predicate_source}",
         0,
     )
 
@@ -187,6 +201,8 @@ def _parameter_boundary_checks(
             status=status,
             reason=reason,
             signal_count=signal_count,
+            predicate_source=_predicate_source(definition),
+            predicate_contract=definition.description,
             boundary_source=authority.maximum_source,
             boundary_rule=authority.maximum_rule,
             limit_values=limit_values,
@@ -206,6 +222,8 @@ def _parameter_boundary_checks(
                 status="history_decreased",
                 reason="increasing_formula_parameter_decreased_required_history",
                 signal_count=signal_count,
+                predicate_source=_predicate_source(definition),
+                predicate_contract=definition.description,
                 boundary_source=authority.maximum_source,
                 boundary_rule=authority.maximum_rule,
                 limit_values=limit_values,
@@ -274,6 +292,8 @@ def build_history_proofs() -> dict[str, StrategyHistoryProof]:
             before_boundary_status=before_status,
             boundary_status=boundary_status,
             boundary_reason=boundary_reason,
+            predicate_source=_predicate_source(definition),
+            predicate_contract=definition.description,
             required_data=definition.required_data,
             required_data_missing_status=missing_status,
             required_data_missing_reason=missing_reason,
