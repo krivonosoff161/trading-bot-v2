@@ -103,13 +103,17 @@ immutable card content identity to the pseudonymous recipient; legacy signal/pre
 keys remain read-compatible for completed deliveries.
 
 An unreadable, malformed, or structurally invalid existing outbox produces
-`outbox_unavailable` and is never replaced by an empty recovery state. A photo message
-id is durably recorded as `external_ack_ambiguous` before the text call begins. The row
-keeps separate `photo_status` and `text_status` values, so a failed text acknowledgement
-cannot turn a confirmed photo acknowledgement into a retryable whole-card send. Later
-runs fail closed on ambiguous or crash-left `pending` records. This is not an
-exactly-once Telegram guarantee; it is a recovery boundary that prevents automatic
-duplicate sends after ambiguous external acknowledgements.
+`outbox_unavailable` and is never replaced by an empty recovery state. The legacy
+`paper_telegram_sent_keys.json` compatibility index follows the same fail-closed rule;
+an existing unreadable or invalid index cannot be treated as an empty delivery history.
+Atomic JSON writes flush the temporary file before replace and flush the parent
+directory where the platform supports directory handles. A photo message id is
+recorded as `external_ack_ambiguous` through that boundary before the text call begins.
+The row keeps separate `photo_status` and `text_status` values, so a failed text
+acknowledgement cannot turn a confirmed photo acknowledgement into a retryable
+whole-card send. Later runs fail closed on ambiguous or crash-left `pending` records.
+This is not an exactly-once Telegram guarantee; it is a recovery boundary that
+prevents automatic duplicate sends after ambiguous external acknowledgements.
 
 Default mode is dry-run:
 

@@ -450,7 +450,9 @@ def test_sender_persists_sent_key_after_each_successful_delivery(tmp_path):
 
     assert summary["sent"] == 2
     assert len(calls) == 2
-    assert "signal:sig_1:content:tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in observed_after_first
+    assert sender._delivery_key(
+        _preview(telegram_card_id="tgcard_sig_1_clean_v2"), "111"
+    ) in observed_after_first
 
 
 def test_sender_deduplicates_when_card_template_changes_same_signal(tmp_path):
@@ -493,7 +495,10 @@ def test_sender_deduplicates_when_card_template_changes_same_signal(tmp_path):
     assert len(calls) == 0
     data = json.loads(sent_keys_path.read_text(encoding="utf-8"))
     assert "preview_1:f6e0a1e2ac41945a" in data["sent_keys"]
-    assert "signal:sig_1:content:tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in data["sent_keys"]
+    assert sender._delivery_key(
+        _preview(preview_id="preview_1", telegram_card_id="tgcard_sig_1_clean_v2"),
+        "111",
+    ) in data["sent_keys"]
 
 
 def test_sender_treats_changed_content_as_a_distinct_attempt(tmp_path):
@@ -961,12 +966,94 @@ def test_sender_fails_closed_when_outbox_is_corrupt(tmp_path):
     assert outbox_path.read_text(encoding="utf-8") == "{not-json"
 
 
+def test_sender_fails_closed_when_legacy_sent_keys_are_corrupt(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_content_v1")])
+    sent_keys_path = tmp_path / "state" / "derived" / "paper_telegram_sent_keys.json"
+    sent_keys_path.write_text("{not-json", encoding="utf-8")
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert calls == []
+    assert summary["outbox_unavailable_messages"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "outbox_unavailable"
+    assert data["items"][0]["problem"] == "delivery_sent_keys_invalid"
+    assert sent_keys_path.read_text(encoding="utf-8") == "{not-json"
+
+
+def test_outbox_write_flushes_before_atomic_replace(monkeypatch, tmp_path):
+    fsync_calls = []
+    monkeypatch.setattr(sender.os, "fsync", lambda fd: fsync_calls.append(fd))
+
+    sender._save_outbox(tmp_path, {})
+
+    assert fsync_calls
+    data = json.loads(sender._outbox_path(tmp_path).read_text(encoding="utf-8"))
+    assert data == {"schema": "paper_telegram_delivery_outbox.v1", "items": []}
+
+
 def test_delivery_key_uses_immutable_content_identity():
     first = _preview(telegram_card_id="tgcard_content_a")
     second = _preview(telegram_card_id="tgcard_content_b")
 
     assert sender._delivery_key(first, "111") != sender._delivery_key(second, "111")
     assert f"signal:sig_1:{sender._recipient_hash('111')}" in sender._delivery_keys(first, "111")
+
+
+def test_same_declared_card_id_with_changed_payload_has_distinct_content_identity(tmp_path):
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    first_preview = _preview(
+        telegram_card_id="tgcard_fixed",
+        text=f"CONTENT_A\n{sender.REQUIRED_DISCLAIMER}",
+    )
+    second_preview = _preview(
+        telegram_card_id="tgcard_fixed",
+        text=f"CONTENT_B\n{sender.REQUIRED_DISCLAIMER}",
+    )
+    assert sender._delivery_key(first_preview, "111") != sender._delivery_key(
+        second_preview, "111"
+    )
+
+    _write_preview_snapshot(tmp_path, [first_preview])
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    _write_preview_snapshot(tmp_path, [second_preview])
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert first["sent"] == 1
+    assert second["sent"] == 1
+    assert second["duplicates"] == 0
+    assert [text for _chat_id, text in calls] == [first_preview["text"], second_preview["text"]]
 
 
 def test_sender_rejects_signal_without_immutable_content_identity(tmp_path):
@@ -1042,6 +1129,46 @@ def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
     assert record["photo_status"] == "acknowledged"
     assert record["photo_message_id"] == 201
     assert record["text_status"] == "failed"
+
+
+def test_text_transport_exception_is_ambiguous_and_never_automatically_retried(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_text_ambiguous")])
+    text_calls = []
+
+    async def failing_text(chat_id, text):
+        text_calls.append((chat_id, text))
+        raise RuntimeError("synthetic failure after possible remote acceptance")
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=failing_text,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=failing_text,
+    )
+
+    assert first["external_ack_ambiguous_messages"] == 1
+    assert second["external_ack_ambiguous_messages"] == 1
+    assert len(text_calls) == 1
+    outbox = json.loads(
+        (tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    record = outbox["items"][0]
+    assert record["status"] == "external_ack_ambiguous"
+    assert record["photo_status"] == "not_applicable"
+    assert record["text_status"] == "failed"
+    assert record["problem"] == "text_ack_ambiguous:RuntimeError"
 
 
 def test_delivery_claim_is_atomic_across_two_processes(tmp_path):
