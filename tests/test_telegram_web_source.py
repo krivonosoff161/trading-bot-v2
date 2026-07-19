@@ -154,6 +154,8 @@ def test_scanner_ingest_summary_includes_tg_web(monkeypatch, capsys):
     monkeypatch.setattr(S.NB, "ready_items", lambda limit: [])
     monkeypatch.setattr(S.J, "write_ingest", lambda rows: len(rows))
     monkeypatch.setattr(S.J, "write_budget", lambda row: None)
+    monkeypatch.setattr(S.J, "ensure_pending_store", lambda: None)
+    monkeypatch.setattr(S.PS, "expire_old", lambda: {"expired": 0})
 
     import asyncio
     asyncio.run(S.run(limit=1, dry=False, use_buffer=True))

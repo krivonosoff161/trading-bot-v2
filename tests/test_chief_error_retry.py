@@ -44,7 +44,7 @@ def _gate_item():
 def _patch_pipeline_chief_error(monkeypatch, tmp_path):
     """process_item без сети/LLM: оркестратор возвращает chief_error-кандидата."""
     _patch_retry_state(tmp_path, monkeypatch)
-    sent, journaled, audits = [], [], []
+    sent, journaled, audits, event_audits = [], [], [], []
     monkeypatch.setattr(S, "SCANNER_CHAT_ID", "12345")
     monkeypatch.setattr(S, "route_asset", lambda h, allowed_layers=None: {
         "asset": "SPACEX", "okx_inst": "SPACEX-USDT-SWAP", "layer": 5,
@@ -57,6 +57,7 @@ def _patch_pipeline_chief_error(monkeypatch, tmp_path):
     monkeypatch.setattr(S, "make_chart", lambda *a, **k: None)
     monkeypatch.setattr(S.J, "write_row", lambda row: (journaled.append(row), row["card_id"])[1])
     monkeypatch.setattr(S.J, "write_routing_audit", audits.append)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda record: (event_audits.append(record), True)[1])
     monkeypatch.setattr(S.R, "write_event_block", lambda b: True)
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
@@ -84,22 +85,23 @@ def _patch_pipeline_chief_error(monkeypatch, tmp_path):
                           "mechanics": [], "key_facts": []},
                 "chief": None}
     monkeypatch.setattr(S.orchestrator, "process", fake_process)
-    return sent, journaled, audits
+    return sent, journaled, audits, event_audits
 
 
 def test_chief_error_requeues_not_journals(monkeypatch, tmp_path):
-    sent, journaled, audits = _patch_pipeline_chief_error(monkeypatch, tmp_path)
+    sent, journaled, audits, event_audits = _patch_pipeline_chief_error(monkeypatch, tmp_path)
     res = asyncio.run(S.process_item(_gate_item(), None, dry=False))
     assert res["skipped"] == "llm_failed"        # run(): буфер→READY / RSS→не-seen → ретрай
     assert journaled == []                       # карточка НЕ финализирована
     assert sent == []                            # Telegram молчит
+    assert event_audits and event_audits[-1]["audit_bucket"] == "realized_seen"
     assert audits and audits[-1]["skipped"] == "chief_error_retry"
     assert audits[-1]["escalation_gate"] == "CHIEF_ERROR_PENDING"
     assert res["tokens"] == 200                  # cheap-токены учтены в бюджете
 
 
 def test_chief_error_finalizes_after_cap(monkeypatch, tmp_path):
-    sent, journaled, audits = _patch_pipeline_chief_error(monkeypatch, tmp_path)
+    sent, journaled, audits, event_audits = _patch_pipeline_chief_error(monkeypatch, tmp_path)
     # выжигаем кап: CHIEF_RETRY_MAX ретраев уже сделано
     for _ in range(S.CHIEF_RETRY_MAX):
         res = asyncio.run(S.process_item(_gate_item(), None, dry=False))
@@ -108,6 +110,7 @@ def test_chief_error_finalizes_after_cap(monkeypatch, tmp_path):
     assert "skipped" not in res or not res.get("skipped")
     assert journaled and journaled[0]["verdict"] == "NO_GO"
     assert journaled[0]["escalation_gate"] == "CHIEF_UNAVAILABLE"   # не обычный NO_GO в аудитах
+    assert len(event_audits) == S.CHIEF_RETRY_MAX + 1
     assert sent == []                                               # в канал не идёт
     # дедуп цел: card_id детерминирован от canonical url
     assert journaled[0]["card_id"]
