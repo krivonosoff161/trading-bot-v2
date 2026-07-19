@@ -45,8 +45,13 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python -m pip install --upgrade pip
 .\.venv\Scripts\python -m pip install -r requirements.txt
 python -m pytest
+python scripts/ci/check_supply_chain_policy.py
 python scripts/ci/check_tracked_artifacts.py
 ```
+
+CI uses `requirements-ci.txt` plus `requirements-ci.sha256` as the public exact
+direct-dependency reconstruction input. `requirements.txt` remains the local
+developer convenience file and can carry broader comments or optional guidance.
 
 Configuration is optional for tests. Integrations that fetch public market data,
 call a provider, or send a paper card need a local `.env` created from

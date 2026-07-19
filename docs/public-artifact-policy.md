@@ -29,6 +29,7 @@ Before staging a file, classify it by content rather than its extension.
 ## Required Checks
 
 ```powershell
+python scripts/ci/check_supply_chain_policy.py
 python scripts/ci/check_tracked_artifacts.py
 git diff --check
 git status --short
@@ -37,6 +38,14 @@ git status --short
 The artifact guard blocks common runtime and credential paths. It is a safety
 net, not content classification. A path that passes the guard can still be
 private and must not be committed.
+
+The supply-chain guard is an offline public-repository check. It blocks mutable
+external GitHub Action references in workflows, requires CI to install from the
+exact `requirements-ci.txt` reconstruction input, verifies the tracked
+`requirements-ci.sha256` digest for that input, and scans tracked text files for
+secret-like assignments while reporting only path, line, and secret type. It
+does not replace repository settings, GitHub dependency review enforcement,
+SBOM generation, package archive hash provenance, or maintainer review.
 
 ## Existing Historical Material
 

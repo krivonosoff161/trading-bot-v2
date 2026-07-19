@@ -3,5 +3,10 @@
 *.cmd  text eol=crlf
 *.ps1  text eol=crlf
 
+# CI supply-chain manifests are hashed byte-for-byte by
+# scripts/ci/check_supply_chain_policy.py; keep them platform-stable.
+requirements-ci.txt text eol=lf
+requirements-ci.sha256 text eol=lf
+
 # Остальное — нормализация по умолчанию
 * text=auto
