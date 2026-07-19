@@ -50,7 +50,9 @@ provider label. For the public Ollama route, the invocation ledger accepts only
 normalized loopback HTTP endpoints and records the provider implementation,
 model name, endpoint identity, prompt/context evidence, and sanitized input
 hash in the invocation identity. Missing, remote, credential-bearing, or
-non-loopback endpoints fail closed before a provider call.
+non-loopback endpoints fail closed before a provider call. Malformed endpoint
+syntax, including non-numeric or out-of-range ports, produces an explicit
+`invalid_endpoint` permit denial and never escapes as a parser exception.
 
 ### Independent Validator
 

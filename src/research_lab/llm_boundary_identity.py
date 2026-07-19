@@ -31,14 +31,20 @@ def endpoint_identity_from_url(base_url: str) -> EndpointIdentity:
     if not raw:
         return EndpointIdentity("", "", None, "", "", False, ("missing_endpoint",))
 
-    parsed = urlparse(raw)
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return EndpointIdentity("", "", None, "", "", False, ("invalid_endpoint_syntax",))
     problems: list[str] = []
     scheme = parsed.scheme.lower()
     if scheme != "http":
         problems.append("non_http_endpoint")
     if parsed.username or parsed.password:
         problems.append("endpoint_userinfo_forbidden")
-    host = (parsed.hostname or "").strip().lower()
+    try:
+        host = (parsed.hostname or "").strip().lower()
+    except ValueError:
+        return EndpointIdentity(scheme, "", None, "", "", False, ("invalid_endpoint_host",))
     if not host:
         problems.append("missing_endpoint_host")
 
@@ -49,14 +55,22 @@ def endpoint_identity_from_url(base_url: str) -> EndpointIdentity:
     if host and not loopback:
         problems.append("non_loopback_endpoint")
 
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+        problems.append("invalid_endpoint_port")
     path = parsed.path.rstrip("/") or ""
     if normalized_host == "::1":
         host_part = "[::1]"
     else:
         host_part = normalized_host
     port_part = f":{port}" if port is not None else ""
-    normalized = f"{scheme}://{host_part}{port_part}{path}" if scheme and host_part else ""
+    normalized = (
+        f"{scheme}://{host_part}{port_part}{path}"
+        if scheme and host_part and "invalid_endpoint_port" not in problems
+        else ""
+    )
     return EndpointIdentity(
         scheme=scheme,
         host=normalized_host,
