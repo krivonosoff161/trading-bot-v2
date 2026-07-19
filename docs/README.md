@@ -85,7 +85,8 @@ architecture.
 - [Simulator truth tiers](simulator-truth-tiers.md): immutable OHLC fixture/scenario
   assumptions, metric states, unsupported execution dimensions, and claim ceilings.
 - [Storage boundaries](storage_boundaries.md): public/private/local-only artifacts,
-  report-only automatic maintenance, and synthetic-only quarantine limits.
+  report-only automatic maintenance, synthetic-only quarantine, and the off-by-default
+  coordinated segment protocol/non-adoption boundary.
 - [Public artifact policy](public-artifact-policy.md): staging and historical
   artifact-remediation rules.
 - [Remote data manifest](REMOTE_DATA_MANIFEST.md): machine-local data locations

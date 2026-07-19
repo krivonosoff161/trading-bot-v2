@@ -32,7 +32,9 @@ under the [Paper Evidence Generations](paper-evidence-generations.md) contract.
 Normal scanner/farm apply modes do not authorize destructive storage maintenance.
 Legacy cache/log/spec/task retention is report-only; the synthetic v2 quarantine proof
 has no supported launcher and cannot activate a repository or current private root. See
-[Storage boundaries](storage_boundaries.md). Coordinated log rotation remains deferred.
+[Storage boundaries](storage_boundaries.md). The synthetic segmented-log protocol also
+has no launcher or implicit adapter; coordinated adoption of current logs remains
+deferred.
 
 `python scripts/ci/check_public_docs.py` verifies that every tracked `.bat`
 file is catalogued and that public documentation links resolve locally.

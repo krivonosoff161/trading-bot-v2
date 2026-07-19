@@ -13,7 +13,6 @@ import json
 import os
 import sqlite3
 import stat
-import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -35,19 +34,16 @@ from src.research_lab.storage_capability import (
     safe_relative_file,
     validate_relative_path_text,
 )
+from src.research_lab.storage_os_lock import (
+    StorageLockConflict,
+    storage_root_lock as _os_lock,
+)
 
 try:
     import msvcrt
 except ImportError:  # pragma: no cover - platform branch
     msvcrt = None
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - platform branch
-    fcntl = None
-
-
-class StorageMaintenanceConflict(RuntimeError):
-    """The requested mutation cannot be proved safe and authoritative."""
+StorageMaintenanceConflict = StorageLockConflict
 
 
 @dataclass(frozen=True)
@@ -143,80 +139,6 @@ def _open_nofollow_read(path: Path) -> int:
     except Exception:
         kernel32.CloseHandle(ctypes.c_void_p(handle))
         raise
-
-
-_LOCAL_LOCK = threading.Lock()
-
-
-def _open_lock_nofollow(path: Path) -> tuple[Any, dict[str, int]]:
-    before = path.lstat()
-    if is_link_or_reparse(path) or not stat.S_ISREG(before.st_mode):
-        raise StorageMaintenanceConflict("storage operation lock path is unsafe")
-    if os.name != "nt":
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-    else:
-        if msvcrt is None:  # pragma: no cover - guarded platform branch
-            raise StorageMaintenanceConflict("Windows lock handle support is unavailable")
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_file = kernel32.CreateFileW
-        create_file.restype = ctypes.c_void_p
-        raw_handle = create_file(
-            ctypes.c_wchar_p(str(path)), 0xC0000000,
-            0x00000001 | 0x00000002, None, 3, 0x00200000, None,
-        )
-        if raw_handle in (None, ctypes.c_void_p(-1).value):
-            raise OSError(ctypes.get_last_error(), "CreateFileW failed", str(path))
-        try:
-            fd = msvcrt.open_osfhandle(
-                int(raw_handle), os.O_RDWR | getattr(os, "O_BINARY", 0)
-            )
-        except Exception:
-            kernel32.CloseHandle(ctypes.c_void_p(raw_handle))
-            raise
-    handle = os.fdopen(fd, "r+b", closefd=True)
-    opened = os.fstat(handle.fileno())
-    if _stat_identity(opened) != _stat_identity(before) or is_link_or_reparse(path):
-        handle.close()
-        raise StorageMaintenanceConflict("storage operation lock identity changed")
-    return handle, _stat_identity(opened)
-
-
-@contextmanager
-def _os_lock(path: Path) -> Iterator[None]:
-    if not _LOCAL_LOCK.acquire(blocking=False):
-        raise StorageMaintenanceConflict("storage operation lock is already held")
-    handle = None
-    locked = False
-    try:
-        handle, lock_identity = _open_lock_nofollow(path)
-        try:
-            if os.name == "nt":
-                if msvcrt is None:
-                    raise StorageMaintenanceConflict("Windows OS locking is unavailable")
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                if fcntl is None:
-                    raise StorageMaintenanceConflict("POSIX OS locking is unavailable")
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            locked = True
-            if _path_identity(path) != lock_identity:
-                raise StorageMaintenanceConflict("storage operation lock identity changed")
-        except (OSError, BlockingIOError) as exc:
-            raise StorageMaintenanceConflict("cannot acquire storage operation lock") from exc
-        yield
-    finally:
-        if handle is not None:
-            try:
-                if locked and os.name == "nt" and msvcrt is not None:
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                elif locked and fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                handle.close()
-        _LOCAL_LOCK.release()
 
 
 class StorageMaintenanceStore:

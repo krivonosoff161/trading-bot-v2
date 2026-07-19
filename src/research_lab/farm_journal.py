@@ -11,7 +11,9 @@ maintenance may report their size, but does not rotate or truncate them:
 
 These are the durable, queryable explanation of "what the farm did and why". Raw stdout
 stays for live watching; humans read structured state via farm_status_report / cockpit,
-not by tailing logs. Pure file IO, no network, no order path.
+not by tailing logs. The separate segmented-store adapter is synthetic-only and must be
+passed explicitly; this module never activates, imports, or dual-writes it. Pure file IO,
+no network, no order path.
 """
 from __future__ import annotations
 

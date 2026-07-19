@@ -18,6 +18,9 @@ import hashlib
 import json
 from pathlib import Path
 
+# The segmented-store adapter is a separate synthetic-only dependency. This legacy
+# module never activates it, falls back to it, imports history, or dual-writes logs.
+
 from src.scout import pending_store as PS
 
 _ROOT = Path(__file__).resolve().parents[2]

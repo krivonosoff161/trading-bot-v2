@@ -142,5 +142,9 @@ Automatic scanner/farm storage maintenance is report-only: outer research `apply
 not authorize cache unlink, log truncation, event-spec pruning, or farm-history deletion.
 The v2 quarantine API is an off-by-default synthetic OS-temp proof with a fixed root
 capability and durable restore evidence; it is not activated for private storage and
-does not reclaim physical bytes. Legacy append logs remain uncoordinated until a
-separately specified segmented-writer package and explicit rollout.
+does not reclaim physical bytes. The separate segmented JSONL API proves coordinated
+canonical append, immutable intent evidence, no-replace seal, crash recovery, and
+full-stream reads only for explicit adapters over the same synthetic capability and root
+lock. No launcher or current farm/scanner producer or reader selects it. Legacy append
+logs remain `legacy_uncoordinated_storage` until a separately authorized private
+inventory, cutover, parity, and rollback package is completed.
