@@ -37,6 +37,7 @@ META_ENUMS = {
 
 PARAMETER_SEARCH_CONTRACT_VERSION = "parameter-search/v1"
 SAMPLER_VERSION = "deterministic-uniform/v1"
+PARAM_POLICY_SOURCE = "configs/strategy_lab/param_schemas.yaml"
 _AXIS_DEPENDENCIES: dict[tuple[str, str], tuple[str, ...]] = {
     ("rsi_reversal", "oversold"): ("oversold < overbought",),
     ("rsi_reversal", "overbought"): ("overbought > oversold",),
@@ -53,6 +54,19 @@ class AdaptiveAxis:
     unit: str = "scalar"
     searchable: bool = True
     dependencies: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ParameterRangeAuthority:
+    strategy_id: str
+    parameter: str
+    default_value: Any
+    value_type: str
+    minimum: float | int | None
+    maximum: float | int
+    maximum_source: str
+    maximum_rule: str
+    rule_inputs: dict[str, float | int]
 
 
 @dataclass(frozen=True)
@@ -163,6 +177,58 @@ def _range_for_key(key: str, default: Any, policy: dict[str, Any]) -> dict[str, 
     base = abs(float(default or 0))
     max_v = max(float(cfg.get("min_max", 1.0)), base * float(cfg.get("max_mult", 4)))
     return {"type": "number", "min": float(cfg.get("min", 0.0)), "max": max_v}
+
+
+def parameter_range_authority(
+    strategy_id: str,
+    parameter: str,
+    *,
+    policy: dict[str, Any] | None = None,
+) -> ParameterRangeAuthority:
+    """Return the registry default and policy rule that authoritatively bound a parameter."""
+    strategy = get_strategy(strategy_id)
+    if parameter not in strategy.parameter_defaults:
+        raise KeyError(f"unknown parameter for {strategy_id}: {parameter}")
+    policy = policy or load_param_policy()
+    default = strategy.parameter_defaults[parameter]
+    spec = _range_for_key(parameter, default, policy)
+    if spec.get("max") is None:
+        raise ValueError(f"parameter has no numeric maximum: {strategy_id}.{parameter}")
+
+    explicit = (policy.get("ranges") or {}).get(parameter)
+    if isinstance(explicit, dict):
+        source = f"{PARAM_POLICY_SOURCE}#ranges.{parameter}"
+        rule = "explicit_policy_max"
+        inputs: dict[str, float | int] = {"configured_max": spec["max"]}
+    elif isinstance(default, int) and not isinstance(default, bool):
+        cfg = (policy.get("fallback_ranges") or {}).get("int") or {}
+        source = f"{PARAM_POLICY_SOURCE}#fallback_ranges.int"
+        rule = "max(min_max, registry_default * max_mult)"
+        inputs = {
+            "min_max": int(cfg.get("min_max", 10)),
+            "max_mult": int(cfg.get("max_mult", 4)),
+            "registry_default": int(default),
+        }
+    else:
+        cfg = (policy.get("fallback_ranges") or {}).get("number") or {}
+        source = f"{PARAM_POLICY_SOURCE}#fallback_ranges.number"
+        rule = "max(min_max, abs(registry_default) * max_mult)"
+        inputs = {
+            "min_max": float(cfg.get("min_max", 1.0)),
+            "max_mult": float(cfg.get("max_mult", 4)),
+            "registry_default": float(default or 0),
+        }
+    return ParameterRangeAuthority(
+        strategy_id=strategy_id,
+        parameter=parameter,
+        default_value=default,
+        value_type=str(spec.get("type") or "number"),
+        minimum=spec.get("min"),
+        maximum=spec["max"],
+        maximum_source=source,
+        maximum_rule=rule,
+        rule_inputs=inputs,
+    )
 
 
 def _validate_one(key: str, value: Any, default: Any, policy: dict[str, Any]) -> list[str]:

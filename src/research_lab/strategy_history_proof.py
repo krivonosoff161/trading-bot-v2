@@ -11,6 +11,7 @@ missing side-data family was satisfied by extra candles.
 from dataclasses import dataclass
 from typing import Any
 
+from src.research_lab.param_schemas import parameter_range_authority, validate_params
 from src.research_lab.strategy_registry import REGISTRY, StrategyDef
 
 
@@ -29,6 +30,15 @@ class ParameterBoundaryCheck:
     status: str
     reason: str
     signal_count: int
+    boundary_source: str
+    boundary_rule: str
+    limit_values: tuple[int, int, int]
+    limit_validity: tuple[bool, bool, bool]
+    above_limit_errors: tuple[str, ...]
+    history_rows: tuple[int, int, int]
+    history_statuses: tuple[str, str, str]
+    history_reasons: tuple[str, str, str]
+    history_signal_counts: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -131,16 +141,6 @@ def _before_boundary_status(
     return "no_signal_before_boundary", reason, count
 
 
-def _term_boundary_value(default: Any) -> int:
-    if isinstance(default, bool):
-        return 1
-    try:
-        value = int(default)
-    except (TypeError, ValueError):
-        value = 1
-    return max(value + 1, value * 2, 2)
-
-
 def _parameter_boundary_checks(
     definition: StrategyDef,
     default_params: dict[str, Any],
@@ -153,14 +153,31 @@ def _parameter_boundary_checks(
     for parameter in terms:
         params = dict(default_params)
         default_value = int(params.get(parameter, 1) or 1)
-        boundary_value = _term_boundary_value(default_value)
+        authority = parameter_range_authority(definition.strategy_id, parameter)
+        boundary_value = int(authority.maximum)
+        if float(authority.maximum) != float(boundary_value):
+            raise ValueError(
+                f"history parameter maximum must be integral: {definition.strategy_id}.{parameter}"
+            )
+        limit_values = (boundary_value - 1, boundary_value, boundary_value + 1)
+        limit_results = []
+        for value in limit_values:
+            candidate = dict(default_params)
+            candidate[parameter] = value
+            limit_results.append(validate_params(definition.strategy_id, candidate))
         params[parameter] = boundary_value
         required = definition.required_history_bars(params)
-        status, reason, signal_count = _signals_status(
+        before_rows = max(0, required - 1)
+        before_status, before_reason, before_count = _before_boundary_status(
             definition,
-            required,
+            before_rows,
             params,
-            include_required_data=True,
+        )
+        status, reason, signal_count = _signals_status(
+            definition, required, params, include_required_data=True
+        )
+        after_status, after_reason, after_count = _signals_status(
+            definition, required + 1, params, include_required_data=True
         )
         checks[parameter] = ParameterBoundaryCheck(
             parameter=parameter,
@@ -170,6 +187,15 @@ def _parameter_boundary_checks(
             status=status,
             reason=reason,
             signal_count=signal_count,
+            boundary_source=authority.maximum_source,
+            boundary_rule=authority.maximum_rule,
+            limit_values=limit_values,
+            limit_validity=tuple(result.ok for result in limit_results),
+            above_limit_errors=tuple(limit_results[2].errors),
+            history_rows=(before_rows, required, required + 1),
+            history_statuses=(before_status, status, after_status),
+            history_reasons=(before_reason, reason, after_reason),
+            history_signal_counts=(before_count, signal_count, after_count),
         )
         if required < default_required:
             checks[parameter] = ParameterBoundaryCheck(
@@ -180,6 +206,15 @@ def _parameter_boundary_checks(
                 status="history_decreased",
                 reason="increasing_formula_parameter_decreased_required_history",
                 signal_count=signal_count,
+                boundary_source=authority.maximum_source,
+                boundary_rule=authority.maximum_rule,
+                limit_values=limit_values,
+                limit_validity=tuple(result.ok for result in limit_results),
+                above_limit_errors=tuple(limit_results[2].errors),
+                history_rows=(before_rows, required, required + 1),
+                history_statuses=(before_status, status, after_status),
+                history_reasons=(before_reason, reason, after_reason),
+                history_signal_counts=(before_count, signal_count, after_count),
             )
     return checks
 

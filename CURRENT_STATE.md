@@ -31,9 +31,12 @@ rows, provider state, and local findings belong outside public Git.
   therefore needs fresh data before it can become paper-forward ready.
 - The public registry can build a deterministic synthetic history-boundary proof
   for all 27 strategy families. This proves formula/generator/history alignment
-  for public synthetic OHLCV fixtures and declared side-data boundaries only; it
-  does not prove private historical completeness, profitability, or paper
-  readiness.
+  for public synthetic OHLCV fixtures and declared side-data boundaries only.
+  Every history-formula term is exercised at its parameter-policy maximum, with
+  parameter N-1/N/N+1 validation and candle required-1/required/required+1
+  checks. Maxima are derived from registry defaults plus
+  `configs/strategy_lab/param_schemas.yaml`, not test-local constants. This does
+  not prove private historical completeness, profitability, or paper readiness.
 - Public runtime code now models process, brain-task and compute-job authority
   with renewable leases and monotonic fences. Cross-database sweep dispatch is
   content-bound and replayable; worker results remain provisional until fenced
