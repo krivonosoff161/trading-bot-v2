@@ -8,7 +8,9 @@ import sqlite3
 from pathlib import Path
 
 from src.research_lab.state_db import connect, default_db_path, import_run_dir, init_db
+from src.research_lab.honest_backtest_bridge import _artifact_stem
 from src.research_lab.validation_handoff import refresh_from_artifacts, validation_state
+from src.research_lab.validation_generation import write_current_generation
 
 V3_FARM_RESULTS = """
 CREATE TABLE farm_results (
@@ -136,6 +138,89 @@ def test_refresh_handoff_can_limit_writer_work_to_current_batch(tmp_path):
         )
 
     result = refresh_from_artifacts(conn, tmp_path, candidate_ids=["current"])
+
+    assert result["request_files"] == 1
+    assert result["verdict_files"] == 1
+    current = conn.execute(
+        "SELECT validation_exported, hard_status FROM farm_results WHERE candidate_id='current'"
+    ).fetchone()
+    historical = conn.execute(
+        "SELECT validation_exported, hard_status FROM farm_results WHERE candidate_id='historical'"
+    ).fetchone()
+    assert tuple(current) == (1, "HARD_REJECT")
+    assert tuple(historical) == (0, "OLD")
+    conn.close()
+
+
+def test_refresh_handoff_uses_only_content_bound_current_generation(tmp_path):
+    conn = connect(default_db_path(tmp_path))
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO runs(run_id, experiment_id, created_at, artifact_label, imported_at) "
+        "VALUES('r','e','t','l','t')"
+    )
+    for candidate_id in ("current", "historical"):
+        conn.execute(
+            "INSERT INTO farm_results(run_id, candidate_id, symbol, family, decision, hard_status) "
+            "VALUES('r',?,'BTC_USDT_SWAP','range_breakout','OBSERVE',?)",
+            (candidate_id, "OLD" if candidate_id == "historical" else ""),
+        )
+    conn.commit()
+    base = tmp_path / "hard_validation"
+    for subdir in ("requests", "reports", "verdicts"):
+        (base / subdir).mkdir(parents=True)
+    cards = tmp_path / "setup_library" / "cards"
+    cards.mkdir(parents=True)
+    for candidate_id, status in (("current", "HARD_REJECT"), ("historical", "FAILED_COSTS")):
+        stem = _artifact_stem(candidate_id)
+        (base / "requests" / f"{stem}.json").write_text(
+            json.dumps({
+                "candidate_id": candidate_id,
+                "symbol": "BTC_USDT_SWAP",
+                "timeframe": "1h",
+                "strategy_id": "range_breakout",
+                "params": {},
+            }), encoding="utf-8"
+        )
+        (base / "reports" / f"{stem}.json").write_text(
+            json.dumps({
+                "candidate_id": candidate_id,
+                "symbol": "BTC_USDT_SWAP",
+                "timeframe": "1h",
+                "strategy_id": "range_breakout",
+                "verdict": {"candidate_id": candidate_id, "hard_status": status},
+            }), encoding="utf-8"
+        )
+        (base / "verdicts" / f"{stem}.json").write_text(
+            json.dumps({"candidate_id": candidate_id, "hard_status": status}), encoding="utf-8"
+        )
+        (cards / f"setup-{candidate_id}.json").write_text(
+            json.dumps({
+                "setup_id": f"setup-{candidate_id}",
+                "candidate_id": candidate_id,
+                "symbol": "BTC_USDT_SWAP",
+                "timeframe": "1h",
+                "strategy_id": "range_breakout",
+                "params": {},
+                "hard_status": status,
+                "paper_forward_ready": False,
+                "main_engine_ready": False,
+            }), encoding="utf-8"
+        )
+    write_current_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 1,
+            "task_type": "export_validation",
+            "task_key": "current",
+            "payload_json": "{}",
+        }],
+        exported_ids=["current"],
+        completed_ids=["current"],
+        producer_time=2.0,
+    )
+
+    result = refresh_from_artifacts(conn, tmp_path)
 
     assert result["request_files"] == 1
     assert result["verdict_files"] == 1

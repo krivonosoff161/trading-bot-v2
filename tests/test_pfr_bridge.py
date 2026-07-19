@@ -23,6 +23,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -57,6 +59,7 @@ def _make_db(path: Path, rows: list[dict]) -> None:
         candidate_id TEXT NOT NULL,
         family TEXT,
         params_json TEXT,
+        metrics_json TEXT,
         PRIMARY KEY (run_id, candidate_id)
     )""")
     for r in rows:
@@ -68,8 +71,14 @@ def _make_db(path: Path, rows: list[dict]) -> None:
              r.get("paper_status", "")),
         )
         c.execute(
-            "INSERT OR REPLACE INTO candidates VALUES (?,?,?,?)",
-            ("R1", r["candidate_id"], r["family"], json.dumps(r.get("params", {}))),
+            "INSERT OR REPLACE INTO candidates VALUES (?,?,?,?,?)",
+            (
+                "R1",
+                r["candidate_id"],
+                r["family"],
+                json.dumps(r.get("params", {})),
+                json.dumps(r.get("metrics", {})),
+            ),
         )
     conn.commit()
     conn.close()
@@ -273,7 +282,7 @@ class TestPFRBridgeLoad:
         conn.commit()
         conn.close()
 
-        row = pfr_bridge.load_pfr_records(db)[0]
+        row = pfr_bridge.load_pfr_records(db, private_root=tmp_path)[0]
         assert row["search_family_id"] == "sfd_parent"
         assert row["search_trial_id"] == "stept_parent"
         assert row["effective_n_trials"] == 4
@@ -285,7 +294,7 @@ class TestPFRBridgeLoad:
             {**_MBR_ROW_DICT, "candidate_id": "C2", "hard_status": "REJECT"},
             {**_MBR_ROW_DICT, "candidate_id": "C3", "hard_status": ""},
         ])
-        recs = pfr_bridge.load_pfr_records(db)
+        recs = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
         assert len(recs) == 1
         assert recs[0]["candidate_id"] == "C1"
 
@@ -304,22 +313,134 @@ class TestPFRBridgeLoad:
         # No candidates row with run_id='R1' — LEFT JOIN gives NULL params_json
         conn.commit()
         conn.close()
-        recs = pfr_bridge.load_pfr_records(db)
+        recs = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
         assert len(recs) == 0  # params_json IS NOT NULL filter excludes it
 
     def test_missing_db_returns_empty(self, tmp_path):
-        recs = pfr_bridge.load_pfr_records(tmp_path / "nonexistent.sqlite")
+        recs = pfr_bridge.load_pfr_records(
+            tmp_path / "nonexistent.sqlite", private_root=tmp_path
+        )
         assert recs == []
 
     def test_params_hash_and_setup_id_added(self, tmp_path):
         db = tmp_path / "sl.sqlite"
         _make_db(db, [_MRF_ROW_DICT])
-        recs = pfr_bridge.load_pfr_records(db)
+        recs = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
         r = recs[0]
         assert r["setup_id"] == f"setup-{r['candidate_id']}"
         assert "params_hash" in r and len(r["params_hash"]) == 12
         # params_hash must be deterministic
         assert r["params_hash"] == pfr_bridge._params_hash(_MRF_PARAMS)
+
+    def test_present_empty_generation_revokes_stale_sqlite_pfr(self, tmp_path):
+        from src.research_lab.validation_generation import write_current_generation
+
+        db = tmp_path / "state" / "strategy_lab.sqlite"
+        db.parent.mkdir(parents=True)
+        _make_db(db, [_MRF_ROW_DICT])
+        write_current_generation(
+            tmp_path,
+            tasks=[{
+                "task_id": 1,
+                "task_type": "export_validation",
+                "task_key": "empty",
+                "payload_json": "{}",
+            }],
+            exported_ids=[],
+            completed_ids=[],
+            producer_time=2.0,
+        )
+
+        assert pfr_bridge.load_pfr_records(db, private_root=tmp_path) == []
+        with pytest.raises(TypeError, match="private_root"):
+            pfr_bridge.load_pfr_records(db)
+
+    def test_current_generation_maps_verified_source_row_to_validation_setup(self, tmp_path):
+        from src.research_lab.honest_backtest_bridge import _artifact_stem
+        from src.research_lab.validation_generation import write_current_generation
+
+        db = tmp_path / "state" / "strategy_lab.sqlite"
+        db.parent.mkdir(parents=True)
+        _make_db(db, [{
+            **_MRF_ROW_DICT,
+            "metrics": {
+                "search_family_id": "sfd_current",
+                "search_trial_id": "stept_current",
+                "effective_n_trials": 7,
+            },
+        }])
+        validation_id = "fv_" + "a" * 64
+        stem = _artifact_stem(validation_id)
+        base = tmp_path / "hard_validation"
+        for subdir in ("requests", "reports", "verdicts"):
+            (base / subdir).mkdir(parents=True)
+        cards = tmp_path / "setup_library" / "cards"
+        cards.mkdir(parents=True)
+        request = {
+            "candidate_id": validation_id,
+            "source_run_id": "R1",
+            "symbol": _MRF_ROW_DICT["symbol"],
+            "timeframe": _MRF_ROW_DICT["timeframe"],
+            "strategy_id": _MRF_ROW_DICT["family"],
+            "params": _MRF_PARAMS,
+            "metrics": {"source_candidate_id": "C1"},
+        }
+        report = {
+            "candidate_id": validation_id,
+            "symbol": _MRF_ROW_DICT["symbol"],
+            "timeframe": _MRF_ROW_DICT["timeframe"],
+            "strategy_id": _MRF_ROW_DICT["family"],
+            "verdict": {
+                "candidate_id": validation_id,
+                "hard_status": "PAPER_FORWARD_READY",
+            },
+        }
+        verdict = {"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}
+        card = {
+            "setup_id": f"setup-{validation_id}",
+            "candidate_id": validation_id,
+            "symbol": _MRF_ROW_DICT["symbol"],
+            "timeframe": _MRF_ROW_DICT["timeframe"],
+            "strategy_id": _MRF_ROW_DICT["family"],
+            "params": _MRF_PARAMS,
+            "hard_status": "PAPER_FORWARD_READY",
+            "paper_forward_ready": True,
+            "main_engine_ready": False,
+        }
+        for subdir, payload in (
+            ("requests", request),
+            ("reports", report),
+            ("verdicts", verdict),
+        ):
+            (base / subdir / f"{stem}.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+        (cards / f"setup-{validation_id}.json").write_text(
+            json.dumps(card), encoding="utf-8"
+        )
+        write_current_generation(
+            tmp_path,
+            tasks=[{
+                "task_id": 1,
+                "task_type": "export_validation",
+                "task_key": "current",
+                "payload_json": "{}",
+            }],
+            exported_ids=[validation_id],
+            completed_ids=[validation_id],
+            producer_time=2.0,
+        )
+
+        records = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
+
+        assert len(records) == 1
+        assert records[0]["candidate_id"] == validation_id
+        assert records[0]["source_candidate_id"] == "C1"
+        assert records[0]["setup_id"] == f"setup-{validation_id}"
+        assert records[0]["validation_generation_id"].startswith("hvg_")
+        assert records[0]["search_family_id"] == "sfd_current"
+        assert records[0]["search_trial_id"] == "stept_current"
+        assert records[0]["effective_n_trials"] == 7
 
 
 # ── Category 2: quality policy rejects correctly ──────────────────────────────
@@ -1143,7 +1264,7 @@ class TestPFRJoinCorrectness:
         conn.commit()
         conn.close()
 
-        recs = pfr_bridge.load_pfr_records(db)
+        recs = pfr_bridge.load_pfr_records(db, private_root=tmp_path)
         assert len(recs) == 1, (
             f"JOIN must use run_id — expected 1 record, got {len(recs)} "
             "(JOIN inflation bug: candidate_id-only JOIN returns 3 copies)")

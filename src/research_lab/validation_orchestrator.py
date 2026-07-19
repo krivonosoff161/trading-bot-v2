@@ -29,6 +29,10 @@ from src.research_lab.honest_backtest_bridge import (
 from src.research_lab.setup_library import build_setup_card, write_setup_library
 from src.research_lab.validation_handoff import refresh_from_artifacts
 from src.research_lab.validation_feedback import generate_feedback, write_feedback
+from src.research_lab.validation_generation import (
+    write_current_generation,
+    write_pending_generation,
+)
 
 
 def _verdict_map(private_root: Path) -> dict[str, str]:
@@ -154,19 +158,60 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
             tasks.complete_task(task["task_id"], reason="export_dry_run", now=now)
         return counters
 
+    # Revoke the previous generation before this producer creates any new
+    # request/report/verdict/card side effects.  A crash anywhere below leaves
+    # the paper readers on a fail-closed pending generation.
+    write_pending_generation(
+        Path(private_root),
+        tasks=export_tasks,
+        producer_time=now,
+    )
+
     uc_keys = [str(_read_payload(t).get("uc_key") or "") for t in export_tasks]
     uc_keys = [k for k in uc_keys if k]
-    summary = export_requests(private_root, dry_run=False, limit=max(limit, len(export_tasks)),
-                              include_regime_specific=True, source="farm_tasks",
-                              uc_keys=uc_keys or None)
-    counters["exported"] = int(summary.get("exported") or 0)
-    exported_ids = [str(x) for x in summary.get("exported_ids") or []]
+    if uc_keys:
+        summary = export_requests(
+            private_root,
+            dry_run=False,
+            limit=max(limit, len(export_tasks)),
+            include_regime_specific=True,
+            source="farm_tasks",
+            uc_keys=uc_keys,
+        )
+    else:
+        summary = {"exported": 0, "exported_ids": []}
+    expected_ids = {
+        _hard_id_for_task(task)
+        for task in export_tasks
+        if str(_read_payload(task).get("uc_key") or "")
+    }
+    expected_ids.discard("")
+    exported_ids = list(dict.fromkeys(
+        str(candidate_id)
+        for candidate_id in (summary.get("exported_ids") or [])
+        if str(candidate_id) in expected_ids
+    ))
+    counters["exported"] = len(exported_ids)
     requests_dir = Path(private_root) / "hard_validation" / "requests"
-    val = run_validation_batch(requests_dir, private_root, dry_run=False,
-                               limit=max(limit, len(export_tasks)),
-                               candidate_ids=exported_ids or None)
+    if exported_ids:
+        val = run_validation_batch(
+            requests_dir,
+            private_root,
+            dry_run=False,
+            limit=max(limit, len(export_tasks)),
+            candidate_ids=exported_ids,
+        )
+    else:
+        val = {"total": 0, "validated": 0, "errors": 0, "results": []}
     counters["validated"] = int(val.get("validated") or 0)
-    current_ids = exported_ids or [_hard_id_for_task(t) for t in export_tasks]
+    exported_set = set(exported_ids)
+    current_ids = list(dict.fromkeys(
+        str(result.get("candidate_id") or "")
+        for result in (val.get("results") or [])
+        if isinstance(result, dict)
+        and result.get("hard_status")
+        and str(result.get("candidate_id") or "") in exported_set
+    ))
 
     # auto stamp-back into farm_results (was the orphaned refresh_validation_handoff step)
     from src.research_lab.state_db import connect, default_db_path, init_db
@@ -205,10 +250,25 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
             else:
                 counters["stamped_unique"] += tasks.set_candidate_hard_status(cid, hard_status, now=now)
 
+    # Publish final authority while the claimed tasks still provide a recoverable
+    # running marker.  If publication fails, startup orphan reconciliation can
+    # requeue the tasks and the pending manifest remains fail-closed.
+    write_current_generation(
+        Path(private_root),
+        tasks=export_tasks,
+        exported_ids=exported_ids,
+        completed_ids=current_ids,
+        producer_time=now,
+    )
     for task in export_tasks:
         hid = _hard_id_for_task(task)
         if hid and hid in verdicts:
             tasks.complete_task(task["task_id"], reason="validated", now=now)
         else:
-            tasks.defer_task(task["task_id"], until=(now or 0) + 300, reason="validation_no_verdict", now=now)
+            tasks.defer_task(
+                task["task_id"],
+                until=(now or 0) + 300,
+                reason="validation_no_verdict",
+                now=now,
+            )
     return counters

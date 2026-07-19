@@ -84,6 +84,46 @@ test for dependent or overlapping trades. An accepted interval/block-aware
 generic method must be implemented upstream in `honest-backtest`, then
 deliberately re-vendored. This repository does not patch the vendored method.
 
+## Current-Generation Completion
+
+The artifact directories are history, not an implicit current batch. The canonical farm
+orchestrator passes the bridge only the non-empty candidate-ID list exported by the
+current producer invocation. A zero-ID export validates nothing and defers the task; it
+must never fall back to scanning historical requests.
+
+Before the producer writes a request or invokes validation, the orchestrator atomically
+publishes an empty manifest with `producer_complete=false`. This immediately revokes the
+previous generation. If export, validation, stamp-back, or card creation then crashes,
+readers remain fail-closed on that pending generation. After the current batch finishes,
+the orchestrator atomically replaces it with
+`hard_validation/current_generation.json` using schema
+`HardValidationGeneration.v1`. The completed manifest binds:
+
+- exact farm task IDs and hashes of their payloads;
+- exact exported candidate IDs and request bytes;
+- SHA-256 identities for the producer, bridge, contract, setup writer, and vendored
+  validator code; every declared file is mandatory, not silently omitted;
+- exact report, verdict, and SetupCard bytes for every completed vertical chain;
+- an explicit producer-completion flag and paper-only/execution-denied boundary.
+
+Once this manifest exists, paper, lifecycle, and farm follow-up readers accept only
+SetupCards listed in its `active` map whose canonical path, hash, candidate ID, identity,
+params, and hard status still match the request/report/verdict chain. The canonical PFR
+paper bridge also joins each SQLite row to the current request's source run/candidate and
+requires exact symbol, timeframe, strategy, and params equality with the verified card.
+Thus an old `PAPER_FORWARD_READY` database row cannot bypass a pending, empty, invalid,
+or newer generation. Missing, malformed, incomplete, code-stale, or tampered generation
+evidence fails closed. Before the first orchestrated apply pass, absence of the manifest
+is an explicit legacy compatibility state; those artifacts are readable but are not
+generation-bound evidence. Manual diagnostic pipelines do not publish current-generation
+authority.
+
+Final authority is published before claimed validation tasks become completed or deferred.
+If final publication fails, those tasks remain `running`; the normal single-owner startup
+orphan reconciliation can requeue them while the pending generation keeps readers closed.
+The PFR loader requires an explicit private root even in the legacy state, so callers cannot
+accidentally bypass generation discovery by omitting context.
+
 ## Authority Boundary
 
 `PAPER_FORWARD_READY` is the strongest positive hard status. It permits only

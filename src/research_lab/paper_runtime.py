@@ -27,6 +27,7 @@ from src.research_lab.paper_contract import (
 from src.research_lab.paper_journal import append_paper_outcome, load_seen_trade_ids
 from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.simulator_contract import build_cost_ledger, legacy_fixture_manifest
+from src.research_lab.validation_generation import read_current_setup_card
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,9 @@ def load_ready_setup_cards(private_root: Path, *, limit: int = 50) -> list[Setup
     cards: list[SetupCard] = []
     for path in sorted(cards_dir.glob("*.json")):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = read_current_setup_card(private_root, path)
+            if payload is None:
+                continue
             card = SetupCard.from_dict(payload)
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
