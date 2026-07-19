@@ -69,7 +69,10 @@ def sqlite_stats(db_path: Path = DB) -> dict[str, dict]:
     out: dict[str, dict] = {}
     if not Path(db_path).exists():
         return out
-    con = sqlite3.connect(str(db_path))
+    try:
+        con = sqlite3.connect(str(db_path))
+    except sqlite3.Error:
+        return out
     try:
         q = """
             SELECT r.source_id, COUNT(*),
@@ -81,7 +84,11 @@ def sqlite_stats(db_path: Path = DB) -> dict[str, dict]:
             FROM raw_items r LEFT JOIN machine_docs m ON m.doc_id = r.doc_id
             GROUP BY r.source_id
         """
-        for s, raw, resolved, docs, full, to, alen in con.execute(q):
+        try:
+            rows = con.execute(q)
+        except sqlite3.Error:
+            return out
+        for s, raw, resolved, docs, full, to, alen in rows:
             out[str(s)] = {"raw_items": int(raw), "resolved_urls": int(resolved or 0),
                            "machine_docs": int(docs or 0), "full_body": int(full or 0),
                            "title_only": int(to or 0), "avg_text_len": alen}
