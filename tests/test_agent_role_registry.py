@@ -1,5 +1,6 @@
 import json
 
+from src.research_lab.advisory_payload_validator import normalize_advisory_key
 from src.research_lab.agent_role_registry import role_registry_summary, validate_role_payload
 from src.research_lab.llm_role_reviews import build_review_input, normalize_review_payload, request_role_review, review_summary
 from src.research_lab.llm_provider import NullProposalProvider
@@ -75,6 +76,46 @@ def test_review_role_normalizes_forbidden_key_variants_recursively():
     assert any("auto_trade" in problem or "Auto-Trade" in problem for problem in problems)
     assert any("execution_allowed" in problem or "execution allowed" in problem for problem in problems)
     assert any("take_profit_plan" in problem or "TakeProfitPlan" in problem for problem in problems)
+
+
+def test_review_role_rejects_unicode_confusable_authority_keys_recursively():
+    confusable_keys = {
+        "\u0430uto_trade": "auto_trade",  # Cyrillic small a
+        "executi\u043en_allowed": "execution_allowed",  # Cyrillic small o
+        "take_pr\u03bffit_plan": "take_profit_plan",  # Greek small omicron
+        "\uff21\uff55\uff54\uff4f\uff0d\uff34\uff52\uff41\uff44\uff45": "auto_trade",  # NFKC full-width form
+    }
+
+    for key, expected in confusable_keys.items():
+        assert normalize_advisory_key(key) == expected
+
+    ok, problems = validate_role_payload(
+        "validator_reviewer",
+        {
+            "summary": "No authority.",
+            "evidence": [{key: True} for key in confusable_keys],
+            "confidence": 0.5,
+        },
+    )
+
+    assert ok is False
+    for expected in confusable_keys.values():
+        assert any(expected in problem for problem in problems)
+
+    for unmapped_key in ("a\u0301uto_trade", "auto\u200dtrade"):
+        ok, problems = validate_role_payload(
+            "validator_reviewer",
+            {"summary": "No authority.", "evidence": [{unmapped_key: True}]},
+        )
+        assert ok is False
+        assert any("advisory key" in problem or "auto_trade" in problem for problem in problems)
+
+    ok, problems = validate_role_payload(
+        "validator_reviewer",
+        {"summary": "\u0411\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u044b\u0439 \u0442\u0435\u043a\u0441\u0442; \u043a\u043b\u044e\u0447\u0438 ASCII.", "confidence": 0.5},
+    )
+    assert ok is True
+    assert problems == []
 
 
 def test_outcome_reviewer_accepts_learning_fields_but_not_authority():

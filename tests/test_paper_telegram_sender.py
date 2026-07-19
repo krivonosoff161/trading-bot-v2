@@ -1,7 +1,60 @@
 import json
+import multiprocessing
+import os
 from pathlib import Path
 
 from src.research_lab import paper_telegram_sender as sender
+
+
+def _claim_worker(root: str, release, results) -> None:
+    try:
+        with sender._delivery_claim(Path(root)):
+            results.put("acquired")
+            release.wait(10)
+    except sender.DeliveryClaimConflict:
+        results.put("conflict")
+
+
+def _crash_while_claimed_worker(root: str, acquired) -> None:
+    with sender._delivery_claim(Path(root)):
+        acquired.set()
+        os._exit(0)
+
+
+def _sender_process_worker(root: str, hold_transport: bool, entered, release, results) -> None:
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        if hold_transport:
+            entered.set()
+            release.wait(10)
+        return 101
+
+    summary = sender.send_paper_telegram_previews(
+        Path(root),
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    results.put((summary["sent"], summary["pending_delivery_claim_messages"], len(calls)))
+
+
+def _crash_sender_after_pending_worker(root: str, entered) -> None:
+    async def crash_after_pending(_chat_id, _text):
+        entered.set()
+        os._exit(0)
+
+    sender.send_paper_telegram_previews(
+        Path(root),
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=crash_after_pending,
+    )
 
 
 def _preview(**overrides):
@@ -10,6 +63,7 @@ def _preview(**overrides):
         "preview_id": "preview_1",
         "instruction_id": "mainpaper_1",
         "source_signal_id": "sig_1",
+        "telegram_card_id": "tgcard_sig_1_content_v1",
         "pair": "BTC-USDT-SWAP",
         "timeframe": "1h",
         "side": "long",
@@ -396,7 +450,7 @@ def test_sender_persists_sent_key_after_each_successful_delivery(tmp_path):
 
     assert summary["sent"] == 2
     assert len(calls) == 2
-    assert "signal:sig_1:f6e0a1e2ac41945a" in observed_after_first
+    assert "signal:sig_1:content:tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in observed_after_first
 
 
 def test_sender_deduplicates_when_card_template_changes_same_signal(tmp_path):
@@ -439,8 +493,44 @@ def test_sender_deduplicates_when_card_template_changes_same_signal(tmp_path):
     assert len(calls) == 0
     data = json.loads(sent_keys_path.read_text(encoding="utf-8"))
     assert "preview_1:f6e0a1e2ac41945a" in data["sent_keys"]
-    assert "signal:sig_1:f6e0a1e2ac41945a" in data["sent_keys"]
-    assert "tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in data["sent_keys"]
+    assert "signal:sig_1:content:tgcard_sig_1_clean_v2:f6e0a1e2ac41945a" in data["sent_keys"]
+
+
+def test_sender_treats_changed_content_as_a_distinct_attempt(tmp_path):
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 100 + len(calls)
+
+    _write_preview_snapshot(
+        tmp_path,
+        [_preview(telegram_card_id="tgcard_content_a", text=f"A\n{sender.REQUIRED_DISCLAIMER}")],
+    )
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    _write_preview_snapshot(
+        tmp_path,
+        [_preview(telegram_card_id="tgcard_content_b", text=f"B\n{sender.REQUIRED_DISCLAIMER}")],
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert first["sent"] == 1
+    assert second["sent"] == 1
+    assert len(calls) == 2
 
 
 def test_sender_status_digest_when_all_cards_are_duplicate(tmp_path):
@@ -842,3 +932,211 @@ def test_sender_rejects_existing_pending_outbox_owner_without_resend(tmp_path):
     assert data["items"][0]["status"] == "pending_delivery_claim"
     assert data["items"][0]["problem"] == "delivery_owned_by_existing_attempt"
     assert data["items"][0]["delivery_key"] == delivery_key
+
+
+def test_sender_fails_closed_when_outbox_is_corrupt(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_content_v1")])
+    outbox_path = tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+    outbox_path.write_text("{not-json", encoding="utf-8")
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert calls == []
+    assert summary["outbox_unavailable_messages"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "outbox_unavailable"
+    assert data["items"][0]["problem"] == "delivery_outbox_invalid"
+    assert outbox_path.read_text(encoding="utf-8") == "{not-json"
+
+
+def test_delivery_key_uses_immutable_content_identity():
+    first = _preview(telegram_card_id="tgcard_content_a")
+    second = _preview(telegram_card_id="tgcard_content_b")
+
+    assert sender._delivery_key(first, "111") != sender._delivery_key(second, "111")
+    assert f"signal:sig_1:{sender._recipient_hash('111')}" in sender._delivery_keys(first, "111")
+
+
+def test_sender_rejects_signal_without_immutable_content_identity(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="")])
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert calls == []
+    assert summary["invalid_preview"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["problem"] == "missing_immutable_content_identity"
+
+
+def test_partial_photo_ack_is_ambiguous_and_never_resends(tmp_path):
+    chart_path = tmp_path / "state" / "derived" / "paper_reviews" / "sig_1.png"
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_bytes(b"fake-png")
+    _write_preview_snapshot(
+        tmp_path,
+        [_preview(chart_path=str(chart_path), telegram_card_id="tgcard_content_v1")],
+    )
+    photo_calls = []
+    text_calls = []
+
+    async def fake_photo(chat_id, path):
+        photo_calls.append((chat_id, path))
+        return 201
+
+    async def failing_text(chat_id, text):
+        text_calls.append((chat_id, text))
+        raise RuntimeError("synthetic text failure after photo ack")
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=failing_text,
+        send_photo=fake_photo,
+    )
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=failing_text,
+        send_photo=fake_photo,
+    )
+
+    assert first["external_ack_ambiguous_messages"] == 1
+    assert second["external_ack_ambiguous_messages"] == 1
+    assert len(photo_calls) == 1
+    assert len(text_calls) == 1
+    outbox = json.loads(
+        (tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json").read_text(encoding="utf-8")
+    )
+    record = outbox["items"][0]
+    assert record["status"] == "external_ack_ambiguous"
+    assert record["photo_status"] == "acknowledged"
+    assert record["photo_message_id"] == 201
+    assert record["text_status"] == "failed"
+
+
+def test_delivery_claim_is_atomic_across_two_processes(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    release = ctx.Event()
+    results = ctx.Queue()
+    first = ctx.Process(target=_claim_worker, args=(str(tmp_path), release, results))
+    second = ctx.Process(target=_claim_worker, args=(str(tmp_path), release, results))
+
+    first.start()
+    assert results.get(timeout=15) == "acquired"
+    second.start()
+    assert results.get(timeout=15) == "conflict"
+    second.join(timeout=15)
+    release.set()
+    first.join(timeout=15)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+def test_delivery_claim_recovers_after_claimant_process_crash(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    acquired = ctx.Event()
+    crashed = ctx.Process(target=_crash_while_claimed_worker, args=(str(tmp_path), acquired))
+    crashed.start()
+    assert acquired.wait(timeout=15)
+    crashed.join(timeout=15)
+    assert crashed.exitcode == 0
+
+    release = ctx.Event()
+    release.set()
+    results = ctx.Queue()
+    recovered = ctx.Process(target=_claim_worker, args=(str(tmp_path), release, results))
+    recovered.start()
+    assert results.get(timeout=15) == "acquired"
+    recovered.join(timeout=15)
+    assert recovered.exitcode == 0
+
+
+def test_sender_two_process_race_allows_only_one_transport_owner(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_content_v1")])
+    ctx = multiprocessing.get_context("spawn")
+    entered = ctx.Event()
+    release = ctx.Event()
+    results = ctx.Queue()
+    first = ctx.Process(
+        target=_sender_process_worker,
+        args=(str(tmp_path), True, entered, release, results),
+    )
+    second = ctx.Process(
+        target=_sender_process_worker,
+        args=(str(tmp_path), False, entered, release, results),
+    )
+
+    first.start()
+    assert entered.wait(timeout=15)
+    second.start()
+    second_result = results.get(timeout=15)
+    second.join(timeout=15)
+    release.set()
+    first_result = results.get(timeout=15)
+    first.join(timeout=15)
+
+    assert sorted((first_result, second_result)) == [(0, 1, 0), (1, 0, 1)]
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+def test_sender_crash_after_pending_recovers_fail_closed(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview(telegram_card_id="tgcard_content_v1")])
+    ctx = multiprocessing.get_context("spawn")
+    entered = ctx.Event()
+    crashed = ctx.Process(target=_crash_sender_after_pending_worker, args=(str(tmp_path), entered))
+    crashed.start()
+    assert entered.wait(timeout=15)
+    crashed.join(timeout=15)
+    assert crashed.exitcode == 0
+
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    recovered = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert calls == []
+    assert recovered["pending_delivery_claim_messages"] == 1
+    data = json.loads(Path(recovered["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["problem"] == "delivery_owned_by_existing_attempt"

@@ -10,17 +10,40 @@ bot subscribers/superadmins supplied by the caller, and only after an explicit
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_lock
+
 SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
 DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
 REQUIRED_DISCLAIMER = "Бумажный режим: это не ордер."
+_OUTBOX_STATUSES = {
+    "completed",
+    "error",
+    "external_ack_ambiguous",
+    "pending",
+    "skipped_no_token",
+}
+
+
+class DeliveryClaimConflict(RuntimeError):
+    """Another process owns the public delivery side-effect boundary."""
+
+
+class DeliveryOutboxUnavailable(RuntimeError):
+    """The existing recovery source cannot be proved readable and valid."""
+
+    def __init__(self, problem: str):
+        super().__init__(problem)
+        self.problem = problem
 
 
 @dataclass(frozen=True)
@@ -83,6 +106,31 @@ def _outbox_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_delivery_outbox.json"
 
 
+def _delivery_lock_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_telegram_delivery.lock"
+
+
+@contextmanager
+def _delivery_claim(private_root: Path):
+    """Acquire a process-local and OS-level claim for the whole send boundary."""
+    path = _delivery_lock_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(b"0")
+            handle.flush()
+            os.fsync(handle.fileno())
+    try:
+        with storage_root_lock(path):
+            yield
+    except StorageLockConflict as exc:
+        raise DeliveryClaimConflict("delivery claim is held by another process") from exc
+
+
 def _quality_report_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
 
@@ -120,18 +168,29 @@ def _load_outbox(private_root: Path) -> dict[str, dict[str, Any]]:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except OSError as exc:
+        raise DeliveryOutboxUnavailable("delivery_outbox_unreadable") from exc
+    except json.JSONDecodeError as exc:
+        raise DeliveryOutboxUnavailable("delivery_outbox_invalid") from exc
+    if not isinstance(data, dict) or data.get("schema") != "paper_telegram_delivery_outbox.v1":
+        raise DeliveryOutboxUnavailable("delivery_outbox_invalid")
     items = data.get("items") if isinstance(data, dict) else None
     if not isinstance(items, list):
-        return {}
+        raise DeliveryOutboxUnavailable("delivery_outbox_invalid")
     out: dict[str, dict[str, Any]] = {}
     for item in items:
-        if not isinstance(item, dict):
-            continue
+        if (
+            not isinstance(item, dict)
+            or item.get("schema") != "paper_telegram_delivery_outbox_item.v1"
+            or item.get("paper_only") is not True
+            or item.get("execution_allowed") is not False
+            or str(item.get("status") or "") not in _OUTBOX_STATUSES
+        ):
+            raise DeliveryOutboxUnavailable("delivery_outbox_invalid")
         key = str(item.get("delivery_key") or "")
-        if key:
-            out[key] = item
+        if not key or key in out:
+            raise DeliveryOutboxUnavailable("delivery_outbox_invalid")
+        out[key] = item
     return out
 
 
@@ -163,6 +222,8 @@ def _outbox_record(
     transport_kind: str,
     message_id: int | None = None,
     photo_message_id: int | None = None,
+    photo_status: str = "not_applicable",
+    text_status: str = "pending",
     problem: str = "",
 ) -> dict[str, Any]:
     return {
@@ -177,6 +238,8 @@ def _outbox_record(
         "transport_kind": transport_kind,
         "message_id": message_id,
         "photo_message_id": photo_message_id,
+        "photo_status": photo_status,
+        "text_status": text_status,
         "problem": problem,
         "paper_only": True,
         "execution_allowed": False,
@@ -205,6 +268,11 @@ def _valid_preview(item: dict[str, Any]) -> tuple[bool, str]:
         return False, "execution_allowed_not_false"
     if item.get("problems"):
         return False, "preview_has_problems"
+    if (
+        str(item.get("source_signal_id") or "") != "paper_status_digest"
+        and not str(item.get("telegram_card_id") or "").strip()
+    ):
+        return False, "missing_immutable_content_identity"
     if not str(item.get("text") or "").strip():
         return False, "missing_text"
     if REQUIRED_DISCLAIMER not in str(item.get("text") or ""):
@@ -232,13 +300,30 @@ async def _send_items(
     private_root: Path,
 ) -> list[PaperTelegramDelivery]:
     deliveries: list[PaperTelegramDelivery] = []
-    outbox = _load_outbox(private_root)
+    try:
+        outbox = _load_outbox(private_root)
+    except DeliveryOutboxUnavailable as exc:
+        return [
+            _delivery_from_preview(
+                item,
+                status="outbox_unavailable",
+                problem=exc.problem,
+                recipient_id=recipient_id,
+                delivery_key=_delivery_key(item, recipient_id),
+                transport_kind="telegram_text",
+                chart_available=bool(_safe_chart_path(item, private_root)[0]),
+                chart_problem=_safe_chart_path(item, private_root)[1],
+            )
+            for item in items
+            for recipient_id in recipient_ids
+        ]
     for item in items:
         for recipient_id in recipient_ids:
             delivery_keys = _delivery_keys(item, recipient_id)
             delivery_key = delivery_keys[0]
             recipient_hash = _recipient_hash(recipient_id)
             chart_path, chart_problem = _safe_chart_path(item, private_root)
+            transport_kind = "telegram_photo+text" if chart_path and send_photo is not None else "telegram_text"
             blocking_record = next(
                 (
                     outbox.get(key)
@@ -256,8 +341,9 @@ async def _send_items(
                         problem="external_ack_requires_operator_recovery",
                         recipient_id=recipient_id,
                         delivery_key=str(blocking_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(blocking_record.get("transport_kind") or "telegram_text"),
+                        transport_kind=str(blocking_record.get("transport_kind") or transport_kind),
                         chart_available=bool(chart_path),
+                        chart_sent=_int_or_none(blocking_record.get("photo_message_id")) is not None,
                         chart_problem=chart_problem,
                     )
                 )
@@ -279,8 +365,9 @@ async def _send_items(
                         problem="delivery_owned_by_existing_attempt",
                         recipient_id=recipient_id,
                         delivery_key=str(pending_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(pending_record.get("transport_kind") or "telegram_text"),
+                        transport_kind=str(pending_record.get("transport_kind") or transport_kind),
                         chart_available=bool(chart_path),
+                        chart_sent=_int_or_none(pending_record.get("photo_message_id")) is not None,
                         chart_problem=chart_problem,
                     )
                 )
@@ -294,7 +381,7 @@ async def _send_items(
                 None,
             )
             if completed_record is not None:
-                sent_keys.update(delivery_keys)
+                sent_keys.add(delivery_key)
                 _save_sent_keys(private_root, sent_keys)
                 deliveries.append(
                     _delivery_from_preview(
@@ -304,14 +391,15 @@ async def _send_items(
                         problem="already_sent_to_recipient",
                         recipient_id=recipient_id,
                         delivery_key=str(completed_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(completed_record.get("transport_kind") or "telegram_text"),
+                        transport_kind=str(completed_record.get("transport_kind") or transport_kind),
                         chart_available=bool(chart_path),
+                        chart_sent=_int_or_none(completed_record.get("photo_message_id")) is not None,
                         chart_problem=chart_problem,
                     )
                 )
                 continue
             if any(key in sent_keys for key in delivery_keys):
-                sent_keys.update(delivery_keys)
+                sent_keys.add(delivery_key)
                 _save_sent_keys(private_root, sent_keys)
                 deliveries.append(
                     _delivery_from_preview(
@@ -320,7 +408,7 @@ async def _send_items(
                         problem="already_sent_to_recipient",
                         recipient_id=recipient_id,
                         delivery_key=delivery_key,
-                        transport_kind="telegram_text",
+                        transport_kind=transport_kind,
                         chart_available=bool(chart_path),
                         chart_problem=chart_problem,
                     )
@@ -331,6 +419,8 @@ async def _send_items(
             status = "sent"
             chart_sent = False
             photo_message_id: int | None = None
+            photo_status = "pending" if chart_path and send_photo is not None else "not_applicable"
+            text_status = "pending"
             try:
                 _upsert_outbox_record(
                     private_root,
@@ -340,28 +430,60 @@ async def _send_items(
                         delivery_key=delivery_key,
                         recipient_hash=recipient_hash,
                         status="pending",
-                        transport_kind="telegram_text",
+                        transport_kind=transport_kind,
+                        photo_status=photo_status,
+                        text_status=text_status,
                     ),
                 )
                 if chart_path and send_photo is not None:
                     photo_message_id = await send_photo(recipient_id, str(chart_path))
                     if photo_message_id is None:
+                        photo_status = "unacknowledged"
                         chart_problem = "photo_message_id_missing"
                     else:
                         chart_sent = True
+                        photo_status = "acknowledged"
+                        _upsert_outbox_record(
+                            private_root,
+                            outbox,
+                            _outbox_record(
+                                item,
+                                delivery_key=delivery_key,
+                                recipient_hash=recipient_hash,
+                                status="external_ack_ambiguous",
+                                transport_kind=transport_kind,
+                                photo_message_id=photo_message_id,
+                                photo_status=photo_status,
+                                text_status="pending",
+                                problem="photo_ack_text_pending",
+                            ),
+                        )
                 elif chart_path and send_photo is None:
+                    photo_status = "transport_unavailable"
                     chart_problem = "photo_transport_not_configured"
                 message_id = await send_text(recipient_id, str(item.get("text") or ""))
                 if message_id is None:
-                    status = "skipped_no_token"
-                    problem = "telegram_token_not_configured"
+                    text_status = "unacknowledged"
+                    if chart_sent:
+                        status = "external_ack_ambiguous"
+                        problem = "photo_ack_text_unacknowledged"
+                    else:
+                        status = "skipped_no_token"
+                        problem = "telegram_token_not_configured"
+                else:
+                    text_status = "acknowledged"
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
-                status = "error"
-                problem = type(exc).__name__
+                if chart_sent:
+                    status = "external_ack_ambiguous"
+                    text_status = "failed"
+                    problem = f"photo_ack_text_failed:{type(exc).__name__}"
+                else:
+                    status = "error"
+                    problem = type(exc).__name__
             if status == "sent":
-                sent_keys.update(delivery_keys)
+                completed_keys = sent_keys | {delivery_key}
                 try:
-                    _save_sent_keys(private_root, sent_keys)
+                    _save_sent_keys(private_root, completed_keys)
                 except OSError:
                     _upsert_outbox_record(
                         private_root,
@@ -371,9 +493,11 @@ async def _send_items(
                             delivery_key=delivery_key,
                             recipient_hash=recipient_hash,
                             status="external_ack_ambiguous",
-                            transport_kind="telegram_text",
+                            transport_kind=transport_kind,
                             message_id=message_id,
                             photo_message_id=photo_message_id,
+                            photo_status=photo_status,
+                            text_status=text_status,
                             problem="sent_key_write_failed",
                         ),
                     )
@@ -385,13 +509,14 @@ async def _send_items(
                             problem="sent_key_write_failed",
                             recipient_id=recipient_id,
                             delivery_key=delivery_key,
-                            transport_kind="telegram_text",
+                            transport_kind=transport_kind,
                             chart_available=bool(chart_path),
                             chart_sent=chart_sent,
                             chart_problem=chart_problem,
                         )
                     )
                     continue
+                sent_keys.add(delivery_key)
                 _upsert_outbox_record(
                     private_root,
                     outbox,
@@ -400,12 +525,14 @@ async def _send_items(
                         delivery_key=delivery_key,
                         recipient_hash=recipient_hash,
                         status="completed",
-                        transport_kind="telegram_text",
+                        transport_kind=transport_kind,
                         message_id=message_id,
                         photo_message_id=photo_message_id,
+                        photo_status=photo_status,
+                        text_status=text_status,
                     ),
                 )
-            elif status in {"error", "skipped_no_token"}:
+            elif status in {"error", "skipped_no_token", "external_ack_ambiguous"}:
                 _upsert_outbox_record(
                     private_root,
                     outbox,
@@ -414,9 +541,11 @@ async def _send_items(
                         delivery_key=delivery_key,
                         recipient_hash=recipient_hash,
                         status=status,
-                        transport_kind="telegram_text",
+                        transport_kind=transport_kind,
                         message_id=message_id,
                         photo_message_id=photo_message_id,
+                        photo_status=photo_status,
+                        text_status=text_status,
                         problem=problem,
                     ),
                 )
@@ -428,7 +557,7 @@ async def _send_items(
                     problem=problem,
                     recipient_id=recipient_id,
                     delivery_key=delivery_key,
-                    transport_kind="telegram_text",
+                    transport_kind=transport_kind,
                     chart_available=bool(chart_path),
                     chart_sent=chart_sent,
                     chart_problem=chart_problem,
@@ -455,11 +584,9 @@ def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
 def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
     """Return primary + legacy sent keys for one recipient.
 
-    Signal cards deduplicate on stable signal identity. ``telegram_card_id`` is a
-    rendered-content hash and changes when wording/templates change, which caused
-    duplicate Telegram sends for the same trade idea. Status digests are different:
-    their preview_id includes a bucket/state hash, so they intentionally resend
-    only when the operator digest materially changes.
+    The primary key binds immutable rendered content identity to a pseudonymous
+    recipient. Legacy signal/preview keys remain candidates so already completed
+    deliveries keep their no-resend behavior after the migration.
     """
     rh = _recipient_hash(recipient_id)
     source_signal_id = str(item.get("source_signal_id") or "").strip()
@@ -467,7 +594,9 @@ def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
     telegram_card_id = str(item.get("telegram_card_id") or "").strip()
 
     if source_signal_id and source_signal_id != "paper_status_digest":
-        candidates = [f"signal:{source_signal_id}:{rh}"]
+        content_key = telegram_card_id or preview_id
+        candidates = [f"signal:{source_signal_id}:content:{content_key}:{rh}"] if content_key else []
+        candidates.append(f"signal:{source_signal_id}:{rh}")
     else:
         digest_key = preview_id or source_signal_id or telegram_card_id
         candidates = [f"digest:{digest_key}:{rh}"] if digest_key else []
@@ -722,7 +851,7 @@ def send_paper_telegram_previews(
     """
     items, source_path, source = _load_preview_items(private_root)
     recipient_ids = [str(r).strip() for r in (recipient_ids or []) if str(r).strip()]
-    sent_keys = _load_sent_keys(private_root)
+    sent_keys: set[str] = set()
     accepted: list[dict[str, Any]] = []
     deliveries: list[PaperTelegramDelivery] = []
     status_digest_reason = ""
@@ -752,23 +881,66 @@ def send_paper_telegram_previews(
             for item in accepted
         )
     else:
-        deliveries.extend(asyncio.run(_send_items(accepted, recipient_ids, send_text, send_photo, sent_keys, Path(private_root))))
-        status_digest_reason = _status_digest_reason(
-            source=source,
-            accepted=accepted,
-            deliveries=deliveries,
-            recipient_count=len(recipient_ids),
-        )
-        if status_digest and status_digest_reason:
-            digest_item = _status_digest_preview(
-                Path(private_root),
-                source=source,
-                reason=status_digest_reason,
-                now=time.time() if now is None else now,
-                interval_hours=status_digest_interval_hours,
+        try:
+            with _delivery_claim(Path(private_root)):
+                sent_keys = _load_sent_keys(private_root)
+                deliveries.extend(
+                    asyncio.run(
+                        _send_items(
+                            accepted,
+                            recipient_ids,
+                            send_text,
+                            send_photo,
+                            sent_keys,
+                            Path(private_root),
+                        )
+                    )
+                )
+                status_digest_reason = _status_digest_reason(
+                    source=source,
+                    accepted=accepted,
+                    deliveries=deliveries,
+                    recipient_count=len(recipient_ids),
+                )
+                if status_digest and status_digest_reason:
+                    digest_item = _status_digest_preview(
+                        Path(private_root),
+                        source=source,
+                        reason=status_digest_reason,
+                        now=time.time() if now is None else now,
+                        interval_hours=status_digest_interval_hours,
+                    )
+                    deliveries.extend(
+                        asyncio.run(
+                            _send_items(
+                                [digest_item],
+                                recipient_ids,
+                                send_text,
+                                send_photo,
+                                sent_keys,
+                                Path(private_root),
+                            )
+                        )
+                    )
+        except (DeliveryClaimConflict, OSError) as exc:
+            claim_problem = (
+                "delivery_claim_held_by_other_process"
+                if isinstance(exc, DeliveryClaimConflict)
+                else "delivery_claim_unavailable"
             )
             deliveries.extend(
-                asyncio.run(_send_items([digest_item], recipient_ids, send_text, send_photo, sent_keys, Path(private_root)))
+                _delivery_from_preview(
+                    item,
+                    status="pending_delivery_claim",
+                    problem=claim_problem,
+                    recipient_id=recipient_id,
+                    delivery_key=_delivery_key(item, recipient_id),
+                    transport_kind="telegram_text",
+                    chart_available=bool(_safe_chart_path(item, Path(private_root))[0]),
+                    chart_problem=_safe_chart_path(item, Path(private_root))[1],
+                )
+                for item in accepted
+                for recipient_id in recipient_ids
             )
 
     out_jsonl = _delivery_jsonl_path(private_root)
@@ -784,6 +956,7 @@ def send_paper_telegram_previews(
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
     ambiguous_messages = sum(1 for delivery in deliveries if delivery.status == "external_ack_ambiguous")
     pending_claim_messages = sum(1 for delivery in deliveries if delivery.status == "pending_delivery_claim")
+    outbox_unavailable_messages = sum(1 for delivery in deliveries if delivery.status == "outbox_unavailable")
     chart_available_messages = sum(1 for delivery in deliveries if delivery.chart_available)
     chart_sent_messages = sum(1 for delivery in deliveries if delivery.chart_sent)
     digest_messages = sum(
@@ -832,6 +1005,9 @@ def send_paper_telegram_previews(
         "pending_delivery_claim": pending_claim_messages,
         "pending_delivery_claim_messages": pending_claim_messages,
         "pending_delivery_claim_cards": _unique_preview_count(deliveries, "pending_delivery_claim"),
+        "outbox_unavailable": outbox_unavailable_messages,
+        "outbox_unavailable_messages": outbox_unavailable_messages,
+        "outbox_unavailable_cards": _unique_preview_count(deliveries, "outbox_unavailable"),
         "status_digest_enabled": bool(status_digest),
         "status_digest_reason": status_digest_reason,
         "status_digest_sent_messages": digest_messages,

@@ -200,6 +200,15 @@ def preflight_invocation(
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "local_provider_required", provider_class=provider_class, endpoint=endpoint,
                        boundary_checks=boundary_checks)
+    if (
+        local_only
+        and provider_name in LOCAL_PROVIDER_NAMES
+        and endpoint is not None
+        and any(problem.startswith("invalid_endpoint") for problem in endpoint.problems)
+    ):
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "invalid_endpoint", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     if local_only and provider_name in LOCAL_PROVIDER_NAMES and endpoint is not None and not endpoint.normalized_base_url:
         return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
                        "local_endpoint_identity_required", provider_class=provider_class, endpoint=endpoint,
