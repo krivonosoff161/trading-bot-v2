@@ -75,6 +75,7 @@ enable execution.
 
 - `state/derived/paper_telegram_delivery.jsonl`
 - `state/derived/paper_telegram_delivery.json`
+- `state/derived/paper_telegram_delivery_outbox.json`
 
 The delivery snapshot is an audit surface, not just a send log. Its per-item statuses
 explain why alerts did or did not leave the machine, for example `dry_run`,
@@ -93,9 +94,15 @@ hashes, not raw chat ids.
 
 Current delivery hardening: chart photos are counted as sent only when Telegram returns
 a photo message id. HTTP/`ok=false` photo failures are surfaced as delivery errors
-instead of being silently treated as successful chart sends. The sent-key ledger is
-written atomically and refreshed after each successful card delivery, reducing duplicate
-subscriber sends after a process restart.
+instead of being silently treated as successful chart sends. The sender writes a
+delivery outbox claim before an injected transport call and keeps the sent-key ledger
+as the completed-delivery compatibility index. If an external message id is observed
+but the completed sent-key write fails, the row is recorded as
+`external_ack_ambiguous`; later runs fail closed on that delivery key instead of
+silently resending it. Existing `pending` claims also block a second sender owner for
+the same card/recipient key. This is not an exactly-once Telegram guarantee; it is a
+recovery boundary that prevents automatic duplicate sends after ambiguous external
+acknowledgements.
 
 Default mode is dry-run:
 

@@ -707,3 +707,138 @@ def test_sender_rejects_invalid_preview(tmp_path):
     data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
     assert data["items"][0]["status"] == "invalid_preview"
     assert data["items"][0]["problem"] == "execution_allowed_not_false"
+
+
+def test_sender_records_ambiguous_ack_when_sent_key_write_fails(monkeypatch, tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    calls = []
+    original_save = sender._save_sent_keys
+
+    def fail_after_transport_ack(private_root, sent_keys):
+        if calls:
+            raise OSError("synthetic durable write failure")
+        original_save(private_root, sent_keys)
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    monkeypatch.setattr(sender, "_save_sent_keys", fail_after_transport_ack)
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert len(calls) == 1
+    assert summary["sent"] == 0
+    assert summary["external_ack_ambiguous_messages"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    item = data["items"][0]
+    assert item["status"] == "external_ack_ambiguous"
+    assert item["message_id"] == 101
+    assert item["problem"] == "sent_key_write_failed"
+    assert item["recipient_hash"] == sender._recipient_hash("111")
+    assert item["delivery_key"] == sender._delivery_key(_preview(), "111")
+    assert "recipient_id" not in item
+    assert "111" not in json.dumps(data, ensure_ascii=False)
+
+
+def test_sender_fails_closed_on_ambiguous_ack_without_resend(tmp_path):
+    _write_preview_snapshot(tmp_path, [_preview()])
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    first = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+    assert first["sent"] == 1
+
+    outbox_path = tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+    outbox = json.loads(outbox_path.read_text(encoding="utf-8"))
+    outbox["items"][0]["status"] = "external_ack_ambiguous"
+    outbox["items"][0]["problem"] = "synthetic_crash_after_ack"
+    outbox_path.write_text(json.dumps(outbox, ensure_ascii=False), encoding="utf-8")
+
+    second = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert len(calls) == 1
+    assert second["sent"] == 0
+    assert second["external_ack_ambiguous_messages"] == 1
+    data = json.loads(Path(second["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "external_ack_ambiguous"
+    assert data["items"][0]["problem"] == "external_ack_requires_operator_recovery"
+    assert data["items"][0]["message_id"] == 101
+
+
+def test_sender_rejects_existing_pending_outbox_owner_without_resend(tmp_path):
+    preview = _preview()
+    _write_preview_snapshot(tmp_path, [preview])
+    delivery_key = sender._delivery_key(preview, "111")
+    outbox_path = tmp_path / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    outbox_path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_delivery_outbox.v1",
+                "items": [
+                    {
+                        "schema": "paper_telegram_delivery_outbox_item.v1",
+                        "delivery_key": delivery_key,
+                        "preview_id": preview["preview_id"],
+                        "source_signal_id": preview["source_signal_id"],
+                        "recipient_hash": sender._recipient_hash("111"),
+                        "status": "pending",
+                        "transport_kind": "telegram_text",
+                        "message_id": None,
+                        "problem": "",
+                        "paper_only": True,
+                        "execution_allowed": False,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_send(chat_id, text):
+        calls.append((chat_id, text))
+        return 101
+
+    summary = sender.send_paper_telegram_previews(
+        tmp_path,
+        apply=True,
+        paper_chat_configured=True,
+        paper_chat_ids_count=1,
+        recipient_ids=["111"],
+        send_text=fake_send,
+    )
+
+    assert calls == []
+    assert summary["sent"] == 0
+    assert summary["pending_delivery_claim_messages"] == 1
+    data = json.loads(Path(summary["snapshot_path"]).read_text(encoding="utf-8"))
+    assert data["items"][0]["status"] == "pending_delivery_claim"
+    assert data["items"][0]["problem"] == "delivery_owned_by_existing_attempt"
+    assert data["items"][0]["delivery_key"] == delivery_key

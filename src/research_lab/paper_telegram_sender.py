@@ -37,6 +37,8 @@ class PaperTelegramDelivery:
     problem: str = ""
     destination: str = "personal_bot"
     recipient_hash: str = ""
+    delivery_key: str = ""
+    transport_kind: str = ""
     chart_available: bool = False
     chart_sent: bool = False
     chart_problem: str = ""
@@ -77,6 +79,10 @@ def _sent_keys_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_telegram_sent_keys.json"
 
 
+def _outbox_path(private_root: Path) -> Path:
+    return Path(private_root) / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+
+
 def _quality_report_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
 
@@ -106,6 +112,80 @@ def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
         encoding="utf-8",
     )
     tmp_path.replace(path)
+
+
+def _load_outbox(private_root: Path) -> dict[str, dict[str, Any]]:
+    path = _outbox_path(private_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("delivery_key") or "")
+        if key:
+            out[key] = item
+    return out
+
+
+def _save_outbox(private_root: Path, outbox: dict[str, dict[str, Any]]) -> None:
+    path = _outbox_path(private_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(
+            {
+                "schema": "paper_telegram_delivery_outbox.v1",
+                "items": [outbox[key] for key in sorted(outbox)],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    tmp_path.replace(path)
+
+
+def _outbox_record(
+    item: dict[str, Any],
+    *,
+    delivery_key: str,
+    recipient_hash: str,
+    status: str,
+    transport_kind: str,
+    message_id: int | None = None,
+    photo_message_id: int | None = None,
+    problem: str = "",
+) -> dict[str, Any]:
+    return {
+        "schema": "paper_telegram_delivery_outbox_item.v1",
+        "delivery_key": delivery_key,
+        "preview_id": str(item.get("preview_id") or ""),
+        "instruction_id": str(item.get("instruction_id") or ""),
+        "source_signal_id": str(item.get("source_signal_id") or ""),
+        "telegram_card_id": str(item.get("telegram_card_id") or ""),
+        "recipient_hash": recipient_hash,
+        "status": status,
+        "transport_kind": transport_kind,
+        "message_id": message_id,
+        "photo_message_id": photo_message_id,
+        "problem": problem,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def _upsert_outbox_record(private_root: Path, outbox: dict[str, dict[str, Any]], record: dict[str, Any]) -> None:
+    outbox[str(record["delivery_key"])] = record
+    _save_outbox(private_root, outbox)
 
 
 def _load_preview_items(private_root: Path) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
@@ -152,10 +232,84 @@ async def _send_items(
     private_root: Path,
 ) -> list[PaperTelegramDelivery]:
     deliveries: list[PaperTelegramDelivery] = []
+    outbox = _load_outbox(private_root)
     for item in items:
         for recipient_id in recipient_ids:
             delivery_keys = _delivery_keys(item, recipient_id)
+            delivery_key = delivery_keys[0]
+            recipient_hash = _recipient_hash(recipient_id)
             chart_path, chart_problem = _safe_chart_path(item, private_root)
+            blocking_record = next(
+                (
+                    outbox.get(key)
+                    for key in delivery_keys
+                    if outbox.get(key, {}).get("status") == "external_ack_ambiguous"
+                ),
+                None,
+            )
+            if blocking_record is not None:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="external_ack_ambiguous",
+                        message_id=_int_or_none(blocking_record.get("message_id")),
+                        problem="external_ack_requires_operator_recovery",
+                        recipient_id=recipient_id,
+                        delivery_key=str(blocking_record.get("delivery_key") or delivery_key),
+                        transport_kind=str(blocking_record.get("transport_kind") or "telegram_text"),
+                        chart_available=bool(chart_path),
+                        chart_problem=chart_problem,
+                    )
+                )
+                continue
+            pending_record = next(
+                (
+                    outbox.get(key)
+                    for key in delivery_keys
+                    if outbox.get(key, {}).get("status") == "pending"
+                ),
+                None,
+            )
+            if pending_record is not None:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="pending_delivery_claim",
+                        message_id=_int_or_none(pending_record.get("message_id")),
+                        problem="delivery_owned_by_existing_attempt",
+                        recipient_id=recipient_id,
+                        delivery_key=str(pending_record.get("delivery_key") or delivery_key),
+                        transport_kind=str(pending_record.get("transport_kind") or "telegram_text"),
+                        chart_available=bool(chart_path),
+                        chart_problem=chart_problem,
+                    )
+                )
+                continue
+            completed_record = next(
+                (
+                    outbox.get(key)
+                    for key in delivery_keys
+                    if outbox.get(key, {}).get("status") == "completed"
+                ),
+                None,
+            )
+            if completed_record is not None:
+                sent_keys.update(delivery_keys)
+                _save_sent_keys(private_root, sent_keys)
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="skipped_duplicate",
+                        message_id=_int_or_none(completed_record.get("message_id")),
+                        problem="already_sent_to_recipient",
+                        recipient_id=recipient_id,
+                        delivery_key=str(completed_record.get("delivery_key") or delivery_key),
+                        transport_kind=str(completed_record.get("transport_kind") or "telegram_text"),
+                        chart_available=bool(chart_path),
+                        chart_problem=chart_problem,
+                    )
+                )
+                continue
             if any(key in sent_keys for key in delivery_keys):
                 sent_keys.update(delivery_keys)
                 _save_sent_keys(private_root, sent_keys)
@@ -165,6 +319,8 @@ async def _send_items(
                         status="skipped_duplicate",
                         problem="already_sent_to_recipient",
                         recipient_id=recipient_id,
+                        delivery_key=delivery_key,
+                        transport_kind="telegram_text",
                         chart_available=bool(chart_path),
                         chart_problem=chart_problem,
                     )
@@ -174,7 +330,19 @@ async def _send_items(
             problem = ""
             status = "sent"
             chart_sent = False
+            photo_message_id: int | None = None
             try:
+                _upsert_outbox_record(
+                    private_root,
+                    outbox,
+                    _outbox_record(
+                        item,
+                        delivery_key=delivery_key,
+                        recipient_hash=recipient_hash,
+                        status="pending",
+                        transport_kind="telegram_text",
+                    ),
+                )
                 if chart_path and send_photo is not None:
                     photo_message_id = await send_photo(recipient_id, str(chart_path))
                     if photo_message_id is None:
@@ -190,6 +358,68 @@ async def _send_items(
             except Exception as exc:  # noqa: BLE001 - delivery errors must be recorded, not crash the farm.
                 status = "error"
                 problem = type(exc).__name__
+            if status == "sent":
+                sent_keys.update(delivery_keys)
+                try:
+                    _save_sent_keys(private_root, sent_keys)
+                except OSError:
+                    _upsert_outbox_record(
+                        private_root,
+                        outbox,
+                        _outbox_record(
+                            item,
+                            delivery_key=delivery_key,
+                            recipient_hash=recipient_hash,
+                            status="external_ack_ambiguous",
+                            transport_kind="telegram_text",
+                            message_id=message_id,
+                            photo_message_id=photo_message_id,
+                            problem="sent_key_write_failed",
+                        ),
+                    )
+                    deliveries.append(
+                        _delivery_from_preview(
+                            item,
+                            status="external_ack_ambiguous",
+                            message_id=message_id,
+                            problem="sent_key_write_failed",
+                            recipient_id=recipient_id,
+                            delivery_key=delivery_key,
+                            transport_kind="telegram_text",
+                            chart_available=bool(chart_path),
+                            chart_sent=chart_sent,
+                            chart_problem=chart_problem,
+                        )
+                    )
+                    continue
+                _upsert_outbox_record(
+                    private_root,
+                    outbox,
+                    _outbox_record(
+                        item,
+                        delivery_key=delivery_key,
+                        recipient_hash=recipient_hash,
+                        status="completed",
+                        transport_kind="telegram_text",
+                        message_id=message_id,
+                        photo_message_id=photo_message_id,
+                    ),
+                )
+            elif status in {"error", "skipped_no_token"}:
+                _upsert_outbox_record(
+                    private_root,
+                    outbox,
+                    _outbox_record(
+                        item,
+                        delivery_key=delivery_key,
+                        recipient_hash=recipient_hash,
+                        status=status,
+                        transport_kind="telegram_text",
+                        message_id=message_id,
+                        photo_message_id=photo_message_id,
+                        problem=problem,
+                    ),
+                )
             deliveries.append(
                 _delivery_from_preview(
                     item,
@@ -197,15 +427,21 @@ async def _send_items(
                     message_id=message_id,
                     problem=problem,
                     recipient_id=recipient_id,
+                    delivery_key=delivery_key,
+                    transport_kind="telegram_text",
                     chart_available=bool(chart_path),
                     chart_sent=chart_sent,
                     chart_problem=chart_problem,
                 )
             )
-            if status == "sent":
-                sent_keys.update(delivery_keys)
-                _save_sent_keys(private_root, sent_keys)
     return deliveries
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _recipient_hash(recipient_id: str) -> str:
@@ -433,6 +669,8 @@ def _delivery_from_preview(
     message_id: int | None = None,
     problem: str = "",
     recipient_id: str = "",
+    delivery_key: str = "",
+    transport_kind: str = "",
     chart_available: bool = False,
     chart_sent: bool = False,
     chart_problem: str = "",
@@ -449,6 +687,8 @@ def _delivery_from_preview(
         message_id=message_id,
         problem=problem,
         recipient_hash=_recipient_hash(recipient_id),
+        delivery_key=delivery_key,
+        transport_kind=transport_kind,
         chart_available=chart_available,
         chart_sent=chart_sent,
         chart_problem=chart_problem,
@@ -530,7 +770,6 @@ def send_paper_telegram_previews(
             deliveries.extend(
                 asyncio.run(_send_items([digest_item], recipient_ids, send_text, send_photo, sent_keys, Path(private_root)))
             )
-        _save_sent_keys(private_root, sent_keys)
 
     out_jsonl = _delivery_jsonl_path(private_root)
     out_snapshot = _delivery_snapshot_path(private_root)
@@ -543,6 +782,8 @@ def send_paper_telegram_previews(
     duplicate_messages = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
     skipped_messages = sum(1 for delivery in deliveries if delivery.status.startswith("skipped"))
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
+    ambiguous_messages = sum(1 for delivery in deliveries if delivery.status == "external_ack_ambiguous")
+    pending_claim_messages = sum(1 for delivery in deliveries if delivery.status == "pending_delivery_claim")
     chart_available_messages = sum(1 for delivery in deliveries if delivery.chart_available)
     chart_sent_messages = sum(1 for delivery in deliveries if delivery.chart_sent)
     digest_messages = sum(
@@ -585,6 +826,12 @@ def send_paper_telegram_previews(
         "errors": error_messages,
         "error_messages": error_messages,
         "error_cards": _unique_preview_count(deliveries, "error"),
+        "external_ack_ambiguous": ambiguous_messages,
+        "external_ack_ambiguous_messages": ambiguous_messages,
+        "external_ack_ambiguous_cards": _unique_preview_count(deliveries, "external_ack_ambiguous"),
+        "pending_delivery_claim": pending_claim_messages,
+        "pending_delivery_claim_messages": pending_claim_messages,
+        "pending_delivery_claim_cards": _unique_preview_count(deliveries, "pending_delivery_claim"),
         "status_digest_enabled": bool(status_digest),
         "status_digest_reason": status_digest_reason,
         "status_digest_sent_messages": digest_messages,
