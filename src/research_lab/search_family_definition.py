@@ -7,7 +7,7 @@ import json
 import math
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 SCHEMA = "SearchFamilyDefinition.v2"
@@ -78,12 +78,13 @@ def resolve_snapshot_set(
     symbols: list[str],
     timeframe: str,
     data_glob: str,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     """Select canonical candles now and fail closed before a queued family is frozen."""
     from src.research_lab.candle_library import load_canonical_candles
 
     bindings: list[dict[str, str]] = []
-    for symbol in symbols:
+    for index, symbol in enumerate(symbols, start=1):
         selected = load_canonical_candles(
             private_root,
             symbol,
@@ -91,6 +92,11 @@ def resolve_snapshot_set(
             fallback_glob=data_glob,
             purpose="experiment",
             coverage_policy="gap_free",
+            progress=(
+                None
+                if progress is None
+                else lambda stage, index=index: progress(f"snapshot_{index}:{stage}")
+            ),
         )
         if not selected.rows:
             raise ValueError(f"no bounded candle snapshot for {symbol}@{timeframe}")
@@ -103,6 +109,8 @@ def resolve_snapshot_set(
                 "row_count": selected.manifest.row_count,
             }
         )
+        if progress is not None:
+            progress(f"snapshot_{index}:bound")
     snapshot_id, evidence_hash = snapshot_set_identity(bindings)
     return snapshot_id, evidence_hash, normalize_snapshot_bindings(bindings)
 

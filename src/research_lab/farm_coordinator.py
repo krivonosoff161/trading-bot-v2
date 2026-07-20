@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import hashlib
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -814,7 +815,8 @@ def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, l
 
 
 def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
-                     priority_base, limit, counters, now, sweep_tier="normal") -> None:
+                     priority_base, limit, counters, now, sweep_tier="normal",
+                     task_claim_guard_factory=None) -> None:
     from src.research_lab.candle_library import load_canonical_candles
     from src.research_lab.search_family_definition import resolve_snapshot_set
     replayed = _replay_materialization_outbox(tasks, conn, now=now)
@@ -824,110 +826,124 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
         task = tasks.claim_next_task(task_types=("run_sweep",), now=now)
         if task is None:
             break
-        sym, tf, fam = task["symbol"], task["timeframe"], task["family"]
-        try:
-            payload = json.loads(task.get("payload_json") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
-        glob = market_data_glob(private_root, tf)
-        selected = load_canonical_candles(
-            private_root, sym, tf, fallback_glob=glob,
-            purpose="experiment", coverage_policy="gap_free",
+        guard_context = (
+            task_claim_guard_factory(tasks, task)
+            if task_claim_guard_factory is not None
+            else nullcontext(None)
         )
-        if not selected.rows or not selected.manifest.evidence_hash:
-            tasks.defer_task(
-                task["task_id"], until=now + 3600,
-                reason="snapshot_missing_before_queue", now=now,
+        with guard_context as claim_guard:
+            progress = None if claim_guard is None else claim_guard.progress
+            if progress is not None:
+                progress("claim_entered")
+            sym, tf, fam = task["symbol"], task["timeframe"], task["family"]
+            try:
+                payload = json.loads(task.get("payload_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            glob = market_data_glob(private_root, tf)
+            selected = load_canonical_candles(
+                private_root, sym, tf, fallback_glob=glob,
+                purpose="experiment", coverage_policy="gap_free", progress=progress,
             )
-            _bump(counters, "sweeps_snapshot_drift")
-            continue
-        fp = selected.manifest.evidence_hash or task.get("data_fingerprint") or "nofp"
-        if isinstance(payload.get("sweep_spec"), dict):
-            spec = _sweep_from_payload(payload["sweep_spec"])
-        else:
-            spec = build_sweep_spec(sym, tf, fam, fingerprint=fp, backend=backend, tier=sweep_tier)
-        try:
-            snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
-                private_root=private_root,
-                symbols=[spec.anchor_symbol, *spec.related_symbols],
-                timeframe=spec.timeframe,
-                data_glob=glob,
+            if not selected.rows or not selected.manifest.evidence_hash:
+                tasks.defer_task(
+                    task["task_id"], until=now + 3600,
+                    reason="snapshot_missing_before_queue", now=now,
+                )
+                _bump(counters, "sweeps_snapshot_drift")
+                continue
+            fp = selected.manifest.evidence_hash or task.get("data_fingerprint") or "nofp"
+            if isinstance(payload.get("sweep_spec"), dict):
+                spec = _sweep_from_payload(payload["sweep_spec"])
+            else:
+                spec = build_sweep_spec(
+                    sym, tf, fam, fingerprint=fp, backend=backend, tier=sweep_tier
+                )
+            if progress is not None:
+                progress("sweep_spec_built")
+            try:
+                snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
+                    private_root=private_root,
+                    symbols=[spec.anchor_symbol, *spec.related_symbols],
+                    timeframe=spec.timeframe,
+                    data_glob=glob,
+                    progress=progress,
+                )
+            except ValueError:
+                tasks.defer_task(
+                    task["task_id"], until=now + 3600,
+                    reason="snapshot_set_incomplete_before_queue", now=now,
+                )
+                _bump(counters, "sweeps_snapshot_drift")
+                continue
+            materialization_id = (
+                f"task:{int(task['task_id'])}:fence:{int(task['fencing_token'])}"
             )
-        except ValueError:
-            tasks.defer_task(
-                task["task_id"], until=now + 3600,
-                reason="snapshot_set_incomplete_before_queue", now=now,
-            )
-            _bump(counters, "sweeps_snapshot_drift")
-            continue
-        materialization_id = (
-            f"task:{int(task['task_id'])}:fence:{int(task['fencing_token'])}"
-        )
 
-        def prepare_intent(spec_path: Path, spec_json: str, spec_digest: str) -> None:
-            tasks.prepare_materialization(
-                int(task["task_id"]),
-                materialization_id=materialization_id,
-                spec_path=str(spec_path),
-                spec_digest=spec_digest,
-                spec_json=spec_json,
-                priority=priority_base + priority_value(task.get("priority")),
-                now=now,
-            )
-
-        exp_id, job_id, created = queue_sweep(
-            conn,
-            spec,
-            private_root=private_root,
-            profiles=profiles,
-            policy=policy,
-            data_glob=glob,
-            fingerprint=fp,
-            priority=priority_base + priority_value(task.get("priority")),
-            event_context=_event_context_from_payload(payload),
-            data_snapshot_id=snapshot_id,
-            data_evidence_hash=evidence_hash,
-            data_snapshot_bindings=snapshot_bindings,
-            materialization_id=materialization_id,
-            prepare_intent=prepare_intent,
-        )
-        tasks.mark_materialization_dispatched(
-            materialization_id, job_id, now=now
-        )
-        if created:
-            tasks.commit_materialization(
-                task["task_id"],
-                materialization_id=materialization_id,
-                queue_job_id=job_id,
-                now=now,
-            )
-            _bump(counters, "sweeps_materialized")
-        else:
-            # A content-identical existing compute row is still linked through
-            # this task fence's durable intent. Only an already-terminal queue
-            # row makes the brain task terminal here; queued/running rows stay
-            # linked for fenced completion sync.
-            tasks.commit_materialization(
-                task["task_id"],
-                materialization_id=materialization_id,
-                queue_job_id=job_id,
-                now=now,
-            )
-            existing = conn.execute(
-                "SELECT status, run_dir_label FROM queue WHERE job_id=?",
-                (int(job_id),),
-            ).fetchone()
-            if existing is not None and existing["status"] == "completed":
-                tasks.complete_task(
-                    task["task_id"], reason="compute_deduped",
-                    materialized_queue_job_id=job_id,
-                    last_result_ref=existing["run_dir_label"],
-                    run_dir_label=existing["run_dir_label"],
+            def prepare_intent(spec_path: Path, spec_json: str, spec_digest: str) -> None:
+                if claim_guard is not None:
+                    claim_guard.assert_active()
+                tasks.prepare_materialization(
+                    int(task["task_id"]),
+                    materialization_id=materialization_id,
+                    spec_path=str(spec_path),
+                    spec_digest=spec_digest,
+                    spec_json=spec_json,
+                    priority=priority_base + priority_value(task.get("priority")),
                     now=now,
                 )
-            elif existing is not None and existing["status"] == "failed":
-                tasks.fail_task(task["task_id"], "compute_failed", now=now)
-            _bump(counters, "sweeps_deduped")
+
+            if claim_guard is not None:
+                claim_guard.assert_active()
+            exp_id, job_id, created = queue_sweep(
+                conn,
+                spec,
+                private_root=private_root,
+                profiles=profiles,
+                policy=policy,
+                data_glob=glob,
+                fingerprint=fp,
+                priority=priority_base + priority_value(task.get("priority")),
+                event_context=_event_context_from_payload(payload),
+                data_snapshot_id=snapshot_id,
+                data_evidence_hash=evidence_hash,
+                data_snapshot_bindings=snapshot_bindings,
+                materialization_id=materialization_id,
+                prepare_intent=prepare_intent,
+            )
+            if progress is not None:
+                progress("compute_queue_bound")
+            tasks.mark_materialization_dispatched(
+                materialization_id, job_id, now=now
+            )
+            tasks.commit_materialization(
+                task["task_id"],
+                materialization_id=materialization_id,
+                queue_job_id=job_id,
+                now=now,
+            )
+            if created:
+                _bump(counters, "sweeps_materialized")
+            else:
+                # A content-identical existing compute row is still linked through
+                # this task fence's durable intent. Only an already-terminal queue
+                # row makes the brain task terminal here; queued/running rows stay
+                # linked for fenced completion sync.
+                existing = conn.execute(
+                    "SELECT status, run_dir_label FROM queue WHERE job_id=?",
+                    (int(job_id),),
+                ).fetchone()
+                if existing is not None and existing["status"] == "completed":
+                    tasks.complete_task(
+                        task["task_id"], reason="compute_deduped",
+                        materialized_queue_job_id=job_id,
+                        last_result_ref=existing["run_dir_label"],
+                        run_dir_label=existing["run_dir_label"],
+                        now=now,
+                    )
+                elif existing is not None and existing["status"] == "failed":
+                    tasks.fail_task(task["task_id"], "compute_failed", now=now)
+                _bump(counters, "sweeps_deduped")
 
 
 def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
@@ -1065,6 +1081,7 @@ def run_coordinator_cycle(
     run_validation: bool = False, max_validations: int = 10,
     run_followups: bool = True, max_followups: int = 10, sweep_tier: str = "normal",
     use_outcome_memory: bool = True,
+    task_claim_guard_factory=None,
 ) -> dict[str, Any]:
     """Advance the research lifecycle by one cycle. Returns counters + pivot + status."""
     now = time.time() if now is None else now
@@ -1111,7 +1128,8 @@ def run_coordinator_cycle(
                                       counters=counters, now=now, limit=max_followups)
             _drain_run_sweep(tasks, conn=conn, private_root=private_root, profiles=profiles, policy=policy,
                              backend=backend, priority_base=priority_base, limit=max_sweeps,
-                             counters=counters, now=now, sweep_tier=sweep_tier)
+                             counters=counters, now=now, sweep_tier=sweep_tier,
+                             task_claim_guard_factory=task_claim_guard_factory)
             _sync_completions(tasks, conn=conn, counters=counters, now=now)
             if run_worker:
                 _drain_worker(private_root, max_worker_jobs, night_mode, errors)

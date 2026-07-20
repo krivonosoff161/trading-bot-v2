@@ -6,7 +6,7 @@ from __future__ import annotations
 import glob as _glob
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.candle_snapshot import (
     CandleSnapshotManifest,
@@ -35,6 +35,7 @@ def load_canonical_candles(
     as_of_ms: int | None = None,
     purpose: str = "canonical_read",
     coverage_policy: str = "available",
+    progress: Callable[[str], None] | None = None,
 ) -> CandleSlice:
     """Select one explicit snapshot across SQLite and retained JSON candidates."""
     from src.research_lab.experiment import choose_symbol_file, load_candles
@@ -45,6 +46,8 @@ def load_canonical_candles(
     candidates: list[CandleSlice] = []
     try:
         coverage = store.coverage(symbol, timeframe)
+        if progress is not None:
+            progress("coverage_checked")
         if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
             selected_start = int(start_ts) if start_ts is not None else coverage.first_ts
             selected_end = int(end_ts) if end_ts is not None else coverage.last_ts
@@ -55,6 +58,8 @@ def load_canonical_candles(
             if snapshot.rows:
                 label = f"sqlite:{str(symbol).replace('-', '_').upper()}:{str(timeframe).lower()}"
                 candidates.append(CandleSlice(snapshot.rows, "sqlite", label, snapshot.manifest))
+            if progress is not None:
+                progress("sqlite_snapshot_checked")
     except (CandleStoreError, ValueError):
         # A damaged/locked migration target must not erase the still-retained JSON fallback.
         pass
@@ -74,6 +79,8 @@ def load_canonical_candles(
         if as_of_ms is not None:
             continue
         rows = load_candles(path)
+        if progress is not None:
+            progress("json_candidate_loaded")
         if start_ts is not None:
             rows = [row for row in rows if int(start_ts) <= int(row["ts"]) <= int(end_ts)]
         root = Path(private_root).resolve()
@@ -120,6 +127,8 @@ def load_canonical_candles(
                 candidate.manifest.snapshot_id,
             ),
         )
+        if progress is not None:
+            progress("canonical_snapshot_selected")
         return selected
 
     empty = build_snapshot(
@@ -133,6 +142,8 @@ def load_canonical_candles(
         coverage_policy=coverage_policy,
         source_backend="missing",
     )
+    if progress is not None:
+        progress("canonical_snapshot_missing")
     return CandleSlice([], "missing", "", empty.manifest)
 
 
