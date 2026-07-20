@@ -363,6 +363,8 @@ def forbidden(label):
 def audit(event, args):
     if event in {{"socket.connect", "subprocess.Popen"}}:
         raise AssertionError(event)
+    if event == "import" and args and str(args[0]).split(".", 1)[0] == "mcp":
+        raise AssertionError("optional MCP dependency imported during module import")
     if event == "open" and args:
         raw = args[0]
         if isinstance(raw, (str, bytes, os.PathLike)):
