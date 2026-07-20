@@ -16,10 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-load_dotenv()
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
 from src.exchange.okx_client import OKXClient  # noqa: E402
 from src.strategy.chart_renderer import generate_chart_png  # noqa: E402
@@ -320,6 +321,9 @@ async def run(
 
 
 def main() -> None:
+    # Standalone entrypoint boundary. When imported by telegram_bot, that
+    # canonical entrypoint has already loaded runtime configuration.
+    load_runtime_dotenv(ROOT)
     parser = argparse.ArgumentParser(description="Chart Analyzer — FAST/SWING engine + OKX data")
     parser.add_argument("--symbol", required=True, help="e.g. XRP-USDT")
     parser.add_argument("--captured-at", required=True, dest="captured_at", help="ISO UTC timestamp e.g. 2026-03-09T11:42:35Z")

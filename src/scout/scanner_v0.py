@@ -39,10 +39,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 try:
-    from dotenv import load_dotenv
-    from src.utils.runtime_root import runtime_env_file
+    from src.utils.runtime_root import load_runtime_dotenv
 
-    load_dotenv(runtime_env_file(_ROOT))
+    load_runtime_dotenv(_ROOT)
 except Exception:
     pass
 
