@@ -16,11 +16,13 @@ from typing import Any
 
 import aiohttp
 import yaml
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-load_dotenv()
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from scripts.subscriptions import is_subscribed, list_users
 from src.data.snapshot_writer import write_snapshot

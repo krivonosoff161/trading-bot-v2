@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
-from dotenv import load_dotenv
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -32,7 +31,13 @@ except AttributeError:
     pass
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 DEFAULT_TAPE_DIR = ROOT / "scripts" / "tape"
 TAPE_DIR = Path(os.getenv("TAPE_DATA_DIR") or DEFAULT_TAPE_DIR)

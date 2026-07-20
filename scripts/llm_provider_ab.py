@@ -17,11 +17,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PRIVATE_ROOT = Path.home() / "github_projects" / "trading-bot-research" / "strategy-lab"
 sys.path.insert(0, str(ROOT))
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except AttributeError:
@@ -95,7 +94,7 @@ async def _call_provider(provider: str, case: dict, max_tokens: int) -> dict:
 
 
 async def run_ab(*, providers: list[str], max_tokens: int, apply: bool, private_root: str = "") -> dict:
-    load_dotenv()
+    load_runtime_dotenv(ROOT)
     rows = []
     for case in CASES:
         for provider in providers:

@@ -8,17 +8,16 @@ import json
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
 from scripts.subscriptions import list_users  # noqa: E402
 from src.utils.telegram_delivery_router import deliver_notification  # noqa: E402
 
 
 async def _run(args: argparse.Namespace) -> dict:
-    load_dotenv()
+    load_runtime_dotenv(ROOT)
     users = list_users() if args.use_subscribers else []
     return await deliver_notification(
         event_type=args.event_type,

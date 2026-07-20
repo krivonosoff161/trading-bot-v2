@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import List
 
 import yaml
-from dotenv import load_dotenv
+from src.utils.runtime_root import load_runtime_dotenv
 
-load_dotenv()
+load_runtime_dotenv(Path(__file__).resolve().parents[1])
 
 
 @dataclass

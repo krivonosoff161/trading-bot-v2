@@ -18,12 +18,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-try:
-    from dotenv import load_dotenv
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
-    load_dotenv(ROOT / ".env")
-except Exception:
-    pass
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.utils.llm_formatter import generate_premium_analysis, premium_vision_status  # noqa: E402

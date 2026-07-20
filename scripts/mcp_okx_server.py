@@ -14,12 +14,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 # --- paths ---
 ROOT = Path(__file__).parent.parent
-load_dotenv(ROOT / ".env")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 API_KEY = os.getenv("OKX_API_KEY", "")
 SECRET_KEY = os.getenv("OKX_SECRET_KEY", "")

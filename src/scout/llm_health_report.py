@@ -20,12 +20,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-try:
-    from dotenv import load_dotenv
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
-    load_dotenv(_ROOT / ".env")
-except Exception:
-    pass
+if __name__ == "__main__":
+    load_runtime_dotenv(_ROOT)
 
 from src.utils import llm_budget_guard as B  # noqa: E402
 from src.utils import llm_client as L  # noqa: E402
