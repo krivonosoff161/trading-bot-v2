@@ -15,13 +15,14 @@ import itertools
 import hashlib
 import math
 import random
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.experiment import ExperimentSpec
 from src.research_lab.param_schemas import (
     PARAMETER_SEARCH_CONTRACT_VERSION,
     SAMPLER_VERSION,
     executable_exit_params,
+    load_param_policy,
     search_variant_validity,
     validate_params,
 )
@@ -31,6 +32,22 @@ from src.research_lab.search_family_definition import build_sweep_family_definit
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.timeframes import TimeframeProfiles
+
+
+ProgressCallback = Callable[[str], None]
+PROGRESS_CHUNK_SIZE = 1_024
+
+
+def _completed_chunk_progress(
+    progress: ProgressCallback | None,
+    stage: str,
+    completed: int,
+    total: int,
+    *,
+    chunk_size: int,
+) -> None:
+    if progress is not None and (completed == total or completed % chunk_size == 0):
+        progress(f"{stage}:{completed}/{total}")
 
 
 def expand_grids(*grids: dict[str, list[Any]]) -> list[dict[str, Any]]:
@@ -64,6 +81,8 @@ def expand_grids_bounded(
     baseline: dict[str, Any] | None = None,
     strategy_id: str = "",
     audit: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
+    progress_chunk_size: int = PROGRESS_CHUNK_SIZE,
 ) -> list[dict[str, Any]]:
     """Sample a Cartesian grid without materializing the full search space."""
     merged: dict[str, list[Any]] = {}
@@ -103,6 +122,7 @@ def expand_grids_bounded(
     keys = sorted(merged)
     axes = [merged[key] for key in keys]
     total = math.prod(len(axis) for axis in axes)
+    chunk_size = max(1, int(progress_chunk_size))
     def decode(flat_index: int) -> dict[str, Any]:
         cursor = flat_index
         values: list[Any] = [None] * len(axes)
@@ -120,18 +140,22 @@ def expand_grids_bounded(
     else:
         valid_indices = []
         strategy_defaults = dict(get_strategy(strategy_id).parameter_defaults)
+        parameter_policy = load_param_policy()
         for index in range(total):
             params = decode(index)
             complete_params = {**strategy_defaults, **params}
-            schema = validate_params(strategy_id, complete_params)
+            schema = validate_params(strategy_id, complete_params, policy=parameter_policy)
             if not schema.ok:
                 invalid[index] = ("schema_invalid", ";".join(schema.errors))
-                continue
-            valid, reason = search_variant_validity(strategy_id, complete_params)
-            if not valid:
-                invalid[index] = ("dependency_invalid", reason)
-                continue
-            valid_indices.append(index)
+            else:
+                valid, reason = search_variant_validity(strategy_id, complete_params)
+                if not valid:
+                    invalid[index] = ("dependency_invalid", reason)
+                else:
+                    valid_indices.append(index)
+            _completed_chunk_progress(
+                progress, "grid_validation", index + 1, total, chunk_size=chunk_size,
+            )
     if not valid_indices:
         raise ValueError("parameter grid has no variants satisfying cross-axis dependencies")
     limit = min(len(valid_indices), max(1, int(cap)))
@@ -192,6 +216,9 @@ def expand_grids_bounded(
                     "reason": reason,
                 }
             )
+            _completed_chunk_progress(
+                progress, "grid_ledger", flat_index + 1, total, chunk_size=chunk_size,
+            )
         audit.update(
             {
                 "axis_order": keys,
@@ -220,6 +247,7 @@ def compile_sweep(
     data_snapshot_id: str = "",
     data_evidence_hash: str = "",
     data_snapshot_bindings: list[dict[str, Any]] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> ExperimentSpec:
     """Validate safety gates, expand grids (bounded by cap), build an ExperimentSpec.
 
@@ -234,6 +262,8 @@ def compile_sweep(
     blocking = [e for e in result.errors if "variant grid" not in e]
     if blocking:
         raise ValueError("invalid sweep spec: " + "; ".join(blocking))
+    if progress is not None:
+        progress("compile_spec_validated")
 
     defaults = executable_exit_params(
         spec.setup_family, get_strategy(spec.setup_family).parameter_defaults
@@ -252,7 +282,10 @@ def compile_sweep(
         baseline=baseline,
         strategy_id=spec.setup_family,
         audit=search_space,
+        progress=progress,
     )
+    if progress is not None:
+        progress("compile_grid_selected")
     filters = {
         str(key): [str(value) for value in values]
         for key, values in spec.filter_grid.items()
@@ -278,9 +311,12 @@ def compile_sweep(
         data_snapshot_id=data_snapshot_id,
         data_evidence_hash=data_evidence_hash,
         data_snapshot_bindings=data_snapshot_bindings,
+        progress=progress,
     )
+    if progress is not None:
+        progress("compile_family_bound")
 
-    return ExperimentSpec(
+    experiment = ExperimentSpec(
         experiment_id=f"sweep_{spec.sweep_id}",
         data_glob=data_glob,
         symbols=symbols,
@@ -308,4 +344,8 @@ def compile_sweep(
                 "omitted_by_execution_cap": max(0, runs - int(job_cap)),
             }
         },
+        validation_progress=progress,
     )
+    if progress is not None:
+        progress("compile_experiment_bound")
+    return experiment

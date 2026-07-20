@@ -17,6 +17,7 @@ Telegram paper delivery is an explicit opt-in surface.
 from __future__ import annotations
 
 import argparse
+import _thread
 import json
 import os
 import sys
@@ -86,7 +87,9 @@ class _FarmLeaseHeartbeat:
             store.close()
 
 
-def _task_claim_guard_factory(ownership_path, process_lease, stop_event):
+def _task_claim_guard_factory(
+    ownership_path, process_lease, stop_event, *, on_failure=None,
+):
     """Bind every long task claim to the one canonical process generation."""
     def build(tasks: FarmTasksDB, task: dict):
         return TaskClaimHeartbeat(
@@ -98,6 +101,7 @@ def _task_claim_guard_factory(ownership_path, process_lease, stop_event):
             lease_seconds=TASK_CLAIM_LEASE_SECONDS,
             renew_interval_seconds=30.0,
             max_no_progress_seconds=300.0,
+            on_failure=on_failure,
         )
 
     return build
@@ -1677,6 +1681,74 @@ def _write_priority_worker_status(
     return target
 
 
+class _TaskClaimFailureSignal:
+    """Make a background claim failure immediately visible to the farm foreground."""
+
+    def __init__(
+        self,
+        private_root: Path,
+        stop_event: threading.Event,
+        *,
+        interrupt_main=_thread.interrupt_main,
+    ) -> None:
+        self.private_root = Path(private_root)
+        self.stop_event = stop_event
+        self._interrupt_main = interrupt_main
+        self._lock = threading.Lock()
+        self._failure: BaseException | None = None
+        self._snapshot: dict = {}
+
+    @property
+    def failure(self) -> BaseException | None:
+        with self._lock:
+            return self._failure
+
+    def notify(self, failure: BaseException, snapshot: dict) -> None:
+        with self._lock:
+            if self._failure is not None:
+                return
+            self._failure = failure
+            self._snapshot = dict(snapshot)
+        self.stop_event.set()
+        try:
+            _write_priority_worker_status(
+                self.private_root,
+                stage="claim_failed",
+                started_at=time.time(),
+                details={
+                    "error_type": type(failure).__name__,
+                    "task_id": snapshot.get("task_id"),
+                    "task_fencing_token": snapshot.get("task_fencing_token"),
+                    "process_fencing_token": snapshot.get("process_fencing_token"),
+                    "last_progress_stage": snapshot.get("last_progress_stage"),
+                    "last_progress_age_seconds": snapshot.get("last_progress_age_seconds"),
+                    "failure": snapshot.get("failure"),
+                },
+            )
+        finally:
+            # Status I/O must not delay or suppress the foreground fail-closed path.
+            self._interrupt_main()
+
+    def raise_if_failed(self) -> None:
+        failure = self.failure
+        if failure is not None:
+            raise RuntimeError("priority task claim heartbeat failed") from failure
+
+    def status_details(self) -> dict:
+        with self._lock:
+            snapshot = dict(self._snapshot)
+            failure = self._failure
+        return {
+            "error_type": None if failure is None else type(failure).__name__,
+            "task_id": snapshot.get("task_id"),
+            "task_fencing_token": snapshot.get("task_fencing_token"),
+            "process_fencing_token": snapshot.get("process_fencing_token"),
+            "last_progress_stage": snapshot.get("last_progress_stage"),
+            "last_progress_age_seconds": snapshot.get("last_progress_age_seconds"),
+            "failure": snapshot.get("failure"),
+        }
+
+
 def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event: threading.Event) -> None:
     """Continuously drain urgent/background numeric work beside the full cycle."""
     task_db_kwargs = {"lease_seconds": TASK_CLAIM_LEASE_SECONDS}
@@ -1726,7 +1798,10 @@ def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event
                         f"pivot={slot.get('pivot')} errors={errors}"
                     )
                 delay = args.busy_slot_seconds if eligible or did_work else args.idle_poll_seconds
-            except Exception as exc:  # noqa: BLE001 - worker must report and retry, not kill full cycle
+            except Exception as exc:  # noqa: BLE001 - claim failures stop; ordinary errors retry
+                failure_signal = getattr(args, "task_claim_failure_signal", None)
+                if failure_signal is not None and failure_signal.failure is not None:
+                    break
                 delay = args.idle_poll_seconds
                 _write_priority_worker_status(
                     private_root, stage="error", started_at=slot_started,
@@ -1735,9 +1810,16 @@ def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event
                 print(f"  priority-worker error: {exc}")
             stop_event.wait(max(0.1, float(delay)))
     finally:
+        failure_signal = getattr(args, "task_claim_failure_signal", None)
+        claim_failed = failure_signal is not None and failure_signal.failure is not None
         _write_priority_worker_status(
-            private_root, stage="stopped", started_at=time.time(),
-            details={"sequence": sequence},
+            private_root, stage="claim_failed" if claim_failed else "stopped",
+            started_at=time.time(),
+            details=(
+                {"sequence": sequence, **failure_signal.status_details()}
+                if claim_failed
+                else {"sequence": sequence}
+            ),
         )
         worker_tasks.close()
 
@@ -1951,10 +2033,16 @@ def main() -> None:
 
     priority_stop = threading.Event()
     priority_thread = None
+    claim_failure_signal = None
     if apply:
+        claim_failure_signal = _TaskClaimFailureSignal(private_root, priority_stop)
         args.canonical_owner_id = process_lease.owner_id
+        args.task_claim_failure_signal = claim_failure_signal
         args.task_claim_guard_factory = _task_claim_guard_factory(
-            ownership_path, process_lease, priority_stop
+            ownership_path,
+            process_lease,
+            priority_stop,
+            on_failure=claim_failure_signal.notify,
         )
     try:
         if not args.loop:
@@ -1979,7 +2067,11 @@ def main() -> None:
                 break
             if lease_heartbeat is not None and lease_heartbeat.failure is not None:
                 raise RuntimeError("farm ownership lease renewal failed") from lease_heartbeat.failure
+            if claim_failure_signal is not None:
+                claim_failure_signal.raise_if_failed()
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            if claim_failure_signal is not None:
+                claim_failure_signal.raise_if_failed()
             sig = _cycle_signature(out)
             # Always show a CHANGED cycle or any error (never hide a changed block, even with
             # --quiet). Unchanged cycle: heartbeat by default; with --quiet, print nothing.
@@ -2015,6 +2107,8 @@ def main() -> None:
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
     except KeyboardInterrupt:
+        if claim_failure_signal is not None:
+            claim_failure_signal.raise_if_failed()
         print("\ninterrupted - graceful stop")
     finally:
         priority_stop.set()

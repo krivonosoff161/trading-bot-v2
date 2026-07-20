@@ -58,6 +58,39 @@ def test_compile_valid_sweep_builds_experiment_spec():
     assert exp.experiment_id == "sweep_s1"
 
 
+def test_compile_reports_only_completed_grid_chunks_and_caches_policy(monkeypatch):
+    from src.research_lab import sweep_compile
+
+    profiles, policy = _ctx()
+    spec = _spec(
+        related_symbols=(),
+        setup_grid={"lookback": list(range(10, 60))},
+        exit_grid={"hold_bars": list(range(2, 22))},
+    )
+    real_load = sweep_compile.load_param_policy
+    loads = []
+    stages = []
+
+    def counted_load():
+        loads.append(True)
+        return real_load()
+
+    monkeypatch.setattr(sweep_compile, "load_param_policy", counted_load)
+    compile_sweep(
+        spec,
+        data_glob=GLOB,
+        timeframe_profiles=profiles,
+        resource_policy=policy,
+        progress=stages.append,
+    )
+
+    assert loads == [True, True, True]
+    assert "grid_validation:1000/1000" in stages
+    assert "grid_ledger:1000/1000" in stages
+    assert stages[-1] == "compile_experiment_bound"
+    assert all("timer" not in stage for stage in stages)
+
+
 def test_compile_caps_variant_explosion():
     profiles, policy = _ctx()
     # 5 * 4 = 20 variants -> clipped to 15m profile cap (16); job runs capped to policy (24)

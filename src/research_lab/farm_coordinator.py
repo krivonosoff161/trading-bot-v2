@@ -910,6 +910,7 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                 data_snapshot_bindings=snapshot_bindings,
                 materialization_id=materialization_id,
                 prepare_intent=prepare_intent,
+                progress=progress,
             )
             if progress is not None:
                 progress("compute_queue_bound")
