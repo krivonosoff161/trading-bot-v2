@@ -18,10 +18,9 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
     delivery artifacts. Importing credential-aware Telegram helpers is isolated
     here so the farm/research modules stay free of direct money/product imports.
     """
-    from dotenv import load_dotenv
-    from src.utils.runtime_root import runtime_env_file
+    from src.utils.runtime_root import load_runtime_dotenv
 
-    load_dotenv(runtime_env_file(Path(root)))
+    load_runtime_dotenv(Path(root))
 
     from scripts.subscriptions import list_delivery_users
     from src.utils.telegram import bot_token, send_photo_bytes_to

@@ -16,8 +16,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.utils.runtime_root import load_runtime_dotenv
+
+_ROOT = Path(__file__).resolve().parent.parent
+load_runtime_dotenv(_ROOT)
 
 try:
     import openpyxl
@@ -29,7 +31,6 @@ except ImportError:
     print("openpyxl не установлен: pip install openpyxl")
     sys.exit(1)
 
-_ROOT               = Path(__file__).resolve().parent.parent
 SIGNAL_LOG          = _ROOT / "logs" / "signals" / "signal_log.jsonl"
 SIGNAL_LABELS       = _ROOT / "logs" / "signals" / "signal_labels.jsonl"
 PUMP_SIGNALS_LOG    = _ROOT / "logs" / "pump" / "pump_signals.jsonl"
