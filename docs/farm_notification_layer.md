@@ -99,8 +99,20 @@ instead of being silently treated as successful chart sends. The sender writes a
 delivery outbox claim before an injected transport call and holds a no-follow OS lock
 across the whole external side-effect boundary. A second process reports
 `pending_delivery_claim` without calling its transport. The primary delivery key binds
-immutable card content identity to the pseudonymous recipient; legacy signal/preview
-keys remain read-compatible for completed deliveries.
+immutable card content identity to the pseudonymous recipient, including the canonical
+resolved chart path and SHA-256 of the accepted PNG bytes when a photo will be sent.
+The same captured byte string—not a path that the transport must reopen—is passed to
+the transport, so a later producer-path replacement cannot change the acknowledged
+payload. Secure capture requires a regular file, uses no-follow/nonblocking open flags
+where supported, and enforces a bounded 10 MiB read. Unreadable, empty, special, or
+oversized chart content fails closed without a send. The exact
+previous-generation `content-sha256` keys and older signal/preview
+keys remain read-compatible for completed deliveries, preventing an upgrade from
+replaying an already acknowledged card.
+
+A preview that declares a chart is never downgraded to a text-only send: a missing,
+invalid, unreadable chart or unavailable photo transport fails closed before either
+part of the card reaches the transport.
 
 An unreadable, malformed, or structurally invalid existing outbox produces
 `outbox_unavailable` and is never replaced by an empty recovery state. The legacy

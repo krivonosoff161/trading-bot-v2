@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import stat
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_l
 SCHEMA = "PaperTelegramDelivery.v1"
 SUMMARY_SCHEMA = "paper_telegram_delivery.v1"
 DEFAULT_DELIVERY_TARGET = "SUBSCRIPTION_USERS"
+MAX_CHART_PAYLOAD_BYTES = 10 * 1024 * 1024
 REQUIRED_DISCLAIMER = "Бумажный режим: это не ордер."
 _OUTBOX_STATUSES = {
     "completed",
@@ -153,12 +155,9 @@ def _load_sent_keys(private_root: Path) -> set[str]:
     return set(items)
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_bytes(path: Path, encoded: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    encoded = (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
     with tmp_path.open("wb") as handle:
         handle.write(encoded)
         handle.flush()
@@ -174,6 +173,13 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         pass
     finally:
         os.close(directory_fd)
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    _atomic_write_bytes(path, encoded)
 
 
 def _save_sent_keys(private_root: Path, sent_keys: set[str]) -> None:
@@ -309,7 +315,7 @@ async def _send_items(
     items: list[dict[str, Any]],
     recipient_ids: list[str],
     send_text: Callable[[str, str], Awaitable[int | None]],
-    send_photo: Callable[[str, str], Awaitable[int | None]] | None,
+    send_photo: Callable[[str, bytes], Awaitable[int | None]] | None,
     sent_keys: set[str],
     private_root: Path,
 ) -> list[PaperTelegramDelivery]:
@@ -333,11 +339,64 @@ async def _send_items(
         ]
     for item in items:
         for recipient_id in recipient_ids:
-            delivery_keys = _delivery_keys(item, recipient_id)
+            chart_path, chart_problem = _safe_chart_path(item, private_root)
+            if str(item.get("chart_path") or "").strip() and chart_path is None:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="invalid_preview",
+                        problem=chart_problem or "invalid_chart_path",
+                        recipient_id=recipient_id,
+                        transport_kind="telegram_photo+text",
+                        chart_available=False,
+                        chart_problem=chart_problem or "invalid_chart_path",
+                    )
+                )
+                continue
+            if chart_path is not None and send_photo is None:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="invalid_preview",
+                        problem="photo_transport_not_configured",
+                        recipient_id=recipient_id,
+                        transport_kind="telegram_photo+text",
+                        chart_available=True,
+                        chart_problem="photo_transport_not_configured",
+                    )
+                )
+                continue
+            transport_kind = "telegram_photo+text" if chart_path and send_photo is not None else "telegram_text"
+            identity_chart_path = chart_path if send_photo is not None else None
+            try:
+                if identity_chart_path is not None:
+                    transport_chart_payload, chart_sha256 = _capture_chart_payload(
+                        identity_chart_path,
+                        private_root,
+                    )
+                else:
+                    transport_chart_payload, chart_sha256 = None, ""
+            except OSError:
+                deliveries.append(
+                    _delivery_from_preview(
+                        item,
+                        status="invalid_preview",
+                        problem="chart_content_unreadable",
+                        recipient_id=recipient_id,
+                        transport_kind=transport_kind,
+                        chart_available=bool(chart_path),
+                        chart_problem="chart_content_unreadable",
+                    )
+                )
+                continue
+            delivery_keys = _delivery_keys(
+                item,
+                recipient_id,
+                chart_path=identity_chart_path,
+                chart_sha256=chart_sha256,
+            )
             delivery_key = delivery_keys[0]
             recipient_hash = _recipient_hash(recipient_id)
-            chart_path, chart_problem = _safe_chart_path(item, private_root)
-            transport_kind = "telegram_photo+text" if chart_path and send_photo is not None else "telegram_text"
             blocking_record = next(
                 (
                     outbox.get(key)
@@ -449,8 +508,8 @@ async def _send_items(
                         text_status=text_status,
                     ),
                 )
-                if chart_path and send_photo is not None:
-                    photo_message_id = await send_photo(recipient_id, str(chart_path))
+                if transport_chart_payload is not None and send_photo is not None:
+                    photo_message_id = await send_photo(recipient_id, transport_chart_payload)
                     if photo_message_id is None:
                         photo_status = "unacknowledged"
                         chart_problem = "photo_message_id_missing"
@@ -590,7 +649,107 @@ def _recipient_hash(recipient_id: str) -> str:
     return hashlib.sha256(recipient_id.encode("utf-8")).hexdigest()[:16] if recipient_id else ""
 
 
-def _delivery_content_identity(item: dict[str, Any]) -> str:
+def _chart_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _allowed_chart_roots(private_root: Path) -> tuple[Path, ...]:
+    return (
+        (Path(private_root) / "state" / "derived" / "paper_reviews").resolve(),
+        (Path(private_root) / "state" / "derived" / "paper_telegram_base_charts").resolve(),
+        (Path(private_root) / "state" / "derived" / "paper_telegram_cards").resolve(),
+    )
+
+
+def _capture_chart_payload(source_path: Path, private_root: Path) -> tuple[bytes, str]:
+    """Pin one validated file handle so identity and transport use identical bytes."""
+    allowed_roots = _allowed_chart_roots(private_root)
+    candidate = source_path.resolve(strict=True)
+    if not any(_is_relative_to(candidate, root) for root in allowed_roots):
+        raise OSError("chart source escaped allowed roots")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    fd = os.open(candidate, flags)
+    try:
+        opened_stat = os.fstat(fd)
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise OSError("chart source is not a regular file")
+        if opened_stat.st_size <= 0 or opened_stat.st_size > MAX_CHART_PAYLOAD_BYTES:
+            raise OSError("chart source size is outside the allowed bound")
+        current = candidate.resolve(strict=True)
+        current_stat = os.stat(current, follow_symlinks=True)
+        if (
+            not any(_is_relative_to(current, root) for root in allowed_roots)
+            or not os.path.samestat(opened_stat, current_stat)
+        ):
+            raise OSError("chart source changed during secure open")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            chunks: list[bytes] = []
+            total = 0
+            while total <= MAX_CHART_PAYLOAD_BYTES:
+                chunk = handle.read(min(1024 * 1024, MAX_CHART_PAYLOAD_BYTES + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            if total != opened_stat.st_size or total > MAX_CHART_PAYLOAD_BYTES:
+                raise OSError("chart source changed size during capture")
+            encoded = b"".join(chunks)
+    finally:
+        os.close(fd)
+    digest = hashlib.sha256(encoded).hexdigest()
+    return encoded, digest
+
+
+def _delivery_content_identity(
+    item: dict[str, Any],
+    *,
+    chart_path: Path | None = None,
+    chart_sha256: str = "",
+) -> str:
+    payload = {
+        key: item.get(key)
+        for key in (
+            "schema",
+            "preview_id",
+            "instruction_id",
+            "source_signal_id",
+            "telegram_card_id",
+            "pair",
+            "timeframe",
+            "side",
+            "setup_family",
+            "text",
+        )
+    }
+    payload["chart"] = (
+        {
+            "resolved_path": str(chart_path),
+            "sha256": chart_sha256 or _chart_sha256(chart_path),
+        }
+        if chart_path is not None
+        else None
+    )
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _legacy_delivery_content_identity_v1(item: dict[str, Any]) -> str:
+    """Reproduce the da49350 content key so completed sends are never replayed."""
     payload = {
         key: item.get(key)
         for key in (
@@ -616,11 +775,23 @@ def _delivery_content_identity(item: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _delivery_key(item: dict[str, Any], recipient_id: str) -> str:
-    return _delivery_keys(item, recipient_id)[0]
+def _delivery_key(
+    item: dict[str, Any],
+    recipient_id: str,
+    *,
+    private_root: Path | None = None,
+) -> str:
+    return _delivery_keys(item, recipient_id, private_root=private_root)[0]
 
 
-def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
+def _delivery_keys(
+    item: dict[str, Any],
+    recipient_id: str,
+    *,
+    private_root: Path | None = None,
+    chart_path: Path | None = None,
+    chart_sha256: str = "",
+) -> list[str]:
     """Return primary + legacy sent keys for one recipient.
 
     The primary key binds immutable rendered content identity to a pseudonymous
@@ -631,17 +802,26 @@ def _delivery_keys(item: dict[str, Any], recipient_id: str) -> list[str]:
     source_signal_id = str(item.get("source_signal_id") or "").strip()
     preview_id = str(item.get("preview_id") or "").strip()
     telegram_card_id = str(item.get("telegram_card_id") or "").strip()
-    content_identity = _delivery_content_identity(item)
+    if chart_path is None and private_root is not None:
+        chart_path, _problem = _safe_chart_path(item, Path(private_root))
+    content_identity = _delivery_content_identity(
+        item,
+        chart_path=chart_path,
+        chart_sha256=chart_sha256,
+    )
+    legacy_content_identity = _legacy_delivery_content_identity_v1(item)
 
     if source_signal_id and source_signal_id != "paper_status_digest":
         content_key = telegram_card_id or preview_id
         candidates = [f"signal:{source_signal_id}:content-sha256:{content_identity}:{rh}"]
+        candidates.append(f"signal:{source_signal_id}:content-sha256:{legacy_content_identity}:{rh}")
         if content_key:
             candidates.append(f"signal:{source_signal_id}:content:{content_key}:{rh}")
         candidates.append(f"signal:{source_signal_id}:{rh}")
     else:
         digest_key = preview_id or source_signal_id or telegram_card_id
         candidates = [f"digest:content-sha256:{content_identity}:{rh}"]
+        candidates.append(f"digest:content-sha256:{legacy_content_identity}:{rh}")
         if digest_key:
             candidates.append(f"digest:{digest_key}:{rh}")
 
@@ -662,11 +842,7 @@ def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | N
         return None, ""
     try:
         path = Path(raw).resolve()
-        allowed_roots = (
-            (Path(private_root) / "state" / "derived" / "paper_reviews").resolve(),
-            (Path(private_root) / "state" / "derived" / "paper_telegram_base_charts").resolve(),
-            (Path(private_root) / "state" / "derived" / "paper_telegram_cards").resolve(),
-        )
+        allowed_roots = _allowed_chart_roots(private_root)
     except OSError:
         return None, "invalid_chart_path"
     if path.suffix.lower() != ".png":
@@ -881,7 +1057,7 @@ def send_paper_telegram_previews(
     paper_chat_ids_count: int = 0,
     recipient_ids: list[str] | None = None,
     send_text: Callable[[str, str], Awaitable[int | None]] | None = None,
-    send_photo: Callable[[str, str], Awaitable[int | None]] | None = None,
+    send_photo: Callable[[str, bytes], Awaitable[int | None]] | None = None,
     status_digest: bool = False,
     status_digest_interval_hours: int = 12,
     now: float | None = None,

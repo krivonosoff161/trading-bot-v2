@@ -154,3 +154,44 @@ async def send_photo_to(chat_id: str, file_path: str, caption: str = "",
             msg_id,
         )
         return msg_id
+
+
+async def send_photo_bytes_to(chat_id: str, payload: bytes, caption: str = "",
+                              parse_mode: str | None = None) -> int | None:
+    """Send already captured PNG bytes without reopening a mutable source path."""
+    token = bot_token()
+    if not token:
+        return None
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    async with aiohttp.ClientSession() as session:
+        data = aiohttp.FormData()
+        data.add_field("chat_id", chat_id)
+        data.add_field("caption", caption)
+        if parse_mode:
+            data.add_field("parse_mode", parse_mode)
+        data.add_field(
+            "photo",
+            payload,
+            filename="paper_chart.png",
+            content_type="image/png",
+        )
+        resp = await session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30))
+        body_text = await resp.text()
+        try:
+            import json as _json
+            body_json = _json.loads(body_text)
+        except Exception:
+            body_json = {}
+
+        if resp.status != 200:
+            raise RuntimeError(f"Telegram photo HTTP {resp.status}: {body_text[:200]}")
+        if body_json and not body_json.get("ok", True):
+            raise RuntimeError(f"Telegram photo ok=false: {body_text[:200]}")
+
+        msg_id = body_json.get("result", {}).get("message_id")
+        logger.info(
+            "Telegram photo sent | recipient_ref={} msg_id={}",
+            recipient_ref(chat_id),
+            msg_id,
+        )
+        return msg_id
