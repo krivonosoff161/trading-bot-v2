@@ -8,7 +8,6 @@ Saves open positions to logs/auto_positions.json for timeout tracking.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -18,8 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+load_runtime_dotenv(ROOT)
 
 from src.exchange.okx_client import OKXClient  # noqa: E402
 

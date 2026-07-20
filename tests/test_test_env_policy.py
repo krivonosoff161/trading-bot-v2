@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -9,6 +10,15 @@ from src.utils.runtime_root import DOTENV_AUTOLOAD_ENV, load_runtime_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_DOTENV_CALL_GRAPH = (
+    "scripts/analyze_chart.py",
+    "scripts/auto_execute.py",
+    "scripts/build_journal.py",
+    "scripts/public_channel_publisher.py",
+    "scripts/strategy_lab/paper_telegram_transport.py",
+    "scripts/telegram_bot.py",
+    "src/scout/scanner_v0.py",
+)
 
 
 def _safe_subprocess_env(tmp_path: Path) -> dict[str, str]:
@@ -202,3 +212,17 @@ assert "scripts.auto_execute" not in sys.modules
     )
 
     assert result.returncode == 0, result.stderr[-1000:]
+
+
+def test_canonical_rcc_call_graph_has_no_direct_python_dotenv_imports() -> None:
+    violations: list[str] = []
+    for relative_path in CANONICAL_DOTENV_CALL_GRAPH:
+        tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "dotenv":
+                violations.append(f"{relative_path}:{node.lineno}")
+            elif isinstance(node, ast.Import):
+                if any(alias.name == "dotenv" for alias in node.names):
+                    violations.append(f"{relative_path}:{node.lineno}")
+
+    assert violations == []
