@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+TASK_CLAIM_LEASE_SECONDS = 900.0
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -1658,7 +1659,10 @@ def _write_priority_worker_status(
 
 def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event: threading.Event) -> None:
     """Continuously drain urgent/background numeric work beside the full cycle."""
-    worker_tasks = FarmTasksDB(tasks_db_path(private_root))
+    worker_tasks = FarmTasksDB(
+        tasks_db_path(private_root),
+        lease_seconds=TASK_CLAIM_LEASE_SECONDS,
+    )
     from src.research_lab.farm_journal import make_transition_sink
     worker_tasks.on_transition = make_transition_sink(private_root)
     sequence = 0
@@ -1903,7 +1907,7 @@ def main() -> None:
             tasks = FarmTasksDB(
                 tasks_db_path(private_root),
                 owner_id=owner_id,
-                lease_seconds=900.0,
+                lease_seconds=TASK_CLAIM_LEASE_SECONDS,
             )
             from src.research_lab.farm_journal import make_transition_sink
             tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit

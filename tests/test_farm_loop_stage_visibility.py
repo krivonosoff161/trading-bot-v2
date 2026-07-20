@@ -18,7 +18,7 @@ from src.research_lab import farm_journal
 
 
 def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_path) -> None:
-    seen = {"closed": False, "slots": 0, "statuses": []}
+    seen = {"closed": False, "slots": 0, "statuses": [], "db_kwargs": None}
 
     class FakeTasks:
         on_transition = None
@@ -36,7 +36,11 @@ def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_
         stop.set()
         return {"pivot": "idle", "active_tasks": 0, "counters": {}, "status": {}, "errors": []}
 
-    monkeypatch.setattr(farm_loop, "FarmTasksDB", lambda path: FakeTasks())
+    def fake_tasks(_path, **kwargs):
+        seen["db_kwargs"] = kwargs
+        return FakeTasks()
+
+    monkeypatch.setattr(farm_loop, "FarmTasksDB", fake_tasks)
     monkeypatch.setattr(farm_loop, "_run_priority_slot", fake_slot)
     monkeypatch.setattr(farm_loop, "_write_priority_checkpoint", lambda *args, **kwargs: tmp_path / "cp")
     monkeypatch.setattr(
@@ -52,6 +56,7 @@ def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_
 
     assert seen["slots"] == 1
     assert seen["closed"] is True
+    assert seen["db_kwargs"] == {"lease_seconds": farm_loop.TASK_CLAIM_LEASE_SECONDS}
     assert seen["statuses"] == ["running_slot", "idle", "stopped"]
 
 
