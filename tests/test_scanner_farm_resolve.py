@@ -36,6 +36,7 @@ def _patch_pipeline(monkeypatch, verdict, side="none"):
     monkeypatch.setattr(S, "make_chart", lambda *a, **k: None)
     monkeypatch.setattr(S.J, "write_row", lambda row: (journaled.append(row), row["card_id"])[1])
     monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda rec: True)
     monkeypatch.setattr(S.R, "write_event_block", lambda b: True)
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)

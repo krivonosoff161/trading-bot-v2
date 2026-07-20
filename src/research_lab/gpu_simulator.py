@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.research_lab.experiment import finalize_trade
+from src.research_lab.simulator_contract import build_cost_ledger, legacy_fixture_manifest
 
 # Exit-mode params the batched simulator faithfully reproduces. Anything else is
 # an unsupported mode (honest CPU fallback, never a silent wrong GPU result).
@@ -192,6 +193,10 @@ def simulate_trades_batched(
             outcome, exit_price = "time_exit", float(candles[exit_idx[b]]["close"])
         trades.append(
             finalize_trade(candles, idxs[b], actual_exit_idx, side, entry[b],
-                           exit_price, outcome, sig, cost_pct)
+                           exit_price, outcome, sig, cost_pct,
+                           simulator_manifest=legacy_fixture_manifest(),
+                           cost_ledger=build_cost_ledger(
+                               fees_bps=fees_bps, slippage_bps=slippage_bps,
+                           ))
         )
     return trades

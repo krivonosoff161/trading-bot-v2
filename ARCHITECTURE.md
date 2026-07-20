@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **ACTIVE**. Updated 2026-07-13.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This file is the current architectural source of truth. Dated reports and
 older plans under `docs/` are historical evidence unless the
@@ -93,11 +93,42 @@ interactive Telegram bot, dashboard, graph builder, and local Ollama sidecar as
 separate process owners. The UI starts with every contour disabled, prevents a
 second control-center instance and duplicate canonical-farm ownership, records a
 private heartbeat, and contains no execution or private-exchange entrypoint.
-If a prior center left a verified local process running, the UI exposes its PID
-and requires a separate confirmation before stopping it. A port owned by an
-unverified executable is reported but never terminated automatically.
+If a prior center left a local process running, recovered heartbeat or port
+evidence is display-only. PID/start time and even an expected executable prove
+liveness and identity checks, not stop ownership; only a process retained by
+the current center's own `Popen` handle is stoppable.
 Its second status line explains per-role work issued, queued, waiting,
 completed, returned to the analyst, and the current bounded generation.
+
+Canonical farm and standalone-worker mutation authority is persisted in
+`ownership.sqlite` as an exact process identity, random owner instance,
+renewable expiry and monotonically increasing fence. All apply modes, including
+one-shot farm runs, acquire the same canonical resource. A stop intent can be
+acknowledged only by that current owner/fence; mutable lock files and heartbeat
+bytes are never authority.
+
+Brain tasks and compute jobs use separate fenced claims. State transitions,
+attempt history and audit rows commit transactionally. An executing attempt
+whose lease expires remains `ambiguous`; a later fence cannot rewrite it.
+Sweep dispatch uses a content-bound brain outbox because two SQLite databases
+cannot share one atomic commit. Worker output remains provisional until a final
+owner/fence check; run import and queue completion then commit together before
+secondary indexes are published.
+
+### Paper Evidence Authority
+
+The public v2 paper-evidence implementation separates immutable authority from
+replaceable views. A co-located SQLite store owns paper subject generations,
+exact observation batches, lifecycle and account events, revisions, run-stage
+manifests, writer fences, and the current-run pointer. A completed projection is
+a verified read view over one atomic run; JSON/JSONL files and legacy v1 output
+remain display-only and cannot become authority through filename presence.
+
+The coordinator API is dependency-injected and off by default. No supported
+launcher currently activates or migrates private v2 state. Future rollout must
+retain the canonical farm lease as an outer preflight and independently acquire
+the co-located paper writer fence. See
+[Paper Evidence Generations](docs/paper-evidence-generations.md).
 
 ## Storage
 
@@ -106,3 +137,14 @@ small deterministic fixtures. Local/private storage holds data, logs,
 credentials, model conversations, candidate rankings, journals, and raw
 research output. The binding repository policy is
 [docs/storage_boundaries.md](docs/storage_boundaries.md).
+
+Automatic scanner/farm storage maintenance is report-only: outer research `apply` does
+not authorize cache unlink, log truncation, event-spec pruning, or farm-history deletion.
+The v2 quarantine API is an off-by-default synthetic OS-temp proof with a fixed root
+capability and durable restore evidence; it is not activated for private storage and
+does not reclaim physical bytes. The separate segmented JSONL API proves coordinated
+canonical append, immutable intent evidence, no-replace seal, crash recovery, and
+full-stream reads only for explicit adapters over the same synthetic capability and root
+lock. No launcher or current farm/scanner producer or reader selects it. Legacy append
+logs remain `legacy_uncoordinated_storage` until a separately authorized private
+inventory, cutover, parity, and rollback package is completed.

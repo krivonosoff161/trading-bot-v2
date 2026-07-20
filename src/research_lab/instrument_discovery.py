@@ -183,10 +183,19 @@ def discovered_universe(snapshot: dict[str, Any]) -> Universe:
     return Universe(groups=groups, relations={})
 
 
-def farm_readiness(symbols: list[str], private_root: Path, timeframe: str) -> dict[str, list[str]]:
+def farm_readiness(symbols: list[str], private_root: Path, timeframe: str) -> dict[str, Any]:
     """Split discovered symbols into those with usable candle data and those missing it."""
     ready, missing = [], []
+    manifests: dict[str, dict[str, str]] = {}
     for symbol in symbols:
-        rows = load_canonical_candles(private_root, symbol, timeframe).rows
-        (ready if rows else missing).append(symbol)
-    return {"ready": ready, "missing": missing}
+        selected = load_canonical_candles(
+            private_root, symbol, timeframe,
+            purpose="farm_readiness", coverage_policy="gap_free",
+        )
+        (ready if selected.rows else missing).append(symbol)
+        manifests[symbol] = {
+            "snapshot_id": selected.manifest.snapshot_id,
+            "evidence_hash": selected.manifest.evidence_hash,
+            "provenance_status": selected.manifest.provenance_status,
+        }
+    return {"ready": ready, "missing": missing, "manifests": manifests}

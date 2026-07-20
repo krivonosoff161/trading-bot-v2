@@ -18,6 +18,8 @@ def _patch_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(R, "REASONING", tmp_path / "scanner_reasoning.jsonl")
     monkeypatch.setattr(R, "TRAINING", tmp_path / "scanner_training.jsonl")
     monkeypatch.setattr(R, "MEMORY", tmp_path / "scanner_memory.jsonl")
+    monkeypatch.setattr(B.PS, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(B.PS, "PENDING", tmp_path / "pending_events.jsonl")
 
 
 def test_scanner_records_write_structured_blocks(monkeypatch, tmp_path):

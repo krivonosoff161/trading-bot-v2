@@ -2,10 +2,15 @@
 """Tests for farm sweep materialization contracts."""
 from __future__ import annotations
 
-from src.research_lab.farm_sweep_runner import build_sweep_spec
+import json
+from pathlib import Path
+
+from src.research_lab.farm_sweep_runner import build_sweep_spec, queue_sweep
 from src.research_lab.param_schemas import parameter_search_contract
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.sweep_compile import compile_sweep
+from src.research_lab.sweep_spec import SweepSpec
+from src.research_lab.state_db import connect, init_db
 from src.research_lab.timeframes import load_timeframe_profiles
 
 
@@ -100,3 +105,106 @@ def test_zero_default_adaptive_axes_receive_absolute_search_levels():
         spec = build_sweep_spec("BTC_USDT_SWAP", "1h", family, fingerprint="fp")
         assert len(spec.setup_grid[axis_name]) > 1
         assert any(float(value) > 0 for value in spec.setup_grid[axis_name])
+
+
+def test_queue_sweep_binds_snapshot_manifest_into_worker_spec(tmp_path):
+    conn = connect(tmp_path / "state" / "strategy_lab.sqlite")
+    init_db(conn)
+    spec = build_sweep_spec(
+        "BTC_USDT_SWAP", "1h", "momentum_breakout", fingerprint="evidence-1",
+    )
+
+    _exp_id, job_id, created = queue_sweep(
+        conn, spec, private_root=tmp_path,
+        profiles=load_timeframe_profiles(), policy=load_resource_policy(),
+        data_glob=str(tmp_path / "market_data" / "1h" / "{symbol}_*.json"),
+        priority=100, fingerprint="evidence-1",
+        data_snapshot_id="csm_queued", data_evidence_hash="evidence-1",
+        data_snapshot_bindings=[{
+            "symbol": "BTC_USDT_SWAP", "timeframe": "1h",
+            "snapshot_id": "csm_queued", "evidence_hash": "evidence-1",
+            "row_count": 100,
+        }],
+    )
+    spec_path = Path(conn.execute(
+        "SELECT spec_path FROM queue WHERE job_id=?", (job_id,),
+    ).fetchone()[0])
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+
+    assert created is True
+    assert payload["data_snapshot_id"] == "csm_queued"
+    assert payload["data_evidence_hash"] == "evidence-1"
+    binding = payload["search_family_definition"]["data_binding"]
+    assert binding["status"] == "bound"
+    assert binding["members"] == [{
+        "symbol": "BTC_USDT_SWAP", "timeframe": "1h",
+        "snapshot_id": "csm_queued", "evidence_hash": "evidence-1",
+        "row_count": 100,
+    }]
+
+
+def test_changed_raw_family_cannot_overwrite_or_dedup_completed_spec(tmp_path):
+    profiles = load_timeframe_profiles()
+    policy = load_resource_policy()
+    conn = connect(tmp_path / "state.sqlite")
+    init_db(conn)
+    base = dict(
+        sweep_id="reused",
+        anchor_symbol="BTC_USDT_SWAP",
+        related_symbols=(),
+        timeframe="15m",
+        setup_family="rsi_reversal",
+        max_variants=1,
+        backend="cpu",
+        resource_class="light",
+    )
+    first = SweepSpec(**base, setup_grid={"oversold": [30], "overbought": [70]})
+    changed = SweepSpec(
+        **base,
+        setup_grid={"oversold": [30, 80], "overbought": [70]},
+    )
+    first_exp, first_job, first_created = queue_sweep(
+        conn,
+        first,
+        private_root=tmp_path,
+        profiles=profiles,
+        policy=policy,
+        data_glob="unused/{symbol}.json",
+        priority=50,
+        fingerprint="fp",
+        data_snapshot_id="csm_one",
+        data_evidence_hash="fp",
+        data_snapshot_bindings=[{
+            "symbol": "BTC_USDT_SWAP", "timeframe": "15m",
+            "snapshot_id": "csm_one", "evidence_hash": "fp", "row_count": 100,
+        }],
+    )
+    first_path = conn.execute(
+        "SELECT spec_path FROM queue WHERE job_id=?", (first_job,)
+    ).fetchone()[0]
+    first_bytes = Path(first_path).read_bytes()
+    second_exp, second_job, second_created = queue_sweep(
+        conn,
+        changed,
+        private_root=tmp_path,
+        profiles=profiles,
+        policy=policy,
+        data_glob="unused/{symbol}.json",
+        priority=50,
+        fingerprint="fp",
+        data_snapshot_id="csm_one",
+        data_evidence_hash="fp",
+        data_snapshot_bindings=[{
+            "symbol": "BTC_USDT_SWAP", "timeframe": "15m",
+            "snapshot_id": "csm_one", "evidence_hash": "fp", "row_count": 100,
+        }],
+    )
+    second_path = conn.execute(
+        "SELECT spec_path FROM queue WHERE job_id=?", (second_job,)
+    ).fetchone()[0]
+
+    assert first_exp == second_exp == "sweep_reused"
+    assert first_created is True and second_created is True
+    assert first_job != second_job
+    assert first_path != second_path
+    assert Path(first_path).read_bytes() == first_bytes

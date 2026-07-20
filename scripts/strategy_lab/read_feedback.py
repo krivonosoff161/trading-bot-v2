@@ -30,15 +30,16 @@ from src.research_lab.validation_feedback import load_feedback_queue  # noqa: E4
 
 
 def _load_cards(private_root: Path) -> list[dict]:
+    from src.research_lab.validation_generation import read_current_setup_card
+
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return []
     cards = []
     for path in sorted(cards_dir.glob("*.json")):
-        try:
-            cards.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
-            continue
+        payload = read_current_setup_card(private_root, path)
+        if payload is not None:
+            cards.append(payload)
     return cards
 
 

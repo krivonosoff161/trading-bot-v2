@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +32,12 @@ if str(ROOT) not in sys.path:
 from src.research_lab.farm_coordinator import DEFAULT_FAMILIES, run_coordinator_cycle  # noqa: E402
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path  # noqa: E402
 from src.research_lab.intake_adapter import watches_to_intake  # noqa: E402
+from src.research_lab.ownership import (  # noqa: E402
+    OwnershipConflictError,
+    OwnershipStore,
+    current_process_identity,
+    probe_process_identity,
+)
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -48,6 +55,33 @@ def _pid_is_alive(pid: int) -> bool:
     except (OSError, SystemError, ValueError):
         return False
     return True
+
+
+class _FarmLeaseHeartbeat:
+    def __init__(self, path: Path, lease, *, lease_seconds: float = 90.0) -> None:
+        self.path = path
+        self.lease = lease
+        self.lease_seconds = lease_seconds
+        self.stop_event = threading.Event()
+        self.failure: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, name="farm-lease-heartbeat", daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=5)
+
+    def _run(self) -> None:
+        store = OwnershipStore(self.path, identity_probe=probe_process_identity)
+        try:
+            while not self.stop_event.wait(self.lease_seconds / 3):
+                store.renew(self.lease, lease_seconds=self.lease_seconds)
+        except BaseException as exc:
+            self.failure = exc
+        finally:
+            store.close()
 
 
 def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
@@ -250,8 +284,8 @@ def _maybe_storage_maintain(private_root: Path, apply: bool) -> None:
     try:
         from src.research_lab.farm_journal import farm_log_paths
         from src.research_lab.storage_policy import bound_farm_artifacts, maintain
-        maintain(farm_log_paths(private_root), apply=True)  # rotate the farm logs too
-        bound_farm_artifacts(private_root, apply=True)
+        maintain(farm_log_paths(private_root), apply=False)
+        bound_farm_artifacts(private_root, apply=False)
     except Exception as exc:  # noqa: BLE001 - storage hygiene must never break the loop
         print(f"  storage: skipped ({type(exc).__name__})")
 
@@ -1833,48 +1867,58 @@ def main() -> None:
 
     profiles = load_timeframe_profiles()
     policy = load_resource_policy(night_mode=args.night_mode)
+    ownership_store = None
+    process_lease = None
+    lease_heartbeat = None
     if apply:
         private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
-        tasks = FarmTasksDB(tasks_db_path(private_root))
-        from src.research_lab.farm_journal import make_transition_sink
-        tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit
-        # A single-process loop has no live worker at boot, so any 'running' task is stale from a
-        # previous stop. Requeue it once so the next cycle re-drains it instead of masking it as work.
-        # Single-process guard: reconcile_orphan_running assumes no other live loop. A fresh lock
-        # (younger than 2 cycles) means a second loop is active -> abort rather than corrupt state.
-        lock_path = private_root / "state" / "farm_loop.lock"
-        if args.loop and lock_path.exists():
-            age = time.time() - lock_path.stat().st_mtime
+        legacy_lock = private_root / "state" / "farm_loop.lock"
+        if legacy_lock.exists():
+            print(
+                "ABORT: legacy farm_loop.lock is present; it is migration evidence, "
+                "not an age-based lease. Quiesce and disposition it explicitly."
+            )
+            return
+        owner_id = f"farm-{os.getpid()}-{uuid.uuid4().hex}"
+        ownership_path = private_root / "state" / "ownership.sqlite"
+        ownership_store = OwnershipStore(
+            ownership_path,
+            identity_probe=probe_process_identity,
+        )
+        try:
+            process_lease = ownership_store.acquire(
+                resource_id="canonical_farm",
+                role_id="farm",
+                owner_id=owner_id,
+                identity=current_process_identity(),
+                lease_seconds=90.0,
+            )
+        except OwnershipConflictError as exc:
+            ownership_store.close()
+            print(f"ABORT: canonical farm ownership conflict: {exc}")
+            return
+        lease_heartbeat = _FarmLeaseHeartbeat(ownership_path, process_lease)
+        lease_heartbeat.start()
+        try:
+            tasks = FarmTasksDB(
+                tasks_db_path(private_root),
+                owner_id=owner_id,
+                lease_seconds=900.0,
+            )
+            from src.research_lab.farm_journal import make_transition_sink
+            tasks.on_transition = make_transition_sink(private_root)  # durable task-transition audit
+            n_orphan = tasks.reconcile_orphan_running()
+            if n_orphan:
+                print(f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop")
+        except Exception:
+            lease_heartbeat.stop()
             try:
-                lock_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
-            except (OSError, ValueError):
-                lock_pid = 0
-            if lock_pid and not _pid_is_alive(lock_pid):
-                print(f"  lock: removed stale farm_loop lock from dead pid={lock_pid}")
-                lock_path.unlink(missing_ok=True)
-            elif not lock_pid and age >= 2 * max(60, args.sleep_seconds):
-                print(f"  lock: removed stale unreadable farm_loop lock age={age:.0f}s")
-                lock_path.unlink(missing_ok=True)
-            elif not lock_pid:
-                print(f"ABORT: another farm_loop lock exists but pid is unreadable "
-                      f"(lock {lock_path}, age {age:.0f}s); stop it or delete the lock to override.")
-                return
-            elif age < 2 * max(60, args.sleep_seconds):
-                print(f"ABORT: another farm_loop appears active (lock {lock_path}, pid={lock_pid}, "
-                      f"age {age:.0f}s); stop it or delete the lock to override.")
-                return
-            else:
-                print(f"  lock: removed stale farm_loop lock pid={lock_pid} age={age:.0f}s")
-                lock_path.unlink(missing_ok=True)
-        if args.loop:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_path.write_text(str(os.getpid()), encoding="utf-8")
-        n_orphan = tasks.reconcile_orphan_running()
-        if n_orphan:
-            print(f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop")
+                ownership_store.release(process_lease)
+            finally:
+                ownership_store.close()
+            raise
     else:
         private_root = Path(args.private_root)
-        lock_path = None
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
 
     priority_stop = threading.Event()
@@ -1896,8 +1940,12 @@ def main() -> None:
             priority_thread.start()
         while True:
             if args.stop_file and Path(args.stop_file).exists():
+                if ownership_store is not None and process_lease is not None:
+                    ownership_store.acknowledge_stop_intent(process_lease, Path(args.stop_file))
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
+            if lease_heartbeat is not None and lease_heartbeat.failure is not None:
+                raise RuntimeError("farm ownership lease renewal failed") from lease_heartbeat.failure
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
             sig = _cycle_signature(out)
             # Always show a CHANGED cycle or any error (never hide a changed block, even with
@@ -1909,8 +1957,7 @@ def main() -> None:
             elif not args.quiet:
                 print(f"  heartbeat @ {int(time.time())} pivot={out['pivot']} active={out['active_tasks']}")
             prev_sig = sig
-            if apply and lock_path is not None:
-                lock_path.write_text(str(os.getpid()), encoding="utf-8")  # keep the lock fresh
+            if apply:
                 _write_loop_status(
                     private_root,
                     stage="priority_slots",
@@ -1924,6 +1971,14 @@ def main() -> None:
                     },
                 )
             if not _sleep_until_next_cycle(args.sleep_seconds, args.stop_file):
+                if (
+                    args.stop_file
+                    and ownership_store is not None
+                    and process_lease is not None
+                ):
+                    ownership_store.acknowledge_stop_intent(
+                        process_lease, Path(args.stop_file)
+                    )
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
                 break
     except KeyboardInterrupt:
@@ -1933,11 +1988,14 @@ def main() -> None:
         if priority_thread is not None:
             priority_thread.join(timeout=15)
         tasks.close()
-        if apply and args.loop and lock_path is not None:
+        if lease_heartbeat is not None:
+            lease_heartbeat.stop()
+        if ownership_store is not None and process_lease is not None:
             try:
-                lock_path.unlink()
-            except OSError:
+                ownership_store.release(process_lease)
+            except Exception:
                 pass
+            ownership_store.close()
 
 
 if __name__ == "__main__":

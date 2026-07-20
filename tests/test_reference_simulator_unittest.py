@@ -32,6 +32,12 @@ class ReferenceSimulatorTest(unittest.TestCase):
             self.assertEqual(actual["entry"], expected["entry"])
             self.assertEqual(actual["exit"], expected["exit"])
             self.assertAlmostEqual(actual["net_pct"], expected["net_pct"], places=4)
+            for key in (
+                "entry_ts", "exit_ts", "simulator_manifest", "simulator_model_id",
+                "simulator_evidence_tier", "unsupported_simulator_dimensions",
+                "cost_ledger", "quantity_ledger",
+            ):
+                self.assertEqual(actual[key], expected[key])
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from src.research_lab.exit_recovery import _exit_grid
 from src.research_lab.experiment import generate_signals, simulate_trades
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.farm_tasks_db import tasks_db_path
+from src.research_lab.simulator_contract import legacy_fixture_manifest, validate_trade_contract
 
 SHADOW_STATUS = "shadow_forward_candidate"
 FEES_BPS = 7.0
@@ -185,9 +186,11 @@ def record_observation(private_root: Path, uc_key: str, *, after_ts: int) -> dic
     cand = _load_registry(private_root).get(uc_key)
     if not cand:
         return {"uc_key": uc_key, "skipped": "not_registered"}
-    candles = load_canonical_candles(
+    selected = load_canonical_candles(
         private_root, cand["symbol"], cand["timeframe"],
-    ).rows
+        purpose="shadow_forward", coverage_policy="gap_free",
+    )
+    candles = selected.rows
     if not candles:
         return {"uc_key": uc_key, "skipped": "no_candles"}
     forward_bars = sum(1 for c in candles if int(c.get("ts") or 0) > int(after_ts))
@@ -195,17 +198,30 @@ def record_observation(private_root: Path, uc_key: str, *, after_ts: int) -> dic
     override = _exit_override(params, str(cand.get("recovered_exit") or "baseline"))
     signals = [s for s in generate_signals(candles, cand["family"], params)
                if int(candles[int(s["idx"])].get("ts") or 0) > int(after_ts)]
-    trades = simulate_trades(candles, signals, {**params, **override},
-                             fees_bps=FEES_BPS, slippage_bps=SLIP_BPS) if signals else []
+    trades = simulate_trades(
+        candles, signals, {**params, **override}, fees_bps=FEES_BPS,
+        slippage_bps=SLIP_BPS, require_complete_horizon=True,
+    ) if signals else []
     obs = _observe(trades)
     record = {"uc_key": uc_key, "symbol": cand["symbol"], "timeframe": cand["timeframe"],
               "after_ts": int(after_ts), "forward_bars": forward_bars, "status": SHADOW_STATUS,
-              "paper_forward_ready": False, **obs}
+              "paper_forward_ready": False,
+              "data_snapshot_id": selected.manifest.snapshot_id,
+              "data_evidence_hash": selected.manifest.evidence_hash,
+              "data_provenance_status": selected.manifest.provenance_status,
+              "simulator_manifest": legacy_fixture_manifest(),
+              "simulator_model_id": legacy_fixture_manifest()["simulator_model_id"],
+              "simulator_evidence_tier": legacy_fixture_manifest()["evidence_tier"],
+              "unsupported_simulator_dimensions": legacy_fixture_manifest()["unsupported_dimensions"],
+              "aggregate_basis": "independent_what_if_trade_sum_not_account_equity", **obs}
     _append_observation(private_root, record)
     return record
 
 
 def _observe(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    manifest = legacy_fixture_manifest()
+    for trade in trades:
+        validate_trade_contract(trade, manifest)
     n = len(trades)
     if not n:
         return {"n_signals": 0, "note": "no forward signals yet (awaiting new bars)"}

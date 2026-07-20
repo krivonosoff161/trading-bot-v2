@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Structured append-only logs for the continuous farm — explain state, don't spam.
 
-Three JSONL streams under ``<private_root>/logs/farm/`` (mirrors the scanner_journal
-pattern so storage_policy.maintain can rotate them):
+Three legacy JSONL streams under ``<private_root>/logs/farm/``. Automatic storage
+maintenance may report their size, but does not rotate or truncate them:
 
   * ``cycle_log.jsonl``       — one row per coordinator cycle (pivot, counters, states);
   * ``task_transitions.jsonl``— one row per task state change (the audit trail that the
@@ -11,7 +11,9 @@ pattern so storage_policy.maintain can rotate them):
 
 These are the durable, queryable explanation of "what the farm did and why". Raw stdout
 stays for live watching; humans read structured state via farm_status_report / cockpit,
-not by tailing logs. Pure file IO, no network, no order path.
+not by tailing logs. The separate segmented-store adapter is synthetic-only and must be
+passed explicitly; this module never activates, imports, or dual-writes it. Pure file IO,
+no network, no order path.
 """
 from __future__ import annotations
 
@@ -39,7 +41,7 @@ def errors_path(private_root: Path) -> Path:
 
 
 def farm_log_paths(private_root: Path) -> list[Path]:
-    """All farm log files — hand these to storage_policy.maintain for rotation."""
+    """All farm log files for report-only storage status."""
     return [cycle_log_path(private_root), transitions_path(private_root), errors_path(private_root)]
 
 

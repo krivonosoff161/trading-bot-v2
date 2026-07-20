@@ -17,15 +17,23 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-CONTRACT_VERSION = "1.1.0"
+from src.research_lab.simulator_contract import validate_simulator_assumption_manifest
+
+CONTRACT_VERSION = "1.3.0"
 
 
 def trade_evidence_hash(trades: list[dict[str, Any]]) -> str:
     normalized = [
         {
             "entry_ts": trade.get("entry_ts"), "exit_ts": trade.get("exit_ts"),
-            "net_pct": trade.get("net_pct"), "pnl_pct": trade.get("pnl_pct"),
+            "gross_pct": trade.get("gross_pct"), "net_pct": trade.get("net_pct"),
+            "pnl_pct": trade.get("pnl_pct"),
             "side": trade.get("side"),
+            "simulator_model_id": trade.get("simulator_model_id"),
+            "simulator_manifest_id": (trade.get("simulator_manifest") or {}).get("manifest_id"),
+            "cost_ledger": trade.get("cost_ledger"),
+            "quantity_ledger": trade.get("quantity_ledger"),
+            "fill_reconciliation": trade.get("fill_reconciliation"),
         }
         for trade in trades
     ]
@@ -62,6 +70,19 @@ HARD_STATUSES = {
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _validated_simulator_provenance(
+    manifest_value: Any, unsupported_value: Any, claim_ceiling_value: Any | None = None,
+) -> tuple[dict[str, Any], list[str], str]:
+    manifest = validate_simulator_assumption_manifest(dict(manifest_value or {}))
+    unsupported = list(unsupported_value or [])
+    if unsupported != manifest["unsupported_dimensions"]:
+        raise ValueError("simulator unsupported dimensions mismatch")
+    ceiling = str(claim_ceiling_value or manifest["claim_ceiling"])
+    if ceiling != manifest["claim_ceiling"]:
+        raise ValueError("simulator claim ceiling mismatch")
+    return manifest, unsupported, ceiling
 
 
 @dataclass(frozen=True)
@@ -120,6 +141,8 @@ class CandidateForValidation:
     equity_curve: list[dict[str, Any]]
     data_window: dict[str, Any]
     created_at: str
+    simulator_manifest: dict[str, Any] = field(default_factory=dict)
+    unsupported_simulator_dimensions: list[str] = field(default_factory=list)
     contract_version: str = CONTRACT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,6 +151,9 @@ class CandidateForValidation:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CandidateForValidation:
         version = d.get("contract_version") or ""
+        manifest, unsupported, _ = _validated_simulator_provenance(
+            d.get("simulator_manifest"), d.get("unsupported_simulator_dimensions"),
+        )
         return cls(
             candidate_id=str(d["candidate_id"]),
             source_run_id=str(d["source_run_id"]),
@@ -147,6 +173,8 @@ class CandidateForValidation:
             equity_curve=list(d.get("equity_curve") or []),
             data_window=dict(d.get("data_window") or {}),
             created_at=str(d.get("created_at") or _utc_now()),
+            simulator_manifest=manifest,
+            unsupported_simulator_dimensions=unsupported,
             contract_version=str(version),
         )
 
@@ -203,6 +231,9 @@ class HardValidationReport:
     strategy_id: str
     verdict: dict[str, Any]
     checks_summary: dict[str, Any]
+    simulator_manifest: dict[str, Any] = field(default_factory=dict)
+    unsupported_simulator_dimensions: list[str] = field(default_factory=list)
+    simulator_claim_ceiling: str = "unavailable"
     created_at: str = ""
     contract_version: str = CONTRACT_VERSION
 
@@ -211,6 +242,10 @@ class HardValidationReport:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> HardValidationReport:
+        manifest, unsupported, ceiling = _validated_simulator_provenance(
+            d.get("simulator_manifest"), d.get("unsupported_simulator_dimensions"),
+            d.get("simulator_claim_ceiling"),
+        )
         return cls(
             candidate_id=str(d["candidate_id"]),
             source_run_id=str(d.get("source_run_id") or ""),
@@ -219,6 +254,9 @@ class HardValidationReport:
             strategy_id=str(d.get("strategy_id") or ""),
             verdict=dict(d.get("verdict") or {}),
             checks_summary=dict(d.get("checks_summary") or {}),
+            simulator_manifest=manifest,
+            unsupported_simulator_dimensions=unsupported,
+            simulator_claim_ceiling=ceiling,
             created_at=str(d.get("created_at") or ""),
             contract_version=str(d.get("contract_version") or CONTRACT_VERSION),
         )
@@ -232,6 +270,8 @@ class HardValidationReport:
             f"**Strategy:** {self.strategy_id}",
             "",
             f"**Hard Status:** `{v.get('hard_status', '?')}`",
+            f"**Simulator:** `{self.simulator_manifest.get('simulator_model_id', 'unavailable')}` "
+            f"(claim ceiling: `{self.simulator_claim_ceiling}`)",
             "",
             "## Checks",
             "",
@@ -308,6 +348,9 @@ class SetupCard:
     risk_flags: list[str]
     entry_exit_summary: str
     regime_tags: list[str]
+    simulator_manifest: dict[str, Any] = field(default_factory=dict)
+    unsupported_simulator_dimensions: list[str] = field(default_factory=list)
+    simulator_claim_ceiling: str = "unavailable"
     paper_forward_ready: bool = False
     main_engine_ready: bool = False
     execution_contract_version: str = CONTRACT_VERSION
@@ -321,6 +364,10 @@ class SetupCard:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SetupCard:
+        manifest, unsupported, ceiling = _validated_simulator_provenance(
+            d.get("simulator_manifest"), d.get("unsupported_simulator_dimensions"),
+            d.get("simulator_claim_ceiling"),
+        )
         return cls(
             setup_id=str(d["setup_id"]),
             candidate_id=str(d["candidate_id"]),
@@ -337,6 +384,9 @@ class SetupCard:
             risk_flags=list(d.get("risk_flags") or []),
             entry_exit_summary=str(d.get("entry_exit_summary") or ""),
             regime_tags=list(d.get("regime_tags") or []),
+            simulator_manifest=manifest,
+            unsupported_simulator_dimensions=unsupported,
+            simulator_claim_ceiling=ceiling,
             paper_forward_ready=bool(d.get("paper_forward_ready") or False),
             main_engine_ready=False,
             execution_contract_version=str(

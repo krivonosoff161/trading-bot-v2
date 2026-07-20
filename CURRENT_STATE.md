@@ -1,6 +1,6 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-14.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This page states what the public repository supports. It is deliberately not a
 runtime dashboard: process IDs, current balances, private journals, signal
@@ -29,6 +29,20 @@ rows, provider state, and local findings belong outside public Git.
 - New validation requests fail closed unless they carry an untouched evaluation
   epoch distinct from the farm selection data. Existing selection-only evidence
   therefore needs fresh data before it can become paper-forward ready.
+- The public registry can build a deterministic synthetic history-boundary proof
+  for all 27 strategy families. This proves formula/generator/history alignment
+  for public synthetic OHLCV fixtures and declared side-data boundaries only.
+  Every history-formula term is exercised at its parameter-policy maximum, with
+  parameter N-1/N/N+1 validation and candle required-1/required/required+1
+  checks. Maxima are derived from registry defaults plus
+  `configs/strategy_lab/param_schemas.yaml`, not test-local constants. Signal and
+  no-signal outcomes are bound to each family's exact registered generator and
+  registry description instead of a shared generic predicate reason. This does not
+  prove private historical completeness, profitability, or paper readiness.
+- Public runtime code now models process, brain-task and compute-job authority
+  with renewable leases and monotonic fences. Cross-database sweep dispatch is
+  content-bound and replayable; worker results remain provisional until fenced
+  import and queue completion commit together.
 
 ## Explicitly Not Supported
 
@@ -49,6 +63,7 @@ rows, provider state, and local findings belong outside public Git.
 | Local GPU | Numeric kernels may use the supported GPU backend. Local Ollama remains CPU-pinned on this 3 GiB GPU to avoid VRAM contention; CuPy warns when `CUDA_PATH` is not discoverable. |
 | Telegram | Delivery is opt-in and deduplicated; it must never be mistaken for execution. |
 | Legacy surfaces | Old engine, `start_all.bat`, and execution-adjacent scripts are isolated references, not supported farm paths. |
+| Ownership rollout | Additive v2 schemas are public and tested, but applying them to private runtime databases requires a separate quiesced, backed-up operator rollout. |
 
 ## How To Verify A Local Run
 

@@ -1,6 +1,6 @@
 # Farm Runbook
 
-Status: **ACTIVE**. Updated 2026-07-10.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 This is the supported operator path for paper/research work. It does not
 authorize live trading, private account access, or publishing local output.
@@ -73,6 +73,27 @@ a sanitized aggregate if a result needs discussion.
 - Do not terminate arbitrary Python processes from an operator script.
 - Before a restart, use the status command and make sure the stop intent is
   cleared through the documented utility if it was intentional.
+- The loop wrapper does not pre-delete its stop file. The exclusive farm owner
+  acknowledges it only after acquiring the current lease/fence. A competing
+  launcher therefore cannot erase another operator's stop request.
+- A PID, fresh heartbeat, old lock path or expected executable is not proof of
+  ownership. Recovered processes remain visible but non-stoppable.
+
+## Schema Rollout And Rollback
+
+The v2 task/queue changes are additive, but this public code does not authorize
+mutating a live private database. Runtime rollout requires a separate operator
+decision: quiesce all writers, back up both SQLite files, verify one canonical
+owner, then invoke the separately authorized migration operation that calls
+`activate_farm_fencing_v2` and `activate_fencing_v2` before any runtime
+initializer. Ordinary launchers, dashboards and status commands refuse a legacy
+schema and never activate it. Abort on any legacy-writer trigger failure or
+`legacy_running_unfenced` row requiring disposition.
+
+After the first v2 fence is issued, do not downgrade to unfenced writers.
+Rollback is forward-only: stop/disable consumers or deploy a v2-aware reader
+while preserving ownership, transition, attempt and outbox history. Never reset
+a fence or manufacture owners for historical rows.
 
 ## Data And Storage
 

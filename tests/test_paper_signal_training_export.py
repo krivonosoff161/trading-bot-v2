@@ -28,6 +28,9 @@ def _signal(signal_id: str = "s1", status: str = "armed") -> PaperActionSignal:
             "setup_id": "setup_1",
             "candidate_id": "candidate_1",
             "source_validation_verdict": "PAPER_FORWARD_READY",
+            "search_family_id": "sfd_parent",
+            "search_trial_id": "stept_parent",
+            "effective_n_trials": 4,
         },
         status=status,
         created_at=1000.0,
@@ -80,6 +83,9 @@ def test_training_row_contains_outcome_and_review_fields():
     assert row["entry_mid"] == 100.5
     assert row["ready_strategy_id"] == "ready_1"
     assert row["source_validation_verdict"] == "PAPER_FORWARD_READY"
+    assert row["search_family_id"] == "sfd_parent"
+    assert row["search_trial_id"] == "stept_parent"
+    assert row["effective_n_trials"] == 4
     assert row["tp1"] == 105.0
     assert row["farm_geometry_profile_id"] == "runner_probe"
     assert row["farm_geometry_tp_scale"] == 1.35

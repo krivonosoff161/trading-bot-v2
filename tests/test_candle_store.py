@@ -73,7 +73,7 @@ def test_store_preserves_optional_research_fields(tmp_path):
     assert row["custom_tag"] == "before_decision"
 
 
-def test_plain_price_refresh_does_not_erase_existing_enrichment(tmp_path):
+def test_plain_price_revision_does_not_inherit_unbound_enrichment(tmp_path):
     store = CandleStore(tmp_path)
     store.upsert_candles(
         "FLOW_USDT_SWAP", "1h", [_row(0, funding=0.001, oi=1200)],
@@ -81,8 +81,8 @@ def test_plain_price_refresh_does_not_erase_existing_enrichment(tmp_path):
     store.upsert_candles("FLOW_USDT_SWAP", "1h", [_row(0, close=101.0)])
     row = store.read("FLOW_USDT_SWAP", "1h", 0, 0)[0]
     assert row["close"] == 101.0
-    assert row["funding"] == 0.001
-    assert row["oi"] == 1200
+    assert "funding" not in row
+    assert "oi" not in row
 
 
 def test_store_enforces_read_cap(tmp_path):
@@ -115,4 +115,4 @@ def test_store_uses_wal_and_schema_version(tmp_path):
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         assert conn.execute(
             "SELECT value FROM meta WHERE key='schema_version'"
-        ).fetchone()[0] == "1"
+        ).fetchone()[0] == "2"

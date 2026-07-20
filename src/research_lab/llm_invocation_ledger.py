@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from src.research_lab.lineage_contract import append_jsonl, stable_id, utc_now
+from src.research_lab.llm_boundary_identity import EndpointIdentity, endpoint_identity_from_url
 from src.research_lab.llm_provider import LLMUsage, ProposalProvider
 
 SCHEMA = "LLMInvocation.v1"
@@ -38,6 +39,9 @@ class InvocationPermit:
     allowed: bool
     reason: str
     created_at: str = field(default_factory=utc_now)
+    provider_class: str = ""
+    endpoint_identity: dict[str, Any] = field(default_factory=dict)
+    boundary_checks: tuple[str, ...] = ()
 
 
 def ledger_path(private_root: Path) -> Path:
@@ -58,6 +62,52 @@ def provider_identity(provider: ProposalProvider) -> tuple[str, str]:
 def _local_model_allowed(model: str, allowlist: tuple[str, ...]) -> bool:
     allowed = set(allowlist)
     return model in allowed or model.split(":", 1)[0] in allowed
+
+
+def _provider_base_url(provider: ProposalProvider) -> str:
+    value = getattr(provider, "base_url", "") or getattr(provider, "_base_url", "")
+    if value:
+        return str(value)
+    url = str(getattr(provider, "_url", "") or "")
+    suffix = "/chat/completions"
+    return url[: -len(suffix)] if url.endswith(suffix) else ""
+
+
+def _provider_redirect_url(provider: ProposalProvider) -> str:
+    for attr in ("redirect_url", "redirected_to", "final_url"):
+        value = str(getattr(provider, attr, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _permit(
+    invocation_id: str,
+    role_id: str,
+    source_ref: str,
+    input_hash: str,
+    provider_name: str,
+    model: str,
+    allowed: bool,
+    reason: str,
+    *,
+    provider_class: str,
+    endpoint: EndpointIdentity | None = None,
+    boundary_checks: tuple[str, ...] = (),
+) -> InvocationPermit:
+    return InvocationPermit(
+        invocation_id,
+        role_id,
+        source_ref,
+        input_hash,
+        provider_name,
+        model,
+        allowed,
+        reason,
+        provider_class=provider_class,
+        endpoint_identity=endpoint.to_dict() if endpoint is not None else {},
+        boundary_checks=boundary_checks,
+    )
 
 
 def _rows(private_root: Path) -> list[dict[str, Any]]:
@@ -88,7 +138,34 @@ def preflight_invocation(
     local_model_allowlist: tuple[str, ...] = DEFAULT_LOCAL_MODEL_ALLOWLIST,
 ) -> InvocationPermit:
     provider_name, model = provider_identity(provider)
+    provider_class = type(provider).__name__
     input_hash = _canonical_hash(input_payload)
+    endpoint: EndpointIdentity | None = None
+    boundary_checks: tuple[str, ...] = ()
+    if local_only and provider_name in LOCAL_PROVIDER_NAMES:
+        base_url = _provider_base_url(provider)
+        if not base_url:
+            endpoint = endpoint_identity_from_url("")
+        else:
+            endpoint = endpoint_identity_from_url(base_url)
+        boundary_checks = ("local_endpoint_identity_v1",)
+        redirect_url = _provider_redirect_url(provider)
+        if redirect_url:
+            redirect_endpoint = endpoint_identity_from_url(redirect_url)
+            if (
+                not redirect_endpoint.loopback_proven
+                or redirect_endpoint.normalized_base_url != endpoint.normalized_base_url
+            ):
+                endpoint = EndpointIdentity(
+                    scheme=endpoint.scheme,
+                    host=endpoint.host,
+                    port=endpoint.port,
+                    base_path=endpoint.base_path,
+                    normalized_base_url=endpoint.normalized_base_url,
+                    loopback_proven=False,
+                    problems=(*endpoint.problems, "redirect_endpoint_not_local"),
+                )
+            boundary_checks = (*boundary_checks, "redirect_identity_v1")
     invocation_id = stable_id(
         "llminv",
         {
@@ -96,7 +173,9 @@ def preflight_invocation(
             "source_ref": source_ref,
             "input_hash": input_hash,
             "provider": provider_name,
+            "provider_class": provider_class,
             "model": model,
+            "endpoint_identity": endpoint.to_dict() if endpoint is not None else {},
         },
         length=24,
     )
@@ -110,39 +189,57 @@ def preflight_invocation(
         and str(row.get("status") or "") in TERMINAL_CALL_STATUSES
         for row in rows
     ):
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "duplicate_completed"
-        )
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "duplicate_completed", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     if not bool(getattr(provider, "configured", False)):
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "provider_not_configured"
-        )
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "provider_not_configured", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     if local_only and provider_name not in LOCAL_PROVIDER_NAMES | TEST_PROVIDER_NAMES:
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "local_provider_required"
-        )
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "local_provider_required", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
+    if (
+        local_only
+        and provider_name in LOCAL_PROVIDER_NAMES
+        and endpoint is not None
+        and any(problem.startswith("invalid_endpoint") for problem in endpoint.problems)
+    ):
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "invalid_endpoint", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
+    if local_only and provider_name in LOCAL_PROVIDER_NAMES and endpoint is not None and not endpoint.normalized_base_url:
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "local_endpoint_identity_required", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
+    if local_only and provider_name in LOCAL_PROVIDER_NAMES and endpoint is not None and not endpoint.loopback_proven:
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "local_endpoint_required", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     if local_only and provider_name in LOCAL_PROVIDER_NAMES and not _local_model_allowed(model, local_model_allowlist):
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "local_model_not_allowlisted"
-        )
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "local_model_not_allowlisted", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     retryable_attempts = sum(
         1 for row in matching
         if str(row.get("status") or "") in RETRYABLE_CALL_STATUSES
     )
     if retryable_attempts >= MAX_RETRYABLE_ATTEMPTS:
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "retry_exhausted"
-        )
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "retry_exhausted", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
     recent = [
         row
         for row in rows
         if row.get("role_id") == role_id and row.get("provider") == provider_name
     ][-CIRCUIT_FAILURE_LIMIT:]
     if len(recent) >= CIRCUIT_FAILURE_LIMIT and all(row.get("status") == "provider_error" for row in recent):
-        return InvocationPermit(
-            invocation_id, role_id, source_ref, input_hash, provider_name, model, False, "circuit_open"
-        )
-    return InvocationPermit(invocation_id, role_id, source_ref, input_hash, provider_name, model, True, "allowed")
+        return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, False,
+                       "circuit_open", provider_class=provider_class, endpoint=endpoint,
+                       boundary_checks=boundary_checks)
+    return _permit(invocation_id, role_id, source_ref, input_hash, provider_name, model, True, "allowed",
+                   provider_class=provider_class, endpoint=endpoint, boundary_checks=boundary_checks)
 
 
 def record_invocation(

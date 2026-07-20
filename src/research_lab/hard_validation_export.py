@@ -13,7 +13,6 @@ import datetime as dt
 import hashlib
 import json
 import sqlite3
-import statistics
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +24,6 @@ from src.research_lab.experiment import (
     annotate_signals_with_regime,
     filter_signals,
     generate_signals,
-    load_candles,
     simulate_trades,
 )
 from src.research_lab.farm_tasks_db import tasks_db_path
@@ -36,6 +34,16 @@ from src.research_lab.hard_validation_contract import (
     write_json,
 )
 from src.research_lab.honest_backtest_bridge import _artifact_stem
+from src.research_lab.search_trial_evidence import validate_search_trial_evidence
+from src.research_lab.time_aware_validation import (
+    PANEL_STATUS_SCHEMA,
+    build_dependence_evidence,
+    classify_legacy_search_bias_evidence,
+)
+from src.research_lab.simulator_contract import (
+    validate_simulator_assumption_manifest,
+    validate_trade_contract,
+)
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
@@ -243,6 +251,13 @@ def _build_candidate(
     metrics = _load_experiment_metrics(private_root, artifact_label, entry)
     if metrics is None:
         return None
+    evidence = metrics.get("search_trial_evidence")
+    if not isinstance(evidence, dict):
+        return None
+    try:
+        validate_search_trial_evidence(evidence, require_complete=True)
+    except (TypeError, ValueError):
+        return None
 
     trades = metrics.pop("_trades", [])
     filters = dict(entry.get("filters") or metrics.pop("_filters", {}) or {})
@@ -260,6 +275,55 @@ def _build_candidate(
     metrics["params_hash"] = str(
         metrics.get("params_hash") or entry.get("params_hash") or ""
     )
+    metrics["validation_evidence_profile"] = "time_aware_v2"
+    simulator_manifest = dict(metrics.get("simulator_manifest") or {})
+    if not simulator_manifest and trades:
+        simulator_manifest = dict(trades[0].get("simulator_manifest") or {})
+    if not simulator_manifest:
+        return None
+    try:
+        validate_simulator_assumption_manifest(simulator_manifest)
+    except (TypeError, ValueError):
+        return None
+    for trade in trades:
+        try:
+            validate_trade_contract(trade, simulator_manifest)
+        except (TypeError, ValueError):
+            return None
+    unsupported_dimensions = list(simulator_manifest["unsupported_dimensions"])
+    metrics["simulator_manifest"] = simulator_manifest
+    metrics["simulator_model_id"] = simulator_manifest["simulator_model_id"]
+    metrics["simulator_evidence_tier"] = simulator_manifest["evidence_tier"]
+    metrics["unsupported_simulator_dimensions"] = unsupported_dimensions
+    metrics.setdefault(
+        "validation_observation_status",
+        {
+            "schema": "ValidationObservationStatus.v2",
+            "status": "unavailable",
+            "reason_codes": [
+                "explicit_period_and_feature_horizon_evidence_not_exported"
+            ],
+        },
+    )
+    if trades:
+        metrics.setdefault(
+            "dependence_evidence",
+            build_dependence_evidence(
+                method="iid_bootstrap_kill_test",
+                seed=42,
+                block_length=None,
+                effective_n=len(trades),
+            ),
+        )
+    else:
+        metrics.setdefault(
+            "dependence_evidence_status",
+            {
+                "schema": "DependenceEvidenceStatus.v2",
+                "status": "unavailable",
+                "reason_codes": ["no_return_observations"],
+            },
+        )
     metrics.setdefault("validation_epoch", {
         "schema": "ValidationEpoch.v1",
         "evidence_stage": "selection_only",
@@ -296,6 +360,8 @@ def _build_candidate(
             entry.get("created_at")
             or dt.datetime.now(dt.timezone.utc).isoformat()
         ),
+        simulator_manifest=simulator_manifest,
+        unsupported_simulator_dimensions=unsupported_dimensions,
         contract_version=CONTRACT_VERSION,
     )
 
@@ -359,15 +425,28 @@ def _load_experiment_metrics(
             "multiple_testing_family_hash": str(
                 data.get("multiple_testing_family_hash") or ""
             ),
+            "runtime": dict(data.get("runtime") or {}),
         }
         evidence_file = run_dir / "search_trial_evidence.json"
-        if evidence_file.exists():
-            try:
-                trial_evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                trial_evidence = {}
-            search_space = trial_evidence.get("search_space") or {}
-            context["n_variants_evaluated"] = int(search_space.get("evaluated") or 0)
+        if not evidence_file.exists():
+            return None
+        try:
+            trial_evidence = json.loads(evidence_file.read_text(encoding="utf-8"))
+            counts = validate_search_trial_evidence(
+                trial_evidence,
+                require_complete=True,
+            )
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return None
+        if (
+            context["search_trial_evidence_id"]
+            != str(trial_evidence.get("search_trial_evidence_id") or "")
+            or context["multiple_testing_family_hash"]
+            != str(trial_evidence.get("multiple_testing_family_hash") or "")
+        ):
+            return None
+        context["search_trial_evidence"] = trial_evidence
+        context["n_variants_evaluated"] = counts["effective_n_trials"]
         results = data.get("results") or []
         candidate_id = str(entry.get("candidate_id") or "")
         source_candidate_id = str(entry.get("source_candidate_id") or "")
@@ -388,14 +467,24 @@ def _load_experiment_metrics(
             if exact_scope and (exact_id or exact_hash):
                 out = dict(r.get("metrics") or {})
                 out.update(context)
-                trial_returns = _comparable_trial_returns(
-                    results, symbol=row_symbol, family=row_family,
+                trial_panel = _comparable_trial_panel(
+                    results,
+                    trial_evidence,
+                    symbol=row_symbol,
+                    family=row_family,
                 )
-                if len(trial_returns) >= 2:
-                    out["trial_returns"] = trial_returns
-                    out["trial_sharpes"] = [
-                        _simple_sharpe(values) for values in trial_returns
-                    ]
+                out["pbo_dsr_family_coverage"] = trial_panel["coverage"]
+                legacy = classify_legacy_search_bias_evidence(
+                    trial_panel["trial_returns"]
+                )
+                out["search_trial_panel"] = {
+                    **legacy,
+                    "schema": PANEL_STATUS_SCHEMA,
+                    "search_family_id": str(
+                        trial_evidence.get("search_family_id") or ""
+                    ),
+                    "coverage": trial_panel["coverage"],
+                }
                 out["_params"] = _params_from_result(r)
                 trades = list(r.get("_trades") or r.get("trades") or [])
                 if not trades and int(out.get("n_trades") or 0) > 0:
@@ -419,29 +508,99 @@ def _load_experiment_metrics(
     return dict(entry.get("metrics_summary") or {})
 
 
-def _comparable_trial_returns(
-    results: list[dict[str, Any]], *, symbol: str, family: str,
-) -> list[list[float]]:
-    comparable: list[list[float]] = []
-    for row in results:
-        row_symbol = str(row.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
-        if row_symbol != symbol or str(row.get("family") or "") != family:
+def _comparable_trial_panel(
+    results: list[dict[str, Any]],
+    evidence: dict[str, Any],
+    *,
+    symbol: str,
+    family: str,
+) -> dict[str, Any]:
+    by_run_id = {
+        str(row.get("run_id") or row.get("candidate_id") or ""): row
+        for row in results
+    }
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    trial_returns: list[list[float]] = []
+    for trial in evidence.get("trials") or []:
+        trial_symbol = (
+            str(trial.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        )
+        execution_id = str(trial.get("execution_id") or "")
+        run_id = str(trial.get("run_id") or "")
+        if trial_symbol != symbol:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "different_symbol_scope",
+                }
+            )
+            continue
+        if str(trial.get("family") or "") != family:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "different_family_scope",
+                }
+            )
+            continue
+        disposition = str(trial.get("terminal_disposition") or "")
+        if disposition != "evaluated":
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": f"terminal_{disposition or 'unknown'}",
+                }
+            )
+            continue
+        row = by_run_id.get(run_id)
+        if row is None:
+            excluded.append(
+                {"execution_id": execution_id, "run_id": run_id, "reason": "result_missing"}
+            )
             continue
         values = [
             float(trade["net_pct"])
             for trade in (row.get("trades") or [])
             if trade.get("net_pct") is not None
         ]
-        if len(values) >= 3:
-            comparable.append(values)
-    return comparable
-
-
-def _simple_sharpe(returns: list[float]) -> float:
-    if len(returns) < 2:
-        return 0.0
-    deviation = statistics.stdev(returns)
-    return statistics.mean(returns) / deviation if deviation > 0 else 0.0
+        if len(values) < 3:
+            excluded.append(
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "fewer_than_3_trades",
+                }
+            )
+            continue
+        included.append(
+            {
+                "execution_id": execution_id,
+                "run_id": run_id,
+                "trade_count": len(values),
+            }
+        )
+        trial_returns.append(values)
+    selected = len(included) + len(excluded)
+    expected_selected = int(
+        (evidence.get("search_space") or {}).get("selected_executions") or 0
+    )
+    return {
+        "trial_returns": trial_returns,
+        "coverage": {
+            "schema": "PboDsrFamilyCoverage.v1",
+            "search_family_id": str(evidence.get("search_family_id") or ""),
+            "selected_executions": selected,
+            "included_count": len(included),
+            "excluded_count": len(excluded),
+            "included": included,
+            "excluded": excluded,
+            "complete": selected > 0 and selected == expected_selected,
+        },
+    }
 
 
 def _params_from_result(row: dict[str, Any]) -> dict[str, Any]:
@@ -454,32 +613,28 @@ def _rebuild_trades_from_result(
     metrics: dict[str, Any],
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Backward-compatible trade-series recovery for old run artifacts.
+    """Recover trades only when the exact experiment snapshot can be re-selected.
 
-    Early farm artifacts stored aggregate metrics but not the per-trade series that
-    hard validation needs. Rebuild the same deterministic CPU simulation from the
-    recorded params, family, filters and candle file label instead of degrading those
-    old candidates to NEEDS_MORE_DATA forever.
+    Aggregate-only legacy artifacts did not bind a point-in-time candle snapshot.
+    Replaying them against the current local series would create different evidence
+    under the old result identity, so those artifacts now fail closed.
     """
-    label = str(metrics.get("data_file_label") or "")
     tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
     symbol = str(row.get("symbol") or context.get("_symbol") or "")
-    candles: list[dict[str, Any]] = []
-    if tf and symbol:
-        candles = load_canonical_candles(private_root, symbol, tf).rows
-    if not candles and not label:
+    expected_snapshot_id = str(metrics.get("data_snapshot_id") or "")
+    if not tf or not symbol or not expected_snapshot_id:
         return []
-    candidates = []
-    if not candles and tf:
-        candidates.append(Path(private_root) / "market_data" / tf / label)
-    if not candles:
-        candidates.extend(Path(private_root).glob(f"market_data/**/{label}"))
-        path = next((p for p in candidates if p.exists()), None)
-        if path is None:
-            return []
+    selected = load_canonical_candles(
+        private_root, symbol, tf, purpose="experiment", coverage_policy="gap_free",
+    )
+    if (
+        not selected.rows
+        or selected.manifest.snapshot_id != expected_snapshot_id
+        or selected.manifest.provenance_status != "complete"
+    ):
+        return []
     try:
-        if not candles:
-            candles = load_candles(path)
+        candles = selected.rows
         family = str(row.get("family") or "")
         params = dict(row.get("params") or {})
         signals = generate_signals(candles, family, params)

@@ -77,7 +77,7 @@ def test_fingerprint_for_symbol_reflects_enrichment(tmp_path):
 
 # ── farm_tasks lifecycle ─────────────────────────────────────────────────────
 def test_enqueue_rearm_dedup_and_ttl():
-    db = FarmTasksDB(":memory:")
+    db = FarmTasksDB(":memory:", clock=lambda: 1000.0)
     t0 = 1000.0
     tid, created = db.enqueue_task(task_type="run_sweep", task_key="k1", now=t0)
     assert created
@@ -95,7 +95,7 @@ def test_enqueue_rearm_dedup_and_ttl():
 
 
 def test_claim_respects_priority_and_deferral():
-    db = FarmTasksDB(":memory:")
+    db = FarmTasksDB(":memory:", clock=lambda: 1000.0)
     now = 1000.0
     db.enqueue_task(task_type="run_sweep", task_key="low", priority=80, now=now)
     hi, _ = db.enqueue_task(task_type="run_sweep", task_key="high", priority=10, now=now)
@@ -132,7 +132,7 @@ def test_active_duplicate_promotes_existing_task_to_urgent():
 
 
 def test_reconcile_orphan_running_requeues_stale():
-    db = FarmTasksDB(":memory:")
+    db = FarmTasksDB(":memory:", lease_seconds=2, clock=lambda: 1000.0)
     now = 1000.0
     a, _ = db.enqueue_task(task_type="run_sweep", task_key="a", now=now)
     b, _ = db.enqueue_task(task_type="run_sweep", task_key="b", now=now)

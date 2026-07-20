@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.main_paper_bridge import ACTIVE_STATUSES, SCHEMA as INSTRUCTION_SCHEMA
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    PaperGenerationMismatch,
+    stage_envelope,
+    verify_stage_envelope,
+)
 from src.strategy.signal_contract import ExitRule, FollowRule, SignalContract
 
 SCHEMA = "MainPaperConsumerRecord.v1"
@@ -34,6 +40,11 @@ class MainPaperConsumerRecord:
     consumer_status: str
     problems: list[str] = field(default_factory=list)
     signal_contract: dict[str, Any] = field(default_factory=dict)
+    paper_generation_run_id: str = ""
+    source_producer_generation_id: str = ""
+    source_member_payload_digest: str = ""
+    source_validation_generation_id: str = ""
+    bridge_output_digest: str = ""
     paper_only: bool = True
     execution_allowed: bool = False
     schema: str = SCHEMA
@@ -45,6 +56,15 @@ class MainPaperConsumerRecord:
             raise ValueError("consumer records must never allow execution")
         if not self.paper_only:
             raise ValueError("consumer records must be paper_only")
+        generation_values = (
+            self.paper_generation_run_id,
+            self.source_producer_generation_id,
+            self.source_member_payload_digest,
+            self.source_validation_generation_id,
+            self.bridge_output_digest,
+        )
+        if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+            raise ValueError("partial paper generation metadata is forbidden")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,23 +111,25 @@ def _contract_from_dict(raw: dict[str, Any]) -> SignalContract:
     )
 
 
-def _load_instruction_rows(private_root: Path) -> tuple[list[dict[str, Any]], Path | None]:
+def _load_instruction_rows(
+    private_root: Path,
+) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
     snapshot = _instruction_snapshot_path(private_root)
     if snapshot.exists():
         data = json.loads(snapshot.read_text(encoding="utf-8"))
         items = data.get("items") if isinstance(data, dict) else None
-        return list(items or []), snapshot
+        return list(items or []), snapshot, data if isinstance(data, dict) else {}
 
     jsonl = _instruction_jsonl_path(private_root)
     if not jsonl.exists():
-        return [], None
+        return [], None, {}
     rows: list[dict[str, Any]] = []
     for line in jsonl.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         rows.append(json.loads(line))
-    return rows, jsonl
+    return rows, jsonl, {}
 
 
 def _validate_instruction(row: dict[str, Any]) -> list[str]:
@@ -126,6 +148,15 @@ def _validate_instruction(row: dict[str, Any]) -> list[str]:
         problems.append("missing_source_signal_id")
     if not row.get("take_profit_plan"):
         problems.append("missing_take_profit_plan")
+    generation_values = (
+        row.get("paper_generation_run_id"),
+        row.get("source_producer_generation_id"),
+        row.get("source_member_payload_digest"),
+        row.get("source_validation_generation_id"),
+        row.get("bridge_input_digest"),
+    )
+    if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+        problems.append("partial_generation_metadata")
     try:
         contract = _contract_from_dict(dict(row.get("signal_contract") or {}))
         meta = contract.metadata
@@ -142,7 +173,12 @@ def _validate_instruction(row: dict[str, Any]) -> list[str]:
     return problems
 
 
-def _record_from_instruction(row: dict[str, Any], problems: list[str]) -> MainPaperConsumerRecord:
+def _record_from_instruction(
+    row: dict[str, Any],
+    problems: list[str],
+    *,
+    bridge_output_digest: str = "",
+) -> MainPaperConsumerRecord:
     status = "accepted_for_paper_watch" if not problems else "rejected_contract"
     return MainPaperConsumerRecord(
         consumer_id=f"consumer_{row.get('instruction_id') or 'missing'}",
@@ -157,12 +193,45 @@ def _record_from_instruction(row: dict[str, Any], problems: list[str]) -> MainPa
         consumer_status=status,
         problems=problems,
         signal_contract=dict(row.get("signal_contract") or {}),
+        paper_generation_run_id=str(row.get("paper_generation_run_id") or ""),
+        source_producer_generation_id=str(row.get("source_producer_generation_id") or ""),
+        source_member_payload_digest=str(row.get("source_member_payload_digest") or ""),
+        source_validation_generation_id=str(row.get("source_validation_generation_id") or ""),
+        bridge_output_digest=bridge_output_digest,
     )
 
 
-def consume_main_paper_instructions(private_root: Path) -> dict[str, Any]:
-    rows, source_path = _load_instruction_rows(private_root)
-    records = [_record_from_instruction(row, _validate_instruction(row)) for row in rows]
+def consume_main_paper_instructions(
+    private_root: Path,
+    *,
+    expected_run_id: str = "",
+    expected_input_digest: str = "",
+) -> dict[str, Any]:
+    rows, source_path, source_payload = _load_instruction_rows(private_root)
+    generation_context: PaperGenerationContext | None = None
+    if source_payload.get("paper_stage_schema") or expected_run_id or expected_input_digest:
+        generation_context = verify_stage_envelope(
+            source_payload,
+            stage="bridge",
+            expected_run_id=expected_run_id,
+            expected_input_digest=expected_input_digest,
+        )
+    records = [
+        _record_from_instruction(
+            row,
+            _validate_instruction(row),
+            bridge_output_digest=generation_context.input_digest if generation_context else "",
+        )
+        for row in rows
+    ]
+    if generation_context is not None:
+        for record in records:
+            if (
+                record.paper_generation_run_id != generation_context.run_id
+                or record.source_producer_generation_id
+                != generation_context.producer_generation_id
+            ):
+                raise PaperGenerationMismatch("bridge item generation does not match envelope")
 
     out_jsonl = _jsonl_path(private_root)
     out_snapshot = _snapshot_path(private_root)
@@ -173,6 +242,8 @@ def consume_main_paper_instructions(private_root: Path) -> dict[str, Any]:
 
     accepted = sum(1 for record in records if record.consumer_status == "accepted_for_paper_watch")
     rejected = len(records) - accepted
+    record_rows = [record.to_dict() for record in records]
+    generation = stage_envelope("consumer", generation_context, record_rows)
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": INSTRUCTION_SCHEMA,
@@ -185,9 +256,10 @@ def consume_main_paper_instructions(private_root: Path) -> dict[str, Any]:
         "execution_allowed": False,
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
+        **generation,
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": [record.to_dict() for record in records]},
+        json.dumps({**summary, "items": record_rows},
                    ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )

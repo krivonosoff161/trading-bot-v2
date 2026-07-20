@@ -49,7 +49,8 @@ class GroupVerdict:
     support_ratio: float
     total_trades: int
     best_test_avg_net_pct: float
-    best_profit_factor: float
+    best_profit_factor: float | None
+    best_profit_factor_state: dict[str, Any] = field(default_factory=dict)
     entry_timing: dict[str, Any] = field(default_factory=dict)
 
 
@@ -95,7 +96,8 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
     if total_trades < MIN_TRADES_FOR_DECISION:
         return GroupVerdict(family, symbol, NEEDS_MORE_DATA, [TOO_FEW_TRADES], n_variants,
                             len(positive), support_ratio, total_trades,
-                            _f(best, "test_avg_net_pct"), _f(best, "profit_factor"), entry)
+                            _f(best, "test_avg_net_pct"), _pf_display(best),
+                            dict(best.get("profit_factor_state") or {}), entry)
     if int(best.get("n_trades") or 0) < MIN_TRADES:
         reasons.append(TOO_FEW_TRADES)
 
@@ -109,14 +111,16 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
         reasons.append(CANDIDATE_FOR_FORWARD)
     return GroupVerdict(family, symbol, verdict, sorted(set(reasons)), n_variants,
                         len(positive), support_ratio, total_trades,
-                        _f(best, "test_avg_net_pct"), _f(best, "profit_factor"), entry)
+                        _f(best, "test_avg_net_pct"), _pf_display(best),
+                        dict(best.get("profit_factor_state") or {}), entry)
 
 
 def _structural_reasons(best: dict[str, Any], entry: dict[str, Any], reasons: list[str]) -> None:
     total = _f(best, "total_net_pct")
     if total > 0 and _f(best, "max_drawdown_pct") > total * 0.8:
         reasons.append(DRAWDOWN_TOO_HIGH)
-    if 0 < _f(best, "avg_net_pct") and _f(best, "profit_factor") < PF_FORWARD:
+    pf = _pf_for_threshold(best)
+    if 0 < _f(best, "avg_net_pct") and (pf is None or pf < PF_FORWARD):
         reasons.append(WEAK_EDGE)
     if _regime_carry(best):
         reasons.append(REGIME_DEPENDENT)
@@ -136,7 +140,7 @@ def _verdict_for(positive, support_ratio, best, reasons, single_lucky) -> str:
     strong = (
         support_ratio >= SUPPORT_FOR_FORWARD
         and _f(best, "test_avg_net_pct") > 0
-        and _f(best, "profit_factor") >= PF_FORWARD
+        and (_pf_for_threshold(best) or 0.0) >= PF_FORWARD
         and ENTRY_LATE not in reasons
         and DRAWDOWN_TOO_HIGH not in reasons
         and TOO_FEW_TRADES not in reasons
@@ -213,3 +217,26 @@ def _f(m: dict[str, Any], key: str) -> float:
         return float(m.get(key) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _pf_for_threshold(metrics: dict[str, Any]) -> float | None:
+    state = metrics.get("profit_factor_state")
+    if isinstance(state, dict):
+        name = str(state.get("state") or "")
+        if name == "positive_infinity":
+            return float("inf")
+        if name != "finite":
+            return None
+        try:
+            return float(state["value"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    try:
+        return float(metrics["profit_factor"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _pf_display(metrics: dict[str, Any]) -> float | None:
+    value = _pf_for_threshold(metrics)
+    return value if value is not None and value != float("inf") else None

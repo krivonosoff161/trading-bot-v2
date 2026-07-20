@@ -314,7 +314,7 @@ def _path_summary(candles: list[dict[str, Any]], *, entry: float | None, side: s
 def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str, Any]:
     if private_root is None:
         return {
-            "schema": "OutcomeMarketContext.v1",
+            "schema": "OutcomeMarketContext.v2",
             "status": "not_available",
             "reason": "private_root_not_supplied",
             "candles": [],
@@ -323,20 +323,23 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
     timeframe = str(row.get("timeframe") or "").strip().lower()
     if not symbol or not timeframe:
         return {
-            "schema": "OutcomeMarketContext.v1",
+            "schema": "OutcomeMarketContext.v2",
             "status": "not_available",
             "reason": "missing_symbol_or_timeframe",
             "candles": [],
         }
     try:
-        candle_slice = load_canonical_candles(private_root, symbol, timeframe)
+        candle_slice = load_canonical_candles(
+            private_root, symbol, timeframe,
+            purpose="outcome_learning", coverage_policy="available",
+        )
         candles = candle_slice.rows
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
         candle_slice = None
         candles = []
     if not candles:
         return {
-            "schema": "OutcomeMarketContext.v1",
+            "schema": "OutcomeMarketContext.v2",
             "status": "not_available",
             "reason": "prepared_candles_not_found",
             "symbol": symbol,
@@ -361,13 +364,16 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
     if len(window) > 88:
         window = window[-88:]
     return {
-        "schema": "OutcomeMarketContext.v1",
+        "schema": "OutcomeMarketContext.v2",
         "status": "available" if window else "not_available",
         "reason": "" if window else "no_candles_in_signal_window",
         "symbol": symbol,
         "timeframe": timeframe,
         "source_label": candle_slice.label,
         "candle_source": candle_slice.source,
+        "data_snapshot_id": candle_slice.manifest.snapshot_id,
+        "data_evidence_hash": candle_slice.manifest.evidence_hash,
+        "data_provenance_status": candle_slice.manifest.provenance_status,
         "boundary_ts": boundary,
         "pre_bars": pre_bars,
         "post_bars": max(0, len(window) - pre_bars),

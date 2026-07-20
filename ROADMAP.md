@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **ACTIVE**. Updated 2026-07-14.
+Status: **ACTIVE**. Updated 2026-07-18.
 
 The project is a paper/research workbench. This roadmap is ordered by evidence
 and maintainability, not by a path to live trading.
@@ -44,6 +44,14 @@ Exit gate: a new contributor or search agent can identify the supported paper
 path, distinguish it from legacy code, and avoid private data without relying
 on a private handoff.
 
+## Current: Owner, Claim And Fencing Review
+
+The public-code implementation adds exact process leases, fenced brain/compute
+claims, append-preserving attempts, content-bound materialization replay and
+provisional worker publication. Review and synthetic tests do not authorize a
+private runtime migration. The rollout gate remains quiescence, backup, legacy
+row disposition, v2-only writers and a separate operator decision.
+
 ## Current: Verified Adaptive Research Center
 
 1. Complete typed farm search, validation provenance, Trader Supervisor replay,
@@ -74,6 +82,11 @@ the active contract is [docs/adaptive-research-center-contract.md](docs/adaptive
 
 - Scanner source-quality and context calibration.
 - Explicit data-gate handling for OI and microstructure.
+- Extend the 27-family synthetic history-boundary proof with separately authorized
+  private-history coverage manifests if that evidence campaign is approved. The
+  current public proof covers all registry history terms at authoritative
+  parameter maxima and the adjacent N-1/N/N+1 limits, with family-specific
+  generator/description identity for predicate outcomes; it remains synthetic only.
 - Independent validation improvements in `honest-backtest`.
 - Operator reports that summarize paper evidence without publishing raw data.
 

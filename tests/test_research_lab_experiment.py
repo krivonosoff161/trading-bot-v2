@@ -386,20 +386,15 @@ def test_choose_symbol_file_prefers_largest(tmp_path):
 
 def test_experiment_spec_loads_from_json(tmp_path):
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(
-        json.dumps(
-            {
-                "experiment_id": "x",
-                "data_glob": "data/{symbol}.json",
-                "symbols": ["BTC_USDT_SWAP"],
-                "families": ["momentum_breakout"],
-                "parameter_grid": {"momentum_breakout": [{"lookback": 3}]},
-                "filters": {"volatility": ["medium", "high"]},
-                "plan_meta": {"group": "core_market", "timeframe_role": "intraday"},
-            }
-        ),
-        encoding="utf-8",
-    )
+    ExperimentSpec(
+        experiment_id="x",
+        data_glob="data/{symbol}.json",
+        symbols=["BTC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 3}]},
+        filters={"volatility": ["medium", "high"]},
+        plan_meta={"group": "core_market", "timeframe_role": "intraday"},
+    ).write_json(spec_path)
 
     spec = ExperimentSpec.from_json(spec_path)
 

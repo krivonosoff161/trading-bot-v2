@@ -45,6 +45,15 @@ explain the choice. It cannot provide prices, numerical trade levels, a
 validator verdict, or execution authority. Deterministic code materializes the
 actual grid.
 
+Local-only model calls must be backed by endpoint identity evidence, not just a
+provider label. For the public Ollama route, the invocation ledger accepts only
+normalized loopback HTTP endpoints and records the provider implementation,
+model name, endpoint identity, prompt/context evidence, and sanitized input
+hash in the invocation identity. Missing, remote, credential-bearing, or
+non-loopback endpoints fail closed before a provider call. Malformed endpoint
+syntax, including non-numeric or out-of-range ports, produces an explicit
+`invalid_endpoint` permit denial and never escapes as a parser exception.
+
 ### Independent Validator
 
 Owns evidence quality and the only `PAPER_FORWARD_READY` verdict. It receives an
@@ -78,6 +87,12 @@ Owns post-outcome diagnosis and feedback provenance. It can address farm,
 validator, or trader independently. Each feedback item includes the frozen
 hypothesis time, knowledge cutoff, source snapshot, evidence references,
 uncertainty, required gate, prohibited actions, and recipient acknowledgement.
+
+Adaptive role tasks and trial records are content-bound. A `RoleTaskSpec.v1`
+must carry the source content digest and producer completion identity used to
+derive its adaptive trial id. Stage records accept only typed evidence
+references with a content digest and producer completion identity; a naked path
+or logical ref is not verified evidence.
 
 The analyst does not promote its own counterfactual. A result selected from a
 grid on one data window is only a hypothesis for a later untouched shadow or
@@ -152,7 +167,9 @@ boundary; custom hidden cryptography is deliberately not introduced.
 
 1. `paper_only=true` and `execution_allowed=false` remain fail-closed.
 2. No LLM output may set side, entry, stop, take-profit, leverage, order fields,
-   validator verdict, or lifecycle state.
+   validator verdict, or lifecycle state. Advisory JSON validators apply this
+   deny-list recursively through nested objects/lists and normalized key
+   variants.
 3. No adaptive artifact may edit `.env`, credentials, process controls, or live
    exchange configuration.
 4. Unsupported schema versions, missing provenance, stale snapshots, and

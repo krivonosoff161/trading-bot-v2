@@ -12,8 +12,14 @@ import pytest
 
 from src.research_lab.hard_validation_contract import (
     CandidateForValidation,
+    CONTRACT_VERSION,
     trade_evidence_hash,
     validation_evidence_hash,
+)
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
 )
 from src.research_lab.honest_backtest_bridge import (
     _build_verdict,
@@ -28,6 +34,8 @@ from src.research_lab.honest_backtest_bridge import (
     _check_robustness,
     _check_significance,
     _check_splits,
+    _check_search_family_evidence,
+    _check_time_dependence_suitability,
     _extract_returns,
     _map_failed_to_status,
     bridge_available,
@@ -35,8 +43,10 @@ from src.research_lab.honest_backtest_bridge import (
     run_validation_batch,
 )
 
+_SIMULATOR_MANIFEST = legacy_fixture_manifest()
+
 CANDIDATE_DICT = {
-    "contract_version": "1.1.0",
+    "contract_version": CONTRACT_VERSION,
     "candidate_id": "c-001",
     "source_run_id": "run-abc",
     "symbol": "BTC-USDT-SWAP",
@@ -62,14 +72,14 @@ CANDIDATE_DICT = {
                     "evaluation_started_at": "2026-07-02T00:00:00+00:00",
                 }},
     "trades": [
-        {"side": "long", "entry_price": 100, "exit_price": 103,
+        {"side": "long", "entry_price": 100, "exit_price": 102.1,
          "entry_ts": "2026-07-02T00:00:00+00:00",
          "exit_ts": "2026-07-02T00:00:30+00:00", "net_pct": 2.0},
-        {"side": "short", "entry_price": 50, "exit_price": 48,
+        {"side": "short", "entry_price": 50, "exit_price": 48.2,
          "entry_ts": "2026-07-02T00:01:00+00:00",
          "exit_ts": "2026-07-02T00:01:30+00:00", "net_pct": 3.5},
     ] + [
-        {"side": "long", "entry_price": 100, "exit_price": 99,
+        {"side": "long", "entry_price": 100, "exit_price": 99.6,
          "entry_ts": f"2026-07-02T00:{i:02d}:00+00:00",
          "exit_ts": f"2026-07-02T00:{i:02d}:30+00:00",
          "net_pct": -0.5}
@@ -78,7 +88,22 @@ CANDIDATE_DICT = {
     "equity_curve": [],
     "data_window": {"start_ts": 0, "end_ts": 20000, "n_bars": 20},
     "created_at": "2026-06-14T00:00:00Z",
+    "simulator_manifest": _SIMULATOR_MANIFEST,
+    "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
 }
+for _trade in CANDIDATE_DICT["trades"]:
+    _trade.update({
+        "simulator_manifest": _SIMULATOR_MANIFEST,
+        "simulator_model_id": _SIMULATOR_MANIFEST["simulator_model_id"],
+        "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
+        "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+        "quantity_ledger": build_trade_quantity_ledger(),
+    })
+CANDIDATE_DICT["metrics"].update({
+    "simulator_manifest": _SIMULATOR_MANIFEST,
+    "simulator_model_id": _SIMULATOR_MANIFEST["simulator_model_id"],
+    "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
+})
 CANDIDATE_DICT["metrics"]["validation_epoch"]["selection_evidence_hash"] = "0" * 64
 CANDIDATE_DICT["metrics"]["validation_epoch"]["selection_evidence"] = [
     {"entry_ts": "2026-06-30T23:00:00+00:00",
@@ -276,25 +301,51 @@ class TestCheckOverfit:
         result = _check_overfit(_make_candidate(), [1.0, 2.0])
         assert result["passed"] is False
 
-    def test_malformed_available_dsr_evidence_fails_closed(self) -> None:
+    def test_malformed_legacy_dsr_evidence_does_not_change_authoritative_psr(self) -> None:
         metrics = {
             **CANDIDATE_DICT["metrics"],
             "trial_sharpes": [1.0, float("nan")],
         }
         returns = [0.5, 1.0, 0.8, 1.2, 0.9, 1.1] * 4
         result = _check_overfit(_make_candidate(metrics=metrics), returns)
-        assert result["passed"] is False
-        assert "dsr_error" in result["details"]
+        assert result["passed"] is True
+        assert result["details"]["shadow_metrics"]["dsr"]["status"] == "unavailable"
 
-    def test_malformed_available_pbo_evidence_fails_closed(self) -> None:
+    def test_legacy_trial_major_pbo_is_invalid_shadow_not_hard_failure(self) -> None:
         metrics = {
             **CANDIDATE_DICT["metrics"],
             "trial_returns": [[0.1, 0.2]],
         }
         returns = [0.5, 1.0, 0.8, 1.2, 0.9, 1.1] * 4
         result = _check_overfit(_make_candidate(metrics=metrics), returns)
+        assert result["passed"] is True
+        shadow = result["details"]["shadow_metrics"]
+        assert shadow["pbo"]["status"] == "invalid"
+        assert shadow["pbo"]["reason_codes"] == ["invalid_legacy_orientation"]
+
+
+class TestEvidenceChannelSeparation:
+    def test_missing_family_panel_is_a_separate_named_hard_check(self) -> None:
+        result = _check_search_family_evidence(_make_candidate())
+        assert result["check_name"] == "search_family_evidence"
         assert result["passed"] is False
-        assert "pbo_error" in result["details"]
+        assert result["details"]["status"] == "unavailable"
+
+    def test_missing_interval_and_dependence_method_is_separate(self) -> None:
+        result = _check_time_dependence_suitability(_make_candidate())
+        assert result["check_name"] == "time_dependence_suitability"
+        assert result["passed"] is False
+        assert "validation_observation_set_missing" in result["details"]["errors"]
+
+    def test_shadow_invalid_cannot_map_to_failed_overfit(self) -> None:
+        candidate = _make_candidate()
+        checks = [
+            {"check_name": "overfit_psr", "passed": True},
+            {"check_name": "search_family_evidence", "passed": False},
+        ]
+        verdict = _build_verdict(candidate, checks)
+        assert verdict.hard_status == "NEEDS_MORE_DATA"
+        assert "overfit_psr" not in verdict.failed_checks
 
 
 class TestReturnConcentration:
@@ -451,7 +502,7 @@ class TestRunValidation:
         with tempfile.TemporaryDirectory() as td:
             c = _make_candidate(trades=[], equity_curve=[])
             result = run_validation(c, Path(td), dry_run=False)
-            assert result["hard_status"] == "NEEDS_MORE_DATA"
+            assert result["hard_status"] == "FAILED_DATA_QUALITY"
             stem = _artifact_stem("c-001")
             report = Path(td) / "hard_validation" / "reports" / f"{stem}.json"
             verdict = Path(td) / "hard_validation" / "verdicts" / f"{stem}.json"
@@ -477,6 +528,18 @@ class TestRunValidation:
 
 
 class TestRunValidationBatch:
+    def test_v11_contract_is_not_silently_reinterpreted_as_time_aware(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            req_dir = Path(td) / "requests"
+            req_dir.mkdir()
+            data = _make_candidate().to_dict()
+            data["contract_version"] = "1.1.0"
+            (req_dir / "c-001.json").write_text(json.dumps(data))
+            result = run_validation_batch(req_dir, Path(td), dry_run=True)
+            assert result["validated"] == 0
+            assert result["errors"] == 1
+            assert "1.1.0" in result["results"][0]["error"]
+
     def test_missing_contract_version_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             req_dir = Path(td) / "requests"

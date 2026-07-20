@@ -14,6 +14,12 @@ from typing import Any
 
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.paper_signals.store import load_signals
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    PaperGenerationMismatch,
+    canonical_digest,
+    stage_envelope,
+)
 from src.research_lab.trade_math import midpoint
 from src.strategy.signal_contract import ExitRule, FollowRule, SignalContract
 
@@ -42,6 +48,11 @@ class MainPaperInstruction:
     source_status: str
     signal_contract: dict[str, Any]
     validator_context: dict[str, Any] = field(default_factory=dict)
+    paper_generation_run_id: str = ""
+    source_producer_generation_id: str = ""
+    source_member_payload_digest: str = ""
+    source_validation_generation_id: str = ""
+    bridge_input_digest: str = ""
     execution_allowed: bool = False
     paper_only: bool = True
     schema: str = SCHEMA
@@ -59,6 +70,15 @@ class MainPaperInstruction:
             raise ValueError("entry and stop must be positive")
         if not self.take_profit_plan:
             raise ValueError("take_profit_plan required")
+        generation_values = (
+            self.paper_generation_run_id,
+            self.source_producer_generation_id,
+            self.source_member_payload_digest,
+            self.source_validation_generation_id,
+            self.bridge_input_digest,
+        )
+        if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+            raise ValueError("partial paper generation metadata is forbidden")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -154,6 +174,9 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
             "setup_id": str(sig.validator_context.get("setup_id") or ""),
             "candidate_id": str(sig.validator_context.get("candidate_id") or ""),
             "source_validation_verdict": str(sig.validator_context.get("source_validation_verdict") or ""),
+            "search_family_id": str(sig.validator_context.get("search_family_id") or ""),
+            "search_trial_id": str(sig.validator_context.get("search_trial_id") or ""),
+            "effective_n_trials": int(sig.validator_context.get("effective_n_trials") or 0),
             **geometry_meta,
             "entry_trigger": str(sig.validator_context.get("entry_trigger") or "limit_pullback"),
             "pretrigger": bool(sig.validator_context.get("pretrigger")),
@@ -168,13 +191,22 @@ def _contract_from_signal(sig: PaperActionSignal, entry: float) -> SignalContrac
     )
 
 
-def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | None:
+def instruction_from_signal(
+    sig: PaperActionSignal,
+    *,
+    generation_context: PaperGenerationContext | None = None,
+) -> MainPaperInstruction | None:
     if sig.status not in ACTIVE_STATUSES:
         return None
     if validation_tier_from_signal(sig) not in MAIN_PAPER_TIERS:
         return None
     entry = _entry_midpoint(sig)
     contract = _contract_from_signal(sig, entry)
+    source_validation_generation_id = str(
+        sig.validation_id or sig.validator_context.get("validation_id") or ""
+    )
+    if generation_context is not None and not source_validation_generation_id:
+        raise PaperGenerationMismatch("v2 bridge source lacks validation generation identity")
     return MainPaperInstruction(
         instruction_id=f"mainpaper_{sig.signal_id}",
         source_signal_id=sig.signal_id,
@@ -190,6 +222,13 @@ def instruction_from_signal(sig: PaperActionSignal) -> MainPaperInstruction | No
         source_status=sig.status,
         signal_contract=contract.to_dict(),
         validator_context=dict(sig.validator_context),
+        paper_generation_run_id=generation_context.run_id if generation_context else "",
+        source_producer_generation_id=(
+            generation_context.producer_generation_id if generation_context else ""
+        ),
+        source_member_payload_digest=canonical_digest(sig.to_dict()),
+        source_validation_generation_id=source_validation_generation_id,
+        bridge_input_digest=generation_context.input_digest if generation_context else "",
     )
 
 
@@ -224,15 +263,23 @@ def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_instructions.json"
 
 
-def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
+def export_main_paper_instructions(
+    private_root: Path,
+    *,
+    generation_context: PaperGenerationContext | None = None,
+) -> dict[str, Any]:
     signals = load_signals(private_root)
     active = [sig for sig in signals if sig.status in ACTIVE_STATUSES]
-    instructions = [item for sig in active if (item := instruction_from_signal(sig)) is not None]
+    instructions = [
+        item
+        for sig in active
+        if (item := instruction_from_signal(sig, generation_context=generation_context)) is not None
+    ]
     skipped_unvalidated = len(active) - len(instructions)
     skip_reasons: dict[str, int] = {}
     skipped_examples: list[dict[str, Any]] = []
     for sig in active:
-        if instruction_from_signal(sig) is not None:
+        if instruction_from_signal(sig, generation_context=generation_context) is not None:
             continue
         context = sig.validator_context or {}
         tier = validation_tier_from_signal(sig)
@@ -263,6 +310,8 @@ def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for item in instructions:
             fh.write(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+    rows = [item.to_dict() for item in instructions]
+    generation = stage_envelope("bridge", generation_context, rows)
     summary = {
         "schema": "main_paper_bridge.v1",
         "source_schema": "paper_signals.v1",
@@ -277,9 +326,10 @@ def export_main_paper_instructions(private_root: Path) -> dict[str, Any]:
         "paper_only": True,
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
+        **generation,
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": [item.to_dict() for item in instructions]},
+        json.dumps({**summary, "items": rows},
                    ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )

@@ -15,9 +15,16 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from src.research_lab.main_paper_runtime_adapter import SCHEMA as QUEUE_ITEM_SCHEMA
+from src.research_lab.paper_generation_contract import (
+    PaperGenerationContext,
+    PaperGenerationMismatch,
+    canonical_digest,
+    stage_envelope,
+    verify_stage_envelope,
+)
 from src.research_lab.paper_signals import lane
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
 from src.research_lab.providers.okx_public import MarketDataError, OkxPublicMarketDataProvider
@@ -38,6 +45,12 @@ class CandleProvider(Protocol):
         """Return canonical OHLCV rows with ts/open/high/low/close/vol."""
 
 
+PersistObservation = Callable[
+    [dict[str, Any], dict[str, Any]],
+    dict[str, Any],
+]
+
+
 def _queue_snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_runtime_queue.json"
 
@@ -54,22 +67,24 @@ def _snapshot_path(private_root: Path) -> Path:
     return Path(private_root) / "state" / "derived" / "main_paper_runtime_observation.json"
 
 
-def _load_queue_rows(private_root: Path) -> tuple[list[dict[str, Any]], Path | None]:
+def _load_queue_rows(
+    private_root: Path,
+) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
     snapshot = _queue_snapshot_path(private_root)
     if snapshot.exists():
         data = json.loads(snapshot.read_text(encoding="utf-8"))
         items = data.get("items") if isinstance(data, dict) else None
-        return list(items or []), snapshot
+        return list(items or []), snapshot, data if isinstance(data, dict) else {}
 
     jsonl = _queue_jsonl_path(private_root)
     if not jsonl.exists():
-        return [], None
+        return [], None, {}
     rows: list[dict[str, Any]] = []
     for line in jsonl.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line:
             rows.append(json.loads(line))
-    return rows, jsonl
+    return rows, jsonl, {}
 
 
 def _signal_from_queue(row: dict[str, Any]) -> PaperActionSignal:
@@ -104,6 +119,9 @@ def _signal_from_queue(row: dict[str, Any]) -> PaperActionSignal:
             "geometry_stop_scale": row.get("farm_geometry_stop_scale"),
             "geometry_tp_scale": row.get("farm_geometry_tp_scale"),
             "geometry_hold_scale": row.get("farm_geometry_hold_scale"),
+            "search_family_id": row.get("search_family_id") or "",
+            "search_trial_id": row.get("search_trial_id") or "",
+            "effective_n_trials": int(row.get("effective_n_trials") or 0),
         },
         outcome_memory_context={"priority_reasons": row.get("priority_reasons") or []},
         status="armed",
@@ -144,10 +162,21 @@ def observe_main_paper_runtime(
     apply: bool = False,
     provider: CandleProvider | None = None,
     now_ms: int | None = None,
+    expected_run_id: str = "",
+    expected_input_digest: str = "",
+    persist_observation: PersistObservation | None = None,
 ) -> dict[str, Any]:
     """Observe queued paper items and optionally persist a status artifact."""
-    rows, source_path = _load_queue_rows(private_root)
-    if limit >= 0:
+    rows, source_path, source_payload = _load_queue_rows(private_root)
+    generation_context: PaperGenerationContext | None = None
+    if source_payload.get("paper_stage_schema") or expected_run_id or expected_input_digest:
+        generation_context = verify_stage_envelope(
+            source_payload,
+            stage="queue",
+            expected_run_id=expected_run_id,
+            expected_input_digest=expected_input_digest,
+        )
+    if limit >= 0 and generation_context is None:
         rows = rows[:limit]
     provider = provider or OkxPublicMarketDataProvider()
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
@@ -170,14 +199,35 @@ def observe_main_paper_runtime(
             sig = _signal_from_queue(row)
             if now_ms <= sig.boundary_ts:
                 counts["no_elapsed_bars"] += 1
-                items.append(_item_result(row, sig, "pending_clock", []))
+                items.append(_item_result(row, sig, "pending_clock", [], now_ms, provider))
                 continue
             candles = _fetch_window(sig, provider, now_ms)
             if not candles:
                 counts["no_data"] += 1
                 sig.outcome = {"result": "no_data"}
-                items.append(_item_result(row, sig, "no_data", candles))
+                items.append(_item_result(row, sig, "no_data", candles, now_ms, provider))
                 continue
+            manifest = _observation_manifest(sig, candles, now_ms, provider)
+            if generation_context is not None:
+                if persist_observation is None:
+                    raise PaperGenerationMismatch(
+                        "v2 calculation requires a persisted immutable observation"
+                    )
+                persisted = persist_observation(row, manifest)
+                if (
+                    persisted.get("schema") != "CandleSnapshotManifest.v2"
+                    or persisted.get("manifest_digest") != manifest["manifest_digest"]
+                    or persisted.get("rows_digest") != manifest["rows_digest"]
+                    or persisted.get("request_digest") != manifest["request_digest"]
+                    or persisted.get("provider_identity") != manifest["provider_identity"]
+                    or persisted.get("acquisition_id") != manifest["acquisition_id"]
+                    or not persisted.get("observation_id")
+                ):
+                    raise PaperGenerationMismatch(
+                        "persisted observation does not match provider acquisition"
+                    )
+                candles = list(persisted.get("rows") or [])
+                manifest = persisted
             observed = lane.observe(sig, candles)
             counts["observed"] += 1
             if observed.status in {"closed_paper", "expired"}:
@@ -187,7 +237,10 @@ def observe_main_paper_runtime(
                 counts["pending"] += 1
             else:
                 counts["terminal_unreviewed"] += 1
-            items.append(_item_result(row, observed, "observed", candles))
+            item = _item_result(row, observed, "observed", candles, now_ms, provider)
+            if generation_context is not None:
+                item["observation_manifest"] = manifest
+            items.append(item)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             counts["invalid"] += 1
             items.append(_error_result(row, "invalid", str(exc)))
@@ -195,12 +248,23 @@ def observe_main_paper_runtime(
             counts["provider_error"] += 1
             items.append(_error_result(row, "provider_error", f"{type(exc).__name__}:{exc}"))
 
+    if generation_context is not None:
+        for item in items:
+            if (
+                item.get("paper_generation_run_id") != generation_context.run_id
+                or item.get("source_producer_generation_id")
+                != generation_context.producer_generation_id
+            ):
+                raise PaperGenerationMismatch("queue item generation does not match envelope")
+            item["queue_output_digest"] = generation_context.input_digest
+    generation = stage_envelope("observer", generation_context, items)
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schema": QUEUE_ITEM_SCHEMA,
         "source_path": str(source_path) if source_path else "",
         "source_exists": source_path is not None,
         "limit": limit,
+        "scheduling_limit_deferred_to_durable_cursor": generation_context is not None,
         "now_ms": now_ms,
         "paper_only": True,
         "execution_allowed": False,
@@ -208,6 +272,7 @@ def observe_main_paper_runtime(
         "items": items,
         "snapshot_path": str(_snapshot_path(private_root)),
         "jsonl_path": str(_jsonl_path(private_root)),
+        **generation,
     }
     if apply:
         _write_summary(private_root, summary)
@@ -246,11 +311,80 @@ def _error_result(row: dict[str, Any], status: str, error: str) -> dict[str, Any
         "new_bars": 0,
         "paper_only": True,
         "execution_allowed": False,
+        **_generation_refs(row),
     }
 
 
-def _item_result(row: dict[str, Any], sig: PaperActionSignal, status: str, candles: list[dict[str, Any]]) -> dict[str, Any]:
+def _generation_refs(row: dict[str, Any]) -> dict[str, Any]:
     return {
+        "paper_generation_run_id": str(row.get("paper_generation_run_id") or ""),
+        "source_producer_generation_id": str(row.get("source_producer_generation_id") or ""),
+        "source_member_payload_digest": str(row.get("source_member_payload_digest") or ""),
+        "source_validation_generation_id": str(
+            row.get("source_validation_generation_id") or ""
+        ),
+        "queue_output_digest": str(row.get("consumer_output_digest") or ""),
+    }
+
+
+def _observation_manifest(
+    sig: PaperActionSignal,
+    candles: list[dict[str, Any]],
+    now_ms: int,
+    provider: CandleProvider,
+) -> dict[str, Any]:
+    tf_ms = TF_MS.get(sig.timeframe, 0)
+    start_ts = max(0, sig.boundary_ts - 2 * tf_ms) if tf_ms else 0
+    max_end = sig.boundary_ts + (sig.max_hold_bars + lane.ARM_WINDOW_BARS + 2) * tf_ms
+    request = {
+        "symbol": sig.okx_inst_id,
+        "timeframe": sig.timeframe,
+        "start_ts": start_ts,
+        "end_ts": min(now_ms, max_end),
+    }
+    provider_identity = str(getattr(provider, "name", "") or type(provider).__name__)
+    rows_digest = canonical_digest(candles)
+    acquisition_id = canonical_digest(
+        {
+            "provider_identity": provider_identity,
+            "request": request,
+            "rows_digest": rows_digest,
+            "observed_at_ms": now_ms,
+        }
+    )
+    return {
+        "schema": "CandleSnapshotManifest.v2",
+        "request": request,
+        "request_digest": canonical_digest(request),
+        "rows": candles,
+        "rows_digest": rows_digest,
+        "observed_at_ms": now_ms,
+        "available_at_ms": now_ms,
+        "provider_identity": provider_identity,
+        "acquisition_id": acquisition_id,
+        "manifest_digest": canonical_digest(
+            {
+                "schema": "CandleSnapshotManifest.v2",
+                "request_digest": canonical_digest(request),
+                "rows_digest": rows_digest,
+                "observed_at_ms": now_ms,
+                "available_at_ms": now_ms,
+                "provider_identity": provider_identity,
+                "acquisition_id": acquisition_id,
+            }
+        ),
+    }
+
+
+def _item_result(
+    row: dict[str, Any],
+    sig: PaperActionSignal,
+    status: str,
+    candles: list[dict[str, Any]],
+    now_ms: int,
+    provider: CandleProvider,
+) -> dict[str, Any]:
+    result = {
         "runtime_id": row.get("runtime_id", ""),
         "source_signal_id": sig.signal_id,
         "source": sig.source,
@@ -280,7 +414,11 @@ def _item_result(row: dict[str, Any], sig: PaperActionSignal, status: str, candl
         "new_bars": len([c for c in candles if int(c.get("ts") or 0) > sig.boundary_ts]),
         "paper_only": True,
         "execution_allowed": False,
+        **_generation_refs(row),
     }
+    if row.get("paper_generation_run_id"):
+        result["observation_manifest"] = _observation_manifest(sig, candles, now_ms, provider)
+    return result
 
 
 def _write_summary(private_root: Path, summary: dict[str, Any]) -> None:

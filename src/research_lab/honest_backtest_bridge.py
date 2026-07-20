@@ -28,6 +28,14 @@ from src.research_lab.hard_validation_contract import (
     validation_evidence_hash,
     write_json,
 )
+from src.research_lab.time_aware_validation import (
+    ValidationEvidenceError,
+    classify_legacy_search_bias_evidence,
+    validate_dependence_evidence,
+    validate_interval_split_manifest,
+    validate_search_trial_panel,
+    validate_validation_observation_set,
+)
 
 try:
     import numpy as _np
@@ -302,26 +310,60 @@ def _candidate_contract_errors(candidate: CandidateForValidation) -> list[str]:
         for trade in candidate.trades
     ):
         errors.append("returns_basis_field_missing")
+    try:
+        from src.research_lab.simulator_contract import (
+            validate_simulator_assumption_manifest,
+            validate_trade_contract,
+        )
+
+        validate_simulator_assumption_manifest(candidate.simulator_manifest)
+        expected_unsupported = candidate.simulator_manifest.get("unsupported_dimensions") or []
+        if candidate.unsupported_simulator_dimensions != expected_unsupported:
+            errors.append("simulator_unsupported_dimensions_mismatch")
+        if (candidate.metrics or {}).get("simulator_model_id") not in {
+            None, candidate.simulator_manifest.get("simulator_model_id")
+        }:
+            errors.append("simulator_model_identity_mismatch")
+        for trade in candidate.trades:
+            validate_trade_contract(trade, candidate.simulator_manifest)
+    except (TypeError, ValueError):
+        errors.append("invalid_simulator_or_trade_manifest")
+    try:
+        _n_trials(candidate)
+    except (TypeError, ValueError) as exc:
+        errors.append(f"invalid_search_family_evidence:{exc}")
     return errors
 
 
 def _n_trials(candidate: CandidateForValidation) -> int:
-    """Number of parameter variants the candidate was selected from (>=1).
+    """Recompute the effective family count from verified immutable evidence."""
+    from src.research_lab.search_trial_evidence import validate_search_trial_evidence
 
-    This is the multiple-testing trial count used to deflate significance: picking the
-    best of N variants inflates apparent significance, so a deeper sweep is penalized.
-    """
     m = candidate.metrics or {}
+    evidence = m.get("search_trial_evidence")
+    if not isinstance(evidence, dict):
+        raise ValueError("verified search family evidence is required")
+    counts = validate_search_trial_evidence(evidence, require_complete=True)
+    n = counts["effective_n_trials"]
     runtime = m.get("runtime") if isinstance(m.get("runtime"), dict) else {}
-    for value in (runtime.get("n_variants_evaluated"), m.get("n_variants_evaluated"),
-                  m.get("variant_count"), m.get("n_trials")):
-        try:
-            n = int(value)
-        except (TypeError, ValueError):
+    claims = (
+        ("runtime.n_variants_evaluated", runtime.get("n_variants_evaluated"), counts["attempted_executions"]),
+        ("n_variants_evaluated", m.get("n_variants_evaluated"), counts["attempted_executions"]),
+        ("variant_count", m.get("variant_count"), counts["selected_points"]),
+        ("n_trials", m.get("n_trials"), n),
+    )
+    for label, value, expected in claims:
+        if value is None:
             continue
-        if n >= 1:
-            return n
-    return 1
+        try:
+            claimed = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("producer n_trials is not an integer") from None
+        if claimed != expected:
+            raise ValueError(
+                f"producer {label} mismatch: claimed={claimed}, recomputed={expected}"
+            )
+    return n
 
 
 def _run_all_checks(
@@ -330,6 +372,8 @@ def _run_all_checks(
 ) -> list[dict[str, Any]]:
     checks = []
     checks.append(_check_independent_evaluation(candidate))
+    checks.append(_check_search_family_evidence(candidate))
+    checks.append(_check_time_dependence_suitability(candidate))
     checks.append(_check_costs(candidate, returns))
     checks.append(_check_splits(returns))
     checks.append(_check_significance(returns, n_trials=_n_trials(candidate)))
@@ -479,6 +523,8 @@ def _check_splits(returns: list[float]) -> dict[str, Any]:
             "n_windows": len(splits),
             "test_size": len(test_idx),
             "test_mean": test_mean,
+            "method_scope": "index_order_kill_test",
+            "authoritative_requires": "time_dependence_suitability",
         },
         "message": f"OOS test mean: {test_mean:.4f}%",
     }
@@ -507,6 +553,9 @@ def _check_significance(returns: list[float], n_trials: int = 1) -> dict[str, An
             "permutation_p_adjusted": p_adj,
             "n_trials": n,
             "point_estimate": boot[0],
+            "resampling_method": "iid_bootstrap_and_independent_sign_flip",
+            "method_scope": "cheap_kill_test_non_authoritative_for_dependence",
+            "authoritative_requires": "time_dependence_suitability",
         },
         "message": (
             f"Bootstrap CI [{boot[1]:.4f}, {boot[2]:.4f}], "
@@ -574,29 +623,10 @@ def _check_overfit(
         "min_n": mtrl["min_n"],
         "sufficient": mtrl["sufficient"],
         "search_bias_metrics_mode": "shadow_only",
+        "authoritative_status": "valid",
+        "method_scope": "scalar_return_series_requires_time_dependence_gate",
     }
-    search_evidence_valid = True
-    trial_sharpes = candidate.metrics.get("trial_sharpes")
-    if isinstance(trial_sharpes, list) and len(trial_sharpes) >= 2:
-        try:
-            dsr = deflated_sharpe_ratio(arr, trial_sharpes)
-            details["dsr"] = dsr
-            details["dsr_shadow_pass"] = bool(dsr["dsr"] >= 0.95)
-        except ValueError as exc:
-            details["dsr_error"] = str(exc)
-            details["dsr_shadow_pass"] = False
-            search_evidence_valid = False
-    trial_returns = candidate.metrics.get("trial_returns")
-    if isinstance(trial_returns, list) and trial_returns:
-        try:
-            pbo = probability_of_backtest_overfitting(trial_returns)
-            details["pbo"] = pbo
-            details["pbo_shadow_pass"] = bool(pbo["pbo"] < 0.5)
-        except ValueError as exc:
-            details["pbo_error"] = str(exc)
-            details["pbo_shadow_pass"] = False
-            search_evidence_valid = False
-    passed = passed and search_evidence_valid
+    details["shadow_metrics"] = _shadow_search_metrics(candidate)
     return {
         "check_name": "overfit_psr",
         "passed": passed,
@@ -606,6 +636,225 @@ def _check_overfit(
             f"MinTRL={mtrl['min_n']:.0f}; pass needs PSR>=0.95 and sufficient MinTRL"
         ),
     }
+
+
+def _candidate_search_panel(candidate: CandidateForValidation) -> dict[str, Any] | None:
+    panel = candidate.metrics.get("search_trial_panel")
+    if isinstance(panel, dict):
+        return panel
+    legacy = candidate.metrics.get("trial_returns")
+    if legacy is not None:
+        return classify_legacy_search_bias_evidence(legacy)
+    return None
+
+
+def _check_search_family_evidence(candidate: CandidateForValidation) -> dict[str, Any]:
+    evidence = candidate.metrics.get("search_trial_evidence")
+    panel = _candidate_search_panel(candidate)
+    errors: list[str] = []
+    state = "unavailable"
+    if not isinstance(evidence, dict):
+        errors.append("complete_search_family_evidence_missing")
+    if panel is None:
+        errors.append("search_trial_panel_missing")
+    elif panel.get("status") != "valid":
+        state = str(panel.get("status") or "invalid")
+        errors.extend(str(value) for value in panel.get("reason_codes") or [])
+    elif isinstance(evidence, dict):
+        try:
+            validate_search_trial_panel(panel, evidence)
+            state = "valid"
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            state = "invalid"
+            errors.append(
+                exc.code if isinstance(exc, ValidationEvidenceError) else "search_trial_panel_invalid"
+            )
+    passed = state == "valid" and not errors
+    return {
+        "check_name": "search_family_evidence",
+        "passed": passed,
+        "details": {
+            "status": state,
+            "errors": sorted(set(errors)),
+            "search_trial_panel_id": str((panel or {}).get("search_trial_panel_id") or ""),
+        },
+        "message": (
+            "complete-family common-time panel verified"
+            if passed
+            else "; ".join(sorted(set(errors))) or "search family evidence unavailable"
+        ),
+    }
+
+
+def _check_time_dependence_suitability(
+    candidate: CandidateForValidation,
+) -> dict[str, Any]:
+    observation_set = candidate.metrics.get("validation_observation_set")
+    split_manifest = candidate.metrics.get("validation_split_manifest")
+    dependence = candidate.metrics.get("dependence_evidence")
+    errors: list[str] = []
+    state = "unavailable"
+    if not isinstance(observation_set, dict):
+        status = candidate.metrics.get("validation_observation_status")
+        if isinstance(status, dict):
+            errors.extend(str(value) for value in status.get("reason_codes") or [])
+        else:
+            errors.append("validation_observation_set_missing")
+    else:
+        try:
+            validate_validation_observation_set(observation_set)
+            state = "valid"
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            state = "invalid"
+            errors.append(
+                exc.code if isinstance(exc, ValidationEvidenceError) else "observation_set_invalid"
+            )
+    if state == "valid":
+        if not isinstance(split_manifest, dict):
+            errors.append("interval_split_manifest_missing")
+            state = "unavailable"
+        else:
+            try:
+                validate_interval_split_manifest(split_manifest, observation_set)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                state = "invalid"
+                errors.append(
+                    exc.code if isinstance(exc, ValidationEvidenceError) else "split_manifest_invalid"
+                )
+    if not isinstance(dependence, dict):
+        dependence_status = candidate.metrics.get("dependence_evidence_status")
+        if isinstance(dependence_status, dict):
+            errors.extend(
+                str(value) for value in dependence_status.get("reason_codes") or []
+            )
+        else:
+            errors.append("dependence_evidence_missing")
+        state = "unavailable" if state != "invalid" else state
+    else:
+        try:
+            validate_dependence_evidence(dependence)
+            if not dependence.get("authoritative_suitable"):
+                errors.append(str(dependence.get("reason") or "dependence_method_unsuitable"))
+                state = "unavailable" if state != "invalid" else state
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            state = "invalid"
+            errors.append(
+                exc.code if isinstance(exc, ValidationEvidenceError) else "dependence_evidence_invalid"
+            )
+    passed = state == "valid" and not errors
+    return {
+        "check_name": "time_dependence_suitability",
+        "passed": passed,
+        "details": {
+            "status": state,
+            "errors": sorted(set(errors)),
+            "observation_set_id": str((observation_set or {}).get("observation_set_id") or ""),
+            "split_manifest_id": str((split_manifest or {}).get("split_manifest_id") or ""),
+            "dependence_evidence_id": str((dependence or {}).get("dependence_evidence_id") or ""),
+        },
+        "message": (
+            "interval and dependence suitability verified"
+            if passed
+            else "; ".join(sorted(set(errors))) or "time/dependence evidence unavailable"
+        ),
+    }
+
+
+def _shadow_search_metrics(candidate: CandidateForValidation) -> dict[str, Any]:
+    """Compute optional PBO/DSR without granting either hard-verdict authority."""
+    result: dict[str, Any] = {
+        "mode": "shadow_only",
+        "pbo": {"status": "unavailable", "reason": "search_trial_panel_missing"},
+        "dsr": {"status": "unavailable", "reason": "search_trial_panel_missing"},
+    }
+    panel = _candidate_search_panel(candidate)
+    evidence = candidate.metrics.get("search_trial_evidence")
+    if panel is None:
+        return result
+    if panel.get("status") != "valid":
+        state = str(panel.get("status") or "invalid")
+        reasons = list(panel.get("reason_codes") or ["search_trial_panel_invalid"])
+        result["pbo"] = {"status": state, "reason_codes": reasons}
+        result["dsr"] = {"status": state, "reason_codes": reasons}
+        return result
+    if not isinstance(evidence, dict):
+        result["pbo"] = {"status": "invalid", "reason": "family_evidence_missing"}
+        result["dsr"] = {"status": "invalid", "reason": "family_evidence_missing"}
+        return result
+    try:
+        validate_search_trial_panel(panel, evidence)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        reason = exc.code if isinstance(exc, ValidationEvidenceError) else "search_trial_panel_invalid"
+        result["pbo"] = {"status": "invalid", "reason": reason}
+        result["dsr"] = {"status": "invalid", "reason": reason}
+        return result
+    if int(panel.get("reported_trial_count") or 0) < 2:
+        result["pbo"] = {
+            "status": "not_applicable",
+            "reason": "fewer_than_two_complete_family_trials",
+        }
+        result["dsr"] = {
+            "status": "not_applicable",
+            "reason": "fewer_than_two_complete_family_trials",
+        }
+        return result
+    try:
+        pbo = probability_of_backtest_overfitting(panel["matrix"])
+        reported = int(panel["reported_trial_count"])
+        if int(pbo.get("n_trials", reported)) != reported:
+            raise ValidationEvidenceError("pbo_trial_count_mismatch")
+        result["pbo"] = {
+            "status": "valid",
+            "shadow_pass": bool(pbo["pbo"] < 0.5),
+            "value": pbo,
+        }
+    except (TypeError, ValueError, ValidationEvidenceError) as exc:
+        reason = exc.code if isinstance(exc, ValidationEvidenceError) else str(exc)
+        result["pbo"] = {"status": "invalid", "reason": reason}
+
+    observation_set = candidate.metrics.get("validation_observation_set")
+    if not isinstance(observation_set, dict):
+        result["dsr"] = {
+            "status": "unavailable",
+            "reason": "candidate_period_returns_missing",
+        }
+        return result
+    try:
+        validate_validation_observation_set(observation_set)
+        if observation_set["trial_id"] not in panel["trial_columns"]:
+            raise ValidationEvidenceError("candidate_trial_not_in_panel")
+        if (
+            [int(row["period_ts"]) for row in observation_set["observations"]]
+            != [int(value) for value in panel["time_axis"]]
+            or observation_set.get("return_basis") != panel.get("return_basis")
+        ):
+            raise ValidationEvidenceError("candidate_period_axis_mismatch")
+        column_index = panel["trial_columns"].index(observation_set["trial_id"])
+        if (
+            panel["observation_set_ids"][column_index]
+            != observation_set["observation_set_id"]
+        ):
+            raise ValidationEvidenceError("candidate_observation_set_not_bound_to_panel")
+        candidate_returns = _np.asarray(
+            [row["return_value"] for row in observation_set["observations"]],
+            dtype=float,
+        )
+        matrix = _np.asarray(panel["matrix"], dtype=float)
+        trial_sharpes = []
+        for index in range(matrix.shape[1]):
+            column = matrix[:, index]
+            deviation = float(_np.std(column, ddof=1)) if len(column) > 1 else 0.0
+            trial_sharpes.append(float(_np.mean(column)) / deviation if deviation > 0 else 0.0)
+        dsr = deflated_sharpe_ratio(candidate_returns, trial_sharpes)
+        result["dsr"] = {
+            "status": "valid",
+            "shadow_pass": bool(dsr["dsr"] >= 0.95),
+            "value": dsr,
+        }
+    except (KeyError, TypeError, ValueError, ValidationEvidenceError) as exc:
+        reason = exc.code if isinstance(exc, ValidationEvidenceError) else str(exc)
+        result["dsr"] = {"status": "invalid", "reason": reason}
+    return result
 
 
 def _check_return_concentration(returns: list[float]) -> dict[str, Any]:
@@ -697,6 +946,10 @@ def _build_verdict(
         reason_codes.append("invalid_contract_or_provenance")
     if "independent_evaluation" in failed:
         reason_codes.append("untouched_evaluation_required")
+    if "search_family_evidence" in failed:
+        reason_codes.append("complete_search_family_evidence_required")
+    if "time_dependence_suitability" in failed:
+        reason_codes.append("time_dependence_method_required")
     if "return_concentration" in failed:
         reason_codes.append("single_trade_dominance")
 
@@ -714,6 +967,8 @@ def _map_failed_to_status(
     failed: list[str], candidate: CandidateForValidation,
 ) -> str:
     if "independent_evaluation" in failed:
+        return "NEEDS_MORE_DATA"
+    if "search_family_evidence" in failed or "time_dependence_suitability" in failed:
         return "NEEDS_MORE_DATA"
     if "data_quality" in failed or "contract_provenance" in failed:
         return "FAILED_DATA_QUALITY"
@@ -754,6 +1009,9 @@ def _build_report(
             "passed": passed,
             "failed": len(checks) - passed,
         },
+        simulator_manifest=dict(candidate.simulator_manifest),
+        unsupported_simulator_dimensions=list(candidate.unsupported_simulator_dimensions),
+        simulator_claim_ceiling=str(candidate.simulator_manifest.get("claim_ceiling") or "unavailable"),
         created_at=verdict.created_at,
     )
 

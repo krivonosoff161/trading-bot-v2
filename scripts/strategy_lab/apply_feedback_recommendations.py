@@ -35,6 +35,7 @@ from src.research_lab.feedback_followup import QUEUEABLE_ACTIONS, plan_followups
 from src.research_lab.feedback_reader import build_recommendations  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.search_family_definition import resolve_snapshot_set  # noqa: E402
 from src.research_lab.sweep_compile import compile_sweep  # noqa: E402
 from src.research_lab.sweep_spec import validate_sweep_spec  # noqa: E402
 from src.research_lab.state_db import connect, default_db_path, ensure_experiment_queued, init_db  # noqa: E402
@@ -45,15 +46,16 @@ DEFAULT_DATA_GLOB = "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{
 
 
 def _load_cards(private_root: Path) -> list[dict]:
+    from src.research_lab.validation_generation import read_current_setup_card
+
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return []
     out = []
     for path in sorted(cards_dir.glob("*.json")):
-        try:
-            out.append(json.loads(path.read_text(encoding="utf-8")))
-        except Exception:
-            continue
+        payload = read_current_setup_card(private_root, path)
+        if payload is not None:
+            out.append(payload)
     return out
 
 
@@ -70,6 +72,9 @@ def _candidate_context_by_id(private_root: Path) -> dict[str, dict]:
             "validation_reasons": list(e.get("validation_reasons") or []),
             "regime_summary": dict(e.get("regime_summary") or {}),
             "validation_status": str(e.get("validation_status") or ""),
+            "search_family_id": str(e.get("search_family_id") or ""),
+            "search_trial_id": str(e.get("search_trial_id") or ""),
+            "effective_n_trials": int(e.get("effective_n_trials") or 0),
         }
         if cid not in out or _context_score(context) > _context_score(out[cid]):
             out[cid] = context
@@ -152,14 +157,23 @@ def main() -> None:
         init_db(conn)
         try:
             for p in valid_plans:
+                snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
+                    private_root=private_root,
+                    symbols=[p.sweep.anchor_symbol, *p.sweep.related_symbols],
+                    timeframe=p.sweep.timeframe,
+                    data_glob=args.data_glob,
+                )
                 exp = compile_sweep(
                     p.sweep, data_glob=args.data_glob, timeframe_profiles=profiles,
                     resource_policy=policy, event_context={"origin": "feedback_followup",
                                                             "candidate_id": p.candidate_id,
                                                             "hard_status_action": p.action},
+                    data_snapshot_id=snapshot_id,
+                    data_evidence_hash=evidence_hash,
+                    data_snapshot_bindings=snapshot_bindings,
                 )
-                spec_path = out_dir / f"{exp.experiment_id}.json"
-                spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                spec_path = out_dir / f"{exp.search_family_id}.json"
+                exp.write_json(spec_path)
                 _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=args.priority)
                 queued += int(created)
                 already += int(not created)
@@ -186,21 +200,7 @@ def main() -> None:
 
 
 def _exp_to_dict(exp) -> dict:
-    return {
-        "experiment_id": exp.experiment_id,
-        "data_glob": exp.data_glob,
-        "symbols": exp.symbols,
-        "timeframe": exp.timeframe,
-        "families": exp.families,
-        "fees_bps": exp.fees_bps,
-        "slippage_bps": exp.slippage_bps,
-        "min_trades": exp.min_trades,
-        "split_ratio": exp.split_ratio,
-        "max_runs": exp.max_runs,
-        "parameter_grid": exp.parameter_grid,
-        "filters": exp.filters,
-        "event_context": exp.event_context,
-    }
+    return exp.to_dict()
 
 
 if __name__ == "__main__":

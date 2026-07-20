@@ -508,7 +508,11 @@ def _outcome_retest_status(private_root: Path) -> dict[str, Any]:
     return out
 
 
-def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
+def paper_product_status(
+    private_root: Path | None = None,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     """Small operator view over the current paper-product chain.
 
     This intentionally reads only aggregate snapshot fields from the private root.
@@ -538,6 +542,69 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
     calibration = _read_json(derived / "trading_policy_calibration.json")
     sent_keys = _sent_key_summary(root)
     outcome_retest = _outcome_retest_status(root)
+    from src.research_lab.paper_projection_reader import read_projection_view
+
+    generation = read_projection_view(
+        root,
+        "trades",
+        legacy_snapshot=derived / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    if generation["authority_database_exists"]:
+        run_id = str(generation.get("paper_generation_run_id") or "")
+
+        def compatible(payload: dict[str, Any]) -> bool:
+            return bool(
+                payload.get("paper_generation_run_id") == run_id
+                and (
+                    payload.get("current_generation_compatible") is True
+                    or payload.get("generation_status") == "stage_completed"
+                )
+            )
+
+        items = list(generation.get("items") or [])
+        by_status: dict[str, int] = {}
+        for item in items:
+            status = str(item.get("status") or "missing")
+            by_status[status] = by_status.get(status, 0) + 1
+        trades = {
+            "schema": "PaperProjectionEnvelope.v2",
+            "trades": len(items),
+            "by_status": by_status,
+            "items": items,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+        for name, payload in (
+            ("bridge", bridge),
+            ("consumer", consumer),
+            ("queue", queue),
+            ("observation", observation),
+            ("preview", preview),
+            ("training", training),
+            ("lineage", lineage),
+            ("quality", quality),
+        ):
+            if not compatible(payload):
+                if name == "bridge":
+                    bridge = {}
+                elif name == "consumer":
+                    consumer = {}
+                elif name == "queue":
+                    queue = {}
+                elif name == "observation":
+                    observation = {}
+                elif name == "preview":
+                    preview = {}
+                elif name == "training":
+                    training = {}
+                    training_rows = []
+                elif name == "lineage":
+                    lineage = {}
+                elif name == "quality":
+                    quality = {}
+        product_trades = {}
+        trade_thesis = {}
     accepted_reviews = [row for row in outcome_reviews if bool(row.get("accepted"))]
     linked_training = [row for row in training_rows if str(row.get("outcome_review_id") or "")]
     try:
@@ -679,6 +746,10 @@ def paper_product_status(private_root: Path | None = None) -> dict[str, Any]:
         "llm_invocation_cost_rub": float(llm_invocations.get("total_cost_rub") or 0.0),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
         "execution_allowed": execution_allowed,
+        "paper_generation_run_id": str(generation.get("paper_generation_run_id") or ""),
+        "generation_status": str(generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(generation.get("current")),
+        "display_only": not bool(generation.get("current")),
     }
 
 

@@ -1,6 +1,6 @@
 # Farm Ownership Map
 
-Status: **ACTIVE**. Last updated: 2026-06-27.
+Status: **ACTIVE**. Last updated: 2026-07-18.
 
 Purpose: after `farm_loop` + `farm_tasks.sqlite` became the calculation farm's core,
 this map records which loops are active, diagnostic, or legacy. Nothing here gives the
@@ -12,6 +12,7 @@ farm permission to touch the old money path.
 |----|------|
 | `state/farm_tasks.sqlite` | **Brain**: typed lifecycle, scheduling, reasons, fingerprints. |
 | `state/strategy_lab.sqlite` | **Compute queue**: proven sweep queue drained by the worker. |
+| `state/ownership.sqlite` | **Process authority**: exact identity, owner instance, lease and monotonic fence. |
 | `state/scanner_farm_loop.sqlite` | Legacy checkpoint for the superseded scanner-farm loop. |
 
 ## Ownership Matrix
@@ -31,7 +32,7 @@ farm permission to touch the old money path.
 | `scripts/strategy_lab/generate_event_sweeps.py` | **KEEP / OFF DEFAULT** | Price-event sweep generator; `--from-scanner` is legacy bridge. |
 | `scripts/strategy_lab/apply_feedback_recommendations.py` | **KEEP / MANUAL DIAGNOSTIC** | Manual follow-up bridge; canonical automation now goes through `farm_loop`. |
 | `scripts/strategy_lab/autopilot_once.py` | **KEEP / OFF DEFAULT** | Registry/spec/queue filler; superseded by lifecycle follow-up logic. |
-| `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Manual stale-job recovery. |
+| `scripts/strategy_lab/requeue_stale_jobs.py` | **KEEP / MAINTENANCE** | Reaps expired fenced claims only; `started_at` age is display evidence, not authority. |
 | `scripts/strategy_lab/sync_state_db.py` | **KEEP / REPAIR** | Imports completed run dirs if worker import crashed. |
 | `bat\strategy_lab_start.bat` | **LEGACY LAB WRAPPER** | Older standalone queue/dashboard/worker start. Kept for diagnostics; not the canonical farm/PFR/paper loop. |
 | `start.bat` | **SEPARATE PRODUCT SURFACE** | Starts the Telegram analyzer product, not the Strategy Lab farm and not the old live `main.py`; any legacy auto-execute path requires `TELEGRAM_BOT_ALLOW_AUTO_EXECUTE=1` plus `AUTO_TRADE`. |
@@ -74,6 +75,24 @@ Forbidden as farm imports:
 - `.env` / config money path
 
 This is enforced by the farm boundary tests.
+
+## Fenced Ownership Rules
+
+- All `farm_loop --apply` modes acquire `canonical_farm`; `--once` is not an
+  ownership bypass. Long cycles renew independently in a heartbeat thread.
+- `worker_once` and the standalone worker scheduler use durable process leases;
+  a legacy `worker.lock` is fail-closed migration evidence and is never deleted
+  by age.
+- Brain and compute claims name owner, expiry and fence. Expiry removes mutation
+  authority immediately, before any takeover. Recovery increments, never
+  resets, the fence.
+- Legacy queued/deferred rows can receive their first v2 claim. Legacy running
+  rows become `legacy_running_unfenced`; terminal rows remain history.
+- Brain-to-compute dispatch is an idempotent, content-bound outbox. Completion
+  joins the same materialization and task fence rather than trusting a job ID
+  alone.
+- Recovered heartbeats and listening ports are display-only. They cannot reach
+  graceful stop or `taskkill` without current in-process ownership.
 
 ## Telegram And LLM Surface Boundary
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import write_cycle_links
+from src.research_lab.paper_projection_reader import read_projection_view
 from src.research_lab.paper_signals import store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import first_tp, geometry, midpoint
@@ -82,9 +83,20 @@ def _card_refs(private_root: Path) -> dict[str, dict[str, Any]]:
     return refs
 
 
-def _trade_refs(private_root: Path) -> dict[str, dict[str, Any]]:
+def _trade_refs(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     refs: dict[str, dict[str, Any]] = {}
-    for name in ("paper_product_trades.json", "main_paper_trades.json"):
+    view = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=private_root / "state" / "derived" / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    names = ("paper_product_trades.json",) if not view["authority_database_exists"] else ()
+    for name in names:
         path = private_root / "state" / "derived" / name
         if not path.exists():
             continue
@@ -96,7 +108,11 @@ def _trade_refs(private_root: Path) -> dict[str, dict[str, Any]]:
             sid = str(item.get("source_signal_id") or "")
             if sid:
                 refs[sid] = item
-    return refs
+    for item in view.get("items") or []:
+        sid = str(item.get("source_signal_id") or "")
+        if sid:
+            refs[sid] = item
+    return refs, view
 
 
 def _calculator_refs(private_root: Path) -> dict[str, dict[str, Any]]:
@@ -225,6 +241,9 @@ def training_row(
         "setup_id": str(validator_context.get("setup_id") or ""),
         "candidate_id": str(validator_context.get("candidate_id") or ""),
         "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
+        "search_family_id": str(validator_context.get("search_family_id") or ""),
+        "search_trial_id": str(validator_context.get("search_trial_id") or ""),
+        "effective_n_trials": int(validator_context.get("effective_n_trials") or 0),
         "farm_geometry_profile_id": geometry_profile_id,
         "farm_geometry_profile_reason": geometry_profile_reason,
         "farm_geometry_entry_scale": validator_context.get("geometry_entry_scale")
@@ -240,6 +259,20 @@ def training_row(
         "paper_product_trade_id": str(trade.get("paper_product_trade_id") or ""),
         "main_paper_status": str(trade.get("status") or ""),
         "main_paper_runtime_id": str(trade.get("runtime_id") or ""),
+        "paper_generation_run_id": str(trade.get("paper_generation_run_id") or ""),
+        "paper_subject_generation_id": str(
+            trade.get("paper_subject_generation_id") or ""
+        ),
+        "terminal_lifecycle_event_id": str(
+            trade.get("terminal_lifecycle_event_id") or ""
+        ),
+        "account_generation_id": str(trade.get("account_generation_id") or ""),
+        "immutable_terminal_evidence": bool(
+            trade.get("paper_generation_run_id")
+            and trade.get("paper_subject_generation_id")
+            and trade.get("terminal_lifecycle_event_id")
+            and trade.get("account_generation_id")
+        ),
         "outcome_id": f"outcome_{sig.signal_id}" if sig.status in TERMINAL_STATUSES else "",
         "source": sig.source,
         "symbol": sig.symbol,
@@ -332,13 +365,30 @@ def _load_existing_summary(path: Path) -> dict[str, Any]:
     return {}
 
 
-def export_training_rows(private_root: Path, *, terminal_only: bool = True, force: bool = False) -> dict[str, Any]:
+def export_training_rows(
+    private_root: Path,
+    *,
+    terminal_only: bool = True,
+    force: bool = False,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = Path(private_root)
     signals = store.load_signals(private_root)
-    source_terminal = [sig for sig in signals if sig.status in TERMINAL_STATUSES]
-    source_terminal_hash = _source_hash(source_terminal)
     cards = _card_refs(private_root)
-    trades = _trade_refs(private_root)
+    trades, trade_generation = _trade_refs(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    source_terminal_all = [sig for sig in signals if sig.status in TERMINAL_STATUSES]
+    if trade_generation["authority_database_exists"]:
+        source_terminal = [
+            sig
+            for sig in source_terminal_all
+            if (trades.get(sig.signal_id) or {}).get("terminal_lifecycle_event_id")
+        ]
+    else:
+        source_terminal = source_terminal_all
+    source_terminal_hash = _source_hash(source_terminal)
     advice_by_feature = _calculator_refs(private_root)
     policy_by_signal = _adaptive_policy_refs(private_root)
     outcome_reviews_by_training = _outcome_review_refs(private_root)
@@ -435,6 +485,7 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
         "rows": len(rows),
         "terminal_only": terminal_only,
         "source_terminal_rows": len(source_terminal),
+        "source_terminal_rows_unbound": len(source_terminal_all) - len(source_terminal),
         "source_terminal_hash": source_terminal_hash,
         "export_refs_hash": export_refs_hash,
         "skipped": False,
@@ -445,6 +496,12 @@ def export_training_rows(private_root: Path, *, terminal_only: bool = True, forc
         "by_family": by_family,
         "by_diagnosis": by_diagnosis,
         "by_result": by_result,
+        "paper_generation_run_id": str(
+            trade_generation.get("paper_generation_run_id") or ""
+        ),
+        "generation_status": str(trade_generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(trade_generation.get("current")),
+        "display_only": not bool(trade_generation.get("current")),
     }
     out_snapshot.write_text(
         json.dumps({**summary, "items": rows[:200]}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

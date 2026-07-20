@@ -36,12 +36,43 @@ def write_run_outputs(
     allow_public_output: bool = False,
     include_rejects: bool = False,
     runtime_meta: dict[str, Any] | None = None,
+    output_state: str = "completed",
+    publication_generation: dict[str, Any] | None = None,
 ) -> Path:
+    if output_state not in {"completed", "provisional"}:
+        raise ValueError("output_state must be completed or provisional")
+    if output_state == "provisional" and not publication_generation:
+        raise ValueError("provisional output requires an owner/fence generation")
     out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-    run_dir = out_root / "experiments" / "completed" / f"{stamp}_{spec.experiment_id}"
+    run_dir = out_root / "experiments" / output_state / f"{stamp}_{spec.experiment_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
+    if publication_generation:
+        (run_dir / "publication_generation.json").write_text(
+            json.dumps(publication_generation, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
     trial_evidence = build_search_trial_evidence(spec, results, runtime_meta)
+    trial_by_run_id = {
+        str(row.get("run_id") or ""): row
+        for row in trial_evidence.get("trials") or []
+        if row.get("run_id")
+    }
+    result_rows = []
+    for result in results:
+        row = result_dict(result, include_trades=True)
+        trial = trial_by_run_id.get(result.run_id) or {}
+        row["search_family_id"] = spec.search_family_id
+        row["search_trial_id"] = str(trial.get("execution_id") or "")
+        row["metrics"] = {
+            **dict(row.get("metrics") or {}),
+            "search_family_id": spec.search_family_id,
+            "search_trial_id": str(trial.get("execution_id") or ""),
+            "effective_n_trials": int(
+                trial_evidence["search_space"]["effective_n_trials"]
+            ),
+        }
+        result_rows.append(row)
     payload = {
         "schema": "strategy_lab_results.v1",
         "experiment_id": spec.experiment_id,
@@ -56,7 +87,7 @@ def write_run_outputs(
         "slippage_bps": spec.slippage_bps,
         "search_trial_evidence_id": trial_evidence["search_trial_evidence_id"],
         "multiple_testing_family_hash": trial_evidence["multiple_testing_family_hash"],
-        "results": [result_dict(r, include_trades=True) for r in results],
+        "results": result_rows,
     }
     (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     write_search_trial_evidence(run_dir, trial_evidence)
@@ -75,18 +106,52 @@ def write_run_outputs(
         _llm_review_prompt(spec, results, reduce_report), encoding="utf-8"
     )
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
+    if output_state == "completed":
+        publish_run_indexes(
+            spec, results, out_root, run_dir,
+            include_rejects=include_rejects,
+            allow_public_output=allow_public_output,
+        )
+    return run_dir
+
+
+def publish_run_indexes(
+    spec: ExperimentSpec,
+    results: list[RunResult],
+    out_root: Path,
+    run_dir: Path,
+    *,
+    include_rejects: bool = False,
+    allow_public_output: bool = False,
+) -> None:
+    """Publish secondary indexes only after a fenced run becomes authoritative."""
+    out_root = resolve_private_root(out_root, allow_public_output=allow_public_output)
     _write_obsidian_notes(spec, results, out_root, run_dir.name)
     artifact_label = f"experiments/completed/{run_dir.name}"
+    evidence_path = run_dir / "search_trial_evidence.json"
+    trial_evidence = (
+        json.loads(evidence_path.read_text(encoding="utf-8"))
+        if evidence_path.exists()
+        else build_search_trial_evidence(spec, results, None)
+    )
     # The registry tracks candidates worth revisiting. REJECT rows stay in the
     # full run artifacts (metrics.json / candidates.csv) but do not pollute the
     # registry unless explicitly requested for debugging.
     registrable = [
         r for r in results if include_rejects or r.validation_status in REGISTRY_STATUSES
     ]
-    entries = [build_entry(spec.experiment_id, r, artifact_label, spec=spec) for r in registrable]
+    entries = [
+        build_entry(
+            spec.experiment_id,
+            r,
+            artifact_label,
+            spec=spec,
+            search_trial_evidence=trial_evidence,
+        )
+        for r in registrable
+    ]
     if entries:
         upsert_entries(registry_path(out_root), entries)
-    return run_dir
 
 
 def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str, Any]:
@@ -95,7 +160,7 @@ def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str,
         "symbol": result.symbol,
         "family": result.family,
         "params": result.params,
-        "metrics": result.metrics,
+        "metrics": dict(result.metrics),
         "decision": result.decision,
         "reasons": result.reasons,
         "validation_status": result.validation_status,
@@ -115,7 +180,7 @@ def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str,
 def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:
     fields = [
         "run_id", "symbol", "family", "decision", "reasons", "n_trades",
-        "win_rate", "avg_net_pct", "total_net_pct", "profit_factor",
+        "win_rate", "avg_net_pct", "total_net_pct", "profit_factor", "profit_factor_state",
         "max_drawdown_pct", "test_avg_net_pct", "best_trade_share",
         "validation_status", "validation_reasons", "next_action",
     ]
@@ -135,6 +200,9 @@ def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:
                 "avg_net_pct": m["avg_net_pct"],
                 "total_net_pct": m["total_net_pct"],
                 "profit_factor": m["profit_factor"],
+                "profit_factor_state": json.dumps(
+                    m.get("profit_factor_state") or {}, sort_keys=True, separators=(",", ":")
+                ),
                 "max_drawdown_pct": m["max_drawdown_pct"],
                 "test_avg_net_pct": m["test_avg_net_pct"],
                 "best_trade_share": m["best_trade_share"],
@@ -376,6 +444,7 @@ def _write_candidate_note(path: Path, result: RunResult, run_name: str) -> None:
         f"- avg_net_pct: {m['avg_net_pct']}",
         f"- test_avg_net_pct: {m['test_avg_net_pct']}",
         f"- profit_factor: {m['profit_factor']}",
+        f"- profit_factor_state: {json.dumps(m.get('profit_factor_state') or {}, sort_keys=True)}",
         f"- max_drawdown_pct: {m['max_drawdown_pct']}",
         f"- best_trade_share: {m['best_trade_share']}",
         f"- stress_avg_net_pct: {m.get('stress_avg_net_pct', 'n/a')}",
@@ -427,14 +496,14 @@ def _summary_md(spec: ExperimentSpec, results: list[RunResult]) -> str:
         "",
     ]
     top = sorted(results, key=lambda r: r.metrics["avg_net_pct"], reverse=True)[:12]
-    lines.append("| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | reasons |")
+    lines.append("| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | pf_state | reasons |")
     lines.append("|---|---|---|---|---|---:|---:|---:|---:|---|")
     for r in top:
         m = r.metrics
         lines.append(
             f"| {r.run_id} | {r.symbol} | {r.family} | {r.decision} | {r.validation_status} | "
             f"{m['n_trades']} | {m['avg_net_pct']} | {m['test_avg_net_pct']} | "
-            f"{m['profit_factor']} | {'; '.join(r.reasons)} |"
+            f"{m['profit_factor']} | {str((m.get('profit_factor_state') or {}).get('state') or '')} | {'; '.join(r.reasons)} |"
         )
     lines.append("")
     return "\n".join(lines)

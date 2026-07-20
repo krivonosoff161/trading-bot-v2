@@ -198,6 +198,22 @@ def plan_followup(
     if rec.strategy_id not in REGISTRY:
         return _note_plan(rec, cid, reason="unknown_strategy",
                           note=f"strategy '{rec.strategy_id}' not in registry; not queued")
+    lineage = dict(candidate_params or {})
+    nested = lineage.get("params")
+    if isinstance(nested, dict):
+        lineage = {**nested, **lineage}
+    parent_family_id = str(lineage.get("search_family_id") or "")
+    parent_trial_id = str(lineage.get("search_trial_id") or "")
+    parent_effective_n_trials = int(
+        lineage.get("effective_n_trials") or 0
+    )
+    if not (parent_family_id and parent_trial_id and parent_effective_n_trials > 0):
+        return _note_plan(
+            rec,
+            cid,
+            reason="unbound_parent_search_family",
+            note="follow-up requires verified parent family/trial accounting; legacy context not queued",
+        )
 
     filter_grid: dict[str, list[str]] = {}
     if rec.action == fr.REGIME_SWEEP:
@@ -232,6 +248,10 @@ def plan_followup(
         backend="cpu",
         resource_class="normal",
         private_output_policy="private_only",
+        parent_family_id=parent_family_id,
+        parent_trial_id=parent_trial_id,
+        parent_effective_n_trials=parent_effective_n_trials,
+        cumulative_family_policy="cumulative",
     )
     return FollowupPlan(
         action=rec.action, candidate_id=cid, symbol=rec.symbol, strategy_id=rec.strategy_id,

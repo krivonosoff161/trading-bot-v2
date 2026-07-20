@@ -1,6 +1,6 @@
 # Entrypoint Catalog
 
-Status: **ACTIVE**. Reviewed: 2026-07-10.
+Status: **ACTIVE**. Reviewed: 2026-07-18.
 
 This catalog is the authority for Windows batch entrypoints. It separates the
 supported paper/product paths from diagnostic, legacy, and network/cost surfaces.
@@ -22,6 +22,19 @@ remain isolated and must not be used as farm launchers.
 
 Read [Farm Ownership Map](farm_ownership_map.md) and
 [Farm Runbook](farm_runbook.md) before using a supported path.
+
+The v2 paper-evidence coordinator is not wired to any supported launcher yet.
+Its public API is off by default and exists for temporary-root/synthetic
+verification. Do not infer activation or private migration from the presence of
+`paper_evidence_store.py`; rollout requires a separate explicit operator action
+under the [Paper Evidence Generations](paper-evidence-generations.md) contract.
+
+Normal scanner/farm apply modes do not authorize destructive storage maintenance.
+Legacy cache/log/spec/task retention is report-only; the synthetic v2 quarantine proof
+has no supported launcher and cannot activate a repository or current private root. See
+[Storage boundaries](storage_boundaries.md). The synthetic segmented-log protocol also
+has no launcher or implicit adapter; coordinated adoption of current logs remains
+deferred.
 
 `python scripts/ci/check_public_docs.py` verifies that every tracked `.bat`
 file is catalogued and that public documentation links resolve locally.
@@ -142,3 +155,7 @@ file is catalogued and that public documentation links resolve locally.
 5. The unified control center supervises existing owners; it does not merge the
    public-news publisher, scanner queue, canonical farm, Telegram bot, or visual
    surfaces into one runtime process.
+6. Recovered heartbeat/port processes are display-only. Executable matching is
+   an identity check, not authority to stop an external process.
+7. Every farm apply mode and standalone worker loop must acquire its durable
+   owner lease; file age and `--once` never bypass the owner group.

@@ -44,7 +44,15 @@ def variant_count(proposal: Proposal) -> int:
     return max(0, len(proposal.symbols)) * max(0, len(grid))
 
 
-def compile_proposal(proposal: Proposal, *, policy: ResourcePolicy, data_glob: str = DEFAULT_DATA_GLOB) -> ExperimentSpec:
+def compile_proposal(
+    proposal: Proposal,
+    *,
+    policy: ResourcePolicy,
+    data_glob: str = DEFAULT_DATA_GLOB,
+    data_snapshot_id: str = "",
+    data_evidence_hash: str = "",
+    data_snapshot_bindings: list[dict] | None = None,
+) -> ExperimentSpec:
     """Compile a proposal into a bounded ExperimentSpec (raises if not compilable)."""
     grid = proposal.parameter_grid.get(proposal.setup_family)
     if proposal.setup_family not in REGISTRY:
@@ -62,6 +70,9 @@ def compile_proposal(proposal: Proposal, *, policy: ResourcePolicy, data_glob: s
         filters=dict(proposal.filters),
         max_runs=cap,
         timeframe=proposal.requested_timeframe or "1d",
+        data_snapshot_id=data_snapshot_id,
+        data_evidence_hash=data_evidence_hash,
+        data_snapshot_bindings=list(data_snapshot_bindings or []),
     )
 
 

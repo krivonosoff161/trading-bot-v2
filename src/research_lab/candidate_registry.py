@@ -33,11 +33,20 @@ def build_entry(
     artifact_label: str,
     created_at: str | None = None,
     spec: Any | None = None,
+    search_trial_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a registry entry from a RunResult-like object."""
     created = created_at or dt.datetime.now(dt.timezone.utc).isoformat()
     status = getattr(result, "validation_status", "") or "OBSERVE"
     plan_meta = dict(getattr(spec, "plan_meta", {}) or {}) if spec is not None else {}
+    trial = next(
+        (
+            row
+            for row in (search_trial_evidence or {}).get("trials", [])
+            if str(row.get("run_id") or "") == str(result.run_id)
+        ),
+        {},
+    )
     return {
         "schema": SCHEMA,
         "candidate_id": result.run_id,
@@ -51,6 +60,14 @@ def build_entry(
         ),
         "plan_group": str(plan_meta.get("group") or ""),
         "plan_meta": plan_meta,
+        "search_family_id": str((search_trial_evidence or {}).get("search_family_id") or ""),
+        "search_trial_id": str(trial.get("execution_id") or ""),
+        "effective_n_trials": int(
+            ((search_trial_evidence or {}).get("search_space") or {}).get(
+                "effective_n_trials", 0
+            )
+            or 0
+        ),
         "filters": dict(getattr(spec, "filters", {}) or {}),
         "fees_bps": float(getattr(spec, "fees_bps", 7.0)) if spec is not None else 7.0,
         "slippage_bps": float(getattr(spec, "slippage_bps", 3.0)) if spec is not None else 3.0,
@@ -139,7 +156,7 @@ def _metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
     keys = [
         "n_trades", "win_rate", "avg_net_pct", "total_net_pct", "profit_factor",
         "max_drawdown_pct", "train_avg_net_pct", "test_avg_net_pct", "test_trades",
-        "best_trade_share", "stress_avg_net_pct",
+        "best_trade_share", "stress_avg_net_pct", "profit_factor_state",
     ]
     summary = {k: metrics.get(k) for k in keys if k in metrics}
     if isinstance(metrics.get("entry_timing"), dict):

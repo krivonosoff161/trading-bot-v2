@@ -12,9 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.candle_store import CandleStore, CandleStoreError
-from src.research_lab.experiment import load_candles
-from src.research_lab.paths import market_data_dir, resolve_private_root
+from src.research_lab.candle_library import load_canonical_candles
+from src.research_lab.paths import resolve_private_root
 
 _TF_MS = {
     "1m": 60_000,
@@ -41,7 +40,6 @@ class LocalFirstMarketDataProvider:
     ) -> None:
         self.private_root = resolve_private_root(private_root)
         self.fallback = fallback
-        self.store = CandleStore(self.private_root)
         self.min_rows = max(1, int(min_rows))
         self.max_stale_bars = max(1, int(max_stale_bars))
         self.name = f"local-cache+{getattr(fallback, 'name', 'fallback')}"
@@ -74,34 +72,13 @@ class LocalFirstMarketDataProvider:
         return end_ts - last_ts <= self.max_stale_bars * tf_ms
 
     def _fetch_cached(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
-        tf = str(timeframe).strip().lower()
-        norm = str(symbol).replace("-", "_").replace("/", "_")
-        if self.store.exists:
-            try:
-                stored = self.store.read(norm, tf, start_ts, end_ts)
-            except (CandleStoreError, ValueError):
-                stored = []
-            if stored:
-                return stored
-        data_dir = market_data_dir(self.private_root, tf)
-        if not data_dir.exists():
-            return []
-        rows_by_ts: dict[int, dict[str, Any]] = {}
-        for path in sorted(data_dir.glob(f"{norm}_*_{tf}.json")):
-            try:
-                rows = load_candles(path)
-            except Exception:  # noqa: BLE001 - bad cache slice should not break paper loop
-                continue
-            for row in rows:
-                try:
-                    ts = int(row["ts"])
-                    float(row["open"])
-                    float(row["high"])
-                    float(row["low"])
-                    float(row["close"])
-                    float(row.get("vol") or 0.0)
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if start_ts <= ts <= end_ts:
-                    rows_by_ts[ts] = dict(row)
-        return [rows_by_ts[ts] for ts in sorted(rows_by_ts)]
+        selected = load_canonical_candles(
+            self.private_root,
+            symbol,
+            timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            purpose="local_first_provider",
+            coverage_policy="complete_range",
+        )
+        return selected.rows

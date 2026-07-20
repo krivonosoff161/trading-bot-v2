@@ -101,7 +101,11 @@ def run(private_root: Path, *, limit_symbols: int = 16, timeframes: tuple[str, .
             if not ensure_candles(private_root, sym, tf, provider=provider):
                 continue
             from src.research_lab.candle_library import load_canonical_candles
-            candles = load_canonical_candles(private_root, sym, tf).rows
+            selected = load_canonical_candles(
+                private_root, sym, tf,
+                purpose="hypothesis_search", coverage_policy="gap_free",
+            )
+            candles = selected.rows
             if len(candles) < 80:
                 continue
             for combo in grid:
@@ -111,7 +115,13 @@ def run(private_root: Path, *, limit_symbols: int = 16, timeframes: tuple[str, .
                 key = f"{_label(combo)}::{tf}"
                 cell = acc.setdefault(key, {"label": _label(combo), "family": combo["family"],
                                             "timeframe": tf, "exit": combo["exit"], "symbols": 0,
-                                            "is": [], "oos": [], "oos_pos": 0})
+                                            "is": [], "oos": [], "oos_pos": 0,
+                                            "data_snapshot_ids": [],
+                                            "data_provenance_statuses": []})
+                if selected.manifest.snapshot_id not in cell["data_snapshot_ids"]:
+                    cell["data_snapshot_ids"].append(selected.manifest.snapshot_id)
+                if selected.manifest.provenance_status not in cell["data_provenance_statuses"]:
+                    cell["data_provenance_statuses"].append(selected.manifest.provenance_status)
                 cell["symbols"] += 1
                 cell["is"].append(res[0])
                 cell["oos"].append(res[1])
@@ -129,6 +139,8 @@ def _rank(acc: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         out.append({"label": cell["label"], "family": cell["family"], "timeframe": cell["timeframe"],
                     "exit": cell["exit"], "symbols": n, "is_median": round(is_med, 3),
                     "oos_median": round(oos_med, 3), "oos_positive_share": round(share, 3),
+                    "data_snapshot_ids": list(cell.get("data_snapshot_ids") or []),
+                    "data_provenance_statuses": list(cell.get("data_provenance_statuses") or []),
                     "verdict": _verdict(is_med, oos_med, share, n), "paper_forward_ready": False})
     return sorted(out, key=lambda c: -c["oos_median"])
 

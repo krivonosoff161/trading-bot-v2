@@ -30,6 +30,12 @@ from src.research_lab.experiment import (
     load_candles,
 )
 from src.research_lab.paths import market_data_glob
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+    reconcile_partial_fills,
+)
 from src.research_lab.trade_path_diagnostics import (
     _index_run_results,
     _load_rejected_uc,
@@ -137,14 +143,31 @@ def _mk_partial(candles, idx, exit_idx, side, entry, p1, p2, frac1, cost_pct, ou
     r2 = direction * (p2 / entry - 1) * 100
     ret = frac1 * r1 + (1 - frac1) * r2 if frac1 else r2
     net = ret - cost_pct * 100
+    quantities = [float(frac1), 1.0 - float(frac1)] if frac1 else [1.0]
+    prices = [float(p1), float(p2)] if frac1 else [float(p2)]
+    reconciliation = reconcile_partial_fills(
+        1.0,
+        [
+            {"quantity": quantity, "price": price, "cost_pct": cost_pct * 100.0}
+            for quantity, price in zip(quantities, prices)
+        ],
+        entry_price=float(entry), side=str(side),
+    )
+    if abs(float(reconciliation["net_return_pct"]) - net) > 1e-9:
+        raise ValueError("partial fill reconciliation does not match trade return")
     return {"entry_ts": candles[idx]["ts"], "exit_ts": candles[exit_idx]["ts"], "side": side,
-            "net_pct": round(net, 4), "outcome": outcome, "mfe_pct": round(max(0.0, r2, r1), 4),
-            "mae_pct": 0.0, "capture_of_mfe": 0.0}
+            "gross_pct": round(ret, 4), "net_pct": round(net, 4), "outcome": outcome,
+            "mfe_pct": round(max(0.0, r2, r1), 4),
+            "mae_pct": 0.0, "capture_of_mfe": 0.0,
+            "partial_exit_fraction": float(frac1),
+            "partial_leg_prices": prices,
+            "fill_reconciliation": reconciliation}
 
 
 def simulate_exit_mode(candles: list[dict[str, Any]], signals: list[dict[str, Any]],
                        params: dict[str, Any], mode: dict[str, Any], *, fees_bps: float = FEES_BPS,
-                       slip_bps: float = SLIP_BPS) -> list[dict[str, Any]]:
+                       slip_bps: float = SLIP_BPS,
+                       require_complete_horizon: bool = False) -> list[dict[str, Any]]:
     """Re-simulate the SAME signals under one dynamic/fixed exit mode (no look-ahead)."""
     hold = int(mode.get("hold_bars", params.get("hold_bars", 5)))
     stop_pct = float(params.get("stop_pct") or 0.0)
@@ -153,7 +176,8 @@ def simulate_exit_mode(candles: list[dict[str, Any]], signals: list[dict[str, An
     trades: list[dict[str, Any]] = []
     for sig in signals:
         idx = int(sig["idx"])
-        cap = min(idx + hold, len(candles) - 1)
+        horizon_end = idx + hold
+        cap = min(horizon_end, len(candles) - 1)
         if idx >= len(candles) or cap <= idx:
             continue
         entry = float(candles[idx]["open"])
@@ -162,12 +186,37 @@ def simulate_exit_mode(candles: list[dict[str, Any]], signals: list[dict[str, An
         if mode["kind"] == "partial":
             t = _partial_net(candles, idx, cap, entry, str(sig["side"]), stop_pct, mode, cost_pct)
             if t:
+                if require_complete_horizon and t.get("outcome") == "time_exit" and horizon_end >= len(candles):
+                    continue
+                manifest = legacy_fixture_manifest()
+                t.update({
+                    "simulator_manifest": manifest,
+                    "simulator_model_id": manifest["simulator_model_id"],
+                    "simulator_evidence_tier": manifest["evidence_tier"],
+                    "unsupported_simulator_dimensions": list(manifest["unsupported_dimensions"]),
+                    "cost_ledger": build_cost_ledger(
+                        fees_bps=fees_bps, slippage_bps=slip_bps,
+                    ),
+                    "quantity_ledger": build_trade_quantity_ledger(
+                        closed_legs=(
+                            (float(t["partial_exit_fraction"]), 1.0 - float(t["partial_exit_fraction"]))
+                            if float(t.get("partial_exit_fraction") or 0.0) > 0
+                            else (1.0,)
+                        ),
+                    ),
+                })
                 trades.append(t)
             continue
         exit_price, outcome, exit_idx = _scan(candles, idx, cap, entry, str(sig["side"]),
                                               stop_pct, take_pct, mode)
+        if require_complete_horizon and outcome == "time_exit" and horizon_end >= len(candles):
+            continue
         trades.append(finalize_trade(candles, idx, exit_idx, str(sig["side"]), entry,
-                                     exit_price, outcome, sig, cost_pct))
+                                     exit_price, outcome, sig, cost_pct,
+                                     simulator_manifest=legacy_fixture_manifest(),
+                                     cost_ledger=build_cost_ledger(
+                                         fees_bps=fees_bps, slippage_bps=slip_bps,
+                                     )))
     return trades
 
 
@@ -183,7 +232,8 @@ def _bridge_status(symbol: str, tf: str, family: str, params: dict[str, Any],
         CONTRACT_VERSION, CandidateForValidation, trade_evidence_hash,
     )
     from src.research_lab.honest_backtest_bridge import run_validation
-    evidence = [{"net_pct": float(t.get("net_pct") or 0.0)} for t in trades]
+    manifest = legacy_fixture_manifest()
+    evidence = [dict(t) for t in trades]
     cand = CandidateForValidation.from_dict({
         "contract_version": CONTRACT_VERSION,
         "candidate_id": f"exit2::{symbol}::{tf}::{family}", "source_run_id": "exit_phase2",
@@ -197,8 +247,13 @@ def _bridge_status(symbol: str, tf: str, family: str, params: dict[str, Any],
                         "selection_evidence": evidence,
                         "evaluation_data_fingerprint": "", "evaluation_evidence_hash": "",
                         "hypothesis_frozen_at": "", "evaluation_started_at": ""},
-                    "runtime": {"n_variants_evaluated": int(n_trials)}},
-        "trades": evidence})
+                    "runtime": {"n_variants_evaluated": int(n_trials)},
+                    "simulator_manifest": manifest,
+                    "simulator_model_id": manifest["simulator_model_id"],
+                    "unsupported_simulator_dimensions": manifest["unsupported_dimensions"]},
+        "trades": evidence,
+        "simulator_manifest": manifest,
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"]})
     return str(run_validation(cand, Path("."), dry_run=True).get("hard_status") or "")
 
 

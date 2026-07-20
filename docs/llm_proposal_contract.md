@@ -20,7 +20,7 @@ call) · `expected_validation` (the reject/observe/pass condition) · `risk_flag
 | reason | rule |
 |---|---|
 | `unknown_strategy_family` / `unknown_symbol` / `unknown_timeframe` | not in registry / universe / profiles |
-| `unsafe_field` | a denylisted key (code/shell/order/auto_trade/api_key/secret/…) or unsafe wording (guaranteed / live-trade / place order) |
+| `unsafe_field` | a denylisted key (code/shell/order/auto_trade/api_key/secret/…) at any nested depth, or unsafe wording (guaranteed / live-trade / place order) |
 | `variants_too_large` | over the resource-policy variant cap, or `1m` full sweep |
 | param errors incl. `take_pct:reward_risk_below_2r` | params outside registry-derived ranges; **take_pct must be ≥ 2× stop_pct** (units are percent points: `stop_pct=8` = 8%) |
 | `wrong_horizon` | `hold_bars` outside the timeframe band (15m ≤192 bars ~48h · 1h ≤168 ~7d · 4h ≤60 ~10d · 1d ≤30 ~30d) |
@@ -46,6 +46,14 @@ against real failures instead of blind.
 3. re-proposing a confirmed-bad `momentum_breakout` param set on the same cell → `known_bad_in_memory`.
 4. `{hypothesis:"guaranteed live-tradable profit, place order"}` → `unsafe_field`/`unsafe_wording`.
 5. `setup_family:"my_new_idea"` → `unknown_strategy_family` (cannot invent registry families).
+
+The advisory boundary is recursive: wrappers, nested parameter containers, and
+model-supplied lists do not hide forbidden authority fields. Normalized key
+variants such as `Auto-Trade`, `execution allowed`, and `TakeProfitPlan` are
+treated as the same deny-listed authority fields. Key normalization applies
+NFKC and a bounded Cyrillic/Greek homoglyph skeleton before deny-list matching;
+unmapped non-ASCII identifiers fail closed at every nesting depth. Unicode in
+field values remains permitted and is not treated as an identifier.
 
 The registry ([strategy_registry.py](../src/research_lab/strategy_registry.py)) stays the single source
 of truth; `param_schemas.yaml` is validation/ranges/horizon **over** it, never a second catalog.

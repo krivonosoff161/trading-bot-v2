@@ -8,12 +8,13 @@ periodically, while the worker itself handles one job and exits.
 from __future__ import annotations
 
 import argparse
-import dataclasses
-import json
+import hashlib
 import os
 import sys
+import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab import ExperimentSpec, evaluate_spec, write_run_outputs  # noqa: E402
+from src.research_lab.outputs import publish_run_indexes  # noqa: E402
+from src.research_lab.ownership import (  # noqa: E402
+    OwnershipConflictError,
+    OwnershipStore,
+    current_process_identity,
+    probe_process_identity,
+)
 from src.research_lab.candle_store import CandleStore  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.runtime_policy import (  # noqa: E402
@@ -34,49 +42,87 @@ from src.research_lab.runtime_policy import (  # noqa: E402
 )
 from src.research_lab.state_db import (  # noqa: E402
     claim_next_job,
-    complete_job,
     connect,
     default_db_path,
     fail_job,
-    import_run_dir,
     init_db,
+    mark_job_executing,
+    mark_publication_indexes_published,
+    publish_completed_job,
     reap_stale_jobs,
+    recover_pending_publications,
+    renew_job_lease,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.search_trial_evidence import (  # noqa: E402
+    build_search_trial_evidence,
+    write_search_trial_evidence,
+)
 
-_WORKER_LOCK_MAX_AGE_SECONDS = 6 * 3600
+_LEASE_SECONDS = 90.0
+_RENEW_SECONDS = 30.0
 
 
 def _worker_lock_path(private_root: Path) -> Path:
     return private_root / "state" / "worker.lock"
 
 
-def _acquire_worker_lock(private_root: Path) -> tuple[bool, Path]:
-    """Best-effort cross-process singleton lock for the quiet desktop worker."""
-    path = _worker_lock_path(private_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    try:
-        if path.exists() and now - path.stat().st_mtime > _WORKER_LOCK_MAX_AGE_SECONDS:
-            path.unlink()
-    except OSError:
-        pass
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False, path
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(json.dumps({"pid": os.getpid(), "created_at": time.time()}))
-    return True, path
+def _legacy_worker_present(private_root: Path) -> bool:
+    """Fail closed while an un-migrated pathname lock is present."""
+    return _worker_lock_path(private_root).exists()
 
 
-def _release_worker_lock(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+class _WorkerLeaseHeartbeat:
+    def __init__(
+        self,
+        *,
+        ownership_path: Path,
+        process_lease,
+        db_path: Path | None = None,
+        job_id: int | None = None,
+        owner_id: str | None = None,
+        fencing_token: int | None = None,
+    ) -> None:
+        self.ownership_path = ownership_path
+        self.process_lease = process_lease
+        self.db_path = db_path
+        self.job_id = job_id
+        self.owner_id = owner_id
+        self.fencing_token = fencing_token
+        self.stop_event = threading.Event()
+        self.failure: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, name="worker-lease-heartbeat", daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=5)
+
+    def _run(self) -> None:
+        store = OwnershipStore(
+            self.ownership_path,
+            identity_probe=probe_process_identity,
+        )
+        job_conn = connect(self.db_path) if self.db_path is not None else None
+        try:
+            while not self.stop_event.wait(_RENEW_SECONDS):
+                store.renew(self.process_lease, lease_seconds=_LEASE_SECONDS)
+                if job_conn is not None and self.job_id is not None:
+                    renew_job_lease(
+                        job_conn,
+                        self.job_id,
+                        owner_id=str(self.owner_id),
+                        fencing_token=int(self.fencing_token or 0),
+                        lease_seconds=_LEASE_SECONDS,
+                    )
+        except BaseException as exc:  # captured and checked before publication
+            self.failure = exc
+        finally:
+            if job_conn is not None:
+                job_conn.close()
+            store.close()
 
 
 def _night_mode(flag: bool) -> bool:
@@ -100,21 +146,58 @@ def run_worker_once(
     failure is recorded to the DB/status file and the exception is re-raised.
     """
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
-    locked, lock_path = _acquire_worker_lock(private_root)
-    if not locked:
+    if _legacy_worker_present(private_root):
         status_path = worker_status_path(private_root)
         write_worker_status(status_path, status="deferred", reason="worker_already_running",
                             wait_seconds=60, mode="unknown")
         if verbose:
             print("deferred reason=worker_already_running wait_seconds=60")
         return {"status": "deferred", "reason": "worker_already_running", "wait_seconds": 60, "mode": "unknown"}
-    policy = load_resource_policy(night_mode=_night_mode(night_mode))
-    db_path = default_db_path(private_root)
-    conn = connect(db_path)
-    init_db(conn)
-    cad_path = cadence_path(private_root)
-    status_path = worker_status_path(private_root)
+    owner_id = f"worker-{os.getpid()}-{uuid.uuid4().hex}"
+    ownership_path = private_root / "state" / "ownership.sqlite"
+    ownership_store = OwnershipStore(
+        ownership_path,
+        identity_probe=probe_process_identity,
+    )
     try:
+        process_lease = ownership_store.acquire(
+            resource_id="strategy_lab_worker",
+            role_id="compute_worker",
+            owner_id=owner_id,
+            identity=current_process_identity(),
+            lease_seconds=_LEASE_SECONDS,
+        )
+    except OwnershipConflictError:
+        ownership_store.close()
+        status_path = worker_status_path(private_root)
+        write_worker_status(
+            status_path, status="deferred", reason="worker_already_running",
+            wait_seconds=60, mode="unknown",
+        )
+        return {"status": "deferred", "reason": "worker_already_running", "wait_seconds": 60, "mode": "unknown"}
+    process_heartbeat = _WorkerLeaseHeartbeat(
+        ownership_path=ownership_path,
+        process_lease=process_lease,
+    )
+    process_heartbeat.start()
+    try:
+        policy = load_resource_policy(night_mode=_night_mode(night_mode))
+        db_path = default_db_path(private_root)
+        conn = connect(db_path)
+        init_db(conn)
+        cad_path = cadence_path(private_root)
+        status_path = worker_status_path(private_root)
+    except Exception:
+        process_heartbeat.stop()
+        try:
+            ownership_store.release(process_lease)
+        finally:
+            ownership_store.close()
+        raise
+    try:
+        recovered = recover_pending_publications(conn, private_root)
+        if recovered and verbose:
+            print(f"recovered pending publications={recovered}")
         stale = reap_stale_jobs(conn)
         if stale and verbose:
             print(f"requeued stale jobs={stale} db=strategy-lab/state/{db_path.name}")
@@ -133,7 +216,9 @@ def run_worker_once(
                 return {"status": "deferred", "reason": decision.reason,
                         "wait_seconds": decision.wait_seconds, "mode": policy.mode}
 
-        job = claim_next_job(conn)
+        job = claim_next_job(
+            conn, owner_id=owner_id, lease_seconds=_LEASE_SECONDS,
+        )
         if not job:
             if verbose:
                 print(f"db=strategy-lab/state/{db_path.name} queue=empty")
@@ -142,8 +227,35 @@ def run_worker_once(
 
         record_start(cad_path, now)
         job_id = int(job["job_id"])
+        fencing_token = int(job["fencing_token"])
+        process_heartbeat.stop()
+        job_heartbeat = _WorkerLeaseHeartbeat(
+            ownership_path=ownership_path,
+            process_lease=process_lease,
+            db_path=db_path,
+            job_id=job_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+        )
+        job_heartbeat.start()
+        spec = None
+        runtime_meta: dict = {}
         try:
-            spec = ExperimentSpec.from_json(Path(str(job["spec_path"])))
+            spec_path = Path(str(job["spec_path"]))
+            expected_digest = str(job.get("materialization_digest") or "")
+            if expected_digest:
+                actual_digest = "sha256:" + hashlib.sha256(
+                    spec_path.read_text(encoding="utf-8").encode("utf-8")
+                ).hexdigest()
+                if actual_digest != expected_digest:
+                    raise RuntimeError(
+                        "queued materialization digest does not match spec content"
+                    )
+            spec = ExperimentSpec.from_json(spec_path)
+            mark_job_executing(
+                conn, job_id, owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
             write_worker_status(
                 status_path,
                 status="running",
@@ -164,15 +276,11 @@ def run_worker_once(
                 )
             cap, capped = effective_variant_cap(policy, spec.max_runs)
             if capped:
-                if verbose:
-                    print(
-                        f"variant cap applied job_id={job_id} "
-                        f"max_runs={spec.max_runs or 'unlimited'} -> {cap} "
-                        f"mode={policy.mode}",
-                        flush=True,
-                    )
-                spec = dataclasses.replace(spec, max_runs=cap)
-            runtime_meta: dict = {}
+                raise RuntimeError(
+                    "queued search-family resource policy drift: "
+                    f"bound execution_cap={spec.max_runs or 'unlimited'} current_cap={cap}; "
+                    "recompile instead of mutating the family at the worker"
+                )
             # The worker reads one immutable bounded series from the canonical
             # candle library for all variants. JSON remains a migration fallback.
             results = evaluate_spec(
@@ -189,29 +297,97 @@ def run_worker_once(
                 spec, results, private_root,
                 allow_public_output=allow_public_output, include_rejects=include_rejects,
                 runtime_meta=runtime_meta,
+                output_state="provisional",
+                publication_generation={
+                    "schema": "strategy_lab_publication_generation.v1",
+                    "job_id": job_id,
+                    "owner_id": owner_id,
+                    "fencing_token": fencing_token,
+                },
             )
-            import_run_dir(conn, private_root, run_dir)
-            conn.commit()
-            label = str(run_dir.relative_to(private_root)).replace("\\", "/")
-            complete_job(conn, job_id, label)
+            if job_heartbeat.failure is not None:
+                raise RuntimeError("worker lease renewal failed before publication") from job_heartbeat.failure
+            final_dir, _ = publish_completed_job(
+                conn,
+                private_root,
+                run_dir,
+                job_id=job_id,
+                owner_id=owner_id,
+                fencing_token=fencing_token,
+            )
+            index_error = ""
+            try:
+                publish_run_indexes(
+                    spec, results, private_root, final_dir,
+                    include_rejects=include_rejects,
+                    allow_public_output=allow_public_output,
+                )
+                mark_publication_indexes_published(
+                    conn, job_id, fencing_token
+                )
+            except Exception as exc:
+                # Queue/run publication is already authoritative and must not
+                # be rewritten as failed. The durable generation remains
+                # directory_published for a bounded repair/rebuild.
+                index_error = type(exc).__name__
+            label = str(final_dir.relative_to(private_root)).replace("\\", "/")
             write_worker_status(
                 status_path, status="completed", job_id=job_id, run_label=label,
                 results=len(results), mode=policy.mode,
+                index_publication_pending=bool(index_error),
+                index_error=index_error,
             )
             if verbose:
                 print(f"completed job_id={job_id} run={label} results={len(results)}")
             return {"status": "completed", "job_id": job_id, "run_label": label,
-                    "results": len(results), "mode": policy.mode}
+                    "results": len(results), "mode": policy.mode,
+                    "index_publication_pending": bool(index_error)}
         except Exception as exc:
             reason = "".join(traceback.format_exception_only(type(exc), exc)).strip()
-            fail_job(conn, job_id, reason)
+            if spec is not None:
+                try:
+                    failed_dir = (
+                        Path(private_root)
+                        / "experiments"
+                        / "failed"
+                        / f"job_{job_id}_{spec.search_family_id[:16]}"
+                    )
+                    failed_dir.mkdir(parents=True, exist_ok=True)
+                    failure_runtime = {
+                        **runtime_meta,
+                        "worker_failure_type": type(exc).__name__,
+                        "worker_failure_stage": "before_complete_outputs",
+                    }
+                    failure_evidence = build_search_trial_evidence(
+                        spec, [], failure_runtime
+                    )
+                    write_search_trial_evidence(failed_dir, failure_evidence)
+                except Exception:
+                    # Preserve the original job failure. A failure to write the
+                    # secondary ledger must not impersonate a successful run.
+                    pass
+            try:
+                fail_job(
+                    conn, job_id, reason, owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+            except Exception:
+                # Losing the lease must not be disguised as an authoritative
+                # failure transition by the stale worker.
+                pass
             write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
             if verbose:
                 print(f"failed job_id={job_id} error={exc}")
             raise
     finally:
+        heartbeat = locals().get("job_heartbeat", process_heartbeat)
+        heartbeat.stop()
         conn.close()
-        _release_worker_lock(lock_path)
+        try:
+            ownership_store.release(process_lease)
+        except Exception:
+            pass
+        ownership_store.close()
 
 
 def main() -> None:

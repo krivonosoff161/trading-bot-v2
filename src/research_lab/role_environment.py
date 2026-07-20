@@ -96,6 +96,78 @@ def _bound_ref(path: Path, content_hash: str | None = None) -> str:
     return f"{path}#sha256={digest}"
 
 
+def _content_ref(
+    ref: str,
+    content_sha256: str,
+    *,
+    producer_completion_id: str,
+    producer_schema: str = "",
+    generation: int = 0,
+) -> dict[str, Any]:
+    return {
+        "ref": str(ref),
+        "content_sha256": str(content_sha256),
+        "producer_completion_id": str(producer_completion_id),
+        "producer_schema": str(producer_schema),
+        "generation": int(generation),
+    }
+
+
+def _feedback_content_refs(
+    feedback: dict[str, Any],
+    refs: list[Any] | tuple[Any, ...],
+    *,
+    generation: int = 0,
+) -> list[dict[str, Any]]:
+    hashes = feedback.get("provenance", {}).get("source_evidence_hashes")
+    if not isinstance(hashes, dict):
+        hashes = {}
+    completion = str(feedback.get("feedback_id") or "")
+    out: list[dict[str, Any]] = []
+    for item in refs:
+        if isinstance(item, dict):
+            out.append(item)
+            continue
+        ref = str(item)
+        digest = str(hashes.get(ref) or "")
+        if not digest:
+            digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()
+        out.append(_content_ref(
+            ref,
+            digest,
+            producer_completion_id=completion,
+            producer_schema=str(feedback.get("schema") or ""),
+            generation=generation,
+        ))
+    return out
+
+
+def _ensure_task_spec_content_binding(
+    task_spec: dict[str, Any],
+    feedback: dict[str, Any],
+    *,
+    recipient: str,
+) -> None:
+    provenance = feedback.get("provenance") if isinstance(feedback.get("provenance"), dict) else {}
+    source_hash = str(provenance.get("source_hash") or "")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
+        source_hash = hashlib.sha256(
+            json.dumps(provenance, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+    task_spec.setdefault("source_content_sha256", source_hash)
+    task_spec.setdefault(
+        "producer_completion_id",
+        _stable_id(
+            {
+                "feedback_id": str(feedback.get("feedback_id") or ""),
+                "recipient": recipient,
+                "source_ref": str(task_spec.get("source_ref") or ""),
+                "generation": int(task_spec.get("generation") or 0),
+            }
+        ),
+    )
+
+
 def recoverable_role_requests(private_root: Path, recipient: str) -> list[dict[str, Any]]:
     """Return immutable candidates whose state projection still needs request acceptance."""
     directory = environment_dir(private_root, recipient)
@@ -178,15 +250,20 @@ def materialize_role_environment(
         task_spec.setdefault("subject", {"subject_ref": str(feedback.get("subject_ref") or "")})
         task_spec.setdefault("source_ref", str(feedback["feedback_id"]))
         task_spec.setdefault("generation", 0)
+        _ensure_task_spec_content_binding(task_spec, feedback, recipient=recipient)
         task_spec.setdefault("adaptive_trial_id", adaptive_trial_id(task_spec))
         basis = {
             "feedback_id": str(feedback["feedback_id"]),
             "recipient": recipient,
             "parent_environment_id": parent_environment_id,
             "action": str(recommendation["action"]),
-            "evidence_refs": list(recommendation.get("evidence_refs") or []),
             "task_spec": task_spec,
         }
+        basis["evidence_refs"] = _feedback_content_refs(
+            feedback,
+            list(recommendation.get("evidence_refs") or []),
+            generation=int(task_spec.get("generation") or 0),
+        )
         trial_id = str(basis["task_spec"].get("adaptive_trial_id") or "")
         expected_trial_id = adaptive_trial_id(basis["task_spec"])
         if trial_id and trial_id != expected_trial_id:
@@ -317,8 +394,20 @@ def gate_role_environment(
         role=recipient,
         artifact_id=environment_id,
         evidence_refs=(
-            _bound_ref(Path(gate_path), gate_hash),
-            _bound_ref(Path(evaluation_path), evaluation_hash),
+            _content_ref(
+                _bound_ref(Path(gate_path), gate_hash),
+                gate_hash,
+                producer_completion_id=f"gate::{environment_id}",
+                producer_schema="DeterministicRoleGate.v1",
+                generation=int((row.get("task_spec") or {}).get("generation") or 0),
+            ),
+            _content_ref(
+                _bound_ref(Path(evaluation_path), evaluation_hash),
+                evaluation_hash,
+                producer_completion_id=f"evaluation::{environment_id}",
+                producer_schema="ValidationEpoch.v1",
+                generation=int((row.get("task_spec") or {}).get("generation") or 0),
+            ),
         ),
     )
     return gated

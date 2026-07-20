@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.paper_projection_reader import read_projection_view
+
 SUMMARY_SCHEMA = "paper_product_quality_report.v1"
 MIN_FAMILY_SAMPLE = 20
 ACTIVE_PRODUCT_STATUSES = {"armed", "opened_paper"}
@@ -622,7 +624,12 @@ def _render_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_paper_product_quality_report(private_root: Path, *, now: float | None = None) -> dict[str, Any]:
+def build_paper_product_quality_report(
+    private_root: Path,
+    *,
+    now: float | None = None,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     private_root = Path(private_root)
     now = time.time() if now is None else now
     derived = private_root / "state" / "derived"
@@ -635,6 +642,43 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
     paper_signals = _read_json(derived / "paper_signals.json")
     training_summary = _read_json(derived / "paper_signal_training.json")
     training_rows = _read_jsonl(derived / "paper_signal_training.jsonl")
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=derived / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    if generation["authority_database_exists"]:
+        generation_items = list(generation.get("items") or [])
+        active_items = [
+            item
+            for item in generation_items
+            if str(item.get("signal_status") or "") in {"armed", "opened_paper"}
+        ]
+        product_trades = {
+            "schema": "PaperProjectionEnvelope.v2",
+            "items": generation_items,
+            "trades": len(generation_items),
+            "active_trades": len(active_items),
+            "live_ready": 0,
+            "live_blocked": len(generation_items),
+            "active_live_ready": 0,
+            "active_live_blocked": len(active_items),
+            "by_live_block": {"v2_is_paper_only": len(generation_items)},
+            "active_by_source": {},
+            "active_by_family": {},
+        }
+        if not (
+            training_summary.get("current_generation_compatible") is True
+            and training_summary.get("paper_generation_run_id")
+            == generation.get("paper_generation_run_id")
+        ):
+            training_summary = {}
+            training_rows = []
+        bridge = {}
+        ready_catalog = {}
+        paper_status = {}
+        paper_signals = {}
     sent = _sent_key_summary(private_root)
 
     active_blockers = _active_live_blockers(product_trades)
@@ -673,6 +717,13 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
         "sent_previews_total": sent["sent_preview_count"],
         "sent_recipients_total": sent["sent_recipient_count"],
     }
+    operator_action = _operator_action(
+        delivery=delivery,
+        product_trades=product_trades,
+        active_blockers=active_blockers,
+    )
+    if generation["authority_database_exists"] and not generation.get("current"):
+        operator_action = "hold_generation_unavailable"
     summary = {
         "schema": SUMMARY_SCHEMA,
         "source_schemas": {
@@ -705,15 +756,15 @@ def build_paper_product_quality_report(private_root: Path, *, now: float | None 
         "pfr_trigger_state": _pfr_trigger_state(pfr_funnel),
         "active_signal_lifecycle": _active_signal_lifecycle(paper_signals, now=now),
         "lifecycle_integrity": _lifecycle_integrity(training_rows),
-        "operator_action": _operator_action(
-            delivery=delivery,
-            product_trades=product_trades,
-            active_blockers=active_blockers,
-        ),
+        "operator_action": operator_action,
         "paper_only": True,
         "execution_allowed": False,
         "json_path": str(derived / "paper_product_quality_report.json"),
         "markdown_path": str(derived / "paper_product_quality_report.md"),
+        "paper_generation_run_id": str(generation.get("paper_generation_run_id") or ""),
+        "generation_status": str(generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(generation.get("current")),
+        "display_only": not bool(generation.get("current")),
     }
     derived.mkdir(parents=True, exist_ok=True)
     (derived / "paper_product_quality_report.json").write_text(

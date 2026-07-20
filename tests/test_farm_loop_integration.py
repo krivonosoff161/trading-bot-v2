@@ -6,6 +6,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -89,6 +91,8 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
     from src.research_lab.honest_backtest_bridge import _artifact_stem
     from src.research_lab.validation_orchestrator import run_due_validations
+    from src.research_lab.simulator_contract import legacy_fixture_manifest
+    manifest = legacy_fixture_manifest()
     uc_key = "X::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
@@ -96,7 +100,13 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "uc_key": uc_key, "symbol": "X", "timeframe": "1h", "family": "momentum_breakout",
         "params_hash": "ph", "data_fingerprint": "fp", "decision": "OBSERVE",
         "validation_status": "FORWARD_PAPER", "hard_status": "", "candidate_id": "c1",
-        "params": {"direction": "long", "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
+        "params": {
+            "direction": "long",
+            "lookback": 20,
+            "stop_pct": 2,
+            "take_pct": 4,
+            "hold_bars": 3,
+        },
     }, now=1.0)
     tasks.enqueue_task(task_type="export_validation", task_key=f"export::{uc_key}", symbol="X",
                        timeframe="1h", family="momentum_breakout",
@@ -104,12 +114,12 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
     # a verdict already on disk -> the stamp-back must mirror it into unique_candidates
     vdir = tmp_path / "hard_validation" / "verdicts"
     vdir.mkdir(parents=True)
-    (vdir / f"{validation_id}.json").write_text(
+    (vdir / f"{_artifact_stem(validation_id)}.json").write_text(
         json.dumps({"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}),
         encoding="utf-8")
     rdir = tmp_path / "hard_validation" / "requests"
     rdir.mkdir(parents=True)
-    (rdir / f"{validation_id}.json").write_text(
+    (rdir / f"{_artifact_stem(validation_id)}.json").write_text(
         json.dumps({
             "candidate_id": validation_id,
             "symbol": "X",
@@ -119,6 +129,8 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
             "params": {"direction": "long", "lookback": 20, "stop_pct": 2, "take_pct": 4, "hold_bars": 3},
             "data_window": {"fingerprint": "fp", "n_bars": 10, "start_ts": 1, "end_ts": 10},
             "metrics": {"uc_key": uc_key},
+            "simulator_manifest": manifest,
+            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
         }), encoding="utf-8")
     reports = tmp_path / "hard_validation" / "reports"
     reports.mkdir(parents=True)
@@ -128,6 +140,9 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         "symbol": "X",
         "timeframe": "1h",
         "strategy_id": "momentum_breakout",
+        "simulator_manifest": manifest,
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+        "simulator_claim_ceiling": manifest["claim_ceiling"],
         "verdict": {
             "candidate_id": validation_id,
             "hard_status": "PAPER_FORWARD_READY",
@@ -142,14 +157,293 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
         return {"total": 1, "validated": 1, "errors": 0,
                 "results": [{"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}]}
 
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests",
+        lambda *args, **kwargs: {"exported": 1, "exported_ids": [validation_id]},
+    )
     monkeypatch.setattr("src.research_lab.validation_orchestrator.run_validation_batch", fake_validation_batch)
     out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
-    assert out["export_tasks"] == 1 and out["stamped_unique"] == 1
+    assert out["export_tasks"] == 1, out
+    assert out["stamped_unique"] == 1, out
     assert out["setup_cards"] == 1
     assert tasks.latest_unique_candidates()[0]["hard_status"] == "PAPER_FORWARD_READY"
     card = tmp_path / "setup_library" / "cards" / f"setup-{validation_id}.json"
     assert json.loads(card.read_text(encoding="utf-8"))["paper_forward_ready"] is True
+    manifest = json.loads(
+        (tmp_path / "hard_validation" / "current_generation.json").read_text(encoding="utf-8")
+    )
+    assert manifest["schema"] == "HardValidationGeneration.v1"
+    assert manifest["producer_complete"] is True
+    assert manifest["task_inputs"][0]["payload_sha256"]
+    assert "src/research_lab/validation_orchestrator.py" in manifest["producer_code"]
+    assert "vendor/honest-backtest/VENDOR.md" in manifest["producer_code"]
+    assert list(manifest["active"]) == [validation_id]
+    from src.research_lab.paper_runtime import load_ready_setup_cards
+    assert [item.candidate_id for item in load_ready_setup_cards(tmp_path)] == [validation_id]
+
+    # A card edited after producer completion no longer matches the current generation.
+    card.write_text(card.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert load_ready_setup_cards(tmp_path) == []
     assert not tasks.tasks_in_state("queued", task_type="export_validation")  # task completed
+    tasks.close()
+
+
+def test_validation_orchestrator_rejects_stale_generation_when_current_export_is_empty(
+    monkeypatch, tmp_path
+):
+    """A failed current producer must not promote artifacts from an older run."""
+    from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
+    from src.research_lab.honest_backtest_bridge import _artifact_stem
+    from src.research_lab.paper_runtime import load_ready_setup_cards
+    from src.research_lab.setup_library import build_setup_card, write_setup_library
+    from src.research_lab.simulator_contract import legacy_fixture_manifest
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    simulator_manifest = legacy_fixture_manifest()
+    uc_key = "STALE::1h::momentum_breakout::ph::fp"
+    validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.upsert_unique_candidate({
+        "uc_key": uc_key,
+        "symbol": "STALE",
+        "timeframe": "1h",
+        "family": "momentum_breakout",
+        "params_hash": "ph",
+        "data_fingerprint": "fp",
+        "decision": "OBSERVE",
+        "validation_status": "FORWARD_PAPER",
+        "hard_status": "",
+        "candidate_id": "old-candidate",
+        "params": {
+            "direction": "long",
+            "lookback": 20,
+            "stop_pct": 2,
+            "take_pct": 4,
+            "hold_bars": 3,
+        },
+    }, now=1.0)
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key=f"export::{uc_key}",
+        symbol="STALE",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"candidate_id": "old-candidate", "uc_key": uc_key},
+        now=1.0,
+    )
+
+    request = {
+        "candidate_id": validation_id,
+        "symbol": "STALE",
+        "timeframe": "1h",
+        "strategy_id": "momentum_breakout",
+        "lite_status": "FORWARD_PAPER",
+        "params": {
+            "direction": "long",
+            "lookback": 20,
+            "stop_pct": 2,
+            "take_pct": 4,
+            "hold_bars": 3,
+        },
+        "data_window": {"fingerprint": "fp", "n_bars": 10, "start_ts": 1, "end_ts": 10},
+        "metrics": {"uc_key": uc_key},
+        "simulator_manifest": simulator_manifest,
+        "unsupported_simulator_dimensions": simulator_manifest["unsupported_dimensions"],
+    }
+    report = {
+        "candidate_id": validation_id,
+        "source_run_id": "old-run",
+        "symbol": "STALE",
+        "timeframe": "1h",
+        "strategy_id": "momentum_breakout",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "simulator_manifest": simulator_manifest,
+        "unsupported_simulator_dimensions": simulator_manifest["unsupported_dimensions"],
+        "simulator_claim_ceiling": simulator_manifest["claim_ceiling"],
+        "verdict": {
+            "candidate_id": validation_id,
+            "hard_status": "PAPER_FORWARD_READY",
+            "checks": [],
+            "failed_checks": [],
+            "reason_codes": [],
+        },
+        "checks_summary": {"total": 0, "passed": 0, "failed": 0},
+    }
+    for subdir, payload in (
+        ("requests", request),
+        ("reports", report),
+        ("verdicts", {"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}),
+    ):
+        directory = tmp_path / "hard_validation" / subdir
+        directory.mkdir(parents=True, exist_ok=True)
+        name = _artifact_stem(validation_id) if subdir == "reports" else validation_id
+        (directory / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+    write_setup_library(
+        tmp_path,
+        [build_setup_card(report, request)],
+        dry_run=False,
+    )
+    assert [card.candidate_id for card in load_ready_setup_cards(tmp_path)] == [validation_id]
+
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests",
+        lambda *args, **kwargs: {"exported": 0, "exported_ids": []},
+    )
+    batch_calls = []
+
+    def stale_batch(*args, **kwargs):
+        batch_calls.append(kwargs)
+        return {
+            "total": 1,
+            "validated": 1,
+            "errors": 0,
+            "results": [{"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}],
+        }
+
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.run_validation_batch", stale_batch
+    )
+
+    out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
+
+    assert out["exported"] == 0
+    assert out["validated"] == 0
+    assert out["stamped_unique"] == 0
+    assert out["setup_cards"] == 0
+    assert batch_calls == []
+    assert tasks.latest_unique_candidates()[0]["hard_status"] == ""
+    assert tasks.tasks_in_state("deferred", task_type="export_validation")
+    assert load_ready_setup_cards(tmp_path) == []
+    tasks.close()
+
+
+def test_validation_orchestrator_publishes_pending_before_export_side_effects(
+    monkeypatch, tmp_path
+):
+    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key="export::crash-window",
+        symbol="X",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"candidate_id": "source", "uc_key": "crash-window"},
+        now=1.0,
+    )
+    observed = []
+
+    def crash_export(*args, **kwargs):
+        manifest = load_current_generation(tmp_path)
+        observed.append(manifest)
+        assert manifest["producer_complete"] is False
+        assert manifest["active"] == {}
+        raise RuntimeError("synthetic producer crash")
+
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests", crash_export
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic producer crash"):
+        run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
+
+    manifest = load_current_generation(tmp_path)
+    assert observed
+    assert manifest["producer_complete"] is False
+    assert manifest["active"] == {}
+    tasks.close()
+
+
+def test_validation_orchestrator_missing_uc_key_cannot_scan_unrelated_candidates(
+    monkeypatch, tmp_path
+):
+    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key="export::missing-uc-key",
+        symbol="X",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"candidate_id": "source-only"},
+        now=1.0,
+    )
+    export_calls = []
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests",
+        lambda *args, **kwargs: export_calls.append((args, kwargs)),
+    )
+
+    out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
+
+    assert out["export_tasks"] == 1
+    assert out["exported"] == 0
+    assert out["validated"] == 0
+    assert export_calls == []
+    manifest = load_current_generation(tmp_path)
+    assert manifest["producer_complete"] is True
+    assert manifest["exported_ids"] == []
+    assert manifest["active"] == {}
+    assert tasks.tasks_in_state("deferred", task_type="export_validation")
+    tasks.close()
+
+
+def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
+    monkeypatch, tmp_path
+):
+    from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
+    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    uc_key = "X::1h::momentum_breakout::ph::fp"
+    validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key=f"export::{uc_key}",
+        symbol="X",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"candidate_id": "source", "uc_key": uc_key},
+        now=1.0,
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests",
+        lambda *args, **kwargs: {"exported": 1, "exported_ids": [validation_id]},
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.run_validation_batch",
+        lambda *args, **kwargs: {
+            "total": 1,
+            "validated": 1,
+            "errors": 0,
+            "results": [{
+                "candidate_id": validation_id,
+                "hard_status": "PAPER_FORWARD_READY",
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_current_generation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("synthetic final publication failure")
+        ),
+    )
+
+    with pytest.raises(OSError, match="synthetic final publication failure"):
+        run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
+
+    assert load_current_generation(tmp_path)["producer_complete"] is False
+    running = tasks.tasks_in_state("running", task_type="export_validation")
+    assert len(running) == 1
+    claim_expires_at = float(running[0]["claim_expires_at"])
+    assert tasks.reconcile_orphan_running(now=claim_expires_at - 0.001) == 0
+    assert tasks.reconcile_orphan_running(now=claim_expires_at) == 1
+    assert len(tasks.tasks_in_state("queued", task_type="export_validation")) == 1
     tasks.close()
 
 
@@ -164,7 +458,7 @@ def test_validation_dry_run_is_noop(tmp_path):
     tasks.close()
 
 
-def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
+def test_storage_reports_event_specs_and_terminal_tasks_without_deleting(tmp_path):
     from src.research_lab.storage_policy import bound_farm_artifacts, prune_event_specs
     spec_dir = tmp_path / "plans" / "event_specs"
     spec_dir.mkdir(parents=True)
@@ -174,7 +468,8 @@ def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
     assert dry["present"] == 10 and dry["removed"] == 6
     assert len(list(spec_dir.glob("*.json"))) == 10  # dry-run removed nothing
     applied = prune_event_specs(tmp_path, keep=4, apply=True)
-    assert applied["removed"] == 6 and len(list(spec_dir.glob("*.json"))) == 4
+    assert applied["removed"] == 6 and len(list(spec_dir.glob("*.json"))) == 10
+    assert applied["reason"] == "event_spec_apply_unsupported"
     # terminal-task retention
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
     for i in range(6):
@@ -183,8 +478,9 @@ def test_storage_bounds_event_specs_and_terminal_tasks(tmp_path):
     tasks.close()
     res = bound_farm_artifacts(tmp_path, keep_specs=4, keep_terminal=3, apply=True)
     assert res["terminal_tasks_pruned"] == 3
+    assert res["applied"] is False
     tasks2 = FarmTasksDB(tasks_db_path(tmp_path))
-    assert len(tasks2.tasks_in_state("completed")) == 3
+    assert len(tasks2.tasks_in_state("completed")) == 6
     tasks2.close()
 
 

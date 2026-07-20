@@ -123,12 +123,11 @@ def test_port_owned_external_service_exposes_pid(monkeypatch):
 
     external = MODULE.ControlCenter._external_descriptor(FakeCenter(), "ollama")
 
-    assert external == {
-        "pid": 4242,
-        "started_at": 123.0,
-        "source": "port",
-        "stoppable": True,
-    }
+    assert external["pid"] == 4242
+    assert external["started_at"] == 123.0
+    assert external["source"] == "port"
+    assert external["stoppable"] is False
+    assert external["authority"] == "display_only"
     assert MODULE.ControlCenter._external_descriptor(FakeCenter(), "dashboard") is None
 
 
@@ -150,6 +149,48 @@ def test_farm_and_paper_cards_share_graceful_stop_owner():
     assert specs["paper_cards"].graceful_seconds == 120.0
     assert specs["scanner"].graceful_seconds == 300.0
     assert specs["public_news"].graceful_seconds == 300.0
+
+
+def test_authorized_multi_start_rejects_owner_group_before_any_start():
+    starts: list[str] = []
+
+    class Item:
+        def __init__(self, spec):
+            self.spec = spec
+            self.running = False
+
+        def start(self):
+            starts.append(self.spec.key)
+
+    class Status:
+        def set(self, _value):
+            return None
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {spec.key: Item(spec) for spec in MODULE.contour_specs()}
+    center.external_contours = {}
+    center.status_vars = {key: Status() for key in center.contours}
+    MODULE.ControlCenter._start_authorized(center, ("farm", "paper_cards"))
+    assert starts == []
+
+
+def test_forged_recovered_process_cannot_reach_stop_hooks(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(MODULE.subprocess, "run", lambda *_a, **_k: calls.append("taskkill"))
+
+    class Events:
+        def put(self, _event):
+            return None
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.events = Events()
+    MODULE.ControlCenter._stop_external(
+        center,
+        "farm",
+        {"pid": os.getpid(), "started_at": MODULE._process_started_at(os.getpid()),
+         "stoppable": False, "authority": "display_only"},
+    )
+    assert calls == []
 
 
 def test_research_profile_methods_are_explicit_ui_actions():

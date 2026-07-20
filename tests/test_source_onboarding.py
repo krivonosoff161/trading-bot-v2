@@ -127,6 +127,7 @@ def test_new_source_cannot_create_go(monkeypatch):
     monkeypatch.setattr(S, "okx_last", lambda inst: 90.0)
     monkeypatch.setattr(S.J, "write_row", lambda row: (journaled.append(row), row["card_id"])[1])
     monkeypatch.setattr(S.J, "write_routing_audit", lambda rec: None)
+    monkeypatch.setattr(S.J, "write_event_audit", lambda rec: True)
     monkeypatch.setattr(S.R, "write_event_block", lambda b: True)
     monkeypatch.setattr(S.R, "write_reasoning_block", lambda b: True)
     monkeypatch.setattr(S.PS, "build_pending_from_journal", lambda row: None)
@@ -174,6 +175,22 @@ def test_onboarding_report_includes_new_sources():
             assert field in row, f"{name}.{field}"
     md = OR.render_md(data)
     assert "Чеклист оценки 24–48ч" in md and "enabled: false" in md
+
+
+def test_onboarding_report_treats_unavailable_sqlite_as_empty(monkeypatch, tmp_path):
+    db_path = tmp_path / "news_buffer.sqlite"
+    db_path.write_bytes(b"not a usable sqlite database")
+
+    class UnavailableConnection:
+        def execute(self, query):
+            raise OR.sqlite3.OperationalError("unable to open database file")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(OR.sqlite3, "connect", lambda path: UnavailableConnection())
+
+    assert OR.sqlite_stats(db_path) == {}
 
 
 def test_onboarding_recommendations_honest():

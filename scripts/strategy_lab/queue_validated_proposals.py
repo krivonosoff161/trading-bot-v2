@@ -13,7 +13,6 @@ alone. Status flips to QUEUED on apply. No LLM, no public output.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -38,27 +37,14 @@ from src.research_lab.proposal_store import (  # noqa: E402
 )
 from src.research_lab.proposal_validator import compile_proposal, validate_proposal  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.search_family_definition import resolve_snapshot_set  # noqa: E402
 from src.research_lab.state_db import connect, default_db_path, ensure_experiment_queued, init_db  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.universe import load_universe  # noqa: E402
 
 
 def _exp_to_dict(exp) -> dict:
-    return {
-        "experiment_id": exp.experiment_id,
-        "data_glob": exp.data_glob,
-        "symbols": exp.symbols,
-        "timeframe": exp.timeframe,
-        "families": exp.families,
-        "fees_bps": exp.fees_bps,
-        "slippage_bps": exp.slippage_bps,
-        "min_trades": exp.min_trades,
-        "split_ratio": exp.split_ratio,
-        "max_runs": exp.max_runs,
-        "parameter_grid": exp.parameter_grid,
-        "filters": exp.filters,
-        "backend": exp.backend,
-    }
+    return exp.to_dict()
 
 
 def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
@@ -136,13 +122,25 @@ def queue_validated(private_root, *, priority: int = 72, apply: bool = False,
             if pending + queued >= cap:
                 skipped_full += 1
                 continue
+            data_glob = market_data_glob(
+                private_root, p.requested_timeframe or "1d"
+            )
+            snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
+                private_root=private_root,
+                symbols=list(p.symbols),
+                timeframe=p.requested_timeframe or "1d",
+                data_glob=data_glob,
+            )
             exp = compile_proposal(
                 p,
                 policy=policy,
-                data_glob=market_data_glob(private_root, p.requested_timeframe or "1d"),
+                data_glob=data_glob,
+                data_snapshot_id=snapshot_id,
+                data_evidence_hash=evidence_hash,
+                data_snapshot_bindings=snapshot_bindings,
             )
-            spec_path = out_dir / f"{exp.experiment_id}.json"
-            spec_path.write_text(json.dumps(_exp_to_dict(exp), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            spec_path = out_dir / f"{exp.search_family_id}.json"
+            exp.write_json(spec_path)
             _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=priority)
             queued += int(created)
             already += int(not created)

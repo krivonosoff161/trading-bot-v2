@@ -141,7 +141,8 @@ class OpenAICompatibleProvider:
                  http_post: HttpPost | None = None):
         self.name = provider
         self.configured = bool(base_url and api_key and model)
-        self._url = base_url.rstrip("/") + "/chat/completions"
+        self.base_url = base_url.rstrip("/")
+        self._url = self.base_url + "/chat/completions"
         self._key = api_key  # held only for the Authorization header; never logged/returned
         self._model = model
         self.model_name = model
@@ -203,7 +204,8 @@ class OllamaProposalProvider:
         http_post: HttpPost | None = None,
     ):
         self.configured = bool(base_url and model)
-        self._url = base_url.rstrip("/") + "/chat/completions"
+        self.base_url = base_url.rstrip("/")
+        self._url = self.base_url + "/chat/completions"
         self._model = model
         self.model_name = model
         self._timeout = float(timeout)

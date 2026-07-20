@@ -55,8 +55,8 @@ def test_no_transition_hook_is_noop(tmp_path):
     assert not J.transitions_path(tmp_path).exists()  # nothing written without a sink
 
 
-def test_storage_maintain_rotates_farm_logs(tmp_path, monkeypatch):
-    # _maybe_storage_maintain must rotate the farm log files (maintain called WITH their paths)
+def test_storage_maintain_reports_farm_logs_without_rotation(tmp_path, monkeypatch):
+    # Apply-mode research cycles must not grant storage mutation authority.
     from scripts.strategy_lab import farm_loop
     from src.research_lab import storage_policy
     calls = {}
@@ -73,8 +73,8 @@ def test_storage_maintain_rotates_farm_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_policy, "maintain", fake_maintain)
     monkeypatch.setattr(storage_policy, "bound_farm_artifacts", fake_bound)
     farm_loop._maybe_storage_maintain(tmp_path, apply=True)
-    assert calls["apply"] is True and calls["bound_apply"] is True
-    assert set(calls["paths"]) == set(J.farm_log_paths(tmp_path))  # rotation wired to farm logs
+    assert calls["apply"] is False and calls["bound_apply"] is False
+    assert set(calls["paths"]) == set(J.farm_log_paths(tmp_path))
 
 
 def test_storage_maintain_noop_in_dry_run(tmp_path, monkeypatch):

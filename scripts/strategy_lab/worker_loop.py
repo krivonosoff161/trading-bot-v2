@@ -13,7 +13,9 @@ import datetime as dt
 import os
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,8 +23,40 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.ownership import (  # noqa: E402
+    OwnershipConflictError,
+    OwnershipStore,
+    current_process_identity,
+    probe_process_identity,
+)
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
-from src.research_lab.stop_intent import is_stop_requested  # noqa: E402
+from src.research_lab.stop_intent import is_stop_requested, stop_intent_path  # noqa: E402
+
+
+class _LoopLeaseHeartbeat:
+    def __init__(self, path: Path, lease) -> None:
+        self.path = path
+        self.lease = lease
+        self.stop_event = threading.Event()
+        self.failure: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=5)
+
+    def _run(self) -> None:
+        store = OwnershipStore(self.path, identity_probe=probe_process_identity)
+        try:
+            while not self.stop_event.wait(30):
+                store.renew(self.lease, lease_seconds=90)
+        except BaseException as exc:
+            self.failure = exc
+        finally:
+            store.close()
 
 
 def run_once(
@@ -72,24 +106,51 @@ def loop(
     night_mode: bool = False,
 ) -> int:
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    ownership_path = private_root / "state" / "ownership.sqlite"
+    store = OwnershipStore(ownership_path, identity_probe=probe_process_identity)
+    try:
+        lease = store.acquire(
+            resource_id="strategy_lab_worker_loop",
+            role_id="compute_worker_loop",
+            owner_id=f"worker-loop-{os.getpid()}-{uuid.uuid4().hex}",
+            identity=current_process_identity(),
+            lease_seconds=90,
+        )
+    except OwnershipConflictError:
+        store.close()
+        return 2
+    heartbeat = _LoopLeaseHeartbeat(ownership_path, lease)
+    heartbeat.start()
     log_path = private_root / "logs" / "worker_loop.log"
     append_log(log_path, f"worker_loop started sleep={sleep_seconds}s night_mode={night_mode}")
     iteration = 0
-    while True:
-        if is_stop_requested(private_root):
-            append_log(log_path, "worker_loop stopped by stop intent")
-            return 0
-        iteration += 1
-        result = run_once(private_root, allow_public_output=allow_public_output, night_mode=night_mode)
-        if result.stdout.strip():
-            append_log(log_path, f"stdout: {result.stdout.strip()}")
-        if result.stderr.strip():
-            append_log(log_path, f"stderr: {result.stderr.strip()}")
-        append_log(log_path, f"iteration={iteration} exit={result.returncode}")
-        if max_iterations and iteration >= max_iterations:
-            append_log(log_path, "worker_loop stopped by max_iterations")
-            return result.returncode
-        time.sleep(error_sleep_seconds if result.returncode else sleep_seconds)
+    try:
+        while True:
+            if is_stop_requested(private_root):
+                store.acknowledge_stop_intent(lease, stop_intent_path(private_root))
+                append_log(log_path, "worker_loop stopped by stop intent")
+                return 0
+            if heartbeat.failure is not None:
+                append_log(log_path, "worker_loop stopped after ownership renewal failure")
+                return 2
+            iteration += 1
+            result = run_once(private_root, allow_public_output=allow_public_output, night_mode=night_mode)
+            if result.stdout.strip():
+                append_log(log_path, f"stdout: {result.stdout.strip()}")
+            if result.stderr.strip():
+                append_log(log_path, f"stderr: {result.stderr.strip()}")
+            append_log(log_path, f"iteration={iteration} exit={result.returncode}")
+            if max_iterations and iteration >= max_iterations:
+                append_log(log_path, "worker_loop stopped by max_iterations")
+                return result.returncode
+            time.sleep(error_sleep_seconds if result.returncode else sleep_seconds)
+    finally:
+        heartbeat.stop()
+        try:
+            store.release(lease)
+        except Exception:
+            pass
+        store.close()
 
 
 def main() -> None:

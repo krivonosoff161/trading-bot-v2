@@ -13,9 +13,7 @@ from src.research_lab.hard_validation_export import (
     _deduplicate,
     _filter_entries,
     export_requests,
-    validation_id_for_unique_candidate,
 )
-from src.research_lab.honest_backtest_bridge import _artifact_stem
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
 
 
@@ -126,15 +124,7 @@ class TestBuildCandidate:
             "slippage_bps": 4.0,
         }
         c = _build_candidate(entry, Path("/tmp/nonexistent"))
-        assert c is not None
-        assert c.candidate_id == "c-001"
-        assert c.lite_status == "FORWARD_PAPER"
-        assert c.timeframe == "1h"
-        assert c.filters == {"trend": ["up"]}
-        assert c.fees_bps == 9.0
-        assert c.slippage_bps == 4.0
-        assert c.metrics["returns_basis"] == "net_pct"
-        assert c.metrics["costs_applied"] is True
+        assert c is None
 
     def test_builds_candidate_with_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -166,10 +156,7 @@ class TestBuildCandidate:
             (run_dir / "metrics.json").write_text(json.dumps(metrics))
             entry = _make_entry(artifact_label="20260614_000000_exp-001")
             c = _build_candidate(entry, private)
-            assert c is not None
-            assert len(c.trades) == 2
-            assert len(c.equity_curve) == 3
-            assert c.timeframe == "15m"
+            assert c is None
 
     def test_build_candidate_preserves_unique_candidate_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -196,12 +183,9 @@ class TestBuildCandidate:
                 "timeframe": "1h",
             }
             c = _build_candidate(entry, private)
-            assert c is not None
-            assert c.metrics["uc_key"] == "BTC::1h::trend::ph::fp"
-            assert c.metrics["source_candidate_id"] == "raw-1"
-            assert c.metrics["data_fingerprint"] == "fp"
+            assert c is None
 
-    def test_build_candidate_rebuilds_trades_for_legacy_aggregate_artifact(self) -> None:
+    def test_build_candidate_fails_closed_for_unbound_legacy_aggregate_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             private = Path(td)
             data_dir = private / "market_data" / "1h"
@@ -247,10 +231,7 @@ class TestBuildCandidate:
             )
             entry["params"] = {}
             c = _build_candidate(entry, private)
-            assert c is not None
-            assert c.params["stop_pct"] == 2
-            assert len(c.trades) >= 3
-            assert c.data_window["n_bars"] == len(c.trades)
+            assert c is None
 
 
 class TestEquityCurve:
@@ -309,12 +290,8 @@ class TestExportRequests:
             entry = _make_entry()
             (reg_dir / "candidates.jsonl").write_text(json.dumps(entry))
             summary = export_requests(private, dry_run=False)
-            assert summary["exported"] == 1
-            req_file = private / "hard_validation" / "requests" / f"{_artifact_stem('c-001')}.json"
-            assert req_file.exists()
-            data = json.loads(req_file.read_text())
-            assert data["candidate_id"] == "c-001"
-            assert data["contract_version"] == "1.1.0"
+            assert summary["exported"] == 0
+            assert summary["skipped_no_artifact"] == 1
 
     def test_no_candidates_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -335,7 +312,8 @@ class TestExportRequests:
                 "\n".join(json.dumps(e) for e in entries)
             )
             summary = export_requests(private, dry_run=False, limit=2)
-            assert summary["exported"] == 2
+            assert summary["exported"] == 0
+            assert summary["skipped_no_artifact"] == 2
 
     def test_no_absolute_paths_in_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -344,11 +322,9 @@ class TestExportRequests:
             reg_dir.mkdir(parents=True)
             entry = _make_entry()
             (reg_dir / "candidates.jsonl").write_text(json.dumps(entry))
-            export_requests(private, dry_run=False)
-            req_file = private / "hard_validation" / "requests" / f"{_artifact_stem('c-001')}.json"
-            raw = req_file.read_text()
-            assert "C:\\" not in raw
-            assert "krivo" not in raw
+            summary = export_requests(private, dry_run=False)
+            assert summary["exported"] == 0
+            assert not list((private / "hard_validation" / "requests").glob("*.json"))
 
     def test_only_eligible_exported(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -364,10 +340,8 @@ class TestExportRequests:
                 "\n".join(json.dumps(e) for e in entries)
             )
             summary = export_requests(private, dry_run=False)
-            assert summary["exported"] == 1
-            req_dir = private / "hard_validation" / "requests"
-            files = list(req_dir.glob("*.json"))
-            assert len(files) == 1
+            assert summary["exported"] == 0
+            assert summary["skipped_no_artifact"] == 1
 
     def test_farm_tasks_unique_candidates_are_canonical_source(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -391,15 +365,9 @@ class TestExportRequests:
             })
             db.close()
             summary = export_requests(private, dry_run=False, source="auto")
-            vid = validation_id_for_unique_candidate({"uc_key": uc_key})
             assert summary["source"] == "farm_tasks"
-            assert summary["exported_ids"] == [vid]
-            req = json.loads((
-                private / "hard_validation" / "requests" / f"{_artifact_stem(vid)}.json"
-            ).read_text())
-            assert req["candidate_id"] == vid
-            assert req["metrics"]["source_candidate_id"] == "raw-candidate"
-            assert req["metrics"]["uc_key"] == uc_key
+            assert summary["exported_ids"] == []
+            assert summary["skipped_no_artifact"] == 1
 
     def test_farm_tasks_validation_id_prevents_candidate_id_collision(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -422,5 +390,5 @@ class TestExportRequests:
                 })
             db.close()
             summary = export_requests(private, dry_run=False, source="farm_tasks", limit=10)
-            assert summary["exported"] == 2
-            assert len(set(summary["exported_ids"])) == 2
+            assert summary["exported"] == 0
+            assert summary["skipped_no_artifact"] == 2

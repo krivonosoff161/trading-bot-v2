@@ -197,6 +197,25 @@ def test_calculator_advice_normalizes_non_string_list_fields():
     assert problems == []
 
 
+def test_calculator_advice_rejects_nested_trade_authority_fields():
+    payload = normalize_advice_payload(
+        {
+            "situation_class": "late_entry",
+            "warnings": [{"execution allowed": False}],
+            "missing_data": [{"nested": {"Auto-Trade": True}}],
+            "sweep_suggestions": [{"TakeProfitPlan": "promote"}],
+            "confidence": 0.6,
+        }
+    )
+
+    ok, problems = validate_advice_payload(payload)
+
+    assert ok is False
+    assert any("execution_allowed" in problem for problem in problems)
+    assert any("auto_trade" in problem for problem in problems)
+    assert any("take_profit_plan" in problem for problem in problems)
+
+
 class _Provider:
     name = "synthetic"
     configured = True

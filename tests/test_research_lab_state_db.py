@@ -2,7 +2,6 @@
 
 import json
 import sqlite3
-import datetime as dt
 from pathlib import Path
 
 from src.research_lab.state_db import (
@@ -72,18 +71,26 @@ def test_import_completed_runs_indexes_results(tmp_path):
 
 def test_queue_claim_complete_and_fail(tmp_path):
     db_path = default_db_path(tmp_path)
-    conn = connect(db_path)
+    conn = connect(db_path, clock=lambda: 100.0)
     init_db(conn)
     first = enqueue_experiment(conn, tmp_path / "b.json", priority=20)
     second = enqueue_experiment(conn, tmp_path / "a.json", priority=10)
 
-    job = claim_next_job(conn)
+    job = claim_next_job(conn, owner_id="worker")
 
     assert job is not None
     assert job["job_id"] == second
     assert job["attempts"] == 1
-    complete_job(conn, int(job["job_id"]), "experiments/completed/demo")
-    fail_job(conn, first, "broken")
+    complete_job(
+        conn, int(job["job_id"]), "experiments/completed/demo",
+        owner_id="worker", fencing_token=int(job["fencing_token"]),
+    )
+    failed_claim = claim_next_job(conn, owner_id="worker")
+    assert failed_claim and failed_claim["job_id"] == first
+    fail_job(
+        conn, first, "broken", owner_id="worker",
+        fencing_token=int(failed_claim["fencing_token"]),
+    )
 
     statuses = {
         int(r["job_id"]): r["status"]
@@ -113,16 +120,18 @@ def test_claim_next_job_leaves_running_job_unclaimed(tmp_path):
 
 def test_reap_stale_jobs_requeues_old_running_job(tmp_path):
     db_path = default_db_path(tmp_path)
-    conn = connect(db_path)
+    conn = connect(db_path, clock=lambda: 100.0)
     init_db(conn)
     job_id = enqueue_experiment(conn, tmp_path / "a.json", priority=10)
-    claimed = claim_next_job(conn)
+    claimed = claim_next_job(conn, owner_id="worker", lease_seconds=5, now=100.0)
     assert claimed is not None
-    old_started = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat()
-    conn.execute("UPDATE queue SET started_at = ? WHERE job_id = ?", (old_started, job_id))
+    conn.execute(
+        "UPDATE queue SET started_at = ? WHERE job_id = ?",
+        ("2000-01-01T00:00:00+00:00", job_id),
+    )
     conn.commit()
 
-    reaped = reap_stale_jobs(conn, max_age_seconds=3600)
+    reaped = reap_stale_jobs(conn, max_age_seconds=3600, now=106.0)
 
     row = conn.execute("SELECT status, started_at, attempts, last_error FROM queue WHERE job_id = ?", (job_id,)).fetchone()
     conn.close()
@@ -189,7 +198,12 @@ def test_ensure_experiment_queued_does_not_duplicate_completed_job(tmp_path):
     spec = tmp_path / "spec.json"
 
     first, first_created = ensure_experiment_queued(conn, spec, priority=50)
-    complete_job(conn, first, "experiments/completed/demo")
+    claim = claim_next_job(conn, owner_id="worker", now=100.0)
+    assert claim and claim["job_id"] == first
+    complete_job(
+        conn, first, "experiments/completed/demo", owner_id="worker",
+        fencing_token=int(claim["fencing_token"]), now=101.0,
+    )
     second, second_created = ensure_experiment_queued(conn, spec, priority=50)
 
     assert first == second

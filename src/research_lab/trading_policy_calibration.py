@@ -14,6 +14,8 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.paper_projection_reader import read_projection_view
+
 SCHEMA = "trading_policy_calibration.v1"
 TRUSTED_LIFECYCLE_SCHEMA = "PaperSignalLifecycle.v2"
 MIN_PROFILE_SAMPLE = 20
@@ -133,7 +135,23 @@ def _opposing_side_conflicts(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _account_primary(private_root: Path) -> dict[str, Any]:
+def _account_primary(
+    private_root: Path,
+    trusted_rows: list[dict[str, Any]],
+    *,
+    current_generation: bool,
+) -> dict[str, Any]:
+    if current_generation:
+        pnl = [_float(row.get("paper_pnl_usdt")) for row in trusted_rows]
+        pnl = [value for value in pnl if value is not None]
+        return {
+            "terminal_trades": len(pnl),
+            "wins": sum(value > 0.0 for value in pnl),
+            "losses": sum(value < 0.0 for value in pnl),
+            "total_pnl_usdt": round(sum(pnl), 6),
+            "avg_pnl_usdt": round(sum(pnl) / len(pnl), 6) if pnl else 0.0,
+            "evidence_role": "immutable_generation_primary_theses",
+        }
     rows = _read_rows(private_root / "state" / "derived" / "paper_account_events.jsonl")
     closed = [row for row in rows if str(row.get("event_type") or "") == "position_closed"]
     pnl = [_float(row.get("pnl_usdt")) for row in closed]
@@ -144,7 +162,7 @@ def _account_primary(private_root: Path) -> dict[str, Any]:
         "losses": sum(value < 0.0 for value in pnl),
         "total_pnl_usdt": round(sum(pnl), 6),
         "avg_pnl_usdt": round(sum(pnl) / len(pnl), 6) if pnl else 0.0,
-        "evidence_role": "shared_account_primary_theses",
+        "evidence_role": "legacy_display_only_shared_account",
     }
 
 
@@ -167,23 +185,39 @@ def _acceptance_cases(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def build_trading_policy_calibration(private_root: Path) -> dict[str, Any]:
+def build_trading_policy_calibration(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     """Write an aggregate, private calibration view over trusted outcomes."""
     private_root = Path(private_root)
     derived = private_root / "state" / "derived"
     source = derived / "paper_signal_training.jsonl"
     rows = _read_rows(source)
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=derived / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    run_id = str(generation.get("paper_generation_run_id") or "")
     trusted = [
         row
         for row in rows
-        if row.get("paper_only") is True
+        if generation.get("current")
+        and row.get("paper_only") is True
         and row.get("execution_allowed") is False
         and str(row.get("lifecycle_schema") or "") == TRUSTED_LIFECYCLE_SCHEMA
+        and row.get("immutable_terminal_evidence") is True
+        and row.get("paper_generation_run_id") == run_id
+        and bool(row.get("terminal_lifecycle_event_id"))
+        and bool(row.get("account_generation_id"))
         and _float(row.get("net_pct")) is not None
     ]
     for row in trusted:
         row["_calibration_horizon"] = _horizon(row.get("timeframe"))
-    legacy = sum(str(row.get("lifecycle_schema") or "") != TRUSTED_LIFECYCLE_SCHEMA for row in rows)
+    legacy = len(rows) - len(trusted)
     by_profile = _summaries(trusted, ("farm_geometry_profile_id",), min_sample=MIN_PROFILE_SAMPLE)
     by_profile_horizon = _summaries(
         trusted,
@@ -216,7 +250,11 @@ def build_trading_policy_calibration(private_root: Path) -> dict[str, Any]:
         "by_exit_mode": by_exit_mode,
         "by_cell_profile": by_cell_profile,
         "opposing_side_conflicts": _opposing_side_conflicts(trusted),
-        "shared_account_primary": _account_primary(private_root),
+        "shared_account_primary": _account_primary(
+            private_root,
+            trusted,
+            current_generation=bool(generation.get("current")),
+        ),
         "acceptance_cases": _acceptance_cases(trusted),
         "profile_verdicts": dict(sorted(verdicts.items())),
         "comparison_kind": "observational_paper_outcomes_not_causal_attribution",
@@ -224,6 +262,10 @@ def build_trading_policy_calibration(private_root: Path) -> dict[str, Any]:
         "execution_allowed": False,
         "source_path": str(source),
         "snapshot_path": str(derived / "trading_policy_calibration.json"),
+        "paper_generation_run_id": run_id,
+        "generation_status": str(generation.get("generation_status") or ""),
+        "current_generation_compatible": bool(generation.get("current")),
+        "display_only": not bool(generation.get("current")),
     }
     derived.mkdir(parents=True, exist_ok=True)
     (derived / "trading_policy_calibration.json").write_text(

@@ -225,11 +225,14 @@ def test_compile_sweep_preserves_backend():
 
 def test_experiment_spec_backend_roundtrip(tmp_path):
     p = tmp_path / "spec.json"
-    p.write_text(json.dumps({
-        "experiment_id": "x", "data_glob": "g/{symbol}.json", "symbols": ["A_USDT_SWAP"],
-        "families": ["momentum_breakout"], "parameter_grid": {"momentum_breakout": [{"lookback": 10}]},
-        "backend": "gpu",
-    }), encoding="utf-8")
+    ExperimentSpec(
+        experiment_id="x",
+        data_glob="g/{symbol}.json",
+        symbols=["A_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={"momentum_breakout": [{"lookback": 10}]},
+        backend="gpu",
+    ).write_json(p)
     assert ExperimentSpec.from_json(p).backend == "gpu"
 
 

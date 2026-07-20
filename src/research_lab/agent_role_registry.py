@@ -10,7 +10,24 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
+from src.research_lab.advisory_payload_validator import validate_advisory_payload
+
 SCHEMA = "AgentRoleRegistry.v1"
+CONTAINER_FIELDS = (
+    "evidence",
+    "warnings",
+    "missing_data",
+    "sweep_suggestions",
+    "next_test_dimensions",
+    "counterfactual_tests",
+    "parameter_hypotheses",
+    "evidence_refs",
+    "learning_tags",
+    "memory_tags",
+    "chart_facts",
+    "scenario_notes",
+    "risk_notes",
+)
 
 CRITICAL_FORBIDDEN_FIELDS = (
     "entry",
@@ -281,18 +298,14 @@ def role_by_id(role_id: str) -> AgentRoleContract:
 
 def validate_role_payload(role_id: str, payload: Mapping[str, Any]) -> tuple[bool, list[str]]:
     role = role_by_id(role_id)
-    problems: list[str] = []
-    for key in payload:
-        if key in role.forbidden_fields:
-            problems.append(f"forbidden field: {key}")
-        elif key not in role.allowed_fields:
-            problems.append(f"unknown field: {key}")
-    confidence = payload.get("confidence")
-    if confidence is not None and not isinstance(confidence, (int, float)):
-        problems.append("confidence must be numeric")
-    if isinstance(confidence, (int, float)) and not 0 <= float(confidence) <= 1:
-        problems.append("confidence must be in [0, 1]")
-    return (not problems, problems)
+    result = validate_advisory_payload(
+        role_id,
+        payload,
+        allowed_fields=role.allowed_fields,
+        forbidden_fields=role.forbidden_fields,
+        container_fields=CONTAINER_FIELDS,
+    )
+    return (result.ok, result.problems)
 
 
 def role_registry_summary() -> dict[str, Any]:

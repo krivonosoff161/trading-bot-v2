@@ -66,6 +66,10 @@ starts a supported send wrapper. It does not grant execution authority.
 `src/research_lab/hard_validation_contract.py` defines the candidate/report
 boundary. `honest_backtest_bridge.py` runs the vendored statistical core. A
 hard-validation verdict is evidence about a candidate, not permission to trade.
+`validation_generation.py` publishes the atomic current-generation manifest; artifact
+directories remain history and are never scanned as implicit completion authority. The
+PFR bridge additionally binds a current validated source identity to its exact SQLite row
+before that row can feed the paper-only signal lane.
 
 ### Validator To Paper
 

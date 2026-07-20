@@ -13,6 +13,9 @@ from src.research_lab.setup_library import (
     build_setup_card,
     write_setup_library,
 )
+from src.research_lab.simulator_contract import legacy_fixture_manifest
+
+_SIMULATOR_MANIFEST = legacy_fixture_manifest()
 
 
 def _make_report_dict(
@@ -32,6 +35,9 @@ def _make_report_dict(
             "failed_checks": failed_checks or [],
         },
         "checks_summary": {"total": 5, "passed": 3, "failed": 2},
+        "simulator_manifest": _SIMULATOR_MANIFEST,
+        "unsupported_simulator_dimensions": _SIMULATOR_MANIFEST["unsupported_dimensions"],
+        "simulator_claim_ceiling": _SIMULATOR_MANIFEST["claim_ceiling"],
     }
 
 

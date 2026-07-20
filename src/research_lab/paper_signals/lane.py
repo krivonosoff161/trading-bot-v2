@@ -14,6 +14,12 @@ from typing import Any
 
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
 from src.research_lab.trade_math import CostAssumptions, capture, gross_pct, net_pct
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    incremental_paper_lane_manifest,
+    reconcile_partial_fills,
+)
 
 # Per-timeframe holding horizon (the owner's gradation): max_hold in BARS.
 HORIZON_BARS = {"1m": 5, "5m": 24, "15m": 28, "1h": 30, "4h": 9, "1d": 5}
@@ -26,6 +32,16 @@ TREND_LOOKBACK = 10
 STOP_ATR_MULT = 1.2             # stop = entry -/+ this many ATR (bounded risk; structure only if tighter)
 MAX_RISK_PCT = 8.0              # a signal whose 1R exceeds this is too volatile to be actionable
 LIFECYCLE_SCHEMA = "PaperSignalLifecycle.v2"
+
+
+def _lane_provenance() -> dict[str, Any]:
+    manifest = incremental_paper_lane_manifest()
+    return {
+        "simulator_manifest": manifest,
+        "simulator_model_id": manifest["simulator_model_id"],
+        "simulator_evidence_tier": manifest["evidence_tier"],
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+    }
 
 
 # ── small pure helpers ────────────────────────────────────────────────────────
@@ -205,6 +221,7 @@ def _pending_outcome(state: dict[str, Any], *, opened: bool) -> dict[str, Any]:
     state.pop("open_index", None)
     return {
         **state,
+        **_lane_provenance(),
         "lifecycle_schema": LIFECYCLE_SCHEMA,
         "result": "pending_open" if opened else "pending_arm",
     }
@@ -337,6 +354,7 @@ def _expire_no_entry(
         state.pop(key, None)
     sig.outcome = {
         **state,
+        **_lane_provenance(),
         "lifecycle_schema": LIFECYCLE_SCHEMA,
         "result": "expired_no_entry",
         "bars_waited": bars_waited,
@@ -353,13 +371,31 @@ def _close(sig, entry_px, banked, partial_done, mfe, mae, bars_held, long_, stat
     gross = banked + 0.5 * leg2 if partial_done else leg2
     assumptions = CostAssumptions()
     net = net_pct(gross, assumptions)
+    quantities = [0.5, 0.5] if partial_done else [1.0]
+    prices = [float(sig.take_profit_plan[0]["price"]), float(exit_px)] if partial_done else [float(exit_px)]
+    reconciliation = reconcile_partial_fills(
+        1.0,
+        [
+            {"quantity": quantity, "price": price, "cost_pct": assumptions.total_cost_pct}
+            for quantity, price in zip(quantities, prices)
+        ],
+        entry_price=float(entry_px), side=side,
+    )
+    if abs(float(reconciliation["net_return_pct"]) - net) > 1e-3:
+        raise ValueError("paper lane fill reconciliation does not match outcome")
     sig.status = "closed_paper"
     state.pop("open_index", None)
-    sig.outcome = {**state, "lifecycle_schema": LIFECYCLE_SCHEMA,
+    sig.outcome = {**state, **_lane_provenance(), "lifecycle_schema": LIFECYCLE_SCHEMA,
                    "result": kind, "entry": round(entry_px, 8), "exit": round(exit_px, 8),
                    "gross_pct": round(gross, 3), "net_pct": round(net, 3),
                    "fees_bps_round_trip": assumptions.fees_bps_round_trip,
                    "slippage_bps_round_trip": assumptions.slippage_bps_round_trip,
+                   "cost_ledger": build_cost_ledger(
+                       fees_bps=assumptions.fees_bps_round_trip,
+                       slippage_bps=assumptions.slippage_bps_round_trip,
+                   ),
+                   "quantity_ledger": build_trade_quantity_ledger(closed_legs=quantities),
+                   "fill_reconciliation": reconciliation,
                    "banked_pct": round(banked, 4), "partial_done": partial_done,
                    "mfe_pct": round(mfe, 3), "mae_pct": round(mae, 3), "bars_held": bars_held,
                    "reached_tp1": bool(partial_done or kind == "take")}
@@ -373,17 +409,17 @@ def age_out(sig: PaperActionSignal, now: float, *, max_no_data: int = 4) -> bool
     o = sig.outcome or {}
     if sig.status == "armed" and sig.expires_at and now > sig.expires_at:
         sig.status = "expired"
-        sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+        sig.outcome = {**o, **_lane_provenance(), "lifecycle_schema": LIFECYCLE_SCHEMA,
                        "result": "expired_no_entry", "reason": "stale_past_expiry"}
         return True
     if int(o.get("no_data_count") or 0) >= max_no_data:
         if sig.status == "opened_paper":
             sig.status = "invalidated"
-            sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+            sig.outcome = {**o, **_lane_provenance(), "lifecycle_schema": LIFECYCLE_SCHEMA,
                            "result": "no_data", "reason": "no_data_repeated_opened"}
         else:
             sig.status = "expired"
-            sig.outcome = {**o, "lifecycle_schema": LIFECYCLE_SCHEMA,
+            sig.outcome = {**o, **_lane_provenance(), "lifecycle_schema": LIFECYCLE_SCHEMA,
                            "result": "expired_no_entry", "reason": "no_data_repeated"}
         return True
     return False

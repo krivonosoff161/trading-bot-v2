@@ -75,6 +75,8 @@ enable execution.
 
 - `state/derived/paper_telegram_delivery.jsonl`
 - `state/derived/paper_telegram_delivery.json`
+- `state/derived/paper_telegram_delivery_outbox.json`
+- `state/derived/paper_telegram_delivery.lock`
 
 The delivery snapshot is an audit surface, not just a send log. Its per-item statuses
 explain why alerts did or did not leave the machine, for example `dry_run`,
@@ -93,9 +95,37 @@ hashes, not raw chat ids.
 
 Current delivery hardening: chart photos are counted as sent only when Telegram returns
 a photo message id. HTTP/`ok=false` photo failures are surfaced as delivery errors
-instead of being silently treated as successful chart sends. The sent-key ledger is
-written atomically and refreshed after each successful card delivery, reducing duplicate
-subscriber sends after a process restart.
+instead of being silently treated as successful chart sends. The sender writes a
+delivery outbox claim before an injected transport call and holds a no-follow OS lock
+across the whole external side-effect boundary. A second process reports
+`pending_delivery_claim` without calling its transport. The primary delivery key binds
+immutable card content identity to the pseudonymous recipient, including the canonical
+resolved chart path and SHA-256 of the accepted PNG bytes when a photo will be sent.
+The same captured byte string—not a path that the transport must reopen—is passed to
+the transport, so a later producer-path replacement cannot change the acknowledged
+payload. Secure capture requires a regular file, uses no-follow/nonblocking open flags
+where supported, and enforces a bounded 10 MiB read. Unreadable, empty, special, or
+oversized chart content fails closed without a send. The exact
+previous-generation `content-sha256` keys and older signal/preview
+keys remain read-compatible for completed deliveries, preventing an upgrade from
+replaying an already acknowledged card.
+
+A preview that declares a chart is never downgraded to a text-only send: a missing,
+invalid, unreadable chart or unavailable photo transport fails closed before either
+part of the card reaches the transport.
+
+An unreadable, malformed, or structurally invalid existing outbox produces
+`outbox_unavailable` and is never replaced by an empty recovery state. The legacy
+`paper_telegram_sent_keys.json` compatibility index follows the same fail-closed rule;
+an existing unreadable or invalid index cannot be treated as an empty delivery history.
+Atomic JSON writes flush the temporary file before replace and flush the parent
+directory where the platform supports directory handles. A photo message id is
+recorded as `external_ack_ambiguous` through that boundary before the text call begins.
+The row keeps separate `photo_status` and `text_status` values, so a failed text
+acknowledgement cannot turn a confirmed photo acknowledgement into a retryable
+whole-card send. Later runs fail closed on ambiguous or crash-left `pending` records.
+This is not an exactly-once Telegram guarantee; it is a recovery boundary that
+prevents automatic duplicate sends after ambiguous external acknowledgements.
 
 Default mode is dry-run:
 

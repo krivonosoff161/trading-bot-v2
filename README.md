@@ -45,7 +45,32 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python -m pip install --upgrade pip
 .\.venv\Scripts\python -m pip install -r requirements.txt
 python -m pytest
+python scripts/ci/check_supply_chain_policy.py
 python scripts/ci/check_tracked_artifacts.py
+```
+
+CI installs the pip-compile-generated, fully transitive `requirements-ci.txt`
+with `--require-hashes`; every locked distribution has one or more SHA-256
+archive hashes. `requirements-ci.in` is the direct input and
+`requirements-ci.sha256` is the byte identity of the generated lock.
+`requirements.txt` remains the local developer convenience file and can carry
+broader comments or optional guidance.
+
+Regenerate and verify the lock with Python 3.11:
+
+```powershell
+python -m piptools compile --generate-hashes --resolver=backtracking --strip-extras --no-emit-index-url --no-emit-trusted-host --output-file=requirements-ci.txt requirements-ci.in
+python -m pip install --require-hashes -r requirements-ci.txt
+```
+
+For a platform-specific offline reconstruction, first populate a wheelhouse on
+that platform, then create a clean venv and disable package indexes:
+
+```powershell
+python -m pip download --only-binary=:all: --require-hashes -r requirements-ci.txt -d .wheelhouse
+py -3.11 -m venv .venv-offline
+.\.venv-offline\Scripts\python -m pip install --no-index --find-links .wheelhouse --require-hashes -r requirements-ci.txt
+.\.venv-offline\Scripts\python -m pip check
 ```
 
 Configuration is optional for tests. Integrations that fetch public market data,

@@ -10,6 +10,8 @@ from src.research_lab.system_analyst_cycle import (
     run_system_analyst_cycle,
 )
 
+FRESH_REVIEW_NOW = "2026-07-11T13:00:00+00:00"
+
 
 def _training():
     return {
@@ -36,7 +38,7 @@ def test_outcome_to_three_role_environments_and_gate_ack(tmp_path, monkeypatch):
     (derived / "paper_signal_training.jsonl").write_text(json.dumps(_training()) + "\n")
     (advice / "outcome_reviews.jsonl").write_text(json.dumps(_review()) + "\n")
 
-    summary = run_system_analyst_cycle(tmp_path, apply=True)
+    summary = run_system_analyst_cycle(tmp_path, apply=True, now=FRESH_REVIEW_NOW)
     assert summary["routed"] == 1
     assert summary["role_environment_candidates"] == {"farm": 1, "validator": 1, "trader": 1}
     assert summary["accepted_role_requests"] == {"farm": 1, "validator": 1, "trader": 1}
@@ -147,9 +149,9 @@ def test_cycle_recovers_request_projection_after_ack_succeeded(tmp_path, monkeyp
     monkeypatch.setattr(role_environment, "_write_state", fail_first)
     import pytest
     with pytest.raises(OSError, match="projection failed"):
-        run_system_analyst_cycle(tmp_path, apply=True)
+        run_system_analyst_cycle(tmp_path, apply=True, now=FRESH_REVIEW_NOW)
     monkeypatch.setattr(role_environment, "_write_state", original_write)
-    recovered = run_system_analyst_cycle(tmp_path, apply=True)
+    recovered = run_system_analyst_cycle(tmp_path, apply=True, now=FRESH_REVIEW_NOW)
     assert recovered["accepted_role_requests"]["farm"] == 1
 
 

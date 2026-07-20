@@ -21,11 +21,17 @@ from src.research_lab.honest_backtest_bridge import (
     run_validation,
     run_validation_batch,
 )
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_MANIFEST = legacy_fixture_manifest()
 
 _CANDIDATE_DICT = {
-    "contract_version": "1.1.0",
+    "contract_version": "1.2.0",
     "candidate_id": "c-repro",
     "source_run_id": "run-repro",
     "symbol": "BTC-USDT-SWAP",
@@ -39,9 +45,15 @@ _CANDIDATE_DICT = {
     "lite_status": "FORWARD_PAPER",
     "lite_reasons": ["passed_lite_validation"],
     "risk_flags": [],
+    "simulator_manifest": _MANIFEST,
+    "unsupported_simulator_dimensions": _MANIFEST["unsupported_dimensions"],
     "metrics": {
         "n_trades": 5, "data_fingerprint": "sha256:evaluation",
         "returns_basis": "net_pct", "costs_applied": True,
+        "simulator_manifest": _MANIFEST,
+        "simulator_model_id": _MANIFEST["simulator_model_id"],
+        "simulator_evidence_tier": _MANIFEST["evidence_tier"],
+        "unsupported_simulator_dimensions": _MANIFEST["unsupported_dimensions"],
         "validation_epoch": {
             "schema": "ValidationEpoch.v1", "evidence_stage": "untouched_evaluation",
             "selection_data_fingerprint": "sha256:selection",
@@ -51,9 +63,15 @@ _CANDIDATE_DICT = {
         },
     },
     "trades": [
-        {"side": "long", "net_pct": 1.0,
+        {"side": "long", "gross_pct": 1.1, "net_pct": 1.0,
          "entry_ts": f"2026-06-20T00:0{i}:00+00:00",
-         "exit_ts": f"2026-06-20T00:0{i}:30+00:00"}
+         "exit_ts": f"2026-06-20T00:0{i}:30+00:00",
+         "simulator_manifest": _MANIFEST,
+         "simulator_model_id": _MANIFEST["simulator_model_id"],
+         "simulator_evidence_tier": _MANIFEST["evidence_tier"],
+         "unsupported_simulator_dimensions": _MANIFEST["unsupported_dimensions"],
+         "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+         "quantity_ledger": build_trade_quantity_ledger()}
         for i in range(5)
     ],
     "equity_curve": [],

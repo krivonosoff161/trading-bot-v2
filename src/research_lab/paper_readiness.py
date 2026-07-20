@@ -7,7 +7,6 @@ or does not contain runnable paper inputs.
 """
 from __future__ import annotations
 
-import json
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from typing import Any
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.paper_contract import PaperPlanError, plan_from_setup_card
+from src.research_lab.validation_generation import read_current_setup_card
 
 
 def _short_reason(reason: str, *, max_len: int = 120) -> str:
@@ -30,8 +30,12 @@ def _load_cards(private_root: Path, *, limit: int = 500) -> tuple[list[SetupCard
     unreadable = 0
     for path in sorted(cards_dir.glob("*.json"))[: max(0, int(limit))]:
         try:
-            cards.append(SetupCard.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            payload = read_current_setup_card(private_root, path)
+            if payload is None:
+                unreadable += 1
+                continue
+            cards.append(SetupCard.from_dict(payload))
+        except (OSError, KeyError, TypeError, ValueError):
             unreadable += 1
     return cards, unreadable
 
@@ -52,6 +56,8 @@ def summarize_paper_readiness(
     plan_ready = 0
     local_data_ready = 0
     local_data_missing = 0
+    local_data_unproven = 0
+    data_manifests: dict[str, dict[str, Any]] = {}
 
     for card in cards:
         hard_status = str(card.hard_status or "missing").strip() or "missing"
@@ -86,12 +92,30 @@ def summarize_paper_readiness(
         plan_ready += 1
         if not check_local_data:
             continue
-        candles = load_canonical_candles(
+        selected = load_canonical_candles(
             Path(private_root), plan.symbol, plan.timeframe,
-        ).rows
-        if not candles:
+            purpose="paper_readiness", coverage_policy="gap_free",
+        )
+        data_manifests[card.setup_id] = {
+            "snapshot_id": selected.manifest.snapshot_id,
+            "evidence_hash": selected.manifest.evidence_hash,
+            "provenance_status": selected.manifest.provenance_status,
+            "coverage_status": selected.manifest.coverage_status,
+        }
+        if not selected.rows:
             local_data_missing += 1
             reason = "local_candles_missing"
+            reasons[reason] += 1
+            if len(sample_blockers) < 10:
+                sample_blockers.append({
+                    "setup_id": card.setup_id,
+                    "symbol": card.symbol,
+                    "timeframe": card.timeframe,
+                    "reason": reason,
+                })
+        elif selected.manifest.provenance_status != "complete":
+            local_data_unproven += 1
+            reason = "local_candles_provenance_unknown"
             reasons[reason] += 1
             if len(sample_blockers) < 10:
                 sample_blockers.append({
@@ -110,6 +134,8 @@ def summarize_paper_readiness(
         "plan_ready": plan_ready,
         "local_data_ready": local_data_ready,
         "local_data_missing": local_data_missing,
+        "local_data_unproven": local_data_unproven,
+        "data_manifests": data_manifests,
         "by_hard_status": dict(sorted(hard.items())),
         "by_lite_status": dict(sorted(lite.items())),
         "blocked_reasons": dict(sorted(reasons.items())),

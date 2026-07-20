@@ -66,7 +66,11 @@ def collect_entries(private_root: Path, *, limit_symbols: int = 30, timeframe: s
         if not ensure_candles(private_root, sym, timeframe, provider=provider):
             continue
         from src.research_lab.candle_library import load_canonical_candles
-        candles = load_canonical_candles(private_root, sym, timeframe).rows
+        selected = load_canonical_candles(
+            private_root, sym, timeframe,
+            purpose="direction_filter_probe", coverage_policy="gap_free",
+        )
+        candles = selected.rows
         if len(candles) < MA_LONG + 30:
             continue
         closes = [float(c["close"]) for c in candles]
@@ -82,6 +86,9 @@ def collect_entries(private_root: Path, *, limit_symbols: int = 30, timeframe: s
             if not trades:
                 continue
             rows.append({"symbol": sym, "oos": idx >= cut, "net": float(trades[0].get("net_pct") or 0.0),
+                         "data_snapshot_id": selected.manifest.snapshot_id,
+                         "data_evidence_hash": selected.manifest.evidence_hash,
+                         "data_provenance_status": selected.manifest.provenance_status,
                          **feats})
     return rows
 

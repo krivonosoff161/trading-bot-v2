@@ -11,10 +11,29 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.research_lab import shadow_oos as SO  # noqa: E402
+from src.research_lab.simulator_contract import (  # noqa: E402
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
 
 
 def _trade(net, mfe=2.0, mae=1.0, ttm=2, tp_before_sl=None):
     return {"net_pct": net, "mfe_pct": mfe, "mae_pct": mae, "time_to_mfe": ttm, "tp_before_sl": tp_before_sl}
+
+
+def _bound_trade(trade):
+    manifest = legacy_fixture_manifest()
+    return {
+        **trade,
+        "gross_pct": float(trade["net_pct"]) + 0.1,
+        "simulator_manifest": manifest,
+        "simulator_model_id": manifest["simulator_model_id"],
+        "simulator_evidence_tier": manifest["evidence_tier"],
+        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+        "cost_ledger": build_cost_ledger(fees_bps=7.0, slippage_bps=3.0),
+        "quantity_ledger": build_trade_quantity_ledger(),
+    }
 
 
 class TestMetrics:
@@ -72,9 +91,9 @@ def test_oos_bridge_builds_content_bound_untouched_epoch(monkeypatch):
          "side": "long", "net_pct": 0.2}
     ]
     evaluation = [
-        {"entry_ts": 1_700_000_120_000 + i * 60_000,
+        _bound_trade({"entry_ts": 1_700_000_120_000 + i * 60_000,
          "exit_ts": 1_700_000_150_000 + i * 60_000,
-         "side": "long", "net_pct": 0.3}
+         "side": "long", "net_pct": 0.3})
         for i in range(10)
     ]
     status = SO._oos_bridge_status(

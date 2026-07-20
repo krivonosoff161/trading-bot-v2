@@ -75,7 +75,10 @@ def _gate_failures(metrics: dict[str, Any], risk_flags: list[str]) -> list[str]:
         failures.append("weak_oos_sample")
     if _f(metrics, "test_avg_net_pct") <= 0:
         failures.append("oos_not_positive")
-    if _f(metrics, "profit_factor") < PF_THRESHOLD:
+    pf = _profit_factor_for_threshold(metrics)
+    if pf is None:
+        failures.append("profit_factor_unavailable")
+    elif pf < PF_THRESHOLD:
         failures.append("weak_profit_factor")
     if _f(metrics, "best_trade_share") > BEST_TRADE_SHARE_MAX:
         failures.append("single_trade_dominance")
@@ -125,3 +128,21 @@ def _f(metrics: dict[str, Any], key: str) -> float:
         return float(metrics.get(key) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _profit_factor_for_threshold(metrics: dict[str, Any]) -> float | None:
+    state = metrics.get("profit_factor_state")
+    if isinstance(state, dict):
+        name = str(state.get("state") or "")
+        if name == "positive_infinity":
+            return float("inf")
+        if name != "finite":
+            return None
+        try:
+            return float(state["value"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    try:
+        return float(metrics["profit_factor"])
+    except (KeyError, TypeError, ValueError):
+        return None

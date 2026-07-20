@@ -50,6 +50,9 @@ architecture.
 - [Farm runbook](farm_runbook.md): supported paper/research operation.
 - [Paper runtime design](paper_runtime_design.md): validated setup observation
   and outcome recording.
+- [Paper evidence generations](paper-evidence-generations.md): immutable v2
+  event/account authority, current projections, legacy display, and rollout
+  boundary.
 - [Paper acceptance cycle](paper_acceptance_cycle_2026-07-10.md): acceptance
   criteria for a bounded paper run.
 - [Outcome learning loop](outcome_learning_loop_2026-07-05.md): paper outcome
@@ -79,8 +82,11 @@ architecture.
 
 - [Validation bridge contract](validation-bridge-contract.md): public-safe
   candidate, verdict, and authority boundary with `honest-backtest`.
-- [Storage boundaries](storage_boundaries.md): public, private, and local-only
-  artifacts.
+- [Simulator truth tiers](simulator-truth-tiers.md): immutable OHLC fixture/scenario
+  assumptions, metric states, unsupported execution dimensions, and claim ceilings.
+- [Storage boundaries](storage_boundaries.md): public/private/local-only artifacts,
+  report-only automatic maintenance, synthetic-only quarantine, and the off-by-default
+  coordinated segment protocol/non-adoption boundary.
 - [Public artifact policy](public-artifact-policy.md): staging and historical
   artifact-remediation rules.
 - [Remote data manifest](REMOTE_DATA_MANIFEST.md): machine-local data locations

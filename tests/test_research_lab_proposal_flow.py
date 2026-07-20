@@ -72,6 +72,22 @@ def _validated(pid):
 
 
 def test_queue_validated_proposals_idempotent(tmp_path, monkeypatch, capsys):
+    data_dir = tmp_path / "market_data" / "15m"
+    data_dir.mkdir(parents=True)
+    rows = [
+        {
+            "ts": index * 900_000,
+            "open": 100 + index,
+            "high": 101 + index,
+            "low": 99 + index,
+            "close": 100.5 + index,
+            "vol": 10,
+        }
+        for index in range(200)
+    ]
+    (data_dir / "SOL_USDT_SWAP_fixture_15m.json").write_text(
+        json.dumps(rows), encoding="utf-8"
+    )
     upsert_proposals(proposals_path(tmp_path), [_validated("p1")])
     _run(queuer, ["queue_validated_proposals", "--apply", "--private-root", str(tmp_path)], monkeypatch)
     out1 = capsys.readouterr().out

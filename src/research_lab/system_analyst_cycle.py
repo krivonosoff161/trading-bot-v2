@@ -64,7 +64,28 @@ def _task_spec(
         "hypotheses": _string_list(review_payload.get("parameter_hypotheses")),
         "subject": subject,
         "source_ref": source_ref,
+        "source_content_sha256": evidence_content_hash(
+            {
+                "source_ref": source_ref,
+                "recipient": recipient,
+                "source_row": source_row,
+                "review_payload": review_payload,
+            }
+        ),
+        "producer_completion_id": stable_id(
+            "role_task_source",
+            {"source_ref": source_ref, "recipient": recipient, "generation": generation},
+            length=24,
+        ),
         "generation": generation,
+        "parent_family_id": str(source_row.get("search_family_id") or ""),
+        "parent_trial_id": str(source_row.get("search_trial_id") or ""),
+        "parent_effective_n_trials": int(source_row.get("effective_n_trials") or 0),
+        "cumulative_family_policy": (
+            "cumulative"
+            if source_row.get("search_family_id") and source_row.get("search_trial_id")
+            else "independent"
+        ),
         "requires_deterministic_mapping": True,
         "requires_untouched_evaluation": True,
         "paper_only": True,

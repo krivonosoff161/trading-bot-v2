@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.research_lab.simulator_contract import (
+    build_cost_ledger,
+    build_trade_quantity_ledger,
+    legacy_fixture_manifest,
+)
+
 
 def simulate_reference_fixed(
     candles: list[dict[str, Any]],
@@ -52,6 +58,8 @@ def simulate_reference_fixed(
         )
         rows.append(
             {
+                "entry_ts": candles[entry_index]["ts"],
+                "exit_ts": candles[exit_index]["ts"],
                 "entry_idx": entry_index,
                 "exit_idx": exit_index,
                 "side": side,
@@ -60,6 +68,14 @@ def simulate_reference_fixed(
                 "outcome": outcome,
                 "gross_pct": round(gross * 100, 6),
                 "net_pct": round((gross - cost_pct) * 100, 6),
+                "simulator_manifest": legacy_fixture_manifest(),
+                "simulator_model_id": legacy_fixture_manifest()["simulator_model_id"],
+                "simulator_evidence_tier": legacy_fixture_manifest()["evidence_tier"],
+                "unsupported_simulator_dimensions": legacy_fixture_manifest()["unsupported_dimensions"],
+                "cost_ledger": build_cost_ledger(
+                    fees_bps=fees_bps, slippage_bps=slippage_bps,
+                ),
+                "quantity_ledger": build_trade_quantity_ledger(),
             }
         )
     return rows

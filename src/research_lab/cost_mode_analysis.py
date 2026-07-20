@@ -8,6 +8,9 @@ three lenses, so we can see WHERE the edge dies instead of just declaring "no ed
   * realistic — net in-sample AND net out-of-sample (the stored test split): what costs + the split do
   * strict   — the honest validator verdict (hard PAPER_FORWARD_READY: OOS + multiple-testing + CI)
 
+The historical ``realistic`` key is a compatibility label for fixed-cost arithmetic
+only. It does not model spread, depth, impact, queueing, quantity, funding or fills.
+
 It also runs a COST sensitivity (taker vs maker vs zero) because the ledger shows costs are the dominant
 killer: a large pool flips positive under maker fills. That is a research hypothesis (maker fills are NOT
 guaranteed), never an edge claim — nothing here is promotable.
@@ -139,13 +142,18 @@ def analyze(private_root: Path) -> dict[str, Any]:
             "maker_0.02pp": sum(1 for x in cl if x["maker"]),
             "maker_unlock_vs_taker": sum(1 for x in cl if x["maker"]) - sum(1 for x in cl if x["real"])}
     return {
+        "simulator_claim_ceiling": "fixed_cost_arithmetic_only",
+        "unsupported_execution_dimensions": [
+            "spread", "depth", "market_impact", "queue_priority", "partial_fill", "funding",
+        ],
         "funnel": funnel,
         "cost_sensitivity": cost,
         "by_family": _aggregate(rows, lambda r: str(r.get("family") or "")),
         "by_timeframe": _aggregate(rows, lambda r: str(r.get("timeframe") or "")),
         "cost_bound_families": [a["key"] for a in _aggregate(rows, lambda r: str(r.get("family") or ""))
                                 if a["verdict"] == "cost_bound"],
-        "note": "read-only 3-mode decomposition of the existing ledger; maker unlock is a hypothesis "
+        "note": "read-only 3-mode decomposition; 'realistic' is a legacy compatibility label for "
+                "fixed-cost arithmetic only; maker unlock is a hypothesis "
                 "(fills not guaranteed), NOT edge; nothing here is paper-ready",
     }
 

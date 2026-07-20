@@ -16,6 +16,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from src.research_lab.validation_generation import (
+    current_candidate_ids,
+    read_current_validation_artifact,
+)
+
 HARD_PASS = "PAPER_FORWARD_READY"
 HARD_FAIL = {"HARD_REJECT", "FAILED_OVERFIT", "FAILED_COSTS", "FAILED_FRAGILITY",
              "FAILED_OOS", "FAILED_DATA_QUALITY", "REGIME_ONLY"}
@@ -52,26 +57,34 @@ def refresh_from_artifacts(
     independent priority worker. Full refresh remains available when IDs are omitted.
     """
     base = Path(private_root) / "hard_validation"
-    if candidate_ids is None:
+    active_ids = current_candidate_ids(private_root)
+    if active_ids is None and candidate_ids is None:
         exported = _ids_from_dir(base / "requests")
         verdicts = _verdicts(base / "verdicts")
-    else:
-        wanted = {str(cid) for cid in candidate_ids if str(cid)}
-        requests_dir = base / "requests"
-        exported = {cid for cid in wanted if (requests_dir / f"{cid}.json").exists()}
+    elif active_ids is None:
+        wanted = {str(cid) for cid in (candidate_ids or []) if str(cid)}
+        exported = {
+            cid for cid in wanted
+            if read_current_validation_artifact(private_root, cid, "request") is not None
+        }
         verdicts = {}
-        verdict_dir = base / "verdicts"
         for cid in wanted:
-            path = verdict_dir / f"{cid}.json"
-            if not path.exists():
-                continue
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            artifact_id = str(data.get("candidate_id") or cid)
-            if artifact_id in wanted:
-                verdicts[artifact_id] = str(data.get("hard_status") or "")
+            data = read_current_validation_artifact(private_root, cid, "verdict")
+            if data is not None:
+                verdicts[cid] = str(data.get("hard_status") or "")
+    else:
+        wanted = active_ids if candidate_ids is None else (
+            active_ids & {str(cid) for cid in candidate_ids if str(cid)}
+        )
+        exported = {
+            cid for cid in wanted
+            if read_current_validation_artifact(private_root, cid, "request") is not None
+        }
+        verdicts = {}
+        for cid in wanted:
+            data = read_current_validation_artifact(private_root, cid, "verdict")
+            if data is not None:
+                verdicts[cid] = str(data.get("hard_status") or "")
     marked_exported = 0
     marked_verdict = 0
     for cid in exported:
