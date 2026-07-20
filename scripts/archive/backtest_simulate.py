@@ -33,8 +33,10 @@ except AttributeError:
     pass
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.utils.runtime_root import load_runtime_dotenv
+
+if __name__ == "__main__":
+    load_runtime_dotenv(Path(__file__).resolve().parents[2])
 
 from src.exchange.okx_client import OKXClient
 from src.strategy.indicators import (
@@ -42,8 +44,11 @@ from src.strategy.indicators import (
     find_swing_levels, calc_bollinger_bands, calc_rsi, calc_slope,
     calc_supertrend, find_fvg,
 )
-# Single source of truth for pair params — same as prod analyze_chart.py
-from scripts.analyze_chart import _PAIR_PARAMS as PAIR_PARAMS, _PAIR_PARAMS_DEFAULT, _mode_cfg
+# Single source of truth for pair params — same as the production signal engine.
+from src.strategy.signal_engine import (
+    _PAIR_PARAMS as PAIR_PARAMS,
+    _mode_cfg,
+)
 
 # ── Historical data helpers ─────────────────────────────────────────────────────
 

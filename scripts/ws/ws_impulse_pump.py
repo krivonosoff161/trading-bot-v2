@@ -17,12 +17,12 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from src.data.impulse_pump_config import load_impulse_config
 from src.data.impulse_pump_engine import ImpulsePumpEngine

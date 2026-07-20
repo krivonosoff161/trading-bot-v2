@@ -14,12 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
 
 # --- paths ---
 ROOT = Path(__file__).parent.parent
-load_dotenv(ROOT / ".env")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 API_KEY = os.getenv("OKX_API_KEY", "")
 SECRET_KEY = os.getenv("OKX_SECRET_KEY", "")
@@ -30,9 +34,6 @@ BASE_URL = "https://www.okx.com"
 UNIVERSE_CACHE = ROOT / "scripts/ws/cache/active_universe.json"
 PUMP_SIGNALS = ROOT / "logs/pump/pump_signals.jsonl"
 PUMP_LABELS = ROOT / "logs/pump/pump_labels.jsonl"
-
-mcp = FastMCP("okx-trading-bot")
-
 
 # --- auth helpers ---
 
@@ -78,7 +79,6 @@ def _get_private(path: str, params: dict = None) -> dict:
 
 # --- tools ---
 
-@mcp.tool()
 def get_candles(symbol: str, bar: str = "1m", limit: int = 50) -> str:
     """
     Get OHLCV candles for a symbol from OKX.
@@ -104,7 +104,6 @@ def get_candles(symbol: str, bar: str = "1m", limit: int = 50) -> str:
     return summary + "\n".join(rows)
 
 
-@mcp.tool()
 def get_ticker(symbol: str) -> str:
     """
     Get current price and 24h stats for a symbol.
@@ -127,7 +126,6 @@ def get_ticker(symbol: str) -> str:
     )
 
 
-@mcp.tool()
 def get_active_universe() -> str:
     """
     Show what pairs the live screener currently tracks as hot (vol_spike + price_move).
@@ -150,7 +148,6 @@ def get_active_universe() -> str:
         return f"Error reading cache: {e}"
 
 
-@mcp.tool()
 def get_pump_stats() -> str:
     """
     Show pump engine paper trading stats: WR, PF, avg_R, recent signals.
@@ -210,7 +207,6 @@ def get_pump_stats() -> str:
     )
 
 
-@mcp.tool()
 def get_positions() -> str:
     """
     Get currently open positions on OKX (uses API credentials from .env).
@@ -241,7 +237,6 @@ def get_positions() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 def get_balance() -> str:
     """
     Get account USDT balance from OKX (uses API credentials from .env).
@@ -265,5 +260,21 @@ def get_balance() -> str:
     return "\n".join(lines)
 
 
+def main() -> None:
+    from mcp.server.fastmcp import FastMCP
+
+    server = FastMCP("okx-trading-bot")
+    for tool in (
+        get_candles,
+        get_ticker,
+        get_active_universe,
+        get_pump_stats,
+        get_positions,
+        get_balance,
+    ):
+        server.tool()(tool)
+    server.run(transport="stdio")
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    main()

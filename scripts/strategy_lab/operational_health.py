@@ -2185,12 +2185,9 @@ def main() -> None:
     # Importing this read-only report must not inspect operator credentials.  The
     # command-line surface retains its historical opt-in environment loading,
     # while library callers and tests remain free of .env side effects.
-    try:
-        from dotenv import load_dotenv
+    from src.utils.runtime_root import load_runtime_dotenv
 
-        load_dotenv(ROOT / ".env")
-    except Exception:
-        pass
+    load_runtime_dotenv(ROOT)
     ap = argparse.ArgumentParser()
     ap.add_argument("--private-root", type=Path, default=DEFAULT_PRIVATE_ROOT)
     ap.add_argument("--pfr-db-path", type=Path, default=None)

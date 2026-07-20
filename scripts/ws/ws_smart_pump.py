@@ -23,11 +23,13 @@ from typing import Any
 
 import aiohttp
 import yaml
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from src.data.ws_feed import Candle, WSFeed, _chunked
 from src.utils.telegram import send_message_to

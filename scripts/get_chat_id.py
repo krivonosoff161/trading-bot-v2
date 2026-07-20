@@ -17,20 +17,18 @@ from pathlib import Path
 import requests
 
 _ROOT = Path(__file__).resolve().parents[1]
-try:
-    from dotenv import load_dotenv
-    load_dotenv(_ROOT / ".env")
-except Exception:
-    pass
+sys.path.insert(0, str(_ROOT))
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
-if not TOKEN:
-    print("TELEGRAM_BOT_TOKEN не найден в .env")
-    sys.exit(1)
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
 
 def main():
-    r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates", timeout=15)
+    load_runtime_dotenv(_ROOT)
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip("'\"")
+    if not token:
+        print("TELEGRAM_BOT_TOKEN не найден в .env")
+        raise SystemExit(1)
+    r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=15)
     data = r.json()
     if not data.get("ok"):
         print(f"Telegram error: {data}")

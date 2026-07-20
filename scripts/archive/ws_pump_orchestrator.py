@@ -37,14 +37,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# load_dotenv() ДО импорта src.utils.telegram — иначе _BOT_TOKEN пустой при
-# импорте модуля и send_message_to молча возвращает None (silent no-op).
-# Это была причина "msg_id=None" для всех NOTIFY: бот просто не звонил Telegram.
-from dotenv import load_dotenv
-load_dotenv()
-
+# Archive imports stay configuration-free. The explicit entrypoint loads the
+# gated runtime environment before any notification can be sent.
 from src.exchange.okx_meta import fetch_ctvals
 from src.data.ws_feed import Candle, WSFeed, _chunked
+from src.utils.runtime_root import load_runtime_dotenv
 from src.utils.telegram import send_message_to
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
@@ -998,5 +995,10 @@ class PumpOrchestrator:
         self.logger.info(f"[{_now()}] {message}")
 
 
+async def _main() -> None:
+    load_runtime_dotenv(ROOT)
+    await PumpOrchestrator().run()
+
+
 if __name__ == "__main__":
-    asyncio.run(PumpOrchestrator().run())
+    asyncio.run(_main())

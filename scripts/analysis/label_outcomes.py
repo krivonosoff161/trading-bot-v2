@@ -25,11 +25,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from dotenv import load_dotenv
-load_dotenv()
+from src.utils.runtime_root import load_runtime_dotenv
+
+if __name__ == "__main__":
+    load_runtime_dotenv(Path(__file__).resolve().parents[2])
 
 from src.exchange.okx_client import OKXClient
-from scripts.backtest.backtest_simulate import check_outcome
+from scripts.archive.backtest_simulate import check_outcome
 
 _ROOT         = Path(__file__).resolve().parents[2]
 SIGNAL_LOG    = _ROOT / "logs" / "signals" / "signal_log.jsonl"

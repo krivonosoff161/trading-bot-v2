@@ -7,15 +7,14 @@ import json
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.utils.runtime_root import runtime_env_file  # noqa: E402
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
-load_dotenv(runtime_env_file(ROOT))
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from scripts.subscriptions import list_delivery_users  # noqa: E402
 from src.research_lab.paper_telegram_sender import send_paper_telegram_previews  # noqa: E402

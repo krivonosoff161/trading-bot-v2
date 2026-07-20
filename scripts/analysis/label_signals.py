@@ -19,12 +19,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-from src.exchange.okx_client import OKXClient
+from src.exchange.okx_client import OKXClient  # noqa: E402
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
-load_dotenv()
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 LOGS_DIR  = Path(__file__).parent.parent / "logs"
 BAR       = "15m"

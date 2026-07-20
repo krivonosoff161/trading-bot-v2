@@ -12,10 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 SIGNAL_SNAPSHOT = ROOT / "logs" / "signals" / "signal_snapshot.jsonl"
 MAIN_SIGNALS = ROOT / "logs" / "signals" / "main_signals.jsonl"

@@ -15,11 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-load_dotenv()
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+
+if __name__ == "__main__":
+    load_runtime_dotenv(ROOT)
 
 from scripts.subscriptions import is_subscribed, list_users
 from src.data.snapshot_writer import write_snapshot
@@ -35,12 +37,19 @@ NOTRADE_LOG = ROOT / "logs" / "signals" / "signal_log_notrade.jsonl"
 SCANNER_LOG_DIR = ROOT / "logs" / "scanner"
 
 _log_file = ROOT / "logs" / "ws_scanner.log"
-_handler = logging.handlers.RotatingFileHandler(
-    _log_file, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
-)
-logging.basicConfig(level=logging.INFO, handlers=[_handler, logging.StreamHandler(sys.stdout)],
-                    format="%(message)s")
 _logger = logging.getLogger("ws_scanner")
+
+
+def _configure_logging() -> None:
+    _log_file.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        _log_file, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[handler, logging.StreamHandler(sys.stdout)],
+        format="%(message)s",
+    )
 
 
 def _now() -> str:
@@ -289,6 +298,7 @@ class WSScanner:
 
 
 def main() -> None:
+    _configure_logging()
     asyncio.run(WSScanner().run())
 
 
