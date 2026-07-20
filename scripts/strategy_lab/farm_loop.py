@@ -41,6 +41,7 @@ from src.research_lab.ownership import (  # noqa: E402
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
+from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
 
@@ -83,6 +84,23 @@ class _FarmLeaseHeartbeat:
             self.failure = exc
         finally:
             store.close()
+
+
+def _task_claim_guard_factory(ownership_path, process_lease, stop_event):
+    """Bind every long task claim to the one canonical process generation."""
+    def build(tasks: FarmTasksDB, task: dict):
+        return TaskClaimHeartbeat(
+            tasks,
+            task,
+            ownership_path=Path(ownership_path),
+            process_lease=process_lease,
+            stop_event=stop_event,
+            lease_seconds=TASK_CLAIM_LEASE_SECONDS,
+            renew_interval_seconds=30.0,
+            max_no_progress_seconds=300.0,
+        )
+
+    return build
 
 
 def _paper_telegram_delivery_config(args, *, apply: bool) -> dict:
@@ -1197,6 +1215,7 @@ def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, ap
             max_validations=int(getattr(args, "max_validations", 10)),
             run_validation=args.run_validation, run_followups=not getattr(args, "no_followups", False),
             max_followups=getattr(args, "max_followups", 10), sweep_tier=args.sweep_tier,
+            task_claim_guard_factory=getattr(args, "task_claim_guard_factory", None),
         )
     out["discovery"] = discovery_info
 
@@ -1569,6 +1588,7 @@ def _run_priority_slot(args, tasks: FarmTasksDB, profiles, policy, private_root:
         run_followups=False,
         max_followups=0,
         sweep_tier=args.sweep_tier,
+        task_claim_guard_factory=getattr(args, "task_claim_guard_factory", None),
     )
 
 
@@ -1659,9 +1679,13 @@ def _write_priority_worker_status(
 
 def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event: threading.Event) -> None:
     """Continuously drain urgent/background numeric work beside the full cycle."""
+    task_db_kwargs = {"lease_seconds": TASK_CLAIM_LEASE_SECONDS}
+    canonical_owner_id = getattr(args, "canonical_owner_id", None)
+    if canonical_owner_id is not None:
+        task_db_kwargs["owner_id"] = canonical_owner_id
     worker_tasks = FarmTasksDB(
         tasks_db_path(private_root),
-        lease_seconds=TASK_CLAIM_LEASE_SECONDS,
+        **task_db_kwargs,
     )
     from src.research_lab.farm_journal import make_transition_sink
     worker_tasks.on_transition = make_transition_sink(private_root)
@@ -1927,6 +1951,11 @@ def main() -> None:
 
     priority_stop = threading.Event()
     priority_thread = None
+    if apply:
+        args.canonical_owner_id = process_lease.owner_id
+        args.task_claim_guard_factory = _task_claim_guard_factory(
+            ownership_path, process_lease, priority_stop
+        )
     try:
         if not args.loop:
             out = _run_once(args, tasks, profiles, policy, private_root, apply)

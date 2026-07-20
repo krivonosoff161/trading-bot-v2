@@ -1005,38 +1005,88 @@ class FarmTasksDB:
         self, task_id: int, *, lease_seconds: float | None = None,
         now: float | None = None,
     ) -> float:
-        current = self._effective_now(now)
         tid = int(task_id)
-        row = self._conn.execute("SELECT * FROM tasks WHERE task_id=?", (tid,)).fetchone()
-        fence = int(row["fencing_token"] or 0) if row is not None else 0
-        if (
-            row is None
-            or str(row["claim_owner"] or "") != self.owner_id
-            or self._claims.get(tid) != fence
-            or float(row["claim_expires_at"] or 0) <= current
-        ):
+        fence = self._claims.get(tid)
+        if fence is None:
             raise StaleTaskClaimError(f"stale claim for task {tid}")
-        expires = current + float(lease_seconds or self.lease_seconds)
-        current = self._effective_now(current)
-        if float(row["claim_expires_at"] or 0) <= current:
-            raise StaleTaskClaimError(f"stale claim for task {tid}")
-        expires = current + float(lease_seconds or self.lease_seconds)
-        cur = self._conn.execute(
-            """UPDATE tasks SET claim_expires_at=?, mutation_protocol='fenced.v2',
-                   mutation_seq=mutation_seq+1
+        return self.renew_task_claim_token(
+            tid,
+            fencing_token=fence,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+
+    def assert_task_claim(
+        self, task_id: int, *, fencing_token: int, now: float | None = None,
+    ) -> dict[str, Any]:
+        """Return the exact live running claim or fail closed.
+
+        Unlike foreground transitions this check accepts an explicit immutable
+        fence, so a separate heartbeat connection never has to forge the
+        connection-local ``_claims`` cache.
+        """
+        current = self._effective_now(now)
+        row = self._conn.execute(
+            """SELECT * FROM tasks
                WHERE task_id=? AND state='running' AND claim_owner=?
                  AND fencing_token=? AND claim_expires_at>?
-                 AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
-            (
-                expires, tid, self.owner_id, fence, current,
-                int(row["mutation_seq"] or 0),
-            ),
-        )
-        if cur.rowcount != 1:
+                 AND mutation_protocol='fenced.v2'""",
+            (int(task_id), self.owner_id, int(fencing_token), current),
+        ).fetchone()
+        if row is None:
+            raise StaleTaskClaimError(f"stale claim for task {int(task_id)}")
+        return dict(row)
+
+    def renew_task_claim_token(
+        self,
+        task_id: int,
+        *,
+        fencing_token: int,
+        lease_seconds: float | None = None,
+        now: float | None = None,
+    ) -> float:
+        """Atomically renew one explicit owner/fence generation.
+
+        This is the only renewal surface suitable for an independent heartbeat
+        connection.  The transaction serializes renewal with reclaim and
+        reconciliation; both cannot win the same generation.
+        """
+        tid = int(task_id)
+        fence = int(fencing_token)
+        duration = float(lease_seconds or self.lease_seconds)
+        if duration <= 0:
+            raise ValueError("lease_seconds must be positive")
+        current = self._effective_now(now)
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            current = self._effective_now(current)
+            row = self._conn.execute(
+                """SELECT mutation_seq, claim_expires_at FROM tasks
+                   WHERE task_id=? AND state='running' AND claim_owner=?
+                     AND fencing_token=? AND mutation_protocol='fenced.v2'""",
+                (tid, self.owner_id, fence),
+            ).fetchone()
+            if row is None or float(row["claim_expires_at"] or 0) <= current:
+                raise StaleTaskClaimError(f"stale claim for task {tid}")
+            expires = current + duration
+            cur = self._conn.execute(
+                """UPDATE tasks SET claim_expires_at=?, updated_at=?,
+                       mutation_protocol='fenced.v2', mutation_seq=mutation_seq+1
+                   WHERE task_id=? AND state='running' AND claim_owner=?
+                     AND fencing_token=? AND claim_expires_at>?
+                     AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
+                (
+                    expires, current, tid, self.owner_id, fence, current,
+                    int(row["mutation_seq"] or 0),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise StaleTaskClaimError(f"task {tid} changed during renewal")
+            self._conn.commit()
+            return expires
+        except Exception:
             self._conn.rollback()
-            raise StaleTaskClaimError(f"task {tid} changed during renewal")
-        self._conn.commit()
-        return expires
+            raise
 
     def skip_task(self, task_id: int, reason: str, *, now: float | None = None) -> None:
         self._set_state(task_id, "skipped", reason=reason, now=now)
