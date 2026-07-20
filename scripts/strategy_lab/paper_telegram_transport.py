@@ -24,7 +24,7 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
     load_dotenv(runtime_env_file(Path(root)))
 
     from scripts.subscriptions import list_delivery_users
-    from src.utils.telegram import bot_token, send_photo_to
+    from src.utils.telegram import bot_token, send_photo_bytes_to
 
     ids = [
         str(user.get("chat_id") or "").strip()
@@ -52,8 +52,8 @@ def build_subscription_delivery_config(root: Path) -> dict[str, Any]:
                 raise RuntimeError("Telegram ok=false")
             return body.get("result", {}).get("message_id")
 
-    async def send_photo(chat_id: str, path: str) -> int | None:
-        return await send_photo_to(chat_id, path)
+    async def send_photo(chat_id: str, payload: bytes) -> int | None:
+        return await send_photo_bytes_to(chat_id, payload)
 
     configured = bool(bot_token() and ids)
     return {
