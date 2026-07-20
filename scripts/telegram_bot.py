@@ -28,14 +28,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import aiohttp
-from dotenv import load_dotenv
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from src.utils.runtime_root import runtime_env_file  # noqa: E402
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
-load_dotenv(runtime_env_file(ROOT))
+load_runtime_dotenv(ROOT)
 
 from scripts.analyze_chart import _format_telegram, run as analyze_run  # noqa: E402
 from scripts.analysis.feedback import (  # noqa: E402

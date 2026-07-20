@@ -1,8 +1,33 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+from pathlib import Path
 
-from src.utils.runtime_root import load_runtime_dotenv
+from src.utils.runtime_root import DOTENV_AUTOLOAD_ENV, load_runtime_dotenv
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _safe_subprocess_env(tmp_path: Path) -> dict[str, str]:
+    allowed = ("PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "WINDIR")
+    env = {name: os.environ[name] for name in allowed if name in os.environ}
+    env.update(
+        {
+            "PYTHONPATH": str(ROOT),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HOME": str(tmp_path),
+            "USERPROFILE": str(tmp_path),
+            DOTENV_AUTOLOAD_ENV: "0",
+            "AUTO_TRADE": "0",
+            "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE": "0",
+            "TRADING_BOT_RUNTIME_ROOT": str(tmp_path / "runtime"),
+            "TRADING_BOT_RESEARCH_ROOT": str(tmp_path / "research"),
+        }
+    )
+    return env
 
 
 def test_dotenv_autoload_is_disabled_before_collection(monkeypatch, tmp_path) -> None:
@@ -36,3 +61,144 @@ def test_dotenv_autoload_enabled_reads_only_isolated_runtime_file(
 
     assert load_runtime_dotenv(tmp_path) is True
     assert os.environ["SYNTHETIC_DOTENV_POLICY_VALUE"] == "isolated"
+
+
+def test_dotenv_autoload_production_default_reads_isolated_runtime_file(
+    monkeypatch, tmp_path,
+) -> None:
+    runtime_root = tmp_path / "runtime-default"
+    runtime_root.mkdir()
+    (runtime_root / ".env").write_text(
+        "SYNTHETIC_DOTENV_DEFAULT_VALUE=isolated\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(DOTENV_AUTOLOAD_ENV, raising=False)
+    monkeypatch.setenv("TRADING_BOT_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.delenv("SYNTHETIC_DOTENV_DEFAULT_VALUE", raising=False)
+
+    assert load_runtime_dotenv(tmp_path) is True
+    assert os.environ["SYNTHETIC_DOTENV_DEFAULT_VALUE"] == "isolated"
+
+
+def test_dotenv_test_environment_changes_are_restored(monkeypatch, tmp_path) -> None:
+    before = {
+        DOTENV_AUTOLOAD_ENV: os.environ.get(DOTENV_AUTOLOAD_ENV),
+        "TRADING_BOT_RUNTIME_ROOT": os.environ.get("TRADING_BOT_RUNTIME_ROOT"),
+    }
+    with monkeypatch.context() as isolated:
+        isolated.setenv(DOTENV_AUTOLOAD_ENV, "1")
+        isolated.setenv("TRADING_BOT_RUNTIME_ROOT", str(tmp_path))
+    after = {
+        DOTENV_AUTOLOAD_ENV: os.environ.get(DOTENV_AUTOLOAD_ENV),
+        "TRADING_BOT_RUNTIME_ROOT": os.environ.get("TRADING_BOT_RUNTIME_ROOT"),
+    }
+
+    assert after == before
+
+
+def test_direct_canonical_env_open_fails_closed_in_isolated_process(tmp_path) -> None:
+    canonical_env = Path.home() / "trading-bot-v2" / ".env"
+    code = """
+import ntpath
+import os
+import sys
+
+target = ntpath.normcase(ntpath.normpath(sys.argv[1]))
+
+def guard(event, args):
+    if event != "open" or not args:
+        return
+    raw = args[0]
+    if not isinstance(raw, (str, bytes, os.PathLike)):
+        return
+    candidate = ntpath.normcase(ntpath.normpath(os.fsdecode(raw)))
+    if candidate == target:
+        raise PermissionError("canonical dotenv blocked")
+
+sys.addaudithook(guard)
+open(sys.argv[1], "rb")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(canonical_env)],
+        cwd=ROOT,
+        env=_safe_subprocess_env(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "canonical dotenv blocked" in result.stderr
+
+
+def test_canonical_rcc_import_graph_is_hermetic_and_side_effect_free(tmp_path) -> None:
+    code = """
+import importlib
+import os
+import platform
+import sqlite3
+import subprocess
+import sys
+
+import dotenv
+import dotenv.main
+
+# Avoid the Windows stdlib `cmd /c ver` probe performed by platform.system()
+# during aiohttp import; all process launches remain forbidden after this.
+platform.system = lambda: "Windows"
+
+def forbidden(label):
+    def fail(*args, **kwargs):
+        raise AssertionError(label)
+    return fail
+
+def audit(event, args):
+    if event in {"socket.connect", "subprocess.Popen"}:
+        raise AssertionError(event)
+    if event == "open" and args:
+        raw = args[0]
+        if isinstance(raw, (str, bytes, os.PathLike)):
+            if os.path.basename(os.fsdecode(raw)).lower() == ".env":
+                raise AssertionError("dotenv file open")
+
+sys.addaudithook(audit)
+dotenv.load_dotenv = forbidden("direct dotenv loader")
+dotenv.main.load_dotenv = dotenv.load_dotenv
+sqlite3.connect = forbidden("sqlite connection")
+
+modules = (
+    "scripts.research_control_center",
+    "scripts.public_channel_publisher",
+    "src.scout.scanner_v0",
+    "src.scout.resolve_outcomes",
+    "scripts.strategy_lab.farm_loop",
+    "scripts.build_journal",
+    "scripts.strategy_lab.paper_telegram_transport",
+    "scripts.telegram_bot",
+    "scripts.analyze_chart",
+)
+for module in modules:
+    importlib.import_module(module)
+
+from scripts.research_control_center import contour_specs
+from scripts import telegram_bot
+
+specs = {spec.key: spec for spec in contour_specs()}
+assert {"ollama", "public_news", "scanner", "paper_cards", "telegram_bot"} <= set(specs)
+assert specs["telegram_bot"].env["AUTO_TRADE"] == "0"
+assert specs["telegram_bot"].env["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
+assert telegram_bot._auto_execute_opt_in() is False
+assert "scripts.auto_execute" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=_safe_subprocess_env(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-1000:]

@@ -24,11 +24,11 @@ def dotenv_autoload_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def load_runtime_dotenv(code_root: Path, **kwargs: object) -> bool:
+def load_runtime_dotenv(code_root: Path) -> bool:
     """Load the runtime dotenv file unless the process disabled autoload."""
     if not dotenv_autoload_enabled():
         return False
 
     from dotenv import load_dotenv
 
-    return bool(load_dotenv(runtime_env_file(code_root), **kwargs))
+    return bool(load_dotenv(runtime_env_file(code_root)))
