@@ -20,7 +20,7 @@ load_dotenv(runtime_env_file(ROOT))
 from scripts.subscriptions import list_delivery_users  # noqa: E402
 from src.research_lab.paper_telegram_sender import send_paper_telegram_previews  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
-from src.utils.telegram import bot_token, send_message_to, send_photo_to  # noqa: E402
+from src.utils.telegram import bot_token, send_message_to, send_photo_bytes_to  # noqa: E402
 
 
 def main() -> None:
@@ -43,8 +43,8 @@ def main() -> None:
     async def _send_text(chat_id: str, text: str) -> int | None:
         return await send_message_to(chat_id, text)
 
-    async def _send_photo(chat_id: str, path: str) -> int | None:
-        return await send_photo_to(chat_id, path)
+    async def _send_photo(chat_id: str, payload: bytes) -> int | None:
+        return await send_photo_bytes_to(chat_id, payload)
 
     summary = send_paper_telegram_previews(
         args.private_root,
