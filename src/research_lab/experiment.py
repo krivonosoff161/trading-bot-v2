@@ -14,9 +14,9 @@ import hashlib
 import itertools
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.entry_timing import event_anchored_timing
 from src.research_lab.candle_identity import candle_evidence_fingerprint
@@ -100,8 +100,9 @@ class ExperimentSpec:
     data_snapshot_bindings: list[dict[str, Any]] = field(default_factory=list)
     search_family_definition: dict[str, Any] = field(default_factory=dict)
     search_family_id: str = ""
+    validation_progress: InitVar[Callable[[str], None] | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, validation_progress: Callable[[str], None] | None) -> None:
         from src.research_lab.search_family_definition import (
             build_declared_grid_definition,
             validate_experiment_spec_binding,
@@ -114,6 +115,7 @@ class ExperimentSpec:
             validate_search_family_definition(
                 self.search_family_definition,
                 expected_id=self.search_family_id,
+                progress=validation_progress,
             )
             validate_experiment_spec_binding(self)
             return

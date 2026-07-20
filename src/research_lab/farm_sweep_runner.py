@@ -174,6 +174,7 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
                 event_context: dict[str, Any] | None = None,
                 materialization_id: str | None = None,
                 prepare_intent: Callable[[Path, str, str], None] | None = None,
+                progress: Callable[[str], None] | None = None,
                 ) -> tuple[str, int, bool]:
     """Compile + write spec file + idempotently enqueue. Returns (experiment_id, job_id, created)."""
     if not data_snapshot_id or not data_evidence_hash or not data_snapshot_bindings:
@@ -187,6 +188,7 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
         data_snapshot_id=data_snapshot_id,
         data_evidence_hash=data_evidence_hash or str(fingerprint or ""),
         data_snapshot_bindings=data_snapshot_bindings,
+        progress=progress,
     )
     out_dir = event_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)

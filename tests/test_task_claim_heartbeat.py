@@ -313,6 +313,37 @@ def test_no_progress_cannot_renew_claim_indefinitely(tmp_path) -> None:
     owner_store.release(process_lease)
 
 
+def test_background_failure_callback_is_immediate_once_and_public_safe(tmp_path) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.25)
+    observed: list[tuple[BaseException, dict]] = []
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.25,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.06,
+        identity_probe=probe,
+        on_failure=lambda failure, snapshot: observed.append((failure, snapshot)),
+    )
+    heartbeat.start()
+    assert _wait_until(lambda: len(observed) == 1)
+    failure, snapshot = observed[0]
+    assert isinstance(failure, TaskClaimProgressStalled)
+    assert snapshot["failure"] == "TaskClaimProgressStalled"
+    assert snapshot["task_id"] == task["task_id"]
+    assert "owner_id" not in snapshot
+    assert tasks.get_task(task["task_id"])["claim_expires_at"] > time.time()
+    heartbeat._record_failure(RuntimeError("secondary"))
+    assert len(observed) == 1
+    heartbeat.stop()
+    owner_store.release(process_lease)
+    owner_store.close()
+    tasks.close()
+
+
 def test_owner_loss_before_materialization_creates_no_outbox_or_compute_job(tmp_path) -> None:
     owner_store, process_lease, probe = _process_lease(tmp_path)
     tasks, task = _claimed_task(tmp_path)

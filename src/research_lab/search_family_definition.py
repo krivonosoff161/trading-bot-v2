@@ -231,6 +231,7 @@ def build_sweep_family_definition(
     data_snapshot_id: str = "",
     data_evidence_hash: str = "",
     data_snapshot_bindings: list[Mapping[str, Any]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str]:
     points = [dict(point) for point in search_space.get("points", [])]
     selected = [int(value) for value in search_space.get("selected_flat_indices", [])]
@@ -283,7 +284,9 @@ def build_sweep_family_definition(
             parent_effective_n_trials=getattr(spec, "parent_effective_n_trials", 0),
         ),
     }
-    validate_search_family_definition(definition, check_code_identity=True)
+    validate_search_family_definition(
+        definition, check_code_identity=True, progress=progress,
+    )
     return definition, family_definition_id(definition)
 
 
@@ -365,6 +368,7 @@ def validate_search_family_definition(
     *,
     expected_id: str = "",
     check_code_identity: bool = True,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
     value = dict(definition)
     if value.get("schema") != SCHEMA:
@@ -455,7 +459,7 @@ def validate_search_family_definition(
         ):
             raise ValueError("historical search-family selection policy is unavailable")
     if value.get("origin") == "sweep":
-        _validate_sweep_derivation(value)
+        _validate_sweep_derivation(value, progress=progress)
     else:
         _validate_declared_grid_derivation(value)
     actual_id = family_definition_id(value)
@@ -473,7 +477,11 @@ def validate_search_family_definition(
     }
 
 
-def _validate_sweep_derivation(definition: Mapping[str, Any]) -> None:
+def _validate_sweep_derivation(
+    definition: Mapping[str, Any],
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> None:
     """Recompile the embedded raw sweep and require an identical point ledger."""
     from src.research_lab.param_schemas import (
         PARAMETER_SEARCH_CONTRACT_VERSION,
@@ -553,6 +561,7 @@ def _validate_sweep_derivation(definition: Mapping[str, Any]) -> None:
         baseline=baseline,
         strategy_id=spec.setup_family,
         audit=audit,
+        progress=progress,
     )
     if definition.get("points") != audit.get("points"):
         raise ValueError("search family points disagree with raw sweep derivation")

@@ -13,6 +13,8 @@ import threading
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from scripts.strategy_lab import farm_loop
 from src.research_lab import farm_journal
 
@@ -58,6 +60,60 @@ def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_
     assert seen["closed"] is True
     assert seen["db_kwargs"] == {"lease_seconds": farm_loop.TASK_CLAIM_LEASE_SECONDS}
     assert seen["statuses"] == ["running_slot", "idle", "stopped"]
+
+
+def test_claim_failure_signal_stops_worker_and_interrupts_foreground(tmp_path) -> None:
+    stop = threading.Event()
+    interrupted = []
+    signal = farm_loop._TaskClaimFailureSignal(
+        tmp_path, stop, interrupt_main=lambda: interrupted.append(True),
+    )
+
+    signal.notify(
+        RuntimeError("claim lost"),
+        {
+            "task_id": 7,
+            "owner_id": "must-not-leak",
+            "task_fencing_token": 3,
+            "process_fencing_token": 8,
+            "last_progress_stage": "grid_validation:1024/157464",
+            "last_progress_age_seconds": 301.0,
+            "failure": "TaskClaimProgressStalled",
+        },
+    )
+    signal.notify(RuntimeError("duplicate"), {})
+
+    assert stop.is_set()
+    assert interrupted == [True]
+    status = json.loads(
+        (tmp_path / "state" / "farm_priority_worker_status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status["stage"] == "claim_failed"
+    assert status["execution_allowed"] is False
+    assert "owner_id" not in json.dumps(status)
+    with pytest.raises(RuntimeError, match="priority task claim heartbeat failed"):
+        signal.raise_if_failed()
+
+
+def test_claim_failure_interrupts_even_when_status_write_fails(monkeypatch, tmp_path) -> None:
+    stop = threading.Event()
+    interrupted = []
+    signal = farm_loop._TaskClaimFailureSignal(
+        tmp_path, stop, interrupt_main=lambda: interrupted.append(True),
+    )
+    monkeypatch.setattr(
+        farm_loop,
+        "_write_priority_worker_status",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("status unavailable")),
+    )
+
+    with pytest.raises(OSError, match="status unavailable"):
+        signal.notify(RuntimeError("claim lost"), {"task_id": 7})
+
+    assert stop.is_set()
+    assert interrupted == [True]
 
 
 def _args(**over) -> Namespace:

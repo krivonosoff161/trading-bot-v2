@@ -20,6 +20,7 @@ class TaskClaimProgressStalled(StaleTaskClaimError):
 
 
 IdentityProbe = Callable[[int], ProcessIdentity | None]
+FailureCallback = Callable[[BaseException, dict[str, Any]], None]
 
 
 class TaskClaimHeartbeat:
@@ -44,6 +45,7 @@ class TaskClaimHeartbeat:
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
         identity_probe: IdentityProbe = probe_process_identity,
+        on_failure: FailureCallback | None = None,
     ) -> None:
         if task_db.path == ":memory:":
             raise ValueError("task claim heartbeat requires a filesystem task DB")
@@ -60,6 +62,7 @@ class TaskClaimHeartbeat:
         self._clock = clock
         self._monotonic = monotonic
         self._identity_probe = identity_probe
+        self._on_failure = on_failure
         if not self.owner_id or self.owner_id != process_lease.owner_id:
             raise ValueError("task claim must belong to the canonical process owner")
         if self.fencing_token <= 0:
@@ -187,10 +190,25 @@ class TaskClaimHeartbeat:
             raise StaleTaskClaimError(f"task claim heartbeat failed for task {self.task_id}") from failure
 
     def _record_failure(self, failure: BaseException) -> None:
+        first_failure = False
         with self._lock:
             if self._failure is None:
                 self._failure = failure
+                first_failure = True
         self._stop.set()
+        if first_failure and self._on_failure is not None:
+            try:
+                self._on_failure(failure, self.public_snapshot())
+            except BaseException:
+                # Failure notification is observability only.  It must never
+                # replace or clear the authority failure that stopped renewal.
+                pass
+
+    def public_snapshot(self) -> dict[str, Any]:
+        """Return failure telemetry without the private owner instance id."""
+        snapshot = self.snapshot()
+        snapshot.pop("owner_id", None)
+        return snapshot
 
     def _wait_for_renewal(self) -> bool:
         deadline = float(self._monotonic()) + self.renew_interval_seconds
