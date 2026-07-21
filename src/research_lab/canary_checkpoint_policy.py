@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Callable, Mapping
 
 
@@ -62,6 +63,43 @@ class CanaryWatchdogAssessment:
 
 class CanaryMonitorHardFailure(RuntimeError):
     """Latched fail-closed monitoring failure that adapters must escalate."""
+
+
+@dataclass(frozen=True)
+class CanaryMonitoringLaneSpec:
+    name: str
+    max_sample_gap_seconds: float
+    permits_database_snapshot: bool
+
+
+CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
+    CanaryMonitoringLaneSpec(
+        name="fast_safety",
+        max_sample_gap_seconds=45.0,
+        permits_database_snapshot=False,
+    ),
+    CanaryMonitoringLaneSpec(
+        name="deep_database",
+        max_sample_gap_seconds=300.0,
+        permits_database_snapshot=True,
+    ),
+)
+
+
+def build_monitoring_lane_watchdogs(
+    *, started_at: float
+) -> Mapping[str, "CanaryFastSampleWatchdog"]:
+    """Build independent freshness clocks for fast and deep monitor lanes."""
+
+    return MappingProxyType(
+        {
+            spec.name: CanaryFastSampleWatchdog(
+                started_at=started_at,
+                max_fast_sample_gap_seconds=spec.max_sample_gap_seconds,
+            )
+            for spec in CANONICAL_MONITORING_LANES
+        }
+    )
 
 
 def require_healthy_watchdog(assessment: CanaryWatchdogAssessment) -> None:

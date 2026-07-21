@@ -4,11 +4,13 @@ import pytest
 
 from src.research_lab.canary_checkpoint_policy import (
     CANONICAL_CANARY_CHECKPOINTS,
+    CANONICAL_MONITORING_LANES,
     FINAL_QUIESCENT_CHECKPOINT,
     CanaryFastSampleWatchdog,
     CanaryMonitorHardFailure,
     IntegrityEvidenceMode,
     collect_checkpoint_integrity_evidence,
+    build_monitoring_lane_watchdogs,
     due_active_checkpoints,
     require_healthy_watchdog,
 )
@@ -144,6 +146,36 @@ def test_healthy_watchdog_assessment_does_not_raise() -> None:
     watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
 
     require_healthy_watchdog(watchdog.record_fast_sample(now=110.0))
+
+
+def test_fast_safety_lane_excludes_database_snapshot() -> None:
+    lanes = {item.name: item for item in CANONICAL_MONITORING_LANES}
+
+    assert not lanes["fast_safety"].permits_database_snapshot
+    assert lanes["fast_safety"].max_sample_gap_seconds == 45.0
+    assert lanes["deep_database"].permits_database_snapshot
+    assert lanes["deep_database"].max_sample_gap_seconds == 300.0
+
+
+def test_deep_database_progress_cannot_refresh_fast_safety_lane() -> None:
+    lanes = build_monitoring_lane_watchdogs(started_at=100.0)
+    lanes["fast_safety"].record_fast_sample(now=105.0)
+    lanes["deep_database"].record_fast_sample(now=105.0)
+    lanes["deep_database"].record_fast_sample(now=149.0)
+
+    fast = lanes["fast_safety"].assess(now=150.1)
+    deep = lanes["deep_database"].assess(now=150.1)
+
+    assert fast.failure_reason == "monitor_fast_sample_freshness_lost"
+    assert deep.failure_reason is None
+
+
+def test_fast_and_deep_lanes_have_independent_latched_alerts() -> None:
+    lanes = build_monitoring_lane_watchdogs(started_at=100.0)
+    fast = lanes["fast_safety"].assess(now=145.1)
+
+    assert fast.alert_count == 1
+    assert lanes["deep_database"].assess(now=145.1).alert_count == 0
 
 
 def test_watchdog_rejects_monotonic_clock_regression() -> None:
