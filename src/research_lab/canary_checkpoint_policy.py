@@ -60,6 +60,17 @@ class CanaryWatchdogAssessment:
     fast_sample_age_seconds: float | None
 
 
+class CanaryMonitorHardFailure(RuntimeError):
+    """Latched fail-closed monitoring failure that adapters must escalate."""
+
+
+def require_healthy_watchdog(assessment: CanaryWatchdogAssessment) -> None:
+    """Raise immediately when a watchdog assessment contains a latched failure."""
+
+    if assessment.failure_reason is not None:
+        raise CanaryMonitorHardFailure(assessment.failure_reason)
+
+
 class CanaryFastSampleWatchdog:
     """Fail-closed monotonic freshness policy independent of checkpoint work.
 

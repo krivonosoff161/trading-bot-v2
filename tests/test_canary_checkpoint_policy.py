@@ -6,9 +6,11 @@ from src.research_lab.canary_checkpoint_policy import (
     CANONICAL_CANARY_CHECKPOINTS,
     FINAL_QUIESCENT_CHECKPOINT,
     CanaryFastSampleWatchdog,
+    CanaryMonitorHardFailure,
     IntegrityEvidenceMode,
     collect_checkpoint_integrity_evidence,
     due_active_checkpoints,
+    require_healthy_watchdog,
 )
 
 
@@ -127,6 +129,21 @@ def test_late_completed_sample_cannot_hide_gap_without_prior_assess() -> None:
     assert result.failure_reason == "monitor_fast_sample_freshness_lost"
     assert result.last_fast_sample_at == 105.0
     assert result.fast_sample_age_seconds == pytest.approx(45.1)
+
+
+def test_adapter_must_escalate_latched_watchdog_before_side_effects() -> None:
+    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog.record_fast_sample(now=105.0)
+    late = watchdog.record_fast_sample(now=150.1)
+
+    with pytest.raises(CanaryMonitorHardFailure, match="monitor_fast_sample_freshness_lost"):
+        require_healthy_watchdog(late)
+
+
+def test_healthy_watchdog_assessment_does_not_raise() -> None:
+    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+
+    require_healthy_watchdog(watchdog.record_fast_sample(now=110.0))
 
 
 def test_watchdog_rejects_monotonic_clock_regression() -> None:
