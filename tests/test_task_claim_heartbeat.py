@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,7 @@ from src.research_lab.state_db import connect, ensure_experiment_queued, init_db
 from src.research_lab.task_claim_heartbeat import (
     TaskClaimHeartbeat,
     TaskClaimProgressStalled,
+    TaskClaimRenewalContentionExceeded,
 )
 
 
@@ -345,6 +347,186 @@ def test_no_progress_cannot_renew_claim_indefinitely(tmp_path) -> None:
     assert tasks.get_task(task["task_id"])["claim_expires_at"] == expires
     heartbeat.stop()
     owner_store.release(process_lease)
+
+
+def test_transient_sqlite_writer_contention_retries_then_renews(tmp_path) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.5)
+    blocker = sqlite3.connect(tasks.path, timeout=0, isolation_level=None)
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.5,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.4,
+        renewal_busy_timeout_seconds=0.01,
+        renewal_retry_seconds=0.01,
+        max_renewal_contention_seconds=0.15,
+        identity_probe=probe,
+    )
+    try:
+        heartbeat.start()
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_connection_ready"]
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        heartbeat.progress("canonical_candles_loaded")
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
+        )
+        assert heartbeat.failure is None
+        blocker.rollback()
+        assert _wait_until(lambda: heartbeat.snapshot()["renewals"] == 1)
+        snapshot = heartbeat.snapshot()
+        assert snapshot["renewal_contention_active"] is False
+        assert snapshot["last_renewal_contention"].startswith("SQLITE_")
+        assert heartbeat.failure is None
+    finally:
+        try:
+            blocker.rollback()
+        except sqlite3.Error:
+            pass
+        heartbeat.stop()
+        blocker.close()
+        owner_store.release(process_lease)
+        owner_store.close()
+        tasks.close()
+
+
+def test_persistent_sqlite_writer_contention_fails_before_claim_expiry(tmp_path) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.5)
+    original_expiry = float(task["claim_expires_at"])
+    blocker = sqlite3.connect(tasks.path, timeout=0, isolation_level=None)
+    observed = []
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.5,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.4,
+        renewal_busy_timeout_seconds=0.01,
+        renewal_retry_seconds=0.01,
+        max_renewal_contention_seconds=0.08,
+        identity_probe=probe,
+        on_failure=lambda failure, snapshot: observed.append((failure, snapshot)),
+    )
+    try:
+        heartbeat.start()
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_connection_ready"]
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        heartbeat.progress("canonical_candles_loaded")
+        assert _wait_until(
+            lambda: isinstance(
+                heartbeat.failure, TaskClaimRenewalContentionExceeded
+            )
+        )
+        assert time.time() < original_expiry
+        assert len(observed) == 1
+        assert observed[0][1]["renewal_contention_active"] is True
+        assert tasks.get_task(task["task_id"])["claim_expires_at"] == original_expiry
+        assert tasks.raw_connection.execute(
+            "SELECT COUNT(*) FROM materialization_outbox"
+        ).fetchone()[0] == 0
+    finally:
+        blocker.rollback()
+        heartbeat.stop()
+        blocker.close()
+        owner_store.release(process_lease)
+        owner_store.close()
+        tasks.close()
+
+
+def test_graceful_stop_during_sqlite_contention_leaves_no_renewal_thread(
+    tmp_path,
+) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.5)
+    blocker = sqlite3.connect(tasks.path, timeout=0, isolation_level=None)
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.5,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.4,
+        renewal_busy_timeout_seconds=0.01,
+        renewal_retry_seconds=0.02,
+        max_renewal_contention_seconds=0.2,
+        identity_probe=probe,
+    )
+    try:
+        heartbeat.start()
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_connection_ready"]
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        heartbeat.progress("canonical_candles_loaded")
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
+        )
+        heartbeat.stop()
+        assert heartbeat.thread.is_alive() is False
+        assert heartbeat.failure is None
+    finally:
+        blocker.rollback()
+        heartbeat.stop()
+        blocker.close()
+        owner_store.release(process_lease)
+        owner_store.close()
+        tasks.close()
+
+
+def test_owner_loss_during_sqlite_contention_cannot_retry_renewal(tmp_path) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.5)
+    original_expiry = float(task["claim_expires_at"])
+    blocker = sqlite3.connect(tasks.path, timeout=0, isolation_level=None)
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.5,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.4,
+        renewal_busy_timeout_seconds=0.01,
+        renewal_retry_seconds=0.02,
+        max_renewal_contention_seconds=0.2,
+        identity_probe=probe,
+    )
+    try:
+        heartbeat.start()
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_connection_ready"]
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        heartbeat.progress("canonical_candles_loaded")
+        assert _wait_until(
+            lambda: heartbeat.snapshot()["renewal_contention_events"] > 0
+        )
+        owner_store.release(process_lease)
+        blocker.rollback()
+        assert _wait_until(lambda: heartbeat.failure is not None)
+        assert isinstance(heartbeat.failure, StaleTaskClaimError)
+        assert tasks.get_task(task["task_id"])["claim_expires_at"] == original_expiry
+        assert heartbeat.snapshot()["renewals"] == 0
+    finally:
+        try:
+            blocker.rollback()
+        except sqlite3.Error:
+            pass
+        heartbeat.stop()
+        blocker.close()
+        owner_store.close()
+        tasks.close()
 
 
 def test_background_failure_callback_is_immediate_once_and_public_safe(tmp_path) -> None:
