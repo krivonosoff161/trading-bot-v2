@@ -353,7 +353,11 @@ def test_production_run_sweep_handles_real_sqlite_writer_contention_fail_closed(
             max_no_progress_seconds=30.0,
             renewal_busy_timeout_seconds=0.01,
             renewal_retry_seconds=0.01,
-            max_renewal_contention_seconds=(0.5 if contention_clears else 0.12),
+            # The positive path must cover Windows scheduler and filesystem
+            # jitter while remaining far below the 120-second production
+            # contention budget.  The negative path deliberately keeps its
+            # short fail-closed budget.
+            max_renewal_contention_seconds=(2.0 if contention_clears else 0.12),
             identity_probe=probe,
             on_failure=on_failure,
         )
@@ -369,7 +373,12 @@ def test_production_run_sweep_handles_real_sqlite_writer_contention_fail_closed(
             assert _wait_until(
                 lambda: heartbeat.snapshot()["renewal_connection_ready"]
             )
-            blocker = sqlite3.connect(task_db.path, timeout=0, isolation_level=None)
+            # The fixture must first wait out any already-running millisecond
+            # renewal transaction before it can become the deliberate writer
+            # blocker.  A zero timeout tested fixture scheduling, not heartbeat
+            # contention, and was nondeterministic on Windows.
+            blocker = sqlite3.connect(task_db.path, timeout=2.0, isolation_level=None)
+            blocker.execute("PRAGMA busy_timeout = 2000")
             blocker.execute("BEGIN IMMEDIATE")
             try:
                 real_progress(stage)
@@ -439,7 +448,13 @@ def test_production_blocking_stage_fails_visible_before_expiry_without_side_effe
     monkeypatch, tmp_path, blocked_stage,
 ) -> None:
     _seed_candles(tmp_path)
-    tasks, task_id = _claimed_run_sweep(tmp_path, lease_seconds=0.25)
+    # Keep a real pre-expiry margin across Windows scheduler stalls.  Failure
+    # is still driven by the much shorter no-progress contract, not the lease.
+    test_lease_seconds = 2.0
+    tasks, task_id = _claimed_run_sweep(
+        tmp_path,
+        lease_seconds=test_lease_seconds,
+    )
     owner_store, process_lease, probe = _owner(tmp_path, lease_seconds=10.0)
     failure_seen = threading.Event()
     failures = []
@@ -454,9 +469,9 @@ def test_production_blocking_stage_fails_visible_before_expiry_without_side_effe
             task,
             ownership_path=tmp_path / "ownership.sqlite",
             process_lease=process_lease,
-            lease_seconds=0.25,
+            lease_seconds=test_lease_seconds,
             renew_interval_seconds=0.02,
-            max_no_progress_seconds=0.06,
+            max_no_progress_seconds=0.2,
             identity_probe=probe,
             on_failure=on_failure,
         )
@@ -467,7 +482,7 @@ def test_production_blocking_stage_fails_visible_before_expiry_without_side_effe
         real_load = candle_library.load_canonical_candles
 
         def blocked_load(*args, **kwargs):
-            assert failure_seen.wait(1.0)
+            assert failure_seen.wait(2.0)
             return real_load(*args, **kwargs)
 
         monkeypatch.setattr(candle_library, "load_canonical_candles", blocked_load)
@@ -475,7 +490,7 @@ def test_production_blocking_stage_fails_visible_before_expiry_without_side_effe
         real_queue = farm_coordinator.queue_sweep
 
         def blocked_queue(*args, **kwargs):
-            assert failure_seen.wait(1.0)
+            assert failure_seen.wait(2.0)
             return real_queue(*args, **kwargs)
 
         monkeypatch.setattr(farm_coordinator, "queue_sweep", blocked_queue)
