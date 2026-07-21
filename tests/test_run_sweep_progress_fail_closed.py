@@ -81,7 +81,10 @@ def _claimed_run_sweep(
 
 def _owner(root, clock=time.time, lease_seconds=10_000.0):
     identity = _identity()
-    probe = lambda pid: identity if pid == identity.pid else None
+
+    def probe(pid):
+        return identity if pid == identity.pid else None
+
     store = OwnershipStore(root / "ownership.sqlite", clock=clock, identity_probe=probe)
     lease = store.acquire(
         resource_id="canonical_farm",
@@ -304,9 +307,13 @@ def test_production_blocking_stage_fails_visible_before_expiry_without_side_effe
             task_claim_guard_factory=guard_factory,
         )
 
-    assert failures and failures[0][2] - started < 0.25
-    assert "owner_id" not in failures[0][1]
     task = tasks.get_task(task_id)
+    assert failures
+    # The claim may renew while earlier production milestones make real
+    # progress.  Compare the visible failure with the current fenced expiry,
+    # not the original claim deadline measured before those milestones.
+    assert failures[0][2] < float(task["claim_expires_at"])
+    assert "owner_id" not in failures[0][1]
     assert task["state"] == "running"
     assert tasks.raw_connection.execute(
         "SELECT COUNT(*) FROM materialization_outbox"

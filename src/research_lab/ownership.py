@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping, Sequence
 
 
 class OwnershipConflictError(RuntimeError):
@@ -46,6 +46,154 @@ class ProcessLease:
 
 
 IdentityProbe = Callable[[int], ProcessIdentity | None]
+
+
+@dataclass(frozen=True)
+class CanonicalAuthorityAssessment:
+    """Fail-closed process-authority view for canonical farm monitoring.
+
+    Resource leases are not process cardinality.  The canonical farm may hold
+    the short-lived ``strategy_lab_worker`` lease while it drains a compute
+    job, but only when both leases resolve to the same exact live process
+    identity.  Unexpected resources remain competing writer authority.
+    """
+
+    green: bool
+    distinct_process_authorities: int
+    canonical_owner_id: str | None
+    canonical_fence: int | None
+    process_identity: ProcessIdentity | None
+    resources: tuple[str, ...]
+    errors: tuple[str, ...]
+
+
+_CANONICAL_FARM_AUTHORITIES = {
+    "canonical_farm": "farm",
+    "strategy_lab_worker": "compute_worker",
+}
+
+
+def assess_canonical_farm_authority(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    identity_probe: IdentityProbe,
+    now: float | None = None,
+    prior_canonical_owner_id: str | None = None,
+    prior_fences: Mapping[str, int] | None = None,
+) -> CanonicalAuthorityAssessment:
+    """Classify active owner rows by exact process and writer authority.
+
+    Callers pass the current ownership rows rather than counting them.  One
+    canonical farm row is required.  A nested compute-worker row is allowed
+    only for the same PID, start time, executable and command digest.  A
+    different process identity, unexpected resource/role, expired row, live
+    identity mismatch, canonical generation change, or fence regression is a
+    hard failure.
+    """
+
+    current = float(time.time() if now is None else now)
+    previous_fences = dict(prior_fences or {})
+    errors: list[str] = []
+    resources: list[str] = []
+    parsed: list[tuple[Mapping[str, Any], ProcessIdentity, str, str, str, int]] = []
+    seen_resources: set[str] = set()
+
+    for row in rows:
+        try:
+            resource_id_value = row["resource_id"]
+            role_id_value = row["role_id"]
+            owner_id_value = row["owner_id"]
+            executable_value = row["executable"]
+            command_digest_value = row["command_digest"]
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    resource_id_value,
+                    role_id_value,
+                    owner_id_value,
+                    executable_value,
+                    command_digest_value,
+                )
+            ):
+                raise ValueError("complete text authority fields are required")
+            resource_id = resource_id_value
+            role_id = role_id_value
+            owner_id = owner_id_value
+            fence = int(row["next_fence"])
+            expires_at = float(row["lease_expires_at"])
+            identity = ProcessIdentity(
+                pid=int(row["pid"]),
+                started_at=float(row["started_at"]),
+                executable=executable_value,
+                command_digest=command_digest_value,
+            )
+        except (KeyError, TypeError, ValueError):
+            errors.append("corrupt_process_authority")
+            continue
+
+        resources.append(resource_id)
+        if resource_id in seen_resources:
+            errors.append("duplicate_resource_authority")
+        seen_resources.add(resource_id)
+        if (
+            not resource_id
+            or not role_id
+            or not owner_id
+            or fence <= 0
+            or identity.pid <= 0
+            or identity.started_at <= 0
+            or not identity.executable
+            or not identity.command_digest
+        ):
+            errors.append("corrupt_process_authority")
+            continue
+        if expires_at <= current:
+            errors.append("expired_process_authority")
+        if _CANONICAL_FARM_AUTHORITIES.get(resource_id) != role_id:
+            errors.append("unexpected_writer_authority")
+
+        prior_fence = previous_fences.get(resource_id)
+        if prior_fence is not None:
+            if fence < int(prior_fence):
+                errors.append("fence_regression")
+            elif resource_id == "canonical_farm" and fence != int(prior_fence):
+                errors.append("canonical_generation_changed")
+        parsed.append((row, identity, resource_id, role_id, owner_id, fence))
+
+    canonical = [entry for entry in parsed if entry[2] == "canonical_farm" and entry[3] == "farm"]
+    if len(canonical) != 1:
+        errors.append("canonical_owner_missing" if not canonical else "canonical_owner_ambiguous")
+
+    identities = {entry[1] for entry in parsed}
+    if len(identities) > 1:
+        errors.append("distinct_process_authority")
+
+    live_by_pid: dict[int, ProcessIdentity | None] = {}
+    for identity in identities:
+        if identity.pid not in live_by_pid:
+            try:
+                live_by_pid[identity.pid] = identity_probe(identity.pid)
+            except Exception:  # identity probes are fail-closed monitor inputs
+                live_by_pid[identity.pid] = None
+        if live_by_pid[identity.pid] != identity:
+            errors.append("process_identity_mismatch")
+
+    canonical_owner_id = canonical[0][4] if len(canonical) == 1 else None
+    canonical_fence = canonical[0][5] if len(canonical) == 1 else None
+    canonical_identity = canonical[0][1] if len(canonical) == 1 else None
+    if prior_canonical_owner_id is not None and canonical_owner_id != prior_canonical_owner_id:
+        errors.append("canonical_generation_changed")
+
+    unique_errors = tuple(dict.fromkeys(errors))
+    return CanonicalAuthorityAssessment(
+        green=not unique_errors,
+        distinct_process_authorities=len(identities),
+        canonical_owner_id=canonical_owner_id,
+        canonical_fence=canonical_fence,
+        process_identity=canonical_identity,
+        resources=tuple(sorted(resources)),
+        errors=unique_errors,
+    )
 
 
 def _command_digest(argv: list[str]) -> str:
