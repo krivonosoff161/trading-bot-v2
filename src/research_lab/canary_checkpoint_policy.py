@@ -92,9 +92,10 @@ class CanaryFastSampleWatchdog:
 
     def record_fast_sample(self, *, now: float) -> CanaryWatchdogAssessment:
         current = self._check_time(now)
+        self._evaluate_freshness(current)
         if self.failure_reason is None:
             self.last_fast_sample_at = current
-        return self.assess(now=current)
+        return self._snapshot(current)
 
     def fail(self, reason: str, *, now: float) -> CanaryWatchdogAssessment:
         current = self._check_time(now)
@@ -105,6 +106,10 @@ class CanaryFastSampleWatchdog:
 
     def assess(self, *, now: float) -> CanaryWatchdogAssessment:
         current = self._check_time(now)
+        self._evaluate_freshness(current)
+        return self._snapshot(current)
+
+    def _evaluate_freshness(self, current: float) -> None:
         basis = self.last_fast_sample_at
         age = current - (basis if basis is not None else self.started_at)
         if self.failure_reason is None and age > self.max_fast_sample_gap_seconds:
@@ -115,6 +120,10 @@ class CanaryFastSampleWatchdog:
             )
             self.failure_reason = reason
             self.alert_count = 1
+
+    def _snapshot(self, current: float) -> CanaryWatchdogAssessment:
+        basis = self.last_fast_sample_at
+        age = current - (basis if basis is not None else self.started_at)
         return CanaryWatchdogAssessment(
             failure_reason=self.failure_reason,
             alert_count=self.alert_count,

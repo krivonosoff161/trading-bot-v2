@@ -118,6 +118,17 @@ def test_late_sample_cannot_clear_latched_watchdog_failure() -> None:
     assert result.last_fast_sample_at is None
 
 
+def test_late_completed_sample_cannot_hide_gap_without_prior_assess() -> None:
+    watchdog = CanaryFastSampleWatchdog(started_at=100.0, max_fast_sample_gap_seconds=45.0)
+    watchdog.record_fast_sample(now=105.0)
+
+    result = watchdog.record_fast_sample(now=150.1)
+
+    assert result.failure_reason == "monitor_fast_sample_freshness_lost"
+    assert result.last_fast_sample_at == 105.0
+    assert result.fast_sample_age_seconds == pytest.approx(45.1)
+
+
 def test_watchdog_rejects_monotonic_clock_regression() -> None:
     watchdog = CanaryFastSampleWatchdog(started_at=100.0)
     watchdog.record_fast_sample(now=110.0)
