@@ -21,6 +21,7 @@ class TaskClaimProgressStalled(StaleTaskClaimError):
 
 IdentityProbe = Callable[[int], ProcessIdentity | None]
 FailureCallback = Callable[[BaseException, dict[str, Any]], None]
+StopRequested = Callable[[], bool]
 
 
 class TaskClaimHeartbeat:
@@ -46,6 +47,7 @@ class TaskClaimHeartbeat:
         monotonic: Callable[[], float] = time.monotonic,
         identity_probe: IdentityProbe = probe_process_identity,
         on_failure: FailureCallback | None = None,
+        stop_requested: StopRequested | None = None,
     ) -> None:
         if task_db.path == ":memory:":
             raise ValueError("task claim heartbeat requires a filesystem task DB")
@@ -63,6 +65,7 @@ class TaskClaimHeartbeat:
         self._monotonic = monotonic
         self._identity_probe = identity_probe
         self._on_failure = on_failure
+        self._stop_requested = stop_requested
         if not self.owner_id or self.owner_id != process_lease.owner_id:
             raise ValueError("task claim must belong to the canonical process owner")
         if self.fencing_token <= 0:
@@ -183,11 +186,18 @@ class TaskClaimHeartbeat:
             }
 
     def _raise_if_inactive(self) -> None:
-        if self._stop.is_set() or (self.stop_event is not None and self.stop_event.is_set()):
+        if self._stopping():
             raise StaleTaskClaimError(f"task claim heartbeat stopped for task {self.task_id}")
         failure = self.failure
         if failure is not None:
             raise StaleTaskClaimError(f"task claim heartbeat failed for task {self.task_id}") from failure
+
+    def _stopping(self) -> bool:
+        return bool(
+            self._stop.is_set()
+            or (self.stop_event is not None and self.stop_event.is_set())
+            or (self._stop_requested is not None and self._stop_requested())
+        )
 
     def _record_failure(self, failure: BaseException) -> None:
         first_failure = False
@@ -213,7 +223,7 @@ class TaskClaimHeartbeat:
     def _wait_for_renewal(self) -> bool:
         deadline = float(self._monotonic()) + self.renew_interval_seconds
         while True:
-            if self._stop.is_set() or (self.stop_event is not None and self.stop_event.is_set()):
+            if self._stopping():
                 return False
             remaining = deadline - float(self._monotonic())
             if remaining <= 0:

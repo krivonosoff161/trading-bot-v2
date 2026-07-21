@@ -10,13 +10,19 @@ import pytest
 from src.research_lab import farm_coordinator
 from src.research_lab.candle_store import CandleStore
 from src.research_lab.farm_coordinator import run_coordinator_cycle
-from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
-from src.research_lab.ownership import OwnershipStore, ProcessIdentity
+from src.research_lab.farm_tasks_db import FarmTasksDB, StaleTaskClaimError, tasks_db_path
+from src.research_lab.ownership import (
+    OwnershipStore,
+    ProcessIdentity,
+    current_process_identity,
+    probe_process_identity,
+)
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.state_db import connect, default_db_path, init_db
 from src.research_lab.sweep_spec import SweepSpec
 from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat
 from src.research_lab.timeframes import load_timeframe_profiles
+from scripts.strategy_lab.farm_loop import _task_claim_guard_factory
 
 
 class LogicalClock:
@@ -240,6 +246,74 @@ def test_claimed_run_sweep_uses_no_public_network_after_data_is_canonical(
 
     assert out["counters"]["sweeps_materialized"] == 1
     tasks.close()
+
+
+def test_production_run_sweep_stop_intent_blocks_materialization(
+    monkeypatch, tmp_path,
+) -> None:
+    _seed_candles(tmp_path)
+    tasks, task_id = _claimed_run_sweep(tmp_path)
+    identity = current_process_identity()
+    owner_store = OwnershipStore(
+        tmp_path / "ownership.sqlite", identity_probe=probe_process_identity
+    )
+    process_lease = owner_store.acquire(
+        resource_id="canonical_farm",
+        role_id="farm",
+        owner_id="canonical-owner",
+        identity=identity,
+        lease_seconds=10_000.0,
+    )
+    stop_file = tmp_path / "STOP_FARM_FULL_CYCLE.txt"
+    real_queue = farm_coordinator.queue_sweep
+
+    def stop_active() -> bool:
+        return stop_file.exists()
+
+    guard_factory = _task_claim_guard_factory(
+        tmp_path / "ownership.sqlite",
+        process_lease,
+        threading.Event(),
+        stop_requested=stop_active,
+    )
+
+    def stop_before_compile(*args, **kwargs):
+        stop_file.write_text("synthetic owner-authorized stop\n", encoding="utf-8")
+        return real_queue(*args, **kwargs)
+
+    monkeypatch.setattr(farm_coordinator, "queue_sweep", stop_before_compile)
+    with pytest.raises(StaleTaskClaimError, match="heartbeat stopped"):
+        run_coordinator_cycle(
+            tasks,
+            private_root=tmp_path,
+            profiles=load_timeframe_profiles(),
+            policy=load_resource_policy(),
+            intake_events=[],
+            apply=True,
+            now=time.time(),
+            run_worker=False,
+            run_validation=False,
+            run_followups=False,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=1,
+            task_claim_guard_factory=guard_factory,
+        )
+
+    assert tasks.get_task(task_id)["state"] == "running"
+    assert tasks.raw_connection.execute(
+        "SELECT COUNT(*) FROM materialization_outbox"
+    ).fetchone()[0] == 0
+    compute = connect(default_db_path(tmp_path))
+    try:
+        init_db(compute)
+        assert compute.execute("SELECT COUNT(*) FROM queue_materializations").fetchone()[0] == 0
+        assert compute.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 0
+    finally:
+        compute.close()
+        owner_store.release(process_lease)
+        owner_store.close()
+        tasks.close()
 
 
 @pytest.mark.parametrize("blocked_stage", ["sqlite", "compile"])

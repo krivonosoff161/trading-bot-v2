@@ -88,7 +88,7 @@ class _FarmLeaseHeartbeat:
 
 
 def _task_claim_guard_factory(
-    ownership_path, process_lease, stop_event, *, on_failure=None,
+    ownership_path, process_lease, stop_event, *, on_failure=None, stop_requested=None,
 ):
     """Bind every long task claim to the one canonical process generation."""
     def build(tasks: FarmTasksDB, task: dict):
@@ -102,6 +102,7 @@ def _task_claim_guard_factory(
             renew_interval_seconds=30.0,
             max_no_progress_seconds=300.0,
             on_failure=on_failure,
+            stop_requested=stop_requested,
         )
 
     return build
@@ -2043,6 +2044,11 @@ def main() -> None:
             process_lease,
             priority_stop,
             on_failure=claim_failure_signal.notify,
+            stop_requested=(
+                (lambda: Path(args.stop_file).exists())
+                if args.stop_file
+                else None
+            ),
         )
     try:
         if not args.loop:
