@@ -882,16 +882,26 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
 
             def prepare_intent(spec_path: Path, spec_json: str, spec_digest: str) -> None:
                 if claim_guard is not None:
-                    claim_guard.assert_active()
-                tasks.prepare_materialization(
-                    int(task["task_id"]),
-                    materialization_id=materialization_id,
-                    spec_path=str(spec_path),
-                    spec_digest=spec_digest,
-                    spec_json=spec_json,
-                    priority=priority_base + priority_value(task.get("priority")),
-                    now=now,
-                )
+                    with claim_guard.foreground_db_write():
+                        tasks.prepare_materialization(
+                            int(task["task_id"]),
+                            materialization_id=materialization_id,
+                            spec_path=str(spec_path),
+                            spec_digest=spec_digest,
+                            spec_json=spec_json,
+                            priority=priority_base + priority_value(task.get("priority")),
+                            now=now,
+                        )
+                else:
+                    tasks.prepare_materialization(
+                        int(task["task_id"]),
+                        materialization_id=materialization_id,
+                        spec_path=str(spec_path),
+                        spec_digest=spec_digest,
+                        spec_json=spec_json,
+                        priority=priority_base + priority_value(task.get("priority")),
+                        now=now,
+                    )
 
             if claim_guard is not None:
                 claim_guard.assert_active()
@@ -914,15 +924,27 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             )
             if progress is not None:
                 progress("compute_queue_bound")
-            tasks.mark_materialization_dispatched(
-                materialization_id, job_id, now=now
-            )
-            tasks.commit_materialization(
-                task["task_id"],
-                materialization_id=materialization_id,
-                queue_job_id=job_id,
-                now=now,
-            )
+            if claim_guard is not None:
+                with claim_guard.foreground_db_write():
+                    tasks.mark_materialization_dispatched(
+                        materialization_id, job_id, now=now
+                    )
+                    tasks.commit_materialization(
+                        task["task_id"],
+                        materialization_id=materialization_id,
+                        queue_job_id=job_id,
+                        now=now,
+                    )
+            else:
+                tasks.mark_materialization_dispatched(
+                    materialization_id, job_id, now=now
+                )
+                tasks.commit_materialization(
+                    task["task_id"],
+                    materialization_id=materialization_id,
+                    queue_job_id=job_id,
+                    now=now,
+                )
             if created:
                 _bump(counters, "sweeps_materialized")
             else:

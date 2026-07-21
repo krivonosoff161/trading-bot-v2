@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sqlite3
 from contextlib import AbstractContextManager
 from dataclasses import asdict
 
@@ -60,6 +61,15 @@ def _identity() -> ProcessIdentity:
         executable="C:/Python/python.exe",
         command_digest="sha256:canonical-farm",
     )
+
+
+def _wait_until(predicate, timeout=1.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
 
 
 def _claimed_run_sweep(
@@ -126,6 +136,9 @@ class _LogicalHeartbeatContext(AbstractContextManager):
 
     def assert_active(self) -> None:
         self.heartbeat.assert_active()
+
+    def foreground_db_write(self):
+        return self.heartbeat.foreground_db_write()
 
 
 def test_production_run_sweep_keeps_claim_beyond_900_logical_seconds(tmp_path) -> None:
@@ -311,6 +324,111 @@ def test_production_run_sweep_stop_intent_blocks_materialization(
         assert compute.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 0
     finally:
         compute.close()
+        owner_store.release(process_lease)
+        owner_store.close()
+        tasks.close()
+
+
+@pytest.mark.parametrize("contention_clears", [True, False])
+def test_production_run_sweep_handles_real_sqlite_writer_contention_fail_closed(
+    tmp_path, contention_clears,
+) -> None:
+    _seed_candles(tmp_path)
+    tasks, task_id = _claimed_run_sweep(tmp_path, lease_seconds=60.0)
+    owner_store, process_lease, probe = _owner(tmp_path, lease_seconds=10_000.0)
+    heartbeats = []
+    failure_seen = threading.Event()
+
+    def on_failure(_failure, _snapshot):
+        failure_seen.set()
+
+    def guard_factory(task_db, task):
+        heartbeat = TaskClaimHeartbeat(
+            task_db,
+            task,
+            ownership_path=tmp_path / "ownership.sqlite",
+            process_lease=process_lease,
+            lease_seconds=60.0,
+            renew_interval_seconds=0.02,
+            max_no_progress_seconds=30.0,
+            renewal_busy_timeout_seconds=0.01,
+            renewal_retry_seconds=0.01,
+            max_renewal_contention_seconds=(0.5 if contention_clears else 0.12),
+            identity_probe=probe,
+            on_failure=on_failure,
+        )
+        real_progress = heartbeat.progress
+        lock_exercised = False
+
+        def progress_with_real_writer_contention(stage):
+            nonlocal lock_exercised
+            if stage != "claim_entered" or lock_exercised:
+                real_progress(stage)
+                return
+            lock_exercised = True
+            assert _wait_until(
+                lambda: heartbeat.snapshot()["renewal_connection_ready"]
+            )
+            blocker = sqlite3.connect(task_db.path, timeout=0, isolation_level=None)
+            blocker.execute("BEGIN IMMEDIATE")
+            try:
+                real_progress(stage)
+                assert _wait_until(
+                    lambda: heartbeat.snapshot()["renewal_contention_events"] > 0,
+                    timeout=1.0,
+                )
+                if not contention_clears:
+                    assert failure_seen.wait(1.0)
+            finally:
+                blocker.rollback()
+                blocker.close()
+
+        heartbeat.progress = progress_with_real_writer_contention
+        heartbeats.append(heartbeat)
+        return heartbeat
+    def run():
+        return run_coordinator_cycle(
+            tasks,
+            private_root=tmp_path,
+            profiles=load_timeframe_profiles(),
+            policy=load_resource_policy(),
+            intake_events=[],
+            apply=True,
+            now=time.time(),
+            run_worker=False,
+            run_validation=False,
+            run_followups=False,
+            max_prepares=0,
+            max_enrich=0,
+            max_sweeps=1,
+            task_claim_guard_factory=guard_factory,
+        )
+    try:
+        if contention_clears:
+            out = run()
+            assert out["counters"]["sweeps_materialized"] == 1
+            assert heartbeats[0].failure is None, repr(heartbeats[0].snapshot())
+            assert heartbeats[0].snapshot()["renewal_contention_events"] > 0
+            expected_side_effects = 1
+        else:
+            with pytest.raises(StaleTaskClaimError):
+                run()
+            assert failure_seen.is_set()
+            expected_side_effects = 0
+
+        assert tasks.raw_connection.execute(
+            "SELECT COUNT(*) FROM materialization_outbox"
+        ).fetchone()[0] == expected_side_effects
+        compute = connect(default_db_path(tmp_path))
+        try:
+            init_db(compute)
+            assert compute.execute(
+                "SELECT COUNT(*) FROM queue_materializations"
+            ).fetchone()[0] == expected_side_effects
+            assert compute.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == expected_side_effects
+        finally:
+            compute.close()
+    finally:
         owner_store.release(process_lease)
         owner_store.close()
         tasks.close()
