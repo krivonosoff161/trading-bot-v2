@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from src.research_lab.process_listener_policy import assess_canonical_rcc_listeners
 
 
-OLLAMA = Path(r"C:\Users\tester\AppData\Local\Programs\Ollama\ollama.exe")
+OLLAMA = PureWindowsPath(r"C:\Users\tester\AppData\Local\Programs\Ollama\ollama.exe")
 RUNNER = OLLAMA.parent / "lib" / "ollama" / "llama-server.exe"
 
 

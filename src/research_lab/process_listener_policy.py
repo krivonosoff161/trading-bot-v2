@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import ipaddress
-import os
+import ntpath
+import posixpath
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePath
 from typing import Any, Mapping, Sequence
 
 
@@ -27,6 +28,29 @@ def _same_start(left: Any, right: float) -> bool:
     try:
         return abs(float(left) - float(right)) <= 0.001
     except (TypeError, ValueError):
+        return False
+
+
+def _path_module(value: object):
+    text = str(value)
+    return ntpath if ntpath.splitdrive(text)[0] or "\\" in text else posixpath
+
+
+def _normalized_path(value: object) -> str:
+    path_module = _path_module(value)
+    return path_module.normcase(path_module.abspath(str(value)))
+
+
+def _is_within_path(candidate: object, directory: object) -> bool:
+    candidate_module = _path_module(candidate)
+    directory_module = _path_module(directory)
+    if candidate_module is not directory_module:
+        return False
+    normalized_candidate = _normalized_path(candidate)
+    normalized_directory = _normalized_path(directory)
+    try:
+        return candidate_module.commonpath([normalized_candidate, normalized_directory]) == normalized_directory
+    except ValueError:
         return False
 
 
@@ -62,7 +86,7 @@ def assess_canonical_rcc_listeners(
     *,
     ollama_pid: int,
     ollama_started_at: float,
-    expected_ollama_executable: Path,
+    expected_ollama_executable: PurePath,
 ) -> ListenerPolicyAssessment:
     """Allow only the loopback Ollama API and its exact internal model runner.
 
@@ -77,19 +101,19 @@ def assess_canonical_rcc_listeners(
     public_ports: list[int] = []
     runner_ports: list[int] = []
     root = processes.get(int(ollama_pid))
-    expected_root = os.path.normcase(os.path.abspath(str(expected_ollama_executable)))
+    expected_root = _normalized_path(expected_ollama_executable)
     if root is None:
         errors.append("ollama_root_missing")
     else:
-        actual_root = os.path.normcase(os.path.abspath(str(root.get("exe") or "")))
+        actual_root = _normalized_path(root.get("exe") or "")
         if (
             actual_root != expected_root
             or not _same_start(root.get("create_time"), ollama_started_at)
         ):
             errors.append("ollama_root_identity_mismatch")
 
-    trusted_root = os.path.normcase(os.path.abspath(str(expected_ollama_executable.parent)))
-    trusted_prefix = trusted_root.rstrip("\\/") + os.sep
+    path_module = _path_module(expected_ollama_executable)
+    trusted_root = path_module.dirname(str(expected_ollama_executable))
     for listener in listeners:
         try:
             pid = int(listener["pid"])
@@ -109,11 +133,11 @@ def assess_canonical_rcc_listeners(
         if process is None:
             errors.append("listener_process_missing")
             continue
-        executable = os.path.normcase(os.path.abspath(str(process.get("exe") or "")))
+        executable = _normalized_path(process.get("exe") or "")
         command = process.get("cmdline")
         if (
-            Path(executable).name.lower() != "llama-server.exe"
-            or not executable.startswith(trusted_prefix)
+            _path_module(executable).basename(executable).lower() != "llama-server.exe"
+            or not _is_within_path(executable, trusted_root)
             or not _descends_from(pid, int(ollama_pid), processes)
             or not _command_has_port(command if isinstance(command, Sequence) else (), port)
         ):
