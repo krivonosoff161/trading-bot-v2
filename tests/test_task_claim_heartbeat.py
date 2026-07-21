@@ -37,7 +37,10 @@ def _process_lease(
     tmp_path, *, owner_id="canonical-owner", clock=time.time, lease_seconds=10.0,
 ):
     identity = _identity()
-    probe = lambda pid: identity if pid == identity.pid else None
+
+    def probe(pid):
+        return identity if pid == identity.pid else None
+
     store = OwnershipStore(tmp_path / "ownership.sqlite", clock=clock, identity_probe=probe)
     lease = store.acquire(
         resource_id="canonical_farm",
@@ -230,6 +233,37 @@ def test_graceful_stop_leaves_no_renewal_thread(tmp_path) -> None:
     assert heartbeat.thread.is_alive() is False
     assert heartbeat.snapshot()["thread_alive"] is False
     owner_store.release(process_lease)
+
+
+def test_external_stop_intent_stops_renewal_and_blocks_foreground(tmp_path) -> None:
+    owner_store, process_lease, probe = _process_lease(tmp_path)
+    tasks, task = _claimed_task(tmp_path, lease_seconds=0.25)
+    stop_requested = False
+    heartbeat = TaskClaimHeartbeat(
+        tasks,
+        task,
+        ownership_path=tmp_path / "ownership.sqlite",
+        process_lease=process_lease,
+        lease_seconds=0.25,
+        renew_interval_seconds=0.02,
+        max_no_progress_seconds=0.12,
+        identity_probe=probe,
+        stop_requested=lambda: stop_requested,
+    )
+    heartbeat.start()
+    heartbeat.progress("snapshot_bound")
+    stop_requested = True
+    assert _wait_until(lambda: not heartbeat.thread.is_alive())
+    expires = tasks.get_task(task["task_id"])["claim_expires_at"]
+    time.sleep(0.06)
+    assert tasks.get_task(task["task_id"])["claim_expires_at"] == expires
+    with pytest.raises(StaleTaskClaimError, match="heartbeat stopped"):
+        heartbeat.progress("must_not_continue")
+    assert heartbeat.failure is None
+    heartbeat.stop()
+    owner_store.release(process_lease)
+    owner_store.close()
+    tasks.close()
 
 
 def test_crash_without_heartbeat_expires_for_controlled_reconciliation(tmp_path) -> None:
