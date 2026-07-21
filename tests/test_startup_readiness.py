@@ -8,6 +8,7 @@ from src.research_lab.startup_readiness import (
     DependencyObservation,
     DependencySpec,
     StartupState,
+    classify_ollama_listener_startup,
 )
 
 
@@ -86,6 +87,49 @@ def test_listener_and_heartbeat_before_deadline_establish_t0() -> None:
     assert result.ready_for_t0
     assert gate.establish_t0(now=108.1)
     assert gate.assess(108.1).t0_monotonic == 108.1
+
+
+def test_stale_heartbeat_defers_ancestry_dependent_listener_error() -> None:
+    result = classify_ollama_listener_startup(
+        identity_basis_fresh=False,
+        listener_ready=False,
+        strict_errors=("ollama_root_missing", "unexpected_owned_listener"),
+    )
+
+    assert result.state is StartupState.LISTENER_STARTING
+    assert result.hard_failure is None
+
+
+def test_stale_heartbeat_does_not_hide_independent_foreign_port_owner() -> None:
+    result = classify_ollama_listener_startup(
+        identity_basis_fresh=False,
+        listener_ready=False,
+        strict_errors=("unexpected_owned_listener",),
+        independent_hard_failures=("foreign_11434_listener",),
+    )
+
+    assert result.hard_failure == "listener_identity:foreign_11434_listener"
+
+
+def test_fresh_identity_keeps_unexpected_listener_fail_closed() -> None:
+    result = classify_ollama_listener_startup(
+        identity_basis_fresh=True,
+        listener_ready=False,
+        strict_errors=("unexpected_owned_listener",),
+    )
+
+    assert result.hard_failure == "listener_policy:unexpected_owned_listener"
+
+
+def test_fresh_identity_missing_listener_remains_starting_until_deadline() -> None:
+    result = classify_ollama_listener_startup(
+        identity_basis_fresh=True,
+        listener_ready=False,
+        strict_errors=("ollama_public_api_listener_mismatch",),
+    )
+
+    assert result.state is StartupState.LISTENER_STARTING
+    assert result.hard_failure is None
 
 
 def test_slow_hdd_real_completed_chunks_prevent_no_progress_failure() -> None:

@@ -59,6 +59,48 @@ class DependencyObservation:
     hard_failure: str | None = None
 
 
+_LISTENER_NOT_READY_ERRORS = frozenset(
+    {"ollama_root_missing", "ollama_public_api_listener_mismatch"}
+)
+
+
+def classify_ollama_listener_startup(
+    *,
+    identity_basis_fresh: bool,
+    listener_ready: bool,
+    strict_errors: tuple[str, ...] = (),
+    independent_hard_failures: tuple[str, ...] = (),
+) -> DependencyObservation:
+    """Classify listener readiness without trusting a stale heartbeat identity.
+
+    The strict listener policy binds listeners to the Ollama PID and start
+    generation published by the RCC heartbeat.  Until that identity basis is
+    fresh, its ancestry-dependent errors cannot distinguish the newly spawned
+    canonical root from a foreign listener.  Independent port-owner/path probes
+    remain immediate hard failures and must be supplied separately.
+    """
+
+    independent = tuple(dict.fromkeys(independent_hard_failures))
+    if independent:
+        return DependencyObservation(
+            StartupState.LISTENER_STARTING,
+            hard_failure="listener_identity:" + ",".join(sorted(independent)),
+        )
+    if not identity_basis_fresh:
+        return DependencyObservation(StartupState.LISTENER_STARTING)
+    unexpected = tuple(
+        error for error in dict.fromkeys(strict_errors) if error not in _LISTENER_NOT_READY_ERRORS
+    )
+    if unexpected:
+        return DependencyObservation(
+            StartupState.LISTENER_STARTING,
+            hard_failure="listener_policy:" + ",".join(sorted(unexpected)),
+        )
+    return DependencyObservation(
+        StartupState.READY if listener_ready else StartupState.LISTENER_STARTING
+    )
+
+
 @dataclass
 class DependencyStatus:
     state: StartupState = StartupState.NOT_STARTED
