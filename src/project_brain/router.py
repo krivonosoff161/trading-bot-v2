@@ -273,6 +273,7 @@ def add_dialogue_graph(
     graph: ProjectGraph, contours: Sequence[ContourSpec]
 ) -> ProjectGraph:
     by_contour: dict[str, str] = {}
+    repository_node = next(node for node in graph.nodes if node.type == "repository")
     for contour in contours:
         node_id = stable_id("dialogue-contour", graph.repository, contour.id)
         node = GraphNode(
@@ -296,6 +297,24 @@ def add_dialogue_graph(
         )
         graph.add_node(node)
         by_contour[contour.id] = node_id
+        root_payload = [repository_node.node_id, node_id, "contains"]
+        graph.add_edge(
+            GraphEdge(
+                edge_id=stable_id("edge", graph.repository, *root_payload),
+                source=repository_node.node_id,
+                target=node_id,
+                relation="contains",
+                repository=graph.repository,
+                source_reference="configs/project_brain/dialogue_contours.json",
+                commit_sha=graph.commit_sha,
+                content_hash=content_sha256(root_payload),
+                first_seen=graph.verified_at,
+                last_verified=graph.verified_at,
+                owner="project_brain_router",
+                confidence="derived",
+                primary_contour=contour.id,
+            )
+        )
     for node in list(graph.nodes):
         if node.node_id in by_contour.values():
             continue
@@ -322,6 +341,23 @@ def add_dialogue_graph(
                     primary_contour=contour_id,
                 )
             )
+    connected = {edge.source for edge in graph.edges} | {
+        edge.target for edge in graph.edges
+    }
+    graph.metrics["orphan_nodes"] = sum(
+        1 for node in graph.nodes if node.node_id not in connected
+    )
+    node_counts = dict(graph.metrics.get("node_counts") or {})
+    node_counts["dialogue_contour"] = len(by_contour)
+    graph.metrics["node_counts"] = dict(sorted(node_counts.items()))
+    edge_counts = dict(graph.metrics.get("edge_counts") or {})
+    edge_counts["contains"] = sum(
+        1 for edge in graph.edges if edge.relation == "contains"
+    )
+    edge_counts["belongs_to_contour"] = sum(
+        1 for edge in graph.edges if edge.relation == "belongs_to_contour"
+    )
+    graph.metrics["edge_counts"] = dict(sorted(edge_counts.items()))
     graph.validate()
     return graph
 

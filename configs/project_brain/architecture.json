@@ -38,6 +38,7 @@
     {"key":"artifact:setup_memory","type":"evidence_artifact","label":"Setup Outcome Memory projection","path":"src/research_lab/setup_outcome_memory.py","owner":"calculation_farm","sensitivity":"private_runtime","primary_contour":"research_and_strategies","load_policy":"summary_only"},
     {"key":"artifact:micro_memory","type":"evidence_artifact","label":"Microstructure Outcome Memory projection","path":"src/research_lab/micro_memory.py","owner":"calculation_farm","sensitivity":"private_runtime","primary_contour":"research_and_strategies","load_policy":"summary_only"},
     {"key":"artifact:research_session","type":"evidence_artifact","label":"bounded research session report","path":"src/research_lab/research_session.py","owner":"calculation_farm","sensitivity":"private_runtime","primary_contour":"research_and_strategies","load_policy":"summary_only"},
+    {"key":"artifact:continuity_checkpoint","type":"file_artifact","label":"manual SESSION and TASK continuity checkpoint","path":"SESSION.md","owner":"project_orchestrator","sensitivity":"local_metadata","primary_contour":"active_work","status":"manual_local","load_policy":"summary_only"},
     {"key":"artifact:invocation_ledger","type":"evidence_artifact","label":"LLM invocation control ledger","path":"src/research_lab/llm_invocation_ledger.py","owner":"model_router","sensitivity":"private_runtime","primary_contour":"models_and_llm","load_policy":"metadata_only"},
 
     {"key":"validation:hard_bridge","type":"validation_method","label":"honest-backtest hard validation bridge","path":"src/research_lab/honest_backtest_bridge.py","owner":"independent_validator","primary_contour":"validation"},
@@ -73,7 +74,7 @@
 
     {"key":"decision:deterministic_authority","type":"decision","label":"deterministic code owns calculations and authority","path":"docs/adaptive-research-center-contract.md","owner":"project_owner","primary_contour":"governance_and_safety","load_policy":"always"},
     {"key":"decision:validator_boundary","type":"decision","label":"honest-backtest remains a separate validation owner","path":"docs/validation-bridge-contract.md","owner":"project_owner","primary_contour":"validation"},
-    {"key":"decision:graph_canonical_json","type":"decision","label":"revision-bound JSON graph is canonical; indexes are projections","path":"configs/project_brain/architecture.json","owner":"project_orchestrator","primary_contour":"project_architecture"},
+    {"key":"decision:graph_canonical_json","type":"decision","label":"revision-bound JSON graph is canonical; indexes are projections","path":"configs/project_brain/architecture.json","owner":"project_orchestrator","primary_contour":"decisions_and_open_questions","secondary_contours":["project_architecture"]},
     {"key":"hypothesis:local_model_specialization","type":"hypothesis","label":"local model specialization after evidence foundation","path":"ROADMAP.md","owner":"research_lead","primary_contour":"models_and_llm","status":"deferred"},
     {"key":"incident:dotenv_import_isolation","type":"incident","label":"repository import-time dotenv isolation defects","path":"tests/test_test_env_policy.py","owner":"repository_maintainers","primary_contour":"incidents_and_causality","status":"fixed"},
     {"key":"incident:claim_progress_gap","type":"incident","label":"long pre-materialization claim progress gap","path":"tests/test_run_sweep_progress_fail_closed.py","owner":"calculation_farm","primary_contour":"incidents_and_causality","status":"fixed"},
@@ -102,6 +103,7 @@
     {"source":"owner:canonical_farm","target":"owner:strategy_lab_worker","relation":"supervises"},
     {"source":"owner:canonical_farm","target":"lease:canonical_farm","relation":"owns"},
     {"source":"owner:strategy_lab_worker","target":"lease:worker","relation":"owns"},
+    {"source":"module:src.research_lab.paper_evidence_store","target":"lease:paper_writer","relation":"owns"},
     {"source":"lease:canonical_farm","target":"fence:ownership_v2","relation":"depends_on"},
     {"source":"process:farm","target":"stop:canonical_farm","relation":"stops"},
     {"source":"module:scripts.strategy_lab.farm_loop","target":"database:farm_tasks.sqlite","relation":"writes"},
@@ -134,6 +136,7 @@
     {"source":"policy:git","target":"repository","relation":"guards"},
     {"source":"policy:entrypoints","target":"contour:rcc","relation":"guards"},
     {"source":"policy:public_private","target":"external:private_research","relation":"guards"},
+    {"source":"repository","target":"artifact:continuity_checkpoint","relation":"contains"},
     {"source":"model:ollama","target":"prompt:local_context","relation":"consumes"},
     {"source":"model:qwen","target":"prompt:local_context","relation":"consumes"},
     {"source":"model:yandex","target":"prompt:proposal","relation":"consumes"},

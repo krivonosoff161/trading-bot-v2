@@ -59,12 +59,24 @@ def _node(
 
 
 def _graph() -> ProjectGraph:
+    repository = GraphNode(
+        node_id=stable_id("repository", "trading-bot-v2"),
+        type="repository",
+        label="trading-bot-v2",
+        repository="trading-bot-v2",
+        commit_sha=SHA,
+        content_hash=stable_id("hash", "repository"),
+        first_seen="2026-01-01T00:00:00+00:00",
+        last_verified="2026-01-01T00:00:00+00:00",
+        owner="test",
+    )
     graph = ProjectGraph(
         "trading-bot-v2",
         SHA,
         "b" * 40,
         "2026-01-01T00:00:00+00:00",
         nodes=[
+            repository,
             _node("runtime", "farm_and_runtime"),
             _node("models", "models_and_llm"),
             _node(
@@ -440,3 +452,6 @@ def test_full_repository_graph_has_required_surfaces() -> None:
     } <= types
     assert graph.metrics["duplicate_candidates"] == 0
     assert graph.metrics["unknown_owners"] == 0
+    assert graph.metrics["orphan_nodes"] == 0
+    mapped = {node.primary_contour for node in graph.nodes}
+    assert {"active_work", "decisions_and_open_questions"} <= mapped
