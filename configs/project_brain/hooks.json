@@ -1,0 +1,13 @@
+{
+  "schema": "ProjectBrainHookCatalog.v1",
+  "authority": "manifest and private-memory delta only; never code, Git, runtime, SESSION.md, or external send",
+  "events": {
+    "UserPromptSubmit": "classify mode and return routing manifest",
+    "SessionStart": "load project identity, current SHA, governance, and active-work pointers",
+    "PreCompact": "append one verified private checkpoint delta",
+    "PostCompact": "return a short resume manifest, never a transcript",
+    "PreToolUse": "check project, contour, authority, and absolute denials",
+    "PostToolUse": "record evidence pointer and hash instead of large output",
+    "Stop": "append verified delta and unresolved questions; do not rewrite SESSION.md"
+  }
+}

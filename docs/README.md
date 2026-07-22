@@ -37,6 +37,11 @@ architecture.
 
 ## Active System Documents
 
+- [Project Brain](project-brain.md) defines the revision-bound machine graph,
+  private local memory index, dialogue routing, and compaction-resume boundary.
+- [Project Brain Baseline](project-brain-baseline.md) records what was reused and
+  what was actually missing before that mechanism was introduced.
+
 ### Farm And Paper Lifecycle
 
 - [Project map](project-map.md): ownership of code directories and boundaries.
