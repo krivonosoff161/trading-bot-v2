@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from pathlib import Path
 
 from .schema import ProjectGraph
@@ -29,9 +30,28 @@ def markdown_projection(graph: ProjectGraph) -> str:
         "",
     ]
     for key, value in sorted(graph.metrics.items()):
-        if isinstance(value, (dict, list)):
+        if isinstance(value, dict) and {"numerator", "denominator", "method"} <= set(value):
+            lines.append(
+                f"- {key}: `{value['numerator']}/{value['denominator']}` "
+                f"(`{value.get('pct', 0.0)}%`) — {value['method']}"
+            )
+            for extra_key in ("parse_failures", "unresolved", "orphan_count"):
+                if extra_key in value:
+                    lines.append(f"  - {extra_key}: `{value[extra_key]}`")
             continue
-        lines.append(f"- {key}: `{value}`")
+        if isinstance(value, dict):
+            compact = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            if len(compact) <= 500:
+                lines.append(f"- {key}: `{compact}`")
+            elif "group_count" in value:
+                lines.append(
+                    f"- {key}: groups=`{value['group_count']}`, "
+                    f"candidate_nodes=`{value.get('candidate_node_count', 0)}` — "
+                    f"{value.get('method', '')}"
+                )
+            continue
+        if not isinstance(value, list):
+            lines.append(f"- {key}: `{value}`")
     lines += ["", "## Node inventory", ""]
     lines.extend(f"- {key}: {value}" for key, value in sorted(nodes.items()))
     lines += ["", "## Relation inventory", ""]

@@ -38,7 +38,8 @@ architecture.
 ## Active System Documents
 
 - [Project Brain](project-brain.md) defines the revision-bound machine graph,
-  private local memory index, dialogue routing, and compaction-resume boundary.
+  private local memory index, dialogue routing, and uninstalled shadow
+  compaction/resume adapters; it is not active chat automation.
 - [Project Brain Baseline](project-brain-baseline.md) records what was reused and
   what was actually missing before that mechanism was introduced.
 

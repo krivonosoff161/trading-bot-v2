@@ -1,13 +1,15 @@
 {
-  "schema": "ProjectBrainHookCatalog.v1",
-  "authority": "manifest and private-memory delta only; never code, Git, runtime, SESSION.md, or external send",
+  "schema": "ProjectBrainHookAdapterCatalog.v2",
+  "installation_status": "not_installed_shadow_only",
+  "authority": "routing reports requested action only; every state-changing effect is denied unless a separate trusted external owner manifest matches action, project, contour, exact scope, resources, turn and expiry",
+  "activation_gate": "separate review, explicit installation, and observed shadow evaluation; not part of PR merge",
   "events": {
     "UserPromptSubmit": "classify mode and return routing manifest",
     "SessionStart": "load project identity, current SHA, governance, and active-work pointers",
-    "PreCompact": "append one verified private checkpoint delta",
+    "PreCompact": "adapter proposal: append one verified private checkpoint delta only with external write-memory authority",
     "PostCompact": "return a short resume manifest, never a transcript",
     "PreToolUse": "check project, contour, authority, and absolute denials",
     "PostToolUse": "record evidence pointer and hash instead of large output",
-    "Stop": "append verified delta and unresolved questions; do not rewrite SESSION.md"
+    "Stop": "adapter proposal: append verified delta only with external write-memory authority; never rewrite SESSION.md"
   }
 }

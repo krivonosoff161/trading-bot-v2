@@ -16,6 +16,8 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterable, Mapping
 
+from scripts.ci.check_supply_chain_policy import reject_sensitive_data
+
 from .schema import MEMORY_SCHEMA, RECORD_TYPES, ProjectGraph, content_sha256, stable_id
 
 
@@ -30,23 +32,6 @@ CAUSAL_STAGES = (
     "verification",
     "residual_risk",
 )
-DENIED_KEYS = frozenset(
-    {
-        "api_key",
-        "secret",
-        "password",
-        "passwd",
-        "token",
-        "bot_token",
-        "recipient_id",
-        "chat_id",
-        "cookie",
-        "session_cookie",
-        "credential",
-    }
-)
-
-
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
@@ -160,7 +145,7 @@ class ProjectBrainStore:
             "task_id": task_id,
             "authority_id": authority_id,
         }
-        _reject_sensitive_fields(payload)
+        reject_sensitive_data(payload)
         now = verified_at or utc_now()
         record = MemoryRecord(
             record_id=stable_id("memory", repository, content_sha256(payload)),
@@ -237,6 +222,7 @@ class ProjectBrainStore:
             "evidence_refs": refs,
             "created_at": utc_now(),
         }
+        reject_sensitive_data(row)
         self._append_event(row)
         self._initialize_index()
         with _connection(self.index_path) as conn:
@@ -436,20 +422,6 @@ class ProjectBrainStore:
                 ).fetchone()
                 is not None
             )
-
-
-def _reject_sensitive_fields(value: Any, path: tuple[str, ...] = ()) -> None:
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            normalized = str(key).strip().lower().replace("-", "_")
-            if normalized in DENIED_KEYS:
-                raise ValueError(
-                    f"sensitive field is forbidden: {'.'.join([*path, normalized])}"
-                )
-            _reject_sensitive_fields(item, (*path, normalized))
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            _reject_sensitive_fields(item, (*path, str(index)))
 
 
 def _is_within(path: Path, parent: Path) -> bool:

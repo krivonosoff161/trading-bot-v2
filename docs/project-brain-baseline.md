@@ -60,16 +60,21 @@ This preserves the existing public/private boundary and avoids turning the
 candidate Obsidian graph, outcome memory, SESSION, or a vector database into a
 second authority.
 
-## Initial Connectivity Metrics
+## Initial Inventory Metrics And Supersession
 
 The Phase 1 build over the baseline commit found 10,440 nodes and 19,895 edges:
 811 parsed Python modules, 70 BAT entrypoints, 225 Python CLIs, 27 strategy
 families, 9 declared database authorities, and 57 statically declared tables.
-All source modules, entrypoints, and declared DB/schema surfaces received an
-owner/status classification. Statically resolved production-symbol-to-test
-links cover 21.33% of production symbols. This is a conservative static lower
-bound, not line or branch coverage. Dynamic dispatch remains a named residual
-risk.
+The initial report assigned every source module a status and owner label, but
+its scalar `100%` measures were not honest semantic-coverage claims: one metric
+divided the module count by itself, document coverage was constant, fallback
+`repository_maintainers` labels hid ownership uncertainty, and dialogue
+containment made the orphan count look like zero. Those scalar metrics are
+superseded by structured numerator/denominator/method records for syntactic
+parsing, semantic catalog coverage, test links, active-document cataloguing,
+verified/rule/fallback ownership, unresolved calls, semantic duplicate
+candidates, and meaningful non-containment connectivity. No generated report
+may call the result a complete or 100% full project map.
 
 ## Baseline Regression Exception
 

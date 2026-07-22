@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
+from scripts.ci.check_supply_chain_policy import reject_sensitive_data
+
+from .graph_builder import refresh_connectivity_metrics, refresh_ownership_metrics
 from .schema import GraphEdge, GraphNode, ProjectGraph, content_sha256, stable_id
 
 
@@ -22,70 +25,11 @@ MODE_RULES = (
     ("question", ("объясни", "почему", "what", "how", "?")),
 )
 
-AUTHORITY_BY_MODE: Mapping[str, Mapping[str, Any]] = {
-    "discussion": {
-        "reads": ["public_code", "public_docs", "verified_memory"],
-        "writes": [],
-        "process": "none",
-        "network": "none",
-        "git": "none",
-    },
-    "question": {
-        "reads": ["public_code", "public_docs", "verified_memory"],
-        "writes": [],
-        "process": "none",
-        "network": "read_only_when_needed",
-        "git": "none",
-    },
-    "status": {
-        "reads": ["public_status", "authorized_runtime_status"],
-        "writes": ["private_evidence_delta"],
-        "process": "none",
-        "network": "none",
-        "git": "none",
-    },
-    "research": {
-        "reads": ["public_code", "public_docs", "approved_sources"],
-        "writes": ["task_worktree", "private_evidence_delta"],
-        "process": "none",
-        "network": "public_research_only",
-        "git": "task_branch_only",
-    },
-    "diagnosis": {
-        "reads": ["public_code", "authorized_evidence"],
-        "writes": ["private_evidence_delta"],
-        "process": "none",
-        "network": "none",
-        "git": "none",
-    },
-    "code_change": {
-        "reads": ["public_code", "public_docs"],
-        "writes": ["registered_task_worktree"],
-        "process": "none",
-        "network": "tests_only",
-        "git": "task_branch_only",
-    },
-    "git": {
-        "reads": ["git_metadata", "ci_metadata"],
-        "writes": ["task_branch_if_authorized"],
-        "process": "none",
-        "network": "git_only_if_authorized",
-        "git": "fresh_gate_required",
-    },
-    "runtime": {
-        "reads": ["documented_status"],
-        "writes": ["private_evidence_delta"],
-        "process": "explicit_scope_required",
-        "network": "documented_profile_only",
-        "git": "none",
-    },
-    "memory": {
-        "reads": ["project_graph", "verified_memory"],
-        "writes": ["private_project_brain_delta"],
-        "process": "none",
-        "network": "none",
-        "git": "none",
-    },
+AUTHORITY_REQUIREMENT: Mapping[str, Any] = {
+    "default_state_change": "deny",
+    "grant_source": "external_owner_manifest_only",
+    "scope_match": "exact",
+    "stale_manifest": "deny",
 }
 
 FORBIDDEN_SURFACES = (
@@ -116,11 +60,11 @@ class RouteDecision:
     mode: str
     primary_contour: str
     secondary_contours: tuple[str, ...]
-    authority: Mapping[str, Any]
+    requested_action: str
+    authority_requirement: Mapping[str, Any]
     forbidden_surfaces: tuple[str, ...]
     explanations: tuple[str, ...]
     route_id: str
-    authority_id: str
 
 
 @dataclass(frozen=True)
@@ -131,11 +75,12 @@ class ContextPacket:
     branch: str
     task_id: str
     intent: str
+    intent_hash: str
     mode: str
     primary_contour: str
     secondary_contours: tuple[str, ...]
-    authority: Mapping[str, Any]
-    authority_id: str
+    requested_action: str
+    authority_requirement: Mapping[str, Any]
     verified_facts: tuple[Mapping[str, Any], ...]
     project_nodes: tuple[Mapping[str, Any], ...]
     causal_links: tuple[Mapping[str, Any], ...]
@@ -144,7 +89,7 @@ class ContextPacket:
     context_budget: Mapping[str, int]
     evidence_refs: tuple[str, ...]
     forbidden_surfaces: tuple[str, ...]
-    schema: str = "ProjectContextPacket.v1"
+    schema: str = "ProjectContextPacket.v2"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -212,6 +157,40 @@ def classify_mode(message: str) -> str:
     return "discussion"
 
 
+def requested_action(message: str, mode: str) -> str:
+    """Classify intent only; this function never grants an effect."""
+
+    normalized = " ".join(message.casefold().split())
+    if any(
+        token in normalized
+        for token in ("runtime status", "rcc status", "process status", "статус rcc")
+    ):
+        return "read_status"
+    if any(token in normalized for token in ("запусти", "start rcc", "start process")):
+        return "start_process"
+    if any(token in normalized for token in ("останови", "stop rcc", "stop process")):
+        return "stop_process"
+    if any(token in normalized for token in ("отправь", "external send", "send telegram")):
+        return "external_send"
+    if any(token in normalized for token in ("merge", "мержи", "squash merge")):
+        return "git_merge"
+    if "push" in normalized:
+        return "git_push"
+    if "commit" in normalized or "коммит" in normalized:
+        return "git_commit"
+    if "создай pr" in normalized or "create pr" in normalized:
+        return "git_create_pr"
+    if mode == "code_change":
+        return "write_project_file"
+    if mode == "memory":
+        return "write_memory"
+    if mode in {"runtime", "status"}:
+        return "read_status"
+    if mode == "git":
+        return "inspect_git"
+    return "answer"
+
+
 def route_message(message: str, contours: Sequence[ContourSpec]) -> RouteDecision:
     normalized = " ".join(message.lower().split())
     normalized_tokens = _tokens(normalized)
@@ -255,17 +234,17 @@ def route_message(message: str, contours: Sequence[ContourSpec]) -> RouteDecisio
     explanations = tuple(
         f"{row[2].id}:{','.join(row[3]) or 'mode_boundary'}" for row in positive[:4]
     ) or ("project_architecture:default",)
-    payload = [mode, primary.id, secondary, normalized]
-    authority = dict(AUTHORITY_BY_MODE[mode])
+    action = requested_action(message, mode)
+    payload = [mode, primary.id, secondary, normalized, action]
     return RouteDecision(
         mode=mode,
         primary_contour=primary.id,
         secondary_contours=tuple(secondary),
-        authority=authority,
+        requested_action=action,
+        authority_requirement=dict(AUTHORITY_REQUIREMENT),
         forbidden_surfaces=FORBIDDEN_SURFACES,
         explanations=explanations,
         route_id=stable_id("route", *payload),
-        authority_id=stable_id("authority", mode, authority),
     )
 
 
@@ -293,6 +272,8 @@ def add_dialogue_graph(
             attributes={
                 "max_tokens": contour.max_tokens,
                 "forbidden_mix": contour.forbidden_mix,
+                "status_classification": "verified",
+                "owner_classification": "verified_owner",
             },
         )
         graph.add_node(node)
@@ -341,12 +322,6 @@ def add_dialogue_graph(
                     primary_contour=contour_id,
                 )
             )
-    connected = {edge.source for edge in graph.edges} | {
-        edge.target for edge in graph.edges
-    }
-    graph.metrics["orphan_nodes"] = sum(
-        1 for node in graph.nodes if node.node_id not in connected
-    )
     node_counts = dict(graph.metrics.get("node_counts") or {})
     node_counts["dialogue_contour"] = len(by_contour)
     graph.metrics["node_counts"] = dict(sorted(node_counts.items()))
@@ -358,6 +333,8 @@ def add_dialogue_graph(
         1 for edge in graph.edges if edge.relation == "belongs_to_contour"
     )
     graph.metrics["edge_counts"] = dict(sorted(edge_counts.items()))
+    refresh_ownership_metrics(graph)
+    refresh_connectivity_metrics(graph)
     graph.validate()
     return graph
 
@@ -373,6 +350,10 @@ def build_context_packet(
     branch: str = "",
     task_id: str = "",
 ) -> ContextPacket:
+    records = tuple(memory_records)
+    causal_rows = tuple(causal_links)
+    reject_sensitive_data({"intent": message})
+    reject_sensitive_data({"memory_records": records, "causal_links": causal_rows})
     allowed_contours = {route.primary_contour, *route.secondary_contours}
     candidates = [
         node
@@ -412,13 +393,14 @@ def build_context_packet(
             "freshness": node.freshness,
             "evidence_refs": node.evidence_refs[:3],
         }
+        reject_sensitive_data(node_compact)
         cost = len(json.dumps(node_compact, ensure_ascii=False))
         if used_chars + cost > max_chars or len(selected_nodes) >= 24:
             break
         selected_nodes.append(node_compact)
         used_chars += cost
     open_questions: list[str] = []
-    for record in memory_records:
+    for record in records:
         if str(record.get("contour")) not in allowed_contours:
             continue
         if str(record.get("type")) in {"hypothesis", "blocked"}:
@@ -446,18 +428,23 @@ def build_context_packet(
             break
         selected_records.append(record_compact)
         used_chars += cost
-    causal = tuple(list(causal_links)[:12])
+    causal = causal_rows[:12]
     evidence_set: set[str] = set()
     for selected_row in selected_nodes:
         refs = selected_row.get("evidence_refs") or ()
         if isinstance(refs, (list, tuple)):
             evidence_set.update(str(ref) for ref in refs if ref)
     evidence = sorted(evidence_set)
+    reject_sensitive_data({"evidence_refs": evidence})
+    intent_hash = content_sha256(message)
+    intent_summary = (
+        f"mode={route.mode}; requested_action={route.requested_action or 'none'}"
+    )
     payload = [
         graph.repository,
         graph.commit_sha,
         route.route_id,
-        message,
+        intent_hash,
         [row["node_id"] for row in selected_nodes],
     ]
     return ContextPacket(
@@ -466,12 +453,13 @@ def build_context_packet(
         commit_sha=graph.commit_sha,
         branch=branch,
         task_id=task_id,
-        intent=message[:500],
+        intent=intent_summary,
+        intent_hash=intent_hash,
         mode=route.mode,
         primary_contour=route.primary_contour,
         secondary_contours=route.secondary_contours,
-        authority=route.authority,
-        authority_id=route.authority_id,
+        requested_action=route.requested_action,
+        authority_requirement=route.authority_requirement,
         verified_facts=tuple(selected_records),
         project_nodes=tuple(selected_nodes),
         causal_links=causal,

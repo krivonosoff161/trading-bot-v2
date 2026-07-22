@@ -7,7 +7,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +25,59 @@ SECRET_ASSIGNMENT = re.compile(
     r")\b\s*[:=]\s*['\"]?(?P<value>[A-Za-z0-9_./:+=@~-]{16,})"
 )
 PRIVATE_KEY_MARKER = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+TOKEN_VALUE_PATTERNS = (
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    (
+        "provider_token",
+        re.compile(r"\bsk-(?!(?:test|fake|synthetic|example))[^\s'\"]{24,}\b", re.I),
+    ),
+    (
+        "telegram_token",
+        re.compile(r"\b[0-9]{6,}:[A-Za-z0-9_-]{20,}\b"),
+    ),
+    (
+        "jwt",
+        re.compile(
+            r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
+        ),
+    ),
+    (
+        "recipient_identity",
+        re.compile(r"(?i)\b(?:recipient|chat)[_-]?id\s*[:=]\s*-?[0-9]{6,}\b"),
+    ),
+    (
+        "cookie_value",
+        re.compile(
+            r"(?i)\b(?:cookie|set-cookie|sessionid|csrftoken)\s*[:=]\s*[^\s;]{8,}"
+        ),
+    ),
+)
+SENSITIVE_FIELD_NAMES = frozenset(
+    {
+        "api_key",
+        "secret",
+        "secret_key",
+        "password",
+        "passwd",
+        "token",
+        "access_token",
+        "auth_token",
+        "bot_token",
+        "telegram_bot_token",
+        "recipient_id",
+        "chat_id",
+        "cookie",
+        "session_cookie",
+        "credential",
+        "credentials",
+        "private_key",
+        "raw_prompt",
+        "user_prompt",
+        "raw_output",
+        "tool_output",
+        "model_output",
+    }
+)
 
 TEXT_EXTENSIONS = {
     ".bat",
@@ -267,6 +320,105 @@ def _safe_placeholder(value: str) -> bool:
     )
 
 
+def _sensitive_field_name(value: str) -> bool:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in SENSITIVE_FIELD_NAMES:
+        return True
+    return normalized.endswith(
+        (
+            "_api_key",
+            "_access_token",
+            "_auth_token",
+            "_bot_token",
+            "_password",
+            "_passwd",
+            "_secret",
+            "_secret_key",
+            "_private_key",
+            "_recipient_id",
+            "_chat_id",
+            "_session_cookie",
+        )
+    )
+
+
+def sensitive_text_kind(text: str) -> str | None:
+    """Return only a public-safe finding type, never the matched value."""
+
+    if PRIVATE_KEY_MARKER.search(text):
+        return "private_key_marker"
+    for match in SECRET_ASSIGNMENT.finditer(text):
+        if not _safe_placeholder(match.group("value")):
+            return f"secret_like_assignment:{match.group('name').lower()}"
+    for kind, pattern in TOKEN_VALUE_PATTERNS:
+        if pattern.search(text):
+            return kind
+    return None
+
+
+def forbidden_evidence_pointer_kind(pointer: str) -> str | None:
+    """Reject pointers to credential and protected-identity surfaces."""
+
+    normalized = pointer.strip().replace("\\", "/").lower()
+    if not normalized:
+        return None
+    components = tuple(part for part in normalized.split("/") if part)
+    if ".env.example" in components:
+        components = tuple(part for part in components if part != ".env.example")
+    if ".env" in components or any(part.startswith(".env.") for part in components):
+        return "dotenv_pointer"
+    protected_components = {
+        "credential",
+        "credentials",
+        "credential_store",
+        "credential-stores",
+        "secret",
+        "secrets",
+        "recipient",
+        "recipients",
+        "recipient_ids",
+        "protected_identities",
+    }
+    if any(part in protected_components for part in components):
+        return "protected_identity_pointer"
+    if components and components[-1] in {
+        "subscriptions.json",
+        "cookies.json",
+        "cookies.txt",
+        "recipient_ids.json",
+    }:
+        return "protected_identity_pointer"
+    return None
+
+
+def reject_sensitive_data(value, path: tuple[str, ...] = ()) -> None:
+    """Recursively fail closed without including a discovered value in errors."""
+
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if _sensitive_field_name(normalized):
+                location = ".".join((*path, normalized)) or "<root>"
+                raise ValueError(f"sensitive field is forbidden at {location}")
+            reject_sensitive_data(item, (*path, normalized))
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            reject_sensitive_data(item, (*path, str(index)))
+        return
+    if not isinstance(value, str):
+        return
+    location = ".".join(path) or "<root>"
+    finding = sensitive_text_kind(value)
+    if finding:
+        raise ValueError(f"sensitive value is forbidden at {location}: {finding}")
+    pointer_finding = forbidden_evidence_pointer_kind(value)
+    if pointer_finding:
+        raise ValueError(
+            f"sensitive evidence pointer is forbidden at {location}: {pointer_finding}"
+        )
+
+
 def scan_tracked_text_files(paths: Iterable[Path], *, root: Path | None = None) -> list[str]:
     root = (root or ROOT).resolve()
     failures: list[str] = []
@@ -279,18 +431,9 @@ def scan_tracked_text_files(paths: Iterable[Path], *, root: Path | None = None) 
             failures.append(f"{_relative(path, root)}: could not scan text file: {exc.__class__.__name__}")
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
-            if PRIVATE_KEY_MARKER.search(line):
-                failures.append(
-                    f"{_relative(path, root)}:{line_number}: private_key_marker"
-                )
-            for match in SECRET_ASSIGNMENT.finditer(line):
-                name = match.group("name").lower()
-                value = match.group("value")
-                if _safe_placeholder(value):
-                    continue
-                failures.append(
-                    f"{_relative(path, root)}:{line_number}: secret_like_assignment:{name}"
-                )
+            finding = sensitive_text_kind(line)
+            if finding:
+                failures.append(f"{_relative(path, root)}:{line_number}: {finding}")
     return failures
 
 

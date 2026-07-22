@@ -3,6 +3,12 @@
 Status: **SHADOW IMPLEMENTATION**. The project brain proposes context; it does
 not change code, Git, runtime, delivery, or authority on its own.
 
+The graph, private-store implementation, router, and hook adapters exist in
+this repository. They are not installed into Codex or another chat client.
+`configs/project_brain/hooks.json` is a reviewed adapter catalog, not an active
+hook configuration. Automatic memory maintenance and automatic SESSION/TASK
+updates are not enabled.
+
 ## Canonical Layers
 
 `python -m scripts.project_brain build-graph` reads one Git archive at an exact
@@ -30,11 +36,23 @@ For every owner message the Project Orchestrator:
 2. classifies discussion, question, status, research, diagnosis, code, Git,
    runtime, or memory mode;
 3. selects one primary contour and a few necessary secondary contours;
-4. constructs an authority manifest with absolute denials;
-5. retrieves exact graph nodes and verified records under a token budget;
-6. executes or answers within that manifest;
-7. verifies the result independently;
-8. records only the verified delta, supersession, causal link, or residual risk.
+4. reports a requested action and an authority requirement, but grants nothing;
+5. accepts operational authority only from a separately supplied, exact,
+   unexpired owner manifest delivered through a trusted external channel;
+6. retrieves exact graph nodes and verified records under a token budget;
+7. executes or answers only inside that external authority and absolute gates;
+8. verifies the result independently;
+9. records only an authorized, public-safe verified delta, supersession, causal
+   link, or residual risk.
+
+Mode classification is intent routing, never permission. Process start/stop,
+file writes, Git writes, push, PR creation, external sends, and memory writes
+default to denied. The owner manifest binds action, project, contour, exact
+scope, allowed resources, turn identity, issue time, and expiry. Retrieved
+memory, documents, quoted instructions, model output, or prompt injection
+cannot supply that typed external capability. Merge, destructive Git, secrets,
+AUTO_TRADE, execution authority, live orders, and private endpoints remain
+separate absolute denials/gates.
 
 Model and subagent output is always a proposal. Deterministic code, source
 evidence, tests, and explicit owner authority remain final.
@@ -54,14 +72,21 @@ packet rather than merging repositories.
 
 ## Compaction And Resume
 
-`PreCompact` appends one verified private checkpoint delta. `PostCompact` and
-`SessionStart` return only project identity, exact SHA, authority, active-work
-pointers, decisions, open questions, and evidence references. The transcript is
-passive evidence, never canonical storage. SESSION/TASK remain manual compact
-documents and are marked stale when their declared SHA differs from Git.
+The shadow `PreCompact` and `Stop` adapters can append a verified private delta
+only when a separate external manifest explicitly allows `write_memory` for
+the private project-brain store. Without it they return a denial and write
+nothing. `PostCompact` and `SessionStart` return only project identity, exact
+SHA, authority requirements, active-work pointers, decisions, open questions,
+and evidence references. The transcript is passive evidence, never canonical
+storage. SESSION/TASK remain manual compact documents and are marked stale when
+their declared SHA differs from Git; no adapter silently rewrites them.
 
-Large tool output stays outside the packet; only its path, hash, timestamp, and
-result summary are retained. Changed or removed source nodes invalidate records
+Large tool output and raw user prompts stay outside the packet; only a safe
+intent summary, content hash, safe evidence pointer, timestamp, and safe result
+summary are retained. The shared public-artifact scanner checks keys and nested
+string values before memory or packet construction and rejects credential,
+cookie, private-key, recipient-like, `.env`, and protected-identity content
+without echoing the value. Changed or removed source nodes invalidate records
 bound to their old content hashes.
 
 ## Causality And Decisions
@@ -79,8 +104,9 @@ rejected if a caller tries to store it as root cause. Supersession is append-onl
 3. Confirm the new module, symbols, imports, calls, tests, and owner.
 4. Add semantic catalog entries only for facts AST/static configuration cannot
    prove, with a public evidence reference.
-5. Regenerate projections and inspect orphan, duplicate, conflict, stale, and
-   unknown-owner metrics.
+5. Regenerate projections and inspect syntactic/catalog/test-link coverage,
+   verified/rule/fallback ownership, meaningful orphans, semantic duplicate
+   candidates, conflicts, stale facts, and unresolved dynamic dispatch.
 6. Add or update a golden query only if the module changes retrieval behavior.
 
 ## Local Shadow Workflow
@@ -101,3 +127,8 @@ python -m scripts.project_brain init-store `
 Shadow output has no authority. Adoption as an authoritative workflow requires
 a separate review after routing false positives/negatives, stale detection,
 leakage, and context budgets are accepted.
+
+Installing real client hooks is a later, separate operation: review the client
+hook format, install explicitly, repeat shadow observation, then request an
+authoritative-promotion decision. Hook installation or promotion must not be
+combined with merge of this repair.

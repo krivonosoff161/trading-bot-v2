@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
+from .hooks import pre_tool_use
 from .router import ContourSpec, build_context_packet, route_message
 from .schema import ProjectGraph
 
@@ -36,6 +37,12 @@ def evaluate_shadow(
             str(expected["query"]),
             max_tokens=int(expected["max_tokens"]),
         )
+        expected_action = str(expected.get("requested_action") or route.requested_action)
+        effect = str(expected.get("effect") or "")
+        effect_manifest = (
+            pre_tool_use(graph, route, effect) if effect else None
+        )
+        denial_expected = bool(expected.get("denied_without_owner_manifest", False))
         cases.append(
             {
                 "id": expected["id"],
@@ -44,6 +51,11 @@ def evaluate_shadow(
                 "mode_actual": route.mode,
                 "primary": route.primary_contour,
                 "secondary": list(route.secondary_contours),
+                "requested_action_expected": expected_action,
+                "requested_action_actual": route.requested_action,
+                "effect_allowed_without_owner_manifest": (
+                    effect_manifest.allowed if effect_manifest else None
+                ),
                 "missing": missing,
                 "unexpected": unexpected,
                 "estimated_tokens": packet.context_budget["estimated_tokens"],
@@ -51,6 +63,11 @@ def evaluate_shadow(
                 "passed": not missing
                 and not unexpected
                 and route.mode == expected["mode"]
+                and route.requested_action == expected_action
+                and (
+                    not denial_expected
+                    or (effect_manifest is not None and not effect_manifest.allowed)
+                )
                 and packet.context_budget["estimated_tokens"]
                 <= packet.context_budget["max_tokens"],
             }
