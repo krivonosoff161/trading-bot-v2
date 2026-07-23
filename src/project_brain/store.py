@@ -467,7 +467,11 @@ def _exclusive_file_lock(
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
+            # Windows can surface a sharing violation for an existing lock as
+            # PermissionError rather than FileExistsError. Both mean bounded
+            # contention here; a persistent condition still fails closed as a
+            # safe TimeoutError for the hook's degraded-memory path.
             try:
                 age = time.time() - path.stat().st_mtime
                 if age > stale_seconds:
