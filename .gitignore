@@ -105,6 +105,8 @@ docs/*.md
 !docs/public-artifact-policy.md
 !docs/entrypoints.md
 !docs/project-map.md
+!docs/project-brain.md
+!docs/project-brain-baseline.md
 !docs/validation-bridge-contract.md
 !docs/simulator-truth-tiers.md
 !docs/adaptive-research-center-contract.md

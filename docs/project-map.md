@@ -2,6 +2,14 @@
 
 Status: **ACTIVE**. Reviewed: 2026-07-10.
 
+The human ownership summary on this page is complemented by the reproducible,
+revision-bound [Project Brain graph](project-brain.md). The generated graph is
+the machine-readable source for symbols, imports, calls, tests, processes,
+databases, policies, external boundaries, and dialogue-contour mappings; this
+page remains a concise maintainer projection. Coverage is reported with honest
+numerators and denominators; the graph does not claim complete semantic or
+dynamic-call coverage, and its hook adapters are not installed automation.
+
 `trading-bot-v2` is a public paper/research workbench around OKX public market
 data. It is not a live-trading product. The active core is the calculation farm;
 the scanner is an upstream intake surface, and old WebSocket engines are

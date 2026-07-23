@@ -16,6 +16,8 @@ instruction. When documents conflict, use the authority order in
 | Development sequence | [../ROADMAP.md](../ROADMAP.md) |
 | Agent operating rules | [../CLAUDE.md](../CLAUDE.md) |
 | Module ownership | [project-map.md](project-map.md) |
+| Reproducible code/process/data/authority graph and dialogue-memory contract | [project-brain.md](project-brain.md) |
+| Project-brain baseline inventory and gap analysis | [project-brain-baseline.md](project-brain-baseline.md) |
 | Windows launch ownership | [entrypoints.md](entrypoints.md) |
 | Paper operator path | [farm_runbook.md](farm_runbook.md) |
 | Farm lifecycle | [farm_loop_lifecycle.md](farm_loop_lifecycle.md) |

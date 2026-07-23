@@ -1,0 +1,24 @@
+{
+  "schema": "DialogueContourCatalog.v1",
+  "contours": [
+    {"id":"governance_and_safety","label":"Governance and safety","load_policy":"always","max_tokens":700,"keywords":["permission","authority","policy","safety","secret","env","live","private","разреш","запрет","полномоч","безопас"],"forbidden_mix":[]},
+    {"id":"project_architecture","label":"Project architecture","load_policy":"architecture_or_change","max_tokens":1400,"keywords":["architecture","module","symbol","import","call graph","owner","test","boundary","карта","архитект","модул","функц","тест","границ"],"forbidden_mix":[]},
+    {"id":"active_work","label":"Active work","load_policy":"always","max_tokens":900,"keywords":["current","task","status","next","blocker","сейчас","задач","статус","дальше"],"forbidden_mix":[]},
+    {"id":"data_and_lineage","label":"Data and lineage","load_policy":"on_demand","max_tokens":1200,"keywords":["data","schema","lineage","candle","manifest","provenance","sqlite","database","данн","свеч","схем","происхожд","баз"],"forbidden_mix":["protected_identity_values"]},
+    {"id":"farm_and_runtime","label":"Farm and runtime","load_policy":"runtime_only","max_tokens":1400,"keywords":["runtime","farm","rcc","process","lease","fence","heartbeat","queue","owner","ферм","процесс","очеред","владел"],"forbidden_mix":["security_project"]},
+    {"id":"research_and_strategies","label":"Research and strategies","load_policy":"on_demand","max_tokens":1400,"keywords":["research","strategy","hypothesis","trial","parameter","исслед","стратег","гипотез","параметр"],"forbidden_mix":["live_execution"]},
+    {"id":"validation","label":"Independent validation","load_policy":"on_demand","max_tokens":1400,"keywords":["validate","validator","backtest","pbo","dsr","cost","провер","валид","бэктест","издерж"],"forbidden_mix":["private_runtime_rows"]},
+    {"id":"paper_lifecycle","label":"Paper lifecycle","load_policy":"on_demand","max_tokens":1400,"keywords":["paper","candidate","observation","outcome","account","materialization","бумаж","наблюд","исход","материал"],"forbidden_mix":["live_execution"]},
+    {"id":"models_and_llm","label":"Models and LLM","load_policy":"model_only","max_tokens":1200,"keywords":["model","llm","mimo","qwen","ollama","prompt","tool","модел","промпт","инструмент"],"forbidden_mix":["private_db","telegram_recipients","credentials"]},
+    {"id":"scanner_and_news","label":"Scanner and public news","load_policy":"on_demand","max_tokens":1100,"keywords":["scanner","news","source","watch","event","скан","новост","источник","событ"],"forbidden_mix":["farm_authority"]},
+    {"id":"telegram_and_delivery","label":"Telegram and delivery","load_policy":"delivery_only","max_tokens":1000,"keywords":["telegram","delivery","outbox","ack","subscriber","телеграм","достав","подпис"],"forbidden_mix":["recipient_values","credentials"]},
+    {"id":"incidents_and_causality","label":"Incidents and causality","load_policy":"diagnosis_only","max_tokens":1500,"keywords":["incident","failure","error","cause","timeline","repair","ошиб","причин","сбой","ремонт"],"forbidden_mix":[]},
+    {"id":"decisions_and_open_questions","label":"Decisions and open questions","load_policy":"decision_or_resume","max_tokens":1000,"keywords":["decision","question","why","alternative","решен","вопрос","почему","вариант"],"forbidden_mix":[]},
+    {"id":"git_and_release","label":"Git and release","load_policy":"git_only","max_tokens":1000,"keywords":["git","branch","commit","pr","merge","ci","worktree","ветк","коммит","мерж"],"forbidden_mix":["runtime_mutation"]}
+  ],
+  "cross_project": {
+    "requires_explicit_request": true,
+    "packet_label": "cross-project context packet",
+    "forbidden_automatic_projects": ["agentic-security-harness"]
+  }
+}
