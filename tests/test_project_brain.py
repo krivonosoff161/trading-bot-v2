@@ -34,6 +34,7 @@ CONTOURS = ROOT / "configs" / "project_brain" / "dialogue_contours.json"
 CATALOG = ROOT / "configs" / "project_brain" / "architecture.json"
 GOLDEN = ROOT / "configs" / "project_brain" / "golden_queries.json"
 HOOK_CATALOG = ROOT / "configs" / "project_brain" / "hooks.json"
+PROJECT_BRAIN_DOC = ROOT / "docs" / "project-brain.md"
 SHA = "a" * 40
 NOW = "2026-01-01T00:05:00+00:00"
 TURN = "turn-1"
@@ -576,6 +577,19 @@ def test_hook_catalog_requires_exact_hash_trust_and_separate_promotion() -> None
     )
     assert "exact hash" in catalog["activation_gate"]
     assert "authoritative promotion remains separate" in catalog["activation_gate"]
+
+
+def test_orchestrator_posture_is_cross_cutting_and_never_grants_authority() -> None:
+    text = PROJECT_BRAIN_DOC.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "## Orchestrator Posture Contract" in text
+    assert "not a fifteenth dialogue contour" in normalized
+    assert "primary recommendation" in text
+    assert "`proven`, `inference`, `recommendation`, and `unknown`" in text
+    assert "initiative separate from authority" in text
+    assert "automatic praise" in text
+    assert "No parallel behavior-memory source is created." in text
 
 
 def test_routing_is_deterministic_and_prompt_injection_cannot_expand_authority() -> (

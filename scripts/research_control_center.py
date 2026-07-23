@@ -47,6 +47,10 @@ PRIVATE_ROOT = (
 )
 STATE_DIR = PRIVATE_ROOT / "state" / "control-center"
 STOP_FARM = PRIVATE_ROOT / "state" / "STOP_FARM_FULL_CYCLE.txt"
+REQUIRED_RESEARCH_CONTOURS = frozenset(
+    {"ollama", "public_news", "scanner", "farm", "paper_cards", "telegram_bot"}
+)
+STATUS_CACHE_SECONDS = 1.0
 
 
 def _python(*args: str) -> tuple[str, ...]:
@@ -80,6 +84,35 @@ class ContourSpec:
     env: dict[str, str] = field(default_factory=dict)
     owner_group: str = ""
     graceful_seconds: float = 15.0
+
+
+@dataclass(frozen=True)
+class _CachedJson:
+    sampled_at: float
+    payload: dict
+
+
+class _JsonStatusCache:
+    """Bound repeated UI reads without making cached data authoritative."""
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.entries: dict[Path, _CachedJson] = {}
+
+    def read(
+        self,
+        path: Path,
+        reader: Callable[[Path], dict],
+        *,
+        max_age_seconds: float = STATUS_CACHE_SECONDS,
+    ) -> dict:
+        now = self.clock()
+        cached = self.entries.get(path)
+        if cached and now - cached.sampled_at < max(0.0, max_age_seconds):
+            return dict(cached.payload)
+        payload = reader(path)
+        self.entries[path] = _CachedJson(sampled_at=now, payload=dict(payload))
+        return dict(payload)
 
 
 def _request_farm_stop() -> None:
@@ -212,6 +245,8 @@ class ManagedContour:
         self.process: subprocess.Popen[str] | None = None
         self.started_at = 0.0
         self.stopping = False
+        self.expected_running = False
+        self.unexpected_exit_reported = False
 
     @property
     def running(self) -> bool:
@@ -221,6 +256,8 @@ class ManagedContour:
         if self.running:
             return
         self.stopping = False
+        self.expected_running = False
+        self.unexpected_exit_reported = False
         env = os.environ.copy()
         for name in GPU_MASK_ENV_NAMES:
             env.pop(name, None)
@@ -242,6 +279,7 @@ class ManagedContour:
             creationflags=flags,
         )
         self.started_at = _process_started_at(self.process.pid) or time.time()
+        self.expected_running = True
         self.events.put((self.spec.key, "state", f"работает · PID {self.process.pid}"))
         threading.Thread(target=self._read_output, daemon=True).start()
 
@@ -252,7 +290,26 @@ class ManagedContour:
         code = self.process.wait()
         self.events.put((self.spec.key, "state", f"остановлен · код {code}"))
 
+    def consume_unexpected_exit(self) -> dict[str, int | float] | None:
+        if (
+            not self.expected_running
+            or self.stopping
+            or self.unexpected_exit_reported
+            or self.process is None
+        ):
+            return None
+        return_code = self.process.poll()
+        if return_code is None:
+            return None
+        self.unexpected_exit_reported = True
+        return {
+            "pid": int(self.process.pid),
+            "started_at": float(self.started_at),
+            "exit_code": int(return_code),
+        }
+
     def stop(self, timeout: float | None = None) -> None:
+        self.expected_running = False
         if not self.running or not self.process:
             return
         self.stopping = True
@@ -487,6 +544,7 @@ class ControlCenter(tk.Tk):
         self.selected_key = "ollama"
         self._closing = False
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
+        self._json_status_cache = _JsonStatusCache()
         self.system_var = tk.StringVar(value="Состояние фермы загружается…")
         self.learning_var = tk.StringVar(value="Контур обучения загружается…")
         self.candles_var = tk.StringVar(value="Библиотека свечей загружается…")
@@ -779,6 +837,7 @@ class ControlCenter(tk.Tk):
 
     def _refresh_buttons(self) -> None:
         for key, item in self.contours.items():
+            self._record_required_contour_exit(key, item)
             if item.stopping:
                 self.buttons[key].configure(text="Останавливается…", state="disabled")
                 self.status_vars[key].set("штатная остановка…")
@@ -803,6 +862,70 @@ class ControlCenter(tk.Tk):
                 if item.running:
                     self.status_vars[key].set(self._health_text(key, item))
 
+    def _record_required_contour_exit(
+        self,
+        key: str,
+        item: ManagedContour,
+    ) -> bool:
+        if key not in REQUIRED_RESEARCH_CONTOURS:
+            return False
+        process = item.consume_unexpected_exit()
+        if process is None:
+            return False
+        farm_status = (
+            self._read_cached_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
+            if key in {"farm", "paper_cards"}
+            else {}
+        )
+        updated_at = float(farm_status.get("updated_at") or 0.0)
+        alert = {
+            "schema": "ResearchControlCenterAlert.v1",
+            "alert_id": (
+                f"required_contour_exit:{key}:{process['pid']}:"
+                f"{process['started_at']}"
+            ),
+            "reason": "required_contour_unexpected_exit",
+            "detected_at": time.time(),
+            "contour": key,
+            "pid": process["pid"],
+            "process_started_at": process["started_at"],
+            "exit_code": process["exit_code"],
+            "last_stage": str(farm_status.get("stage") or ""),
+            "progress_age_seconds": (
+                max(0.0, time.time() - updated_at) if updated_at > 0 else None
+            ),
+            "log_pointer": f"rcc_contour_log:{key}",
+            "paper_only": True,
+            "execution_allowed": False,
+            "automatic_restart": False,
+        }
+        evidence_written = True
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            with (STATE_DIR / "alerts.jsonl").open(
+                "a",
+                encoding="utf-8",
+                newline="\n",
+            ) as handle:
+                handle.write(json.dumps(alert, ensure_ascii=True, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            evidence_written = False
+        message = (
+            "FAILED: required contour exited unexpectedly "
+            f"(code={process['exit_code']}); automatic restart is disabled"
+        )
+        if not evidence_written:
+            message += "; alert evidence write failed"
+        rows = self._logs[key]
+        rows.append(message)
+        del rows[:-500]
+        self.status_vars[key].set(message)
+        if key == self.selected_key:
+            self._render_log()
+        return True
+
     @staticmethod
     def _file_age(path: Path) -> int | None:
         try:
@@ -823,7 +946,7 @@ class ControlCenter(tk.Tk):
         if key in {"farm", "paper_cards"}:
             status_path = PRIVATE_ROOT / "state" / "farm_loop_status.json"
             try:
-                data = json.loads(status_path.read_text(encoding="utf-8"))
+                data = self._read_cached_json(status_path)
                 stage = str(data.get("stage") or "неизвестно")
                 age = max(0, int(time.time() - float(data.get("updated_at") or 0)))
                 base = f"этап {stage} · heartbeat {format_age(age)} назад · PID {pid}"
@@ -832,7 +955,7 @@ class ControlCenter(tk.Tk):
             if key == "paper_cards":
                 delivery_path = PRIVATE_ROOT / "state" / "derived" / "paper_telegram_delivery.json"
                 try:
-                    delivery = json.loads(delivery_path.read_text(encoding="utf-8"))
+                    delivery = self._read_cached_json(delivery_path)
                     base += (
                         f" · Telegram: sent={int(delivery.get('sent_cards') or 0)}"
                         f" errors={int(delivery.get('errors') or 0)}"
@@ -974,6 +1097,18 @@ class ControlCenter(tk.Tk):
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return {}
 
+    def _read_cached_json(
+        self,
+        path: Path,
+        *,
+        max_age_seconds: float = STATUS_CACHE_SECONDS,
+    ) -> dict:
+        cache = getattr(self, "_json_status_cache", None)
+        if cache is None:
+            cache = _JsonStatusCache()
+            self._json_status_cache = cache
+        return cache.read(path, self._read_json, max_age_seconds=max_age_seconds)
+
     @staticmethod
     def _read_jsonl(path: Path) -> list[dict]:
         try:
@@ -1103,8 +1238,10 @@ class ControlCenter(tk.Tk):
     def _system_snapshot(self) -> str:
         queue_state = self._queue_snapshot()
         backend = self._backend_snapshot()
-        farm = self._read_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
-        priority_worker = self._read_json(PRIVATE_ROOT / "state" / "farm_priority_worker_status.json")
+        farm = self._read_cached_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
+        priority_worker = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "farm_priority_worker_status.json"
+        )
         stage = (
             str(farm.get("stage") or "работает")
             if self.contours.get("farm") and self.contours["farm"].running
@@ -1189,7 +1326,11 @@ class ControlCenter(tk.Tk):
                     float(external_started_at) if external_started_at else None
                 ),
                 "status": self._health_text(key, item) if item.running else (
-                    "работает вне центра" if external else "выключен"
+                    "работает вне центра" if external else (
+                        "failed_unexpected_exit"
+                        if item.unexpected_exit_reported
+                        else "выключен"
+                    )
                 ),
             }
         payload = {

@@ -28,6 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_CLAIM_LEASE_SECONDS = 900.0
+STATUS_PUBLISH_MAX_OUTAGE_SECONDS = 120.0
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -1098,6 +1099,136 @@ def _run_journal_export_stage(private_root: Path, apply: bool) -> dict:
             os.environ["JOURNAL_ENABLE_PRIVATE_FILLS"] = old_private_fills
 
 
+class _LoopStatusPublisher:
+    """Keep the last good status visible across transient Windows contention."""
+
+    _retry_delays = (0.05, 0.1, 0.2, 0.4)
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.consecutive_failures = 0
+        self.outage_started_monotonic: float | None = None
+        self.last_error_code: int | None = None
+
+    @staticmethod
+    def _is_transient(exc: OSError) -> bool:
+        return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {
+            5,
+            32,
+            33,
+        }
+
+    def publish(
+        self,
+        payload: dict,
+        *,
+        now_monotonic: float | None = None,
+    ) -> bool:
+        current = time.monotonic() if now_monotonic is None else float(now_monotonic)
+        temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+        text = json.dumps(payload, ensure_ascii=True, indent=2) + "\n"
+        last_error: OSError | None = None
+        try:
+            try:
+                temporary.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                if not self._is_transient(exc):
+                    raise
+                last_error = exc
+            else:
+                for attempt in range(len(self._retry_delays) + 1):
+                    try:
+                        temporary.replace(self.path)
+                        recovered = self.consecutive_failures
+                        self.consecutive_failures = 0
+                        self.outage_started_monotonic = None
+                        self.last_error_code = None
+                        if recovered:
+                            print(
+                                "status publication recovered after "
+                                f"{recovered} failed update(s)"
+                            )
+                        return True
+                    except OSError as exc:
+                        if not self._is_transient(exc):
+                            raise
+                        last_error = exc
+                        if attempt < len(self._retry_delays):
+                            time.sleep(self._retry_delays[attempt])
+
+            self.consecutive_failures += 1
+            if self.outage_started_monotonic is None:
+                self.outage_started_monotonic = current
+            self.last_error_code = getattr(last_error, "winerror", None)
+            if self.consecutive_failures == 1 or self.consecutive_failures % 10 == 0:
+                print(
+                    "WARNING: farm status publication degraded; "
+                    "last-known-good status retained; "
+                    f"failed_updates={self.consecutive_failures}"
+                )
+            return False
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                # The fixed per-process temporary name prevents unbounded litter.
+                pass
+
+    def outage_seconds(self, *, now_monotonic: float | None = None) -> float:
+        if self.outage_started_monotonic is None:
+            return 0.0
+        current = time.monotonic() if now_monotonic is None else float(now_monotonic)
+        return max(0.0, current - self.outage_started_monotonic)
+
+
+_LOOP_STATUS_PUBLISHERS: dict[Path, _LoopStatusPublisher] = {}
+
+
+def _loop_status_publisher(private_root: Path) -> _LoopStatusPublisher:
+    path = private_root / "state" / "farm_loop_status.json"
+    publisher = _LOOP_STATUS_PUBLISHERS.get(path)
+    if publisher is None:
+        publisher = _LoopStatusPublisher(path)
+        _LOOP_STATUS_PUBLISHERS[path] = publisher
+    return publisher
+
+
+def _status_publication_requires_stop(
+    private_root: Path,
+    *,
+    max_outage_seconds: float,
+    now_monotonic: float | None = None,
+) -> bool:
+    publisher = _LOOP_STATUS_PUBLISHERS.get(
+        private_root / "state" / "farm_loop_status.json"
+    )
+    return bool(
+        publisher
+        and publisher.consecutive_failures
+        and publisher.outage_seconds(now_monotonic=now_monotonic)
+        > max(0.0, float(max_outage_seconds))
+    )
+
+
+def _leave_for_status_publication_outage(
+    private_root: Path,
+    *,
+    max_outage_seconds: float,
+) -> bool:
+    if not _status_publication_requires_stop(
+        private_root,
+        max_outage_seconds=max_outage_seconds,
+    ):
+        return False
+    publisher = _loop_status_publisher(private_root)
+    print(
+        "ERROR: farm status publication remained unavailable for "
+        f"{publisher.outage_seconds():.1f}s; "
+        "leaving at the completed-cycle boundary without restart"
+    )
+    return True
+
+
 def _write_loop_status(
     private_root: Path,
     *,
@@ -1106,14 +1237,14 @@ def _write_loop_status(
     loop: bool,
     cycle_started_at: float,
     details: dict | None = None,
-) -> None:
+) -> bool:
     """Write a private heartbeat for long visible runs.
 
     The loop prints a full summary only after a cycle finishes. Some stages can take
     minutes, so this status file is the operator-facing "where is it now" signal.
     """
     if not apply:
-        return
+        return True
     path = private_root / "state" / "farm_loop_status.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
@@ -1129,19 +1260,7 @@ def _write_loop_status(
         "execution_allowed": False,
         "details": details or {},
     }
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    try:
-        for attempt in range(5):
-            try:
-                tmp.replace(path)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
-    finally:
-        tmp.unlink(missing_ok=True)
+    return _loop_status_publisher(private_root).publish(payload)
 
 
 def _run_once(args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool) -> dict:
@@ -1962,6 +2081,15 @@ def main() -> None:
     ap.add_argument("--idle-poll-seconds", type=float, default=5.0,
                     help="poll interval for new urgent/scanner work between full cycles")
     ap.add_argument("--stop-file", default="")
+    ap.add_argument(
+        "--status-publish-max-outage-seconds",
+        type=float,
+        default=STATUS_PUBLISH_MAX_OUTAGE_SECONDS,
+        help=(
+            "gracefully leave the loop at a completed-cycle boundary when the "
+            "operator status channel stays unavailable"
+        ),
+    )
     ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
     ap.add_argument("--allow-public-output", action="store_true")
     verb = ap.add_mutually_exclusive_group()
@@ -2075,9 +2203,19 @@ def main() -> None:
                 raise RuntimeError("farm ownership lease renewal failed") from lease_heartbeat.failure
             if claim_failure_signal is not None:
                 claim_failure_signal.raise_if_failed()
+            if apply and _leave_for_status_publication_outage(
+                private_root,
+                max_outage_seconds=args.status_publish_max_outage_seconds,
+            ):
+                break
             out = _run_once(args, tasks, profiles, policy, private_root, apply)
             if claim_failure_signal is not None:
                 claim_failure_signal.raise_if_failed()
+            if apply and _leave_for_status_publication_outage(
+                private_root,
+                max_outage_seconds=args.status_publish_max_outage_seconds,
+            ):
+                break
             sig = _cycle_signature(out)
             # Always show a CHANGED cycle or any error (never hide a changed block, even with
             # --quiet). Unchanged cycle: heartbeat by default; with --quiet, print nothing.
@@ -2129,6 +2267,11 @@ def main() -> None:
             except Exception:
                 pass
             ownership_store.close()
+        if apply:
+            _LOOP_STATUS_PUBLISHERS.pop(
+                private_root / "state" / "farm_loop_status.json",
+                None,
+            )
 
 
 if __name__ == "__main__":

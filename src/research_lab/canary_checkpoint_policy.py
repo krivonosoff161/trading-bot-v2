@@ -75,7 +75,7 @@ class CanaryMonitoringLaneSpec:
 CANONICAL_MONITORING_LANES: tuple[CanaryMonitoringLaneSpec, ...] = (
     CanaryMonitoringLaneSpec(
         name="fast_safety",
-        max_sample_gap_seconds=45.0,
+        max_sample_gap_seconds=15.0,
         permits_database_snapshot=False,
     ),
     CanaryMonitoringLaneSpec(
@@ -121,7 +121,7 @@ class CanaryFastSampleWatchdog:
         self,
         *,
         started_at: float,
-        max_fast_sample_gap_seconds: float = 45.0,
+        max_fast_sample_gap_seconds: float = 15.0,
     ) -> None:
         if max_fast_sample_gap_seconds <= 0:
             raise ValueError("fast-sample gap must be positive")

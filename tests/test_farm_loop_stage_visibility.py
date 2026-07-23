@@ -123,6 +123,102 @@ def _args(**over) -> Namespace:
     return Namespace(**base)
 
 
+def test_loop_status_transient_windows_contention_recovers(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "state" / "farm_loop_status.json"
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(path: Path, destination: Path):
+        nonlocal attempts
+        if destination == target:
+            attempts += 1
+            if attempts < 3:
+                raise PermissionError(5, "synthetic sharing violation")
+        return original_replace(path, destination)
+
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr(farm_loop.time, "sleep", lambda _seconds: None)
+
+    written = farm_loop._write_loop_status(
+        tmp_path,
+        stage="paper_signals",
+        apply=True,
+        loop=True,
+        cycle_started_at=1.0,
+    )
+
+    assert written is True
+    assert attempts == 3
+    assert json.loads(target.read_text(encoding="utf-8"))["stage"] == "paper_signals"
+    assert farm_loop._loop_status_publisher(tmp_path).consecutive_failures == 0
+
+
+def test_loop_status_persistent_contention_keeps_last_good_and_requests_safe_stop(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = tmp_path / "state" / "farm_loop_status.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"stage":"last_good"}\n', encoding="utf-8")
+    original_replace = Path.replace
+
+    def locked_replace(path: Path, destination: Path):
+        if destination == target:
+            raise PermissionError(5, "synthetic sharing violation")
+        return original_replace(path, destination)
+
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    monkeypatch.setattr(Path, "replace", locked_replace)
+    monkeypatch.setattr(farm_loop.time, "sleep", lambda _seconds: None)
+    publisher = farm_loop._loop_status_publisher(tmp_path)
+
+    assert publisher.publish({"stage": "new"}, now_monotonic=100.0) is False
+    assert json.loads(target.read_text(encoding="utf-8")) == {"stage": "last_good"}
+    assert not farm_loop._status_publication_requires_stop(
+        tmp_path,
+        max_outage_seconds=120.0,
+        now_monotonic=220.0,
+    )
+    assert farm_loop._status_publication_requires_stop(
+        tmp_path,
+        max_outage_seconds=120.0,
+        now_monotonic=220.001,
+    )
+    monkeypatch.setattr(farm_loop.time, "monotonic", lambda: 220.001)
+    assert farm_loop._leave_for_status_publication_outage(
+        tmp_path,
+        max_outage_seconds=120.0,
+    )
+    assert "completed-cycle boundary without restart" in capsys.readouterr().out
+    assert list(target.parent.glob("farm_loop_status.json.*.tmp")) == []
+
+
+def test_loop_status_non_transient_storage_error_remains_fatal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "state" / "farm_loop_status.json"
+    original_replace = Path.replace
+
+    def failed_replace(path: Path, destination: Path):
+        if destination == target:
+            raise OSError(28, "synthetic no space")
+        return original_replace(path, destination)
+
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    monkeypatch.setattr(Path, "replace", failed_replace)
+    publisher = farm_loop._loop_status_publisher(tmp_path)
+    target.parent.mkdir(parents=True)
+
+    with pytest.raises(OSError, match="synthetic no space"):
+        publisher.publish({"stage": "new"}, now_monotonic=100.0)
+
+
 class TestStageStatus:
     def test_priority_checkpoint_is_resumable_and_paper_only(self, tmp_path: Path) -> None:
         target = farm_loop._write_priority_checkpoint(

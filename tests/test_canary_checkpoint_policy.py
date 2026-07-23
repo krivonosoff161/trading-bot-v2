@@ -152,7 +152,7 @@ def test_fast_safety_lane_excludes_database_snapshot() -> None:
     lanes = {item.name: item for item in CANONICAL_MONITORING_LANES}
 
     assert not lanes["fast_safety"].permits_database_snapshot
-    assert lanes["fast_safety"].max_sample_gap_seconds == 45.0
+    assert lanes["fast_safety"].max_sample_gap_seconds == 15.0
     assert lanes["deep_database"].permits_database_snapshot
     assert lanes["deep_database"].max_sample_gap_seconds == 300.0
 
