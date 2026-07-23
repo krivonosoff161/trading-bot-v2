@@ -82,6 +82,19 @@ def test_project_hooks_use_only_official_supported_events_and_exact_trust_surfac
                 assert "project_brain_hook.py" in handler["commandWindows"]
 
 
+def test_project_brain_skill_has_discoverable_frontmatter() -> None:
+    text = (ROOT / ".agents" / "skills" / "project-brain" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith("---\n")
+    frontmatter, body = text.removeprefix("---\n").split("\n---\n", maxsplit=1)
+    metadata = dict(line.split(": ", maxsplit=1) for line in frontmatter.splitlines())
+    assert set(metadata) == {"name", "description"}
+    assert metadata["name"] == "project-brain"
+    assert "trading-bot-v2" in metadata["description"]
+    assert body.startswith("\n# Project Brain Point Loader")
+
+
 def test_public_artifact_guard_allows_only_reviewed_project_brain_client_files() -> None:
     allowed = {
         ".codex/hooks.json",

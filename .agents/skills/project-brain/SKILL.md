@@ -1,3 +1,8 @@
+---
+name: project-brain
+description: Load bounded, revision-bound trading-bot-v2 architecture, continuity, causality, and authority context. Use when Codex needs precise project nodes, dialogue contours, evidence, freshness, current task continuity, incident causality, or an authority-safe Context Packet without loading the full graph or transcript.
+---
+
 # Project Brain Point Loader
 
 Use this project-local skill when a request needs precise trading-bot-v2
