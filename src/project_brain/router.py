@@ -166,9 +166,15 @@ def requested_action(message: str, mode: str) -> str:
         for token in ("runtime status", "rcc status", "process status", "статус rcc")
     ):
         return "read_status"
-    if any(token in normalized for token in ("запусти", "start rcc", "start process")):
+    if _contains_command_token(
+        normalized,
+        ("запусти", "запустить", "запустите", "start rcc", "start process"),
+    ):
         return "start_process"
-    if any(token in normalized for token in ("останови", "stop rcc", "stop process")):
+    if _contains_command_token(
+        normalized,
+        ("останови", "остановить", "остановите", "stop rcc", "stop process"),
+    ):
         return "stop_process"
     if any(token in normalized for token in ("отправь", "external send", "send telegram")):
         return "external_send"
@@ -189,6 +195,13 @@ def requested_action(message: str, mode: str) -> str:
     if mode == "git":
         return "inspect_git"
     return "answer"
+
+
+def _contains_command_token(normalized: str, tokens: Sequence[str]) -> bool:
+    return any(
+        re.search(rf"(?<!\w){re.escape(token)}(?!\w)", normalized) is not None
+        for token in tokens
+    )
 
 
 def route_message(message: str, contours: Sequence[ContourSpec]) -> RouteDecision:

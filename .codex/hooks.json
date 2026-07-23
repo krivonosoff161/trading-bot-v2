@@ -1,0 +1,87 @@
+{
+  "description": "Trusted, bounded Project Brain context and private-memory hooks for trading-bot-v2.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Loading bounded Project Brain context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Routing through Project Brain"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Checkpointing safe Project Brain delta"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Restoring bounded Project Brain context"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 15,
+            "statusMessage": "Recording safe tool evidence digest"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -lc 'root=\"$(git rev-parse --show-toplevel)\" && python3 \"$root/scripts/project_brain_hook.py\"'",
+            "commandWindows": "py -3 -c \"import pathlib,runpy,subprocess; r=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip()); runpy.run_path(str(r/'scripts'/'project_brain_hook.py'),run_name='__main__')\"",
+            "timeout": 15,
+            "statusMessage": "Saving safe Project Brain checkpoint"
+          }
+        ]
+      }
+    ]
+  }
+}

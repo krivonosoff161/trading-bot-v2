@@ -835,7 +835,10 @@ def _apply_catalog(
                 source,
                 target,
                 str(row["relation"]),
-                ref=str(row.get("source_reference") or catalog_path.as_posix()),
+                ref=str(
+                    row.get("source_reference")
+                    or "configs/project_brain/architecture.json"
+                ),
                 confidence=str(row.get("confidence") or "verified"),
                 attributes=dict(row.get("attributes") or {}),
             )
@@ -853,6 +856,78 @@ def _apply_catalog(
         )
     graph.metrics["semantic_catalog_sha256"] = content_sha256(payload)
     graph.metrics["semantic_catalog_verified_node_ids"] = sorted(catalog_verified_ids)
+    graph.metrics["active_scope_catalog"] = _resolve_active_scope(
+        payload.get("active_scope") or {}, aliases
+    )
+
+
+def _resolve_active_scope(
+    scope: Mapping[str, Any], aliases: Mapping[str, str]
+) -> dict[str, Any]:
+    """Resolve reviewed active-scope aliases without inventing architecture."""
+
+    resolved: dict[str, Any] = {"method": str(scope.get("method") or "")}
+    for category in (
+        "supported_entrypoints",
+        "canonical_rcc_contours",
+        "active_databases",
+        "active_documents",
+    ):
+        rows: list[dict[str, Any]] = []
+        for raw in scope.get(category, []):
+            row = {"node": raw} if isinstance(raw, str) else dict(raw)
+            alias = str(row.get("node") or "")
+            node_id = aliases.get(alias)
+            if not node_id:
+                raise ValueError(f"active scope has unknown node alias: {alias}")
+            required_links: list[dict[str, Any]] = []
+            for link in row.get("required_links", []):
+                if not isinstance(link, Mapping):
+                    raise ValueError("active database link must be an object")
+                link_row = dict(link)
+                source_alias = str(link_row.get("source") or "")
+                target_alias = str(link_row.get("target") or "")
+                source_id = aliases.get(source_alias)
+                target_id = aliases.get(target_alias)
+                if not source_id or not target_id:
+                    raise ValueError(
+                        "active database link has unknown endpoint: "
+                        f"{source_alias} -> {target_alias}"
+                    )
+                required_links.append(
+                    {
+                        **link_row,
+                        "source_id": source_id,
+                        "target_id": target_id,
+                    }
+                )
+            if required_links:
+                row["required_links"] = required_links
+            rows.append({**row, "node_id": node_id})
+        resolved[category] = rows
+    dispositions: list[dict[str, Any]] = []
+    for raw in scope.get("meaningful_orphan_dispositions", []):
+        row = dict(raw)
+        alias = str(row.get("node") or "")
+        node_id = aliases.get(alias)
+        if not node_id:
+            raise ValueError(f"orphan disposition has unknown node alias: {alias}")
+        disposition = str(row.get("disposition") or "").strip()
+        evidence = str(row.get("evidence") or "").strip()
+        if not disposition or not evidence:
+            raise ValueError("orphan disposition requires disposition and evidence")
+        dispositions.append({**row, "node_id": node_id})
+    resolved["meaningful_orphan_dispositions"] = dispositions
+    duplicate_dispositions: list[dict[str, str]] = []
+    for raw in scope.get("semantic_duplicate_dispositions", []):
+        row = {key: str(value).strip() for key, value in dict(raw).items()}
+        if not all(row.get(key) for key in ("kind", "signature", "disposition", "evidence")):
+            raise ValueError(
+                "semantic duplicate disposition requires kind, signature, disposition, and evidence"
+            )
+        duplicate_dispositions.append(row)
+    resolved["semantic_duplicate_dispositions"] = duplicate_dispositions
+    return resolved
 
 
 def _metrics(
@@ -918,6 +993,7 @@ def _metrics(
         or node.attributes.get("semantic_catalog_verified")
         or node.attributes.get("catalog_key")
     ]
+    semantic_duplicates = _semantic_duplicate_candidates(graph)
     result = {
         **graph.metrics,
         "node_counts": dict(sorted(node_counts.items())),
@@ -989,7 +1065,7 @@ def _metrics(
             1 for edge in graph.edges if edge.relation == "conflicts_with"
         ),
         "exact_duplicate_candidates": _exact_duplicate_candidates(graph.nodes),
-        "semantic_duplicate_candidates": _semantic_duplicate_candidates(graph),
+        "semantic_duplicate_candidates": semantic_duplicates,
         "stale_facts": len(stale),
         "cross_repository_boundaries": sum(
             1 for edge in graph.edges if edge.relation == "crosses_repository_boundary"
@@ -998,6 +1074,7 @@ def _metrics(
     graph.metrics = result
     refresh_ownership_metrics(graph)
     refresh_connectivity_metrics(graph)
+    _active_scope_metrics(graph, snapshot, semantic_duplicates)
     return graph.metrics
 
 
@@ -1146,12 +1223,153 @@ def _semantic_duplicate_candidates(graph: ProjectGraph) -> dict[str, Any]:
         }
         for kind, signature, rows in sorted(groups)[:30]
     ]
+    group_details = [
+        {
+            "kind": kind,
+            "signature": signature,
+            "node_ids": sorted(set(rows)),
+        }
+        for kind, signature, rows in sorted(groups)
+    ]
     return {
         "group_count": len(groups),
         "candidate_node_count": len(candidate_ids),
         "breakdown": dict(sorted(breakdown.items())),
         "method": "bounded same-symbol, competing-launcher, repeated-truth and same role/effect/owner candidate scan; candidates require human review",
         "samples": samples,
+        "groups": group_details,
+    }
+
+
+def _active_scope_metrics(
+    graph: ProjectGraph,
+    snapshot: GitSnapshot,
+    semantic_duplicates: Mapping[str, Any],
+) -> None:
+    """Publish a strict gate for supported paths without claiming archive completeness."""
+
+    scope = graph.metrics.pop("active_scope_catalog", {})
+    categories = (
+        "supported_entrypoints",
+        "canonical_rcc_contours",
+        "active_databases",
+        "active_documents",
+    )
+    scoped = {
+        str(row["node_id"])
+        for category in categories
+        for row in scope.get(category, [])
+    }
+    node_ids = {node.node_id for node in graph.nodes}
+    edges = {(edge.source, edge.relation, edge.target) for edge in graph.edges}
+
+    entrypoints = list(scope.get("supported_entrypoints", []))
+    entrypoint_ok = [row for row in entrypoints if row["node_id"] in node_ids]
+    contours = list(scope.get("canonical_rcc_contours", []))
+    contour_ok = [
+        row
+        for row in contours
+        if row["node_id"] in node_ids
+        and any(
+            relation == "belongs_to_contour" and target == row["node_id"]
+            for _, relation, target in edges
+        )
+    ]
+    databases = list(scope.get("active_databases", []))
+    database_ok: list[dict[str, Any]] = []
+    for row in databases:
+        required = list(row.get("required_links") or [])
+        if required and all(
+            (
+                str(link["source_id"]),
+                str(link["relation"]),
+                str(link["target_id"]),
+            )
+            in edges
+            for link in required
+        ):
+            database_ok.append(row)
+    documents = list(scope.get("active_documents", []))
+    active_paths = _document_catalog_inventory(snapshot)[2]
+    documented = [
+        row
+        for row in documents
+        if str(row.get("path") or "") in active_paths
+        and row["node_id"] in node_ids
+    ]
+
+    meaningful_connected = {
+        endpoint
+        for edge in graph.edges
+        if edge.relation not in STRUCTURAL_RELATIONS
+        for endpoint in (edge.source, edge.target)
+    }
+    disposition_ids = {
+        str(row["node_id"])
+        for row in scope.get("meaningful_orphan_dispositions", [])
+    }
+    resolved_orphans = scoped & (meaningful_connected | disposition_ids)
+    duplicate_groups = [
+        row
+        for row in semantic_duplicates.get("groups", [])
+        if scoped.intersection(row.get("node_ids", []))
+    ]
+    duplicate_dispositions = {
+        (row["kind"], row["signature"]): row
+        for row in scope.get("semantic_duplicate_dispositions", [])
+    }
+    resolved_duplicate_groups = [
+        row
+        for row in duplicate_groups
+        if (row["kind"], row["signature"]) in duplicate_dispositions
+    ]
+
+    graph.metrics["active_scope"] = {
+        "claim": "complete only for explicitly supported active paths; archive and dynamic dispatch remain backlog",
+        "method": scope.get("method")
+        or "reviewed active catalog bound to exact graph nodes and edges",
+        "supported_entrypoint_coverage": _coverage_metric(
+            len(entrypoint_ok),
+            len(entrypoints),
+            "reviewed supported entrypoints resolved to exact tracked graph nodes",
+        ),
+        "canonical_rcc_contour_coverage": _coverage_metric(
+            len(contour_ok),
+            len(contours),
+            "reviewed RCC contours with an explicit process-to-contour relationship",
+        ),
+        "active_db_producer_consumer_coverage": _coverage_metric(
+            len(database_ok),
+            len(databases),
+            "reviewed active databases with every declared producer/consumer edge present",
+        ),
+        "active_document_coverage": _coverage_metric(
+            len(documented),
+            len(documents),
+            "reviewed active documents that exist, declare ACTIVE, and resolve to graph nodes",
+        ),
+        "meaningful_orphan_disposition_coverage": _coverage_metric(
+            len(resolved_orphans),
+            len(scoped),
+            "active-scope nodes have a non-structural edge or an explicit evidence-backed disposition",
+            unresolved=sorted(scoped - resolved_orphans),
+        ),
+        "semantic_duplicate_disposition": {
+            "numerator": len(resolved_duplicate_groups),
+            "denominator": len(duplicate_groups),
+            "pct": round(
+                100.0 * len(resolved_duplicate_groups) / len(duplicate_groups), 2
+            )
+            if duplicate_groups
+            else 100.0,
+            "method": "bounded semantic duplicate groups intersecting the supported active scope with exact reviewed kind/signature dispositions; this is not a whole-repository uniqueness claim",
+            "candidate_groups": duplicate_groups,
+            "unresolved": [
+                row
+                for row in duplicate_groups
+                if row not in resolved_duplicate_groups
+            ],
+        },
     }
 
 

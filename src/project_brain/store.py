@@ -11,9 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import sqlite3
 from contextlib import contextmanager
+import time
 from typing import Any, Iterable, Mapping
 
 from scripts.ci.check_supply_chain_policy import reject_sensitive_data
@@ -83,16 +85,20 @@ class ProjectBrainStore:
         self.events_path = self.root / "events.jsonl"
         self.index_path = self.root / "index.sqlite3"
         self.graph_path = self.root / "project_graph.json"
+        self.lock_path = self.root / ".write.lock"
 
     def initialize(self, graph: ProjectGraph) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        self.graph_path.write_text(
-            json.dumps(graph.to_dict(), ensure_ascii=False, sort_keys=True, indent=2)
-            + "\n",
-            encoding="utf-8",
-        )
-        self._initialize_index()
-        self.index_graph(graph)
+        with _exclusive_file_lock(self.lock_path):
+            _atomic_write_text(
+                self.graph_path,
+                json.dumps(
+                    graph.to_dict(), ensure_ascii=False, sort_keys=True, indent=2
+                )
+                + "\n",
+            )
+            self._initialize_index()
+            self.index_graph(graph)
 
     def append_record(
         self,
@@ -172,16 +178,17 @@ class ProjectBrainStore:
             task_id=task_id,
             authority_id=authority_id,
         )
-        if self._record_exists(record.record_id):
-            return record
-        self._append_event(
-            {
-                "event_schema": "ProjectBrainEvent.v1",
-                "event": "record",
-                "record": record.to_dict(),
-            }
-        )
-        self._upsert_record(record)
+        with _exclusive_file_lock(self.lock_path):
+            if self._record_exists(record.record_id):
+                return record
+            self._append_event_unlocked(
+                {
+                    "event_schema": "ProjectBrainEvent.v1",
+                    "event": "record",
+                    "record": record.to_dict(),
+                }
+            )
+            self._upsert_record(record)
         return record
 
     def append_causal_link(
@@ -223,21 +230,22 @@ class ProjectBrainStore:
             "created_at": utc_now(),
         }
         reject_sensitive_data(row)
-        self._append_event(row)
-        self._initialize_index()
-        with _connection(self.index_path) as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO causal_links VALUES (?,?,?,?,?,?,?)",
-                (
-                    link_id,
-                    chain_id,
-                    source_record_id,
-                    target_record_id,
-                    relation,
-                    json.dumps(refs),
-                    row["created_at"],
-                ),
-            )
+        with _exclusive_file_lock(self.lock_path):
+            self._append_event_unlocked(row)
+            self._initialize_index()
+            with _connection(self.index_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO causal_links VALUES (?,?,?,?,?,?,?)",
+                    (
+                        link_id,
+                        chain_id,
+                        source_record_id,
+                        target_record_id,
+                        relation,
+                        json.dumps(refs),
+                        row["created_at"],
+                    ),
+                )
         return link_id
 
     def index_graph(self, graph: ProjectGraph) -> None:
@@ -362,7 +370,7 @@ class ProjectBrainStore:
                         ),
                     )
 
-    def _append_event(self, row: Mapping[str, Any]) -> None:
+    def _append_event_unlocked(self, row: Mapping[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         with self.events_path.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(
@@ -371,7 +379,10 @@ class ProjectBrainStore:
 
     def _initialize_index(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
+        new_index = not self.index_path.exists()
         with _connection(self.index_path) as conn:
+            if new_index:
+                conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS memory_records(
@@ -434,9 +445,53 @@ def _is_within(path: Path, parent: Path) -> bool:
 
 @contextmanager
 def _connection(path: Path):
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, timeout=2.0)
     try:
+        connection.execute("PRAGMA busy_timeout=2000")
         with connection:
             yield connection
     finally:
         connection.close()
+
+
+@contextmanager
+def _exclusive_file_lock(
+    path: Path, *, timeout_seconds: float = 2.0, stale_seconds: float = 30.0
+):
+    """Small cross-process lock for bounded hook writes on Windows and POSIX."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_seconds
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+                if age > stale_seconds:
+                    path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError("project brain write lock is busy")
+            time.sleep(0.025)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
