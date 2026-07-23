@@ -59,6 +59,8 @@ DENY_PATTERNS = [
 
 ALLOW_PATTERNS = [
     ".env.example",
+    ".codex/hooks.json",
+    ".agents/skills/project-brain/SKILL.md",
     "scripts/backtest_runs/.gitkeep",
     "scripts/backtest/backtest_runs/.gitkeep",
     "scripts/ws/cache/.gitkeep",

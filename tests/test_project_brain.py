@@ -567,11 +567,15 @@ def test_compaction_memory_write_without_owner_manifest_is_denied(tmp_path) -> N
     assert store.records() == []
 
 
-def test_hook_catalog_is_explicitly_uninstalled_shadow_only() -> None:
+def test_hook_catalog_requires_exact_hash_trust_and_separate_promotion() -> None:
     catalog = json.loads(HOOK_CATALOG.read_text(encoding="utf-8"))
-    assert catalog["schema"] == "ProjectBrainHookAdapterCatalog.v2"
-    assert catalog["installation_status"] == "not_installed_shadow_only"
-    assert "not part of PR merge" in catalog["activation_gate"]
+    assert catalog["schema"] == "ProjectBrainHookAdapterCatalog.v3"
+    assert (
+        catalog["installation_status"]
+        == "project_local_config_tracked_exact_hash_trust_required"
+    )
+    assert "exact hash" in catalog["activation_gate"]
+    assert "authoritative promotion remains separate" in catalog["activation_gate"]
 
 
 def test_routing_is_deterministic_and_prompt_injection_cannot_expand_authority() -> (
@@ -876,3 +880,17 @@ def test_full_repository_graph_has_required_surfaces() -> None:
         )
     mapped = {node.primary_contour for node in graph.nodes}
     assert {"active_work", "decisions_and_open_questions"} <= mapped
+    active = graph.metrics["active_scope"]
+    for metric in (
+        "supported_entrypoint_coverage",
+        "canonical_rcc_contour_coverage",
+        "active_db_producer_consumer_coverage",
+        "active_document_coverage",
+        "meaningful_orphan_disposition_coverage",
+    ):
+        assert active[metric]["numerator"] == active[metric]["denominator"]
+        assert active[metric]["pct"] == 100.0
+    duplicate_disposition = active["semantic_duplicate_disposition"]
+    assert duplicate_disposition["numerator"] == duplicate_disposition["denominator"]
+    assert duplicate_disposition["pct"] == 100.0
+    assert duplicate_disposition["denominator"] > 0

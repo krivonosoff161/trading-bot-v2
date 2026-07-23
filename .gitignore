@@ -171,10 +171,16 @@ docs/статисика.csv
 .claude/
 .internal/
 
-# Local agent app state / instructions (machine-specific, not source)
-.codex/
+# Local agent app state / instructions. Only the reviewed Project Brain hook
+# definition and point-loader skill are source; every other client file stays local.
+.codex/*
+!.codex/hooks.json
 .codex-remote-attachments/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/project-brain/
+!.agents/skills/project-brain/SKILL.md
 **/private_root/
 **/leak_scan.json
 **/path_trace.json

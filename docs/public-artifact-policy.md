@@ -39,6 +39,12 @@ The artifact guard blocks common runtime and credential paths. It is a safety
 net, not content classification. A path that passes the guard can still be
 private and must not be committed.
 
+The otherwise private `.codex/` and `.agents/` namespaces have exactly two
+reviewed source exceptions: `.codex/hooks.json` and
+`.agents/skills/project-brain/SKILL.md`. The guard still rejects every other
+file under those namespaces, including local hook state, trust data, memories,
+outputs, and client configuration.
+
 The supply-chain guard is an offline public-repository check. It blocks mutable
 external GitHub Action references in workflows, requires CI to install with
 `--require-hashes` from the pip-compile-generated transitive

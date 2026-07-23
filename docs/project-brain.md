@@ -1,13 +1,15 @@
 # Project Brain And Main-Chat Contract
 
-Status: **SHADOW IMPLEMENTATION**. The project brain proposes context; it does
-not change code, Git, runtime, delivery, or authority on its own.
+Status: **ACTIVATION CANDIDATE**. The graph and routing remain advisory. The
+tracked project-local hooks become active only after Codex reviews and trusts
+their exact definition hash; authoritative-memory promotion remains a later
+decision.
 
-The graph, private-store implementation, router, and hook adapters exist in
-this repository. They are not installed into Codex or another chat client.
-`configs/project_brain/hooks.json` is a reviewed adapter catalog, not an active
-hook configuration. Automatic memory maintenance and automatic SESSION/TASK
-updates are not enabled.
+The graph, private-store implementation, router, hook runtime, and project skill
+exist in this repository. `.codex/hooks.json` is the real project-local Codex
+configuration. Codex skips it until the owner reviews and trusts its exact
+hash. `configs/project_brain/hooks.json` remains the human-readable event and
+authority catalog. Hooks never rewrite SESSION/TASK.
 
 ## Canonical Layers
 
@@ -72,14 +74,14 @@ packet rather than merging repositories.
 
 ## Compaction And Resume
 
-The shadow `PreCompact` and `Stop` adapters can append a verified private delta
-only when a separate external manifest explicitly allows `write_memory` for
-the private project-brain store. Without it they return a denial and write
-nothing. `PostCompact` and `SessionStart` return only project identity, exact
-SHA, authority requirements, active-work pointers, decisions, open questions,
-and evidence references. The transcript is passive evidence, never canonical
-storage. SESSION/TASK remain manual compact documents and are marked stale when
-their declared SHA differs from Git; no adapter silently rewrites them.
+The trusted hook definition itself grants only one local capability: append a
+safe derived delta to the private Project Brain store. It does not grant a
+project-file write or any operational effect. `PreCompact` and `Stop` save the
+latest route, tool name/outcome, hashes, exact SHA, and checkpoint reason.
+`PostCompact` and `SessionStart` return only project identity, exact SHA,
+authority boundary, and recent safe checkpoints. The transcript is never read
+or stored. SESSION/TASK remain manual compact documents and are marked stale
+when their declared SHA differs from Git.
 
 Large tool output and raw user prompts stay outside the packet; only a safe
 intent summary, content hash, safe evidence pointer, timestamp, and safe result
@@ -88,6 +90,55 @@ string values before memory or packet construction and rejects credential,
 cookie, private-key, recipient-like, `.env`, and protected-identity content
 without echoing the value. Changed or removed source nodes invalidate records
 bound to their old content hashes.
+
+## Active-Scope Completion Gate
+
+Whole-repository semantic coverage is intentionally not called complete. The
+activation gate has exact, reviewed denominators for the supported surface:
+
+- eight supported entrypoints from `docs/entrypoints.md`;
+- six canonical RCC contours;
+- five active databases with declared producer and consumer edges;
+- every Markdown document declaring `Status: **ACTIVE**`;
+- every meaningful orphan and semantic duplicate candidate intersecting that
+  supported scope.
+
+The graph publishes numerator, denominator, percentage, method, unresolved
+items, and exact duplicate groups. Archive and dynamic-dispatch gaps remain a
+separate backlog and cannot lower or inflate the active-scope denominator.
+
+## Codex Hook Activation And Recovery
+
+The current [Codex Hooks contract](https://learn.chatgpt.com/docs/hooks.md)
+supports project-local `.codex/hooks.json`, exact-hash trust, and command
+hooks. This project configures `SessionStart` for
+`startup|resume|clear|compact`, `UserPromptSubmit`, `PreCompact` and
+`PostCompact` for `manual|auto`, `PostToolUse`, and `Stop`. It does not read the
+unstable transcript interface.
+
+The private default store is
+`~/.codex/project_brain/trading-bot-v2`; `TRADING_PROJECT_BRAIN_HOME` can move
+the parent directory for an explicitly controlled installation. It contains an
+append-only JSONL event log, a rebuildable WAL-mode SQLite index, the exact-SHA
+graph, and a small atomic hook-state file. No file is placed in public Git.
+
+Activation procedure:
+
+1. Merge and fast-forward the exact reviewed hook tree.
+2. Open `/hooks`, inspect the project source and exact commands, and trust the
+   current hash. Never use a trust-bypass flag.
+3. Resume the same chat. Confirm the `SessionStart` manifest names the current
+   project and SHA.
+4. Ask one golden query, perform one harmless read-only tool call, compact, and
+   resume. Confirm the restored packet contains the route and safe checkpoint,
+   not raw prompt or tool bytes.
+5. Keep the memory advisory during shadow observation. A separate decision is
+   required before calling it authoritative.
+
+If graph refresh, locking, SQLite, or validation fails, the command exits zero
+and surfaces `DEGRADED MEMORY MODE`; Codex continues under AGENTS and current
+Git evidence without memory writes. Repeated degraded events are diagnosed from
+safe error codes. They never justify disabling trust or relaxing secret gates.
 
 ## Causality And Decisions
 
@@ -128,7 +179,7 @@ Shadow output has no authority. Adoption as an authoritative workflow requires
 a separate review after routing false positives/negatives, stale detection,
 leakage, and context budgets are accepted.
 
-Installing real client hooks is a later, separate operation: review the client
-hook format, install explicitly, repeat shadow observation, then request an
-authoritative-promotion decision. Hook installation or promotion must not be
-combined with merge of this repair.
+The hook implementation can be merged with this activation change because its
+installation still requires exact-hash trust. Authoritative promotion cannot be
+combined with that merge: repeat shadow observation first, then request a
+separate promotion decision.

@@ -1,15 +1,14 @@
 {
-  "schema": "ProjectBrainHookAdapterCatalog.v2",
-  "installation_status": "not_installed_shadow_only",
+  "schema": "ProjectBrainHookAdapterCatalog.v3",
+  "installation_status": "project_local_config_tracked_exact_hash_trust_required",
   "authority": "routing reports requested action only; every state-changing effect is denied unless a separate trusted external owner manifest matches action, project, contour, exact scope, resources, turn and expiry",
-  "activation_gate": "separate review, explicit installation, and observed shadow evaluation; not part of PR merge",
+  "activation_gate": "the tracked .codex/hooks.json is skipped until the owner reviews and trusts its exact hash in /hooks; authoritative promotion remains separate",
   "events": {
-    "UserPromptSubmit": "classify mode and return routing manifest",
-    "SessionStart": "load project identity, current SHA, governance, and active-work pointers",
-    "PreCompact": "adapter proposal: append one verified private checkpoint delta only with external write-memory authority",
-    "PostCompact": "return a short resume manifest, never a transcript",
-    "PreToolUse": "check project, contour, authority, and absolute denials",
-    "PostToolUse": "record evidence pointer and hash instead of large output",
-    "Stop": "adapter proposal: append verified delta only with external write-memory authority; never rewrite SESSION.md"
+    "UserPromptSubmit": "classify intent and inject a bounded routing Context Packet; no operational authority",
+    "SessionStart": "load project identity, exact SHA, safe recent checkpoints, and authority boundary",
+    "PreCompact": "append a derived safe checkpoint without reading the transcript",
+    "PostCompact": "inject a bounded resume manifest, never a transcript",
+    "PostToolUse": "record tool name, outcome, and input/result hashes instead of raw payloads",
+    "Stop": "append a derived safe turn checkpoint; never rewrite SESSION.md"
   }
 }
