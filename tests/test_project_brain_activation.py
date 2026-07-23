@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -218,3 +219,35 @@ def test_concurrent_store_writes_are_complete_and_idempotent(tmp_path) -> None:
     lines = store.events_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 24
     assert all(json.loads(line)["event"] == "record" for line in lines)
+
+
+def test_windows_sharing_violation_is_treated_as_bounded_lock_contention(
+    monkeypatch, tmp_path
+) -> None:
+    graph = _graph()
+    store = _store(tmp_path, graph)
+    real_open = os.open
+    calls = 0
+
+    def sharing_violation_then_open(path, flags, mode=0o777):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise PermissionError(13, "synthetic Windows sharing violation")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", sharing_violation_then_open)
+    record = store.append_record(
+        contour="active_work",
+        entity="windows-sharing-violation",
+        record_type="observed",
+        source="synthetic-windows-lock-test",
+        evidence_refs=("project-brain://windows-lock/retry",),
+        repository="trading-bot-v2",
+        branch="test",
+        commit_sha=SHA,
+        authority="synthetic",
+        summary="completed after bounded synthetic sharing violation",
+    )
+    assert record.entity == "windows-sharing-violation"
+    assert calls >= 2
