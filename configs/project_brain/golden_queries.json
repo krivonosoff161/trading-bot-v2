@@ -1,6 +1,7 @@
 {
   "schema": "ProjectBrainGoldenQueries.v1",
   "queries": [
+    {"id":"orchestrator_challenges_assumption","query":"Why did the farm fail, and what is the evidence-backed primary repair?","mode":"diagnosis","required_contours":["incidents_and_causality","farm_and_runtime","governance_and_safety"],"forbidden_contours":["models_and_llm","validation"],"max_tokens":2000},
     {"id":"farm_incident","query":"Почему в прошлый раз остановилась ферма?","mode":"diagnosis","required_contours":["incidents_and_causality","farm_and_runtime","governance_and_safety"],"forbidden_contours":["models_and_llm","telegram_and_delivery"],"max_tokens":2200},
     {"id":"renewal_tests","query":"Какие тесты покрывают renewal heartbeat?","mode":"question","required_contours":["farm_and_runtime","project_architecture","governance_and_safety"],"forbidden_contours":["telegram_and_delivery"],"max_tokens":2200},
     {"id":"validator_boundary","query":"Где проходит граница trading-bot-v2 и honest-backtest?","mode":"question","required_contours":["validation","project_architecture","governance_and_safety"],"forbidden_contours":["farm_and_runtime"],"max_tokens":2200},

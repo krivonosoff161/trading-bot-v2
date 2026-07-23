@@ -251,3 +251,101 @@ def test_scanner_delivery_environment_gate(monkeypatch):
     assert scanner_telegram_enabled() is False
     monkeypatch.setenv("SCANNER_SEND_TELEGRAM", "1")
     assert scanner_telegram_enabled() is True
+
+
+def test_status_cache_bounds_duplicate_rcc_reads() -> None:
+    now = [100.0]
+    reads: list[Path] = []
+    path = Path("synthetic") / "farm_loop_status.json"
+
+    def reader(target: Path) -> dict:
+        reads.append(target)
+        return {"sample": len(reads)}
+
+    cache = MODULE._JsonStatusCache(clock=lambda: now[0])
+
+    assert cache.read(path, reader)["sample"] == 1
+    assert cache.read(path, reader)["sample"] == 1
+    now[0] += MODULE.STATUS_CACHE_SECONDS
+    assert cache.read(path, reader)["sample"] == 2
+    assert reads == [path, path]
+
+
+def test_required_contour_exit_is_latched_once_without_restart(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    private_root = tmp_path / "private"
+    state_dir = private_root / "state" / "control-center"
+    farm_status = private_root / "state" / "farm_loop_status.json"
+    farm_status.parent.mkdir(parents=True)
+    farm_status.write_text(
+        json.dumps({"stage": "paper_signals", "updated_at": MODULE.time.time()}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", private_root)
+    monkeypatch.setattr(MODULE, "STATE_DIR", state_dir)
+
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 7
+
+    class Status:
+        value = ""
+
+        def set(self, value):
+            self.value = value
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "paper_cards"),
+        MODULE.queue.Queue(),
+    )
+    item.process = Process()
+    item.started_at = 123.0
+    item.expected_running = True
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._json_status_cache = MODULE._JsonStatusCache()
+    center._logs = {"paper_cards": []}
+    center.status_vars = {"paper_cards": Status()}
+    center.selected_key = "ollama"
+    center._render_log = lambda: None
+
+    assert center._record_required_contour_exit("paper_cards", item) is True
+    assert center._record_required_contour_exit("paper_cards", item) is False
+
+    alerts = [
+        json.loads(line)
+        for line in (state_dir / "alerts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(alerts) == 1
+    assert alerts[0]["reason"] == "required_contour_unexpected_exit"
+    assert alerts[0]["last_stage"] == "paper_signals"
+    assert alerts[0]["automatic_restart"] is False
+    assert alerts[0]["execution_allowed"] is False
+    assert "automatic restart is disabled" in center.status_vars["paper_cards"].value
+
+
+def test_intentional_stop_disarms_required_contour_exit() -> None:
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 0
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "paper_cards"),
+        MODULE.queue.Queue(),
+    )
+    item.process = Process()
+    item.started_at = 123.0
+    item.expected_running = True
+
+    item.stop()
+
+    assert item.expected_running is False
+    assert item.consume_unexpected_exit() is None
