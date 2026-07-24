@@ -39,10 +39,55 @@ _TIERS = {
 }
 # Absolute cap so even a fat grid stays desktop-safe (also clipped by tier/profile downstream).
 MAX_VARIANTS = 48
+_SPEC_PROGRESS_BYTES = 1024 * 1024
 
 
 def _safe(symbol: str) -> str:
     return str(symbol).replace("-", "_").replace("/", "_").upper()
+
+
+def _serialize_spec(
+    spec: dict[str, Any],
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> str:
+    """Encode a spec while reporting only completed serialization chunks."""
+
+    chunks: list[str] = []
+    completed_bytes = 0
+    next_progress = _SPEC_PROGRESS_BYTES
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2, sort_keys=True)
+    for chunk in encoder.iterencode(spec):
+        chunks.append(chunk)
+        completed_bytes += len(chunk.encode("utf-8"))
+        if progress is not None and completed_bytes >= next_progress:
+            progress(f"compile_spec_json_bytes:{completed_bytes}")
+            next_progress = (
+                (completed_bytes // _SPEC_PROGRESS_BYTES) + 1
+            ) * _SPEC_PROGRESS_BYTES
+    chunks.append("\n")
+    if progress is not None:
+        progress(f"compile_spec_json_complete:{completed_bytes}")
+    return "".join(chunks)
+
+
+def _write_immutable_spec(
+    path: Path,
+    payload: str,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> None:
+    if path.exists():
+        if path.read_text(encoding="utf-8") != payload:
+            raise ValueError("immutable experiment spec collision")
+        if progress is not None:
+            progress("compile_spec_file_verified")
+        return
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)
+    if progress is not None:
+        progress("compile_spec_file_published")
 
 
 def _int_levels(base: int, factors: tuple[float, ...]) -> list[int]:
@@ -193,13 +238,13 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
     out_dir = event_spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     spec_path = out_dir / f"{exp.search_family_id}.json"
-    payload = json.dumps(
-        exp.to_dict(), ensure_ascii=False, indent=2, sort_keys=True
-    ) + "\n"
+    payload = _serialize_spec(exp.to_dict(), progress=progress)
     digest = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
     if prepare_intent is not None:
         prepare_intent(spec_path.resolve(), payload, digest)
-    exp.write_json(spec_path)
+    if progress is not None:
+        progress("compile_materialization_intent_persisted")
+    _write_immutable_spec(spec_path, payload, progress=progress)
     job_id, created = ensure_experiment_queued(
         conn,
         spec_path.resolve(),
@@ -207,4 +252,6 @@ def queue_sweep(conn, spec: SweepSpec, *, private_root: Path, profiles, policy, 
         materialization_id=materialization_id,
         materialization_digest=digest if materialization_id else None,
     )
+    if progress is not None:
+        progress("compile_queue_row_bound")
     return exp.experiment_id, int(job_id), bool(created)

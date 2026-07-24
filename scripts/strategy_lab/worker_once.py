@@ -8,6 +8,7 @@ periodically, while the worker itself handles one job and exits.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import os
 import sys
@@ -61,6 +62,11 @@ from src.research_lab.search_trial_evidence import (  # noqa: E402
 
 _LEASE_SECONDS = 90.0
 _RENEW_SECONDS = 30.0
+_HEARTBEAT_STOP_SECONDS = 35.0
+
+
+class WorkerLeaseLifecycleError(RuntimeError):
+    """The compute worker can no longer prove or release its process authority."""
 
 
 def _worker_lock_path(private_root: Path) -> Path:
@@ -72,57 +78,156 @@ def _legacy_worker_present(private_root: Path) -> bool:
     return _worker_lock_path(private_root).exists()
 
 
-class _WorkerLeaseHeartbeat:
+class _ProcessLeaseHeartbeat:
     def __init__(
         self,
         *,
         ownership_path: Path,
         process_lease,
-        db_path: Path | None = None,
-        job_id: int | None = None,
-        owner_id: str | None = None,
-        fencing_token: int | None = None,
     ) -> None:
         self.ownership_path = ownership_path
         self.process_lease = process_lease
-        self.db_path = db_path
-        self.job_id = job_id
-        self.owner_id = owner_id
-        self.fencing_token = fencing_token
         self.stop_event = threading.Event()
+        self.ready_event = threading.Event()
         self.failure: BaseException | None = None
-        self.thread = threading.Thread(target=self._run, name="worker-lease-heartbeat", daemon=True)
+        self._started = False
+        self.thread = threading.Thread(
+            target=self._run,
+            name="worker-process-lease-heartbeat",
+            daemon=True,
+        )
 
     def start(self) -> None:
         self.thread.start()
+        self._started = True
+        if not self.ready_event.wait(timeout=5):
+            self.failure = TimeoutError(
+                "compute worker process lease heartbeat did not initialize"
+            )
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=5)
+        if not self._started:
+            return
+        self.thread.join(timeout=_HEARTBEAT_STOP_SECONDS)
+        if self.thread.is_alive():
+            raise WorkerLeaseLifecycleError(
+                "compute worker process lease heartbeat did not stop"
+            )
 
     def _run(self) -> None:
-        store = OwnershipStore(
-            self.ownership_path,
-            identity_probe=probe_process_identity,
-        )
-        job_conn = connect(self.db_path) if self.db_path is not None else None
+        store = None
         try:
+            store = OwnershipStore(
+                self.ownership_path,
+                identity_probe=probe_process_identity,
+            )
+            self.ready_event.set()
             while not self.stop_event.wait(_RENEW_SECONDS):
                 store.renew(self.process_lease, lease_seconds=_LEASE_SECONDS)
-                if job_conn is not None and self.job_id is not None:
-                    renew_job_lease(
-                        job_conn,
-                        self.job_id,
-                        owner_id=str(self.owner_id),
-                        fencing_token=int(self.fencing_token or 0),
-                        lease_seconds=_LEASE_SECONDS,
-                    )
         except BaseException as exc:  # captured and checked before publication
             self.failure = exc
         finally:
+            self.ready_event.set()
+            if store is not None:
+                store.close()
+
+
+class _JobLeaseHeartbeat:
+    """Renew one queue claim until its fenced terminal transition succeeds."""
+
+    def __init__(
+        self,
+        *,
+        db_path: Path,
+        job_id: int,
+        owner_id: str,
+        fencing_token: int,
+    ) -> None:
+        self.db_path = db_path
+        self.job_id = int(job_id)
+        self.owner_id = str(owner_id)
+        self.fencing_token = int(fencing_token)
+        self.stop_event = threading.Event()
+        self.ready_event = threading.Event()
+        self.failure: BaseException | None = None
+        self._transition_lock = threading.Lock()
+        self._terminal = False
+        self._started = False
+        self.thread = threading.Thread(
+            target=self._run,
+            name="worker-job-lease-heartbeat",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self.thread.start()
+        self._started = True
+        if not self.ready_event.wait(timeout=5):
+            self.failure = TimeoutError(
+                "compute job lease heartbeat did not initialize"
+            )
+        if self.failure is not None:
+            raise WorkerLeaseLifecycleError(
+                "compute job lease heartbeat failed to initialize"
+            ) from self.failure
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if not self._started:
+            return
+        self.thread.join(timeout=_HEARTBEAT_STOP_SECONDS)
+        if self.thread.is_alive():
+            raise WorkerLeaseLifecycleError(
+                "compute job lease heartbeat did not stop"
+            )
+
+    def _run(self) -> None:
+        job_conn = None
+        try:
+            job_conn = connect(self.db_path)
+            self.ready_event.set()
+            while not self.stop_event.wait(_RENEW_SECONDS):
+                with self._transition_lock:
+                    if self._terminal:
+                        break
+                    renew_job_lease(
+                        job_conn,
+                        self.job_id,
+                        owner_id=self.owner_id,
+                        fencing_token=self.fencing_token,
+                        lease_seconds=_LEASE_SECONDS,
+                    )
+        except BaseException as exc:
+            self.failure = exc
+        finally:
+            self.ready_event.set()
             if job_conn is not None:
                 job_conn.close()
-            store.close()
+
+    @contextmanager
+    def terminal_transition(self):
+        """Serialize the terminal queue write against the final renewal."""
+
+        with self._transition_lock:
+            if self.failure is not None:
+                raise WorkerLeaseLifecycleError(
+                    "compute job lease renewal failed before terminal publication"
+                ) from self.failure
+            yield
+            self._terminal = True
+            self.stop_event.set()
+
+
+def _raise_process_heartbeat_failure(
+    heartbeat: _ProcessLeaseHeartbeat,
+    *,
+    stage: str,
+) -> None:
+    if heartbeat.failure is not None:
+        raise WorkerLeaseLifecycleError(
+            f"compute worker process lease renewal failed during {stage}"
+        ) from heartbeat.failure
 
 
 def _night_mode(flag: bool) -> bool:
@@ -148,11 +253,23 @@ def run_worker_once(
     private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
     if _legacy_worker_present(private_root):
         status_path = worker_status_path(private_root)
-        write_worker_status(status_path, status="deferred", reason="worker_already_running",
-                            wait_seconds=60, mode="unknown")
+        write_worker_status(
+            status_path,
+            status="deferred",
+            reason="worker_already_running",
+            reason_code="legacy_worker_lock_present",
+            wait_seconds=60,
+            mode="unknown",
+        )
         if verbose:
             print("deferred reason=worker_already_running wait_seconds=60")
-        return {"status": "deferred", "reason": "worker_already_running", "wait_seconds": 60, "mode": "unknown"}
+        return {
+            "status": "deferred",
+            "reason": "worker_already_running",
+            "reason_code": "legacy_worker_lock_present",
+            "wait_seconds": 60,
+            "mode": "unknown",
+        }
     owner_id = f"worker-{os.getpid()}-{uuid.uuid4().hex}"
     ownership_path = private_root / "state" / "ownership.sqlite"
     ownership_store = OwnershipStore(
@@ -167,20 +284,44 @@ def run_worker_once(
             identity=current_process_identity(),
             lease_seconds=_LEASE_SECONDS,
         )
-    except OwnershipConflictError:
+    except OwnershipConflictError as exc:
         ownership_store.close()
         status_path = worker_status_path(private_root)
+        reason_code = str(exc) or type(exc).__name__
+        if reason_code != "resource already owned":
+            write_worker_status(
+                status_path,
+                status="failed",
+                reason="worker_ownership_unavailable",
+                reason_code=reason_code,
+                mode="unknown",
+            )
+            raise WorkerLeaseLifecycleError(
+                f"compute worker ownership unavailable: {reason_code}"
+            ) from exc
         write_worker_status(
             status_path, status="deferred", reason="worker_already_running",
+            reason_code="active_worker_owner",
             wait_seconds=60, mode="unknown",
         )
-        return {"status": "deferred", "reason": "worker_already_running", "wait_seconds": 60, "mode": "unknown"}
-    process_heartbeat = _WorkerLeaseHeartbeat(
+        return {
+            "status": "deferred",
+            "reason": "worker_already_running",
+            "reason_code": "active_worker_owner",
+            "wait_seconds": 60,
+            "mode": "unknown",
+        }
+    process_heartbeat = _ProcessLeaseHeartbeat(
         ownership_path=ownership_path,
         process_lease=process_lease,
     )
-    process_heartbeat.start()
+    conn = None
     try:
+        process_heartbeat.start()
+        _raise_process_heartbeat_failure(
+            process_heartbeat,
+            stage="initialization",
+        )
         policy = load_resource_policy(night_mode=_night_mode(night_mode))
         db_path = default_db_path(private_root)
         conn = connect(db_path)
@@ -188,6 +329,8 @@ def run_worker_once(
         cad_path = cadence_path(private_root)
         status_path = worker_status_path(private_root)
     except Exception:
+        if conn is not None:
+            conn.close()
         process_heartbeat.stop()
         try:
             ownership_store.release(process_lease)
@@ -228,10 +371,7 @@ def run_worker_once(
         record_start(cad_path, now)
         job_id = int(job["job_id"])
         fencing_token = int(job["fencing_token"])
-        process_heartbeat.stop()
-        job_heartbeat = _WorkerLeaseHeartbeat(
-            ownership_path=ownership_path,
-            process_lease=process_lease,
+        job_heartbeat = _JobLeaseHeartbeat(
             db_path=db_path,
             job_id=job_id,
             owner_id=owner_id,
@@ -283,8 +423,34 @@ def run_worker_once(
                 )
             # The worker reads one immutable bounded series from the canonical
             # candle library for all variants. JSON remains a migration fallback.
+            last_progress_status = 0.0
+
+            def compute_progress(stage: str) -> None:
+                nonlocal last_progress_status
+                _raise_process_heartbeat_failure(
+                    process_heartbeat,
+                    stage=f"evaluation:{stage}",
+                )
+                sampled = time.monotonic()
+                if (
+                    sampled - last_progress_status >= 5.0
+                    or stage.startswith("evaluation_completed:")
+                ):
+                    write_worker_status(
+                        status_path,
+                        status="running",
+                        job_id=job_id,
+                        experiment_id=spec.experiment_id,
+                        progress_stage=stage,
+                        mode=policy.mode,
+                    )
+                    last_progress_status = sampled
+
             results = evaluate_spec(
-                spec, runtime_meta, candle_store=CandleStore(private_root),
+                spec,
+                runtime_meta,
+                candle_store=CandleStore(private_root),
+                progress=compute_progress,
             )
             if verbose:
                 print(f"backend requested={runtime_meta.get('requested_backend')} "
@@ -305,15 +471,23 @@ def run_worker_once(
                     "fencing_token": fencing_token,
                 },
             )
-            if job_heartbeat.failure is not None:
-                raise RuntimeError("worker lease renewal failed before publication") from job_heartbeat.failure
-            final_dir, _ = publish_completed_job(
-                conn,
-                private_root,
-                run_dir,
-                job_id=job_id,
-                owner_id=owner_id,
-                fencing_token=fencing_token,
+            _raise_process_heartbeat_failure(
+                process_heartbeat,
+                stage="pre-publication",
+            )
+            with job_heartbeat.terminal_transition():
+                final_dir, _ = publish_completed_job(
+                    conn,
+                    private_root,
+                    run_dir,
+                    job_id=job_id,
+                    owner_id=owner_id,
+                    fencing_token=fencing_token,
+                )
+            job_heartbeat.stop()
+            _raise_process_heartbeat_failure(
+                process_heartbeat,
+                stage="secondary-index-publication",
             )
             index_error = ""
             try:
@@ -330,6 +504,10 @@ def run_worker_once(
                 # be rewritten as failed. The durable generation remains
                 # directory_published for a bounded repair/rebuild.
                 index_error = type(exc).__name__
+            _raise_process_heartbeat_failure(
+                process_heartbeat,
+                stage="post-publication",
+            )
             label = str(final_dir.relative_to(private_root)).replace("\\", "/")
             write_worker_status(
                 status_path, status="completed", job_id=job_id, run_label=label,
@@ -380,14 +558,29 @@ def run_worker_once(
                 print(f"failed job_id={job_id} error={exc}")
             raise
     finally:
-        heartbeat = locals().get("job_heartbeat", process_heartbeat)
-        heartbeat.stop()
+        heartbeat = locals().get("job_heartbeat")
+        if heartbeat is not None:
+            heartbeat.stop()
+        process_heartbeat.stop()
         conn.close()
+        release_error = None
         try:
             ownership_store.release(process_lease)
-        except Exception:
-            pass
-        ownership_store.close()
+        except Exception as exc:
+            release_error = exc
+            write_worker_status(
+                worker_status_path(private_root),
+                status="failed",
+                reason="worker_process_lease_release_failed",
+                reason_code=type(exc).__name__,
+                mode="unknown",
+            )
+        finally:
+            ownership_store.close()
+        if release_error is not None:
+            raise WorkerLeaseLifecycleError(
+                "compute worker process lease release failed"
+            ) from release_error
 
 
 def main() -> None:

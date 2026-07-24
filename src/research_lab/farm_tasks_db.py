@@ -12,8 +12,10 @@ Why this kills the ``already_queued`` saturation:
   * a ``run_sweep`` task_key embeds the BASE-candle data fingerprint, so identical
     data within a TTL is never recomputed, but NEW candles (changed fingerprint)
     legitimately re-arm a fresh task;
-  * ``deferred`` carries a concrete ``deferred_until`` so ``too_short`` / fresh
-    listings stop being retried every cycle;
+  * scheduled ``deferred`` work carries a concrete ``deferred_until`` so
+    ``too_short`` / fresh listings stop being retried every cycle; a durably
+    materialized sweep is instead parked with ``deferred_until=NULL`` while
+    the independent fenced compute queue owns execution;
   * ``blocked`` carries a machine reason (e.g. ``NEEDS_OI_DATA``) and is flipped
     back to ``queued`` by an explicit unblock step when the gate clears.
 
@@ -764,8 +766,21 @@ class FarmTasksDB:
                         materialized_queue_job_id=materialized_queue_job_id)
 
     def materialize_task(self, task_id: int, queue_job_id: int, *, now: float | None = None) -> None:
-        """Mark a run_sweep task as materialized into the compute queue (awaiting worker)."""
-        self._set_state(task_id, "running", reason="materialized_awaiting_worker", now=now,
+        """Park a run_sweep task after durable compute-queue materialization."""
+        row = self._conn.execute(
+            "SELECT state, claim_owner FROM tasks WHERE task_id=?",
+            (int(task_id),),
+        ).fetchone()
+        if (
+            row is None
+            or row["state"] != "running"
+            or row["claim_owner"] is None
+        ):
+            raise StaleTaskClaimError(
+                f"materialization for task {int(task_id)} requires a fenced claim"
+            )
+        self._set_state(task_id, "deferred", reason="materialized_awaiting_worker", now=now,
+                        deferred_until=None,
                         materialized_queue_job_id=int(queue_job_id))
 
     def prepare_materialization(
@@ -873,8 +888,9 @@ class FarmTasksDB:
                 )
             seq = int(row["mutation_seq"] or 0) + 1
             cur = self._conn.execute(
-                """UPDATE tasks SET materialized_queue_job_id=?,
+                """UPDATE tasks SET state='deferred', materialized_queue_job_id=?,
                        machine_reason='materialized_awaiting_worker', updated_at=?,
+                       deferred_until=NULL, claim_owner=NULL, claim_expires_at=NULL,
                        mutation_protocol='fenced.v2', mutation_seq=?
                    WHERE task_id=? AND state='running' AND claim_owner=?
                      AND fencing_token=? AND claim_expires_at>?
@@ -896,16 +912,112 @@ class FarmTasksDB:
             if outbox_cur.rowcount != 1:
                 raise StaleTaskClaimError("materialization outbox changed during commit")
             self._record_transition(
-                tid, "running", "running", "materialized_awaiting_worker",
+                tid, "running", "deferred", "materialized_awaiting_worker",
                 current, self.owner_id, fence, seq,
             )
             self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
-        self._emit_transition(
-            tid, "running", "materialized_awaiting_worker", current
-        )
+        self._claims.pop(tid, None)
+        self._emit_transition(tid, "deferred", "materialized_awaiting_worker", current)
+
+    def finish_materialized_task(
+        self,
+        task_id: int,
+        *,
+        materialization_id: str,
+        queue_job_id: int,
+        queue_status: str,
+        last_result_ref: str | None = None,
+        run_dir_label: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Finish one parked task through its exact acknowledged fence binding.
+
+        A materialized task deliberately holds no renewable claim while the
+        independent compute queue owns execution.  Completion authority comes
+        from the immutable acknowledged outbox generation plus a compare-and-
+        swap over the task fence and mutation sequence.
+        """
+
+        if queue_status not in {"completed", "failed"}:
+            raise ValueError("queue_status must be terminal")
+        current = self._effective_now(now)
+        tid = int(task_id)
+        job_id = int(queue_job_id)
+        target_state = "completed" if queue_status == "completed" else "failed"
+        reason = "compute_completed" if queue_status == "completed" else "compute_failed"
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            current = self._effective_now(current)
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE task_id=?",
+                (tid,),
+            ).fetchone()
+            outbox = self._conn.execute(
+                """SELECT * FROM materialization_outbox
+                   WHERE materialization_id=? AND task_id=? AND queue_job_id=?
+                     AND state='acknowledged'""",
+                (materialization_id, tid, job_id),
+            ).fetchone()
+            if (
+                row is None
+                or outbox is None
+                or row["state"] != "deferred"
+                or str(row["machine_reason"] or "") != "materialized_awaiting_worker"
+                or row["claim_owner"] is not None
+                or row["claim_expires_at"] is not None
+                or int(row["materialized_queue_job_id"] or 0) != job_id
+                or int(row["fencing_token"] or 0)
+                != int(outbox["task_fencing_token"] or 0)
+            ):
+                raise StaleTaskClaimError(
+                    f"materialized task generation changed for task {tid}"
+                )
+            seq = int(row["mutation_seq"] or 0) + 1
+            cur = self._conn.execute(
+                """UPDATE tasks SET state=?, machine_reason=?, updated_at=?,
+                       last_result_ref=?, run_dir_label=?,
+                       materialized_queue_job_id=?, deferred_until=NULL,
+                       mutation_protocol='fenced.v2', mutation_seq=?
+                   WHERE task_id=? AND state='deferred'
+                     AND machine_reason='materialized_awaiting_worker'
+                     AND claim_owner IS NULL AND claim_expires_at IS NULL
+                     AND fencing_token=? AND mutation_protocol='fenced.v2'
+                     AND mutation_seq=?""",
+                (
+                    target_state,
+                    reason,
+                    current,
+                    last_result_ref,
+                    run_dir_label,
+                    job_id,
+                    seq,
+                    tid,
+                    int(row["fencing_token"] or 0),
+                    int(row["mutation_seq"] or 0),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise StaleTaskClaimError(
+                    f"materialized task changed during finish for task {tid}"
+                )
+            self._record_transition(
+                tid,
+                "deferred",
+                target_state,
+                reason,
+                current,
+                self.owner_id,
+                int(row["fencing_token"] or 0),
+                seq,
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._emit_transition(tid, target_state, reason, current)
 
     def mark_materialization_dispatched(
         self, materialization_id: str, queue_job_id: int, *, now: float | None = None

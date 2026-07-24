@@ -32,7 +32,11 @@ STATUS_PUBLISH_MAX_OUTAGE_SECONDS = 120.0
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.research_lab.farm_coordinator import DEFAULT_FAMILIES, run_coordinator_cycle  # noqa: E402
+from src.research_lab.farm_coordinator import (  # noqa: E402
+    DEFAULT_FAMILIES,
+    PriorityWorkerFatalError,
+    run_coordinator_cycle,
+)
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path  # noqa: E402
 from src.research_lab.intake_adapter import watches_to_intake  # noqa: E402
 from src.research_lab.ownership import (  # noqa: E402
@@ -1830,12 +1834,19 @@ class _TaskClaimFailureSignal:
             self._failure = failure
             self._snapshot = dict(snapshot)
         self.stop_event.set()
+        failure_kind = str(snapshot.get("failure_kind") or "task_claim")
+        failure_stage = (
+            "worker_failed"
+            if failure_kind == "compute_worker_lifecycle"
+            else "claim_failed"
+        )
         try:
             _write_priority_worker_status(
                 self.private_root,
-                stage="claim_failed",
+                stage=failure_stage,
                 started_at=time.time(),
                 details={
+                    "failure_kind": failure_kind,
                     "error_type": type(failure).__name__,
                     "task_id": snapshot.get("task_id"),
                     "task_fencing_token": snapshot.get("task_fencing_token"),
@@ -1852,13 +1863,23 @@ class _TaskClaimFailureSignal:
     def raise_if_failed(self) -> None:
         failure = self.failure
         if failure is not None:
-            raise RuntimeError("priority task claim heartbeat failed") from failure
+            with self._lock:
+                failure_kind = str(
+                    self._snapshot.get("failure_kind") or "task_claim"
+                )
+            message = (
+                "priority compute worker failed closed"
+                if failure_kind == "compute_worker_lifecycle"
+                else "priority task claim heartbeat failed"
+            )
+            raise RuntimeError(message) from failure
 
     def status_details(self) -> dict:
         with self._lock:
             snapshot = dict(self._snapshot)
             failure = self._failure
         return {
+            "failure_kind": snapshot.get("failure_kind"),
             "error_type": None if failure is None else type(failure).__name__,
             "task_id": snapshot.get("task_id"),
             "task_fencing_token": snapshot.get("task_fencing_token"),
@@ -1918,6 +1939,19 @@ def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event
                         f"pivot={slot.get('pivot')} errors={errors}"
                     )
                 delay = args.busy_slot_seconds if eligible or did_work else args.idle_poll_seconds
+            except PriorityWorkerFatalError as exc:
+                failure_signal = getattr(args, "task_claim_failure_signal", None)
+                if failure_signal is not None:
+                    failure_signal.notify(
+                        exc,
+                        {
+                            "failure_kind": "compute_worker_lifecycle",
+                            "failure": type(exc.__cause__).__name__
+                            if exc.__cause__ is not None
+                            else type(exc).__name__,
+                        },
+                    )
+                break
             except Exception as exc:  # noqa: BLE001 - claim failures stop; ordinary errors retry
                 failure_signal = getattr(args, "task_claim_failure_signal", None)
                 if failure_signal is not None and failure_signal.failure is not None:
@@ -1932,11 +1966,22 @@ def _priority_worker_loop(args, profiles, policy, private_root: Path, stop_event
     finally:
         failure_signal = getattr(args, "task_claim_failure_signal", None)
         claim_failed = failure_signal is not None and failure_signal.failure is not None
+        failure_details = (
+            failure_signal.status_details() if claim_failed else {}
+        )
+        failure_kind = str(failure_details.get("failure_kind") or "task_claim")
         _write_priority_worker_status(
-            private_root, stage="claim_failed" if claim_failed else "stopped",
+            private_root,
+            stage=(
+                "worker_failed"
+                if claim_failed and failure_kind == "compute_worker_lifecycle"
+                else "claim_failed"
+                if claim_failed
+                else "stopped"
+            ),
             started_at=time.time(),
             details=(
-                {"sequence": sequence, **failure_signal.status_details()}
+                {"sequence": sequence, **failure_details}
                 if claim_failed
                 else {"sequence": sequence}
             ),

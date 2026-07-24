@@ -1109,6 +1109,7 @@ def evaluate_spec(
     runtime_meta: dict[str, Any] | None = None,
     *,
     candle_store: Any | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> list[RunResult]:
     """Run a spec. ``backend`` decides the signal-generation path:
 
@@ -1139,7 +1140,22 @@ def evaluate_spec(
     sim_fallback_reasons: set[str] = set()
 
     stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
-    results = []
+    results: list[RunResult] = []
+    variant_total = len(spec.symbols) * sum(
+        len(spec.parameter_grid.get(family, []))
+        for family in spec.families
+    )
+    if spec.max_runs:
+        variant_total = min(variant_total, int(spec.max_runs))
+
+    def report_completed_variant() -> None:
+        if progress is not None:
+            progress(f"variant_completed:{len(results)}/{variant_total}")
+
+    def report_evaluation_completed() -> None:
+        if progress is not None:
+            progress(f"evaluation_completed:{len(results)}/{variant_total}")
+
     tf = spec.timeframe if spec.timeframe else None
     loaded: dict[tuple[str, str], tuple[list[dict[str, Any]], str, str, str]] = {}
     for symbol in spec.symbols:
@@ -1149,6 +1165,8 @@ def evaluate_spec(
         )
         if candle_bundle is not None:
             loaded[cache_key] = candle_bundle
+        if progress is not None:
+            progress(f"candles_loaded:{len(loaded)}/{len(spec.symbols)}")
     if (spec.data_snapshot_id or spec.data_evidence_hash) and len(loaded) != len(spec.symbols):
         raise RuntimeError("queued candle snapshot drift: a scheduled symbol is unavailable")
     resolved_snapshot_id = ""
@@ -1243,12 +1261,14 @@ def evaluate_spec(
                     validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
                     next_action="provide the required OI/funding/microstructure data, then re-run",
                     regime_summary={}))
+                report_completed_variant()
                 if spec.max_runs and len(results) >= spec.max_runs:
                     _finalize_runtime_meta(
                         runtime_meta, started, accelerated_signal_runs,
                         accelerated_simulation_runs, cpu_fallback_families,
                         sim_fallback_reasons, n_variants=len(results),
                     )
+                    report_evaluation_completed()
                     return results
             continue
         auto_batch_ok = spec.backend != "auto" or auto_gpu_worthwhile(len(candles), len(family_variants))
@@ -1309,6 +1329,7 @@ def evaluate_spec(
                         error=exc,
                     )
                 )
+                report_completed_variant()
                 if spec.max_runs and len(results) >= spec.max_runs:
                     _finalize_runtime_meta(
                         runtime_meta,
@@ -1319,6 +1340,7 @@ def evaluate_spec(
                         sim_fallback_reasons,
                         n_variants=len(results),
                     )
+                    report_evaluation_completed()
                     return results
                 continue
             try:
@@ -1420,14 +1442,17 @@ def evaluate_spec(
                     error=exc,
                 )
             results.append(result)
+            report_completed_variant()
             if spec.max_runs and len(results) >= spec.max_runs:
                 _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                                        accelerated_simulation_runs, cpu_fallback_families,
                                        sim_fallback_reasons, n_variants=len(results))
+                report_evaluation_completed()
                 return results
     _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
                            accelerated_simulation_runs, cpu_fallback_families,
                            sim_fallback_reasons, n_variants=len(results))
+    report_evaluation_completed()
     return results
 
 

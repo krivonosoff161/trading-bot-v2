@@ -551,6 +551,63 @@ def test_operational_health_reports_fresh_farm_loop_process(tmp_path, monkeypatc
     assert "running" in gate["message"]
 
 
+def test_operational_health_blocks_active_compute_lifecycle_failure(
+    tmp_path,
+    monkeypatch,
+):
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    (state / "farm_loop.lock").write_text("12345", encoding="utf-8")
+    (state / "farm_loop_status.json").write_text(
+        json.dumps(
+            {
+                "schema": "FarmLoopStatus.v1",
+                "pid": 12345,
+                "stage": "paper_signals",
+                "updated_at": 2000.0,
+                "cycle_age_seconds": 10.0,
+                "paper_only": True,
+                "execution_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (state / "farm_priority_worker_status.json").write_text(
+        json.dumps(
+            {
+                "stage": "worker_failed",
+                "updated_at": 2005.0,
+                "details": {"owner_id": "must-not-propagate"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (state / "worker_status.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "reason_code": "expired_alive_conflict",
+                "updated_at": "1970-01-01T00:33:25+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(H, "_pid_is_alive", lambda pid: pid == 12345)
+    monkeypatch.setattr(H.time, "time", lambda: 2010.0)
+
+    report = H.collect(
+        private_root=tmp_path,
+        pfr_db_path=state / "strategy_lab.sqlite",
+    )
+
+    assert report["compute_pipeline"]["state"] == "failed"
+    assert report["compute_pipeline"]["hard_fail"] is True
+    assert "owner_id" not in json.dumps(report["compute_pipeline"])
+    gate = report["readiness"]["compute_pipeline_current"]
+    assert gate["status"] == "blocked"
+    assert "graceful stop" in gate["action"]
+
+
 def test_operational_health_exposes_stale_farm_loop_process_action(tmp_path, monkeypatch):
     lock = tmp_path / "state" / "farm_loop.lock"
     lock.parent.mkdir(parents=True)
