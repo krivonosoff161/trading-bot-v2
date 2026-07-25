@@ -34,6 +34,7 @@ from scripts.subscriptions import list_delivery_users  # noqa: E402
 
 PAPER_TRAINING_STALE_GRACE_SECONDS = 900.0
 ACTIVE_FARM_LOOP_STALE_GRACE_SECONDS = 3600.0
+_WINDLL: Any = getattr(ctypes, "windll", None)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -41,14 +42,16 @@ def _pid_is_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
+        if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path
+            return False
+        handle = _WINDLL.kernel32.OpenProcess(
             process_query_limited_information,
             False,
             int(pid),
         )
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
+        _WINDLL.kernel32.CloseHandle(handle)
         return True
     try:
         os.kill(pid, 0)

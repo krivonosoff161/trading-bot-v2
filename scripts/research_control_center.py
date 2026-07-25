@@ -32,6 +32,10 @@ from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 
 msvcrt: Any = None
 fcntl: Any = None
+_WINDLL: Any = getattr(ctypes, "windll", None)
+_CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+_CREATE_NO_WINDOW = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+_CTRL_BREAK_EVENT = int(getattr(signal, "CTRL_BREAK_EVENT", 0))
 if os.name == "nt":
     import msvcrt as _msvcrt
 
@@ -296,7 +300,7 @@ class ManagedContour:
         env["TRADING_BOT_RUNTIME_ROOT"] = str(RUNTIME_ROOT)
         env["PYTHONUTF8"] = "1"
         env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        flags = _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
         self.process = subprocess.Popen(
             self.spec.command,
             cwd=ROOT,
@@ -349,7 +353,7 @@ class ManagedContour:
                 self.spec.graceful_stop()
             else:
                 try:
-                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                    self.process.send_signal(_CTRL_BREAK_EVENT)
                 except (OSError, ValueError):
                     self.process.terminate()
             deadline = time.monotonic() + (
@@ -365,7 +369,7 @@ class ManagedContour:
                         text=True,
                         timeout=15,
                         check=False,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        creationflags=_CREATE_NO_WINDOW,
                     )
                 else:
                     self.process.terminate()
@@ -412,7 +416,9 @@ def _process_started_at(pid: int) -> float | None:
         except OSError:
             return None
     process_query_limited_information = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(
+    if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path
+        return None
+    handle = _WINDLL.kernel32.OpenProcess(
         process_query_limited_information, False, int(pid)
     )
     if not handle:
@@ -422,7 +428,7 @@ def _process_started_at(pid: int) -> float | None:
         exit_time = ctypes.wintypes.FILETIME()
         kernel = ctypes.wintypes.FILETIME()
         user = ctypes.wintypes.FILETIME()
-        if not ctypes.windll.kernel32.GetProcessTimes(
+        if not _WINDLL.kernel32.GetProcessTimes(
             handle,
             ctypes.byref(creation),
             ctypes.byref(exit_time),
@@ -433,7 +439,7 @@ def _process_started_at(pid: int) -> float | None:
         ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
         return ticks / 10_000_000.0 - 11_644_473_600.0
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        _WINDLL.kernel32.CloseHandle(handle)
 
 
 def _process_executable(pid: int) -> Path | None:
@@ -441,7 +447,9 @@ def _process_executable(pid: int) -> Path | None:
     if os.name != "nt" or pid <= 0:
         return None
     process_query_limited_information = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(
+    if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path
+        return None
+    handle = _WINDLL.kernel32.OpenProcess(
         process_query_limited_information, False, int(pid)
     )
     if not handle:
@@ -449,13 +457,13 @@ def _process_executable(pid: int) -> Path | None:
     try:
         buffer = ctypes.create_unicode_buffer(32_768)
         size = ctypes.wintypes.DWORD(len(buffer))
-        if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+        if not _WINDLL.kernel32.QueryFullProcessImageNameW(
             handle, 0, buffer, ctypes.byref(size)
         ):
             return None
         return Path(buffer.value)
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        _WINDLL.kernel32.CloseHandle(handle)
 
 
 def _listening_pid(port: int) -> int | None:
@@ -471,7 +479,7 @@ def _listening_pid(port: int) -> int | None:
             errors="replace",
             timeout=5,
             check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=_CREATE_NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -825,7 +833,7 @@ class ControlCenter(tk.Tk):
                 capture_output=True,
                 timeout=15,
                 check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             if completed.returncode == 0:
                 self.after(
@@ -1303,7 +1311,7 @@ class ControlCenter(tk.Tk):
                 text=True,
                 timeout=15,
                 check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
         if not _same_live_process(pid, started_at):
             self.external_contours.pop(key, None)
@@ -1488,7 +1496,7 @@ class ControlCenter(tk.Tk):
                 capture_output=True,
                 timeout=2,
                 check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             parts = [part.strip() for part in completed.stdout.strip().split(",")]
             if completed.returncode == 0 and len(parts) >= 4:

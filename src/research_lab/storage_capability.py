@@ -24,6 +24,7 @@ ALLOWED_SUBTREE = "cache"
 ALLOWED_EXTENSIONS = (".json", ".jsonl", ".bin", ".parquet")
 MAX_BUDGET_MB = 1024 * 1024
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_WIN_DLL: Any = getattr(ctypes, "WinDLL", None)
 
 
 class StorageCapabilityError(ValueError):
@@ -53,6 +54,9 @@ def is_link_or_reparse(path: Path) -> bool:
 
 
 def _windows_temp_anchor() -> Path:
+    if _WIN_DLL is None:  # pragma: no cover - guarded by the Windows call path
+        raise StorageCapabilityError("Windows DLL loading is unavailable")
+
     class GUID(ctypes.Structure):
         _fields_ = [
             ("Data1", ctypes.c_ulong),
@@ -61,9 +65,9 @@ def _windows_temp_anchor() -> Path:
             ("Data4", ctypes.c_ubyte * 8),
         ]
 
-    ole32 = ctypes.WinDLL("ole32", use_last_error=True)
-    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ole32 = _WIN_DLL("ole32", use_last_error=True)
+    shell32 = _WIN_DLL("shell32", use_last_error=True)
+    kernel32 = _WIN_DLL("kernel32", use_last_error=True)
     folder_id = GUID()
     if ole32.CLSIDFromString(
         ctypes.c_wchar_p("{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}"),
@@ -101,7 +105,9 @@ def fixed_temp_anchor() -> Path:
 def _volume_serial(path: Path) -> int:
     if os.name != "nt":
         return 0
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if _WIN_DLL is None:  # pragma: no cover - guarded by the Windows call path
+        raise StorageCapabilityError("Windows DLL loading is unavailable")
+    kernel32 = _WIN_DLL("kernel32", use_last_error=True)
     serial = ctypes.c_ulong()
     ok = kernel32.GetVolumeInformationW(
         ctypes.c_wchar_p(path.anchor),

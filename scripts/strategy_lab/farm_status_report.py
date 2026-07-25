@@ -27,6 +27,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -36,6 +37,7 @@ from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
 from src.research_lab.state_db import default_db_path  # noqa: E402
 
 READY_FOR_VALIDATION = ("FORWARD_PAPER", "REGIME_SPECIFIC")
+_WINDLL: Any = getattr(ctypes, "windll", None)
 
 
 def _connect_readonly(db_path: Path) -> sqlite3.Connection:
@@ -61,12 +63,14 @@ def _pid_is_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
+        if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path
+            return False
+        handle = _WINDLL.kernel32.OpenProcess(
             process_query_limited_information, False, pid
         )
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
+        _WINDLL.kernel32.CloseHandle(handle)
         return True
     try:
         os.kill(pid, 0)

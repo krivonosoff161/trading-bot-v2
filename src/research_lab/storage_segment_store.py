@@ -33,6 +33,7 @@ from src.research_lab.storage_capability import (
 from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_lock
 
 msvcrt: Any
+_GET_LAST_ERROR: Any = getattr(ctypes, "get_last_error", lambda: 0)
 try:  # pragma: no cover - platform import
     import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover
@@ -88,6 +89,13 @@ class SegmentStoreConflict(SegmentStoreError):
 
 class SegmentStoreUnsupported(SegmentStoreError):
     """The platform/filesystem cannot support the frozen durability tier."""
+
+
+def _win_dll(name: str) -> Any:
+    loader: Any = getattr(ctypes, "WinDLL", None)
+    if loader is None:  # pragma: no cover - guarded by Windows call paths
+        raise SegmentStoreUnsupported("Windows DLL loading is unavailable")
+    return loader(name, use_last_error=True)
 
 
 @dataclass(frozen=True)
@@ -396,7 +404,7 @@ def _statfs_type(path: Path) -> int:
 def detect_durability_mode(root: Path) -> str:
     root = Path(root)
     if os.name == "nt":
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _win_dll("kernel32")
         if int(kernel32.GetDriveTypeW(ctypes.c_wchar_p(root.anchor))) != 3:
             raise SegmentStoreUnsupported("segment store requires a fixed local drive")
         fs_name = ctypes.create_unicode_buffer(32)
@@ -460,7 +468,7 @@ def _open_file(path: Path, *, read_only: bool = False, create: bool = False) -> 
         return os.open(path, flags, 0o600)
     if msvcrt is None:  # pragma: no cover
         raise SegmentStoreUnsupported("Windows handle support is unavailable")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _win_dll("kernel32")
     create_file = kernel32.CreateFileW
     create_file.restype = ctypes.c_void_p
     access = 0x80000000 if read_only else 0xC0000000
@@ -477,7 +485,7 @@ def _open_file(path: Path, *, read_only: bool = False, create: bool = False) -> 
         None,
     )
     if raw in (None, ctypes.c_void_p(-1).value):
-        error = ctypes.get_last_error()
+        error = _GET_LAST_ERROR()
         if create and error in {80, 183}:
             raise FileExistsError(str(path))
         raise OSError(error, "CreateFileW failed", str(path))
@@ -527,13 +535,13 @@ def _move_no_replace(source: Path, target: Path, durability_mode: str) -> None:
     if _path_lexists(target):
         raise FileExistsError(str(target))
     if durability_mode == DURABILITY_WINDOWS:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _win_dll("kernel32")
         if not kernel32.MoveFileExW(
             ctypes.c_wchar_p(_windows_extended_path(source)),
             ctypes.c_wchar_p(_windows_extended_path(target)),
             0x00000008,
         ):
-            raise OSError(ctypes.get_last_error(), "MoveFileExW failed", str(source))
+            raise OSError(_GET_LAST_ERROR(), "MoveFileExW failed", str(source))
         return
     source_dir = os.open(
         source.parent,

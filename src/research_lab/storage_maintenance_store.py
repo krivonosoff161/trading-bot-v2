@@ -40,6 +40,8 @@ from src.research_lab.storage_os_lock import (
 )
 
 msvcrt: Any
+_WIN_DLL: Any = getattr(ctypes, "WinDLL", None)
+_GET_LAST_ERROR: Any = getattr(ctypes, "get_last_error", lambda: 0)
 try:
     import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover - platform branch
@@ -123,7 +125,9 @@ def _open_nofollow_read(path: Path) -> int:
         return os.open(path, flags)
     if msvcrt is None:  # pragma: no cover - guarded platform branch
         raise StorageMaintenanceConflict("Windows file handle support is unavailable")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if _WIN_DLL is None:  # pragma: no cover - guarded by the Windows call path
+        raise StorageMaintenanceConflict("Windows DLL loading is unavailable")
+    kernel32 = _WIN_DLL("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
     create_file.restype = ctypes.c_void_p
     handle = create_file(
@@ -136,7 +140,7 @@ def _open_nofollow_read(path: Path) -> int:
         None,
     )
     if handle in (None, ctypes.c_void_p(-1).value):
-        raise OSError(ctypes.get_last_error(), "CreateFileW failed", str(path))
+        raise OSError(_GET_LAST_ERROR(), "CreateFileW failed", str(path))
     try:
         return msvcrt.open_osfhandle(int(handle), flags)
     except Exception:
