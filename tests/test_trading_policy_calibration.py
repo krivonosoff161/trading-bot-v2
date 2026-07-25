@@ -32,26 +32,67 @@ def _row(*, profile="base", net=0.5, lifecycle="PaperSignalLifecycle.v2", captur
         "diagnosis": "good_signal" if net > 0 else "valid_loss",
         "immutable_terminal_evidence": True,
         "paper_generation_run_id": "run-v2",
+        "paper_subject_generation_id": "subject-v2",
         "terminal_lifecycle_event_id": "lifecycle-v2",
         "account_generation_id": "account-v2",
+        "paper_pnl_usdt": 0.0,
     }
 
 
-def _enable_current(monkeypatch):
+def _enable_current(monkeypatch, rows):
+    items = []
+    subject_ids = []
+    for index, row in enumerate(rows):
+        signal_id = f"signal-v2-{index}"
+        subject_id = f"subject-v2-{index}"
+        terminal_id = f"lifecycle-v2-{index}"
+        row.update(
+            {
+                "signal_id": signal_id,
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+            }
+        )
+        subject_ids.append(subject_id)
+        items.append(
+            {
+                "source_signal_id": signal_id,
+                "paper_generation_run_id": "run-v2",
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+                "account_generation_id": "account-v2",
+                "paper_account_decision": "position_closed",
+                "okx_inst_id": row["symbol"],
+                "timeframe": row["timeframe"],
+                "setup_family": row["family"],
+                "side": row["side"],
+                "boundary_ts": row["boundary_ts"],
+                "farm_geometry_profile_id": row["farm_geometry_profile_id"],
+                "outcome": {"net_pct": row["net_pct"]},
+                "paper_account": {"pnl_usdt": row["paper_pnl_usdt"]},
+            }
+        )
     monkeypatch.setattr(
         trading_policy_calibration,
         "read_projection_view",
         lambda *_args, **_kwargs: {
             "current": True,
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
             "paper_generation_run_id": "run-v2",
+            "account_generation_id": "account-v2",
+            "paper_subject_generation_ids": subject_ids,
+            "items": items,
             "generation_status": "completed",
         },
     )
 
 
 def test_legacy_rows_are_visible_but_cannot_calibrate(tmp_path, monkeypatch):
-    _enable_current(monkeypatch)
-    _write_rows(tmp_path, [_row(lifecycle="legacy") for _ in range(50)])
+    rows = [_row(lifecycle="legacy") for _ in range(50)]
+    _enable_current(monkeypatch, rows)
+    _write_rows(tmp_path, rows)
 
     report = build_trading_policy_calibration(tmp_path)
 
@@ -63,8 +104,8 @@ def test_legacy_rows_are_visible_but_cannot_calibrate(tmp_path, monkeypatch):
 
 
 def test_profile_requires_sample_and_reports_uncertainty(tmp_path, monkeypatch):
-    _enable_current(monkeypatch)
     rows = [_row(net=0.7) for _ in range(18)] + [_row(net=-0.3) for _ in range(2)]
+    _enable_current(monkeypatch, rows)
     _write_rows(tmp_path, rows)
 
     report = build_trading_policy_calibration(tmp_path)
@@ -79,9 +120,9 @@ def test_profile_requires_sample_and_reports_uncertainty(tmp_path, monkeypatch):
 
 
 def test_losing_profile_is_demoted_only_after_enough_evidence(tmp_path, monkeypatch):
-    _enable_current(monkeypatch)
     rows = [_row(profile="runner_probe", net=-0.8) for _ in range(18)]
     rows += [_row(profile="runner_probe", net=0.2) for _ in range(2)]
+    _enable_current(monkeypatch, rows)
     _write_rows(tmp_path, rows)
 
     report = build_trading_policy_calibration(tmp_path)
@@ -91,9 +132,22 @@ def test_losing_profile_is_demoted_only_after_enough_evidence(tmp_path, monkeypa
     assert report["execution_allowed"] is False
 
 
+def test_stale_or_display_only_calibration_cannot_vote():
+    stale = {
+        "paper_generation_run_id": "old-run",
+        "account_generation_id": "old-account",
+        "generation_status": "completed",
+        "current_generation_compatible": False,
+        "display_only": True,
+        "by_profile": {"runner_probe": {"verdict": "demote"}},
+    }
+
+    assert profile_verdict(stale, "runner_probe") == "insufficient_evidence"
+
+
 def test_untrusted_or_execution_rows_are_excluded(tmp_path, monkeypatch):
-    _enable_current(monkeypatch)
     rows = [_row() for _ in range(20)]
+    _enable_current(monkeypatch, rows)
     rows[0]["paper_only"] = False
     rows[1]["execution_allowed"] = True
     _write_rows(tmp_path, rows)
@@ -105,12 +159,12 @@ def test_untrusted_or_execution_rows_are_excluded(tmp_path, monkeypatch):
 
 
 def test_reports_horizon_conflicts_account_and_kaito_acceptance(tmp_path, monkeypatch):
-    _enable_current(monkeypatch)
     rows = [_row() for _ in range(12)]
     for row in rows:
         row["symbol"] = "KAITO_USDT_SWAP"
     rows[0]["paper_pnl_usdt"] = 2.5
     rows[1]["side"] = "short"
+    _enable_current(monkeypatch, rows)
     _write_rows(tmp_path, rows)
     report = build_trading_policy_calibration(tmp_path)
 

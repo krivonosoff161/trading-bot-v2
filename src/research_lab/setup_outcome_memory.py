@@ -31,6 +31,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.farm_tasks_db import tasks_db_path
+from src.research_lab.paper_projection_reader import (
+    read_projection_view,
+    select_current_terminal_training_rows,
+)
 from src.research_lab.setup_lifecycle import HARD_FAILED, derive_setup_lifecycle
 from src.research_lab.trade_path_diagnostics import POWER_FLOOR, characterize_rejects
 
@@ -481,8 +485,13 @@ def _derived_by_uc(private_root: Path, filename: str) -> dict[str, dict[str, Any
 
 def _training_memory(
     private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
 ) -> tuple[
-    dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, Any],
 ]:
     """Aggregate paper-product training rows for memory enrichment.
 
@@ -494,12 +503,11 @@ def _training_memory(
     by_candidate: dict[str, dict[str, Any]] = {}
     by_cell: dict[str, dict[str, Any]] = {}
     by_geometry_profile_cell: dict[str, dict[str, Any]] = {}
-    if not path.exists():
-        return by_candidate, by_cell, by_geometry_profile_cell
+    rows: list[dict[str, Any]] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     except OSError:
-        return by_candidate, by_cell, by_geometry_profile_cell
+        lines = []
     for line in lines:
         if not line.strip():
             continue
@@ -509,11 +517,18 @@ def _training_memory(
             continue
         if not isinstance(row, dict):
             continue
-        # Legacy rows were produced before durable lifecycle cursors. They stay
-        # in the private export for forensic comparison, but must not steer the
-        # adaptive farm because entry/hold labels may be contradictory.
-        if str(row.get("lifecycle_schema") or "") != "PaperSignalLifecycle.v2":
-            continue
+        rows.append(row)
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=Path(private_root)
+        / "state"
+        / "derived"
+        / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    evidence_selection = select_current_terminal_training_rows(rows, generation)
+    for row in evidence_selection["items"]:
         candidate_ids = {
             str(row.get("candidate_id") or "").strip(),
             str(row.get("setup_candidate_id") or "").strip(),
@@ -543,7 +558,10 @@ def _training_memory(
                 ),
                 row,
             )
-    return by_candidate, by_cell, by_geometry_profile_cell
+    selection_summary = {
+        key: value for key, value in evidence_selection.items() if key != "items"
+    }
+    return by_candidate, by_cell, by_geometry_profile_cell, selection_summary
 
 
 def _outcome_retest_memory(
@@ -692,7 +710,11 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
+def summarize_product_training_memory(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
     """Aggregate broad subscriber-facing paper outcomes.
 
     This is intentionally separate from the strict setup memory: product paper
@@ -701,7 +723,10 @@ def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
     ``momentum_breakout``).  Mixing them would fake validator evidence.  The
     summary keeps the product learning signal visible without promoting it.
     """
-    _, by_cell, by_geometry_profile_cell = _training_memory(private_root)
+    _, by_cell, by_geometry_profile_cell, evidence_selection = _training_memory(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
     total = _empty_training_agg()
     by_family: dict[str, dict[str, Any]] = {}
     by_timeframe: dict[str, dict[str, Any]] = {}
@@ -741,6 +766,25 @@ def summarize_product_training_memory(private_root: Path) -> dict[str, Any]:
         },
         "by_cell": by_cell_summary,
         "by_geometry_profile_cell": by_geometry_profile_cell_summary,
+        "source_rows": int(evidence_selection.get("source_rows") or 0),
+        "eligible_rows": int(evidence_selection.get("eligible_rows") or 0),
+        "excluded_rows": int(evidence_selection.get("excluded_rows") or 0),
+        "evidence_rejection_counts": dict(
+            evidence_selection.get("rejection_counts") or {}
+        ),
+        "paper_generation_run_id": str(
+            evidence_selection.get("paper_generation_run_id") or ""
+        ),
+        "account_generation_id": str(
+            evidence_selection.get("account_generation_id") or ""
+        ),
+        "generation_status": str(
+            evidence_selection.get("generation_status") or ""
+        ),
+        "current_generation_compatible": bool(
+            evidence_selection.get("current_generation_compatible")
+        ),
+        "display_only": bool(evidence_selection.get("display_only", True)),
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -790,9 +834,12 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
     exit2 = _derived_by_uc(private_root, "exit_phase2.json")
-    training_by_candidate, training_by_cell, _training_by_geometry_profile_cell = (
-        _training_memory(private_root)
-    )
+    (
+        training_by_candidate,
+        training_by_cell,
+        _training_by_geometry_profile_cell,
+        _training_evidence_selection,
+    ) = _training_memory(private_root)
     retest_by_candidate, retest_by_cell = _outcome_retest_memory(private_root)
     records: list[dict[str, Any]] = []
     for lc in lifecycle:

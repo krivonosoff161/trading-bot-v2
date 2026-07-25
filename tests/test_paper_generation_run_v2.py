@@ -17,6 +17,7 @@ from src.research_lab.paper_signals.store import (
 )
 from src.research_lab.paper_signals.training_export import export_training_rows
 from src.research_lab.paper_telegram_preview import build_paper_telegram_preview
+from src.research_lab.setup_outcome_memory import summarize_product_training_memory
 from src.research_lab.trading_policy_calibration import build_trading_policy_calibration
 
 
@@ -223,6 +224,10 @@ def test_downstream_learning_preview_and_lineage_bind_completed_generation(tmp_p
         tmp_path,
         evidence_database_path=store.path,
     )
+    product_memory = summarize_product_training_memory(
+        tmp_path,
+        evidence_database_path=store.path,
+    )
     health = operational_health.collect(
         private_root=tmp_path,
         pfr_db_path=tmp_path / "missing.sqlite",
@@ -240,6 +245,9 @@ def test_downstream_learning_preview_and_lineage_bind_completed_generation(tmp_p
     assert lineage["items"][0]["terminal_lifecycle_event_id"]
     assert calibration["trusted_terminal_rows"] == 1
     assert calibration["paper_generation_run_id"] == result["run_id"]
+    assert product_memory["eligible_rows"] == 1
+    assert product_memory["summary"]["terminal_rows"] == 1
+    assert product_memory["paper_generation_run_id"] == result["run_id"]
     assert health["paper_generation"]["current"] is True
     assert health["paper_generation"]["stage_chain_compatible"] is True
     assert health["readiness"]["paper_chain_counts"]["status"] == "pass"
