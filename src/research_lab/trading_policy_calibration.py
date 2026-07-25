@@ -53,16 +53,20 @@ def _wilson(wins: int, total: int, *, z: float = 1.96) -> tuple[float, float]:
     denominator = 1.0 + z * z / total
     centre = p + z * z / (2.0 * total)
     spread = z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * total)) / total)
-    return max(0.0, (centre - spread) / denominator), min(1.0, (centre + spread) / denominator)
+    return max(0.0, (centre - spread) / denominator), min(
+        1.0, (centre + spread) / denominator
+    )
 
 
-def _group_summary(key: str, rows: list[dict[str, Any]], *, min_sample: int) -> dict[str, Any]:
-    net = [_float(row.get("net_pct")) for row in rows]
-    net = [value for value in net if value is not None]
+def _group_summary(
+    key: str, rows: list[dict[str, Any]], *, min_sample: int
+) -> dict[str, Any]:
+    raw_net = [_float(row.get("net_pct")) for row in rows]
+    net = [value for value in raw_net if value is not None]
     wins = sum(value > 0.0 for value in net)
     losses = sum(value < 0.0 for value in net)
-    captures = [_float(row.get("capture")) for row in rows]
-    captures = [value for value in captures if value is not None]
+    raw_captures = [_float(row.get("capture")) for row in rows]
+    captures = [value for value in raw_captures if value is not None]
     gave_back = sum(
         str(row.get("diagnosis") or "") == "bad_exit_gave_back"
         or str(row.get("outcome_learning_bucket") or "") == "gave_back"
@@ -97,7 +101,9 @@ def _group_summary(key: str, rows: list[dict[str, Any]], *, min_sample: int) -> 
     }
 
 
-def _summaries(rows: list[dict[str, Any]], fields: tuple[str, ...], *, min_sample: int) -> dict[str, Any]:
+def _summaries(
+    rows: list[dict[str, Any]], fields: tuple[str, ...], *, min_sample: int
+) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         key = "|".join(str(row.get(field) or "unknown") for field in fields)
@@ -127,7 +133,9 @@ def _opposing_side_conflicts(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for field in ("symbol", "timeframe", "boundary_ts")
         )
         cohorts.setdefault(key, set()).add(str(row.get("side") or "unknown").lower())
-    conflicts = sorted(key for key, sides in cohorts.items() if {"long", "short"}.issubset(sides))
+    conflicts = sorted(
+        key for key, sides in cohorts.items() if {"long", "short"}.issubset(sides)
+    )
     return {
         "cohorts": len(cohorts),
         "opposing_side_cohorts": len(conflicts),
@@ -142,8 +150,8 @@ def _account_primary(
     current_generation: bool,
 ) -> dict[str, Any]:
     if current_generation:
-        pnl = [_float(row.get("paper_pnl_usdt")) for row in trusted_rows]
-        pnl = [value for value in pnl if value is not None]
+        raw_pnl = [_float(row.get("paper_pnl_usdt")) for row in trusted_rows]
+        pnl = [value for value in raw_pnl if value is not None]
         return {
             "terminal_trades": len(pnl),
             "wins": sum(value > 0.0 for value in pnl),
@@ -153,9 +161,11 @@ def _account_primary(
             "evidence_role": "immutable_generation_primary_theses",
         }
     rows = _read_rows(private_root / "state" / "derived" / "paper_account_events.jsonl")
-    closed = [row for row in rows if str(row.get("event_type") or "") == "position_closed"]
-    pnl = [_float(row.get("pnl_usdt")) for row in closed]
-    pnl = [value for value in pnl if value is not None]
+    closed = [
+        row for row in rows if str(row.get("event_type") or "") == "position_closed"
+    ]
+    raw_pnl = [_float(row.get("pnl_usdt")) for row in closed]
+    pnl = [value for value in raw_pnl if value is not None]
     return {
         "terminal_trades": len(pnl),
         "wins": sum(value > 0.0 for value in pnl),
@@ -177,7 +187,9 @@ def _acceptance_cases(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out[symbol] = {
             "trusted_terminal_rows": len(selected),
             "by_side": {
-                side: sum(str(row.get("side") or "").lower() == side for row in selected)
+                side: sum(
+                    str(row.get("side") or "").lower() == side for row in selected
+                )
                 for side in ("long", "short")
             },
             "ready": len(selected) >= MIN_CELL_SAMPLE,
@@ -218,13 +230,17 @@ def build_trading_policy_calibration(
     for row in trusted:
         row["_calibration_horizon"] = _horizon(row.get("timeframe"))
     legacy = len(rows) - len(trusted)
-    by_profile = _summaries(trusted, ("farm_geometry_profile_id",), min_sample=MIN_PROFILE_SAMPLE)
+    by_profile = _summaries(
+        trusted, ("farm_geometry_profile_id",), min_sample=MIN_PROFILE_SAMPLE
+    )
     by_profile_horizon = _summaries(
         trusted,
         ("farm_geometry_profile_id", "timeframe"),
         min_sample=MIN_PROFILE_SAMPLE,
     )
-    by_horizon = _summaries(trusted, ("_calibration_horizon",), min_sample=MIN_PROFILE_SAMPLE)
+    by_horizon = _summaries(
+        trusted, ("_calibration_horizon",), min_sample=MIN_PROFILE_SAMPLE
+    )
     by_exit_mode = _summaries(trusted, ("exit_mode",), min_sample=MIN_PROFILE_SAMPLE)
     by_cell_profile = _summaries(
         trusted,
@@ -280,4 +296,8 @@ def profile_verdict(calibration: dict[str, Any] | None, profile_id: str) -> str:
     if not isinstance(by_profile, dict):
         return "insufficient_evidence"
     row = by_profile.get(str(profile_id or ""))
-    return str(row.get("verdict") or "insufficient_evidence") if isinstance(row, dict) else "insufficient_evidence"
+    return (
+        str(row.get("verdict") or "insufficient_evidence")
+        if isinstance(row, dict)
+        else "insufficient_evidence"
+    )

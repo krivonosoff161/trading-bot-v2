@@ -19,12 +19,46 @@ from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.universe import Universe
 
 SCHEMA = "okx_instrument_discovery.v2"
-GROUPS = ("crypto_major", "meme_or_high_beta", "tokenized_equity", "commodity", "crypto_alt", "unknown")
+GROUPS = (
+    "crypto_major",
+    "meme_or_high_beta",
+    "tokenized_equity",
+    "commodity",
+    "crypto_alt",
+    "unknown",
+)
 
 _MAJORS = {"BTC", "ETH", "SOL", "BNB", "XRP"}
-_MEMES = {"DOGE", "SHIB", "PEPE", "WIF", "BONK", "FLOKI", "PENGU", "PUMP", "BRETT",
-          "MOG", "POPCAT", "MEW", "TURBO", "NEIRO", "MOODENG"}
-_EQUITY = {"NVDA", "AMD", "COIN", "MSTR", "PLTR", "AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META"}
+_MEMES = {
+    "DOGE",
+    "SHIB",
+    "PEPE",
+    "WIF",
+    "BONK",
+    "FLOKI",
+    "PENGU",
+    "PUMP",
+    "BRETT",
+    "MOG",
+    "POPCAT",
+    "MEW",
+    "TURBO",
+    "NEIRO",
+    "MOODENG",
+}
+_EQUITY = {
+    "NVDA",
+    "AMD",
+    "COIN",
+    "MSTR",
+    "PLTR",
+    "AAPL",
+    "TSLA",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "META",
+}
 _COMMODITY = {"XAU", "XAG", "XPT", "XPD", "HG", "CL", "NG"}
 
 
@@ -54,14 +88,18 @@ def classify_symbol(symbol: str) -> str:
 
 
 def _is_live_usdt_perp(raw: dict[str, Any]) -> bool:
-    return (str(raw.get("instType")) == "SWAP"
-            and str(raw.get("settleCcy")).upper() == "USDT"
-            and str(raw.get("state")).lower() == "live")
+    return (
+        str(raw.get("instType")) == "SWAP"
+        and str(raw.get("settleCcy")).upper() == "USDT"
+        and str(raw.get("state")).lower() == "live"
+    )
 
 
 def _is_usdt_perp(raw: dict[str, Any]) -> bool:
-    return (str(raw.get("instType")) == "SWAP"
-            and str(raw.get("settleCcy")).upper() == "USDT")
+    return (
+        str(raw.get("instType")) == "SWAP"
+        and str(raw.get("settleCcy")).upper() == "USDT"
+    )
 
 
 def _as_int(value: Any) -> int | None:
@@ -71,7 +109,9 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def build_snapshot(raw_instruments: list[dict[str, Any]], *, generated_at: str, inst_type: str = "SWAP") -> dict[str, Any]:
+def build_snapshot(
+    raw_instruments: list[dict[str, Any]], *, generated_at: str, inst_type: str = "SWAP"
+) -> dict[str, Any]:
     """Filter to live USDT perps + classify into bounded groups."""
     instruments: dict[str, dict[str, Any]] = {}
     catalog: dict[str, dict[str, Any]] = {}
@@ -101,7 +141,9 @@ def build_snapshot(raw_instruments: list[dict[str, Any]], *, generated_at: str, 
         }
         groups[group].append(symbol)
     return {
-        "schema": SCHEMA, "generated_at": generated_at, "inst_type": inst_type,
+        "schema": SCHEMA,
+        "generated_at": generated_at,
+        "inst_type": inst_type,
         "count": len(instruments),
         "catalog_count": len(catalog),
         "groups": {g: sorted(v) for g, v in groups.items()},
@@ -117,7 +159,9 @@ def snapshot_path(private_root: Path) -> Path:
 def save_snapshot(private_root: Path, snapshot: dict[str, Any]) -> Path:
     path = snapshot_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return path
 
 
@@ -135,6 +179,7 @@ def load_snapshot(private_root: Path) -> dict[str, Any]:
 def is_fresh(snapshot: dict[str, Any], now_ms: int, ttl_seconds: int) -> bool:
     """True if the snapshot's generated_at is within ttl_seconds of now (ms)."""
     import datetime as dt
+
     stamp = str(snapshot.get("generated_at") or "")
     if not stamp:
         return False
@@ -150,6 +195,7 @@ def is_fresh(snapshot: dict[str, Any], now_ms: int, ttl_seconds: int) -> bool:
 def snapshot_age_seconds(snapshot: dict[str, Any], now_ms: int) -> int | None:
     """Age of the snapshot in seconds (None if no/invalid generated_at)."""
     import datetime as dt
+
     stamp = str(snapshot.get("generated_at") or "")
     if not stamp:
         return None
@@ -173,24 +219,37 @@ def diff_snapshots(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
         for s in sorted(set(old_inst) & set(new_inst))
         if old_inst[s].get("group") != new_inst[s].get("group")
     ]
-    return {"new_instruments": new_symbols, "delisted": delisted, "group_changes": group_changes}
+    return {
+        "new_instruments": new_symbols,
+        "delisted": delisted,
+        "group_changes": group_changes,
+    }
 
 
 def discovered_universe(snapshot: dict[str, Any]) -> Universe:
     """Build a Universe whose groups are ``discovered_<group>`` from the snapshot."""
-    groups = {f"discovered_{g}": tuple(symbols)
-              for g, symbols in (snapshot.get("groups") or {}).items() if symbols}
+    groups = {
+        f"discovered_{g}": tuple(symbols)
+        for g, symbols in (snapshot.get("groups") or {}).items()
+        if symbols
+    }
     return Universe(groups=groups, relations={})
 
 
-def farm_readiness(symbols: list[str], private_root: Path, timeframe: str) -> dict[str, Any]:
+def farm_readiness(
+    symbols: list[str], private_root: Path, timeframe: str
+) -> dict[str, Any]:
     """Split discovered symbols into those with usable candle data and those missing it."""
-    ready, missing = [], []
+    ready: list[str] = []
+    missing: list[str] = []
     manifests: dict[str, dict[str, str]] = {}
     for symbol in symbols:
         selected = load_canonical_candles(
-            private_root, symbol, timeframe,
-            purpose="farm_readiness", coverage_policy="gap_free",
+            private_root,
+            symbol,
+            timeframe,
+            purpose="farm_readiness",
+            coverage_policy="gap_free",
         )
         (ready if selected.rows else missing).append(symbol)
         manifests[symbol] = {

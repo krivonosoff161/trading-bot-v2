@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.wintypes
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -25,14 +26,20 @@ import time
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
-from typing import Callable
+from typing import Any, Callable
 
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 
+msvcrt: Any = None
+fcntl: Any = None
 if os.name == "nt":
-    import msvcrt
+    import msvcrt as _msvcrt
+
+    msvcrt = _msvcrt
 else:  # pragma: no cover - exercised by the Linux CI import path
-    import fcntl
+    import fcntl as _fcntl
+
+    fcntl = _fcntl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,14 +126,18 @@ class _JsonStatusCache:
 
 def _request_farm_stop() -> None:
     STOP_FARM.parent.mkdir(parents=True, exist_ok=True)
-    STOP_FARM.write_text(f"control center stop requested at {time.time()}\n", encoding="utf-8")
+    STOP_FARM.write_text(
+        f"control center stop requested at {time.time()}\n", encoding="utf-8"
+    )
 
 
 def _request_named_stop(filename: str) -> Callable[[], None]:
     def request() -> None:
         target = PRIVATE_ROOT / "state" / filename
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"control center stop requested at {time.time()}\n", encoding="utf-8")
+        target.write_text(
+            f"control center stop requested at {time.time()}\n", encoding="utf-8"
+        )
 
     return request
 
@@ -182,7 +193,12 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             "farm",
             "Ферма / валидатор / paper-наблюдение",
             "Канонический исследовательский цикл с калькулятором",
-            ("cmd.exe", "/d", "/c", str(ROOT / "bat" / "paper_product_headless_loop.bat")),
+            (
+                "cmd.exe",
+                "/d",
+                "/c",
+                str(ROOT / "bat" / "paper_product_headless_loop.bat"),
+            ),
             network=True,
             graceful_stop=_request_farm_stop,
             owner_group="canonical_farm",
@@ -227,21 +243,34 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             "dashboard",
             "Dashboard",
             "Локальная страница состояния на 127.0.0.1:8765",
-            _python("scripts/strategy_lab/serve_dashboard.py", "--host", "127.0.0.1", "--port", "8765"),
+            _python(
+                "scripts/strategy_lab/serve_dashboard.py",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8765",
+            ),
             browser=True,
         ),
         ContourSpec(
             "graphs",
             "Графы",
             "Однократно перестраивает и открывает локальный граф",
-            ("cmd.exe", "/d", "/c", str(ROOT / "bat" / "strategy_lab_graph_viewer.bat")),
+            (
+                "cmd.exe",
+                "/d",
+                "/c",
+                str(ROOT / "bat" / "strategy_lab_graph_viewer.bat"),
+            ),
             browser=True,
         ),
     )
 
 
 class ManagedContour:
-    def __init__(self, spec: ContourSpec, events: queue.Queue[tuple[str, str, str]]) -> None:
+    def __init__(
+        self, spec: ContourSpec, events: queue.Queue[tuple[str, str, str]]
+    ) -> None:
         self.spec = spec
         self.events = events
         self.process: subprocess.Popen[str] | None = None
@@ -323,14 +352,19 @@ class ManagedContour:
                     self.process.send_signal(signal.CTRL_BREAK_EVENT)
                 except (OSError, ValueError):
                     self.process.terminate()
-            deadline = time.monotonic() + (self.spec.graceful_seconds if timeout is None else timeout)
+            deadline = time.monotonic() + (
+                self.spec.graceful_seconds if timeout is None else timeout
+            )
             while self.running and time.monotonic() < deadline:
                 time.sleep(0.2)
             if self.running:
                 if os.name == "nt":
                     subprocess.run(
                         ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
-                        capture_output=True, text=True, timeout=15, check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                        check=False,
                         creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                 else:
@@ -472,9 +506,12 @@ def _external_process_descriptor(
     executable_matches: bool = False,
     owned_child: bool = False,
     source: str = "external",
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Describe observed processes without upgrading observation into authority."""
-    del executable, executable_matches  # identity evidence is useful, but is not ownership
+    del (
+        executable,
+        executable_matches,
+    )  # identity evidence is useful, but is not ownership
     stoppable = bool(owned_child)
     return {
         "key": key,
@@ -506,7 +543,7 @@ def validate_owner_group_start(
         groups[spec.owner_group] = key
 
 
-def _load_external_contours(path: Path) -> dict[str, dict]:
+def _load_external_contours(path: Path) -> dict[str, dict[str, Any]]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -530,7 +567,9 @@ def _load_external_contours(path: Path) -> dict[str, dict]:
 
 
 class ControlCenter(tk.Tk):
-    def __init__(self, instance: SingleInstance, autostart: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, instance: SingleInstance, autostart: tuple[str, ...] = ()
+    ) -> None:
         super().__init__()
         self.title("Исследовательский центр trading-bot-v2")
         self.geometry("1180x760")
@@ -540,7 +579,9 @@ class ControlCenter(tk.Tk):
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.instance = instance
         self.external_contours = _load_external_contours(STATE_DIR / "heartbeat.json")
-        self.contours = {spec.key: ManagedContour(spec, self.events) for spec in contour_specs()}
+        self.contours = {
+            spec.key: ManagedContour(spec, self.events) for spec in contour_specs()
+        }
         self.status_vars: dict[str, tk.StringVar] = {}
         self.buttons: dict[str, ttk.Button] = {}
         self.selected_key = "ollama"
@@ -564,21 +605,50 @@ class ControlCenter(tk.Tk):
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure("TFrame", background="#0f172a")
-        style.configure("TLabel", background="#0f172a", foreground="#dbeafe", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", foreground="#f8fafc", font=("Segoe UI", 22, "bold"))
+        style.configure(
+            "TLabel", background="#0f172a", foreground="#dbeafe", font=("Segoe UI", 10)
+        )
+        style.configure(
+            "Header.TLabel", foreground="#f8fafc", font=("Segoe UI", 22, "bold")
+        )
         style.configure("Muted.TLabel", foreground="#93a4b8", font=("Segoe UI", 9))
         style.configure(
-            "Status.TLabel", background="#132238", foreground="#a7f3d0",
-            font=("Segoe UI", 10, "bold"), padding=(10, 8),
+            "Status.TLabel",
+            background="#132238",
+            foreground="#a7f3d0",
+            font=("Segoe UI", 10, "bold"),
+            padding=(10, 8),
         )
-        style.configure("Card.TLabelframe", background="#172033", foreground="#e2e8f0", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background="#172033", foreground="#7dd3fc", font=("Segoe UI", 10, "bold"))
+        style.configure(
+            "Card.TLabelframe",
+            background="#172033",
+            foreground="#e2e8f0",
+            borderwidth=1,
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background="#172033",
+            foreground="#7dd3fc",
+            font=("Segoe UI", 10, "bold"),
+        )
         style.configure("Card.TLabel", background="#172033", foreground="#dbeafe")
-        style.configure("Accent.TButton", background="#0284c7", foreground="#ffffff", padding=(12, 7))
+        style.configure(
+            "Accent.TButton",
+            background="#0284c7",
+            foreground="#ffffff",
+            padding=(12, 7),
+        )
         style.map("Accent.TButton", background=[("active", "#0369a1")])
-        style.configure("Danger.TButton", background="#b91c1c", foreground="#ffffff", padding=(12, 7))
+        style.configure(
+            "Danger.TButton",
+            background="#b91c1c",
+            foreground="#ffffff",
+            padding=(12, 7),
+        )
         style.map("Danger.TButton", background=[("active", "#991b1b")])
-        style.configure("TButton", background="#334155", foreground="#f8fafc", padding=(9, 5))
+        style.configure(
+            "TButton", background="#334155", foreground="#f8fafc", padding=(9, 5)
+        )
         style.map("TButton", background=[("active", "#475569")])
 
     def _build(self) -> None:
@@ -589,16 +659,18 @@ class ControlCenter(tk.Tk):
             self,
             text="Paper/research only · сделки, AUTO_TRADE и private endpoints отсутствуют",
         ).pack(anchor="w", padx=18, pady=(0, 6))
-        ttk.Label(self, text=f"Приватные данные: {PRIVATE_ROOT}", style="Muted.TLabel").pack(anchor="w", padx=18, pady=(0, 10))
-        ttk.Label(self, textvariable=self.system_var, style="Status.TLabel", wraplength=1120).pack(
-            anchor="w", fill=tk.X, padx=18, pady=(0, 4)
-        )
-        ttk.Label(self, textvariable=self.learning_var, style="Status.TLabel", wraplength=1120).pack(
-            anchor="w", fill=tk.X, padx=18, pady=(0, 4)
-        )
-        ttk.Label(self, textvariable=self.candles_var, style="Status.TLabel", wraplength=1120).pack(
-            anchor="w", fill=tk.X, padx=18, pady=(0, 10)
-        )
+        ttk.Label(
+            self, text=f"Приватные данные: {PRIVATE_ROOT}", style="Muted.TLabel"
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        ttk.Label(
+            self, textvariable=self.system_var, style="Status.TLabel", wraplength=1120
+        ).pack(anchor="w", fill=tk.X, padx=18, pady=(0, 4))
+        ttk.Label(
+            self, textvariable=self.learning_var, style="Status.TLabel", wraplength=1120
+        ).pack(anchor="w", fill=tk.X, padx=18, pady=(0, 4))
+        ttk.Label(
+            self, textvariable=self.candles_var, style="Status.TLabel", wraplength=1120
+        ).pack(anchor="w", fill=tk.X, padx=18, pady=(0, 10))
         actions = ttk.Frame(self)
         actions.pack(fill=tk.X, padx=18, pady=(0, 10))
         ttk.Button(
@@ -613,20 +685,41 @@ class ControlCenter(tk.Tk):
             command=self._stop_research_profile,
             style="Danger.TButton",
         ).pack(side=tk.LEFT, padx=8)
-        urgent = ttk.LabelFrame(self, text="Срочный ручной расчёт (paper-only)", padding=9, style="Card.TLabelframe")
-        urgent.pack(fill=tk.X, padx=18, pady=(0, 8))
-        ttk.Label(urgent, text="Монета", style="Card.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Entry(urgent, textvariable=self.manual_symbol, width=14).grid(row=0, column=1, padx=(6, 12))
-        ttk.Label(urgent, text="Таймфрейм", style="Card.TLabel").grid(row=0, column=2, sticky="w")
-        ttk.Combobox(
-            urgent, textvariable=self.manual_timeframe, values=("15m", "1h", "4h", "1d"),
-            state="readonly", width=7,
-        ).grid(row=0, column=3, padx=(6, 12))
-        ttk.Label(urgent, text="Причина", style="Card.TLabel").grid(row=0, column=4, sticky="w")
-        ttk.Entry(urgent, textvariable=self.manual_reason).grid(row=0, column=5, padx=6, sticky="ew")
-        ttk.Button(urgent, text="Поставить первой", command=self._enqueue_manual_urgent, style="Accent.TButton").grid(
-            row=0, column=6, padx=(8, 0)
+        urgent = ttk.LabelFrame(
+            self,
+            text="Срочный ручной расчёт (paper-only)",
+            padding=9,
+            style="Card.TLabelframe",
         )
+        urgent.pack(fill=tk.X, padx=18, pady=(0, 8))
+        ttk.Label(urgent, text="Монета", style="Card.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Entry(urgent, textvariable=self.manual_symbol, width=14).grid(
+            row=0, column=1, padx=(6, 12)
+        )
+        ttk.Label(urgent, text="Таймфрейм", style="Card.TLabel").grid(
+            row=0, column=2, sticky="w"
+        )
+        ttk.Combobox(
+            urgent,
+            textvariable=self.manual_timeframe,
+            values=("15m", "1h", "4h", "1d"),
+            state="readonly",
+            width=7,
+        ).grid(row=0, column=3, padx=(6, 12))
+        ttk.Label(urgent, text="Причина", style="Card.TLabel").grid(
+            row=0, column=4, sticky="w"
+        )
+        ttk.Entry(urgent, textvariable=self.manual_reason).grid(
+            row=0, column=5, padx=6, sticky="ew"
+        )
+        ttk.Button(
+            urgent,
+            text="Поставить первой",
+            command=self._enqueue_manual_urgent,
+            style="Accent.TButton",
+        ).grid(row=0, column=6, padx=(8, 0))
         urgent.columnconfigure(5, weight=1)
         body = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=14, pady=8)
@@ -637,29 +730,47 @@ class ControlCenter(tk.Tk):
         canvas = tk.Canvas(left, background="#0f172a", highlightthickness=0)
         scrollbar = ttk.Scrollbar(left, orient=tk.VERTICAL, command=canvas.yview)
         cards = ttk.Frame(canvas)
-        cards.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        cards.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
         card_window = canvas.create_window((0, 0), window=cards, anchor="nw")
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(card_window, width=event.width))
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(card_window, width=event.width),
+        )
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         for spec in contour_specs():
-            frame = ttk.LabelFrame(cards, text=spec.title, padding=9, style="Card.TLabelframe")
+            frame = ttk.LabelFrame(
+                cards, text=spec.title, padding=9, style="Card.TLabelframe"
+            )
             frame.pack(fill=tk.X, pady=4)
-            ttk.Label(frame, text=spec.description, style="Card.TLabel").grid(row=0, column=0, sticky="w")
+            ttk.Label(frame, text=spec.description, style="Card.TLabel").grid(
+                row=0, column=0, sticky="w"
+            )
             var = tk.StringVar(value="выключен")
             self.status_vars[spec.key] = var
-            ttk.Label(frame, textvariable=var, style="Card.TLabel").grid(row=1, column=0, sticky="w")
-            button = ttk.Button(frame, text="Включить", command=lambda key=spec.key: self._toggle(key))
+            ttk.Label(frame, textvariable=var, style="Card.TLabel").grid(
+                row=1, column=0, sticky="w"
+            )
+            button = ttk.Button(
+                frame,
+                text="Включить",
+                command=partial(self._toggle, spec.key),
+            )
             button.grid(row=0, column=1, rowspan=2, padx=8)
             self.buttons[spec.key] = button
-            ttk.Button(frame, text="Журнал", command=lambda key=spec.key: self._select(key)).grid(
-                row=0, column=2, rowspan=2
-            )
+            ttk.Button(
+                frame,
+                text="Журнал",
+                command=partial(self._select, spec.key),
+            ).grid(row=0, column=2, rowspan=2)
             frame.columnconfigure(0, weight=1)
-        ttk.Label(right, text="Журнал выбранного контура", font=("Segoe UI", 11, "bold")).pack(
-            anchor="w", padx=6, pady=(2, 6)
-        )
+        ttk.Label(
+            right, text="Журнал выбранного контура", font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", padx=6, pady=(2, 6))
         self.log = tk.Text(
             right,
             wrap="word",
@@ -673,7 +784,9 @@ class ControlCenter(tk.Tk):
             pady=10,
         )
         self.log.pack(fill=tk.BOTH, expand=True, padx=6)
-        ttk.Button(right, text="Обновить статусы", command=self._refresh).pack(anchor="e", padx=6, pady=8)
+        ttk.Button(right, text="Обновить статусы", command=self._refresh).pack(
+            anchor="e", padx=6, pady=8
+        )
 
     def _select(self, key: str) -> None:
         self.selected_key = key
@@ -689,25 +802,43 @@ class ControlCenter(tk.Tk):
 
         def enqueue() -> None:
             command = _python(
-                "-m", "scripts.strategy_lab.enqueue_manual_urgent", symbol,
-                "--timeframe", timeframe, "--reason", reason,
-                "--private-root", str(PRIVATE_ROOT),
+                "-m",
+                "scripts.strategy_lab.enqueue_manual_urgent",
+                symbol,
+                "--timeframe",
+                timeframe,
+                "--reason",
+                reason,
+                "--private-root",
+                str(PRIVATE_ROOT),
             )
             env = os.environ.copy()
             env["PYTHONUTF8"] = "1"
             env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
             completed = subprocess.run(
-                command, cwd=ROOT, env=env, text=True, encoding="utf-8", errors="replace",
-                capture_output=True, timeout=15, check=False,
+                command,
+                cwd=ROOT,
+                env=env,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=15,
+                check=False,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             if completed.returncode == 0:
-                self.after(0, lambda: messagebox.showinfo(
-                    "Срочный расчёт",
-                    f"{symbol.upper()} {timeframe} поставлен первым в очередь. Сделки не исполняются.",
-                ))
+                self.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Срочный расчёт",
+                        f"{symbol.upper()} {timeframe} поставлен первым в очередь. Сделки не исполняются.",
+                    ),
+                )
             else:
-                error = (completed.stderr or completed.stdout or "неизвестная ошибка").strip()[:300]
+                error = (
+                    completed.stderr or completed.stdout or "неизвестная ошибка"
+                ).strip()[:300]
                 self.after(0, lambda: messagebox.showerror("Срочный расчёт", error))
 
         threading.Thread(target=enqueue, daemon=True).start()
@@ -751,11 +882,10 @@ class ControlCenter(tk.Tk):
 
     def _start_authorized(self, keys: tuple[str, ...]) -> None:
         """Start only contours explicitly named on this process command line."""
-        active_owned = tuple(
-            key for key, item in self.contours.items() if item.running
-        )
+        active_owned = tuple(key for key, item in self.contours.items() if item.running)
         active_external = tuple(
-            key for key in getattr(self, "external_contours", {})
+            key
+            for key in getattr(self, "external_contours", {})
             if key in self.contours
         )
         active = active_owned + active_external
@@ -793,7 +923,14 @@ class ControlCenter(tk.Tk):
     def _stop_research_profile(self) -> None:
         owned = [
             self.contours[key]
-            for key in ("telegram_bot", "paper_cards", "farm", "scanner", "public_news", "ollama")
+            for key in (
+                "telegram_bot",
+                "paper_cards",
+                "farm",
+                "scanner",
+                "public_news",
+                "ollama",
+            )
             if self.contours[key].running
         ]
         external = self._external_profile_contours()
@@ -806,7 +943,9 @@ class ControlCenter(tk.Tk):
             return
 
         def stop_owned() -> None:
-            workers = [threading.Thread(target=item.stop, daemon=True) for item in owned]
+            workers = [
+                threading.Thread(target=item.stop, daemon=True) for item in owned
+            ]
             for worker in workers:
                 worker.start()
             for worker in workers:
@@ -848,14 +987,25 @@ class ControlCenter(tk.Tk):
             if external:
                 pid = external.get("pid")
                 if pid and external.get("stoppable"):
-                    self.buttons[key].configure(text=f"Остановить внешний PID {pid}", state="normal")
+                    self.buttons[key].configure(
+                        text=f"Остановить внешний PID {pid}", state="normal"
+                    )
                     self.status_vars[key].set(f"работает вне центра · PID {pid}")
                 elif pid:
-                    self.buttons[key].configure(text=f"Внешний PID {pid}: владелец не подтверждён", state="disabled")
-                    self.status_vars[key].set("порт занят неизвестным процессом; автоматическая остановка запрещена")
+                    self.buttons[key].configure(
+                        text=f"Внешний PID {pid}: владелец не подтверждён",
+                        state="disabled",
+                    )
+                    self.status_vars[key].set(
+                        "порт занят неизвестным процессом; автоматическая остановка запрещена"
+                    )
                 else:
-                    self.buttons[key].configure(text="Внешний процесс: PID не найден", state="disabled")
-                    self.status_vars[key].set("порт занят внешним процессом; безопасная остановка недоступна")
+                    self.buttons[key].configure(
+                        text="Внешний процесс: PID не найден", state="disabled"
+                    )
+                    self.status_vars[key].set(
+                        "порт занят внешним процессом; безопасная остановка недоступна"
+                    )
             else:
                 self.buttons[key].configure(
                     text="Выключить" if item.running else "Включить",
@@ -883,8 +1033,7 @@ class ControlCenter(tk.Tk):
         alert = {
             "schema": "ResearchControlCenterAlert.v1",
             "alert_id": (
-                f"required_contour_exit:{key}:{process['pid']}:"
-                f"{process['started_at']}"
+                f"required_contour_exit:{key}:{process['pid']}:{process['started_at']}"
             ),
             "reason": "required_contour_unexpected_exit",
             "detected_at": time.time(),
@@ -909,7 +1058,9 @@ class ControlCenter(tk.Tk):
                 encoding="utf-8",
                 newline="\n",
             ) as handle:
-                handle.write(json.dumps(alert, ensure_ascii=True, sort_keys=True) + "\n")
+                handle.write(
+                    json.dumps(alert, ensure_ascii=True, sort_keys=True) + "\n"
+                )
                 handle.flush()
                 os.fsync(handle.fileno())
         except OSError:
@@ -938,13 +1089,27 @@ class ControlCenter(tk.Tk):
     def _health_text(self, key: str, item: ManagedContour) -> str:
         pid = item.process.pid if item.process else "?"
         if key == "ollama":
-            return f"готов · API 11434 · PID {pid}" if self._port_open(11434) else f"запускается · PID {pid}"
+            return (
+                f"готов · API 11434 · PID {pid}"
+                if self._port_open(11434)
+                else f"запускается · PID {pid}"
+            )
         if key == "public_news":
-            age = self._file_age(ROOT / "logs" / "scout" / "public_channel" / "publisher_audit.jsonl")
-            return f"цикл работает · audit {format_age(age)} назад · PID {pid}" if age is not None else f"первый проход · PID {pid}"
+            age = self._file_age(
+                ROOT / "logs" / "scout" / "public_channel" / "publisher_audit.jsonl"
+            )
+            return (
+                f"цикл работает · audit {format_age(age)} назад · PID {pid}"
+                if age is not None
+                else f"первый проход · PID {pid}"
+            )
         if key == "scanner":
             age = self._file_age(ROOT / "logs" / "scout" / "scanner_journal.jsonl")
-            return f"очередь работает · journal {format_age(age)} назад · PID {pid}" if age is not None else f"первый проход · PID {pid}"
+            return (
+                f"очередь работает · journal {format_age(age)} назад · PID {pid}"
+                if age is not None
+                else f"первый проход · PID {pid}"
+            )
         if key in {"farm", "paper_cards"}:
             status_path = PRIVATE_ROOT / "state" / "farm_loop_status.json"
             try:
@@ -956,11 +1121,10 @@ class ControlCenter(tk.Tk):
                 base = f"первый цикл · PID {pid}"
             if key == "paper_cards":
                 compute = self._compute_pipeline_health()
-                base += (
-                    f" · compute {compute['state']}"
-                    f" ({compute['reason']})"
+                base += f" · compute {compute['state']} ({compute['reason']})"
+                delivery_path = (
+                    PRIVATE_ROOT / "state" / "derived" / "paper_telegram_delivery.json"
                 )
-                delivery_path = PRIVATE_ROOT / "state" / "derived" / "paper_telegram_delivery.json"
                 try:
                     delivery = self._read_cached_json(delivery_path)
                     base += (
@@ -972,18 +1136,24 @@ class ControlCenter(tk.Tk):
             return base
         if key == "telegram_bot":
             age = self._file_age(ROOT / "logs" / "telegram_bot.log")
-            return f"онлайн · log {format_age(age)} назад · PID {pid}" if age is not None else f"онлайн · PID {pid}"
+            return (
+                f"онлайн · log {format_age(age)} назад · PID {pid}"
+                if age is not None
+                else f"онлайн · PID {pid}"
+            )
         if key == "dashboard":
-            return f"готов · http://127.0.0.1:8765 · PID {pid}" if self._port_open(8765) else f"запускается · PID {pid}"
+            return (
+                f"готов · http://127.0.0.1:8765 · PID {pid}"
+                if self._port_open(8765)
+                else f"запускается · PID {pid}"
+            )
         return f"работает · PID {pid}"
 
     def _compute_pipeline_health(self) -> dict:
         priority = self._read_cached_json(
             PRIVATE_ROOT / "state" / "farm_priority_worker_status.json"
         )
-        worker = self._read_cached_json(
-            PRIVATE_ROOT / "state" / "worker_status.json"
-        )
+        worker = self._read_cached_json(PRIVATE_ROOT / "state" / "worker_status.json")
         farm_item = self.contours.get("farm")
         farm_running = bool(farm_item and farm_item.running)
         owned_started_at = getattr(farm_item, "started_at", None)
@@ -995,9 +1165,7 @@ class ControlCenter(tk.Tk):
         if not farm_running:
             descriptor = self._external_descriptor("farm")
             farm_running = descriptor is not None
-            external_started_at = (
-                descriptor.get("started_at") if descriptor else None
-            )
+            external_started_at = descriptor.get("started_at") if descriptor else None
             farm_started_at = (
                 float(external_started_at)
                 if isinstance(external_started_at, (int, float))
@@ -1021,7 +1189,7 @@ class ControlCenter(tk.Tk):
     def _external_running(self, key: str) -> bool:
         return self._external_descriptor(key) is not None
 
-    def _external_descriptor(self, key: str) -> dict[str, object] | None:
+    def _external_descriptor(self, key: str) -> dict[str, Any] | None:
         """Return verified metadata for a contour owned by another center."""
         related = ("farm", "paper_cards") if key in {"farm", "paper_cards"} else (key,)
         for candidate in related:
@@ -1040,18 +1208,21 @@ class ControlCenter(tk.Tk):
             external_contours.pop(candidate, None)
         port = {"ollama": 11434, "dashboard": 8765}.get(key)
         if port and self._port_open(port):
-            pid = _listening_pid(port)
-            started_at = _process_started_at(pid or 0)
-            executable = _process_executable(pid or 0)
-            expected_ollama = Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+            listener_pid = _listening_pid(port)
+            started_at = _process_started_at(listener_pid or 0)
+            executable = _process_executable(listener_pid or 0)
+            expected_ollama = (
+                Path.home() / "AppData" / "Local" / "Programs" / "Ollama" / "ollama.exe"
+            )
             executable_matches = bool(
                 key == "ollama"
                 and executable
-                and os.path.normcase(str(executable)) == os.path.normcase(str(expected_ollama))
+                and os.path.normcase(str(executable))
+                == os.path.normcase(str(expected_ollama))
             )
             return _external_process_descriptor(
                 key=key,
-                pid=pid,
+                pid=listener_pid,
                 started_at=started_at,
                 executable=str(executable) if executable else None,
                 executable_matches=executable_matches,
@@ -1059,23 +1230,39 @@ class ControlCenter(tk.Tk):
             )
         return None
 
-    def _external_profile_contours(self) -> list[tuple[str, dict[str, object]]]:
-        rows: list[tuple[str, dict[str, object]]] = []
+    def _external_profile_contours(self) -> list[tuple[str, dict[str, Any]]]:
+        rows: list[tuple[str, dict[str, Any]]] = []
         seen: set[int] = set()
-        for key in ("telegram_bot", "paper_cards", "farm", "scanner", "public_news", "ollama"):
+        for key in (
+            "telegram_bot",
+            "paper_cards",
+            "farm",
+            "scanner",
+            "public_news",
+            "ollama",
+        ):
             if self.contours[key].running:
                 continue
             descriptor = self._external_descriptor(key)
             pid = int((descriptor or {}).get("pid") or 0)
-            if descriptor and descriptor.get("stoppable") and pid > 0 and pid not in seen:
+            if (
+                descriptor
+                and descriptor.get("stoppable")
+                and pid > 0
+                and pid not in seen
+            ):
                 rows.append((key, descriptor))
                 seen.add(pid)
         return rows
 
-    def _request_external_stop(self, key: str, descriptor: dict[str, object]) -> None:
+    def _request_external_stop(self, key: str, descriptor: dict[str, Any]) -> None:
         pid = int(descriptor.get("pid") or 0)
         started_at = descriptor.get("started_at")
-        if not descriptor.get("stoppable") or pid <= 0 or not _same_live_process(pid, started_at):
+        if (
+            not descriptor.get("stoppable")
+            or pid <= 0
+            or not _same_live_process(pid, started_at)
+        ):
             messagebox.showwarning(
                 "Внешний процесс",
                 "PID внешнего процесса не подтверждён. Центр не будет останавливать неизвестный процесс.",
@@ -1087,13 +1274,21 @@ class ControlCenter(tk.Tk):
         ):
             return
         self.buttons[key].configure(text="Останавливается…", state="disabled")
-        threading.Thread(target=self._stop_external, args=(key, descriptor), daemon=True).start()
+        threading.Thread(
+            target=self._stop_external, args=(key, descriptor), daemon=True
+        ).start()
 
-    def _stop_external(self, key: str, descriptor: dict[str, object]) -> None:
+    def _stop_external(self, key: str, descriptor: dict[str, Any]) -> None:
         pid = int(descriptor.get("pid") or 0)
         started_at = descriptor.get("started_at")
-        if not descriptor.get("stoppable") or pid <= 0 or not _same_live_process(pid, started_at):
-            self.events.put((key, "state", "внешний процесс уже завершён или PID изменился"))
+        if (
+            not descriptor.get("stoppable")
+            or pid <= 0
+            or not _same_live_process(pid, started_at)
+        ):
+            self.events.put(
+                (key, "state", "внешний процесс уже завершён или PID изменился")
+            )
             return
         spec = self.contours[key].spec
         if spec.graceful_stop:
@@ -1127,7 +1322,9 @@ class ControlCenter(tk.Tk):
         for key, item in self.contours.items():
             if item.running and item.process:
                 age = int(time.time() - item.started_at)
-                self.status_vars[key].set(f"работает · PID {item.process.pid} · {format_age(age)}")
+                self.status_vars[key].set(
+                    f"работает · PID {item.process.pid} · {format_age(age)}"
+                )
 
     @staticmethod
     def _read_json(path: Path) -> dict:
@@ -1153,7 +1350,8 @@ class ControlCenter(tk.Tk):
     def _read_jsonl(path: Path) -> list[dict]:
         try:
             return [
-                row for line in path.read_text(encoding="utf-8").splitlines()
+                row
+                for line in path.read_text(encoding="utf-8").splitlines()
                 if line.strip() and isinstance((row := json.loads(line)), dict)
             ]
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -1166,7 +1364,9 @@ class ControlCenter(tk.Tk):
         max_generation = 0
         for recipient in ("farm", "validator", "trader"):
             env_dir = state / "role_environments" / recipient
-            role_counts[recipient] = len(list(env_dir.glob("env_*.json"))) if env_dir.exists() else 0
+            role_counts[recipient] = (
+                len(list(env_dir.glob("env_*.json"))) if env_dir.exists() else 0
+            )
             counters = {"waiting": 0, "queued": 0, "completed": 0, "deduped": 0}
             work_dir = state / "role_work_queue" / recipient
             if work_dir.exists():
@@ -1174,18 +1374,28 @@ class ControlCenter(tk.Tk):
                     row = self._read_json(path)
                     status = str(row.get("status") or "waiting")
                     counters[status] = counters.get(status, 0) + 1
-                    spec = row.get("task_spec") if isinstance(row.get("task_spec"), dict) else {}
-                    max_generation = max(max_generation, int(spec.get("generation") or 0))
+                    raw_spec = row.get("task_spec")
+                    spec = raw_spec if isinstance(raw_spec, dict) else {}
+                    max_generation = max(
+                        max_generation, int(spec.get("generation") or 0)
+                    )
             work_counts[recipient] = counters
-        results = self._read_jsonl(state / "derived" / "system_analyst_result_inbox.jsonl")
+        results = self._read_jsonl(
+            state / "derived" / "system_analyst_result_inbox.jsonl"
+        )
         drafts = self._read_jsonl(state / "llm_advice" / "system_analyst_drafts.jsonl")
         reviewed = {
-            str(row.get("source_ref") or "") for row in drafts
+            str(row.get("source_ref") or "")
+            for row in drafts
             if row.get("accepted") and str(row.get("role_id") or "") == "system_analyst"
         }
         result_ids = {str(row.get("result_id") or "") for row in results}
         pending_review = len(result_ids - reviewed)
-        labels = {"farm": "ферма", "validator": "валидатор", "trader": "paper-наблюдатель"}
+        labels = {
+            "farm": "ферма",
+            "validator": "валидатор",
+            "trader": "paper-наблюдатель",
+        }
         role_text = []
         for recipient in ("farm", "validator", "trader"):
             counts = work_counts[recipient]
@@ -1195,8 +1405,9 @@ class ControlCenter(tk.Tk):
                 f"готово {counts.get('completed', 0)}"
             )
         return (
-            "Обучение · Alibaba · " + " | ".join(role_text) +
-            f" | вернулось аналитику {len(results)}, ждут разбора {pending_review}, "
+            "Обучение · Alibaba · "
+            + " | ".join(role_text)
+            + f" | вернулось аналитику {len(results)}, ждут разбора {pending_review}, "
             f"поколение {max_generation}/2"
         )
 
@@ -1205,7 +1416,9 @@ class ControlCenter(tk.Tk):
         if not path.is_file():
             return None
         try:
-            conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=0.2)
+            conn = sqlite3.connect(
+                f"file:{path.as_posix()}?mode=ro", uri=True, timeout=0.2
+            )
             conn.row_factory = sqlite3.Row
             return conn
         except sqlite3.Error:
@@ -1235,8 +1448,10 @@ class ControlCenter(tk.Tk):
             return {
                 "manual": int(row["manual"] or 0) + int(waiting_manual or 0),
                 "go": int(row["go_n"] or 0),
-                "watch": int(row["watch_n"] or 0), "queued": int(row["queued"] or 0),
-                "running": int(row["running"] or 0), "current": dict(current) if current else {},
+                "watch": int(row["watch_n"] or 0),
+                "queued": int(row["queued"] or 0),
+                "running": int(row["running"] or 0),
+                "current": dict(current) if current else {},
             }
         except sqlite3.Error:
             return {}
@@ -1262,10 +1477,17 @@ class ControlCenter(tk.Tk):
     def _gpu_snapshot() -> str:
         try:
             completed = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
-                 "--format=csv,noheader,nounits"],
-                text=True, encoding="utf-8", errors="replace", capture_output=True,
-                timeout=2, check=False,
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=2,
+                check=False,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             parts = [part.strip() for part in completed.stdout.strip().split(",")]
@@ -1327,7 +1549,9 @@ class ControlCenter(tk.Tk):
             return "Свечи · библиотека недоступна для чтения"
         finally:
             conn.close()
-        parts = [f"{row[0]}: серий {int(row[1])}, свечей {int(row[2])}" for row in by_tf]
+        parts = [
+            f"{row[0]}: серий {int(row[1])}, свечей {int(row[2])}" for row in by_tf
+        ]
         size_mb = sum(
             self._optional_file_size(p)
             for p in (path, Path(f"{path}-wal"), Path(f"{path}-shm"))
@@ -1359,14 +1583,18 @@ class ControlCenter(tk.Tk):
                 "running": item.running or bool(external),
                 "owned": item.running,
                 "external": bool(external),
-                "pid": item.process.pid if item.running and item.process else (
-                    int(external_pid) if external_pid else None
-                ),
-                "started_at": item.started_at if item.running else (
-                    float(external_started_at) if external_started_at else None
-                ),
-                "status": self._health_text(key, item) if item.running else (
-                    "работает вне центра" if external else (
+                "pid": item.process.pid
+                if item.running and item.process
+                else (int(external_pid) if external_pid else None),
+                "started_at": item.started_at
+                if item.running
+                else (float(external_started_at) if external_started_at else None),
+                "status": self._health_text(key, item)
+                if item.running
+                else (
+                    "работает вне центра"
+                    if external
+                    else (
                         "failed_unexpected_exit"
                         if item.unexpected_exit_reported
                         else "выключен"
@@ -1385,7 +1613,9 @@ class ControlCenter(tk.Tk):
         target = STATE_DIR / "heartbeat.json"
         temporary = target.with_suffix(".tmp")
         try:
-            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             temporary.replace(target)
         except OSError as exc:
             rows = self._logs[self.selected_key]
@@ -1412,7 +1642,9 @@ class ControlCenter(tk.Tk):
         self.withdraw()
 
         def stop_all() -> None:
-            workers = [threading.Thread(target=item.stop, daemon=True) for item in running]
+            workers = [
+                threading.Thread(target=item.stop, daemon=True) for item in running
+            ]
             for worker in workers:
                 worker.start()
             for worker in workers:

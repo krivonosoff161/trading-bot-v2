@@ -21,6 +21,7 @@ from src.research_lab.candle_identity import (
     candle_slice_fingerprint,
     legacy_revision_ref,
 )
+
 SCHEMA = "CandleSnapshotManifest.v2"
 SELECTION_POLICY = "latest_available_at_or_before.v1"
 SUPPORTED_COVERAGE_POLICIES = frozenset({"available", "gap_free", "complete_range"})
@@ -37,7 +38,9 @@ _TIMEFRAME_MS = {
 
 def _normalize_symbol(symbol: str) -> str:
     token = str(symbol).strip().upper().replace("-", "_").replace("/", "_")
-    if not token or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for ch in token):
+    if not token or any(
+        ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for ch in token
+    ):
         raise ValueError(f"unsupported candle symbol: {symbol!r}")
     return token
 
@@ -94,7 +97,10 @@ def _gap_count(rows: list[dict[str, Any]], timeframe: str) -> int:
 
 
 def _coverage(
-    rows: list[dict[str, Any]], timeframe: str, start_ts: int | None, end_ts: int | None,
+    rows: list[dict[str, Any]],
+    timeframe: str,
+    start_ts: int | None,
+    end_ts: int | None,
     coverage_policy: str,
 ) -> tuple[int, int, int, str]:
     if not rows:
@@ -106,7 +112,9 @@ def _coverage(
     requested_start = first_ts if start_ts is None else int(start_ts)
     requested_end = last_ts if end_ts is None else int(end_ts)
     expected = max(0, (requested_end - requested_start) // interval + 1)
-    in_range = sum(1 for row in rows if requested_start <= int(row["ts"]) <= requested_end)
+    in_range = sum(
+        1 for row in rows if requested_start <= int(row["ts"]) <= requested_end
+    )
     missing = max(0, expected - in_range)
     if coverage_policy == "available":
         status = "available"
@@ -152,25 +160,33 @@ def build_snapshot_manifest(
         if row.get("_available_at_ms") is not None
     ]
     lineage_present = any(
-        row.get("_revision_id") or row.get("_content_hash")
+        row.get("_revision_id")
+        or row.get("_content_hash")
         or row.get("_available_at_ms") is not None
         for row in selected
     )
     provenance_complete = bool(selected) and all(
         _row_provenance_is_valid(
-            row, symbol=sym, timeframe=tf, as_of_ms=as_of_ms,
+            row,
+            symbol=sym,
+            timeframe=tf,
+            as_of_ms=as_of_ms,
         )
         for row in selected
     )
     provenance_status = (
-        "complete" if provenance_complete else (
-            "invalid" if lineage_present else "legacy_unknown"
-        )
+        "complete"
+        if provenance_complete
+        else ("invalid" if lineage_present else "legacy_unknown")
     )
     content_hash = candle_slice_fingerprint(sym, tf, selected) or ""
     evidence_hash = candle_evidence_fingerprint(sym, tf, selected) or ""
     expected, missing, gaps, coverage_status = _coverage(
-        selected, tf, start_ts, end_ts, policy,
+        selected,
+        tf,
+        start_ts,
+        end_ts,
+        policy,
     )
     first_ts = int(selected[0]["ts"]) if selected else None
     last_ts = int(selected[-1]["ts"]) if selected else None
@@ -190,7 +206,9 @@ def build_snapshot_manifest(
         "coverage_status": coverage_status,
         "provenance_status": provenance_status,
     }
-    blob = json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    blob = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     snapshot_id = f"csm_{hashlib.sha256(blob.encode('utf-8')).hexdigest()}"
     return CandleSnapshotManifest(
         snapshot_id=snapshot_id,
@@ -219,7 +237,11 @@ def build_snapshot_manifest(
 
 
 def _row_provenance_is_valid(
-    row: dict[str, Any], *, symbol: str, timeframe: str, as_of_ms: int | None,
+    row: dict[str, Any],
+    *,
+    symbol: str,
+    timeframe: str,
+    as_of_ms: int | None,
 ) -> bool:
     revision_id = str(row.get("_revision_id") or "")
     stored_hash = str(row.get("_content_hash") or "")
@@ -228,8 +250,11 @@ def _row_provenance_is_valid(
     acquired = row.get("_acquired_at_ms")
     field_provenance = row.get("_field_provenance")
     if (
-        not revision_id or not stored_hash or observed is None
-        or available is None or acquired is None
+        not revision_id
+        or not stored_hash
+        or observed is None
+        or available is None
+        or acquired is None
         or not isinstance(field_provenance, dict)
     ):
         return False
@@ -250,8 +275,13 @@ def _row_provenance_is_valid(
         return False
     source = str(row.get("_source") or "")
     expected_revision_id = candle_revision_id(
-        symbol, timeframe, int(row["ts"]), actual_hash, source,
-        observed_ms, available_ms,
+        symbol,
+        timeframe,
+        int(row["ts"]),
+        actual_hash,
+        source,
+        observed_ms,
+        available_ms,
     )
     if revision_id != expected_revision_id:
         return False
@@ -267,9 +297,11 @@ def _row_provenance_is_valid(
         if str(ref.get("source") or "") != source:
             return False
         try:
-            if int(ref.get("available_at_ms")) != available_ms:
+            raw_available_ms = ref.get("available_at_ms")
+            raw_observed_ms = ref.get("observed_at_ms")
+            if raw_available_ms is None or int(raw_available_ms) != available_ms:
                 return False
-            if int(ref.get("observed_at_ms")) != observed_ms:
+            if raw_observed_ms is None or int(raw_observed_ms) != observed_ms:
                 return False
         except (TypeError, ValueError):
             return False
@@ -278,7 +310,8 @@ def _row_provenance_is_valid(
 
 def build_snapshot(**kwargs: Any) -> CandleSnapshot:
     rows = sorted(
-        (dict(row) for row in kwargs.pop("rows")), key=lambda row: int(row["ts"]),
+        (dict(row) for row in kwargs.pop("rows")),
+        key=lambda row: int(row["ts"]),
     )
     manifest = build_snapshot_manifest(rows=rows, **kwargs)
     for row in rows:

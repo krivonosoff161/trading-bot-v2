@@ -24,10 +24,18 @@ SCHEMA = "RoleEnvironmentCandidate.v1"
 STATE_SCHEMA = "RoleEnvironmentState.v1"
 
 RECIPIENT_ACTIONS = {
-    "farm": {"collect_more_evidence", "rerun_bounded_sweep", "retest_candidate", "no_action"},
+    "farm": {
+        "collect_more_evidence",
+        "rerun_bounded_sweep",
+        "retest_candidate",
+        "no_action",
+    },
     "validator": {
-        "collect_more_evidence", "inspect_data_quality", "retest_candidate",
-        "review_validator_threshold", "no_action",
+        "collect_more_evidence",
+        "inspect_data_quality",
+        "retest_candidate",
+        "review_validator_threshold",
+        "no_action",
     },
     "trader": {"collect_more_evidence", "review_paper_outcome", "no_action"},
 }
@@ -78,7 +86,9 @@ def _effective_row(path: Path) -> dict[str, Any]:
     if not state_path.exists():
         return candidate
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    if state.get("schema") != STATE_SCHEMA or state.get("environment_id") != candidate.get("environment_id"):
+    if state.get("schema") != STATE_SCHEMA or state.get(
+        "environment_id"
+    ) != candidate.get("environment_id"):
         raise ValueError("role environment state contract mismatch")
     return {**candidate, **state, "schema": candidate["schema"]}
 
@@ -87,7 +97,10 @@ def _write_state(path: Path, state: dict[str, Any]) -> None:
     state_path = _state_path(path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = state_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     tmp.replace(state_path)
 
 
@@ -132,13 +145,15 @@ def _feedback_content_refs(
         digest = str(hashes.get(ref) or "")
         if not digest:
             digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()
-        out.append(_content_ref(
-            ref,
-            digest,
-            producer_completion_id=completion,
-            producer_schema=str(feedback.get("schema") or ""),
-            generation=generation,
-        ))
+        out.append(
+            _content_ref(
+                ref,
+                digest,
+                producer_completion_id=completion,
+                producer_schema=str(feedback.get("schema") or ""),
+                generation=generation,
+            )
+        )
     return out
 
 
@@ -148,11 +163,17 @@ def _ensure_task_spec_content_binding(
     *,
     recipient: str,
 ) -> None:
-    provenance = feedback.get("provenance") if isinstance(feedback.get("provenance"), dict) else {}
+    provenance = (
+        raw_provenance
+        if isinstance(raw_provenance := feedback.get("provenance"), dict)
+        else {}
+    )
     source_hash = str(provenance.get("source_hash") or "")
     if not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
         source_hash = hashlib.sha256(
-            json.dumps(provenance, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+            json.dumps(
+                provenance, ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8")
         ).hexdigest()
     task_spec.setdefault("source_content_sha256", source_hash)
     task_spec.setdefault(
@@ -168,7 +189,9 @@ def _ensure_task_spec_content_binding(
     )
 
 
-def recoverable_role_requests(private_root: Path, recipient: str) -> list[dict[str, Any]]:
+def recoverable_role_requests(
+    private_root: Path, recipient: str
+) -> list[dict[str, Any]]:
     """Return immutable candidates whose state projection still needs request acceptance."""
     directory = environment_dir(private_root, recipient)
     if not directory.exists():
@@ -204,12 +227,17 @@ def _verified_gate_artifact(
             payload.get("schema") == "ValidationEpoch.v1"
             and payload.get("evidence_stage") == "untouched_evaluation"
             and payload.get("environment_id") == environment_id
-            and isinstance(selection, list) and bool(selection)
-            and isinstance(evaluation, list) and bool(evaluation)
+            and isinstance(selection, list)
+            and bool(selection)
+            and isinstance(evaluation, list)
+            and bool(evaluation)
             and trade_evidence_hash(selection) == selection_hash
             and trade_evidence_hash(evaluation) == evaluation_hash
-            and bool(selection_fp) and bool(evaluation_fp) and selection_fp != evaluation_fp
-            and bool(frozen_at) and bool(evaluation_started_at)
+            and bool(selection_fp)
+            and bool(evaluation_fp)
+            and selection_fp != evaluation_fp
+            and bool(frozen_at)
+            and bool(evaluation_started_at)
             and evaluation_started_at > frozen_at
             and isinstance(payload.get("quality_gate_passed"), bool)
         )
@@ -220,7 +248,8 @@ def _verified_gate_artifact(
 
 def _recommendation(feedback: dict[str, Any], recipient: str) -> dict[str, Any] | None:
     rows = [
-        row for row in feedback.get("recommendations") or []
+        row
+        for row in feedback.get("recommendations") or []
         if isinstance(row, dict) and row.get("recipient") == recipient
     ]
     if len(rows) != 1:
@@ -247,12 +276,14 @@ def materialize_role_environment(
         if recommendation is None or recommendation.get("action") not in allowed:
             continue
         task_spec = dict(recommendation.get("task_spec") or {})
-        task_spec.setdefault("subject", {"subject_ref": str(feedback.get("subject_ref") or "")})
+        task_spec.setdefault(
+            "subject", {"subject_ref": str(feedback.get("subject_ref") or "")}
+        )
         task_spec.setdefault("source_ref", str(feedback["feedback_id"]))
         task_spec.setdefault("generation", 0)
         _ensure_task_spec_content_binding(task_spec, feedback, recipient=recipient)
         task_spec.setdefault("adaptive_trial_id", adaptive_trial_id(task_spec))
-        basis = {
+        basis: dict[str, Any] = {
             "feedback_id": str(feedback["feedback_id"]),
             "recipient": recipient,
             "parent_environment_id": parent_environment_id,
@@ -341,12 +372,17 @@ def gate_role_environment(
     if row.get("schema") != SCHEMA or row.get("recipient") != recipient:
         raise ValueError("role environment candidate contract mismatch")
     if row.get("status") != "request_accepted":
-        raise ValueError("role environment must be request_accepted and can be gated only once")
+        raise ValueError(
+            "role environment must be request_accepted and can be gated only once"
+        )
     gate_path, gate_hash = _verified_gate_artifact(
         private_root, gate_result_ref, environment_id=environment_id, kind="gate"
     )
     evaluation_path, evaluation_hash = _verified_gate_artifact(
-        private_root, untouched_evaluation_ref, environment_id=environment_id, kind="evaluation"
+        private_root,
+        untouched_evaluation_ref,
+        environment_id=environment_id,
+        kind="evaluation",
     )
     gate_payload = json.loads(Path(gate_path).read_text(encoding="utf-8"))
     evaluation_payload = json.loads(Path(evaluation_path).read_text(encoding="utf-8"))
@@ -373,20 +409,24 @@ def gate_role_environment(
         ack_id=f"ack::{environment_id}",
         disposition=status,
         applied_artifact_refs=(
-            _bound_ref(path), _bound_ref(Path(gate_path), gate_hash),
+            _bound_ref(path),
+            _bound_ref(Path(gate_path), gate_hash),
             _bound_ref(Path(evaluation_path), evaluation_hash),
         ),
     )
-    _write_state(path, {
-        "schema": STATE_SCHEMA,
-        "environment_id": environment_id,
-        "status": status,
-        "deterministic_gate_result": gate_path,
-        "deterministic_gate_hash": gate_hash,
-        "untouched_evaluation_ref": evaluation_path,
-        "untouched_evaluation_hash": evaluation_hash,
-        "gated_at": gated["gated_at"],
-    })
+    _write_state(
+        path,
+        {
+            "schema": STATE_SCHEMA,
+            "environment_id": environment_id,
+            "status": status,
+            "deterministic_gate_result": gate_path,
+            "deterministic_gate_hash": gate_hash,
+            "untouched_evaluation_ref": evaluation_path,
+            "untouched_evaluation_hash": evaluation_hash,
+            "gated_at": gated["gated_at"],
+        },
+    )
     write_adaptive_trial_record(
         private_root,
         trial_id=_adaptive_trial_id_from_row(row),
@@ -445,13 +485,16 @@ def accept_role_request(
         disposition="request_accepted",
         applied_artifact_refs=(_bound_ref(path),),
     )
-    _write_state(path, {
-        "schema": STATE_SCHEMA,
-        "environment_id": environment_id,
-        "status": "request_accepted",
-        "deterministic_gate_result": "recipient_contract_passed",
-        "accepted_at": accepted["accepted_at"],
-    })
+    _write_state(
+        path,
+        {
+            "schema": STATE_SCHEMA,
+            "environment_id": environment_id,
+            "status": "request_accepted",
+            "deterministic_gate_result": "recipient_contract_passed",
+            "accepted_at": accepted["accepted_at"],
+        },
+    )
     write_adaptive_trial_record(
         private_root,
         trial_id=_adaptive_trial_id_from_row(row),

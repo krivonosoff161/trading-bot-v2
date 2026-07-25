@@ -110,7 +110,9 @@ class ExperimentSpec:
         )
 
         if bool(self.search_family_definition) != bool(self.search_family_id):
-            raise ValueError("search family definition and id must be supplied together")
+            raise ValueError(
+                "search family definition and id must be supplied together"
+            )
         if self.search_family_definition:
             validate_search_family_definition(
                 self.search_family_definition,
@@ -151,9 +153,10 @@ class ExperimentSpec:
 
     def write_json(self, path: Path) -> Path:
         path = Path(path)
-        payload = json.dumps(
-            self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True
-        ) + "\n"
+        payload = (
+            json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n"
+        )
         if path.exists():
             if path.read_text(encoding="utf-8") != payload:
                 raise ValueError("immutable experiment spec collision")
@@ -218,13 +221,18 @@ class ExperimentSpec:
             data_glob=str(data["data_glob"]),
             symbols=[str(s) for s in data.get("symbols", [])],
             families=[str(f) for f in data.get("families", [])],
-            parameter_grid={str(k): list(v) for k, v in data.get("parameter_grid", {}).items()},
+            parameter_grid={
+                str(k): list(v) for k, v in data.get("parameter_grid", {}).items()
+            },
             fees_bps=float(data.get("fees_bps", 7.0)),
             slippage_bps=float(data.get("slippage_bps", 3.0)),
             min_trades=int(data.get("min_trades", 20)),
             split_ratio=float(data.get("split_ratio", 0.7)),
             max_runs=int(data.get("max_runs", 0)),
-            filters={str(k): [str(x) for x in v] for k, v in (data.get("filters") or {}).items()},
+            filters={
+                str(k): [str(x) for x in v]
+                for k, v in (data.get("filters") or {}).items()
+            },
             regime_params=dict(data.get("regime_params") or {}),
             event_context=dict(data.get("event_context") or {}),
             plan_meta=dict(data.get("plan_meta") or {}),
@@ -318,7 +326,14 @@ def _execution_error_result(
 
 # Optional flow/microstructure fields carried through to the feature layer when the
 # prepared file was enriched (e.g. by enrich_flow_data / the loop's funding enricher).
-_OPTIONAL_CANDLE_FIELDS = ("funding", "oi", "index_px", "obi_top5", "spread_bps", "trade_delta_100")
+_OPTIONAL_CANDLE_FIELDS = (
+    "funding",
+    "oi",
+    "index_px",
+    "obi_top5",
+    "spread_bps",
+    "trade_delta_100",
+)
 
 
 def load_candles(path: Path) -> list[dict[str, Any]]:
@@ -349,14 +364,27 @@ def load_candles(path: Path) -> list[dict[str, Any]]:
                     candle[flow_field] = float(value)
                 except (TypeError, ValueError):
                     pass
-        known = {"ts", "date", "open", "high", "low", "close", "vol", *_OPTIONAL_CANDLE_FIELDS}
-        candle.update({str(key): value for key, value in row.items() if key not in known})
+        known = {
+            "ts",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "vol",
+            *_OPTIONAL_CANDLE_FIELDS,
+        }
+        candle.update(
+            {str(key): value for key, value in row.items() if key not in known}
+        )
         out.append(candle)
     return sorted(out, key=lambda r: int(r["ts"]))
 
 
 def _candle_identity(
-    symbol: str, timeframe: str, candles: list[dict[str, Any]],
+    symbol: str,
+    timeframe: str,
+    candles: list[dict[str, Any]],
 ) -> str:
     """Stable identity for the exact bounded series handed to every variant."""
     return candle_evidence_fingerprint(symbol, timeframe, candles) or ""
@@ -417,7 +445,9 @@ def _load_experiment_candles(
         source_backend="json",
     )
     return (
-        snapshot.rows, path.name, snapshot.manifest.evidence_hash,
+        snapshot.rows,
+        path.name,
+        snapshot.manifest.evidence_hash,
         snapshot.manifest.snapshot_id,
     )
 
@@ -436,7 +466,10 @@ def _derive_timeframe(candles: list[dict[str, Any]]) -> str:
 
 
 def choose_symbol_file(
-    pattern: str, symbol: str, *, timeframe: str | None = None,
+    pattern: str,
+    symbol: str,
+    *,
+    timeframe: str | None = None,
 ) -> Path | None:
     normalized = symbol.replace("-", "_").replace("/", "_")
     candidates = [Path(p) for p in glob.glob(pattern.format(symbol=normalized))]
@@ -445,13 +478,19 @@ def choose_symbol_file(
     if not candidates:
         return None
     if timeframe is None:
-        return sorted(candidates, key=lambda p: (_safe_row_count(p), str(p)), reverse=True)[0]
+        return sorted(
+            candidates, key=lambda p: (_safe_row_count(p), str(p)), reverse=True
+        )[0]
     from src.research_lab.data_inventory import inspect_file
+
     wanted = str(timeframe).strip().lower()
     matching: list[tuple[int, Path]] = []
     for p in candidates:
         info = inspect_file(p)
-        if info.get("timeframe", "").lower() == wanted and info.get("quality_status") == "usable":
+        if (
+            info.get("timeframe", "").lower() == wanted
+            and info.get("quality_status") == "usable"
+        ):
             matching.append((int(info.get("rows") or 0), p))
     if not matching:
         return None
@@ -486,7 +525,9 @@ def annotate_signals_with_regime(
     return signals
 
 
-def filter_signals(signals: list[dict[str, Any]], filters: dict[str, list[str]]) -> list[dict[str, Any]]:
+def filter_signals(
+    signals: list[dict[str, Any]], filters: dict[str, list[str]]
+) -> list[dict[str, Any]]:
     if not filters:
         return signals
     return [s for s in signals if regime_matches(s.get("regime") or {}, filters)]
@@ -504,8 +545,12 @@ def simulate_trades(
     exit_mode = str(params.get("exit_mode") or "baseline").strip().lower()
     if exit_mode and exit_mode != "baseline":
         return simulate_dynamic_exit_trades(
-            candles, signals, params, exit_mode=exit_mode,
-            fees_bps=fees_bps, slippage_bps=slippage_bps,
+            candles,
+            signals,
+            params,
+            exit_mode=exit_mode,
+            fees_bps=fees_bps,
+            slippage_bps=slippage_bps,
             require_complete_horizon=require_complete_horizon,
         )
     hold_bars = int(params.get("hold_bars", 5))
@@ -547,13 +592,29 @@ def simulate_trades(
                 if take and low <= take:
                     exit_price, outcome, actual_exit_idx = take, "take", j
                     break
-        if require_complete_horizon and outcome == "time_exit" and horizon_end >= len(candles):
+        if (
+            require_complete_horizon
+            and outcome == "time_exit"
+            and horizon_end >= len(candles)
+        ):
             continue
-        trades.append(finalize_trade(
-            candles, idx, actual_exit_idx, side, entry, exit_price, outcome, sig, cost_pct,
-            simulator_manifest=legacy_fixture_manifest(),
-            cost_ledger=build_cost_ledger(fees_bps=fees_bps, slippage_bps=slippage_bps),
-        ))
+        trades.append(
+            finalize_trade(
+                candles,
+                idx,
+                actual_exit_idx,
+                side,
+                entry,
+                exit_price,
+                outcome,
+                sig,
+                cost_pct,
+                simulator_manifest=legacy_fixture_manifest(),
+                cost_ledger=build_cost_ledger(
+                    fees_bps=fees_bps, slippage_bps=slippage_bps
+                ),
+            )
+        )
     return trades
 
 
@@ -566,9 +627,17 @@ def _dynamic_mode_params(params: dict[str, Any], exit_mode: str) -> dict[str, An
     if exit_mode == "trailing":
         return {"kind": "trailing", "trail_pct": round(stop, 6), "hold_bars": hold}
     if exit_mode == "trailing_tight":
-        return {"kind": "trailing", "trail_pct": round(stop * 0.5, 6), "hold_bars": hold}
+        return {
+            "kind": "trailing",
+            "trail_pct": round(stop * 0.5, 6),
+            "hold_bars": hold,
+        }
     if exit_mode == "break_even":
-        return {"kind": "break_even", "be_trigger_pct": round(stop, 6), "hold_bars": hold}
+        return {
+            "kind": "break_even",
+            "be_trigger_pct": round(stop, 6),
+            "hold_bars": hold,
+        }
     if exit_mode == "time_decay":
         return {"kind": "time_decay", "hold_bars": hold}
     if exit_mode in {"partial_tp", "partial_be"}:
@@ -610,17 +679,28 @@ def _scan_dynamic_exit(
     for j in range(idx, cap + 1):
         high = float(candles[j]["high"])
         low = float(candles[j]["low"])
-        if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+        if stop is not None and (
+            (long_ and low <= stop) or (not long_ and high >= stop)
+        ):
             return stop, ("trail" if kind == "trailing" else "stop"), j
-        if take is not None and ((long_ and high >= take) or (not long_ and low <= take)):
+        if take is not None and (
+            (long_ and high >= take) or (not long_ and low <= take)
+        ):
             return take, "take", j
         water = max(water, high) if long_ else min(water, low)
         if kind == "trailing":
             trail = _level(water, float(mode["trail_pct"]), long_=not long_)
-            stop = max(initial_stop or trail, trail) if long_ else min(initial_stop or trail, trail)
+            if trail is not None:
+                stop = (
+                    max(initial_stop or trail, trail)
+                    if long_
+                    else min(initial_stop or trail, trail)
+                )
         elif kind == "break_even":
             trigger = _level(entry, float(mode["be_trigger_pct"]), long_=long_)
-            if trigger is not None and ((long_ and water >= trigger) or (not long_ and water <= trigger)):
+            if trigger is not None and (
+                (long_ and water >= trigger) or (not long_ and water <= trigger)
+            ):
                 stop = entry
         elif kind == "time_decay":
             decayed = stop_pct * max(0.0, 1 - (j - idx) / span)
@@ -653,19 +733,27 @@ def _partial_dynamic_trade(
         high = float(candles[j]["high"])
         low = float(candles[j]["low"])
         if not filled_first:
-            if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+            if stop is not None and (
+                (long_ and low <= stop) or (not long_ and high >= stop)
+            ):
                 exit_price, exit_idx, outcome = stop, j, "stop"
                 break
-            if tp1 is not None and ((long_ and high >= tp1) or (not long_ and low <= tp1)):
+            if tp1 is not None and (
+                (long_ and high >= tp1) or (not long_ and low <= tp1)
+            ):
                 filled_first = True
                 first_exit = tp1
                 stop = entry
                 continue
         else:
-            if tp2 is not None and ((long_ and high >= tp2) or (not long_ and low <= tp2)):
+            if tp2 is not None and (
+                (long_ and high >= tp2) or (not long_ and low <= tp2)
+            ):
                 exit_price, exit_idx, outcome = tp2, j, "take"
                 break
-            if stop is not None and ((long_ and low <= stop) or (not long_ and high >= stop)):
+            if stop is not None and (
+                (long_ and low <= stop) or (not long_ and high >= stop)
+            ):
                 exit_price, exit_idx, outcome = stop, j, "partial_be"
                 break
     first_fraction = 0.5 if filled_first else 0.0
@@ -674,8 +762,13 @@ def _partial_dynamic_trade(
     ret_pct = first_fraction * first_ret + (1 - first_fraction) * second_ret
     net_pct = ret_pct - cost_pct * 100
     mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(
-        candles, idx, exit_idx, entry, side,
-        exit_price=exit_price, outcome=outcome,
+        candles,
+        idx,
+        exit_idx,
+        entry,
+        side,
+        exit_price=exit_price,
+        outcome=outcome,
     )
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
     return {
@@ -695,14 +788,18 @@ def _partial_dynamic_trade(
         "bars_held": int(exit_idx - idx),
         "time_to_mfe": int(mfe_off),
         "time_to_mae": int(mae_off),
-        "tp_before_sl": True if outcome == "take" else (False if outcome == "stop" else None),
+        "tp_before_sl": True
+        if outcome == "take"
+        else (False if outcome == "stop" else None),
         "bars_to_tp": int(exit_idx - idx) if outcome == "take" else None,
         "bars_to_sl": int(exit_idx - idx) if outcome == "stop" else None,
         "adverse_before_favorable": bool(mae_off < mfe_off),
         "path_quality": _path_quality(mfe_pct, capture, mae_off < mfe_off),
         "partial_exit_fraction": first_fraction,
         "partial_leg_prices": (
-            [float(first_exit), float(exit_price)] if first_fraction else [float(exit_price)]
+            [float(first_exit), float(exit_price)]
+            if first_fraction
+            else [float(exit_price)]
         ),
         "path_observation": _path_observation(outcome),
     }
@@ -735,9 +832,15 @@ def simulate_dynamic_exit_trades(
         if entry <= 0:
             continue
         if mode["kind"] == "partial":
-            trade = _partial_dynamic_trade(candles, idx, cap, entry, side, stop_pct, mode, sig, cost_pct)
+            trade = _partial_dynamic_trade(
+                candles, idx, cap, entry, side, stop_pct, mode, sig, cost_pct
+            )
             if trade is not None:
-                if require_complete_horizon and trade.get("outcome") == "time_exit" and horizon_end >= len(candles):
+                if (
+                    require_complete_horizon
+                    and trade.get("outcome") == "time_exit"
+                    and horizon_end >= len(candles)
+                ):
                     continue
                 manifest = legacy_fixture_manifest()
                 fraction = float(trade.get("partial_exit_fraction") or 0.0)
@@ -745,44 +848,82 @@ def simulate_dynamic_exit_trades(
                 reconciliation = reconcile_partial_fills(
                     1.0,
                     [
-                        {"quantity": quantity, "price": price, "cost_pct": cost_pct * 100.0}
-                        for quantity, price in zip(quantities, trade["partial_leg_prices"])
+                        {
+                            "quantity": quantity,
+                            "price": price,
+                            "cost_pct": cost_pct * 100.0,
+                        }
+                        for quantity, price in zip(
+                            quantities, trade["partial_leg_prices"]
+                        )
                     ],
                     entry_price=entry,
                     side=side,
                 )
-                if abs(float(reconciliation["net_return_pct"]) - float(trade["net_pct"])) > 1e-3:
-                    raise ValueError("partial fill reconciliation does not match trade return")
-                trade.update({
-                    "simulator_manifest": manifest,
-                    "simulator_model_id": manifest["simulator_model_id"],
-                    "simulator_evidence_tier": manifest["evidence_tier"],
-                    "unsupported_simulator_dimensions": list(manifest["unsupported_dimensions"]),
-                    "cost_ledger": build_cost_ledger(
-                        fees_bps=fees_bps, slippage_bps=slippage_bps,
-                    ),
-                    "quantity_ledger": build_trade_quantity_ledger(
-                        closed_legs=(
-                            (float(trade.get("partial_exit_fraction") or 0.0),
-                             1.0 - float(trade.get("partial_exit_fraction") or 0.0))
-                            if float(trade.get("partial_exit_fraction") or 0.0) > 0
-                            else (1.0,)
+                if (
+                    abs(
+                        float(reconciliation["net_return_pct"])
+                        - float(trade["net_pct"])
+                    )
+                    > 1e-3
+                ):
+                    raise ValueError(
+                        "partial fill reconciliation does not match trade return"
+                    )
+                trade.update(
+                    {
+                        "simulator_manifest": manifest,
+                        "simulator_model_id": manifest["simulator_model_id"],
+                        "simulator_evidence_tier": manifest["evidence_tier"],
+                        "unsupported_simulator_dimensions": list(
+                            manifest["unsupported_dimensions"]
                         ),
-                    ),
-                    "fill_reconciliation": reconciliation,
-                })
+                        "cost_ledger": build_cost_ledger(
+                            fees_bps=fees_bps,
+                            slippage_bps=slippage_bps,
+                        ),
+                        "quantity_ledger": build_trade_quantity_ledger(
+                            closed_legs=(
+                                (
+                                    float(trade.get("partial_exit_fraction") or 0.0),
+                                    1.0
+                                    - float(trade.get("partial_exit_fraction") or 0.0),
+                                )
+                                if float(trade.get("partial_exit_fraction") or 0.0) > 0
+                                else (1.0,)
+                            ),
+                        ),
+                        "fill_reconciliation": reconciliation,
+                    }
+                )
                 trades.append(trade)
             continue
         exit_price, outcome, exit_idx = _scan_dynamic_exit(
             candles, idx, cap, entry, side, stop_pct, take_pct, mode
         )
-        if require_complete_horizon and outcome == "time_exit" and horizon_end >= len(candles):
+        if (
+            require_complete_horizon
+            and outcome == "time_exit"
+            and horizon_end >= len(candles)
+        ):
             continue
-        trades.append(finalize_trade(
-            candles, idx, exit_idx, side, entry, exit_price, outcome, sig, cost_pct,
-            simulator_manifest=legacy_fixture_manifest(),
-            cost_ledger=build_cost_ledger(fees_bps=fees_bps, slippage_bps=slippage_bps),
-        ))
+        trades.append(
+            finalize_trade(
+                candles,
+                idx,
+                exit_idx,
+                side,
+                entry,
+                exit_price,
+                outcome,
+                sig,
+                cost_pct,
+                simulator_manifest=legacy_fixture_manifest(),
+                cost_ledger=build_cost_ledger(
+                    fees_bps=fees_bps, slippage_bps=slippage_bps
+                ),
+            )
+        )
     return trades
 
 
@@ -810,8 +951,13 @@ def finalize_trade(
     ret_pct = direction * (exit_price / entry - 1) * 100
     net_pct = ret_pct - cost_pct * 100
     mfe_pct, mae_pct, mfe_off, mae_off = _trade_path(
-        candles, idx, actual_exit_idx, entry, side,
-        exit_price=exit_price, outcome=outcome,
+        candles,
+        idx,
+        actual_exit_idx,
+        entry,
+        side,
+        exit_price=exit_price,
+        outcome=outcome,
     )
     capture = round(ret_pct / mfe_pct, 4) if mfe_pct > 0 else 0.0
     bars_held = int(actual_exit_idx - idx)
@@ -838,7 +984,9 @@ def finalize_trade(
         "bars_held": bars_held,
         "time_to_mfe": int(mfe_off),
         "time_to_mae": int(mae_off),
-        "tp_before_sl": True if outcome == "take" else (False if outcome == "stop" else None),
+        "tp_before_sl": True
+        if outcome == "take"
+        else (False if outcome == "stop" else None),
         "bars_to_tp": bars_held if outcome == "take" else None,
         "bars_to_sl": bars_held if outcome == "stop" else None,
         "adverse_before_favorable": bool(adverse_first),
@@ -856,18 +1004,21 @@ def finalize_trade(
 def _path_observation(outcome: str) -> str:
     return (
         "full_ohlc_through_close"
-        if str(outcome) == "time_exit" else "exit_bar_censored_to_exit_price"
+        if str(outcome) == "time_exit"
+        else "exit_bar_censored_to_exit_price"
     )
 
 
-def _path_quality(mfe_pct: float, capture: float, adverse_before_favorable: bool) -> str:
+def _path_quality(
+    mfe_pct: float, capture: float, adverse_before_favorable: bool
+) -> str:
     """One-word path label for the outcome-memory drill (wrong_exit = 'gave_back')."""
     if mfe_pct <= 0:
         return "no_move"
     if capture >= 0.7:
         return "clean_capture"
     if capture < 0.3:
-        return "gave_back"          # the move happened but the exit gave it back (wrong_exit)
+        return "gave_back"  # the move happened but the exit gave it back (wrong_exit)
     return "heat_first" if adverse_before_favorable else "partial"
 
 
@@ -895,17 +1046,34 @@ def _trade_path(
         if lo is None or low < lo:
             lo, lo_off = low, off
     if intrabar_exit:
+        assert exit_price is not None
         off = max(0, exit_idx - entry_idx)
-        known = [float(entry), float(exit_price)] if exit_idx == entry_idx else [float(exit_price)]
+        known = (
+            [float(entry), float(exit_price)]
+            if exit_idx == entry_idx
+            else [float(exit_price)]
+        )
         h, low = max(known), min(known)
         if hi is None or h > hi:
             hi, hi_off = h, off
         if lo is None or low < lo:
             lo, lo_off = low, off
+    if hi is None or lo is None:
+        hi = lo = entry
     if side == "long":
-        favorable, adverse, fav_off, adv_off = (hi - entry) / entry * 100, (entry - lo) / entry * 100, hi_off, lo_off
+        favorable, adverse, fav_off, adv_off = (
+            (hi - entry) / entry * 100,
+            (entry - lo) / entry * 100,
+            hi_off,
+            lo_off,
+        )
     else:
-        favorable, adverse, fav_off, adv_off = (entry - lo) / entry * 100, (hi - entry) / entry * 100, lo_off, hi_off
+        favorable, adverse, fav_off, adv_off = (
+            (entry - lo) / entry * 100,
+            (hi - entry) / entry * 100,
+            lo_off,
+            hi_off,
+        )
     return max(0.0, favorable), max(0.0, adverse), fav_off, adv_off
 
 
@@ -933,7 +1101,11 @@ def _entry_timing_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     mfes = [float(t.get("mfe_pct") or 0.0) for t in trades]
     maes = [float(t.get("mae_pct") or 0.0) for t in trades]
     captures = [float(t.get("capture_of_mfe") or 0.0) for t in trades]
-    late = sum(1 for t in trades if float(t.get("mae_pct") or 0.0) > float(t.get("mfe_pct") or 0.0))
+    late = sum(
+        1
+        for t in trades
+        if float(t.get("mae_pct") or 0.0) > float(t.get("mfe_pct") or 0.0)
+    )
     n = len(trades)
     return {
         "avg_mfe_pct": round(sum(mfes) / n, 4),
@@ -1012,7 +1184,9 @@ def compute_metrics(
     train = returns[:split]
     test = returns[split:]
     total = sum(returns)
-    best_share = max((abs(r) for r in returns), default=0.0) / abs(total) if total else 0.0
+    best_share = (
+        max((abs(r) for r in returns), default=0.0) / abs(total) if total else 0.0
+    )
     avg = total / n if n else 0.0
     pf_state = profit_factor_state(returns)
     return {
@@ -1065,12 +1239,19 @@ def grade_candidate(metrics: dict[str, Any]) -> tuple[str, list[str]]:
         reasons.append("oos_not_positive")
     if metrics["best_trade_share"] > 0.45:
         reasons.append("single_trade_dominance")
-    if metrics["max_drawdown_pct"] > abs(metrics["total_net_pct"]) * 0.8 and metrics["total_net_pct"] > 0:
+    if (
+        metrics["max_drawdown_pct"] > abs(metrics["total_net_pct"]) * 0.8
+        and metrics["total_net_pct"] > 0
+    ):
         reasons.append("drawdown_too_large_vs_total")
 
     if not reasons:
         return "PROMOTE_FOR_PRESSURE_TEST", ["passed_basic_gates"]
-    if metrics["n_trades"] >= metrics["min_trades"] and metrics["avg_net_pct"] > 0 and metrics["test_avg_net_pct"] > 0:
+    if (
+        metrics["n_trades"] >= metrics["min_trades"]
+        and metrics["avg_net_pct"] > 0
+        and metrics["test_avg_net_pct"] > 0
+    ):
         return "OBSERVE", reasons
     return "REJECT", reasons
 
@@ -1139,11 +1320,12 @@ def evaluate_spec(
     cpu_fallback_families: set[str] = set()
     sim_fallback_reasons: set[str] = set()
 
-    stress_extra = (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
+    stress_extra = (
+        (spec.fees_bps + spec.slippage_bps) / 10000.0 * 100 * (COST_STRESS_MULT - 1)
+    )
     results: list[RunResult] = []
     variant_total = len(spec.symbols) * sum(
-        len(spec.parameter_grid.get(family, []))
-        for family in spec.families
+        len(spec.parameter_grid.get(family, [])) for family in spec.families
     )
     if spec.max_runs:
         variant_total = min(variant_total, int(spec.max_runs))
@@ -1161,14 +1343,21 @@ def evaluate_spec(
     for symbol in spec.symbols:
         cache_key = (symbol, str(tf or ""))
         candle_bundle = _load_experiment_candles(
-            spec.data_glob, symbol, timeframe=tf, candle_store=candle_store,
+            spec.data_glob,
+            symbol,
+            timeframe=tf,
+            candle_store=candle_store,
         )
         if candle_bundle is not None:
             loaded[cache_key] = candle_bundle
         if progress is not None:
             progress(f"candles_loaded:{len(loaded)}/{len(spec.symbols)}")
-    if (spec.data_snapshot_id or spec.data_evidence_hash) and len(loaded) != len(spec.symbols):
-        raise RuntimeError("queued candle snapshot drift: a scheduled symbol is unavailable")
+    if (spec.data_snapshot_id or spec.data_evidence_hash) and len(loaded) != len(
+        spec.symbols
+    ):
+        raise RuntimeError(
+            "queued candle snapshot drift: a scheduled symbol is unavailable"
+        )
     resolved_snapshot_id = ""
     resolved_evidence_hash = ""
     resolved_snapshot_bindings: list[dict[str, Any]] = []
@@ -1194,12 +1383,15 @@ def evaluate_spec(
             resolved_snapshot_bindings
         )
     if (
-        spec.data_snapshot_id and resolved_snapshot_id != spec.data_snapshot_id
-    ) or (
-        spec.data_evidence_hash and resolved_evidence_hash != spec.data_evidence_hash
-    ) or (
-        spec.data_snapshot_bindings
-        and resolved_snapshot_bindings != list(spec.data_snapshot_bindings)
+        (spec.data_snapshot_id and resolved_snapshot_id != spec.data_snapshot_id)
+        or (
+            spec.data_evidence_hash
+            and resolved_evidence_hash != spec.data_evidence_hash
+        )
+        or (
+            spec.data_snapshot_bindings
+            and resolved_snapshot_bindings != list(spec.data_snapshot_bindings)
+        )
     ):
         raise RuntimeError(
             "queued candle snapshot drift: selected evidence no longer matches the queued spec"
@@ -1209,7 +1401,10 @@ def evaluate_spec(
         candle_bundle = loaded.get(cache_key)
         if candle_bundle is None:
             candle_bundle = _load_experiment_candles(
-                spec.data_glob, symbol, timeframe=tf, candle_store=candle_store,
+                spec.data_glob,
+                symbol,
+                timeframe=tf,
+                candle_store=candle_store,
             )
             if candle_bundle is not None:
                 loaded[cache_key] = candle_bundle
@@ -1227,10 +1422,14 @@ def evaluate_spec(
         if needs is not None:
             for raw_params in family_variants:
                 params = {**strategy_defaults, **dict(raw_params or {})}
-                zero = compute_metrics([], spec.split_ratio, spec.min_trades, stress_extra)
+                zero = compute_metrics(
+                    [], spec.split_ratio, spec.min_trades, stress_extra
+                )
                 zero["data_file_label"] = data_label
                 zero["data_file_timeframe"] = file_tf or ""
-                zero["data_source"] = "sqlite" if data_label.startswith("sqlite:") else "json"
+                zero["data_source"] = (
+                    "sqlite" if data_label.startswith("sqlite:") else "json"
+                )
                 zero["data_fingerprint"] = data_fingerprint
                 zero["data_snapshot_id"] = data_snapshot_id
                 zero["data_evidence_hash"] = data_fingerprint
@@ -1249,35 +1448,59 @@ def evaluate_spec(
                     "simulator": "not_executed_data_gate",
                     "terminal_phase": "data_gate",
                 }
-                results.append(RunResult(
-                    run_id=stable_run_id(
-                        symbol, family, params, experiment_id=spec.experiment_id,
-                        data_fingerprint=data_fingerprint, timeframe=file_tf or "",
-                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
-                        split_ratio=spec.split_ratio, filters=spec.filters,
-                    ), symbol=symbol, family=family,
-                    params=params, metrics=zero, decision=needs,
-                    reasons=["missing_required_data"], trades=[],
-                    validation_status=needs, validation_reasons=[], risk_flags=["needs_data"],
-                    next_action="provide the required OI/funding/microstructure data, then re-run",
-                    regime_summary={}))
+                results.append(
+                    RunResult(
+                        run_id=stable_run_id(
+                            symbol,
+                            family,
+                            params,
+                            experiment_id=spec.experiment_id,
+                            data_fingerprint=data_fingerprint,
+                            timeframe=file_tf or "",
+                            fees_bps=spec.fees_bps,
+                            slippage_bps=spec.slippage_bps,
+                            split_ratio=spec.split_ratio,
+                            filters=spec.filters,
+                        ),
+                        symbol=symbol,
+                        family=family,
+                        params=params,
+                        metrics=zero,
+                        decision=needs,
+                        reasons=["missing_required_data"],
+                        trades=[],
+                        validation_status=needs,
+                        validation_reasons=[],
+                        risk_flags=["needs_data"],
+                        next_action="provide the required OI/funding/microstructure data, then re-run",
+                        regime_summary={},
+                    )
+                )
                 report_completed_variant()
                 if spec.max_runs and len(results) >= spec.max_runs:
                     _finalize_runtime_meta(
-                        runtime_meta, started, accelerated_signal_runs,
-                        accelerated_simulation_runs, cpu_fallback_families,
-                        sim_fallback_reasons, n_variants=len(results),
+                        runtime_meta,
+                        started,
+                        accelerated_signal_runs,
+                        accelerated_simulation_runs,
+                        cpu_fallback_families,
+                        sim_fallback_reasons,
+                        n_variants=len(results),
                     )
                     report_evaluation_completed()
                     return results
             continue
-        auto_batch_ok = spec.backend != "auto" or auto_gpu_worthwhile(len(candles), len(family_variants))
+        auto_batch_ok = spec.backend != "auto" or auto_gpu_worthwhile(
+            len(candles), len(family_variants)
+        )
         gpu_family = use_gpu and auto_batch_ok and gpu_kernels.supported_family(family)
         if use_gpu and not gpu_family:
             cpu_fallback_families.add(
                 f"{family}:auto_batch_too_small" if not auto_batch_ok else family
             )
-        prepared_arrays = gpu_kernels.prepare_candle_arrays(candles, xp=xp) if gpu_family else None
+        prepared_arrays = (
+            gpu_kernels.prepare_candle_arrays(candles, xp=xp) if gpu_family else None
+        )
         for raw_params in family_variants:
             params = {**strategy_defaults, **dict(raw_params or {})}
             trial_identity = {
@@ -1306,7 +1529,11 @@ def evaluate_spec(
             try:
                 if gpu_family:
                     signals = gpu_kernels.generate_signals_vectorized(
-                        candles, family, params, xp=xp, arrays=prepared_arrays,
+                        candles,
+                        family,
+                        params,
+                        xp=xp,
+                        arrays=prepared_arrays,
                     )
                     accelerated_signal_runs += 1
                 else:
@@ -1344,14 +1571,18 @@ def evaluate_spec(
                     return results
                 continue
             try:
-                signals = annotate_signals_with_regime(candles, signals, spec.regime_params)
+                signals = annotate_signals_with_regime(
+                    candles, signals, spec.regime_params
+                )
                 signals = filter_signals(signals, spec.filters)
                 # Simulation backend is decided per variant: GPU only for the supported
                 # exit mode and a batch that fits the VRAM cap; otherwise CPU with a
                 # recorded reason (never a silent wrong-GPU result).
                 use_gpu_sim = use_gpu
                 if use_gpu:
-                    ok_mode, mode_reason = gpu_simulator.supported_simulation_mode(params)
+                    ok_mode, mode_reason = gpu_simulator.supported_simulation_mode(
+                        params
+                    )
                     if not ok_mode:
                         use_gpu_sim, reason = False, mode_reason
                     elif not gpu_simulator.within_memory_cap(
@@ -1368,8 +1599,12 @@ def evaluate_spec(
                         terminal_phase="simulation",
                     )
                     trades = gpu_simulator.simulate_trades_batched(
-                        candles, signals, params,
-                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps, xp=xp,
+                        candles,
+                        signals,
+                        params,
+                        fees_bps=spec.fees_bps,
+                        slippage_bps=spec.slippage_bps,
+                        xp=xp,
                     )
                     accelerated_simulation_runs += 1
                 else:
@@ -1379,8 +1614,11 @@ def evaluate_spec(
                         terminal_phase="simulation",
                     )
                     trades = simulate_trades(
-                        candles, signals, params,
-                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
+                        candles,
+                        signals,
+                        params,
+                        fees_bps=spec.fees_bps,
+                        slippage_bps=spec.slippage_bps,
                     )
                 metrics = compute_metrics(
                     trades, spec.split_ratio, spec.min_trades, stress_extra
@@ -1407,10 +1645,16 @@ def evaluate_spec(
                 validation = validate_candidate(metrics, decision)
                 result = RunResult(
                     run_id=stable_run_id(
-                        symbol, family, params, experiment_id=spec.experiment_id,
-                        data_fingerprint=data_fingerprint, timeframe=file_tf or "",
-                        fees_bps=spec.fees_bps, slippage_bps=spec.slippage_bps,
-                        split_ratio=spec.split_ratio, filters=spec.filters,
+                        symbol,
+                        family,
+                        params,
+                        experiment_id=spec.experiment_id,
+                        data_fingerprint=data_fingerprint,
+                        timeframe=file_tf or "",
+                        fees_bps=spec.fees_bps,
+                        slippage_bps=spec.slippage_bps,
+                        split_ratio=spec.split_ratio,
+                        filters=spec.filters,
                     ),
                     symbol=symbol,
                     family=family,
@@ -1444,14 +1688,26 @@ def evaluate_spec(
             results.append(result)
             report_completed_variant()
             if spec.max_runs and len(results) >= spec.max_runs:
-                _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
-                                       accelerated_simulation_runs, cpu_fallback_families,
-                                       sim_fallback_reasons, n_variants=len(results))
+                _finalize_runtime_meta(
+                    runtime_meta,
+                    started,
+                    accelerated_signal_runs,
+                    accelerated_simulation_runs,
+                    cpu_fallback_families,
+                    sim_fallback_reasons,
+                    n_variants=len(results),
+                )
                 report_evaluation_completed()
                 return results
-    _finalize_runtime_meta(runtime_meta, started, accelerated_signal_runs,
-                           accelerated_simulation_runs, cpu_fallback_families,
-                           sim_fallback_reasons, n_variants=len(results))
+    _finalize_runtime_meta(
+        runtime_meta,
+        started,
+        accelerated_signal_runs,
+        accelerated_simulation_runs,
+        cpu_fallback_families,
+        sim_fallback_reasons,
+        n_variants=len(results),
+    )
     report_evaluation_completed()
     return results
 
@@ -1476,7 +1732,9 @@ def _finalize_runtime_meta(
     runtime_meta["accelerated_signal_runs"] = accelerated_signal_runs
     runtime_meta["accelerated_simulation_runs"] = accelerated_simulation_runs
     runtime_meta["signal_backend"] = GPU if accelerated_signal_runs > 0 else "cpu"
-    runtime_meta["simulation_backend"] = GPU if accelerated_simulation_runs > 0 else "cpu"
+    runtime_meta["simulation_backend"] = (
+        GPU if accelerated_simulation_runs > 0 else "cpu"
+    )
     resolved_backend = str(runtime_meta.get("effective_backend") or "cpu")
     runtime_meta["resolved_backend"] = resolved_backend
     runtime_meta["effective_backend"] = (
@@ -1485,7 +1743,9 @@ def _finalize_runtime_meta(
     if resolved_backend == GPU and runtime_meta["effective_backend"] == "cpu":
         sim_fallback_reasons.add("no_workload_executed_on_gpu")
     runtime_meta["simulation_fallback_reason"] = "; ".join(sorted(sim_fallback_reasons))
-    runtime_meta["gpu_supported_simulation_modes"] = list(GPU_SUPPORTED_SIMULATION_MODES)
+    runtime_meta["gpu_supported_simulation_modes"] = list(
+        GPU_SUPPORTED_SIMULATION_MODES
+    )
     runtime_meta["cpu_fallback_families"] = sorted(cpu_fallback_families)
 
 

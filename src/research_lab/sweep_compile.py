@@ -60,7 +60,10 @@ def expand_grids(*grids: dict[str, list[Any]]) -> list[dict[str, Any]]:
     if not merged:
         return [{}]
     keys = sorted(merged)
-    return [dict(zip(keys, combo)) for combo in itertools.product(*(merged[k] for k in keys))]
+    return [
+        dict(zip(keys, combo))
+        for combo in itertools.product(*(merged[k] for k in keys))
+    ]
 
 
 def bounded_uniform_sample(
@@ -77,7 +80,9 @@ def bounded_uniform_sample(
 
 
 def expand_grids_bounded(
-    *grids: dict[str, list[Any]], cap: int, seed_material: str,
+    *grids: dict[str, list[Any]],
+    cap: int,
+    seed_material: str,
     baseline: dict[str, Any] | None = None,
     strategy_id: str = "",
     audit: dict[str, Any] | None = None,
@@ -123,6 +128,7 @@ def expand_grids_bounded(
     axes = [merged[key] for key in keys]
     total = math.prod(len(axis) for axis in axes)
     chunk_size = max(1, int(progress_chunk_size))
+
     def decode(flat_index: int) -> dict[str, Any]:
         cursor = flat_index
         values: list[Any] = [None] * len(axes)
@@ -144,7 +150,9 @@ def expand_grids_bounded(
         for index in range(total):
             params = decode(index)
             complete_params = {**strategy_defaults, **params}
-            schema = validate_params(strategy_id, complete_params, policy=parameter_policy)
+            schema = validate_params(
+                strategy_id, complete_params, policy=parameter_policy
+            )
             if not schema.ok:
                 invalid[index] = ("schema_invalid", ";".join(schema.errors))
             else:
@@ -154,10 +162,16 @@ def expand_grids_bounded(
                 else:
                     valid_indices.append(index)
             _completed_chunk_progress(
-                progress, "grid_validation", index + 1, total, chunk_size=chunk_size,
+                progress,
+                "grid_validation",
+                index + 1,
+                total,
+                chunk_size=chunk_size,
             )
     if not valid_indices:
-        raise ValueError("parameter grid has no variants satisfying cross-axis dependencies")
+        raise ValueError(
+            "parameter grid has no variants satisfying cross-axis dependencies"
+        )
     limit = min(len(valid_indices), max(1, int(cap)))
     if len(valid_indices) <= limit:
         indices: list[int] = valid_indices
@@ -177,7 +191,9 @@ def expand_grids_bounded(
             return index
 
         baseline_index = flat_index(offsets)
-        mandatory: list[int] = [baseline_index] if baseline_index in valid_indices else []
+        mandatory: list[int] = (
+            [baseline_index] if baseline_index in valid_indices else []
+        )
         for axis_pos, axis in enumerate(axes):
             coverage_levels = sorted({0, offsets[axis_pos], len(axis) - 1})
             for level in coverage_levels:
@@ -195,29 +211,36 @@ def expand_grids_bounded(
             chosen.add(rng.choice(valid_indices))
         indices = sorted(chosen)
     variants: list[dict[str, Any]] = []
-    for flat_index in indices:
-        variants.append(decode(flat_index))
+    for selected_index in indices:
+        variants.append(decode(selected_index))
     if audit is not None:
         selected = set(indices)
         points = []
-        for flat_index in range(total):
-            params = decode(flat_index)
-            if flat_index in invalid:
-                disposition, reason = invalid[flat_index]
-            elif flat_index in selected:
+        for candidate_index in range(total):
+            params = decode(candidate_index)
+            if candidate_index in invalid:
+                disposition, reason = invalid[candidate_index]
+            elif candidate_index in selected:
                 disposition, reason = "selected", "selected_by_sampler"
             else:
-                disposition, reason = "omitted_variant_cap", "eligible_not_selected_by_cap"
+                disposition, reason = (
+                    "omitted_variant_cap",
+                    "eligible_not_selected_by_cap",
+                )
             points.append(
                 {
-                    "flat_index": flat_index,
+                    "flat_index": candidate_index,
                     "params": params,
                     "pre_disposition": disposition,
                     "reason": reason,
                 }
             )
             _completed_chunk_progress(
-                progress, "grid_ledger", flat_index + 1, total, chunk_size=chunk_size,
+                progress,
+                "grid_ledger",
+                candidate_index + 1,
+                total,
+                chunk_size=chunk_size,
             )
         audit.update(
             {
@@ -276,7 +299,9 @@ def compile_sweep(
     }
     search_space: dict[str, int] = {}
     variants = expand_grids_bounded(
-        spec.setup_grid, spec.entry_grid, spec.exit_grid,
+        spec.setup_grid,
+        spec.entry_grid,
+        spec.exit_grid,
         cap=result.effective_max_variants,
         seed_material=f"{spec.sweep_id}|{spec.setup_family}|{spec.timeframe}",
         baseline=baseline,

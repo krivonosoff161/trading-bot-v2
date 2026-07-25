@@ -139,11 +139,17 @@ def compile_sweep_proposals(private_root: Path, advice: Any) -> dict[str, Any]:
     }
     snapshot = proposal_snapshot_path(private_root)
     snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.write_text(json.dumps({**summary, "items": rows[-100:]}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    snapshot.write_text(
+        json.dumps({**summary, "items": rows[-100:]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
     return summary
 
 
-def schedule_advisor_sweep_tasks(private_root: Path, tasks: Any, *, limit: int = 20, now: float | None = None) -> dict[str, Any]:
+def schedule_advisor_sweep_tasks(
+    private_root: Path, tasks: Any, *, limit: int = 20, now: float | None = None
+) -> dict[str, Any]:
     """Turn accepted advisor proposals into scheduler tasks backed by active paper signals.
 
     The advisor only proposes dimensions. This scheduler does not carry numeric LLM
@@ -157,7 +163,9 @@ def schedule_advisor_sweep_tasks(private_root: Path, tasks: Any, *, limit: int =
     deduped = 0
     skipped: dict[str, int] = {}
     for proposal in proposals:
-        if not bool(proposal.get("paper_only", True)) or bool(proposal.get("execution_allowed", False)):
+        if not bool(proposal.get("paper_only", True)) or bool(
+            proposal.get("execution_allowed", False)
+        ):
             _inc(skipped, "unsafe_proposal")
             continue
         feature_packet_id = str(proposal.get("feature_packet_id") or "")
@@ -169,7 +177,9 @@ def schedule_advisor_sweep_tasks(private_root: Path, tasks: Any, *, limit: int =
         if not signal:
             _inc(skipped, "missing_active_signal")
             continue
-        executable_family = paper_to_executable_family(str(signal.get("setup_family") or ""))
+        executable_family = paper_to_executable_family(
+            str(signal.get("setup_family") or "")
+        )
         if executable_family not in REGISTRY:
             _inc(skipped, "unsupported_executable_family")
             continue
@@ -255,7 +265,9 @@ def _load_recent_proposals(private_root: Path, *, limit: int) -> list[dict[str, 
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-max(1, int(limit)) * 3:]:
+    for line in path.read_text(encoding="utf-8").splitlines()[
+        -max(1, int(limit)) * 3 :
+    ]:
         if not line.strip():
             continue
         try:
@@ -264,11 +276,12 @@ def _load_recent_proposals(private_root: Path, *, limit: int) -> list[dict[str, 
             continue
         if isinstance(row, dict) and row.get("schema") == SCHEMA:
             rows.append(row)
-    return rows[-max(1, int(limit)):]
+    return rows[-max(1, int(limit)) :]
 
 
 def _feature_index(private_root: Path) -> dict[str, dict[str, Any]]:
     from src.research_lab.feature_packet import packet_index_path
+
     index = packet_index_path(private_root)
     out: dict[str, dict[str, Any]] = {}
     if not index.exists():
@@ -294,7 +307,8 @@ def _active_paper_signals(private_root: Path) -> list[dict[str, Any]]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
-    active = data.get("active") if isinstance(data, dict) else []
+    raw_active = data.get("active") if isinstance(data, dict) else []
+    active = raw_active if isinstance(raw_active, list) else []
     return [row for row in active if isinstance(row, dict)]
 
 
@@ -306,14 +320,16 @@ def _match_active_signal(
     symbol = str(feature.get("symbol") or "")
     timeframe = str(feature.get("timeframe") or "")
     exact = [
-        row for row in signals
+        row
+        for row in signals
         if str(row.get("feature_packet_id") or "") == feature_packet_id
         and str(row.get("setup_family") or "")
     ]
     if exact:
         return _best_signal(exact)
     loose = [
-        row for row in signals
+        row
+        for row in signals
         if str(row.get("symbol") or "") == symbol
         and str(row.get("timeframe") or "") == timeframe
         and str(row.get("setup_family") or "")

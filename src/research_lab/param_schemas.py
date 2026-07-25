@@ -5,6 +5,7 @@ The strategy registry remains the source of truth for strategy ids, default
 parameters and required data. This module adds executable validation: allowed
 keys, scalar types/ranges, and the paper/LLM risk-reward gate.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -105,7 +106,14 @@ def parameter_search_contract(strategy_id: str) -> ParameterSearchContract:
                 float(range_spec.get("min", 2.0 if isinstance(value, int) else 0.0)),
                 float(range_spec.get("max", value)),
                 float(value),
-                str(units.get(name) or ("bars" if "lookback" in name or name.endswith("period") else "scalar")),
+                str(
+                    units.get(name)
+                    or (
+                        "bars"
+                        if "lookback" in name or name.endswith("period")
+                        else "scalar"
+                    )
+                ),
                 True,
                 _AXIS_DEPENDENCIES.get((strategy_id, name), ()),
             )
@@ -118,7 +126,9 @@ def parameter_search_contract(strategy_id: str) -> ParameterSearchContract:
     )
 
 
-def search_variant_validity(strategy_id: str, params: dict[str, Any]) -> tuple[bool, str]:
+def search_variant_validity(
+    strategy_id: str, params: dict[str, Any]
+) -> tuple[bool, str]:
     """Return cross-axis validity plus one deterministic disposition reason."""
     if strategy_id == "rsi_reversal":
         try:
@@ -171,12 +181,16 @@ def _range_for_key(key: str, default: Any, policy: dict[str, Any]) -> dict[str, 
     fallback = policy.get("fallback_ranges") or {}
     if isinstance(default, int) and not isinstance(default, bool):
         cfg = fallback.get("int") or {}
-        max_v = max(int(cfg.get("min_max", 10)), int(default) * int(cfg.get("max_mult", 4)))
-        return {"type": "int", "min": int(cfg.get("min", 0)), "max": max_v}
+        max_int = max(
+            int(cfg.get("min_max", 10)), int(default) * int(cfg.get("max_mult", 4))
+        )
+        return {"type": "int", "min": int(cfg.get("min", 0)), "max": max_int}
     cfg = fallback.get("number") or {}
     base = abs(float(default or 0))
-    max_v = max(float(cfg.get("min_max", 1.0)), base * float(cfg.get("max_mult", 4)))
-    return {"type": "number", "min": float(cfg.get("min", 0.0)), "max": max_v}
+    max_number = max(
+        float(cfg.get("min_max", 1.0)), base * float(cfg.get("max_mult", 4))
+    )
+    return {"type": "number", "min": float(cfg.get("min", 0.0)), "max": max_number}
 
 
 def parameter_range_authority(
@@ -231,7 +245,9 @@ def parameter_range_authority(
     )
 
 
-def _validate_one(key: str, value: Any, default: Any, policy: dict[str, Any]) -> list[str]:
+def _validate_one(
+    key: str, value: Any, default: Any, policy: dict[str, Any]
+) -> list[str]:
     spec = _range_for_key(key, default, policy)
     typ = str(spec.get("type") or "")
     if typ == "bool":
@@ -239,18 +255,18 @@ def _validate_one(key: str, value: Any, default: Any, policy: dict[str, Any]) ->
     if typ == "int":
         if not _is_intish(value):
             return [f"{key}:expected_int"]
-        val = int(value)
+        normalized_value = float(int(value))
     else:
         num = _num(value)
         if num is None:
             return [f"{key}:expected_number"]
-        val = num
+        normalized_value = num
     lo = spec.get("min")
     hi = spec.get("max")
     errors: list[str] = []
-    if lo is not None and val < float(lo):
+    if lo is not None and normalized_value < float(lo):
         errors.append(f"{key}:below_min:{lo}")
-    if hi is not None and val > float(hi):
+    if hi is not None and normalized_value > float(hi):
         errors.append(f"{key}:above_max:{hi}")
     return errors
 
@@ -383,5 +399,7 @@ def executable_exit_params(
         if take is None or take < target_take:
             out["take_pct"] = round(target_take, 6)
     if _num(out.get("hold_bars")) is None or float(out.get("hold_bars") or 0) <= 0:
-        out["hold_bars"] = int(get_strategy(strategy_id).parameter_defaults.get("hold_bars") or 5)
+        out["hold_bars"] = int(
+            get_strategy(strategy_id).parameter_defaults.get("hold_bars") or 5
+        )
     return out

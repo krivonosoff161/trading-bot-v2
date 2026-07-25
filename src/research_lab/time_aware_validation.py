@@ -40,7 +40,9 @@ def _content_hash(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _identified(prefix: str, payload: Mapping[str, Any], id_field: str) -> dict[str, Any]:
+def _identified(
+    prefix: str, payload: Mapping[str, Any], id_field: str
+) -> dict[str, Any]:
     value = dict(payload)
     value[id_field] = f"{prefix}_{_content_hash(value)}"
     return value
@@ -169,12 +171,10 @@ def build_validation_observation_set(
         observations.append(_identified("vobs", body, "observation_id"))
     if not observations:
         raise ValidationEvidenceError("empty_observation_set")
-    normalized_grid = {"kind": str(time_grid.get("kind") or "")}
+    normalized_grid: dict[str, Any] = {"kind": str(time_grid.get("kind") or "")}
     if "step_ms" in time_grid:
         normalized_grid["step_ms"] = int(time_grid["step_ms"])
-    _validate_time_grid(
-        [row["period_ts"] for row in observations], normalized_grid
-    )
+    _validate_time_grid([row["period_ts"] for row in observations], normalized_grid)
     payload = {
         "schema": OBSERVATION_SET_SCHEMA,
         **required_identity,
@@ -259,7 +259,9 @@ def validate_validation_observation_set(value: Mapping[str, Any]) -> None:
             _required_int(row, "period_ts", code="invalid_observation_row")
             for row in observations
         ],
-        value.get("time_grid") if isinstance(value.get("time_grid"), dict) else {},
+        raw_time_grid
+        if isinstance(raw_time_grid := value.get("time_grid"), dict)
+        else {},
     )
     entry_axis = [
         _required_int(row, "entry_ts", code="invalid_observation_row")
@@ -287,7 +289,9 @@ def validate_validation_observation_set(value: Mapping[str, Any]) -> None:
 def classify_legacy_search_bias_evidence(trial_returns: Any) -> dict[str, Any]:
     """Classify old trial-major/per-trade vectors without trying to repair them."""
     rows = len(trial_returns) if isinstance(trial_returns, list) else 0
-    lengths = [len(row) for row in trial_returns if isinstance(row, list)] if rows else []
+    lengths = (
+        [len(row) for row in trial_returns if isinstance(row, list)] if rows else []
+    )
     return {
         "schema": PANEL_STATUS_SCHEMA,
         "status": "invalid",
@@ -308,7 +312,9 @@ def _family_scope(evidence: Mapping[str, Any]) -> tuple[str, str, str]:
         or ""
     )
     snapshot_id = str((definition.get("data_binding") or {}).get("snapshot_id") or "")
-    evidence_hash = str((definition.get("data_binding") or {}).get("evidence_hash") or "")
+    evidence_hash = str(
+        (definition.get("data_binding") or {}).get("evidence_hash") or ""
+    )
     return timeframe, snapshot_id, evidence_hash
 
 
@@ -372,8 +378,8 @@ def build_search_trial_panel(
                 }
             )
             continue
-        observation_set = by_trial.get(trial_id)
-        if observation_set is None:
+        selected_observation_set = by_trial.get(trial_id)
+        if selected_observation_set is None:
             excluded.append(
                 {
                     "trial_id": trial_id,
@@ -387,25 +393,33 @@ def build_search_trial_panel(
             trial.get("data_evidence_hash") or family_evidence_hash
         )
         if (
-            str(observation_set.get("symbol") or "") != str(trial.get("symbol") or "")
-            or str(observation_set.get("strategy_family") or "")
+            str(selected_observation_set.get("symbol") or "")
+            != str(trial.get("symbol") or "")
+            or str(selected_observation_set.get("strategy_family") or "")
             != str(trial.get("family") or "")
-            or str(observation_set.get("timeframe") or "") != expected_timeframe
-            or str(observation_set.get("data_snapshot_id") or "") != expected_snapshot
-            or str(observation_set.get("data_evidence_hash") or "")
+            or str(selected_observation_set.get("timeframe") or "")
+            != expected_timeframe
+            or str(selected_observation_set.get("data_snapshot_id") or "")
+            != expected_snapshot
+            or str(selected_observation_set.get("data_evidence_hash") or "")
             != expected_evidence_hash
-            or str(observation_set.get("search_family_id") or "") != family_id
+            or str(selected_observation_set.get("search_family_id") or "") != family_id
         ):
             raise ValidationEvidenceError("panel_scope_mismatch", trial_id)
-        validate_validation_observation_set(observation_set)
+        validate_validation_observation_set(selected_observation_set)
         included.append(
             {
                 "trial_id": trial_id,
-                "observation_set_id": str(observation_set["observation_set_id"]),
+                "observation_set_id": str(
+                    selected_observation_set["observation_set_id"]
+                ),
                 "disposition": disposition,
             }
         )
-    unknown = sorted(set(by_trial) - {str(row.get("execution_id") or "") for row in evidence.get("trials") or []})
+    unknown = sorted(
+        set(by_trial)
+        - {str(row.get("execution_id") or "") for row in evidence.get("trials") or []}
+    )
     if unknown:
         raise ValidationEvidenceError("panel_unknown_trial", ",".join(unknown))
     coverage = {
@@ -438,9 +452,7 @@ def build_search_trial_panel(
         return {
             "schema": PANEL_STATUS_SCHEMA,
             "status": "unavailable",
-            "reason_codes": sorted(
-                {str(row["reason"]) for row in blocking_exclusions}
-            ),
+            "reason_codes": sorted({str(row["reason"]) for row in blocking_exclusions}),
             "search_family_id": family_id,
             "effective_family_trial_count": effective_family_trial_count,
             "coverage": coverage,
@@ -472,7 +484,10 @@ def build_search_trial_panel(
     ):
         raise ValidationEvidenceError("panel_basis_or_grid_mismatch")
     matrix = [
-        [float(value["observations"][row_index]["return_value"]) for value in ordered_sets]
+        [
+            float(value["observations"][row_index]["return_value"])
+            for value in ordered_sets
+        ]
         for row_index in range(len(axes[0]))
     ]
     payload = {
@@ -490,7 +505,9 @@ def build_search_trial_panel(
         "time_grid": grid,
         "time_axis": axes[0],
         "trial_columns": columns,
-        "observation_set_ids": [str(value["observation_set_id"]) for value in ordered_sets],
+        "observation_set_ids": [
+            str(value["observation_set_id"]) for value in ordered_sets
+        ],
         "observation_sets": ordered_sets,
         "matrix": matrix,
         "reported_time_count": len(axes[0]),
@@ -518,7 +535,11 @@ def validate_search_trial_panel(
     source_observation_sets = panel.get("observation_sets")
     matrix = panel.get("matrix")
     time_axis = panel.get("time_axis")
-    if not isinstance(columns, list) or columns != sorted(columns) or len(set(columns)) != len(columns):
+    if (
+        not isinstance(columns, list)
+        or columns != sorted(columns)
+        or len(set(columns)) != len(columns)
+    ):
         raise ValidationEvidenceError("panel_columns_invalid")
     if (
         not isinstance(observation_set_ids, list)
@@ -560,7 +581,9 @@ def validate_search_trial_panel(
         != int(counts["effective_n_trials"])
     ):
         raise ValidationEvidenceError("panel_trial_count_mismatch")
-    if _required_int(panel, "reported_time_count", code="panel_time_count_mismatch") != len(time_axis):
+    if _required_int(
+        panel, "reported_time_count", code="panel_time_count_mismatch"
+    ) != len(time_axis):
         raise ValidationEvidenceError("panel_time_count_mismatch")
     if len(matrix) != len(time_axis) or any(
         not isinstance(row, list) or len(row) != len(columns) for row in matrix
@@ -574,11 +597,17 @@ def validate_search_trial_panel(
             _required_int({"value": value}, "value", code="panel_time_axis_invalid")
             for value in time_axis
         ],
-        panel.get("time_grid") if isinstance(panel.get("time_grid"), dict) else {},
+        raw_panel_time_grid
+        if isinstance(raw_panel_time_grid := panel.get("time_grid"), dict)
+        else {},
     )
-    if str(panel.get("search_family_id") or "") != str(evidence.get("search_family_id") or ""):
+    if str(panel.get("search_family_id") or "") != str(
+        evidence.get("search_family_id") or ""
+    ):
         raise ValidationEvidenceError("panel_family_identity_mismatch")
-    expected_timeframe, expected_snapshot, expected_evidence_hash = _family_scope(evidence)
+    expected_timeframe, expected_snapshot, expected_evidence_hash = _family_scope(
+        evidence
+    )
     if (
         str(panel.get("timeframe") or "") != expected_timeframe
         or str(panel.get("data_snapshot_id") or "") != expected_snapshot
@@ -619,12 +648,14 @@ def validate_search_trial_panel(
             }
             for row in evidence.get("trials") or []
             if str(row.get("symbol") or "") != str(panel.get("symbol") or "")
-            or str(row.get("family") or "")
-            != str(panel.get("strategy_family") or "")
+            or str(row.get("family") or "") != str(panel.get("strategy_family") or "")
         ],
         key=lambda row: row["trial_id"],
     )
-    if coverage.get("included") != expected_included or coverage.get("excluded") != expected_excluded:
+    if (
+        coverage.get("included") != expected_included
+        or coverage.get("excluded") != expected_excluded
+    ):
         raise ValidationEvidenceError("panel_coverage_mismatch")
     body = {key: item for key, item in panel.items() if key != "search_trial_panel_id"}
     if panel.get("search_trial_panel_id") != f"stp_{_content_hash(body)}":
@@ -750,7 +781,9 @@ def validate_dependence_evidence(value: Mapping[str, Any]) -> None:
             method=str(value["method"]),
             seed=int(value["seed"]),
             block_length=(
-                None if value.get("block_length") is None else int(value["block_length"])
+                None
+                if value.get("block_length") is None
+                else int(value["block_length"])
             ),
             effective_n=int(value["effective_n"]),
         )

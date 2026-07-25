@@ -15,6 +15,7 @@ Before believing it, close the gaps honestly, with comparisons:
 
 Pooled across a broad meme sample, OOS only. Keyless public candles; nothing edge or paper-ready.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,18 +26,47 @@ from typing import Any
 
 from src.research_lab.strategies._helpers import sma
 
-FEES_RT = 0.06            # 2 taker legs at ~3bps (high-liquidity memes); slippage is added on top
+FEES_RT = 0.06  # 2 taker legs at ~3bps (high-liquidity memes); slippage is added on top
 OOS_FRAC = 0.35
-N_BLOCKS = 5             # walk-forward time-blocks over the OOS region
-GRID_CELLS_TESTED = 50   # ~ the size of the search that produced the lead (for Sidak deflation)
-SYMBOLS = ("PEPE-USDT-SWAP", "BONK-USDT-SWAP", "WIF-USDT-SWAP", "FLOKI-USDT-SWAP", "SHIB-USDT-SWAP",
-           "DOGE-USDT-SWAP", "PUMP-USDT-SWAP", "PENGU-USDT-SWAP", "MEW-USDT-SWAP", "TRUMP-USDT-SWAP",
-           "WLD-USDT-SWAP", "SAND-USDT-SWAP")
+N_BLOCKS = 5  # walk-forward time-blocks over the OOS region
+GRID_CELLS_TESTED = (
+    50  # ~ the size of the search that produced the lead (for Sidak deflation)
+)
+SYMBOLS = (
+    "PEPE-USDT-SWAP",
+    "BONK-USDT-SWAP",
+    "WIF-USDT-SWAP",
+    "FLOKI-USDT-SWAP",
+    "SHIB-USDT-SWAP",
+    "DOGE-USDT-SWAP",
+    "PUMP-USDT-SWAP",
+    "PENGU-USDT-SWAP",
+    "MEW-USDT-SWAP",
+    "TRUMP-USDT-SWAP",
+    "WLD-USDT-SWAP",
+    "SAND-USDT-SWAP",
+)
 SPECS = (
-    {"label": "range_fade x3 | tp_sl", "tf": "5m", "trigger": "range", "mult": 3.0,
-     "exit": "tp_sl", "tp": 1.0, "sl": 0.8, "max_hold": 6},
-    {"label": "nbar_fade n4 | first_green", "tf": "15m", "trigger": "nbar", "n": 4,
-     "exit": "first_green", "tp": 1.6, "sl": 1.2, "max_hold": 28},
+    {
+        "label": "range_fade x3 | tp_sl",
+        "tf": "5m",
+        "trigger": "range",
+        "mult": 3.0,
+        "exit": "tp_sl",
+        "tp": 1.0,
+        "sl": 0.8,
+        "max_hold": 6,
+    },
+    {
+        "label": "nbar_fade n4 | first_green",
+        "tf": "15m",
+        "trigger": "nbar",
+        "n": 4,
+        "exit": "first_green",
+        "tp": 1.6,
+        "sl": 1.2,
+        "max_hold": 28,
+    },
 )
 
 
@@ -77,18 +107,26 @@ def _trade(candles, idx, side, spec):
     take = entry * (1 + spec["tp"] / 100) if long_ else entry * (1 - spec["tp"] / 100)
     exit_price = float(candles[cap]["close"])
     for j in range(idx, cap + 1):
-        hi, lo, cl = float(candles[j]["high"]), float(candles[j]["low"]), float(candles[j]["close"])
+        hi, lo, cl = (
+            float(candles[j]["high"]),
+            float(candles[j]["low"]),
+            float(candles[j]["close"]),
+        )
         if (long_ and lo <= stop) or (not long_ and hi >= stop):
             exit_price = stop
             break
         if (long_ and hi >= take) or (not long_ and lo <= take):
             exit_price = take
             break
-        if spec["exit"] == "first_green" and ((long_ and cl > entry) or (not long_ and cl < entry)):
+        if spec["exit"] == "first_green" and (
+            (long_ and cl > entry) or (not long_ and cl < entry)
+        ):
             exit_price = cl
             break
     gross = (exit_price / entry - 1) * 100 * (1 if long_ else -1)
-    return gross, _range_pct(candles[idx - 1])   # the trigger (spike) bar's range drives slippage
+    return gross, _range_pct(
+        candles[idx - 1]
+    )  # the trigger (spike) bar's range drives slippage
 
 
 def collect(private_root, spec, *, provider, symbols=SYMBOLS):
@@ -136,7 +174,7 @@ def analyze(rows) -> dict[str, Any]:
             breakeven = sm
     # 2. walk-forward at a realistic slip (0.02)
     real = _net(rows, 0.02)
-    by_block = {}
+    by_block: dict[Any, list[float]] = {}
     for r, n in zip(rows, real):
         by_block.setdefault(r["block"], []).append(n)
     wf = {b: round(mean(v), 4) for b, v in sorted(by_block.items())}
@@ -151,20 +189,27 @@ def analyze(rows) -> dict[str, Any]:
         max_dd = min(max_dd, equity - peak)
     # 4. significance (t-stat) + Sidak deflation across the grid
     mu, sd, n = mean(real), pstdev(real) or 1e-9, len(real)
-    t = mu / (sd / (n ** 0.5))
+    t = mu / (sd / (n**0.5))
     # rough two-sided p from t via normal approx, then Sidak over the grid
     import math
-    p_raw = math.erfc(abs(t) / (2 ** 0.5))
+
+    p_raw = math.erfc(abs(t) / (2**0.5))
     p_adj = 1 - (1 - p_raw) ** GRID_CELLS_TESTED
     return {
         "trades": len(rows),
-        "slippage_curve_net": slip_curve, "breakeven_slip_mult": breakeven,
-        "walk_forward_by_block": wf, "wf_blocks_positive": f"{wf_positive}/{len(wf)}",
-        "realistic_net_mean": round(mu, 4), "win_rate": round(len(wins) / n, 3),
+        "slippage_curve_net": slip_curve,
+        "breakeven_slip_mult": breakeven,
+        "walk_forward_by_block": wf,
+        "wf_blocks_positive": f"{wf_positive}/{len(wf)}",
+        "realistic_net_mean": round(mu, 4),
+        "win_rate": round(len(wins) / n, 3),
         "avg_win": round(mean(wins), 3) if wins else 0.0,
         "avg_loss": round(mean(losses), 3) if losses else 0.0,
-        "worst_loss": round(min(real), 3), "max_drawdown_pct_sum": round(max_dd, 3),
-        "t_stat": round(t, 2), "p_raw": round(p_raw, 4), "p_sidak_deflated": round(p_adj, 4),
+        "worst_loss": round(min(real), 3),
+        "max_drawdown_pct_sum": round(max_dd, 3),
+        "t_stat": round(t, 2),
+        "p_raw": round(p_raw, 4),
+        "p_sidak_deflated": round(p_adj, 4),
         "verdict": _verdict(slip_curve, wf_positive, len(wf), p_adj, breakeven),
     }
 
@@ -183,20 +228,34 @@ def _verdict(slip_curve, wf_pos, wf_n, p_adj, breakeven) -> str:
 def run(private_root, *, provider=None):
     if provider is None:
         from src.research_lab.providers.okx_public import OkxPublicMarketDataProvider
+
         provider = OkxPublicMarketDataProvider()
     out = {}
     for spec in SPECS:
-        out[spec["label"] + " :: " + spec["tf"]] = analyze(collect(Path(private_root), spec, provider=provider))
-    return {"specs": out, "note": "slippage/walk-forward/loss-tail/deflation gates on the fade lead. "
-                                   "Research-only; survives_all_gates != edge, only a paper-forward candidate"}
+        out[spec["label"] + " :: " + spec["tf"]] = analyze(
+            collect(Path(private_root), spec, provider=provider)
+        )
+    return {
+        "specs": out,
+        "note": "slippage/walk-forward/loss-tail/deflation gates on the fade lead. "
+        "Research-only; survives_all_gates != edge, only a paper-forward candidate",
+    }
 
 
 def write_snapshot(private_root, report) -> Path:
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "fade_validation.json"
-    path.write_text(json.dumps({"schema": "fade_validation.v1", **report}, ensure_ascii=False,
-                               indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            {"schema": "fade_validation.v1", **report},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
@@ -204,12 +263,19 @@ def main() -> None:
     import argparse
     import os
     import sys
+
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     from src.research_lab.paths import DEFAULT_PRIVATE_ROOT
-    ap = argparse.ArgumentParser(description="Fade-lead validation: slippage/walk-forward/tail/deflation.")
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
+
+    ap = argparse.ArgumentParser(
+        description="Fade-lead validation: slippage/walk-forward/tail/deflation."
+    )
+    ap.add_argument(
+        "--private-root",
+        default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
+    )
     ap.add_argument("--snapshot", action="store_true")
     args = ap.parse_args()
     report = run(Path(args.private_root))

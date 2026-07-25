@@ -9,6 +9,7 @@ If honest-backtest is not importable, returns a bridge_unavailable report.
 
 No network. No LLM. No live trading.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -154,16 +155,26 @@ def run_validation(
 
     contract_errors = _candidate_contract_errors(candidate)
     if contract_errors:
-        checks = [{"check_name": "contract_provenance", "passed": False,
-                   "details": {"errors": contract_errors},
-                   "message": "; ".join(contract_errors)}]
+        checks = [
+            {
+                "check_name": "contract_provenance",
+                "passed": False,
+                "details": {"errors": contract_errors},
+                "message": "; ".join(contract_errors),
+            }
+        ]
         verdict = _build_verdict(candidate, checks)
         report = _build_report(candidate, verdict, checks)
         if not dry_run:
             _write_artifacts(private_root, candidate, verdict, report)
-        return {"candidate_id": candidate.candidate_id,
-                "hard_status": verdict.hard_status, "checks_run": 1,
-                "checks_passed": 0, "checks_failed": 1, "dry_run": dry_run}
+        return {
+            "candidate_id": candidate.candidate_id,
+            "hard_status": verdict.hard_status,
+            "checks_run": 1,
+            "checks_passed": 0,
+            "checks_failed": 1,
+            "dry_run": dry_run,
+        }
 
     returns = _extract_returns(candidate)
     if len(returns) < 3:
@@ -221,10 +232,12 @@ def run_validation_batch(
             result = run_validation(candidate, private_root, dry_run=dry_run)
             results.append(result)
         except Exception as exc:
-            results.append({
-                "candidate_id": rf.stem,
-                "error": str(exc),
-            })
+            results.append(
+                {
+                    "candidate_id": rf.stem,
+                    "error": str(exc),
+                }
+            )
 
     return {
         "total": len(request_files),
@@ -253,7 +266,8 @@ def _bridge_unavailable(candidate: CandidateForValidation) -> dict[str, Any]:
 
 
 def _insufficient_data(
-    candidate: CandidateForValidation, n_returns: int,
+    candidate: CandidateForValidation,
+    n_returns: int,
 ) -> dict[str, Any]:
     return {
         "candidate_id": candidate.candidate_id,
@@ -317,11 +331,14 @@ def _candidate_contract_errors(candidate: CandidateForValidation) -> list[str]:
         )
 
         validate_simulator_assumption_manifest(candidate.simulator_manifest)
-        expected_unsupported = candidate.simulator_manifest.get("unsupported_dimensions") or []
+        expected_unsupported = (
+            candidate.simulator_manifest.get("unsupported_dimensions") or []
+        )
         if candidate.unsupported_simulator_dimensions != expected_unsupported:
             errors.append("simulator_unsupported_dimensions_mismatch")
         if (candidate.metrics or {}).get("simulator_model_id") not in {
-            None, candidate.simulator_manifest.get("simulator_model_id")
+            None,
+            candidate.simulator_manifest.get("simulator_model_id"),
         }:
             errors.append("simulator_model_identity_mismatch")
         for trade in candidate.trades:
@@ -345,10 +362,18 @@ def _n_trials(candidate: CandidateForValidation) -> int:
         raise ValueError("verified search family evidence is required")
     counts = validate_search_trial_evidence(evidence, require_complete=True)
     n = counts["effective_n_trials"]
-    runtime = m.get("runtime") if isinstance(m.get("runtime"), dict) else {}
+    runtime = raw_runtime if isinstance(raw_runtime := m.get("runtime"), dict) else {}
     claims = (
-        ("runtime.n_variants_evaluated", runtime.get("n_variants_evaluated"), counts["attempted_executions"]),
-        ("n_variants_evaluated", m.get("n_variants_evaluated"), counts["attempted_executions"]),
+        (
+            "runtime.n_variants_evaluated",
+            runtime.get("n_variants_evaluated"),
+            counts["attempted_executions"],
+        ),
+        (
+            "n_variants_evaluated",
+            m.get("n_variants_evaluated"),
+            counts["attempted_executions"],
+        ),
         ("variant_count", m.get("variant_count"), counts["selected_points"]),
         ("n_trials", m.get("n_trials"), n),
     )
@@ -397,7 +422,9 @@ def _check_independent_evaluation(candidate: CandidateForValidation) -> dict[str
         problems.append("validation_epoch_fingerprint_missing")
     elif selection_fp == evaluation_fp:
         problems.append("evaluation_reuses_selection_data")
-    if evaluation_fp and evaluation_fp != str(candidate.metrics.get("data_fingerprint") or ""):
+    if evaluation_fp and evaluation_fp != str(
+        candidate.metrics.get("data_fingerprint") or ""
+    ):
         problems.append("evaluation_fingerprint_not_bound_to_candidate")
     selection_hash = str(epoch.get("selection_evidence_hash") or "")
     evaluation_hash = str(epoch.get("evaluation_evidence_hash") or "")
@@ -416,12 +443,21 @@ def _check_independent_evaluation(candidate: CandidateForValidation) -> dict[str
     if epoch.get("evidence_stage") != "untouched_evaluation":
         problems.append("evidence_stage_not_untouched")
     try:
-        frozen = dt.datetime.fromisoformat(str(epoch["hypothesis_frozen_at"]).replace("Z", "+00:00"))
-        started = dt.datetime.fromisoformat(str(epoch["evaluation_started_at"]).replace("Z", "+00:00"))
+        frozen = dt.datetime.fromisoformat(
+            str(epoch["hypothesis_frozen_at"]).replace("Z", "+00:00")
+        )
+        started = dt.datetime.fromisoformat(
+            str(epoch["evaluation_started_at"]).replace("Z", "+00:00")
+        )
         if started <= frozen:
             problems.append("evaluation_not_after_freeze")
-        selection_bounds = _evidence_time_bounds(selection_evidence, [])
-        evaluation_bounds = _evidence_time_bounds(candidate.trades, candidate.equity_curve)
+        selection_rows = (
+            selection_evidence if isinstance(selection_evidence, list) else []
+        )
+        selection_bounds = _evidence_time_bounds(selection_rows, [])
+        evaluation_bounds = _evidence_time_bounds(
+            candidate.trades, candidate.equity_curve
+        )
         if selection_bounds is None or evaluation_bounds is None:
             problems.append("validation_epoch_evidence_time_missing")
         else:
@@ -437,7 +473,9 @@ def _check_independent_evaluation(candidate: CandidateForValidation) -> dict[str
         "check_name": "independent_evaluation",
         "passed": not problems,
         "details": {"errors": sorted(set(problems)), "epoch": epoch},
-        "message": "untouched evaluation epoch verified" if not problems else "; ".join(sorted(set(problems))),
+        "message": "untouched evaluation epoch verified"
+        if not problems
+        else "; ".join(sorted(set(problems))),
     }
 
 
@@ -466,7 +504,8 @@ def _evidence_time_bounds(
 
 
 def _check_costs(
-    candidate: CandidateForValidation, returns: list[float],
+    candidate: CandidateForValidation,
+    returns: list[float],
 ) -> dict[str, Any]:
     arr = _np.asarray(returns, dtype=float)
     cost_pct = (candidate.fees_bps + candidate.slippage_bps) / 100.0
@@ -504,7 +543,9 @@ def _check_splits(returns: list[float]) -> dict[str, Any]:
             "message": f"Too few returns ({n}) for split analysis.",
         }
     splits = walk_forward(
-        n, train_size=max(5, n // 2), test_size=max(3, n // 4),
+        n,
+        train_size=max(5, n // 2),
+        test_size=max(3, n // 4),
     )
     if not splits:
         return {
@@ -578,14 +619,14 @@ def _check_robustness(returns: list[float]) -> dict[str, Any]:
             "n_periods": result["n_periods"],
         },
         "message": (
-            f"{result['positive_periods']}/{result['n_periods']} "
-            f"periods positive"
+            f"{result['positive_periods']}/{result['n_periods']} periods positive"
         ),
     }
 
 
 def _check_overfit(
-    candidate: CandidateForValidation, returns: list[float],
+    candidate: CandidateForValidation,
+    returns: list[float],
 ) -> dict[str, Any]:
     arr = _np.asarray(returns, dtype=float)
     n = len(arr)
@@ -607,7 +648,9 @@ def _check_overfit(
     try:
         psr = probabilistic_sharpe_ratio(arr, benchmark_sr=0.0)
         mtrl = minimum_track_record_length(
-            arr, benchmark_sr=0.0, confidence=0.95,
+            arr,
+            benchmark_sr=0.0,
+            confidence=0.95,
         )
     except ValueError:
         return {
@@ -667,7 +710,9 @@ def _check_search_family_evidence(candidate: CandidateForValidation) -> dict[str
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             state = "invalid"
             errors.append(
-                exc.code if isinstance(exc, ValidationEvidenceError) else "search_trial_panel_invalid"
+                exc.code
+                if isinstance(exc, ValidationEvidenceError)
+                else "search_trial_panel_invalid"
             )
     passed = state == "valid" and not errors
     return {
@@ -676,7 +721,9 @@ def _check_search_family_evidence(candidate: CandidateForValidation) -> dict[str
         "details": {
             "status": state,
             "errors": sorted(set(errors)),
-            "search_trial_panel_id": str((panel or {}).get("search_trial_panel_id") or ""),
+            "search_trial_panel_id": str(
+                (panel or {}).get("search_trial_panel_id") or ""
+            ),
         },
         "message": (
             "complete-family common-time panel verified"
@@ -707,7 +754,9 @@ def _check_time_dependence_suitability(
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             state = "invalid"
             errors.append(
-                exc.code if isinstance(exc, ValidationEvidenceError) else "observation_set_invalid"
+                exc.code
+                if isinstance(exc, ValidationEvidenceError)
+                else "observation_set_invalid"
             )
     if state == "valid":
         if not isinstance(split_manifest, dict):
@@ -715,11 +764,15 @@ def _check_time_dependence_suitability(
             state = "unavailable"
         else:
             try:
+                if not isinstance(observation_set, dict):
+                    raise ValidationEvidenceError("observation_set_missing")
                 validate_interval_split_manifest(split_manifest, observation_set)
             except (AttributeError, KeyError, TypeError, ValueError) as exc:
                 state = "invalid"
                 errors.append(
-                    exc.code if isinstance(exc, ValidationEvidenceError) else "split_manifest_invalid"
+                    exc.code
+                    if isinstance(exc, ValidationEvidenceError)
+                    else "split_manifest_invalid"
                 )
     if not isinstance(dependence, dict):
         dependence_status = candidate.metrics.get("dependence_evidence_status")
@@ -734,12 +787,16 @@ def _check_time_dependence_suitability(
         try:
             validate_dependence_evidence(dependence)
             if not dependence.get("authoritative_suitable"):
-                errors.append(str(dependence.get("reason") or "dependence_method_unsuitable"))
+                errors.append(
+                    str(dependence.get("reason") or "dependence_method_unsuitable")
+                )
                 state = "unavailable" if state != "invalid" else state
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             state = "invalid"
             errors.append(
-                exc.code if isinstance(exc, ValidationEvidenceError) else "dependence_evidence_invalid"
+                exc.code
+                if isinstance(exc, ValidationEvidenceError)
+                else "dependence_evidence_invalid"
             )
     passed = state == "valid" and not errors
     return {
@@ -748,14 +805,21 @@ def _check_time_dependence_suitability(
         "details": {
             "status": state,
             "errors": sorted(set(errors)),
-            "observation_set_id": str((observation_set or {}).get("observation_set_id") or ""),
-            "split_manifest_id": str((split_manifest or {}).get("split_manifest_id") or ""),
-            "dependence_evidence_id": str((dependence or {}).get("dependence_evidence_id") or ""),
+            "observation_set_id": str(
+                (observation_set or {}).get("observation_set_id") or ""
+            ),
+            "split_manifest_id": str(
+                (split_manifest or {}).get("split_manifest_id") or ""
+            ),
+            "dependence_evidence_id": str(
+                (dependence or {}).get("dependence_evidence_id") or ""
+            ),
         },
         "message": (
             "interval and dependence suitability verified"
             if passed
-            else "; ".join(sorted(set(errors))) or "time/dependence evidence unavailable"
+            else "; ".join(sorted(set(errors)))
+            or "time/dependence evidence unavailable"
         ),
     }
 
@@ -784,7 +848,11 @@ def _shadow_search_metrics(candidate: CandidateForValidation) -> dict[str, Any]:
     try:
         validate_search_trial_panel(panel, evidence)
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
-        reason = exc.code if isinstance(exc, ValidationEvidenceError) else "search_trial_panel_invalid"
+        reason = (
+            exc.code
+            if isinstance(exc, ValidationEvidenceError)
+            else "search_trial_panel_invalid"
+        )
         result["pbo"] = {"status": "invalid", "reason": reason}
         result["dsr"] = {"status": "invalid", "reason": reason}
         return result
@@ -823,18 +891,18 @@ def _shadow_search_metrics(candidate: CandidateForValidation) -> dict[str, Any]:
         validate_validation_observation_set(observation_set)
         if observation_set["trial_id"] not in panel["trial_columns"]:
             raise ValidationEvidenceError("candidate_trial_not_in_panel")
-        if (
-            [int(row["period_ts"]) for row in observation_set["observations"]]
-            != [int(value) for value in panel["time_axis"]]
-            or observation_set.get("return_basis") != panel.get("return_basis")
-        ):
+        if [int(row["period_ts"]) for row in observation_set["observations"]] != [
+            int(value) for value in panel["time_axis"]
+        ] or observation_set.get("return_basis") != panel.get("return_basis"):
             raise ValidationEvidenceError("candidate_period_axis_mismatch")
         column_index = panel["trial_columns"].index(observation_set["trial_id"])
         if (
             panel["observation_set_ids"][column_index]
             != observation_set["observation_set_id"]
         ):
-            raise ValidationEvidenceError("candidate_observation_set_not_bound_to_panel")
+            raise ValidationEvidenceError(
+                "candidate_observation_set_not_bound_to_panel"
+            )
         candidate_returns = _np.asarray(
             [row["return_value"] for row in observation_set["observations"]],
             dtype=float,
@@ -844,7 +912,9 @@ def _shadow_search_metrics(candidate: CandidateForValidation) -> dict[str, Any]:
         for index in range(matrix.shape[1]):
             column = matrix[:, index]
             deviation = float(_np.std(column, ddof=1)) if len(column) > 1 else 0.0
-            trial_sharpes.append(float(_np.mean(column)) / deviation if deviation > 0 else 0.0)
+            trial_sharpes.append(
+                float(_np.mean(column)) / deviation if deviation > 0 else 0.0
+            )
         dsr = deflated_sharpe_ratio(candidate_returns, trial_sharpes)
         result["dsr"] = {
             "status": "valid",
@@ -862,9 +932,12 @@ def _check_return_concentration(returns: list[float]) -> dict[str, Any]:
     arr = _np.asarray(returns, dtype=float)
     n = len(arr)
     if n < 6:
-        return {"check_name": "return_concentration", "passed": False,
-                "details": {"n": n},
-                "message": f"Too few returns ({n}) for concentration analysis."}
+        return {
+            "check_name": "return_concentration",
+            "passed": False,
+            "details": {"n": n},
+            "message": f"Too few returns ({n}) for concentration analysis.",
+        }
     best_idx = int(_np.argmax(arr))
     without_best = _np.delete(arr, best_idx)
     full_sum = float(_np.sum(arr))
@@ -875,11 +948,16 @@ def _check_return_concentration(returns: list[float]) -> dict[str, Any]:
     return {
         "check_name": "return_concentration",
         "passed": passed,
-        "details": {"n": n, "best_return": best,
-                    "leave_best_out_mean": loo_mean,
-                    "best_trade_profit_share": dominance},
-        "message": (f"leave-best-out mean={loo_mean:.4f}%, "
-                    f"best-trade profit share={dominance:.4f}"),
+        "details": {
+            "n": n,
+            "best_return": best,
+            "leave_best_out_mean": loo_mean,
+            "best_trade_profit_share": dominance,
+        },
+        "message": (
+            f"leave-best-out mean={loo_mean:.4f}%, "
+            f"best-trade profit share={dominance:.4f}"
+        ),
     }
 
 
@@ -898,7 +976,8 @@ def _check_forward_readiness(candidate: CandidateForValidation) -> dict[str, Any
 
 
 def _check_data_quality(
-    candidate: CandidateForValidation, returns: list[float],
+    candidate: CandidateForValidation,
+    returns: list[float],
 ) -> dict[str, Any]:
     n = len(returns)
     metrics = candidate.metrics
@@ -917,8 +996,7 @@ def _check_data_quality(
             "has_inf": has_inf,
         },
         "message": (
-            f"{n} returns, consistent={consistency}, "
-            f"nan={has_nan}, inf={has_inf}"
+            f"{n} returns, consistent={consistency}, nan={has_nan}, inf={has_inf}"
         ),
     }
 
@@ -964,7 +1042,8 @@ def _build_verdict(
 
 
 def _map_failed_to_status(
-    failed: list[str], candidate: CandidateForValidation,
+    failed: list[str],
+    candidate: CandidateForValidation,
 ) -> str:
     if "independent_evaluation" in failed:
         return "NEEDS_MORE_DATA"
@@ -1010,8 +1089,12 @@ def _build_report(
             "failed": len(checks) - passed,
         },
         simulator_manifest=dict(candidate.simulator_manifest),
-        unsupported_simulator_dimensions=list(candidate.unsupported_simulator_dimensions),
-        simulator_claim_ceiling=str(candidate.simulator_manifest.get("claim_ceiling") or "unavailable"),
+        unsupported_simulator_dimensions=list(
+            candidate.unsupported_simulator_dimensions
+        ),
+        simulator_claim_ceiling=str(
+            candidate.simulator_manifest.get("claim_ceiling") or "unavailable"
+        ),
         created_at=verdict.created_at,
     )
 
@@ -1090,4 +1173,5 @@ def _artifact_stem(candidate_id: str) -> str:
 
 def _read_json(path: Path) -> Any:
     import json
+
     return json.loads(path.read_text(encoding="utf-8"))

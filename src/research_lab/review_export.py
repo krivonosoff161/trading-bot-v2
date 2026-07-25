@@ -52,8 +52,14 @@ DISCLAIMER = (
     "The model may suggest next tests only; it must not declare anything live-tradable."
 )
 _METRIC_KEYS = (
-    "n_trades", "win_rate", "avg_net_pct", "test_avg_net_pct",
-    "profit_factor", "max_drawdown_pct", "best_trade_share", "stress_avg_net_pct",
+    "n_trades",
+    "win_rate",
+    "avg_net_pct",
+    "test_avg_net_pct",
+    "profit_factor",
+    "max_drawdown_pct",
+    "best_trade_share",
+    "stress_avg_net_pct",
 )
 
 
@@ -61,8 +67,12 @@ def review_pack_dir(private_root: Path) -> Path:
     return private_root / "reports" / "llm_review"
 
 
-def build_registry_review_pack(entries: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any]:
-    candidates = [e for e in entries if str(e.get("validation_status")) in REVIEW_STATUSES]
+def build_registry_review_pack(
+    entries: list[dict[str, Any]], *, limit: int = 10
+) -> dict[str, Any]:
+    candidates = [
+        e for e in entries if str(e.get("validation_status")) in REVIEW_STATUSES
+    ]
     candidates.sort(key=_sort_key)
     selected = candidates[: max(1, limit)]
     return {
@@ -98,7 +108,11 @@ def _entry_timing_pain(entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate entry-timing pain across selected candidates (empty if none)."""
     blocks = []
     for e in entries:
-        metrics = e.get("metrics_summary") if isinstance(e.get("metrics_summary"), dict) else {}
+        metrics = (
+            raw_metrics
+            if isinstance(raw_metrics := e.get("metrics_summary"), dict)
+            else {}
+        )
         if isinstance(metrics.get("entry_timing"), dict):
             blocks.append(metrics["entry_timing"])
     if not blocks:
@@ -117,14 +131,18 @@ def export_review_pack(
     limit: int = 10,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     entries = load_entries(registry_path(private_root))
     pack = build_registry_review_pack(entries, limit=limit)
     out_dir = review_pack_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_path = out_dir / f"registry_review_pack_{stamp}.json"
-    out_path.write_text(json.dumps(pack, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(pack, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return {
         "registry_entries": len(entries),
         "candidate_count": pack["candidate_count"],
@@ -134,7 +152,11 @@ def export_review_pack(
 
 
 def _summarize(entry: dict[str, Any]) -> dict[str, Any]:
-    metrics = entry.get("metrics_summary") if isinstance(entry.get("metrics_summary"), dict) else {}
+    metrics = (
+        raw_metrics
+        if isinstance(raw_metrics := entry.get("metrics_summary"), dict)
+        else {}
+    )
     return {
         "candidate_id": entry.get("candidate_id"),
         "symbol": entry.get("symbol"),
@@ -142,7 +164,9 @@ def _summarize(entry: dict[str, Any]) -> dict[str, Any]:
         "validation_status": entry.get("validation_status"),
         "params": entry.get("params"),
         "metrics": {k: metrics.get(k) for k in _METRIC_KEYS if k in metrics},
-        "entry_timing": metrics.get("entry_timing") if isinstance(metrics.get("entry_timing"), dict) else {},
+        "entry_timing": metrics.get("entry_timing")
+        if isinstance(metrics.get("entry_timing"), dict)
+        else {},
         "risk_flags": entry.get("risk_flags") or [],
         "validation_reasons": entry.get("validation_reasons") or [],
         "next_action": entry.get("next_action") or "",
@@ -153,7 +177,11 @@ def _summarize(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sort_key(entry: dict[str, Any]) -> tuple[int, float, float, int]:
-    metrics = entry.get("metrics_summary") if isinstance(entry.get("metrics_summary"), dict) else {}
+    metrics = (
+        raw_metrics
+        if isinstance(raw_metrics := entry.get("metrics_summary"), dict)
+        else {}
+    )
     return (
         -_RANK.get(str(entry.get("validation_status")), 0),
         -_float(metrics.get("test_avg_net_pct")),

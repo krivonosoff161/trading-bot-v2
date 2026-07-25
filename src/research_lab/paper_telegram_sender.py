@@ -105,7 +105,9 @@ def _sent_keys_path(private_root: Path) -> Path:
 
 
 def _outbox_path(private_root: Path) -> Path:
-    return Path(private_root) / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+    return (
+        Path(private_root) / "state" / "derived" / "paper_telegram_delivery_outbox.json"
+    )
 
 
 def _delivery_lock_path(private_root: Path) -> Path:
@@ -130,11 +132,15 @@ def _delivery_claim(private_root: Path):
         with storage_root_lock(path):
             yield
     except StorageLockConflict as exc:
-        raise DeliveryClaimConflict("delivery claim is held by another process") from exc
+        raise DeliveryClaimConflict(
+            "delivery claim is held by another process"
+        ) from exc
 
 
 def _quality_report_path(private_root: Path) -> Path:
-    return Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
+    return (
+        Path(private_root) / "state" / "derived" / "paper_product_quality_report.json"
+    )
 
 
 def _load_sent_keys(private_root: Path) -> set[str]:
@@ -147,10 +153,15 @@ def _load_sent_keys(private_root: Path) -> set[str]:
         raise DeliveryOutboxUnavailable("delivery_sent_keys_unreadable") from exc
     except json.JSONDecodeError as exc:
         raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid") from exc
-    if not isinstance(data, dict) or data.get("schema") != "paper_telegram_sent_keys.v1":
+    if (
+        not isinstance(data, dict)
+        or data.get("schema") != "paper_telegram_sent_keys.v1"
+    ):
         raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid")
     items = data.get("sent_keys")
-    if not isinstance(items, list) or any(not isinstance(item, str) or not item for item in items):
+    if not isinstance(items, list) or any(
+        not isinstance(item, str) or not item for item in items
+    ):
         raise DeliveryOutboxUnavailable("delivery_sent_keys_invalid")
     return set(items)
 
@@ -200,7 +211,10 @@ def _load_outbox(private_root: Path) -> dict[str, dict[str, Any]]:
         raise DeliveryOutboxUnavailable("delivery_outbox_unreadable") from exc
     except json.JSONDecodeError as exc:
         raise DeliveryOutboxUnavailable("delivery_outbox_invalid") from exc
-    if not isinstance(data, dict) or data.get("schema") != "paper_telegram_delivery_outbox.v1":
+    if (
+        not isinstance(data, dict)
+        or data.get("schema") != "paper_telegram_delivery_outbox.v1"
+    ):
         raise DeliveryOutboxUnavailable("delivery_outbox_invalid")
     items = data.get("items") if isinstance(data, dict) else None
     if not isinstance(items, list):
@@ -266,12 +280,16 @@ def _outbox_record(
     }
 
 
-def _upsert_outbox_record(private_root: Path, outbox: dict[str, dict[str, Any]], record: dict[str, Any]) -> None:
+def _upsert_outbox_record(
+    private_root: Path, outbox: dict[str, dict[str, Any]], record: dict[str, Any]
+) -> None:
     outbox[str(record["delivery_key"])] = record
     _save_outbox(private_root, outbox)
 
 
-def _load_preview_items(private_root: Path) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
+def _load_preview_items(
+    private_root: Path,
+) -> tuple[list[dict[str, Any]], Path | None, dict[str, Any]]:
     path = _preview_snapshot_path(private_root)
     if not path.exists():
         return [], None, {}
@@ -366,7 +384,11 @@ async def _send_items(
                     )
                 )
                 continue
-            transport_kind = "telegram_photo+text" if chart_path and send_photo is not None else "telegram_text"
+            transport_kind = (
+                "telegram_photo+text"
+                if chart_path and send_photo is not None
+                else "telegram_text"
+            )
             identity_chart_path = chart_path if send_photo is not None else None
             try:
                 if identity_chart_path is not None:
@@ -413,10 +435,15 @@ async def _send_items(
                         message_id=_int_or_none(blocking_record.get("message_id")),
                         problem="external_ack_requires_operator_recovery",
                         recipient_id=recipient_id,
-                        delivery_key=str(blocking_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(blocking_record.get("transport_kind") or transport_kind),
+                        delivery_key=str(
+                            blocking_record.get("delivery_key") or delivery_key
+                        ),
+                        transport_kind=str(
+                            blocking_record.get("transport_kind") or transport_kind
+                        ),
                         chart_available=bool(chart_path),
-                        chart_sent=_int_or_none(blocking_record.get("photo_message_id")) is not None,
+                        chart_sent=_int_or_none(blocking_record.get("photo_message_id"))
+                        is not None,
                         chart_problem=chart_problem,
                     )
                 )
@@ -437,10 +464,15 @@ async def _send_items(
                         message_id=_int_or_none(pending_record.get("message_id")),
                         problem="delivery_owned_by_existing_attempt",
                         recipient_id=recipient_id,
-                        delivery_key=str(pending_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(pending_record.get("transport_kind") or transport_kind),
+                        delivery_key=str(
+                            pending_record.get("delivery_key") or delivery_key
+                        ),
+                        transport_kind=str(
+                            pending_record.get("transport_kind") or transport_kind
+                        ),
                         chart_available=bool(chart_path),
-                        chart_sent=_int_or_none(pending_record.get("photo_message_id")) is not None,
+                        chart_sent=_int_or_none(pending_record.get("photo_message_id"))
+                        is not None,
                         chart_problem=chart_problem,
                     )
                 )
@@ -463,10 +495,17 @@ async def _send_items(
                         message_id=_int_or_none(completed_record.get("message_id")),
                         problem="already_sent_to_recipient",
                         recipient_id=recipient_id,
-                        delivery_key=str(completed_record.get("delivery_key") or delivery_key),
-                        transport_kind=str(completed_record.get("transport_kind") or transport_kind),
+                        delivery_key=str(
+                            completed_record.get("delivery_key") or delivery_key
+                        ),
+                        transport_kind=str(
+                            completed_record.get("transport_kind") or transport_kind
+                        ),
                         chart_available=bool(chart_path),
-                        chart_sent=_int_or_none(completed_record.get("photo_message_id")) is not None,
+                        chart_sent=_int_or_none(
+                            completed_record.get("photo_message_id")
+                        )
+                        is not None,
                         chart_problem=chart_problem,
                     )
                 )
@@ -492,7 +531,9 @@ async def _send_items(
             status = "sent"
             chart_sent = False
             photo_message_id: int | None = None
-            photo_status = "pending" if chart_path and send_photo is not None else "not_applicable"
+            photo_status = (
+                "pending" if chart_path and send_photo is not None else "not_applicable"
+            )
             text_status = "pending"
             try:
                 _upsert_outbox_record(
@@ -509,7 +550,9 @@ async def _send_items(
                     ),
                 )
                 if transport_chart_payload is not None and send_photo is not None:
-                    photo_message_id = await send_photo(recipient_id, transport_chart_payload)
+                    photo_message_id = await send_photo(
+                        recipient_id, transport_chart_payload
+                    )
                     if photo_message_id is None:
                         photo_status = "unacknowledged"
                         chart_problem = "photo_message_id_missing"
@@ -646,7 +689,11 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _recipient_hash(recipient_id: str) -> str:
-    return hashlib.sha256(recipient_id.encode("utf-8")).hexdigest()[:16] if recipient_id else ""
+    return (
+        hashlib.sha256(recipient_id.encode("utf-8")).hexdigest()[:16]
+        if recipient_id
+        else ""
+    )
 
 
 def _chart_sha256(path: Path) -> str:
@@ -660,7 +707,9 @@ def _chart_sha256(path: Path) -> str:
 def _allowed_chart_roots(private_root: Path) -> tuple[Path, ...]:
     return (
         (Path(private_root) / "state" / "derived" / "paper_reviews").resolve(),
-        (Path(private_root) / "state" / "derived" / "paper_telegram_base_charts").resolve(),
+        (
+            Path(private_root) / "state" / "derived" / "paper_telegram_base_charts"
+        ).resolve(),
         (Path(private_root) / "state" / "derived" / "paper_telegram_cards").resolve(),
     )
 
@@ -687,16 +736,17 @@ def _capture_chart_payload(source_path: Path, private_root: Path) -> tuple[bytes
             raise OSError("chart source size is outside the allowed bound")
         current = candidate.resolve(strict=True)
         current_stat = os.stat(current, follow_symlinks=True)
-        if (
-            not any(_is_relative_to(current, root) for root in allowed_roots)
-            or not os.path.samestat(opened_stat, current_stat)
-        ):
+        if not any(
+            _is_relative_to(current, root) for root in allowed_roots
+        ) or not os.path.samestat(opened_stat, current_stat):
             raise OSError("chart source changed during secure open")
         with os.fdopen(fd, "rb", closefd=False) as handle:
             chunks: list[bytes] = []
             total = 0
             while total <= MAX_CHART_PAYLOAD_BYTES:
-                chunk = handle.read(min(1024 * 1024, MAX_CHART_PAYLOAD_BYTES + 1 - total))
+                chunk = handle.read(
+                    min(1024 * 1024, MAX_CHART_PAYLOAD_BYTES + 1 - total)
+                )
                 if not chunk:
                     break
                 chunks.append(chunk)
@@ -813,8 +863,12 @@ def _delivery_keys(
 
     if source_signal_id and source_signal_id != "paper_status_digest":
         content_key = telegram_card_id or preview_id
-        candidates = [f"signal:{source_signal_id}:content-sha256:{content_identity}:{rh}"]
-        candidates.append(f"signal:{source_signal_id}:content-sha256:{legacy_content_identity}:{rh}")
+        candidates = [
+            f"signal:{source_signal_id}:content-sha256:{content_identity}:{rh}"
+        ]
+        candidates.append(
+            f"signal:{source_signal_id}:content-sha256:{legacy_content_identity}:{rh}"
+        )
         if content_key:
             candidates.append(f"signal:{source_signal_id}:content:{content_key}:{rh}")
         candidates.append(f"signal:{source_signal_id}:{rh}")
@@ -836,7 +890,9 @@ def _delivery_keys(
     return out or [f"missing_preview_identity:{rh}"]
 
 
-def _safe_chart_path(item: dict[str, Any], private_root: Path) -> tuple[Path | None, str]:
+def _safe_chart_path(
+    item: dict[str, Any], private_root: Path
+) -> tuple[Path | None, str]:
     raw = str(item.get("chart_path") or "").strip()
     if not raw:
         return None, ""
@@ -872,8 +928,15 @@ def _status_digest_reason(
     if not source:
         return ""
     sent = sum(1 for delivery in deliveries if delivery.status == "sent")
-    duplicates = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
-    if accepted and sent == 0 and recipient_count > 0 and duplicates >= len(accepted) * recipient_count:
+    duplicates = sum(
+        1 for delivery in deliveries if delivery.status == "skipped_duplicate"
+    )
+    if (
+        accepted
+        and sent == 0
+        and recipient_count > 0
+        and duplicates >= len(accepted) * recipient_count
+    ):
         return "all_cards_duplicate"
     if not accepted and int(source.get("records_read") or 0) > 0:
         if int(source.get("skipped_quality_gate") or 0) > 0:
@@ -889,12 +952,18 @@ def _status_digest_state(
     quality: dict[str, Any],
     reason: str,
 ) -> dict[str, Any]:
-    pfr_state = quality.get("pfr_trigger_state") if isinstance(quality.get("pfr_trigger_state"), dict) else {}
-    pfr_funnel = quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {}
-    lifecycle = quality.get("active_signal_lifecycle") if isinstance(
-        quality.get("active_signal_lifecycle"),
-        dict,
-    ) else {}
+    pfr_state = (
+        raw_pfr_state
+        if isinstance(raw_pfr_state := quality.get("pfr_trigger_state"), dict)
+        else {}
+    )
+    pfr_funnel = (
+        raw_pfr_funnel
+        if isinstance(raw_pfr_funnel := quality.get("pfr_funnel"), dict)
+        else {}
+    )
+    raw_lifecycle = quality.get("active_signal_lifecycle")
+    lifecycle = raw_lifecycle if isinstance(raw_lifecycle, dict) else {}
     return {
         "reason": reason,
         "source": {
@@ -917,7 +986,9 @@ def _status_digest_state(
             "by_outcome_result": lifecycle.get("by_outcome_result") or {},
             "pending_outcomes": int(lifecycle.get("pending_outcomes") or 0),
             "overdue_expiry": int(lifecycle.get("overdue_expiry") or 0),
-            "terminal_training_backlog": int(lifecycle.get("terminal_training_backlog") or 0),
+            "terminal_training_backlog": int(
+                lifecycle.get("terminal_training_backlog") or 0
+            ),
         },
         "pfr": {
             "state": str(pfr_state.get("state") or ""),
@@ -931,7 +1002,9 @@ def _status_digest_state(
 
 
 def _status_digest_fingerprint(state: dict[str, Any]) -> str:
-    encoded = json.dumps(state, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        state, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:12]
 
 
@@ -944,21 +1017,27 @@ def _status_digest_preview(
     interval_hours: int,
 ) -> dict[str, Any]:
     quality = _load_quality_report(private_root)
-    pfr_state = quality.get("pfr_trigger_state") if isinstance(quality.get("pfr_trigger_state"), dict) else {}
-    pfr_reasons = pfr_state.get("top_reasons") if isinstance(pfr_state.get("top_reasons"), dict) else {}
-    pfr_funnel = quality.get("pfr_funnel") if isinstance(quality.get("pfr_funnel"), dict) else {}
-    cycle_reasons = pfr_funnel.get("cycle_resource_reasons") if isinstance(
-        pfr_funnel.get("cycle_resource_reasons"),
-        dict,
-    ) else {}
-    near_reasons = pfr_funnel.get("near_trigger_counts") if isinstance(
-        pfr_funnel.get("near_trigger_counts"),
-        dict,
-    ) else {}
-    lifecycle = quality.get("active_signal_lifecycle") if isinstance(
-        quality.get("active_signal_lifecycle"),
-        dict,
-    ) else {}
+    pfr_state = (
+        raw_pfr_state
+        if isinstance(raw_pfr_state := quality.get("pfr_trigger_state"), dict)
+        else {}
+    )
+    pfr_reasons = (
+        raw_pfr_reasons
+        if isinstance(raw_pfr_reasons := pfr_state.get("top_reasons"), dict)
+        else {}
+    )
+    pfr_funnel = (
+        raw_pfr_funnel
+        if isinstance(raw_pfr_funnel := quality.get("pfr_funnel"), dict)
+        else {}
+    )
+    raw_cycle_reasons = pfr_funnel.get("cycle_resource_reasons")
+    cycle_reasons = raw_cycle_reasons if isinstance(raw_cycle_reasons, dict) else {}
+    raw_near_reasons = pfr_funnel.get("near_trigger_counts")
+    near_reasons = raw_near_reasons if isinstance(raw_near_reasons, dict) else {}
+    raw_lifecycle = quality.get("active_signal_lifecycle")
+    lifecycle = raw_lifecycle if isinstance(raw_lifecycle, dict) else {}
     bucket_seconds = max(1, int(interval_hours)) * 3600
     bucket = int(now // bucket_seconds)
     state = _status_digest_state(source=source, quality=quality, reason=reason)
@@ -1045,7 +1124,13 @@ def _delivery_from_preview(
 
 
 def _unique_preview_count(deliveries: list[PaperTelegramDelivery], status: str) -> int:
-    return len({delivery.preview_id for delivery in deliveries if delivery.status == status and delivery.preview_id})
+    return len(
+        {
+            delivery.preview_id
+            for delivery in deliveries
+            if delivery.status == status and delivery.preview_id
+        }
+    )
 
 
 def send_paper_telegram_previews(
@@ -1080,7 +1165,9 @@ def send_paper_telegram_previews(
         ok, problem = _valid_preview(item)
         if not ok:
             invalid += 1
-            deliveries.append(_delivery_from_preview(item, status="invalid_preview", problem=problem))
+            deliveries.append(
+                _delivery_from_preview(item, status="invalid_preview", problem=problem)
+            )
             continue
         if len(accepted) < limit:
             accepted.append(item)
@@ -1097,7 +1184,11 @@ def send_paper_telegram_previews(
         )
     elif not paper_chat_configured or send_text is None or not recipient_ids:
         deliveries.extend(
-            _delivery_from_preview(item, status="skipped_no_subscribers", problem="paper_subscribers_not_configured")
+            _delivery_from_preview(
+                item,
+                status="skipped_no_subscribers",
+                problem="paper_subscribers_not_configured",
+            )
             for item in accepted
         )
     else:
@@ -1183,26 +1274,43 @@ def send_paper_telegram_previews(
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for delivery in deliveries:
-            fh.write(json.dumps(delivery.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+            fh.write(
+                json.dumps(delivery.to_dict(), ensure_ascii=False, sort_keys=True)
+                + "\n"
+            )
 
     sent_messages = sum(1 for delivery in deliveries if delivery.status == "sent")
-    duplicate_messages = sum(1 for delivery in deliveries if delivery.status == "skipped_duplicate")
-    skipped_messages = sum(1 for delivery in deliveries if delivery.status.startswith("skipped"))
+    duplicate_messages = sum(
+        1 for delivery in deliveries if delivery.status == "skipped_duplicate"
+    )
+    skipped_messages = sum(
+        1 for delivery in deliveries if delivery.status.startswith("skipped")
+    )
     error_messages = sum(1 for delivery in deliveries if delivery.status == "error")
-    ambiguous_messages = sum(1 for delivery in deliveries if delivery.status == "external_ack_ambiguous")
-    pending_claim_messages = sum(1 for delivery in deliveries if delivery.status == "pending_delivery_claim")
-    outbox_unavailable_messages = sum(1 for delivery in deliveries if delivery.status == "outbox_unavailable")
-    chart_available_messages = sum(1 for delivery in deliveries if delivery.chart_available)
+    ambiguous_messages = sum(
+        1 for delivery in deliveries if delivery.status == "external_ack_ambiguous"
+    )
+    pending_claim_messages = sum(
+        1 for delivery in deliveries if delivery.status == "pending_delivery_claim"
+    )
+    outbox_unavailable_messages = sum(
+        1 for delivery in deliveries if delivery.status == "outbox_unavailable"
+    )
+    chart_available_messages = sum(
+        1 for delivery in deliveries if delivery.chart_available
+    )
     chart_sent_messages = sum(1 for delivery in deliveries if delivery.chart_sent)
     digest_messages = sum(
         1
         for delivery in deliveries
-        if delivery.source_signal_id == "paper_status_digest" and delivery.status == "sent"
+        if delivery.source_signal_id == "paper_status_digest"
+        and delivery.status == "sent"
     )
     digest_duplicates = sum(
         1
         for delivery in deliveries
-        if delivery.source_signal_id == "paper_status_digest" and delivery.status == "skipped_duplicate"
+        if delivery.source_signal_id == "paper_status_digest"
+        and delivery.status == "skipped_duplicate"
     )
     summary = {
         "schema": SUMMARY_SCHEMA,
@@ -1236,26 +1344,39 @@ def send_paper_telegram_previews(
         "error_cards": _unique_preview_count(deliveries, "error"),
         "external_ack_ambiguous": ambiguous_messages,
         "external_ack_ambiguous_messages": ambiguous_messages,
-        "external_ack_ambiguous_cards": _unique_preview_count(deliveries, "external_ack_ambiguous"),
+        "external_ack_ambiguous_cards": _unique_preview_count(
+            deliveries, "external_ack_ambiguous"
+        ),
         "pending_delivery_claim": pending_claim_messages,
         "pending_delivery_claim_messages": pending_claim_messages,
-        "pending_delivery_claim_cards": _unique_preview_count(deliveries, "pending_delivery_claim"),
+        "pending_delivery_claim_cards": _unique_preview_count(
+            deliveries, "pending_delivery_claim"
+        ),
         "outbox_unavailable": outbox_unavailable_messages,
         "outbox_unavailable_messages": outbox_unavailable_messages,
-        "outbox_unavailable_cards": _unique_preview_count(deliveries, "outbox_unavailable"),
+        "outbox_unavailable_cards": _unique_preview_count(
+            deliveries, "outbox_unavailable"
+        ),
         "status_digest_enabled": bool(status_digest),
         "status_digest_reason": status_digest_reason,
         "status_digest_sent_messages": digest_messages,
         "status_digest_duplicate_messages": digest_duplicates,
         "paper_only": True,
         "execution_allowed": False,
-        "sends_network": bool(apply and paper_chat_configured and send_text is not None and recipient_ids),
+        "sends_network": bool(
+            apply and paper_chat_configured and send_text is not None and recipient_ids
+        ),
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": [delivery.to_dict() for delivery in deliveries]},
-                   ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {**summary, "items": [delivery.to_dict() for delivery in deliveries]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return summary

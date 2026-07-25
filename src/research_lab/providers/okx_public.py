@@ -31,8 +31,8 @@ import httpx
 OKX_BASE_URL = "https://www.okx.com"
 HISTORY_CANDLES_PATH = "/api/v5/market/history-candles"
 MINUTE_MS = 60_000
-PAGE_LIMIT = 300            # OKX history-candles max per request
-MAX_PAGES = 60             # hard stop: enough for bounded multi-year research windows
+PAGE_LIMIT = 300  # OKX history-candles max per request
+MAX_PAGES = 60  # hard stop: enough for bounded multi-year research windows
 # Guard equals the pager's capacity so an accepted window is always fully fetchable
 # (never silently truncated). The lab's requirement windows are far smaller (<=360).
 MAX_WINDOW_BARS = MAX_PAGES * PAGE_LIMIT  # 18,000
@@ -92,7 +92,9 @@ def _default_http_get(
     *,
     worker: Callable[[str, float, Any], None] | None = None,
 ) -> Any:
-    return _httpx_get_with_hard_deadline(url, timeout, worker=worker or _httpx_get_worker)
+    return _httpx_get_with_hard_deadline(
+        url, timeout, worker=worker or _httpx_get_worker
+    )
 
 
 def _httpx_get_direct(url: str, timeout: float) -> Any:
@@ -100,7 +102,9 @@ def _httpx_get_direct(url: str, timeout: float) -> Any:
     response = httpx.get(
         url,
         headers={"User-Agent": _USER_AGENT},
-        timeout=httpx.Timeout(timeout, connect=timeout, read=timeout, write=timeout, pool=timeout),
+        timeout=httpx.Timeout(
+            timeout, connect=timeout, read=timeout, write=timeout, pool=timeout
+        ),
     )
     response.raise_for_status()
     return response.json()
@@ -126,12 +130,17 @@ def _persistent_http_worker(request_queue: Any, response_queue: Any) -> None:
                 response = client.get(
                     url,
                     timeout=httpx.Timeout(
-                        bounded, connect=bounded, read=bounded,
-                        write=bounded, pool=bounded,
+                        bounded,
+                        connect=bounded,
+                        read=bounded,
+                        write=bounded,
+                        pool=bounded,
                     ),
                 )
                 if response.status_code >= 400:
-                    response_queue.put(("http_error", request_id, int(response.status_code)))
+                    response_queue.put(
+                        ("http_error", request_id, int(response.status_code))
+                    )
                     continue
                 response_queue.put(("ok", request_id, response.json()))
             except json.JSONDecodeError:
@@ -165,7 +174,9 @@ class PersistentHttpGet:
             request_id = self._next_id
             self._request_queue.put((request_id, url, bounded))
             try:
-                response = self._response_queue.get(timeout=bounded + self.grace_seconds)
+                response = self._response_queue.get(
+                    timeout=bounded + self.grace_seconds
+                )
             except queue.Empty as exc:
                 self._terminate_worker()
                 raise TimeoutError("okx-public worker deadline exceeded") from exc
@@ -255,7 +266,9 @@ def _httpx_get_with_hard_deadline(
     try:
         status, *payload = out_queue.get_nowait()
     except queue.Empty as exc:
-        raise RuntimeError(f"okx-public worker exited without payload code={proc.exitcode}") from exc
+        raise RuntimeError(
+            f"okx-public worker exited without payload code={proc.exitcode}"
+        ) from exc
     if status == "ok":
         return payload[0]
     err_name = payload[0] if payload else "Error"
@@ -300,7 +313,10 @@ class OkxPublicMarketDataProvider:
         self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
         self.fetch_deadline_seconds = max(self.timeout, float(fetch_deadline_seconds))
         self._owned_http_get = PersistentHttpGet() if http_get is None else None
-        self._http_get = http_get or self._owned_http_get
+        resolved_http_get = http_get or self._owned_http_get
+        if resolved_http_get is None:
+            raise RuntimeError("public HTTP transport is unavailable")
+        self._http_get: HttpGet = resolved_http_get
         self._sleep = sleep or time.sleep
         self._jitter = jitter or random.uniform
 
@@ -308,7 +324,9 @@ class OkxPublicMarketDataProvider:
         if self._owned_http_get is not None:
             self._owned_http_get.close()
 
-    def fetch_ohlcv(self, symbol: str, timeframe: str, start_ts: int, end_ts: int) -> list[dict[str, Any]]:
+    def fetch_ohlcv(
+        self, symbol: str, timeframe: str, start_ts: int, end_ts: int
+    ) -> list[dict[str, Any]]:
         okx_bar, interval_ms = _resolve_timeframe(timeframe)
         start_ts, end_ts = int(start_ts), int(end_ts)
         if end_ts < start_ts:
@@ -322,7 +340,9 @@ class OkxPublicMarketDataProvider:
 
         inst_id = to_inst_id(symbol)
         collected: dict[int, dict[str, Any]] = {}
-        cursor = end_ts + interval_ms  # 'after' returns candles strictly older than cursor
+        cursor = (
+            end_ts + interval_ms
+        )  # 'after' returns candles strictly older than cursor
         fetch_started = time.monotonic()
 
         for _page in range(self.max_pages):
@@ -353,9 +373,14 @@ class OkxPublicMarketDataProvider:
         return [collected[ts] for ts in sorted(collected)]
 
     def _fetch_page(self, inst_id: str, bar: str, after_ts: int) -> list[Any]:
-        query = urllib.parse.urlencode({
-            "instId": inst_id, "bar": bar, "after": str(int(after_ts)), "limit": str(PAGE_LIMIT),
-        })
+        query = urllib.parse.urlencode(
+            {
+                "instId": inst_id,
+                "bar": bar,
+                "after": str(int(after_ts)),
+                "limit": str(PAGE_LIMIT),
+            }
+        )
         url = f"{self.base_url}{HISTORY_CANDLES_PATH}?{query}"
         last_error: MarketDataError | None = None
         for attempt in range(self.retry_attempts):
@@ -376,11 +401,13 @@ class OkxPublicMarketDataProvider:
                         transient=transient,
                     )
                 break
-            except Exception as exc:  # classified below; safe detail never leaves provider
+            except (
+                Exception
+            ) as exc:  # classified below; safe detail never leaves provider
                 last_error = _classify_request_error(exc)
                 if not last_error.transient or attempt + 1 >= self.retry_attempts:
                     raise last_error from exc
-                delay = self.retry_backoff_seconds * (2 ** attempt)
+                delay = self.retry_backoff_seconds * (2**attempt)
                 self._sleep(delay + self._jitter(0.0, max(0.0, delay * 0.25)))
         else:  # pragma: no cover - loop either succeeds or raises
             raise last_error or MarketDataError("okx-public request failed")
@@ -395,30 +422,51 @@ def _classify_request_error(exc: Exception) -> MarketDataError:
     if isinstance(exc, _WorkerRequestError):
         status = exc.status_code
         if exc.kind == "invalid_json":
-            return MarketDataError("okx-public returned invalid JSON", reason="invalid_json")
+            return MarketDataError(
+                "okx-public returned invalid JSON", reason="invalid_json"
+            )
         if exc.kind == "timeout":
-            return MarketDataError("okx-public request timed out", reason="timeout", transient=True)
+            return MarketDataError(
+                "okx-public request timed out", reason="timeout", transient=True
+            )
         if exc.kind == "transport":
-            return MarketDataError("okx-public transport failed", reason="tls_or_transport", transient=True)
+            return MarketDataError(
+                "okx-public transport failed", reason="tls_or_transport", transient=True
+            )
     if isinstance(exc, httpx.HTTPStatusError):
         status = int(exc.response.status_code)
     if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
-        return MarketDataError("okx-public request timed out", reason="timeout", transient=True)
+        return MarketDataError(
+            "okx-public request timed out", reason="timeout", transient=True
+        )
     if isinstance(exc, json.JSONDecodeError):
-        return MarketDataError("okx-public returned invalid JSON", reason="invalid_json")
+        return MarketDataError(
+            "okx-public returned invalid JSON", reason="invalid_json"
+        )
     if isinstance(exc, (httpx.TransportError, OSError)):
-        return MarketDataError("okx-public transport failed", reason="tls_or_transport", transient=True)
+        return MarketDataError(
+            "okx-public transport failed", reason="tls_or_transport", transient=True
+        )
     if status == 429:
         return MarketDataError(
-            "okx-public rate limited", reason="rate_limited", transient=True, status_code=status,
+            "okx-public rate limited",
+            reason="rate_limited",
+            transient=True,
+            status_code=status,
         )
     if status is not None and status >= 500:
         return MarketDataError(
-            "okx-public server error", reason="http_5xx", transient=True, status_code=status,
+            "okx-public server error",
+            reason="http_5xx",
+            transient=True,
+            status_code=status,
         )
     if status is not None:
         return MarketDataError(
-            "okx-public HTTP error", reason="http_4xx", transient=False, status_code=status,
+            "okx-public HTTP error",
+            reason="http_4xx",
+            transient=False,
+            status_code=status,
         )
     return MarketDataError(
         f"okx-public request failed: {type(exc).__name__}",
@@ -446,7 +494,9 @@ def _normalize_row(raw: Any, ts: int) -> dict[str, Any] | None:
     try:
         return {
             "ts": ts,
-            "date": dt.datetime.fromtimestamp(ts / 1000, tz=dt.timezone.utc).isoformat(),
+            "date": dt.datetime.fromtimestamp(
+                ts / 1000, tz=dt.timezone.utc
+            ).isoformat(),
             "open": float(raw[1]),
             "high": float(raw[2]),
             "low": float(raw[3]),

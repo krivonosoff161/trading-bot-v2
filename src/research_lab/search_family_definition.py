@@ -6,14 +6,23 @@ import hashlib
 import json
 import math
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 
 SCHEMA = "SearchFamilyDefinition.v2"
 COMPILER_VERSION = "bounded-cartesian/v2"
 DECLARED_GRID_VERSION = "declared-grid/v2"
 FAMILY_POLICIES = {"independent", "cumulative", "confirmatory"}
+
+
+def _report_snapshot_progress(
+    progress: Callable[[str], None],
+    index: int,
+    stage: str,
+) -> None:
+    progress(f"snapshot_{index}:{stage}")
 
 
 def canonical_bytes(payload: Any) -> bytes:
@@ -31,24 +40,24 @@ def content_hash(payload: Any) -> str:
 
 
 def normalize_snapshot_bindings(
-    bindings: list[Mapping[str, Any]],
+    bindings: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    normalized = sorted(
-        (
-            {
-                "symbol": str(item.get("symbol") or ""),
-                "timeframe": str(item.get("timeframe") or ""),
-                "snapshot_id": str(item.get("snapshot_id") or ""),
-                "evidence_hash": str(item.get("evidence_hash") or ""),
-                "row_count": int(item.get("row_count") or 0),
-            }
-            for item in bindings
-        ),
-        key=lambda item: (item["symbol"], item["timeframe"]),
-    )
+    normalized: list[dict[str, Any]] = [
+        {
+            "symbol": str(item.get("symbol") or ""),
+            "timeframe": str(item.get("timeframe") or ""),
+            "snapshot_id": str(item.get("snapshot_id") or ""),
+            "evidence_hash": str(item.get("evidence_hash") or ""),
+            "row_count": int(item.get("row_count") or 0),
+        }
+        for item in bindings
+    ]
+    normalized.sort(key=lambda item: (str(item["symbol"]), str(item["timeframe"])))
     if not normalized or any(
-        not item["symbol"] or not item["timeframe"]
-        or not item["snapshot_id"] or not item["evidence_hash"]
+        not item["symbol"]
+        or not item["timeframe"]
+        or not item["snapshot_id"]
+        or not item["evidence_hash"]
         or item["row_count"] < 1
         for item in normalized
     ):
@@ -60,7 +69,7 @@ def normalize_snapshot_bindings(
 
 
 def snapshot_set_identity(
-    bindings: list[Mapping[str, Any]],
+    bindings: Sequence[Mapping[str, Any]],
 ) -> tuple[str, str]:
     """Identity for the exact symbol-level candle manifests scheduled in a family."""
     normalized = normalize_snapshot_bindings(bindings)
@@ -83,7 +92,7 @@ def resolve_snapshot_set(
     """Select canonical candles now and fail closed before a queued family is frozen."""
     from src.research_lab.candle_library import load_canonical_candles
 
-    bindings: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
     for index, symbol in enumerate(symbols, start=1):
         selected = load_canonical_candles(
             private_root,
@@ -95,7 +104,7 @@ def resolve_snapshot_set(
             progress=(
                 None
                 if progress is None
-                else lambda stage, index=index: progress(f"snapshot_{index}:{stage}")
+                else partial(_report_snapshot_progress, progress, index)
             ),
         )
         if not selected.rows:
@@ -175,7 +184,9 @@ def _family_policy(
     if normalized == "independent" and prior:
         raise ValueError("independent family cannot inherit prior trials")
     if normalized != "independent" and not (parent_family_id and parent_trial_id):
-        raise ValueError("follow-up family requires parent_family_id and parent_trial_id")
+        raise ValueError(
+            "follow-up family requires parent_family_id and parent_trial_id"
+        )
     if normalized == "cumulative" and prior < 1:
         raise ValueError("cumulative family requires parent_effective_n_trials")
     if normalized == "confirmatory" and prior < 1:
@@ -230,7 +241,7 @@ def build_sweep_family_definition(
     timeframe_profile: Any,
     data_snapshot_id: str = "",
     data_evidence_hash: str = "",
-    data_snapshot_bindings: list[Mapping[str, Any]] | None = None,
+    data_snapshot_bindings: Sequence[Mapping[str, Any]] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str]:
     points = [dict(point) for point in search_space.get("points", [])]
@@ -257,7 +268,9 @@ def build_sweep_family_definition(
             "version": str(sampler_version),
             "digest": sampler_code_identity(),
             "seed_material": str(seed_material),
-            "seed_sha256": hashlib.sha256(str(seed_material).encode("utf-8")).hexdigest(),
+            "seed_sha256": hashlib.sha256(
+                str(seed_material).encode("utf-8")
+            ).hexdigest(),
         },
         "resource_policy": {
             "requested_max_variants": int(spec.max_variants),
@@ -275,7 +288,9 @@ def build_sweep_family_definition(
             "members": normalize_snapshot_bindings(data_snapshot_bindings or [])
             if data_snapshot_bindings
             else [],
-            "status": "bound" if data_snapshot_id and data_evidence_hash else "selection_pending",
+            "status": "bound"
+            if data_snapshot_id and data_evidence_hash
+            else "selection_pending",
         },
         "family_policy": _family_policy(
             mode=getattr(spec, "cumulative_family_policy", "independent"),
@@ -285,7 +300,9 @@ def build_sweep_family_definition(
         ),
     }
     validate_search_family_definition(
-        definition, check_code_identity=True, progress=progress,
+        definition,
+        check_code_identity=True,
+        progress=progress,
     )
     return definition, family_definition_id(definition)
 
@@ -329,8 +346,16 @@ def build_declared_grid_definition(spec: Any) -> tuple[dict[str, Any], str]:
             "version": DECLARED_GRID_VERSION,
             "digest": compiler_code_identity(),
         },
-        "validity": {"version": "declared-as-provided/v1", "digest": validity_code_identity()},
-        "sampler": {"version": "none", "digest": "", "seed_material": "", "seed_sha256": ""},
+        "validity": {
+            "version": "declared-as-provided/v1",
+            "digest": validity_code_identity(),
+        },
+        "sampler": {
+            "version": "none",
+            "digest": "",
+            "seed_material": "",
+            "seed_sha256": "",
+        },
         "resource_policy": {
             "requested_max_variants": len(points),
             "effective_max_variants": len(points),
@@ -348,7 +373,8 @@ def build_declared_grid_definition(spec: Any) -> tuple[dict[str, Any], str]:
             else [],
             "status": (
                 "bound"
-                if getattr(spec, "data_snapshot_id", "") and getattr(spec, "data_evidence_hash", "")
+                if getattr(spec, "data_snapshot_id", "")
+                and getattr(spec, "data_evidence_hash", "")
                 else "selection_pending"
             ),
         },
@@ -381,7 +407,12 @@ def validate_search_family_definition(
     indices = [point.get("flat_index") for point in points if isinstance(point, dict)]
     if indices != list(range(len(points))):
         raise ValueError("search family flat indices must be unique and contiguous")
-    allowed = {"selected", "schema_invalid", "dependency_invalid", "omitted_variant_cap"}
+    allowed = {
+        "selected",
+        "schema_invalid",
+        "dependency_invalid",
+        "omitted_variant_cap",
+    }
     dispositions = [str(point.get("pre_disposition") or "") for point in points]
     if any(disposition not in allowed for disposition in dispositions):
         raise ValueError("invalid search family pre-execution disposition")
@@ -414,12 +445,18 @@ def validate_search_family_definition(
         parent_trial_id=str(policy.get("parent_trial_id") or ""),
         parent_effective_n_trials=int(policy.get("parent_effective_n_trials") or 0),
     )
-    if policy.get("mode") == "confirmatory" and int(
-        resource.get("selected_run_total", -1)
-    ) != 1:
-        raise ValueError("confirmatory family must declare exactly one selected execution")
+    if (
+        policy.get("mode") == "confirmatory"
+        and int(resource.get("selected_run_total", -1)) != 1
+    ):
+        raise ValueError(
+            "confirmatory family must declare exactly one selected execution"
+        )
     binding = value.get("data_binding")
-    if not isinstance(binding, dict) or binding.get("status") not in {"bound", "selection_pending"}:
+    if not isinstance(binding, dict) or binding.get("status") not in {
+        "bound",
+        "selection_pending",
+    }:
         raise ValueError("invalid search family data binding")
     if binding.get("status") == "bound" and not (
         binding.get("snapshot_id") and binding.get("evidence_hash")
@@ -433,13 +470,16 @@ def validate_search_family_definition(
         if members != normalized_members:
             raise ValueError("search family snapshot members are not canonical")
         snapshot_id, evidence_hash = snapshot_set_identity(members)
-        if (
-            snapshot_id != str(binding.get("snapshot_id") or "")
-            or evidence_hash != str(binding.get("evidence_hash") or "")
+        if snapshot_id != str(binding.get("snapshot_id") or "") or evidence_hash != str(
+            binding.get("evidence_hash") or ""
         ):
             raise ValueError("search family snapshot set identity mismatch")
-        if [item["symbol"] for item in members] != sorted(str(symbol) for symbol in symbols):
-            raise ValueError("search family snapshot members disagree with symbol scope")
+        if [item["symbol"] for item in members] != sorted(
+            str(symbol) for symbol in symbols
+        ):
+            raise ValueError(
+                "search family snapshot members disagree with symbol scope"
+            )
     elif binding.get("status") == "selection_pending" and (
         binding.get("snapshot_id") or binding.get("evidence_hash")
     ):
@@ -451,8 +491,13 @@ def validate_search_family_definition(
         if compiler.get("digest") != compiler_code_identity():
             raise ValueError("historical search-family compiler is unavailable")
         if validity.get("digest") != validity_code_identity():
-            raise ValueError("historical search-family validity contract is unavailable")
-        if sampler.get("version") != "none" and sampler.get("digest") != sampler_code_identity():
+            raise ValueError(
+                "historical search-family validity contract is unavailable"
+            )
+        if (
+            sampler.get("version") != "none"
+            and sampler.get("digest") != sampler_code_identity()
+        ):
             raise ValueError("historical search-family sampler is unavailable")
         if value.get("origin") == "sweep" and (
             resource.get("selection_policy_digest") != selection_policy_code_identity()
@@ -470,7 +515,8 @@ def validate_search_family_definition(
         "schema_invalid": dispositions.count("schema_invalid"),
         "dependency_invalid": dispositions.count("dependency_invalid"),
         "eligible_points": sum(
-            disposition in {"selected", "omitted_variant_cap"} for disposition in dispositions
+            disposition in {"selected", "omitted_variant_cap"}
+            for disposition in dispositions
         ),
         "selected_points": len(selected),
         "omitted_variant_cap": dispositions.count("omitted_variant_cap"),
@@ -582,9 +628,11 @@ def _validate_sweep_derivation(
     sampler = dict(definition.get("sampler") or {})
     if sampler.get("version") != SAMPLER_VERSION:
         raise ValueError("sampler version disagrees with compiler contract")
-    if sampler.get("seed_material") != seed_material or sampler.get(
-        "seed_sha256"
-    ) != hashlib.sha256(seed_material.encode("utf-8")).hexdigest():
+    if (
+        sampler.get("seed_material") != seed_material
+        or sampler.get("seed_sha256")
+        != hashlib.sha256(seed_material.encode("utf-8")).hexdigest()
+    ):
         raise ValueError("sampler seed identity disagrees with raw sweep")
     validity = dict(definition.get("validity") or {})
     if validity.get("version") != PARAMETER_SEARCH_CONTRACT_VERSION:
@@ -626,15 +674,25 @@ def _validate_declared_grid_derivation(definition: Mapping[str, Any]) -> None:
 def validate_experiment_spec_binding(spec: Any) -> None:
     definition = spec.search_family_definition
     if list(definition.get("symbols") or []) != list(spec.symbols):
-        raise ValueError("ExperimentSpec symbols disagree with search family definition")
+        raise ValueError(
+            "ExperimentSpec symbols disagree with search family definition"
+        )
     if dict(definition.get("filters") or {}) != dict(spec.filters):
-        raise ValueError("ExperimentSpec filters disagree with search family definition")
+        raise ValueError(
+            "ExperimentSpec filters disagree with search family definition"
+        )
     resource = dict(definition.get("resource_policy") or {})
     if int(resource.get("execution_cap", -1)) != int(spec.max_runs):
-        raise ValueError("ExperimentSpec execution cap disagrees with search family definition")
-    expected_grid: dict[str, list[dict[str, Any]]] = {family: [] for family in spec.families}
+        raise ValueError(
+            "ExperimentSpec execution cap disagrees with search family definition"
+        )
+    expected_grid: dict[str, list[dict[str, Any]]] = {
+        family: [] for family in spec.families
+    }
     origin = definition.get("origin")
-    default_family = str((definition.get("raw_sweep_spec") or {}).get("setup_family") or "")
+    default_family = str(
+        (definition.get("raw_sweep_spec") or {}).get("setup_family") or ""
+    )
     for point in definition.get("points") or []:
         if point.get("pre_disposition") != "selected":
             continue
@@ -645,7 +703,9 @@ def validate_experiment_spec_binding(spec: Any) -> None:
         for family, variants in spec.parameter_grid.items()
     }
     if expected_grid != actual_grid:
-        raise ValueError("ExperimentSpec parameter grid disagrees with search family definition")
+        raise ValueError(
+            "ExperimentSpec parameter grid disagrees with search family definition"
+        )
     binding = dict(definition.get("data_binding") or {})
     if binding.get("status") == "bound" and (
         str(binding.get("snapshot_id") or "") != str(spec.data_snapshot_id or "")
@@ -657,7 +717,9 @@ def validate_experiment_spec_binding(spec: Any) -> None:
             else []
         )
     ):
-        raise ValueError("ExperimentSpec data identity disagrees with search family definition")
+        raise ValueError(
+            "ExperimentSpec data identity disagrees with search family definition"
+        )
     if origin == "declared_grid":
         declared = dict(definition.get("declared_grid") or {})
         exact = {
@@ -671,7 +733,9 @@ def validate_experiment_spec_binding(spec: Any) -> None:
             "backend": str(spec.backend),
         }
         if declared != exact:
-            raise ValueError("declared-grid ExperimentSpec fields disagree with family definition")
+            raise ValueError(
+                "declared-grid ExperimentSpec fields disagree with family definition"
+            )
 
 
 def effective_family_n_trials(definition: Mapping[str, Any]) -> int:

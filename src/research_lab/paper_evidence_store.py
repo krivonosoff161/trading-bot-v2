@@ -55,7 +55,9 @@ def _stable_id(namespace: str, value: Any, *, length: int = 32) -> str:
 
 
 def _scaled(value: Any, scale: int) -> int:
-    return int((Decimal(str(value)) * scale).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+    return int(
+        (Decimal(str(value)) * scale).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
+    )
 
 
 def _unscaled(value: int, scale: int) -> float:
@@ -82,7 +84,9 @@ def _row_dict(row: sqlite3.Row | None) -> dict[str, Any]:
 class PaperEvidenceStore:
     """One SQLite authority for writer fencing, lifecycle, and paper account state."""
 
-    def __init__(self, path: Path | str, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self, path: Path | str, *, clock: Callable[[], float] = time.time
+    ) -> None:
         self.path = Path(path)
         self._clock = clock
         self._lock = threading.RLock()
@@ -91,7 +95,9 @@ class PaperEvidenceStore:
     @property
     def connection(self) -> sqlite3.Connection:
         if self._conn is None:
-            raise PaperEvidenceConflict("paper evidence store is not explicitly activated")
+            raise PaperEvidenceConflict(
+                "paper evidence store is not explicitly activated"
+            )
         return self._conn
 
     def activate(self) -> None:
@@ -387,7 +393,9 @@ class PaperEvidenceStore:
                 INSERT OR IGNORE INTO scheduling_state(singleton, cursor) VALUES(1, 0);
                 """
             )
-            marker = conn.execute("SELECT value FROM paper_meta WHERE key='schema_version'").fetchone()
+            marker = conn.execute(
+                "SELECT value FROM paper_meta WHERE key='schema_version'"
+            ).fetchone()
             if marker is None:
                 conn.execute(
                     "INSERT INTO paper_meta(key,value) VALUES('schema_version',?)",
@@ -433,7 +441,8 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 row = conn.execute(
-                    "SELECT * FROM paper_writer_lease WHERE resource_id=?", (WRITER_RESOURCE,)
+                    "SELECT * FROM paper_writer_lease WHERE resource_id=?",
+                    (WRITER_RESOURCE,),
                 ).fetchone()
                 if row is None:
                     fence = 1
@@ -444,8 +453,13 @@ class PaperEvidenceStore:
                     )
                 else:
                     fence = int(row["next_fence"]) + 1
-                    if row["owner_id"] is not None and float(row["lease_expires_at"] or 0) > now:
-                        raise PaperEvidenceConflict("paper evidence writer already owned")
+                    if (
+                        row["owner_id"] is not None
+                        and float(row["lease_expires_at"] or 0) > now
+                    ):
+                        raise PaperEvidenceConflict(
+                            "paper evidence writer already owned"
+                        )
                 expires = now + float(lease_seconds)
                 conn.execute(
                     """
@@ -472,7 +486,9 @@ class PaperEvidenceStore:
                 raise
         return PaperWriterLease(owner_id, identity, fence, expires)
 
-    def _assert_writer(self, conn: sqlite3.Connection, lease: PaperWriterLease) -> sqlite3.Row:
+    def _assert_writer(
+        self, conn: sqlite3.Connection, lease: PaperWriterLease
+    ) -> sqlite3.Row:
         row = conn.execute(
             "SELECT * FROM paper_writer_lease WHERE resource_id=?", (WRITER_RESOURCE,)
         ).fetchone()
@@ -531,7 +547,9 @@ class PaperEvidenceStore:
                     ),
                 )
                 if updated.rowcount != 1:
-                    raise StalePaperWriter("paper writer renewal compare-and-set failed")
+                    raise StalePaperWriter(
+                        "paper writer renewal compare-and-set failed"
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -555,7 +573,9 @@ class PaperEvidenceStore:
                     ),
                 )
                 if updated.rowcount != 1:
-                    raise StalePaperWriter("paper writer release compare-and-set failed")
+                    raise StalePaperWriter(
+                        "paper writer release compare-and-set failed"
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -604,20 +624,26 @@ class PaperEvidenceStore:
             "money_scale": MONEY_SCALE,
             "ratio_scale": RATIO_SCALE,
             "deposit_microunits": _scaled(config["deposit"], MONEY_SCALE),
-            "position_margin_microunits": _scaled(config["position_margin"], MONEY_SCALE),
+            "position_margin_microunits": _scaled(
+                config["position_margin"], MONEY_SCALE
+            ),
             "leverage_microunits": _scaled(config["leverage"], RATIO_SCALE),
         }
         config_digest = _digest(payload)
         generation_id = _stable_id(
             "paperaccountgeneration",
-            {"config_digest": config_digest, "parent_generation_id": parent_generation_id or ""},
+            {
+                "config_digest": config_digest,
+                "parent_generation_id": parent_generation_id or "",
+            },
         )
         with self._lock:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
                 existing = conn.execute(
-                    "SELECT * FROM account_geneses WHERE generation_id=?", (generation_id,)
+                    "SELECT * FROM account_geneses WHERE generation_id=?",
+                    (generation_id,),
                 ).fetchone()
                 if existing is not None:
                     conn.commit()
@@ -627,7 +653,10 @@ class PaperEvidenceStore:
                     "WHERE parent_generation_id IS NULL"
                 ).fetchall()
                 if parent_generation_id is None and roots:
-                    same = next((row for row in roots if row["config_digest"] == config_digest), None)
+                    same = next(
+                        (row for row in roots if row["config_digest"] == config_digest),
+                        None,
+                    )
                     if same is not None:
                         conn.commit()
                         return str(same["generation_id"])
@@ -661,7 +690,9 @@ class PaperEvidenceStore:
                 )
                 if parent_generation_id is not None:
                     rebase_payload = {
-                        "opening_balance_microunits": int(payload["deposit_microunits"]),
+                        "opening_balance_microunits": int(
+                            payload["deposit_microunits"]
+                        ),
                         "parent_generation_id": parent_generation_id,
                         "reason": "explicit_account_generation_change",
                     }
@@ -690,7 +721,12 @@ class PaperEvidenceStore:
         status: str = "completed",
         parent_generation_id: str | None = None,
     ) -> str:
-        if not producer_id or producer_sequence < 1 or not code_identity or not method_identity:
+        if (
+            not producer_id
+            or producer_sequence < 1
+            or not code_identity
+            or not method_identity
+        ):
             raise ValueError("complete producer generation identity required")
         if status not in {"completed", "failed", "incomplete"}:
             raise ValueError("invalid producer generation status")
@@ -709,7 +745,9 @@ class PaperEvidenceStore:
             key=lambda member: member["logical_id"],
         )
         if len({member["logical_id"] for member in normalized}) != len(normalized):
-            raise PaperEvidenceConflict("producer generation contains duplicate logical IDs")
+            raise PaperEvidenceConflict(
+                "producer generation contains duplicate logical IDs"
+            )
         if any(
             not member["logical_id"]
             or not member["payload_digest"]
@@ -717,7 +755,9 @@ class PaperEvidenceStore:
             or member["disposition"] not in {"active", "withdrawn", "rejected"}
             for member in normalized
         ):
-            raise PaperEvidenceConflict("producer generation member identity is incomplete")
+            raise PaperEvidenceConflict(
+                "producer generation member identity is incomplete"
+            )
         member_set_digest = _digest(normalized)
         manifest = {
             "schema": "PaperProducerGeneration.v2",
@@ -733,7 +773,10 @@ class PaperEvidenceStore:
         manifest_digest = _digest(manifest)
         generation_id = _stable_id(
             "paperproducer",
-            {"manifest_digest": manifest_digest, "member_set_digest": member_set_digest},
+            {
+                "manifest_digest": manifest_digest,
+                "member_set_digest": member_set_digest,
+            },
         )
         with self._lock:
             conn = self._begin()
@@ -745,7 +788,9 @@ class PaperEvidenceStore:
                         (parent_generation_id,),
                     ).fetchone()
                     if parent is None or parent["producer_id"] != producer_id:
-                        raise PaperEvidenceConflict("producer parent generation mismatch")
+                        raise PaperEvidenceConflict(
+                            "producer parent generation mismatch"
+                        )
                     if int(parent["producer_sequence"]) >= producer_sequence:
                         raise PaperEvidenceConflict("producer sequence must increase")
                 existing_sequence = conn.execute(
@@ -847,13 +892,16 @@ class PaperEvidenceStore:
                 ]
                 if (
                     _digest(manifest) != producer["manifest_digest"]
-                    or manifest.get("member_set_digest") != producer["member_set_digest"]
+                    or manifest.get("member_set_digest")
+                    != producer["member_set_digest"]
                     or int(manifest.get("expected_member_count", -1))
                     != int(producer["expected_member_count"])
                     or len(normalized) != int(producer["expected_member_count"])
                     or _digest(normalized) != producer["member_set_digest"]
                 ):
-                    raise PaperEvidenceConflict("producer generation manifest/member mismatch")
+                    raise PaperEvidenceConflict(
+                        "producer generation manifest/member mismatch"
+                    )
                 expected = sorted(
                     member["logical_id"]
                     for member in normalized
@@ -868,7 +916,9 @@ class PaperEvidenceStore:
                     "source_completed": source_completed,
                 }
                 run_id = _stable_id("paperrun", payload)
-                existing = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                existing = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 if existing is None:
                     conn.execute(
                         "INSERT INTO paper_runs VALUES(?,?,?,?,?,?,?,?)",
@@ -885,7 +935,10 @@ class PaperEvidenceStore:
                     )
                     conn.executemany(
                         "INSERT INTO paper_run_stages(run_id,stage,ordinal,status) VALUES(?,?,?,'pending')",
-                        [(run_id, stage, ordinal) for ordinal, stage in enumerate(STAGES)],
+                        [
+                            (run_id, stage, ordinal)
+                            for ordinal, stage in enumerate(STAGES)
+                        ],
                     )
                 conn.commit()
             except Exception:
@@ -909,9 +962,12 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 current = conn.execute(
-                    "SELECT * FROM paper_run_stages WHERE run_id=? AND stage=?", (run_id, stage)
+                    "SELECT * FROM paper_run_stages WHERE run_id=? AND stage=?",
+                    (run_id, stage),
                 ).fetchone()
                 if run is None or current is None or run["status"] != "pending":
                     raise PaperEvidenceConflict("paper run/stage is not pending")
@@ -922,15 +978,22 @@ class PaperEvidenceStore:
                         (run_id, ordinal - 1),
                     ).fetchone()
                     if predecessor is None or predecessor["status"] != "completed":
-                        raise PaperEvidenceConflict("paper stage predecessor is incomplete")
+                        raise PaperEvidenceConflict(
+                            "paper stage predecessor is incomplete"
+                        )
                     expected_input = str(predecessor["output_digest"])
                 if input_digest != expected_input:
                     raise PaperEvidenceConflict("paper stage input digest mismatch")
                 if current["status"] == "completed":
-                    if current["input_digest"] == input_digest and current["output_digest"] == output_digest:
+                    if (
+                        current["input_digest"] == input_digest
+                        and current["output_digest"] == output_digest
+                    ):
                         conn.commit()
                         return
-                    raise PaperEvidenceConflict("paper stage identity reused with different content")
+                    raise PaperEvidenceConflict(
+                        "paper stage identity reused with different content"
+                    )
                 updated = conn.execute(
                     "UPDATE paper_run_stages SET status='completed',input_digest=?,output_digest=? "
                     "WHERE run_id=? AND stage=? AND status='pending'",
@@ -964,7 +1027,9 @@ class PaperEvidenceStore:
                 )
                 if updated.rowcount != 1:
                     raise PaperEvidenceConflict("paper stage is not pending")
-                conn.execute("UPDATE paper_runs SET status='failed' WHERE run_id=?", (run_id,))
+                conn.execute(
+                    "UPDATE paper_runs SET status='failed' WHERE run_id=?", (run_id,)
+                )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -985,9 +1050,13 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT status FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT status FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 if run is None or run["status"] != "pending":
-                    raise PaperEvidenceConflict("only a pending paper run can be aborted")
+                    raise PaperEvidenceConflict(
+                        "only a pending paper run can be aborted"
+                    )
                 identity = {"run_id": run_id, "stage": stage, "reason": reason[:240]}
                 conn.execute(
                     "INSERT OR IGNORE INTO paper_run_failures VALUES(?,?,?,?,?,?)",
@@ -1000,14 +1069,18 @@ class PaperEvidenceStore:
                         float(self._clock()),
                     ),
                 )
-                conn.execute("UPDATE paper_runs SET status='failed' WHERE run_id=?", (run_id,))
+                conn.execute(
+                    "UPDATE paper_runs SET status='failed' WHERE run_id=?", (run_id,)
+                )
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
 
     def promote_run(self, *_args: Any, **_kwargs: Any) -> None:
-        raise PaperEvidenceConflict("direct run promotion is forbidden; use finalize_run")
+        raise PaperEvidenceConflict(
+            "direct run promotion is forbidden; use finalize_run"
+        )
 
     def finalize_run(self, lease: PaperWriterLease, run_id: str) -> dict[str, Any]:
         """Apply all planned authority and move current-run in one fenced commit."""
@@ -1015,9 +1088,12 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 stages = conn.execute(
-                    "SELECT status FROM paper_run_stages WHERE run_id=? ORDER BY ordinal", (run_id,)
+                    "SELECT status FROM paper_run_stages WHERE run_id=? ORDER BY ordinal",
+                    (run_id,),
                 ).fetchall()
                 if (
                     run is None
@@ -1025,21 +1101,25 @@ class PaperEvidenceStore:
                     or len(stages) != len(STAGES)
                     or any(row["status"] != "completed" for row in stages)
                 ):
-                    raise PaperEvidenceConflict("only a complete paper generation run can be current")
+                    raise PaperEvidenceConflict(
+                        "only a complete paper generation run can be current"
+                    )
                 if run["status"] == "completed":
                     current = conn.execute(
                         "SELECT run_id FROM paper_current_run WHERE singleton=1"
                     ).fetchone()
                     if current is None or current["run_id"] != run_id:
-                        raise PaperEvidenceConflict("completed run is not the current authoritative run")
-                    applied = conn.execute(
+                        raise PaperEvidenceConflict(
+                            "completed run is not the current authoritative run"
+                        )
+                    applied_rows = conn.execute(
                         "SELECT * FROM paper_run_mutation_intents WHERE run_id=? ORDER BY intent_order",
                         (run_id,),
                     ).fetchall()
                     conn.commit()
                     return {
                         "run_id": run_id,
-                        "applied_intents": len(applied),
+                        "applied_intents": len(applied_rows),
                         "current": True,
                     }
                 if run["status"] != "pending":
@@ -1081,10 +1161,10 @@ class PaperEvidenceStore:
                     or producer_expected != expected
                     or _digest(sorted(expected)) != run["expected_ids_digest"]
                 ):
-                    raise PaperEvidenceConflict("paper run producer authority changed or mismatched")
-                member_by_logical = {
-                    str(row["logical_id"]): row for row in member_rows
-                }
+                    raise PaperEvidenceConflict(
+                        "paper run producer authority changed or mismatched"
+                    )
+                member_by_logical = {str(row["logical_id"]): row for row in member_rows}
                 provisional = conn.execute(
                     "SELECT * FROM paper_subjects WHERE run_id=? AND state='provisional' "
                     "ORDER BY logical_id,subject_generation_id",
@@ -1099,7 +1179,9 @@ class PaperEvidenceStore:
                     supersedes = str(subject["supersedes_generation_id"] or "")
                     if active is not None:
                         if supersedes != str(active["subject_generation_id"]):
-                            raise PaperEvidenceConflict("subject head changed before run finalization")
+                            raise PaperEvidenceConflict(
+                                "subject head changed before run finalization"
+                            )
                         conn.execute(
                             "UPDATE paper_subjects SET state='superseded' "
                             "WHERE subject_generation_id=? AND state='active'",
@@ -1111,21 +1193,28 @@ class PaperEvidenceStore:
                             (supersedes,),
                         ).fetchone()
                         if prior is None or prior["logical_id"] != logical_id:
-                            raise PaperEvidenceConflict("subject reintroduction predecessor mismatch")
+                            raise PaperEvidenceConflict(
+                                "subject reintroduction predecessor mismatch"
+                            )
                     updated = conn.execute(
                         "UPDATE paper_subjects SET state='active' "
                         "WHERE subject_generation_id=? AND state='provisional'",
                         (subject["subject_generation_id"],),
                     )
                     if updated.rowcount != 1:
-                        raise PaperEvidenceConflict("subject activation compare-and-set failed")
+                        raise PaperEvidenceConflict(
+                            "subject activation compare-and-set failed"
+                        )
                     if supersedes and active is None:
                         self._append_system_lifecycle(
                             conn,
                             lease,
                             str(subject["subject_generation_id"]),
                             "source_reintroduced",
-                            {"supersedes_generation_id": supersedes, "producer_run_id": run_id},
+                            {
+                                "supersedes_generation_id": supersedes,
+                                "producer_run_id": run_id,
+                            },
                             next_state="armed",
                         )
 
@@ -1157,7 +1246,9 @@ class PaperEvidenceStore:
                         (subject["subject_generation_id"],),
                     ).fetchone()
                     if cursor is None:
-                        raise PaperEvidenceConflict("subject reintroduction cursor missing")
+                        raise PaperEvidenceConflict(
+                            "subject reintroduction cursor missing"
+                        )
                     self._append_system_lifecycle(
                         conn,
                         lease,
@@ -1184,7 +1275,9 @@ class PaperEvidenceStore:
                 ).fetchall()
                 active_ids = {str(row["logical_id"]) for row in active_rows}
                 if not expected.issubset(active_ids):
-                    raise PaperEvidenceConflict("completed producer subject set is incomplete")
+                    raise PaperEvidenceConflict(
+                        "completed producer subject set is incomplete"
+                    )
                 for subject in active_rows:
                     logical_id = str(subject["logical_id"])
                     if logical_id not in expected:
@@ -1193,9 +1286,13 @@ class PaperEvidenceStore:
                     subject_payload = json.loads(str(subject["payload_json"]))
                     if (
                         _digest(subject_payload) != str(subject["payload_digest"])
-                        or str(subject_payload.get("source_member_payload_digest") or "")
+                        or str(
+                            subject_payload.get("source_member_payload_digest") or ""
+                        )
                         != str(member["payload_digest"])
-                        or str(subject_payload.get("source_validation_generation_id") or "")
+                        or str(
+                            subject_payload.get("source_validation_generation_id") or ""
+                        )
                         != str(member["source_validation_generation_id"])
                     ):
                         raise PaperEvidenceConflict(
@@ -1209,13 +1306,18 @@ class PaperEvidenceStore:
                         "SELECT state FROM subject_cursors WHERE subject_generation_id=?",
                         (subject["subject_generation_id"],),
                     ).fetchone()
-                    lifecycle_state = str(cursor["state"]) if cursor is not None else "armed"
+                    lifecycle_state = (
+                        str(cursor["state"]) if cursor is not None else "armed"
+                    )
                     self._append_system_lifecycle(
                         conn,
                         lease,
                         str(subject["subject_generation_id"]),
                         "source_withdrawn",
-                        {"producer_run_id": run_id, "reason": "absent_from_complete_subject_set"},
+                        {
+                            "producer_run_id": run_id,
+                            "reason": "absent_from_complete_subject_set",
+                        },
                         next_state=lifecycle_state,
                     )
                     conn.execute(
@@ -1237,14 +1339,19 @@ class PaperEvidenceStore:
                         (subject_generation_id,),
                     ).fetchone()
                     if cursor is None:
-                        raise PaperEvidenceConflict("accepted observation cursor missing")
-                    accepted_seq = int(
-                        conn.execute(
-                            "SELECT COALESCE(MAX(accepted_seq),0) AS n "
-                            "FROM accepted_observations WHERE subject_generation_id=?",
-                            (subject_generation_id,),
-                        ).fetchone()["n"]
-                    ) + 1
+                        raise PaperEvidenceConflict(
+                            "accepted observation cursor missing"
+                        )
+                    accepted_seq = (
+                        int(
+                            conn.execute(
+                                "SELECT COALESCE(MAX(accepted_seq),0) AS n "
+                                "FROM accepted_observations WHERE subject_generation_id=?",
+                                (subject_generation_id,),
+                            ).fetchone()["n"]
+                        )
+                        + 1
+                    )
                     conn.execute(
                         "INSERT INTO accepted_observations VALUES(?,?,?,?,?,?,?)",
                         (
@@ -1278,12 +1385,12 @@ class PaperEvidenceStore:
                     "AND status='planned' ORDER BY intent_order",
                     (run_id,),
                 ).fetchall()
-                applied: list[dict[str, str]] = []
+                applied_intents: list[dict[str, str]] = []
                 for intent in intents:
                     lifecycle_id, account_id, account_type = self._apply_planned_intent(
                         conn, lease, intent
                     )
-                    applied.append(
+                    applied_intents.append(
                         {
                             "intent_id": str(intent["intent_id"]),
                             "lifecycle_event_id": lifecycle_id,
@@ -1297,7 +1404,9 @@ class PaperEvidenceStore:
                     (run_id,),
                 ).fetchall()
                 if not projections:
-                    raise PaperEvidenceConflict("run finalization requires a prepared projection")
+                    raise PaperEvidenceConflict(
+                        "run finalization requires a prepared projection"
+                    )
                 high_water = self._high_water(conn)
                 completed_projection_ids: list[str] = []
                 for projection in projections:
@@ -1322,7 +1431,9 @@ class PaperEvidenceStore:
                         ),
                     )
                     completed_projection_ids.append(str(projection["projection_id"]))
-                conn.execute("UPDATE paper_runs SET status='completed' WHERE run_id=?", (run_id,))
+                conn.execute(
+                    "UPDATE paper_runs SET status='completed' WHERE run_id=?", (run_id,)
+                )
                 conn.execute(
                     "INSERT INTO paper_current_run(singleton,run_id,promoted_fence,promoted_at) "
                     "VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET "
@@ -1335,14 +1446,16 @@ class PaperEvidenceStore:
                 raise
         return {
             "run_id": run_id,
-            "applied_intents": applied,
+            "applied_intents": applied_intents,
             "withdrawn_subject_generation_ids": withdrawn,
             "completed_projection_ids": completed_projection_ids,
             "current": True,
         }
 
     def current_run_id(self) -> str:
-        row = self.connection.execute("SELECT run_id FROM paper_current_run WHERE singleton=1").fetchone()
+        row = self.connection.execute(
+            "SELECT run_id FROM paper_current_run WHERE singleton=1"
+        ).fetchone()
         return str(row["run_id"]) if row is not None else ""
 
     def register_subject(
@@ -1363,8 +1476,13 @@ class PaperEvidenceStore:
             "execution_allowed",
         }
         if not required_identity.issubset(payload):
-            raise PaperEvidenceConflict("paper subject generation identity is incomplete")
-        if payload.get("paper_only") is not True or payload.get("execution_allowed") is not False:
+            raise PaperEvidenceConflict(
+                "paper subject generation identity is incomplete"
+            )
+        if (
+            payload.get("paper_only") is not True
+            or payload.get("execution_allowed") is not False
+        ):
             raise PaperEvidenceConflict("paper subject crossed execution boundary")
         payload_digest = _digest(payload)
         generation_id = _stable_id(
@@ -1375,9 +1493,13 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 if run is None or run["status"] != "pending":
-                    raise PaperEvidenceConflict("subject generation requires a pending paper run")
+                    raise PaperEvidenceConflict(
+                        "subject generation requires a pending paper run"
+                    )
                 producer_member = conn.execute(
                     "SELECT * FROM producer_generation_members "
                     "WHERE producer_generation_id=? AND logical_id=?",
@@ -1391,7 +1513,9 @@ class PaperEvidenceStore:
                     or producer_member["source_validation_generation_id"]
                     != payload["source_validation_generation_id"]
                 ):
-                    raise PaperEvidenceConflict("paper subject does not match producer generation member")
+                    raise PaperEvidenceConflict(
+                        "paper subject does not match producer generation member"
+                    )
                 queue_predecessors = conn.execute(
                     "SELECT status FROM paper_run_stages WHERE run_id=? AND ordinal<=2",
                     (run_id,),
@@ -1399,9 +1523,12 @@ class PaperEvidenceStore:
                 if len(queue_predecessors) != 3 or any(
                     row["status"] != "completed" for row in queue_predecessors
                 ):
-                    raise PaperEvidenceConflict("subject generation queue predecessors are incomplete")
+                    raise PaperEvidenceConflict(
+                        "subject generation queue predecessors are incomplete"
+                    )
                 existing = conn.execute(
-                    "SELECT * FROM paper_subjects WHERE subject_generation_id=?", (generation_id,)
+                    "SELECT * FROM paper_subjects WHERE subject_generation_id=?",
+                    (generation_id,),
                 ).fetchone()
                 if existing is not None:
                     if existing["state"] == "withdrawn":
@@ -1421,7 +1548,8 @@ class PaperEvidenceStore:
                     conn.commit()
                     return generation_id
                 active = conn.execute(
-                    "SELECT * FROM paper_subjects WHERE logical_id=? AND state='active'", (logical_id,)
+                    "SELECT * FROM paper_subjects WHERE logical_id=? AND state='active'",
+                    (logical_id,),
                 ).fetchone()
                 if active is not None:
                     if supersedes_generation_id != active["subject_generation_id"]:
@@ -1434,7 +1562,9 @@ class PaperEvidenceStore:
                         (supersedes_generation_id,),
                     ).fetchone()
                     if prior is None or prior["logical_id"] != logical_id:
-                        raise PaperEvidenceConflict("subject supersession target mismatch")
+                        raise PaperEvidenceConflict(
+                            "subject supersession target mismatch"
+                        )
                 conn.execute(
                     "INSERT INTO paper_subjects VALUES(?,?,?,?,?,?,?,?,?)",
                     (
@@ -1461,7 +1591,8 @@ class PaperEvidenceStore:
 
     def subject(self, subject_generation_id: str) -> dict[str, Any]:
         row = self.connection.execute(
-            "SELECT * FROM paper_subjects WHERE subject_generation_id=?", (subject_generation_id,)
+            "SELECT * FROM paper_subjects WHERE subject_generation_id=?",
+            (subject_generation_id,),
         ).fetchone()
         if row is None:
             raise PaperEvidenceConflict("paper subject generation missing")
@@ -1482,7 +1613,9 @@ class PaperEvidenceStore:
         ).fetchone()
         return _row_dict(row) if row is not None else None
 
-    def latest_terminal_event(self, subject_generation_id: str) -> dict[str, Any] | None:
+    def latest_terminal_event(
+        self, subject_generation_id: str
+    ) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT * FROM lifecycle_events WHERE subject_generation_id=? "
             "AND event_type IN ('position_closed','outcome_revised') "
@@ -1560,23 +1693,35 @@ class PaperEvidenceStore:
                     "SELECT * FROM paper_subjects WHERE subject_generation_id=?",
                     (subject_generation_id,),
                 ).fetchone()
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 observer_predecessors = conn.execute(
                     "SELECT status FROM paper_run_stages WHERE run_id=? AND ordinal<=2",
                     (run_id,),
                 ).fetchall()
                 if subject is None or subject["state"] not in {"active", "provisional"}:
-                    raise PaperEvidenceConflict("observation requires active or provisional subject generation")
+                    raise PaperEvidenceConflict(
+                        "observation requires active or provisional subject generation"
+                    )
                 if (
                     run is None
                     or run["status"] != "pending"
                     or len(observer_predecessors) != 3
-                    or any(row["status"] != "completed" for row in observer_predecessors)
-                    or (subject["state"] == "provisional" and subject["run_id"] != run_id)
+                    or any(
+                        row["status"] != "completed" for row in observer_predecessors
+                    )
+                    or (
+                        subject["state"] == "provisional"
+                        and subject["run_id"] != run_id
+                    )
                 ):
-                    raise PaperEvidenceConflict("observation run predecessors are incomplete or mismatched")
+                    raise PaperEvidenceConflict(
+                        "observation run predecessors are incomplete or mismatched"
+                    )
                 existing = conn.execute(
-                    "SELECT * FROM observation_batches WHERE observation_id=?", (observation_id,)
+                    "SELECT * FROM observation_batches WHERE observation_id=?",
+                    (observation_id,),
                 ).fetchone()
                 if existing is None:
                     conn.execute(
@@ -1644,7 +1789,9 @@ class PaperEvidenceStore:
             "request": request,
         }
 
-    def _account_config(self, conn: sqlite3.Connection, generation_id: str) -> dict[str, Any]:
+    def _account_config(
+        self, conn: sqlite3.Connection, generation_id: str
+    ) -> dict[str, Any]:
         row = conn.execute(
             "SELECT * FROM account_geneses WHERE generation_id=?", (generation_id,)
         ).fetchone()
@@ -1673,7 +1820,9 @@ class PaperEvidenceStore:
             raise PaperEvidenceConflict("paper account genesis unit binding mismatch")
         return config
 
-    def _replay_account_conn(self, conn: sqlite3.Connection, generation_id: str) -> dict[str, Any]:
+    def _replay_account_conn(
+        self, conn: sqlite3.Connection, generation_id: str
+    ) -> dict[str, Any]:
         config = self._account_config(conn, generation_id)
         model_digest = _digest(config)
         balance_units = int(config["deposit_microunits"])
@@ -1709,7 +1858,9 @@ class PaperEvidenceStore:
                 "lifecycle_event_id": lifecycle_event_id,
                 "account_model_digest": model_digest,
                 "payload_digest": str(row["payload_digest"]),
-                "supersedes_account_event_id": str(row["supersedes_account_event_id"] or ""),
+                "supersedes_account_event_id": str(
+                    row["supersedes_account_event_id"] or ""
+                ),
             }
             if _digest(identity) != row["event_hash"]:
                 raise PaperEvidenceConflict("paper account event hash mismatch")
@@ -1718,13 +1869,21 @@ class PaperEvidenceStore:
                     "SELECT * FROM lifecycle_events WHERE lifecycle_event_id=?",
                     (lifecycle_event_id,),
                 ).fetchone()
-                if lifecycle is None or str(lifecycle["subject_generation_id"]) != subject:
-                    raise PaperEvidenceConflict("paper account source-event identity mismatch")
+                if (
+                    lifecycle is None
+                    or str(lifecycle["subject_generation_id"]) != subject
+                ):
+                    raise PaperEvidenceConflict(
+                        "paper account source-event identity mismatch"
+                    )
                 lifecycle_payload = json.loads(str(lifecycle["payload_json"]))
                 if _digest(lifecycle_payload) != lifecycle["payload_digest"]:
-                    raise PaperEvidenceConflict("paper account lifecycle payload mismatch")
+                    raise PaperEvidenceConflict(
+                        "paper account lifecycle payload mismatch"
+                    )
             elif event_type != "account_rebased":
                 raise PaperEvidenceConflict("paper account source event is missing")
+            expected_payload: dict[str, Any]
             if event_type == "position_opened":
                 scenario_id = str(lifecycle_payload.get("scenario_id") or "")
                 candidates = sorted(
@@ -1752,7 +1911,9 @@ class PaperEvidenceStore:
                     or balance_units - sum(reserved.values()) < margin_units
                     or payload != expected_payload
                 ):
-                    raise PaperEvidenceConflict("paper account open arithmetic mismatch")
+                    raise PaperEvidenceConflict(
+                        "paper account open arithmetic mismatch"
+                    )
                 reserved[subject] = margin_units
                 owned_scenario_sets.add(scenario_set_digest)
             elif event_type == "position_closed":
@@ -1772,8 +1933,12 @@ class PaperEvidenceStore:
                 reserved.pop(subject)
                 balance_units += int(payload["pnl_delta_microunits"])
             elif event_type == "pnl_adjustment":
-                supersedes_account_event_id = str(row["supersedes_account_event_id"] or "")
-                supersedes_lifecycle_event_id = str(lifecycle["supersedes_event_id"] or "")
+                supersedes_account_event_id = str(
+                    row["supersedes_account_event_id"] or ""
+                )
+                supersedes_lifecycle_event_id = str(
+                    lifecycle["supersedes_event_id"] or ""
+                )
                 prior_account = conn.execute(
                     "SELECT * FROM account_events WHERE account_event_id=?",
                     (supersedes_account_event_id,),
@@ -1781,12 +1946,16 @@ class PaperEvidenceStore:
                 if (
                     lifecycle["event_type"] != "outcome_revised"
                     or prior_account is None
-                    or prior_account["lifecycle_event_id"] != supersedes_lifecycle_event_id
+                    or prior_account["lifecycle_event_id"]
+                    != supersedes_lifecycle_event_id
                     or prior_account["subject_generation_id"] != subject
                     or prior_account["account_generation_id"] != generation_id
-                    or prior_account["event_type"] not in {"position_closed", "pnl_adjustment"}
+                    or prior_account["event_type"]
+                    not in {"position_closed", "pnl_adjustment"}
                 ):
-                    raise PaperEvidenceConflict("paper adjustment supersession mismatch")
+                    raise PaperEvidenceConflict(
+                        "paper adjustment supersession mismatch"
+                    )
                 prior_payload = json.loads(str(prior_account["payload_json"]))
                 previous_net_units = int(prior_payload.get("net_pct_microunits", 0))
                 new_net_units = _scaled(lifecycle_payload.get("net_pct"), RATIO_SCALE)
@@ -1805,7 +1974,8 @@ class PaperEvidenceStore:
             elif event_type == "allocation_rejected":
                 expected_payload = {
                     "required_margin_microunits": margin_units,
-                    "available_margin_microunits": balance_units - sum(reserved.values()),
+                    "available_margin_microunits": balance_units
+                    - sum(reserved.values()),
                 }
                 if (
                     lifecycle["event_type"] != "position_opened"
@@ -1839,7 +2009,9 @@ class PaperEvidenceStore:
                     )
                     or payload != expected_payload
                 ):
-                    raise PaperEvidenceConflict("paper counterfactual exclusion mismatch")
+                    raise PaperEvidenceConflict(
+                        "paper counterfactual exclusion mismatch"
+                    )
             elif event_type == "account_rebased":
                 genesis = conn.execute(
                     "SELECT parent_generation_id FROM account_geneses WHERE generation_id=?",
@@ -1850,7 +2022,10 @@ class PaperEvidenceStore:
                     "parent_generation_id": str(genesis["parent_generation_id"] or ""),
                     "reason": "explicit_account_generation_change",
                 }
-                if not expected_payload["parent_generation_id"] or payload != expected_payload:
+                if (
+                    not expected_payload["parent_generation_id"]
+                    or payload != expected_payload
+                ):
                     raise PaperEvidenceConflict("paper account rebase mismatch")
             else:
                 raise PaperEvidenceConflict("unknown paper account event type")
@@ -1912,13 +2087,16 @@ class PaperEvidenceStore:
         lifecycle_event_id: str | None = None,
         supersedes_account_event_id: str | None = None,
     ) -> str:
-        seq = int(
-            conn.execute(
-                "SELECT COALESCE(MAX(account_seq),0) AS value FROM account_events "
-                "WHERE account_generation_id=?",
-                (generation_id,),
-            ).fetchone()["value"]
-        ) + 1
+        seq = (
+            int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(account_seq),0) AS value FROM account_events "
+                    "WHERE account_generation_id=?",
+                    (generation_id,),
+                ).fetchone()["value"]
+            )
+            + 1
+        )
         prior_row = conn.execute(
             "SELECT event_hash FROM account_events WHERE account_generation_id=? "
             "ORDER BY account_seq DESC LIMIT 1",
@@ -1979,19 +2157,31 @@ class PaperEvidenceStore:
         """Persist a non-authoritative intent; only ``finalize_run`` may apply it."""
         if event_type not in {"position_opened", "position_closed", "outcome_revised"}:
             raise ValueError("unsupported paper lifecycle event")
-        if event_type == "position_opened" and not str(payload.get("scenario_id") or ""):
+        if event_type == "position_opened" and not str(
+            payload.get("scenario_id") or ""
+        ):
             raise ValueError("paper open requires a scenario identity")
-        if event_type in {"position_closed", "outcome_revised"} and "net_pct" not in payload:
+        if (
+            event_type in {"position_closed", "outcome_revised"}
+            and "net_pct" not in payload
+        ):
             raise ValueError("paper terminal event requires net_pct")
         if "_evidence" in payload:
-            raise PaperEvidenceConflict("reserved lifecycle evidence field supplied by caller")
-        if payload.get("execution_allowed") is True or payload.get("paper_only") is False:
+            raise PaperEvidenceConflict(
+                "reserved lifecycle evidence field supplied by caller"
+            )
+        if (
+            payload.get("execution_allowed") is True
+            or payload.get("paper_only") is False
+        ):
             raise PaperEvidenceConflict("paper lifecycle crossed execution boundary")
         with self._lock:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 subject = conn.execute(
                     "SELECT * FROM paper_subjects WHERE subject_generation_id=?",
                     (subject_generation_id,),
@@ -2014,7 +2204,9 @@ class PaperEvidenceStore:
                     or observation["run_id"] != run_id
                     or cursor is None
                 ):
-                    raise PaperEvidenceConflict("lifecycle intent generation join mismatch")
+                    raise PaperEvidenceConflict(
+                        "lifecycle intent generation join mismatch"
+                    )
                 subject_payload = json.loads(str(subject["payload_json"]))
                 observation_rows = json.loads(str(observation["rows_json"]))
                 observation_request = json.loads(str(observation["request_json"]))
@@ -2023,7 +2215,9 @@ class PaperEvidenceStore:
                     or _digest(observation_rows) != observation["rows_digest"]
                     or _digest(observation_request) != observation["request_digest"]
                 ):
-                    raise PaperEvidenceConflict("lifecycle evidence input digest mismatch")
+                    raise PaperEvidenceConflict(
+                        "lifecycle evidence input digest mismatch"
+                    )
                 payload = {
                     **payload,
                     "_evidence": {
@@ -2031,11 +2225,17 @@ class PaperEvidenceStore:
                         "source_validation_generation_id": str(
                             subject_payload["source_validation_generation_id"]
                         ),
-                        "simulator_manifest_id": str(subject_payload["simulator_manifest_id"]),
+                        "simulator_manifest_id": str(
+                            subject_payload["simulator_manifest_id"]
+                        ),
                         "method_identity": str(subject_payload["method_identity"]),
                         "observation_rows_digest": str(observation["rows_digest"]),
-                        "observation_request_digest": str(observation["request_digest"]),
-                        "observation_acquisition_id": str(observation["acquisition_id"]),
+                        "observation_request_digest": str(
+                            observation["request_digest"]
+                        ),
+                        "observation_acquisition_id": str(
+                            observation["acquisition_id"]
+                        ),
                         "observation_observed_at": float(observation["observed_at"]),
                         "observation_available_at": float(observation["available_at"]),
                     },
@@ -2047,7 +2247,9 @@ class PaperEvidenceStore:
                 if len(predecessor_stages) != 4 or any(
                     row["status"] != "completed" for row in predecessor_stages
                 ):
-                    raise PaperEvidenceConflict("lifecycle intent predecessors are incomplete")
+                    raise PaperEvidenceConflict(
+                        "lifecycle intent predecessors are incomplete"
+                    )
                 payload_digest = _digest(payload)
                 exact_retry = conn.execute(
                     "SELECT intent_id FROM paper_run_mutation_intents WHERE run_id=? "
@@ -2085,7 +2287,9 @@ class PaperEvidenceStore:
                         "event_type": str(prior_intent["intent_type"]),
                         "observation_id": str(prior_intent["observation_id"]),
                         "payload_digest": _digest(prior_payload),
-                        "supersedes_event_id": str(prior_intent["supersedes_event_id"] or ""),
+                        "supersedes_event_id": str(
+                            prior_intent["supersedes_event_id"] or ""
+                        ),
                     }
                     expected_hash = _digest(prior_identity)
                     state = {
@@ -2099,13 +2303,18 @@ class PaperEvidenceStore:
                     raise PaperEvidenceConflict("paper subject is not opened")
                 if event_type == "outcome_revised":
                     if state not in {"closed", "revised"} or not supersedes_event_id:
-                        raise PaperEvidenceConflict("paper revision requires terminal predecessor")
+                        raise PaperEvidenceConflict(
+                            "paper revision requires terminal predecessor"
+                        )
                     prior = conn.execute(
                         "SELECT * FROM lifecycle_events WHERE lifecycle_event_id=? "
                         "AND subject_generation_id=?",
                         (supersedes_event_id, subject_generation_id),
                     ).fetchone()
-                    if prior is None or prior["event_type"] not in {"position_closed", "outcome_revised"}:
+                    if prior is None or prior["event_type"] not in {
+                        "position_closed",
+                        "outcome_revised",
+                    }:
                         raise PaperEvidenceConflict("paper revision target mismatch")
                 self._account_config(conn, account_generation_id)
                 base_account_seq = int(
@@ -2122,13 +2331,16 @@ class PaperEvidenceStore:
                         (run_id, account_generation_id),
                     ).fetchone()["n"]
                 )
-                order = int(
-                    conn.execute(
-                        "SELECT COALESCE(MAX(intent_order),0) AS n FROM paper_run_mutation_intents "
-                        "WHERE run_id=?",
-                        (run_id,),
-                    ).fetchone()["n"]
-                ) + 1
+                order = (
+                    int(
+                        conn.execute(
+                            "SELECT COALESCE(MAX(intent_order),0) AS n FROM paper_run_mutation_intents "
+                            "WHERE run_id=?",
+                            (run_id,),
+                        ).fetchone()["n"]
+                    )
+                    + 1
+                )
                 intent_identity = {
                     "run_id": run_id,
                     "intent_order": order,
@@ -2144,7 +2356,8 @@ class PaperEvidenceStore:
                 }
                 intent_id = _stable_id("paperintent", intent_identity)
                 existing = conn.execute(
-                    "SELECT * FROM paper_run_mutation_intents WHERE intent_id=?", (intent_id,)
+                    "SELECT * FROM paper_run_mutation_intents WHERE intent_id=?",
+                    (intent_id,),
                 ).fetchone()
                 if existing is None:
                     conn.execute(
@@ -2235,7 +2448,9 @@ class PaperEvidenceStore:
             or int(cursor["event_seq"]) != int(intent["expected_subject_seq"])
             or str(cursor["last_event_hash"]) != str(intent["expected_subject_hash"])
         ):
-            raise PaperEvidenceConflict("planned lifecycle cursor/observation CAS failed")
+            raise PaperEvidenceConflict(
+                "planned lifecycle cursor/observation CAS failed"
+            )
         account_seq = int(
             conn.execute(
                 "SELECT COALESCE(MAX(account_seq),0) AS n FROM account_events "
@@ -2280,26 +2495,37 @@ class PaperEvidenceStore:
         account = self._replay_account_conn(conn, account_generation_id)
         config = self._account_config(conn, account_generation_id)
         supersedes_account_event_id = None
+        account_payload: dict[str, Any]
         if event_type == "position_opened":
             margin_units = int(config["position_margin_microunits"])
             scenario_id = str(payload.get("scenario_id") or "")
             raw_candidates = payload.get("scenario_candidates") or [scenario_id]
             if not isinstance(raw_candidates, list):
-                raise PaperEvidenceConflict("scenario candidates must be a complete list")
-            candidates = sorted({str(candidate) for candidate in raw_candidates if str(candidate)})
+                raise PaperEvidenceConflict(
+                    "scenario candidates must be a complete list"
+                )
+            candidates = sorted(
+                {str(candidate) for candidate in raw_candidates if str(candidate)}
+            )
             if scenario_id not in candidates:
-                raise PaperEvidenceConflict("scenario is absent from its complete candidate set")
+                raise PaperEvidenceConflict(
+                    "scenario is absent from its complete candidate set"
+                )
             scenario_set_digest = _digest(candidates)
             primary = scenario_id == candidates[0]
-            scenario_owned = any(
-                json.loads(str(row["payload_json"])).get("scenario_set_digest")
-                == scenario_set_digest
-                for row in conn.execute(
-                    "SELECT payload_json FROM account_events WHERE account_generation_id=? "
-                    "AND event_type='position_opened'",
-                    (account_generation_id,),
-                ).fetchall()
-            ) if scenario_id else False
+            scenario_owned = (
+                any(
+                    json.loads(str(row["payload_json"])).get("scenario_set_digest")
+                    == scenario_set_digest
+                    for row in conn.execute(
+                        "SELECT payload_json FROM account_events WHERE account_generation_id=? "
+                        "AND event_type='position_opened'",
+                        (account_generation_id,),
+                    ).fetchall()
+                )
+                if scenario_id
+                else False
+            )
             if not primary or scenario_owned:
                 account_event_type = "counterfactual_excluded"
                 account_payload = {
@@ -2322,7 +2548,9 @@ class PaperEvidenceStore:
                 account_event_type = "allocation_rejected"
                 account_payload = {
                     "required_margin_microunits": margin_units,
-                    "available_margin_microunits": int(account["available_margin_microunits"]),
+                    "available_margin_microunits": int(
+                        account["available_margin_microunits"]
+                    ),
                 }
                 next_state = "allocation_rejected"
         elif event_type == "position_closed":
@@ -2340,7 +2568,10 @@ class PaperEvidenceStore:
                 "SELECT * FROM account_events WHERE lifecycle_event_id=?",
                 (supersedes_event_id,),
             ).fetchone()
-            if prior_account is None or prior_account["event_type"] not in {"position_closed", "pnl_adjustment"}:
+            if prior_account is None or prior_account["event_type"] not in {
+                "position_closed",
+                "pnl_adjustment",
+            }:
                 raise PaperEvidenceConflict("paper revision lacks prior account effect")
             prior_payload = json.loads(str(prior_account["payload_json"]))
             new_net_units = _scaled(payload["net_pct"], RATIO_SCALE)
@@ -2418,7 +2649,10 @@ class PaperEvidenceStore:
             payload = json.loads(str(row["payload_json"]))
             if int(row["event_seq"]) != expected_seq:
                 raise PaperEvidenceConflict("paper lifecycle event sequence gap")
-            if row["prior_event_hash"] != prior_hash or _digest(payload) != row["payload_digest"]:
+            if (
+                row["prior_event_hash"] != prior_hash
+                or _digest(payload) != row["payload_digest"]
+            ):
                 raise PaperEvidenceConflict("paper lifecycle event chain mismatch")
             if row["observation_id"] is not None:
                 observation = self.connection.execute(
@@ -2426,8 +2660,13 @@ class PaperEvidenceStore:
                     (row["observation_id"],),
                 ).fetchone()
                 evidence = payload.get("_evidence") or {}
-                if observation is None or observation["subject_generation_id"] != subject_generation_id:
-                    raise PaperEvidenceConflict("paper lifecycle observation identity mismatch")
+                if (
+                    observation is None
+                    or observation["subject_generation_id"] != subject_generation_id
+                ):
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle observation identity mismatch"
+                    )
                 observation_rows = json.loads(str(observation["rows_json"]))
                 observation_request = json.loads(str(observation["request_json"]))
                 expected_evidence = {
@@ -2435,7 +2674,9 @@ class PaperEvidenceStore:
                     "source_validation_generation_id": str(
                         subject_payload["source_validation_generation_id"]
                     ),
-                    "simulator_manifest_id": str(subject_payload["simulator_manifest_id"]),
+                    "simulator_manifest_id": str(
+                        subject_payload["simulator_manifest_id"]
+                    ),
                     "method_identity": str(subject_payload["method_identity"]),
                     "observation_rows_digest": str(observation["rows_digest"]),
                     "observation_request_digest": str(observation["request_digest"]),
@@ -2448,7 +2689,9 @@ class PaperEvidenceStore:
                     or _digest(observation_request) != observation["request_digest"]
                     or evidence != expected_evidence
                 ):
-                    raise PaperEvidenceConflict("paper lifecycle observation evidence mismatch")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle observation evidence mismatch"
+                    )
             identity = {
                 "subject_generation_id": subject_generation_id,
                 "event_seq": expected_seq,
@@ -2463,30 +2706,42 @@ class PaperEvidenceStore:
             event_type = str(row["event_type"])
             if event_type == "position_opened":
                 if derived_state != "armed":
-                    raise PaperEvidenceConflict("paper lifecycle opened from invalid replay state")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle opened from invalid replay state"
+                    )
                 account = self.connection.execute(
                     "SELECT event_type FROM account_events WHERE lifecycle_event_id=?",
                     (row["lifecycle_event_id"],),
                 ).fetchone()
                 if account is None:
-                    raise PaperEvidenceConflict("paper lifecycle open lacks account decision")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle open lacks account decision"
+                    )
                 derived_state = {
                     "position_opened": "opened",
                     "allocation_rejected": "allocation_rejected",
                     "counterfactual_excluded": "counterfactual",
                 }.get(str(account["event_type"]), "")
                 if not derived_state:
-                    raise PaperEvidenceConflict("paper lifecycle open account decision is invalid")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle open account decision is invalid"
+                    )
             elif event_type == "position_closed":
                 if derived_state != "opened":
-                    raise PaperEvidenceConflict("paper lifecycle closed without replayed open")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle closed without replayed open"
+                    )
                 derived_state = "closed"
             elif event_type == "outcome_revised":
                 if derived_state not in {"closed", "revised"}:
-                    raise PaperEvidenceConflict("paper lifecycle revision lacks terminal state")
+                    raise PaperEvidenceConflict(
+                        "paper lifecycle revision lacks terminal state"
+                    )
                 derived_state = "revised"
             elif event_type not in {"source_withdrawn", "source_reintroduced"}:
-                raise PaperEvidenceConflict("paper lifecycle replay event type is invalid")
+                raise PaperEvidenceConflict(
+                    "paper lifecycle replay event type is invalid"
+                )
             prior_hash = str(row["event_hash"])
         accepted = self.connection.execute(
             "SELECT * FROM accepted_observations WHERE subject_generation_id=? "
@@ -2525,7 +2780,9 @@ class PaperEvidenceStore:
             or str(cursor["state"]) != derived_state
             or str(cursor["last_observation_id"] or "") != prior_observation_id
         ):
-            raise PaperEvidenceConflict("paper lifecycle cursor does not match event chain")
+            raise PaperEvidenceConflict(
+                "paper lifecycle cursor does not match event chain"
+            )
         return {
             "subject_generation_id": subject_generation_id,
             "events": len(rows),
@@ -2602,7 +2859,9 @@ class PaperEvidenceStore:
             raise PaperEvidenceConflict("paper system lifecycle compare-and-set failed")
         return event_id
 
-    def withdraw_absent_subjects(self, lease: PaperWriterLease, run_id: str) -> list[str]:
+    def withdraw_absent_subjects(
+        self, lease: PaperWriterLease, run_id: str
+    ) -> list[str]:
         del lease, run_id
         raise PaperEvidenceConflict(
             "direct withdrawal is forbidden; completed producer reconciliation runs in finalize_run"
@@ -2623,12 +2882,14 @@ class PaperEvidenceStore:
                     conn.commit()
                     return []
                 cursor = int(
-                    conn.execute("SELECT cursor FROM scheduling_state WHERE singleton=1").fetchone()[
-                        "cursor"
-                    ]
+                    conn.execute(
+                        "SELECT cursor FROM scheduling_state WHERE singleton=1"
+                    ).fetchone()["cursor"]
                 )
                 count = min(limit, len(rows))
-                selected = [str(rows[(cursor + index) % len(rows)][0]) for index in range(count)]
+                selected = [
+                    str(rows[(cursor + index) % len(rows)][0]) for index in range(count)
+                ]
                 conn.execute(
                     "UPDATE scheduling_state SET cursor=? WHERE singleton=1",
                     ((cursor + count) % len(rows),),
@@ -2641,13 +2902,23 @@ class PaperEvidenceStore:
 
     @staticmethod
     def _high_water(conn: sqlite3.Connection) -> str:
-        lifecycle = int(conn.execute("SELECT COUNT(*) AS n FROM lifecycle_events").fetchone()["n"])
-        account = int(conn.execute("SELECT COUNT(*) AS n FROM account_events").fetchone()["n"])
+        lifecycle = int(
+            conn.execute("SELECT COUNT(*) AS n FROM lifecycle_events").fetchone()["n"]
+        )
+        account = int(
+            conn.execute("SELECT COUNT(*) AS n FROM account_events").fetchone()["n"]
+        )
         observations = int(
-            conn.execute("SELECT COUNT(*) AS n FROM observation_batches").fetchone()["n"]
+            conn.execute("SELECT COUNT(*) AS n FROM observation_batches").fetchone()[
+                "n"
+            ]
         )
         return _digest(
-            {"lifecycle_events": lifecycle, "account_events": account, "observations": observations}
+            {
+                "lifecycle_events": lifecycle,
+                "account_events": account,
+                "observations": observations,
+            }
         )
 
     @staticmethod
@@ -2676,9 +2947,7 @@ class PaperEvidenceStore:
         for item in envelope.get("items") or []:
             if not isinstance(item, dict):
                 raise PaperEvidenceConflict("projection item is not an object")
-            subject_generation_id = str(
-                item.get("paper_subject_generation_id") or ""
-            )
+            subject_generation_id = str(item.get("paper_subject_generation_id") or "")
             item_account_generation_id = str(item.get("account_generation_id") or "")
             allocation_event_id = str(item.get("allocation_lifecycle_event_id") or "")
             lifecycle_event_id = str(item.get("terminal_lifecycle_event_id") or "")
@@ -2688,19 +2957,33 @@ class PaperEvidenceStore:
                 "allocation_rejected",
                 "counterfactual_excluded",
             }
-            terminal_decisions = {"position_closed", "pnl_adjustment", "terminal_unchanged"}
+            terminal_decisions = {
+                "position_closed",
+                "pnl_adjustment",
+                "terminal_unchanged",
+            }
             if account_decision not in allocation_decisions | terminal_decisions | {""}:
                 raise PaperEvidenceConflict("unknown paper account decision")
             if not subject_generation_id or subject_generation_id not in subject_ids:
-                raise PaperEvidenceConflict("projection item subject reference mismatch")
+                raise PaperEvidenceConflict(
+                    "projection item subject reference mismatch"
+                )
             if item_account_generation_id != account_generation_id:
-                raise PaperEvidenceConflict("projection item account reference mismatch")
+                raise PaperEvidenceConflict(
+                    "projection item account reference mismatch"
+                )
             if account_decision in allocation_decisions and not allocation_event_id:
-                raise PaperEvidenceConflict("paper account decision lacks allocation evidence")
+                raise PaperEvidenceConflict(
+                    "paper account decision lacks allocation evidence"
+                )
             if account_decision in terminal_decisions and allocation_event_id:
-                raise PaperEvidenceConflict("terminal account decision has allocation evidence")
+                raise PaperEvidenceConflict(
+                    "terminal account decision has allocation evidence"
+                )
             if not account_decision and (allocation_event_id or lifecycle_event_id):
-                raise PaperEvidenceConflict("projection event reference lacks account decision")
+                raise PaperEvidenceConflict(
+                    "projection event reference lacks account decision"
+                )
             if allocation_event_id:
                 allocation_lifecycle = conn.execute(
                     "SELECT * FROM lifecycle_events WHERE lifecycle_event_id=?",
@@ -2735,9 +3018,13 @@ class PaperEvidenceStore:
                 "counterfactual_excluded",
             }
             if account_decision in terminal_decisions and not lifecycle_event_id:
-                raise PaperEvidenceConflict("paper account decision lacks terminal evidence")
+                raise PaperEvidenceConflict(
+                    "paper account decision lacks terminal evidence"
+                )
             if terminal_looking and not terminal_excluded and not lifecycle_event_id:
-                raise PaperEvidenceConflict("terminal projection item lacks terminal evidence")
+                raise PaperEvidenceConflict(
+                    "terminal projection item lacks terminal evidence"
+                )
             if not lifecycle_event_id:
                 continue
             lifecycle = conn.execute(
@@ -2755,19 +3042,26 @@ class PaperEvidenceStore:
                 or lifecycle["event_type"] not in {"position_closed", "outcome_revised"}
                 or account_event is None
                 or account_event["subject_generation_id"] != subject_generation_id
-                or account_event["event_type"] not in {"position_closed", "pnl_adjustment"}
+                or account_event["event_type"]
+                not in {"position_closed", "pnl_adjustment"}
             ):
-                raise PaperEvidenceConflict("projection lifecycle/account reference mismatch")
+                raise PaperEvidenceConflict(
+                    "projection lifecycle/account reference mismatch"
+                )
             if account_decision == "position_closed" and (
                 lifecycle["event_type"] != "position_closed"
                 or account_event["event_type"] != "position_closed"
             ):
-                raise PaperEvidenceConflict("projection close decision reference mismatch")
+                raise PaperEvidenceConflict(
+                    "projection close decision reference mismatch"
+                )
             if account_decision == "pnl_adjustment" and (
                 lifecycle["event_type"] != "outcome_revised"
                 or account_event["event_type"] != "pnl_adjustment"
             ):
-                raise PaperEvidenceConflict("projection adjustment decision reference mismatch")
+                raise PaperEvidenceConflict(
+                    "projection adjustment decision reference mismatch"
+                )
 
     def prepare_projection(
         self,
@@ -2784,7 +3078,11 @@ class PaperEvidenceStore:
         """Persist projection bytes as a provisional run artifact, not authority."""
         if not projection_kind:
             raise ValueError("projection kind required")
-        if any(item.get("paper_only") is not True or item.get("execution_allowed") is not False for item in items):
+        if any(
+            item.get("paper_only") is not True
+            or item.get("execution_allowed") is not False
+            for item in items
+        ):
             raise PaperEvidenceConflict("projection item crossed execution boundary")
         target_path = Path(target_path)
         subjects = sorted(set(subject_generation_ids or []))
@@ -2793,7 +3091,9 @@ class PaperEvidenceStore:
             conn = self._begin()
             try:
                 self._authorize(conn, lease)
-                run = conn.execute("SELECT * FROM paper_runs WHERE run_id=?", (run_id,)).fetchone()
+                run = conn.execute(
+                    "SELECT * FROM paper_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
                 predecessors = conn.execute(
                     "SELECT status FROM paper_run_stages WHERE run_id=? AND ordinal<=4",
                     (run_id,),
@@ -2804,7 +3104,9 @@ class PaperEvidenceStore:
                     or len(predecessors) != 5
                     or any(row["status"] != "completed" for row in predecessors)
                 ):
-                    raise PaperEvidenceConflict("projection plan predecessors are incomplete")
+                    raise PaperEvidenceConflict(
+                        "projection plan predecessors are incomplete"
+                    )
                 if account_generation_id:
                     self._account_config(conn, account_generation_id)
                 identity = {
@@ -2880,7 +3182,9 @@ class PaperEvidenceStore:
                         existing["envelope_digest"] != _digest(envelope),
                     )
                 ):
-                    raise PaperEvidenceConflict("projection identity reused with different content")
+                    raise PaperEvidenceConflict(
+                        "projection identity reused with different content"
+                    )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -2906,8 +3210,14 @@ class PaperEvidenceStore:
             self.path, projection_kind, expected_run_id=expected_run_id
         )
         if not envelope.get("current"):
-            raise PaperEvidenceConflict("no completed projection is available for export")
-        exported = {key: value for key, value in envelope.items() if key not in {"current", "display_only", "generation_status"}}
+            raise PaperEvidenceConflict(
+                "no completed projection is available for export"
+            )
+        exported = {
+            key: value
+            for key, value in envelope.items()
+            if key not in {"current", "display_only", "generation_status"}
+        }
         target_path = Path(target_path)
         generation_path = target_path.with_name(
             f"{target_path.stem}.{exported['projection_generation_id']}{target_path.suffix or '.json'}"
@@ -2955,7 +3265,9 @@ class PaperEvidenceStore:
                 "SELECT value FROM paper_meta WHERE key='schema_version'"
             ).fetchone()
             if marker is None or marker["value"] != SCHEMA_VERSION:
-                return unavailable | {"generation_status": "legacy_unversioned_projection"}
+                return unavailable | {
+                    "generation_status": "legacy_unversioned_projection"
+                }
             current = conn.execute(
                 "SELECT run_id FROM paper_current_run WHERE singleton=1"
             ).fetchone()
@@ -3038,7 +3350,9 @@ class PaperEvidenceStore:
                 "SELECT value FROM paper_meta WHERE key='schema_version'"
             ).fetchone()
             if marker is None or marker["value"] != SCHEMA_VERSION:
-                return unavailable | {"generation_status": "legacy_unversioned_projection"}
+                return unavailable | {
+                    "generation_status": "legacy_unversioned_projection"
+                }
             generation_id = account_generation_id
             if not generation_id:
                 current = conn.execute(
@@ -3053,7 +3367,9 @@ class PaperEvidenceStore:
                     (current["run_id"],),
                 ).fetchone()
                 if projection is None:
-                    return unavailable | {"generation_status": "account_generation_missing"}
+                    return unavailable | {
+                        "generation_status": "account_generation_missing"
+                    }
                 generation_id = str(projection["account_generation_id"])
             reader = PaperEvidenceStore(database_path)
             reader._conn = conn

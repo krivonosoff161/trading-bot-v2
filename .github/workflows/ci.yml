@@ -35,11 +35,15 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes -r requirements-ci.txt
 
       - name: Check canonical Python quality
-        run: >-
-          python -m ruff check
-          src/research_lab
-          scripts/strategy_lab
-          scripts/research_control_center.py
+        run: |
+          python -m ruff check .
+          python -m mypy \
+            --explicit-package-bases \
+            --follow-imports=skip \
+            --ignore-missing-imports \
+            src/research_lab \
+            scripts/strategy_lab \
+            scripts/research_control_center.py
 
       - name: Check whitespace
         run: git diff --check

@@ -7,6 +7,7 @@ artifacts, and writes HardValidationRequest JSON files to the private root.
 
 No network. No LLM. No live trading.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -130,13 +131,21 @@ def validation_id_for_unique_candidate(row: dict[str, Any]) -> str:
     if not uc_key:
         uc_key = "::".join(
             str(row.get(k) or "")
-            for k in ("symbol", "timeframe", "family", "params_hash", "data_fingerprint")
+            for k in (
+                "symbol",
+                "timeframe",
+                "family",
+                "params_hash",
+                "data_fingerprint",
+            )
         )
     digest = hashlib.sha256(uc_key.encode("utf-8")).hexdigest()
     return f"fv_{digest}"
 
 
-def _load_farm_unique_entries(private_root: Path, *, uc_keys: list[str] | None = None) -> list[dict[str, Any]]:
+def _load_farm_unique_entries(
+    private_root: Path, *, uc_keys: list[str] | None = None
+) -> list[dict[str, Any]]:
     db = tasks_db_path(Path(private_root))
     if not db.exists():
         return []
@@ -228,7 +237,7 @@ def _filter_entries(
 
 
 def _deduplicate(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: dict[tuple[str, str, str], dict[str, Any]] = {}
+    seen: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
     for e in entries:
         key = (
             str(e.get("candidate_id") or ""),
@@ -261,9 +270,13 @@ def _build_candidate(
 
     trades = metrics.pop("_trades", [])
     filters = dict(entry.get("filters") or metrics.pop("_filters", {}) or {})
-    fee_value = entry["fees_bps"] if "fees_bps" in entry else metrics.pop("_fees_bps", 7.0)
+    fee_value = (
+        entry["fees_bps"] if "fees_bps" in entry else metrics.pop("_fees_bps", 7.0)
+    )
     slippage_value = (
-        entry["slippage_bps"] if "slippage_bps" in entry else metrics.pop("_slippage_bps", 3.0)
+        entry["slippage_bps"]
+        if "slippage_bps" in entry
+        else metrics.pop("_slippage_bps", 3.0)
     )
     fees_bps = float(7.0 if fee_value is None else fee_value)
     slippage_bps = float(3.0 if slippage_value is None else slippage_value)
@@ -324,17 +337,20 @@ def _build_candidate(
                 "reason_codes": ["no_return_observations"],
             },
         )
-    metrics.setdefault("validation_epoch", {
-        "schema": "ValidationEpoch.v1",
-        "evidence_stage": "selection_only",
-        "selection_data_fingerprint": metrics["data_fingerprint"],
-        "selection_evidence_hash": trade_evidence_hash(trades),
-        "selection_evidence": trades,
-        "evaluation_data_fingerprint": "",
-        "evaluation_evidence_hash": "",
-        "hypothesis_frozen_at": str(entry.get("updated_at") or ""),
-        "evaluation_started_at": "",
-    })
+    metrics.setdefault(
+        "validation_epoch",
+        {
+            "schema": "ValidationEpoch.v1",
+            "evidence_stage": "selection_only",
+            "selection_data_fingerprint": metrics["data_fingerprint"],
+            "selection_evidence_hash": trade_evidence_hash(trades),
+            "selection_evidence": trades,
+            "evaluation_data_fingerprint": "",
+            "evaluation_evidence_hash": "",
+            "hypothesis_frozen_at": str(entry.get("updated_at") or ""),
+            "evaluation_started_at": "",
+        },
+    )
     equity_curve = _build_equity_curve(trades)
     data_window = _build_data_window(trades)
 
@@ -357,8 +373,7 @@ def _build_candidate(
         equity_curve=equity_curve,
         data_window=data_window,
         created_at=str(
-            entry.get("created_at")
-            or dt.datetime.now(dt.timezone.utc).isoformat()
+            entry.get("created_at") or dt.datetime.now(dt.timezone.utc).isoformat()
         ),
         simulator_manifest=simulator_manifest,
         unsupported_simulator_dimensions=unsupported_dimensions,
@@ -413,11 +428,13 @@ def _load_experiment_metrics(
         context = {
             "_filters": dict(data.get("filters") or {}),
             "_fees_bps": float(
-                7.0 if data.get("fees_bps", entry.get("fees_bps")) is None
+                7.0
+                if data.get("fees_bps", entry.get("fees_bps")) is None
                 else data.get("fees_bps", entry.get("fees_bps"))
             ),
             "_slippage_bps": float(
-                3.0 if data.get("slippage_bps", entry.get("slippage_bps")) is None
+                3.0
+                if data.get("slippage_bps", entry.get("slippage_bps")) is None
                 else data.get("slippage_bps", entry.get("slippage_bps"))
             ),
             "_timeframe": str(data.get("timeframe") or entry.get("timeframe") or ""),
@@ -438,11 +455,10 @@ def _load_experiment_metrics(
             )
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             return None
-        if (
-            context["search_trial_evidence_id"]
-            != str(trial_evidence.get("search_trial_evidence_id") or "")
-            or context["multiple_testing_family_hash"]
-            != str(trial_evidence.get("multiple_testing_family_hash") or "")
+        if context["search_trial_evidence_id"] != str(
+            trial_evidence.get("search_trial_evidence_id") or ""
+        ) or context["multiple_testing_family_hash"] != str(
+            trial_evidence.get("multiple_testing_family_hash") or ""
         ):
             return None
         context["search_trial_evidence"] = trial_evidence
@@ -451,18 +467,23 @@ def _load_experiment_metrics(
         candidate_id = str(entry.get("candidate_id") or "")
         source_candidate_id = str(entry.get("source_candidate_id") or "")
         wanted_params_hash = str(entry.get("params_hash") or "")
-        wanted_symbol = str(entry.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        wanted_symbol = (
+            str(entry.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+        )
         wanted_family = str(entry.get("strategy_id") or "")
         for r in results:
             row_id = str(r.get("run_id") or r.get("candidate_id") or "")
-            row_symbol = str(r.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+            row_symbol = (
+                str(r.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
+            )
             row_family = str(r.get("family") or "")
             row_params_hash = params_hash(r.get("params") or {})
-            exact_id = row_id == candidate_id or (source_candidate_id and row_id == source_candidate_id)
+            exact_id = row_id == candidate_id or (
+                source_candidate_id and row_id == source_candidate_id
+            )
             exact_hash = wanted_params_hash and row_params_hash == wanted_params_hash
-            exact_scope = (
-                (not wanted_symbol or row_symbol == wanted_symbol)
-                and (not wanted_family or row_family == wanted_family)
+            exact_scope = (not wanted_symbol or row_symbol == wanted_symbol) and (
+                not wanted_family or row_family == wanted_family
             )
             if exact_scope and (exact_id or exact_hash):
                 out = dict(r.get("metrics") or {})
@@ -501,7 +522,9 @@ def _load_experiment_metrics(
             first["_params"] = _params_from_result(results[0])
             trades = list(results[0].get("_trades") or results[0].get("trades") or [])
             if not trades and int(first.get("n_trades") or 0) > 0:
-                trades = _rebuild_trades_from_result(private_root, results[0], first, context)
+                trades = _rebuild_trades_from_result(
+                    private_root, results[0], first, context
+                )
             first["_trades"] = trades
             return first
 
@@ -516,8 +539,7 @@ def _comparable_trial_panel(
     family: str,
 ) -> dict[str, Any]:
     by_run_id = {
-        str(row.get("run_id") or row.get("candidate_id") or ""): row
-        for row in results
+        str(row.get("run_id") or row.get("candidate_id") or ""): row for row in results
     }
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
@@ -559,7 +581,11 @@ def _comparable_trial_panel(
         row = by_run_id.get(run_id)
         if row is None:
             excluded.append(
-                {"execution_id": execution_id, "run_id": run_id, "reason": "result_missing"}
+                {
+                    "execution_id": execution_id,
+                    "run_id": run_id,
+                    "reason": "result_missing",
+                }
             )
             continue
         values = [
@@ -619,13 +645,19 @@ def _rebuild_trades_from_result(
     Replaying them against the current local series would create different evidence
     under the old result identity, so those artifacts now fail closed.
     """
-    tf = normalize_timeframe(metrics.get("data_file_timeframe") or context.get("_timeframe"))
+    tf = normalize_timeframe(
+        metrics.get("data_file_timeframe") or context.get("_timeframe")
+    )
     symbol = str(row.get("symbol") or context.get("_symbol") or "")
     expected_snapshot_id = str(metrics.get("data_snapshot_id") or "")
     if not tf or not symbol or not expected_snapshot_id:
         return []
     selected = load_canonical_candles(
-        private_root, symbol, tf, purpose="experiment", coverage_policy="gap_free",
+        private_root,
+        symbol,
+        tf,
+        purpose="experiment",
+        coverage_policy="gap_free",
     )
     if (
         not selected.rows
@@ -644,9 +676,13 @@ def _rebuild_trades_from_result(
             candles,
             signals,
             params,
-            fees_bps=float(7.0 if context.get("_fees_bps") is None else context["_fees_bps"]),
+            fees_bps=float(
+                7.0 if context.get("_fees_bps") is None else context["_fees_bps"]
+            ),
             slippage_bps=float(
-                3.0 if context.get("_slippage_bps") is None else context["_slippage_bps"]
+                3.0
+                if context.get("_slippage_bps") is None
+                else context["_slippage_bps"]
             ),
         )
     except (OSError, ValueError, KeyError, TypeError):

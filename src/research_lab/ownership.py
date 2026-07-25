@@ -5,6 +5,7 @@ PID is never ownership by itself: the persisted process identity, owner id,
 unexpired lease, and fencing token must all still match before a mutation is
 authoritative.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -41,8 +42,8 @@ class ProcessLease:
     fencing_token: int
     lease_expires_at: float
 
-    def replace(self, **changes: object) -> "ProcessLease":
-        return replace(self, **changes)
+    def replace(self, *, owner_id: str) -> "ProcessLease":
+        return replace(self, owner_id=owner_id)
 
 
 IdentityProbe = Callable[[int], ProcessIdentity | None]
@@ -160,9 +161,13 @@ def assess_canonical_farm_authority(
                 errors.append("canonical_generation_changed")
         parsed.append((row, identity, resource_id, role_id, owner_id, fence))
 
-    canonical = [entry for entry in parsed if entry[2] == "canonical_farm" and entry[3] == "farm"]
+    canonical = [
+        entry for entry in parsed if entry[2] == "canonical_farm" and entry[3] == "farm"
+    ]
     if len(canonical) != 1:
-        errors.append("canonical_owner_missing" if not canonical else "canonical_owner_ambiguous")
+        errors.append(
+            "canonical_owner_missing" if not canonical else "canonical_owner_ambiguous"
+        )
 
     identities = {entry[1] for entry in parsed}
     if len(identities) > 1:
@@ -181,7 +186,10 @@ def assess_canonical_farm_authority(
     canonical_owner_id = canonical[0][4] if len(canonical) == 1 else None
     canonical_fence = canonical[0][5] if len(canonical) == 1 else None
     canonical_identity = canonical[0][1] if len(canonical) == 1 else None
-    if prior_canonical_owner_id is not None and canonical_owner_id != prior_canonical_owner_id:
+    if (
+        prior_canonical_owner_id is not None
+        and canonical_owner_id != prior_canonical_owner_id
+    ):
         errors.append("canonical_generation_changed")
 
     unique_errors = tuple(dict.fromkeys(errors))
@@ -197,7 +205,9 @@ def assess_canonical_farm_authority(
 
 
 def _command_digest(argv: list[str]) -> str:
-    payload = "\0".join(str(part) for part in argv).encode("utf-8", errors="surrogatepass")
+    payload = "\0".join(str(part) for part in argv).encode(
+        "utf-8", errors="surrogatepass"
+    )
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
@@ -218,7 +228,9 @@ def probe_process_identity(pid: int) -> ProcessIdentity | None:
     except (psutil.NoSuchProcess, ProcessLookupError):
         return None
     except Exception as exc:
-        raise OwnershipConflictError(f"process identity probe failed for pid {pid}") from exc
+        raise OwnershipConflictError(
+            f"process identity probe failed for pid {pid}"
+        ) from exc
 
 
 def current_process_identity() -> ProcessIdentity:
@@ -302,7 +314,12 @@ class OwnershipStore:
     ) -> ProcessLease:
         if not resource_id or not role_id or not owner_id or lease_seconds <= 0:
             raise ValueError("resource, role, owner, and positive lease are required")
-        if identity.pid <= 0 or identity.started_at <= 0 or not identity.executable or not identity.command_digest:
+        if (
+            identity.pid <= 0
+            or identity.started_at <= 0
+            or not identity.executable
+            or not identity.command_digest
+        ):
             raise ValueError("complete process identity is required")
         now = float(self._clock())
         conn = self.raw_connection
@@ -341,8 +358,11 @@ class OwnershipStore:
                 elif any(
                     row[name] is not None
                     for name in (
-                        "pid", "started_at", "executable",
-                        "command_digest", "lease_expires_at",
+                        "pid",
+                        "started_at",
+                        "executable",
+                        "command_digest",
+                        "lease_expires_at",
                     )
                 ):
                     raise OwnershipConflictError("corrupt released ownership state")
@@ -356,9 +376,16 @@ class OwnershipStore:
                 WHERE resource_id=?
                 """,
                 (
-                    role_id, owner_id, identity.pid, identity.started_at,
-                    identity.executable, identity.command_digest, expires_at,
-                    fence, now, resource_id,
+                    role_id,
+                    owner_id,
+                    identity.pid,
+                    identity.started_at,
+                    identity.executable,
+                    identity.command_digest,
+                    expires_at,
+                    fence,
+                    now,
+                    resource_id,
                 ),
             )
             conn.commit()
@@ -367,10 +394,13 @@ class OwnershipStore:
             raise
         return ProcessLease(resource_id, role_id, owner_id, identity, fence, expires_at)
 
-    def _assert_authoritative(self, lease: ProcessLease, *, now: float | None = None) -> sqlite3.Row:
+    def _assert_authoritative(
+        self, lease: ProcessLease, *, now: float | None = None
+    ) -> sqlite3.Row:
         current = float(self._clock()) if now is None else float(now)
         row = self.raw_connection.execute(
-            "SELECT * FROM ownership_resources WHERE resource_id=?", (lease.resource_id,)
+            "SELECT * FROM ownership_resources WHERE resource_id=?",
+            (lease.resource_id,),
         ).fetchone()
         if row is None or row["owner_id"] is None:
             raise StaleProcessLeaseError("lease is no longer owned")
@@ -386,7 +416,9 @@ class OwnershipStore:
         try:
             live = self._identity_probe(persisted.pid)
         except OwnershipConflictError as exc:
-            raise StaleProcessLeaseError("process identity cannot be revalidated") from exc
+            raise StaleProcessLeaseError(
+                "process identity cannot be revalidated"
+            ) from exc
         if not self._same_identity(live, persisted):
             raise StaleProcessLeaseError("process identity no longer matches lease")
         return row
@@ -423,9 +455,12 @@ class OwnershipStore:
         same = self._same_identity(live, persisted)
         expired = float(row["lease_expires_at"] or 0) <= float(self._clock())
         state = (
-            "identity_mismatch" if live is not None and not same
-            else "lease_expired" if expired
-            else "exclusive_owner" if same
+            "identity_mismatch"
+            if live is not None and not same
+            else "lease_expired"
+            if expired
+            else "exclusive_owner"
+            if same
             else "display_only"
         )
         return {
@@ -438,7 +473,9 @@ class OwnershipStore:
             "lease_expires_at": float(row["lease_expires_at"]),
         }
 
-    def renew(self, lease: ProcessLease, *, lease_seconds: float = 30.0) -> ProcessLease:
+    def renew(
+        self, lease: ProcessLease, *, lease_seconds: float = 30.0
+    ) -> ProcessLease:
         if lease_seconds <= 0:
             raise ValueError("positive lease is required")
         now = float(self._clock())
@@ -450,7 +487,13 @@ class OwnershipStore:
             conn.execute(
                 "UPDATE ownership_resources SET lease_expires_at=?, updated_at=? "
                 "WHERE resource_id=? AND owner_id=? AND next_fence=?",
-                (expires_at, now, lease.resource_id, lease.owner_id, lease.fencing_token),
+                (
+                    expires_at,
+                    now,
+                    lease.resource_id,
+                    lease.owner_id,
+                    lease.fencing_token,
+                ),
             )
             conn.commit()
         except Exception:

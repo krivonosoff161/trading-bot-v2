@@ -129,12 +129,18 @@ class MainPaperRuntimeQueueItem:
         if self.source not in SOURCES:
             raise ValueError(f"runtime queue source must be one of {SOURCES}")
         if self.validation_tier not in MAIN_PAPER_TIERS:
-            raise ValueError(f"validation_tier must be one of {sorted(MAIN_PAPER_TIERS)}")
+            raise ValueError(
+                f"validation_tier must be one of {sorted(MAIN_PAPER_TIERS)}"
+            )
         if self.validation_tier == VALIDATED_TIER:
             if not self.ready_strategy_id:
-                raise ValueError("validated runtime queue item requires ready_strategy_id")
+                raise ValueError(
+                    "validated runtime queue item requires ready_strategy_id"
+                )
             if self.source_validation_verdict != "PAPER_FORWARD_READY":
-                raise ValueError("validated runtime queue item requires PAPER_FORWARD_READY")
+                raise ValueError(
+                    "validated runtime queue item requires PAPER_FORWARD_READY"
+                )
         if self.entry <= 0 or self.stop <= 0:
             raise ValueError("entry and stop must be positive")
         if self.entry == self.stop:
@@ -166,7 +172,9 @@ class MainPaperRuntimeQueueItem:
             self.source_validation_generation_id,
             self.consumer_output_digest,
         )
-        if any(generation_values[:2] + generation_values[4:]) and not all(generation_values):
+        if any(generation_values[:2] + generation_values[4:]) and not all(
+            generation_values
+        ):
             raise ValueError("partial paper generation metadata is forbidden")
 
     def to_dict(self) -> dict[str, Any]:
@@ -216,7 +224,9 @@ def _priority(row: dict[str, Any], contract: dict[str, Any]) -> tuple[int, list[
     score = FAMILY_PRIORITY.get(family, 9) * 100
     reasons.append(f"family={family or 'unknown'}:{FAMILY_PRIORITY.get(family, 9)}")
     score += TIMEFRAME_PRIORITY.get(timeframe, 9) * 10
-    reasons.append(f"timeframe={timeframe or 'unknown'}:{TIMEFRAME_PRIORITY.get(timeframe, 9)}")
+    reasons.append(
+        f"timeframe={timeframe or 'unknown'}:{TIMEFRAME_PRIORITY.get(timeframe, 9)}"
+    )
     entry = float(contract.get("entry") or 0)
     stop = float(contract.get("stop") or 0)
     if entry > 0 and stop > 0:
@@ -249,7 +259,11 @@ def _item_from_row(
     if not validation_tier:
         ready_strategy_id = str(meta.get("ready_strategy_id") or "").strip()
         verdict = str(meta.get("source_validation_verdict") or "").strip()
-        validation_tier = VALIDATED_TIER if ready_strategy_id and verdict == "PAPER_FORWARD_READY" else FARM_CALCULATED_TIER
+        validation_tier = (
+            VALIDATED_TIER
+            if ready_strategy_id and verdict == "PAPER_FORWARD_READY"
+            else FARM_CALCULATED_TIER
+        )
     take_profit_plan = list(
         row.get("take_profit_plan")
         or meta.get("take_profit_plan")
@@ -271,6 +285,11 @@ def _item_from_row(
         "exit_mode": str(meta.get("exit_mode") or exit_params.get("exit_mode") or ""),
     }
     policy = build_policy(policy_input)
+    entry = contract.get("entry")
+    stop = contract.get("stop")
+    max_hold_min = contract.get("max_hold_min")
+    if entry is None or stop is None or max_hold_min is None:
+        raise ValueError("runtime contract is missing required deterministic values")
     return MainPaperRuntimeQueueItem(
         runtime_id=f"runtime_{row.get('consumer_id') or row.get('instruction_id')}",
         consumer_id=str(row.get("consumer_id") or ""),
@@ -282,17 +301,19 @@ def _item_from_row(
         timeframe=str(row.get("timeframe") or ""),
         side=str(row.get("side") or contract.get("side") or ""),
         setup_family=str(row.get("setup_family") or ""),
-        entry=float(contract.get("entry")),
+        entry=float(entry),
         entry_zone=[float(v) for v in list(meta.get("entry_zone") or [])[:2]],
-        stop=float(contract.get("stop")),
+        stop=float(stop),
         take_profit_plan=take_profit_plan,
-        max_hold_min=int(contract.get("max_hold_min")),
+        max_hold_min=int(max_hold_min),
         max_hold_bars=int(meta.get("max_hold_bars") or 0),
         boundary_ts=int(meta.get("boundary_ts") or 0),
         created_at=float(meta.get("created_at") or 0.0),
         expires_at=float(meta.get("expires_at") or 0.0),
         risk_pct=float(meta.get("risk_pct") or 0.0),
-        data_fingerprint=str(meta.get("data_fingerprint") or contract.get("snapshot_id") or ""),
+        data_fingerprint=str(
+            meta.get("data_fingerprint") or contract.get("snapshot_id") or ""
+        ),
         dedup_key=str(meta.get("dedup_key") or ""),
         source_mode=str(meta.get("mode") or ""),
         exit_mode=str(meta.get("exit_mode") or exit_params.get("exit_mode") or ""),
@@ -328,9 +349,13 @@ def _item_from_row(
         sweep_run_id=str(meta.get("sweep_run_id") or ""),
         priority_reasons=priority_reasons,
         paper_generation_run_id=str(row.get("paper_generation_run_id") or ""),
-        source_producer_generation_id=str(row.get("source_producer_generation_id") or ""),
+        source_producer_generation_id=str(
+            row.get("source_producer_generation_id") or ""
+        ),
         source_member_payload_digest=str(row.get("source_member_payload_digest") or ""),
-        source_validation_generation_id=str(row.get("source_validation_generation_id") or ""),
+        source_validation_generation_id=str(
+            row.get("source_validation_generation_id") or ""
+        ),
         consumer_output_digest=consumer_output_digest,
     )
 
@@ -344,14 +369,20 @@ def build_main_paper_runtime_queue(
 ) -> dict[str, Any]:
     rows, source_path, source_payload = _load_consumer_rows(private_root)
     generation_context: PaperGenerationContext | None = None
-    if source_payload.get("paper_stage_schema") or expected_run_id or expected_input_digest:
+    if (
+        source_payload.get("paper_stage_schema")
+        or expected_run_id
+        or expected_input_digest
+    ):
         generation_context = verify_stage_envelope(
             source_payload,
             stage="consumer",
             expected_run_id=expected_run_id,
             expected_input_digest=expected_input_digest,
         )
-    accepted_rows = [row for row in rows if row.get("consumer_status") == "accepted_for_paper_watch"]
+    accepted_rows = [
+        row for row in rows if row.get("consumer_status") == "accepted_for_paper_watch"
+    ]
     rejected_or_skipped = len(rows) - len(accepted_rows)
 
     items: list[MainPaperRuntimeQueueItem] = []
@@ -371,7 +402,14 @@ def build_main_paper_runtime_queue(
         except (TypeError, ValueError, KeyError):
             invalid += 1
 
-    items.sort(key=lambda item: (item.priority, item.okx_inst_id, item.timeframe, item.source_signal_id))
+    items.sort(
+        key=lambda item: (
+            item.priority,
+            item.okx_inst_id,
+            item.timeframe,
+            item.source_signal_id,
+        )
+    )
     if limit >= 0 and generation_context is None:
         items = items[:limit]
     if generation_context is not None:
@@ -381,7 +419,9 @@ def build_main_paper_runtime_queue(
                 or item.source_producer_generation_id
                 != generation_context.producer_generation_id
             ):
-                raise PaperGenerationMismatch("consumer item generation does not match envelope")
+                raise PaperGenerationMismatch(
+                    "consumer item generation does not match envelope"
+                )
     policies = []
     for item in items:
         policies.append(
@@ -404,7 +444,9 @@ def build_main_paper_runtime_queue(
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for item in items:
-            fh.write(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+            fh.write(
+                json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            )
 
     item_rows = [item.to_dict() for item in items]
     generation = stage_envelope("queue", generation_context, item_rows)
@@ -434,8 +476,13 @@ def build_main_paper_runtime_queue(
         **generation,
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": item_rows},
-                   ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {**summary, "items": item_rows},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return summary

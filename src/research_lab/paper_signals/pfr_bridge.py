@@ -5,6 +5,7 @@ Paper / research only — no order path, no .env, no AUTO_TRADE, no private endp
 All signal params come from strategy_lab.sqlite (candidates.params_json).  Nothing is invented.
 Quality gate is policy-driven; no hardcoded symbol blacklists.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -16,8 +17,12 @@ from typing import Any, Callable
 from src.research_lab.lineage_contract import stable_id
 from src.research_lab.paper_signals.contract import PaperActionSignal, validate_signal
 from src.research_lab.paper_signals.lane import (
-    ARM_WINDOW_BARS, MAX_RISK_PCT, TF_MINUTES,
-    _atr, _round, fingerprint,
+    ARM_WINDOW_BARS,
+    MAX_RISK_PCT,
+    TF_MINUTES,
+    _atr,
+    _round,
+    fingerprint,
 )
 from src.research_lab.validation_generation import (
     current_candidate_ids,
@@ -35,19 +40,23 @@ from src.research_lab.strategies.detectors import (
 # If any are missing the bridge emits a blocker reason rather than inventing a default.
 _REQUIRED_PARAMS: dict[str, frozenset[str]] = {
     "momentum_breakout": frozenset({"lookback", "stop_pct", "take_pct", "hold_bars"}),
-    "mean_reversion_fade": frozenset({"lookback", "move_pct", "stop_pct", "take_pct", "hold_bars"}),
+    "mean_reversion_fade": frozenset(
+        {"lookback", "move_pct", "stop_pct", "take_pct", "hold_bars"}
+    ),
 }
 
 # Research-only quality policy (config-like dict; no hardcoded symbol names).
 # All thresholds can be overridden per-call via the `policy` argument.
 DEFAULT_QUALITY_POLICY: dict[str, float | int] = {
-    "max_drawdown_pct": 35.0,   # excludes high-DD outliers (not a BEAT blacklist)
+    "max_drawdown_pct": 35.0,  # excludes high-DD outliers (not a BEAT blacklist)
     "min_n_trades": 15,
     "min_win_rate": 0.50,
-    "min_avg_net_pct": 0.3,     # must be net-positive after farm costs
+    "min_avg_net_pct": 0.3,  # must be net-positive after farm costs
 }
 
-_MIN_RR = 2.0   # minimum risk-reward required (matches param_schemas.executable_params_ready)
+_MIN_RR = (
+    2.0  # minimum risk-reward required (matches param_schemas.executable_params_ready)
+)
 _FETCH_WINDOW_BARS = 1500
 _PRETRIGGER_BREAKOUT_MAX_GAP_PCT = 1.0
 _PRETRIGGER_FADE_MAX_GAP_PCT = 1.0
@@ -55,6 +64,7 @@ _PRETRIGGER_ENTRY_BAND_PCT = 0.2
 
 
 # ── canonical DB helpers ──────────────────────────────────────────────────────
+
 
 def _params_hash(params: dict) -> str:
     """Stable 12-char SHA1 of sorted params JSON — the canonical identity of a parameter set."""
@@ -83,7 +93,9 @@ def _ready_strategy_id(row: dict[str, Any]) -> str:
     return stable_id("ready", payload, length=20)
 
 
-def _current_pfr_authorizations(private_root: Path) -> dict[tuple[str, str], dict[str, Any]] | None:
+def _current_pfr_authorizations(
+    private_root: Path,
+) -> dict[tuple[str, str], dict[str, Any]] | None:
     """Map source DB identity to a fully verified current validation chain.
 
     ``None`` means the explicit pre-manifest legacy state.  Any present but
@@ -98,17 +110,25 @@ def _current_pfr_authorizations(private_root: Path) -> dict[tuple[str, str], dic
     authorized: dict[tuple[str, str], dict[str, Any]] = {}
     ambiguous: set[tuple[str, str]] = set()
     for validation_id in sorted(candidate_ids):
-        request = read_current_validation_artifact(private_root, validation_id, "request")
+        request = read_current_validation_artifact(
+            private_root, validation_id, "request"
+        )
         card = read_current_setup_card_for_candidate(private_root, validation_id)
         if request is None or card is None:
             continue
-        metrics = request.get("metrics") if isinstance(request.get("metrics"), dict) else {}
+        metrics = (
+            raw_metrics
+            if isinstance(raw_metrics := request.get("metrics"), dict)
+            else {}
+        )
         source_candidate_id = str(
             request.get("source_candidate_id")
             or metrics.get("source_candidate_id")
             or ""
         )
-        source_run_id = Path(str(request.get("source_run_id") or "").replace("\\", "/")).name
+        source_run_id = Path(
+            str(request.get("source_run_id") or "").replace("\\", "/")
+        ).name
         if (
             not source_run_id
             or not source_candidate_id
@@ -153,7 +173,8 @@ def load_pfr_records(
     try:
         cur = conn.cursor()
         candidate_columns = {
-            str(row[1]) for row in cur.execute("PRAGMA table_info(candidates)").fetchall()
+            str(row[1])
+            for row in cur.execute("PRAGMA table_info(candidates)").fetchall()
         }
         metrics_select = (
             "c.metrics_json AS metrics_json"
@@ -222,6 +243,7 @@ def load_pfr_records(
 
 # ── quality gate ──────────────────────────────────────────────────────────────
 
+
 def apply_quality_policy(
     records: list[dict[str, Any]],
     *,
@@ -240,7 +262,7 @@ def apply_quality_policy(
         n = int(r.get("n_trades") or 0)
         wr = float(r.get("win_rate") or 0.0)
         net = float(r.get("avg_net_pct") or 0.0)
-        params = r.get("params") if isinstance(r.get("params"), dict) else {}
+        params = raw_params if isinstance(raw_params := r.get("params"), dict) else {}
         stop_pct = _float_param(params, "stop_pct")
         take_pct = _float_param(params, "take_pct")
         if dd > p["max_drawdown_pct"]:
@@ -253,7 +275,11 @@ def apply_quality_policy(
             reasons.append(f"avg_net_pct={net:.4f}<{p['min_avg_net_pct']}")
         if stop_pct is not None and stop_pct > MAX_RISK_PCT:
             reasons.append(f"stop_pct={stop_pct:g}>{MAX_RISK_PCT:g}")
-        if stop_pct is not None and take_pct is not None and take_pct < stop_pct * _MIN_RR:
+        if (
+            stop_pct is not None
+            and take_pct is not None
+            and take_pct < stop_pct * _MIN_RR
+        ):
             reasons.append(f"rr={take_pct / max(stop_pct, 1e-9):.2f}<{_MIN_RR:g}")
         if reasons:
             rejected.append({**r, "_rejection_reasons": reasons})
@@ -264,12 +290,17 @@ def apply_quality_policy(
 
 # ── param validation helper ───────────────────────────────────────────────────
 
+
 def _missing_params(family: str, params: dict) -> list[str]:
     """Return list of missing required param keys for this family."""
-    return [k for k in _REQUIRED_PARAMS.get(family, frozenset()) if params.get(k) is None]
+    return [
+        k for k in _REQUIRED_PARAMS.get(family, frozenset()) if params.get(k) is None
+    ]
 
 
-def _common_validator_context(row: dict[str, Any], symbol: str, tf: str) -> dict[str, Any]:
+def _common_validator_context(
+    row: dict[str, Any], symbol: str, tf: str
+) -> dict[str, Any]:
     return {
         "setup_id": row["setup_id"],
         "ready_strategy_id": _ready_strategy_id(row),
@@ -410,6 +441,7 @@ def _breakout_pretrigger(
 
 # ── signal builders ───────────────────────────────────────────────────────────
 
+
 def _fade_pretrigger(
     row: dict[str, Any],
     candles: list[dict[str, Any]],
@@ -442,7 +474,9 @@ def _fade_pretrigger(
     inst = symbol.replace("_", "-")
     tf = str(row["timeframe"])
     tf_min = TF_MINUTES.get(tf, 15)
-    trigger = base * (1 + move_pct / 100) if side == "short" else base * (1 - move_pct / 100)
+    trigger = (
+        base * (1 + move_pct / 100) if side == "short" else base * (1 - move_pct / 100)
+    )
     band = max(abs(trigger) * (_PRETRIGGER_ENTRY_BAND_PCT / 100), abs(price) * 0.001)
 
     if side == "short":
@@ -551,7 +585,7 @@ def build_pfr_momentum_breakout(
     threshold_pct = float(params.get("threshold_pct") or 0.0)
 
     if take_pct < stop_pct * _MIN_RR:
-        return None, f"rr_below_{_MIN_RR}:{take_pct/max(stop_pct,1e-9):.2f}r"
+        return None, f"rr_below_{_MIN_RR}:{take_pct / max(stop_pct, 1e-9):.2f}r"
     if len(candles) < lookback + 2:
         return None, "insufficient_bars"
 
@@ -559,7 +593,9 @@ def build_pfr_momentum_breakout(
     if price <= 0:
         return None, "bad_price"
 
-    det = _detect_mbr(candles, len(candles) - 1, lookback=lookback, threshold_pct=threshold_pct)
+    det = _detect_mbr(
+        candles, len(candles) - 1, lookback=lookback, threshold_pct=threshold_pct
+    )
     if det is None:
         return _breakout_pretrigger(
             row,
@@ -682,7 +718,7 @@ def build_pfr_mean_reversion_fade(
     hold_bars = int(params["hold_bars"])
 
     if take_pct < stop_pct * _MIN_RR:
-        return None, f"rr_below_{_MIN_RR}:{take_pct/max(stop_pct,1e-9):.2f}r"
+        return None, f"rr_below_{_MIN_RR}:{take_pct / max(stop_pct, 1e-9):.2f}r"
     if len(candles) < lookback + 2:
         return None, "insufficient_bars"
 
@@ -825,6 +861,7 @@ def _diverse_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]
 
 # ── PFR generation (called from cycle.run_cycle) ──────────────────────────────
 
+
 def _gap_bucket(gap_pct: float) -> str:
     if gap_pct <= 0.25:
         return "gap_le_0_25pct"
@@ -837,7 +874,9 @@ def _gap_bucket(gap_pct: float) -> str:
     return "gap_gt_2pct"
 
 
-def _near_trigger_bucket(row: dict[str, Any], candles: list[dict[str, Any]], reason: str) -> str:
+def _near_trigger_bucket(
+    row: dict[str, Any], candles: list[dict[str, Any]], reason: str
+) -> str:
     params = row.get("params") or {}
     family = str(row.get("family") or "")
     idx = len(candles) - 1
@@ -872,7 +911,9 @@ def _near_trigger_bucket(row: dict[str, Any], candles: list[dict[str, Any]], rea
     return ""
 
 
-def _gap_sample(row: dict[str, Any], candles: list[dict[str, Any]], reason: str) -> dict[str, Any] | None:
+def _gap_sample(
+    row: dict[str, Any], candles: list[dict[str, Any]], reason: str
+) -> dict[str, Any] | None:
     params = row.get("params") or {}
     family = str(row.get("family") or "")
     idx = len(candles) - 1
@@ -962,16 +1003,22 @@ def generate_pfr_signals(
     sc: dict[str, int] = status_counts if status_counts is not None else {}
     tf_set = set(timeframes)
     generated: list[tuple[PaperActionSignal, list[dict]]] = []
-    pretrigger_candidates: list[tuple[PaperActionSignal, list[dict], str]] = []
+    pretrigger_candidates: list[
+        tuple[PaperActionSignal, list[dict[str, Any]], str, dict[str, Any] | None]
+    ] = []
     pfr_scanned = 0
     pfr_fetches = 0
     diverse_records, duplicate_variants = _diverse_records(records)
     if duplicate_variants:
-        sc["pfr_duplicate_setup_variant"] = sc.get("pfr_duplicate_setup_variant", 0) + duplicate_variants
+        sc["pfr_duplicate_setup_variant"] = (
+            sc.get("pfr_duplicate_setup_variant", 0) + duplicate_variants
+        )
 
     for row in diverse_records:
         if should_stop is not None and should_stop():
-            sc["pfr_time_or_stop_limit_reached"] = sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+            sc["pfr_time_or_stop_limit_reached"] = (
+                sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+            )
             break
         if pfr_scanned >= max_pfr_scan:
             sc["pfr_scan_limit_reached"] = sc.get("pfr_scan_limit_reached", 0) + 1
@@ -1013,12 +1060,16 @@ def generate_pfr_signals(
             break
         try:
             if should_stop is not None and should_stop():
-                sc["pfr_time_or_stop_limit_reached"] = sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+                sc["pfr_time_or_stop_limit_reached"] = (
+                    sc.get("pfr_time_or_stop_limit_reached", 0) + 1
+                )
                 break
             now_ms = int(now * 1000)
             tf_ms = TF_MINUTES.get(tf, 15) * 60_000
             pfr_fetches += 1
-            candles = provider.fetch_ohlcv(inst, tf, now_ms - _FETCH_WINDOW_BARS * tf_ms, now_ms)
+            candles = provider.fetch_ohlcv(
+                inst, tf, now_ms - _FETCH_WINDOW_BARS * tf_ms, now_ms
+            )
         except TimeoutError:
             sc["pfr_fetch_timeout"] = sc.get("pfr_fetch_timeout", 0) + 1
             continue
@@ -1066,17 +1117,23 @@ def generate_pfr_signals(
 
     for sig, candles, setup_id, sample in pretrigger_candidates:
         if len(generated) >= max_pfr:
-            sc["pfr_pretrigger_deferred_by_exact_cap"] = sc.get("pfr_pretrigger_deferred_by_exact_cap", 0) + 1
+            sc["pfr_pretrigger_deferred_by_exact_cap"] = (
+                sc.get("pfr_pretrigger_deferred_by_exact_cap", 0) + 1
+            )
             if sample is not None:
                 sample["selection_state"] = "pretrigger_deferred_by_exact_cap"
             continue
         if sig.dedup_key in active_dedup:
-            sc["pfr_pretrigger_dedup_active_key"] = sc.get("pfr_pretrigger_dedup_active_key", 0) + 1
+            sc["pfr_pretrigger_dedup_active_key"] = (
+                sc.get("pfr_pretrigger_dedup_active_key", 0) + 1
+            )
             if sample is not None:
                 sample["selection_state"] = "pretrigger_dedup_active_key"
             continue
         if setup_id and setup_id in active_setup_ids:
-            sc["pfr_pretrigger_dedup_setup_id"] = sc.get("pfr_pretrigger_dedup_setup_id", 0) + 1
+            sc["pfr_pretrigger_dedup_setup_id"] = (
+                sc.get("pfr_pretrigger_dedup_setup_id", 0) + 1
+            )
             if sample is not None:
                 sample["selection_state"] = "pretrigger_dedup_setup_id"
             continue

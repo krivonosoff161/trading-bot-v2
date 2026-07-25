@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id, utc_now
-from src.research_lab.paper_signals.pfr_bridge import apply_quality_policy, load_pfr_records
+from src.research_lab.paper_signals.pfr_bridge import (
+    apply_quality_policy,
+    load_pfr_records,
+)
 
 SCHEMA = "ReadyStrategyCatalogRow.v1"
 SUMMARY_SCHEMA = "ready_strategy_catalog.v1"
@@ -84,11 +87,15 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _row(record: dict[str, Any], *, status: str, reasons: list[str] | None = None) -> ReadyStrategyCatalogRow:
-    params = record.get("params") if isinstance(record.get("params"), dict) else {}
+def _row(
+    record: dict[str, Any], *, status: str, reasons: list[str] | None = None
+) -> ReadyStrategyCatalogRow:
+    params = raw_params if isinstance(raw_params := record.get("params"), dict) else {}
     return ReadyStrategyCatalogRow(
         ready_strategy_id=ready_strategy_id(record),
-        setup_id=str(record.get("setup_id") or f"setup-{record.get('candidate_id', '')}"),
+        setup_id=str(
+            record.get("setup_id") or f"setup-{record.get('candidate_id', '')}"
+        ),
         run_id=str(record.get("run_id") or ""),
         candidate_id=str(record.get("candidate_id") or ""),
         symbol=str(record.get("symbol") or ""),
@@ -126,14 +133,19 @@ def build_ready_strategy_catalog(
     seen_ready: set[str] = set()
     duplicate_ready = 0
     for record in passed:
-        row = _row(record, status="ready_for_paper_runtime", reasons=["quality_policy_passed"])
+        row = _row(
+            record, status="ready_for_paper_runtime", reasons=["quality_policy_passed"]
+        )
         if row.ready_strategy_id in seen_ready:
             duplicate_ready += 1
             continue
         seen_ready.add(row.ready_strategy_id)
         rows.append(row)
     for record in rejected:
-        reasons = [str(x) for x in record.get("_rejection_reasons") or ["quality_policy_rejected"]]
+        reasons = [
+            str(x)
+            for x in record.get("_rejection_reasons") or ["quality_policy_rejected"]
+        ]
         rows.append(_row(record, status="rejected_quality", reasons=reasons))
 
     by_status: dict[str, int] = {}
@@ -167,9 +179,16 @@ def build_ready_strategy_catalog(
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         with jsonl_path.open("w", encoding="utf-8") as fh:
             for row in rows:
-                fh.write(json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+                fh.write(
+                    json.dumps(row.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+                )
         snapshot_path.write_text(
-            json.dumps({**summary, "items": [row.to_dict() for row in rows]}, ensure_ascii=False, indent=2, sort_keys=True)
+            json.dumps(
+                {**summary, "items": [row.to_dict() for row in rows]},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
             + "\n",
             encoding="utf-8",
         )

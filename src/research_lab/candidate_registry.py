@@ -19,7 +19,7 @@ import uuid
 
 SCHEMA = "strategy_lab_candidate_registry.v1"
 NEXT_REVIEW_DAYS = {
-    "REJECT": 0,            # no scheduled review
+    "REJECT": 0,  # no scheduled review
     "OBSERVE": 14,
     "REGIME_SPECIFIC": 7,
     "FORWARD_PAPER": 7,
@@ -42,7 +42,7 @@ def build_entry(
     created = created_at or dt.datetime.now(dt.timezone.utc).isoformat()
     status = getattr(result, "validation_status", "") or "OBSERVE"
     plan_meta = dict(getattr(spec, "plan_meta", {}) or {}) if spec is not None else {}
-    trial = next(
+    trial: dict[str, Any] = next(
         (
             row
             for row in (search_trial_evidence or {}).get("trials", [])
@@ -59,11 +59,15 @@ def build_entry(
         "params": result.params,
         "timeframe": (
             getattr(spec, "timeframe", "")
-            or str((getattr(result, "metrics", {}) or {}).get("data_file_timeframe") or "")
+            or str(
+                (getattr(result, "metrics", {}) or {}).get("data_file_timeframe") or ""
+            )
         ),
         "plan_group": str(plan_meta.get("group") or ""),
         "plan_meta": plan_meta,
-        "search_family_id": str((search_trial_evidence or {}).get("search_family_id") or ""),
+        "search_family_id": str(
+            (search_trial_evidence or {}).get("search_family_id") or ""
+        ),
         "search_trial_id": str(trial.get("execution_id") or ""),
         "effective_n_trials": int(
             ((search_trial_evidence or {}).get("search_space") or {}).get(
@@ -73,7 +77,9 @@ def build_entry(
         ),
         "filters": dict(getattr(spec, "filters", {}) or {}),
         "fees_bps": float(getattr(spec, "fees_bps", 7.0)) if spec is not None else 7.0,
-        "slippage_bps": float(getattr(spec, "slippage_bps", 3.0)) if spec is not None else 3.0,
+        "slippage_bps": float(getattr(spec, "slippage_bps", 3.0))
+        if spec is not None
+        else 3.0,
         "metrics_summary": _metrics_summary(result.metrics),
         "decision": result.decision,
         "validation_status": status,
@@ -177,8 +183,13 @@ def upsert_entries(
         key = (entry.get("experiment_id"), entry.get("candidate_id"))
         old = index.get(key)
         if old:
-            entry = {**entry, "created_at": old.get("created_at") or entry["created_at"]}
-            entry["next_review"] = _next_review(entry["created_at"], entry["validation_status"])
+            entry = {
+                **entry,
+                "created_at": old.get("created_at") or entry["created_at"],
+            }
+            entry["next_review"] = _next_review(
+                entry["created_at"], entry["validation_status"]
+            )
             stats["updated"] += 1
         else:
             stats["added"] += 1
@@ -265,9 +276,18 @@ def registry_summary(path: Path) -> dict[str, Any]:
 
 def _metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
     keys = [
-        "n_trades", "win_rate", "avg_net_pct", "total_net_pct", "profit_factor",
-        "max_drawdown_pct", "train_avg_net_pct", "test_avg_net_pct", "test_trades",
-        "best_trade_share", "stress_avg_net_pct", "profit_factor_state",
+        "n_trades",
+        "win_rate",
+        "avg_net_pct",
+        "total_net_pct",
+        "profit_factor",
+        "max_drawdown_pct",
+        "train_avg_net_pct",
+        "test_avg_net_pct",
+        "test_trades",
+        "best_trade_share",
+        "stress_avg_net_pct",
+        "profit_factor_state",
     ]
     summary = {k: metrics.get(k) for k in keys if k in metrics}
     if isinstance(metrics.get("entry_timing"), dict):

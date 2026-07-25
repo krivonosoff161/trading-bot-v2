@@ -73,8 +73,8 @@ def _f(value: Any, default: float = 0.0) -> float:
 
 def _deterministic_decision(row: dict[str, Any]) -> tuple[str, str, list[str]]:
     status = str(row.get("status") or "")
-    outcome = row.get("outcome") if isinstance(row.get("outcome"), dict) else {}
-    review = row.get("review") if isinstance(row.get("review"), dict) else {}
+    outcome = raw_outcome if isinstance(raw_outcome := row.get("outcome"), dict) else {}
+    review = raw_review if isinstance(raw_review := row.get("review"), dict) else {}
     result = str(outcome.get("result") or "")
     mfe = _f(outcome.get("mfe_pct") or review.get("mfe_pct"))
     mae = _f(outcome.get("mae_pct") or review.get("mae_pct"))
@@ -91,13 +91,25 @@ def _deterministic_decision(row: dict[str, Any]) -> tuple[str, str, list[str]]:
     if status != "opened_paper":
         return "ignore_non_active", "low", reasons
     if mae_r >= 0.8 and mfe_r < 0.3:
-        return "risk_reduce_watch", "high", reasons + ["adverse_move_without_favourable_excursion"]
+        return (
+            "risk_reduce_watch",
+            "high",
+            reasons + ["adverse_move_without_favourable_excursion"],
+        )
     if mfe_r >= 1.5 and bars_held >= max(1, max_hold // 2):
         return "consider_paper_close", "high", reasons + ["large_mfe_mid_or_late_hold"]
     if mfe_r >= 1.0 and not partial_done:
-        return "lock_profit_watch", "medium", reasons + ["mfe_at_least_one_r_without_partial_lock"]
+        return (
+            "lock_profit_watch",
+            "medium",
+            reasons + ["mfe_at_least_one_r_without_partial_lock"],
+        )
     if partial_done:
-        return "hold_with_breakeven_guard", "medium", reasons + ["partial_or_be_guard_active"]
+        return (
+            "hold_with_breakeven_guard",
+            "medium",
+            reasons + ["partial_or_be_guard_active"],
+        )
     if bars_held >= max_hold:
         return "time_stop_watch", "medium", reasons + ["max_hold_reached"]
     return "hold", "low", reasons + ["no_exit_pressure"]
@@ -165,11 +177,15 @@ def write_exit_supervisor(private_root: Path) -> dict[str, Any]:
     out_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with out_jsonl.open("w", encoding="utf-8") as fh:
         for item in items:
-            fh.write(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+            fh.write(
+                json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            )
     by_action: dict[str, int] = {}
     by_urgency: dict[str, int] = {}
     for item in items:
-        by_action[item.deterministic_action] = by_action.get(item.deterministic_action, 0) + 1
+        by_action[item.deterministic_action] = (
+            by_action.get(item.deterministic_action, 0) + 1
+        )
         by_urgency[item.urgency] = by_urgency.get(item.urgency, 0) + 1
     summary = {
         "schema": SUMMARY_SCHEMA,
@@ -183,5 +199,8 @@ def write_exit_supervisor(private_root: Path) -> dict[str, Any]:
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
     }
-    out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out_snapshot.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return summary

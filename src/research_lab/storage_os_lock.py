@@ -12,14 +12,20 @@ from typing import Any, Iterator
 
 from src.research_lab.storage_capability import is_link_or_reparse
 
+msvcrt: Any
+fcntl: Any
 try:  # pragma: no cover - imported on the matching platform
-    import msvcrt
+    import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover
     msvcrt = None
+else:
+    msvcrt = _msvcrt
 try:  # pragma: no cover - imported on the matching platform
-    import fcntl
+    import fcntl as _fcntl
 except ImportError:  # pragma: no cover
     fcntl = None
+else:
+    fcntl = _fcntl
 
 
 class StorageLockConflict(RuntimeError):
@@ -91,7 +97,9 @@ def storage_root_lock(path: Path, *, wait_seconds: float = 0.0) -> Iterator[None
     global _LOCAL_OWNER
     owner = threading.get_ident()
     if _LOCAL_OWNER == owner:
-        raise StorageLockConflict("storage operation lock is already held by this thread")
+        raise StorageLockConflict(
+            "storage operation lock is already held by this thread"
+        )
     acquired = _LOCAL_LOCK.acquire(timeout=max(0.0, float(wait_seconds)))
     if not acquired:
         raise StorageLockConflict("storage operation lock is already held")

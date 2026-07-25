@@ -12,6 +12,7 @@ If the honest-backtest package is unavailable the bridge writes a NEEDS_MORE_DAT
 verdict (honest degradation, never a fake pass) and that fact is reported. No
 network beyond the existing bridge, no order path, no .env, no Telegram.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,10 @@ from typing import Any
 
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.hard_validation_contract import HardValidationReport
-from src.research_lab.hard_validation_export import export_requests, validation_id_for_unique_candidate
+from src.research_lab.hard_validation_export import (
+    export_requests,
+    validation_id_for_unique_candidate,
+)
 from src.research_lab.honest_backtest_bridge import (
     _artifact_stem,
     bridge_available,
@@ -45,7 +49,9 @@ def _verdict_map(private_root: Path) -> dict[str, str]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        out[str(data.get("candidate_id") or path.stem)] = str(data.get("hard_status") or "")
+        out[str(data.get("candidate_id") or path.stem)] = str(
+            data.get("hard_status") or ""
+        )
     return out
 
 
@@ -87,7 +93,9 @@ def _read_payload(task: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _stamp_farm_results_from_contexts(private_root: Path, verdicts: dict[str, str]) -> int:
+def _stamp_farm_results_from_contexts(
+    private_root: Path, verdicts: dict[str, str]
+) -> int:
     """Stamp compute DB using request provenance, not just validation candidate_id."""
     from src.research_lab.state_db import connect, default_db_path, init_db
 
@@ -98,7 +106,11 @@ def _stamp_farm_results_from_contexts(private_root: Path, verdicts: dict[str, st
     try:
         for validation_id, hard_status in verdicts.items():
             req = reqs.get(validation_id) or {}
-            metrics = req.get("metrics") if isinstance(req.get("metrics"), dict) else {}
+            metrics = (
+                raw_metrics
+                if isinstance(raw_metrics := req.get("metrics"), dict)
+                else {}
+            )
             original_candidate = str(metrics.get("source_candidate_id") or "")
             run_id = Path(str(req.get("source_run_id") or "").replace("\\", "/")).name
             if run_id and original_candidate:
@@ -137,12 +149,25 @@ def _write_setup_cards(private_root: Path, candidate_ids: list[str]) -> int:
     return int(summary.get("cards_written") or 0)
 
 
-def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
-                        limit: int = 10, now: float | None = None) -> dict[str, Any]:
+def run_due_validations(
+    tasks: FarmTasksDB,
+    private_root: Path,
+    *,
+    apply: bool,
+    limit: int = 10,
+    now: float | None = None,
+) -> dict[str, Any]:
     """Execute export + validation + stamp-back for queued export_validation tasks."""
-    counters = {"export_tasks": 0, "exported": 0, "validated": 0, "stamped_db": 0,
-                "stamped_unique": 0, "setup_cards": 0, "feedback_written": 0,
-                "bridge_ok": all(bridge_available().values())}
+    counters = {
+        "export_tasks": 0,
+        "exported": 0,
+        "validated": 0,
+        "stamped_db": 0,
+        "stamped_unique": 0,
+        "setup_cards": 0,
+        "feedback_written": 0,
+        "bridge_ok": all(bridge_available().values()),
+    }
     export_tasks: list[dict] = []
     while len(export_tasks) < limit:
         task = tasks.claim_next_task(task_types=("export_validation",), now=now)
@@ -186,11 +211,13 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
         if str(_read_payload(task).get("uc_key") or "")
     }
     expected_ids.discard("")
-    exported_ids = list(dict.fromkeys(
-        str(candidate_id)
-        for candidate_id in (summary.get("exported_ids") or [])
-        if str(candidate_id) in expected_ids
-    ))
+    exported_ids = list(
+        dict.fromkeys(
+            str(candidate_id)
+            for candidate_id in (summary.get("exported_ids") or [])
+            if str(candidate_id) in expected_ids
+        )
+    )
     counters["exported"] = len(exported_ids)
     requests_dir = Path(private_root) / "hard_validation" / "requests"
     if exported_ids:
@@ -205,16 +232,19 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
         val = {"total": 0, "validated": 0, "errors": 0, "results": []}
     counters["validated"] = int(val.get("validated") or 0)
     exported_set = set(exported_ids)
-    current_ids = list(dict.fromkeys(
-        str(result.get("candidate_id") or "")
-        for result in (val.get("results") or [])
-        if isinstance(result, dict)
-        and result.get("hard_status")
-        and str(result.get("candidate_id") or "") in exported_set
-    ))
+    current_ids = list(
+        dict.fromkeys(
+            str(result.get("candidate_id") or "")
+            for result in (val.get("results") or [])
+            if isinstance(result, dict)
+            and result.get("hard_status")
+            and str(result.get("candidate_id") or "") in exported_set
+        )
+    )
 
     # auto stamp-back into farm_results (was the orphaned refresh_validation_handoff step)
     from src.research_lab.state_db import connect, default_db_path, init_db
+
     conn = connect(default_db_path(private_root))
     init_db(conn)
     try:
@@ -227,7 +257,9 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
     verdicts_all = _verdict_map(private_root)
     verdicts = {cid: verdicts_all[cid] for cid in current_ids if cid in verdicts_all}
     reqs = _request_map(private_root)
-    counters["stamped_db"] += _stamp_farm_results_from_contexts(Path(private_root), verdicts)
+    counters["stamped_db"] += _stamp_farm_results_from_contexts(
+        Path(private_root), verdicts
+    )
     counters["setup_cards"] = _write_setup_cards(Path(private_root), current_ids)
     reports_dir = Path(private_root) / "hard_validation" / "reports"
     for cid in current_ids:
@@ -238,17 +270,27 @@ def run_due_validations(tasks: FarmTasksDB, private_root: Path, *, apply: bool,
             feedback = generate_feedback(HardValidationReport.from_dict(report_data))
         except (KeyError, TypeError, ValueError):
             feedback = None
-        if feedback is not None and write_feedback(Path(private_root), feedback, dry_run=False):
+        if feedback is not None and write_feedback(
+            Path(private_root), feedback, dry_run=False
+        ):
             counters["feedback_written"] += 1
     for cid, hard_status in verdicts.items():
         if hard_status:
             req = reqs.get(cid) or {}
-            metrics = req.get("metrics") if isinstance(req.get("metrics"), dict) else {}
+            metrics = (
+                raw_metrics
+                if isinstance(raw_metrics := req.get("metrics"), dict)
+                else {}
+            )
             uc_key = str(metrics.get("uc_key") or "")
             if uc_key:
-                counters["stamped_unique"] += tasks.set_unique_hard_status(uc_key, hard_status, now=now)
+                counters["stamped_unique"] += tasks.set_unique_hard_status(
+                    uc_key, hard_status, now=now
+                )
             else:
-                counters["stamped_unique"] += tasks.set_candidate_hard_status(cid, hard_status, now=now)
+                counters["stamped_unique"] += tasks.set_candidate_hard_status(
+                    cid, hard_status, now=now
+                )
 
     # Publish final authority while the claimed tasks still provide a recoverable
     # running marker.  If publication fails, startup orphan reconciliation can

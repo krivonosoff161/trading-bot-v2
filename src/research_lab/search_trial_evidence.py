@@ -40,7 +40,9 @@ def _normalized_params(family: str, params: Mapping[str, Any] | None) -> dict[st
 def _selected_points(spec: ExperimentSpec) -> list[dict[str, Any]]:
     definition = spec.search_family_definition
     origin = definition.get("origin")
-    default_family = str((definition.get("raw_sweep_spec") or {}).get("setup_family") or "")
+    default_family = str(
+        (definition.get("raw_sweep_spec") or {}).get("setup_family") or ""
+    )
     points = []
     for point in definition.get("points") or []:
         if point.get("pre_disposition") != "selected":
@@ -69,7 +71,9 @@ def _expected_execution_identity_rows(
     definition: Mapping[str, Any],
     family_id: str,
 ) -> list[dict[str, Any]]:
-    default_family = str((definition.get("raw_sweep_spec") or {}).get("setup_family") or "")
+    default_family = str(
+        (definition.get("raw_sweep_spec") or {}).get("setup_family") or ""
+    )
     selected = [
         point
         for point in definition.get("points") or []
@@ -93,7 +97,9 @@ def _expected_execution_identity_rows(
     return expected
 
 
-def _runtime_identity(spec: ExperimentSpec, runtime_meta: Mapping[str, Any]) -> dict[str, Any]:
+def _runtime_identity(
+    spec: ExperimentSpec, runtime_meta: Mapping[str, Any]
+) -> dict[str, Any]:
     backend_name = str(runtime_meta.get("backend_name") or "numpy")
     if backend_name in {"none", "cpu"}:
         backend_name = "numpy"
@@ -237,21 +243,33 @@ def _validate_per_execution_semantics(
     if requested not in {"cpu", "gpu", "auto"}:
         raise ValueError("search trial requested backend is invalid")
     if status in {"execution_cap", "missing_terminal"}:
-        expected_suffix = "resource_cap" if status == "execution_cap" else "missing_terminal"
+        expected_suffix = (
+            "resource_cap" if status == "execution_cap" else "missing_terminal"
+        )
         if (
             resolved != "not_executed"
             or backend_name != "not_executed"
             or signal_backend != "not_executed"
             or signal_kernel != f"not_executed_{expected_suffix}"
             or signal_reason
-            != ("resource_execution_cap" if status == "execution_cap" else "missing_terminal")
+            != (
+                "resource_execution_cap"
+                if status == "execution_cap"
+                else "missing_terminal"
+            )
             or simulation_backend != "not_executed"
             or simulator != f"not_executed_{expected_suffix}"
             or phase != status
         ):
             raise ValueError("unattempted trial has inconsistent execution identity")
         return
-    allowed_resolved = {"cpu"} if requested == "cpu" else {"gpu"} if requested == "gpu" else {"cpu", "gpu"}
+    allowed_resolved = (
+        {"cpu"}
+        if requested == "cpu"
+        else {"gpu"}
+        if requested == "gpu"
+        else {"cpu", "gpu"}
+    )
     if resolved not in allowed_resolved:
         raise ValueError("search trial resolved backend contradicts requested backend")
     if status == "data_gate":
@@ -266,17 +284,30 @@ def _validate_per_execution_semantics(
         ):
             raise ValueError("data-gated trial has inconsistent execution identity")
     else:
-        if candle_count != expected_candle_count or family_variant_count != expected_family_variant_count:
-            raise ValueError("search trial signal workload disagrees with immutable family/data")
+        if (
+            candle_count != expected_candle_count
+            or family_variant_count != expected_family_variant_count
+        ):
+            raise ValueError(
+                "search trial signal workload disagrees with immutable family/data"
+            )
     if status == "data_gate":
-        if candle_count != expected_candle_count or family_variant_count != expected_family_variant_count:
-            raise ValueError("data-gated signal workload disagrees with immutable family/data")
+        if (
+            candle_count != expected_candle_count
+            or family_variant_count != expected_family_variant_count
+        ):
+            raise ValueError(
+                "data-gated signal workload disagrees with immutable family/data"
+            )
         return
     valid_signal = {
         "cpu": "strategy_generator",
         "gpu": "gpu_kernels",
     }
-    if signal_backend not in valid_signal or signal_kernel != valid_signal[signal_backend]:
+    if (
+        signal_backend not in valid_signal
+        or signal_kernel != valid_signal[signal_backend]
+    ):
         raise ValueError("search trial signal backend/kernel identity mismatch")
     gpu_supported = family in GPU_SUPPORTED_FAMILIES
     if resolved == "cpu":
@@ -290,7 +321,9 @@ def _validate_per_execution_semantics(
     else:
         expected_signal, expected_reason = "cpu", "auto_batch_too_small"
     if signal_backend != expected_signal or signal_reason != expected_reason:
-        raise ValueError("search trial signal path contradicts deterministic GPU eligibility")
+        raise ValueError(
+            "search trial signal path contradicts deterministic GPU eligibility"
+        )
     valid_simulator = {"cpu": "cpu_simulator", "gpu": "gpu_simulator"}
     if status == "evaluated":
         if (
@@ -305,13 +338,17 @@ def _validate_per_execution_semantics(
                 simulation_backend != "not_executed"
                 or simulator != "not_executed_before_simulation"
             ):
-                raise ValueError("signal-error trial has inconsistent execution identity")
+                raise ValueError(
+                    "signal-error trial has inconsistent execution identity"
+                )
         elif phase == "simulation":
             if (
                 simulation_backend not in valid_simulator
                 or simulator != valid_simulator[simulation_backend]
             ):
-                raise ValueError("simulation-error trial has inconsistent execution identity")
+                raise ValueError(
+                    "simulation-error trial has inconsistent execution identity"
+                )
         else:
             raise ValueError("error trial has inconsistent terminal phase")
     else:
@@ -358,10 +395,12 @@ def build_search_trial_evidence(
         for point in selected_points:
             family = point["family"]
             if family not in spec.families:
-                raise ValueError("search family point is outside ExperimentSpec families")
+                raise ValueError(
+                    "search family point is outside ExperimentSpec families"
+                )
             params = dict(point["params"])
             key = _execution_key(symbol, family, params)
-            result = result_by_key.pop(key, None)
+            terminal_result = result_by_key.pop(key) if key in result_by_key else None
             row = {
                 "execution_id": f"stept_{content_hash({'family_id': spec.search_family_id, 'symbol': symbol, 'flat_index': point['flat_index']})}",
                 "ordinal": ordinal,
@@ -377,42 +416,54 @@ def build_search_trial_evidence(
                 "data_snapshot_id": "",
                 "data_evidence_hash": "",
                 "family_data_snapshot_id": str(family_binding.get("snapshot_id") or ""),
-                "family_data_evidence_hash": str(family_binding.get("evidence_hash") or ""),
+                "family_data_evidence_hash": str(
+                    family_binding.get("evidence_hash") or ""
+                ),
                 "data_binding_status": "legacy_unknown",
                 "execution_identity": {},
             }
-            if result is not None:
-                is_error = result.decision == "ERROR" or result.validation_status == "ERROR"
-                is_data_gate = result.decision.startswith("NEEDS_")
+            if terminal_result is not None:
+                is_error = (
+                    terminal_result.decision == "ERROR"
+                    or terminal_result.validation_status == "ERROR"
+                )
+                is_data_gate = terminal_result.decision.startswith("NEEDS_")
                 row.update(
                     {
-                        "run_id": result.run_id,
+                        "run_id": terminal_result.run_id,
                         "terminal_disposition": (
-                            "error" if is_error else "data_gate" if is_data_gate else "evaluated"
+                            "error"
+                            if is_error
+                            else "data_gate"
+                            if is_data_gate
+                            else "evaluated"
                         ),
                         "reason": (
-                            ";".join(result.reasons) or "execution_error"
+                            ";".join(terminal_result.reasons) or "execution_error"
                             if is_error
-                            else result.decision.lower()
+                            else terminal_result.decision.lower()
                             if is_data_gate
                             else "completed_evaluation"
                         ),
-                        "decision": result.decision,
-                        "validation_status": result.validation_status,
-                        "data_snapshot_id": str(result.metrics.get("data_snapshot_id") or ""),
+                        "decision": terminal_result.decision,
+                        "validation_status": terminal_result.validation_status,
+                        "data_snapshot_id": str(
+                            terminal_result.metrics.get("data_snapshot_id") or ""
+                        ),
                         "data_evidence_hash": str(
-                            result.metrics.get("data_evidence_hash")
-                            or result.metrics.get("data_fingerprint")
+                            terminal_result.metrics.get("data_evidence_hash")
+                            or terminal_result.metrics.get("data_fingerprint")
                             or ""
                         ),
                         "family_data_snapshot_id": str(
-                            result.metrics.get("family_data_snapshot_id") or ""
+                            terminal_result.metrics.get("family_data_snapshot_id") or ""
                         ),
                         "family_data_evidence_hash": str(
-                            result.metrics.get("family_data_evidence_hash") or ""
+                            terminal_result.metrics.get("family_data_evidence_hash")
+                            or ""
                         ),
                         "execution_identity": _per_execution_identity(
-                            result.metrics.get("execution_identity"),
+                            terminal_result.metrics.get("execution_identity"),
                             family=family,
                             code_identity=code_identity,
                         ),
@@ -434,7 +485,9 @@ def build_search_trial_evidence(
                         "reason": gate.decision.lower(),
                         "decision": gate.decision,
                         "validation_status": gate.validation_status,
-                        "data_snapshot_id": str(gate.metrics.get("data_snapshot_id") or ""),
+                        "data_snapshot_id": str(
+                            gate.metrics.get("data_snapshot_id") or ""
+                        ),
                         "data_evidence_hash": str(
                             gate.metrics.get("data_evidence_hash")
                             or gate.metrics.get("data_fingerprint")
@@ -517,8 +570,12 @@ def build_search_trial_evidence(
             row["terminal_disposition"] in {"evaluated", "data_gate", "error"}
             for row in executions
         ),
-        "evaluated": sum(row["terminal_disposition"] == "evaluated" for row in executions),
-        "data_gates": sum(row["terminal_disposition"] == "data_gate" for row in executions),
+        "evaluated": sum(
+            row["terminal_disposition"] == "evaluated" for row in executions
+        ),
+        "data_gates": sum(
+            row["terminal_disposition"] == "data_gate" for row in executions
+        ),
         "errors": sum(row["terminal_disposition"] == "error" for row in executions),
         "execution_cap": sum(
             row["terminal_disposition"] == "execution_cap" for row in executions
@@ -533,7 +590,9 @@ def build_search_trial_evidence(
         + counts["execution_cap"]
         + counts["missing_terminal"]
     )
-    counts["effective_n_trials"] = effective_family_n_trials(spec.search_family_definition)
+    counts["effective_n_trials"] = effective_family_n_trials(
+        spec.search_family_definition
+    )
     payload = {
         "schema": SCHEMA,
         "legacy_classification": "complete_family",
@@ -576,7 +635,9 @@ def validate_search_trial_evidence(
             if point.get("family")
         }
     )
-    default_family = str((definition.get("raw_sweep_spec") or {}).get("setup_family") or "")
+    default_family = str(
+        (definition.get("raw_sweep_spec") or {}).get("setup_family") or ""
+    )
     if default_family:
         families.append(default_family)
     if value.get("code_identity") != execution_code_identity(families):
@@ -588,7 +649,9 @@ def validate_search_trial_evidence(
     trials = evidence.get("trials")
     if not isinstance(trials, list):
         raise ValueError("search trial ledger is missing")
-    ids = [str(row.get("execution_id") or "") for row in trials if isinstance(row, dict)]
+    ids = [
+        str(row.get("execution_id") or "") for row in trials if isinstance(row, dict)
+    ]
     if len(ids) != len(trials) or not all(ids) or len(set(ids)) != len(ids):
         raise ValueError("search trial execution ids are invalid")
     expected_rows = _expected_execution_identity_rows(definition, family_id)
@@ -606,7 +669,9 @@ def validate_search_trial_evidence(
         if not isinstance(actual, dict) or any(
             actual.get(field) != expected[field] for field in identity_fields
         ):
-            raise ValueError("search trial row identity disagrees with immutable family")
+            raise ValueError(
+                "search trial row identity disagrees with immutable family"
+            )
     requested_backend = str(
         (definition.get("raw_sweep_spec") or {}).get("backend")
         or (definition.get("declared_grid") or {}).get("backend")
@@ -676,11 +741,11 @@ def validate_search_trial_evidence(
         + expected_counts["missing_terminal"]
     )
     expected_counts["effective_n_trials"] = effective_family_n_trials(definition)
-    counts = evidence.get("search_space")
-    if not isinstance(counts, dict):
+    aggregate_counts = evidence.get("search_space")
+    if not isinstance(aggregate_counts, dict):
         raise ValueError("search trial aggregate counts are missing")
-    for key, expected in expected_counts.items():
-        if int(counts.get(key, -1)) != int(expected):
+    for key, expected_value in expected_counts.items():
+        if int(aggregate_counts.get(key, -1)) != int(expected_value):
             raise ValueError(f"search trial aggregate mismatch: {key}")
     for row in trials:
         status = str(row.get("terminal_disposition") or "")
@@ -692,7 +757,9 @@ def validate_search_trial_evidence(
         if status in {"execution_cap", "missing_terminal"} and any(
             row.get(key) for key in ("run_id", "decision", "validation_status")
         ):
-            raise ValueError("unattempted search trial carries terminal execution fields")
+            raise ValueError(
+                "unattempted search trial carries terminal execution fields"
+            )
         if status == "evaluated" and (
             per_execution.get("terminal_phase") != "completed"
             or per_execution.get("signal_backend") not in {"cpu", "gpu"}
@@ -711,12 +778,11 @@ def validate_search_trial_evidence(
             or per_execution.get("simulation_backend") != "not_executed"
         ):
             raise ValueError("unattempted trial has inconsistent execution identity")
-    runtime = evidence.get("runtime") if isinstance(evidence.get("runtime"), dict) else {}
-    identity = (
-        evidence.get("execution_identity")
-        if isinstance(evidence.get("execution_identity"), dict)
-        else {}
+    runtime = (
+        raw_runtime if isinstance(raw_runtime := evidence.get("runtime"), dict) else {}
     )
+    raw_identity = evidence.get("execution_identity")
+    identity = raw_identity if isinstance(raw_identity, dict) else {}
     if identity.get("simulator_identity") != research_code_identity():
         raise ValueError("historical simulator identity is unavailable")
     backend_name = str(identity.get("backend_name") or "unknown")
@@ -728,12 +794,16 @@ def validate_search_trial_evidence(
         identity.get("numpy_version")
     ) != _library_version("numpy"):
         raise ValueError("aggregate numpy library identity mismatch")
-    if str(identity.get("python_version") or "") not in {"", "unknown"} and str(
-        identity.get("python_version")
-    ) != platform.python_version():
+    if (
+        str(identity.get("python_version") or "") not in {"", "unknown"}
+        and str(identity.get("python_version")) != platform.python_version()
+    ):
         raise ValueError("aggregate Python runtime identity mismatch")
     producer_count = runtime.get("n_variants_evaluated")
-    if producer_count is not None and int(producer_count) != expected_counts["attempted_executions"]:
+    if (
+        producer_count is not None
+        and int(producer_count) != expected_counts["attempted_executions"]
+    ):
         raise ValueError("producer attempted-trial count mismatch")
     if require_complete:
         if dict(definition.get("data_binding") or {}).get("status") != "bound":
@@ -806,13 +876,14 @@ def validate_search_trial_evidence(
             or ""
         )
         for row in trials:
-            if (
-                str(row.get("family_data_snapshot_id") or "")
-                != str(binding.get("snapshot_id") or "")
-                or str(row.get("family_data_evidence_hash") or "")
-                != str(binding.get("evidence_hash") or "")
+            if str(row.get("family_data_snapshot_id") or "") != str(
+                binding.get("snapshot_id") or ""
+            ) or str(row.get("family_data_evidence_hash") or "") != str(
+                binding.get("evidence_hash") or ""
             ):
-                raise ValueError("search trial data identity disagrees with bound family")
+                raise ValueError(
+                    "search trial data identity disagrees with bound family"
+                )
             if row["terminal_disposition"] == "execution_cap":
                 continue
             expected_member = members.get((str(row.get("symbol") or ""), timeframe))
@@ -830,7 +901,9 @@ def validate_search_trial_evidence(
                 str(row.get("data_snapshot_id") or "") != expected_snapshot_id
                 or str(row.get("data_evidence_hash") or "") != expected_evidence_hash
             ):
-                raise ValueError("search trial actual data identity disagrees with family member")
+                raise ValueError(
+                    "search trial actual data identity disagrees with family member"
+                )
     return {key: int(value) for key, value in expected_counts.items()}
 
 
@@ -852,7 +925,9 @@ def classify_search_trial_evidence(evidence: Mapping[str, Any]) -> str:
     return "unknown_schema"
 
 
-def search_trial_evidence_migration_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
+def search_trial_evidence_migration_report(
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
     """Classify synthetic legacy input without inventing unavailable family history."""
     classification = classify_search_trial_evidence(evidence)
     missing = []
@@ -882,7 +957,9 @@ def read_search_trial_evidence(
         raise ValueError("unsupported explicit search evidence reader schema")
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema") != accepted_schema:
-        raise ValueError("search evidence schema does not match explicit reader selection")
+        raise ValueError(
+            "search evidence schema does not match explicit reader selection"
+        )
     if accepted_schema == SCHEMA:
         validate_search_trial_evidence(value)
     return value

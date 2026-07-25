@@ -77,9 +77,12 @@ def connect(db_path: Path, *, clock: Any = time.time) -> sqlite3.Connection:
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        is not None
+    )
 
 
 def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -89,9 +92,7 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 def _fencing_marker(conn: sqlite3.Connection) -> str | None:
     if not _table_exists(conn, "meta"):
         return None
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key='fencing_protocol'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM meta WHERE key='fencing_protocol'").fetchone()
     return None if row is None else str(row[0])
 
 
@@ -419,17 +420,23 @@ def _install_queue_fencing_trigger(conn: sqlite3.Connection) -> None:
 
 def _migrate_candidate_columns(conn: sqlite3.Connection) -> None:
     """Schema v1 -> v2: add validation columns to pre-existing candidates tables."""
-    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(candidates)")}
+    existing = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(candidates)")
+    }
     for column in ("validation_status", "validation_reasons", "next_action"):
         if column not in existing:
-            conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                f"ALTER TABLE candidates ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+            )
 
 
 def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
     """Schema v3 -> v4: add decision-machine columns to a pre-existing farm_results."""
     if not list(conn.execute("PRAGMA table_info(farm_results)")):
         return  # table created fresh with v4 columns already
-    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(farm_results)")}
+    existing = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(farm_results)")
+    }
     additions = {
         "max_drawdown_pct": "REAL NOT NULL DEFAULT 0",
         "gpu_signal_supported": "INTEGER NOT NULL DEFAULT 0",
@@ -443,7 +450,9 @@ def _migrate_farm_results_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE farm_results ADD COLUMN {column} {decl}")
 
 
-def import_completed_runs(private_root: Path, db_path: Path | None = None) -> dict[str, int]:
+def import_completed_runs(
+    private_root: Path, db_path: Path | None = None
+) -> dict[str, int]:
     private_root = private_root.expanduser().resolve()
     db_path = db_path or default_db_path(private_root)
     completed_root = private_root / "experiments" / "completed"
@@ -479,7 +488,9 @@ def import_run_dir(
         rows = _load_candidate_rows(run_dir / "candidates.csv")
     counts = _decision_counts(rows)
     run_id = run_dir.name
-    experiment_id = str(payload.get("experiment_id") or _experiment_from_run_name(run_id))
+    experiment_id = str(
+        payload.get("experiment_id") or _experiment_from_run_name(run_id)
+    )
     created_at = str(payload.get("created_at") or "")
     artifact_label = artifact_label_override or _artifact_label(private_root, run_dir)
     now = utc_now()
@@ -530,7 +541,9 @@ def import_run_dir(
                 str(row.get("family") or ""),
                 str(row.get("decision") or "UNKNOWN"),
                 _reasons_text(row),
-                json.dumps(row.get("metrics") or _metrics_from_csv_row(row), sort_keys=True),
+                json.dumps(
+                    row.get("metrics") or _metrics_from_csv_row(row), sort_keys=True
+                ),
                 json.dumps(row.get("params") or {}, sort_keys=True),
                 str(row.get("validation_status") or ""),
                 _validation_reasons_text(row),
@@ -560,10 +573,16 @@ def enqueue_experiment(
         VALUES (?, ?, ?, ?, 'fenced.v2', ?, ?)
         """,
         (
-            str(spec_path), status, int(priority), now,
-            materialization_id, materialization_digest,
+            str(spec_path),
+            status,
+            int(priority),
+            now,
+            materialization_id,
+            materialization_digest,
         ),
     )
+    if cur.lastrowid is None:
+        raise RuntimeError("queue insert did not return an id")
     job_id = int(cur.lastrowid)
     if materialization_id is not None:
         conn.execute(
@@ -571,8 +590,11 @@ def enqueue_experiment(
                    materialization_id, job_id, spec_path, spec_digest, created_at)
                VALUES(?,?,?,?,?)""",
             (
-                materialization_id, job_id, str(spec_path),
-                str(materialization_digest or ""), now,
+                materialization_id,
+                job_id,
+                str(spec_path),
+                str(materialization_digest or ""),
+                now,
             ),
         )
     conn.commit()
@@ -594,9 +616,12 @@ def ensure_experiment_queued(
         if materialization_id is None:
             return
         try:
-            actual = "sha256:" + hashlib.sha256(
-                Path(normalized).read_text(encoding="utf-8").encode("utf-8")
-            ).hexdigest()
+            actual = (
+                "sha256:"
+                + hashlib.sha256(
+                    Path(normalized).read_text(encoding="utf-8").encode("utf-8")
+                ).hexdigest()
+            )
         except (OSError, UnicodeError) as exc:
             raise ValueError("materialization spec content is unreadable") from exc
         if actual != incoming_digest:
@@ -619,7 +644,9 @@ def ensure_experiment_queued(
                     or str(binding["spec_digest"]) != str(materialization_digest or "")
                     or str(binding["queue_digest"] or "") != incoming_digest
                 ):
-                    raise ValueError("materialization id is bound to different spec content")
+                    raise ValueError(
+                        "materialization id is bound to different spec content"
+                    )
                 assert_current_content()
                 conn.commit()
                 return int(binding["job_id"]), False
@@ -659,8 +686,11 @@ def ensure_experiment_queued(
                            materialization_id, job_id, spec_path, spec_digest, created_at)
                        VALUES(?,?,?,?,?)""",
                     (
-                        materialization_id, int(row["job_id"]), normalized,
-                        incoming_digest, utc_now(),
+                        materialization_id,
+                        int(row["job_id"]),
+                        normalized,
+                        incoming_digest,
+                        utc_now(),
                     ),
                 )
             conn.commit()
@@ -674,10 +704,15 @@ def ensure_experiment_queued(
             VALUES (?, 'queued', ?, ?, 'fenced.v2', ?, ?)
             """,
             (
-                normalized, int(priority), now,
-                materialization_id, incoming_digest if materialization_id else None,
+                normalized,
+                int(priority),
+                now,
+                materialization_id,
+                incoming_digest if materialization_id else None,
             ),
         )
+        if cur.lastrowid is None:
+            raise RuntimeError("queue insert did not return an id")
         job_id = int(cur.lastrowid)
         if materialization_id is not None:
             conn.execute(
@@ -685,8 +720,11 @@ def ensure_experiment_queued(
                        materialization_id, job_id, spec_path, spec_digest, created_at)
                    VALUES(?,?,?,?,?)""",
                 (
-                    materialization_id, job_id, normalized,
-                    incoming_digest, now,
+                    materialization_id,
+                    job_id,
+                    normalized,
+                    incoming_digest,
+                    now,
                 ),
             )
         conn.commit()
@@ -708,7 +746,9 @@ def ensure_experiment_queued(
                     or str(binding["spec_digest"]) != str(materialization_digest or "")
                     or str(binding["queue_digest"] or "") != incoming_digest
                 ):
-                    raise ValueError("materialization id is bound to different spec content")
+                    raise ValueError(
+                        "materialization id is bound to different spec content"
+                    )
                 assert_current_content()
                 return int(binding["job_id"]), False
             assert_current_content()
@@ -748,8 +788,11 @@ def ensure_experiment_queued(
                        materialization_id, job_id, spec_path, spec_digest, created_at)
                    VALUES(?,?,?,?,?)""",
                 (
-                    materialization_id, int(row["job_id"]), normalized,
-                    incoming_digest, utc_now(),
+                    materialization_id,
+                    int(row["job_id"]),
+                    normalized,
+                    incoming_digest,
+                    utc_now(),
                 ),
             )
             conn.commit()
@@ -766,7 +809,9 @@ def ensure_experiment_queued(
                 or str(binding["spec_digest"]) != str(materialization_digest or "")
                 or str(binding["queue_digest"] or "") != incoming_digest
             ):
-                raise ValueError("materialization id is bound to different spec content")
+                raise ValueError(
+                    "materialization id is bound to different spec content"
+                )
             return int(binding["job_id"]), False
         return int(row["job_id"]), False
     except Exception:
@@ -829,8 +874,13 @@ def claim_next_job(
               AND mutation_seq=?
             """,
             (
-                utc_now(), owner, current + float(lease_seconds), fence,
-                mutation_seq, job_id, int(row["fencing_token"] or 0),
+                utc_now(),
+                owner,
+                current + float(lease_seconds),
+                fence,
+                mutation_seq,
+                job_id,
+                int(row["fencing_token"] or 0),
                 int(row["mutation_seq"] or 0),
             ),
         )
@@ -843,7 +893,9 @@ def claim_next_job(
             (job_id, owner, fence, current),
         )
         conn.commit()
-        claimed = conn.execute("SELECT * FROM queue WHERE job_id = ?", (job_id,)).fetchone()
+        claimed = conn.execute(
+            "SELECT * FROM queue WHERE job_id = ?", (job_id,)
+        ).fetchone()
         return dict(claimed) if claimed is not None else None
     except Exception:
         conn.rollback()
@@ -897,8 +949,11 @@ def mark_job_executing(
 ) -> None:
     current = _epoch(conn, now)
     _assert_job_claim(
-        conn, job_id, owner_id=owner_id,
-        fencing_token=fencing_token, now=current,
+        conn,
+        job_id,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        now=current,
     )
     current = _epoch(conn, current)
     cur = conn.execute(
@@ -911,8 +966,13 @@ def mark_job_executing(
                    AND q.mutation_protocol='fenced.v2'
              )""",
         (
-            current, int(job_id), owner_id, int(fencing_token), owner_id,
-            int(fencing_token), current,
+            current,
+            int(job_id),
+            owner_id,
+            int(fencing_token),
+            owner_id,
+            int(fencing_token),
+            current,
         ),
     )
     if cur.rowcount != 1:
@@ -934,14 +994,20 @@ def renew_job_lease(
         raise ValueError("lease_seconds must be positive")
     current = _epoch(conn, now)
     row = _assert_job_claim(
-        conn, job_id, owner_id=owner_id,
-        fencing_token=fencing_token, now=current,
+        conn,
+        job_id,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        now=current,
     )
     expires = current + float(lease_seconds)
     current = _epoch(conn, current)
     _assert_job_claim(
-        conn, job_id, owner_id=owner_id,
-        fencing_token=fencing_token, now=current,
+        conn,
+        job_id,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        now=current,
     )
     expires = current + float(lease_seconds)
     cur = conn.execute(
@@ -951,7 +1017,11 @@ def renew_job_lease(
              AND fencing_token=? AND claim_expires_at>?
              AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
         (
-            expires, int(job_id), owner_id, int(fencing_token), current,
+            expires,
+            int(job_id),
+            owner_id,
+            int(fencing_token),
+            current,
             int(row["mutation_seq"] or 0),
         ),
     )
@@ -994,7 +1064,11 @@ def reap_stale_jobs(
                      AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
                 (
                     "requeued stale running job: expired fenced lease",
-                    seq, job_id, owner, fence, current,
+                    seq,
+                    job_id,
+                    owner,
+                    fence,
+                    current,
                     int(row["mutation_seq"] or 0),
                 ),
             )
@@ -1005,13 +1079,18 @@ def reap_stale_jobs(
                 (job_id, fence),
             ).fetchone()
             if attempt is not None:
-                next_attempt_state = "ambiguous" if attempt["state"] == "executing" else "superseded"
+                next_attempt_state = (
+                    "ambiguous" if attempt["state"] == "executing" else "superseded"
+                )
                 conn.execute(
                     """UPDATE job_attempts SET state=?, finished_at=?, detail=?
                        WHERE job_id=? AND fencing_token=?""",
                     (
-                        next_attempt_state, current, "lease expired before terminal publication",
-                        job_id, fence,
+                        next_attempt_state,
+                        current,
+                        "lease expired before terminal publication",
+                        job_id,
+                        fence,
                     ),
                 )
             count += 1
@@ -1032,8 +1111,13 @@ def complete_job(
     now: float | None = None,
 ) -> None:
     _finish_job(
-        conn, job_id, "completed", run_dir_label=run_dir_label,
-        owner_id=owner_id, fencing_token=fencing_token, now=now,
+        conn,
+        job_id,
+        "completed",
+        run_dir_label=run_dir_label,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        now=now,
     )
 
 
@@ -1047,8 +1131,13 @@ def fail_job(
     now: float | None = None,
 ) -> None:
     _finish_job(
-        conn, job_id, "failed", error=error,
-        owner_id=owner_id, fencing_token=fencing_token, now=now,
+        conn,
+        job_id,
+        "failed",
+        error=error,
+        owner_id=owner_id,
+        fencing_token=fencing_token,
+        now=now,
     )
 
 
@@ -1071,11 +1160,20 @@ def _finish_job(
     fence = int(fencing_token)
     try:
         row = _assert_job_claim(
-            conn, job_id, owner_id=owner, fencing_token=fence, now=current,
+            conn,
+            job_id,
+            owner_id=owner,
+            fencing_token=fence,
+            now=current,
         )
     except StaleJobClaimError:
         _record_stale_claim(
-            conn, job_id, owner, fence, status, current,
+            conn,
+            job_id,
+            owner,
+            fence,
+            status,
+            current,
         )
         raise
     seq = int(row["mutation_seq"] or 0) + 1
@@ -1090,9 +1188,15 @@ def _finish_job(
                  AND fencing_token=? AND claim_expires_at>?
                  AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
             (
-                status, utc_now(), run_dir_label,
+                status,
+                utc_now(),
+                run_dir_label,
                 None if status == "completed" else error[:1000],
-                seq, int(job_id), owner, fence, current,
+                seq,
+                int(job_id),
+                owner,
+                fence,
+                current,
                 int(row["mutation_seq"] or 0),
             ),
         )
@@ -1102,7 +1206,10 @@ def _finish_job(
             """UPDATE job_attempts SET state=?, finished_at=?, detail=?
                WHERE job_id=? AND fencing_token=? AND state IN ('claimed','executing')""",
             (
-                status, current, error[:1000], int(job_id),
+                status,
+                current,
+                error[:1000],
+                int(job_id),
                 int(row["fencing_token"] or 0),
             ),
         )
@@ -1131,7 +1238,9 @@ def publish_completed_job(
     current = _epoch(conn, now)
     private_root = Path(private_root).resolve()
     provisional_dir = Path(provisional_dir).resolve()
-    provisional_dir.relative_to((private_root / "experiments" / "provisional").resolve())
+    provisional_dir.relative_to(
+        (private_root / "experiments" / "provisional").resolve()
+    )
     generation_path = provisional_dir / "publication_generation.json"
     try:
         generation = json.loads(generation_path.read_text(encoding="utf-8"))
@@ -1150,19 +1259,27 @@ def publish_completed_job(
         conn.execute("BEGIN IMMEDIATE")
         current = _epoch(conn, current)
         row = _assert_job_claim(
-            conn, job_id, owner_id=owner_id,
-            fencing_token=fencing_token, now=current,
+            conn,
+            job_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            now=current,
         )
         imported = import_run_dir(
-            conn, private_root, provisional_dir,
+            conn,
+            private_root,
+            provisional_dir,
             artifact_label_override=final_label,
         )
         # Recheck at the publication boundary. Expiry immediately removes
         # authority even when no replacement worker has claimed the row yet.
         boundary_now = _epoch(conn, now)
         row = _assert_job_claim(
-            conn, job_id, owner_id=owner_id,
-            fencing_token=fencing_token, now=boundary_now,
+            conn,
+            job_id,
+            owner_id=owner_id,
+            fencing_token=fencing_token,
+            now=boundary_now,
         )
         seq = int(row["mutation_seq"] or 0) + 1
         cur = conn.execute(
@@ -1173,8 +1290,14 @@ def publish_completed_job(
                  AND fencing_token=? AND claim_expires_at>?
                  AND mutation_protocol='fenced.v2' AND mutation_seq=?""",
             (
-                utc_now(), final_label, seq, int(job_id), owner_id,
-                int(fencing_token), boundary_now, int(row["mutation_seq"] or 0),
+                utc_now(),
+                final_label,
+                seq,
+                int(job_id),
+                owner_id,
+                int(fencing_token),
+                boundary_now,
+                int(row["mutation_seq"] or 0),
             ),
         )
         if cur.rowcount != 1:
@@ -1192,7 +1315,13 @@ def publish_completed_job(
                ON CONFLICT(job_id, fencing_token) DO UPDATE SET
                    provisional_path=excluded.provisional_path,
                    final_label=excluded.final_label""",
-            (int(job_id), int(fencing_token), str(provisional_dir), final_label, boundary_now),
+            (
+                int(job_id),
+                int(fencing_token),
+                str(provisional_dir),
+                final_label,
+                boundary_now,
+            ),
         )
         conn.commit()
     except Exception:
@@ -1261,7 +1390,9 @@ def recover_pending_publications(
                WHERE publication_id=? AND state='pending_rename'
                  AND job_id=? AND fencing_token=?""",
             (
-                _epoch(conn, now), int(row["publication_id"]), int(row["job_id"]),
+                _epoch(conn, now),
+                int(row["publication_id"]),
+                int(row["job_id"]),
                 int(row["fencing_token"]),
             ),
         )
@@ -1298,7 +1429,10 @@ def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
     uri = Path(db_path).resolve().as_posix()
     conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    runs = [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY run_id DESC LIMIT 20")]
+    runs = [
+        dict(r)
+        for r in conn.execute("SELECT * FROM runs ORDER BY run_id DESC LIMIT 20")
+    ]
     candidates = [
         {
             "run_id": str(r["run_id"]),
@@ -1334,8 +1468,15 @@ def dashboard_snapshot(db_path: Path) -> dict[str, Any]:
             """
         )
     ]
-    queue = [_queue_row_for_snapshot(dict(r)) for r in conn.execute("SELECT * FROM queue ORDER BY job_id DESC LIMIT 20")]
-    totals = dict(conn.execute("SELECT COUNT(*) AS run_count, COALESCE(SUM(candidate_count), 0) AS candidate_count FROM runs").fetchone())
+    queue = [
+        _queue_row_for_snapshot(dict(r))
+        for r in conn.execute("SELECT * FROM queue ORDER BY job_id DESC LIMIT 20")
+    ]
+    totals = dict(
+        conn.execute(
+            "SELECT COUNT(*) AS run_count, COALESCE(SUM(candidate_count), 0) AS candidate_count FROM runs"
+        ).fetchone()
+    )
     queue_counts = {
         str(r["status"]): int(r["n"])
         for r in conn.execute("SELECT status, COUNT(*) AS n FROM queue GROUP BY status")
@@ -1427,6 +1568,7 @@ def _group_map() -> dict[str, str]:
     """symbol -> universe group (best effort; '' for all if universe unavailable)."""
     try:
         from src.research_lab.universe import load_universe
+
         uni = load_universe()
         return {sym: group for group, members in uni.groups.items() for sym in members}
     except Exception:
@@ -1468,16 +1610,24 @@ def _as_int(value: Any) -> int:
 
 
 def _import_farm_results(
-    conn: sqlite3.Connection, run_id: str, payload: dict[str, Any], rows: list[dict[str, Any]]
+    conn: sqlite3.Connection,
+    run_id: str,
+    payload: dict[str, Any],
+    rows: list[dict[str, Any]],
 ) -> None:
     """Richer per-candidate result rows (group/timeframe/backend/data_quality)."""
     from src.research_lab.gpu_runtime import GPU_SUPPORTED_FAMILIES
+
     runtime = (payload.get("runtime") if isinstance(payload, dict) else {}) or {}
-    backend = str(runtime.get("effective_backend") or runtime.get("signal_backend") or "")
+    backend = str(
+        runtime.get("effective_backend") or runtime.get("signal_backend") or ""
+    )
     created_at = str((payload or {}).get("created_at") or utc_now())
     top_tf = str((payload or {}).get("timeframe") or "")
     plan_meta = (payload.get("plan_meta") if isinstance(payload, dict) else {}) or {}
-    planned_group = str(plan_meta.get("group") or "") if isinstance(plan_meta, dict) else ""
+    planned_group = (
+        str(plan_meta.get("group") or "") if isinstance(plan_meta, dict) else ""
+    )
     group_map = _group_map()
     conn.execute("DELETE FROM farm_results WHERE run_id = ?", (run_id,))
     for row in rows:
@@ -1512,7 +1662,8 @@ def _import_farm_results(
                 _as_float(_row_metric(row, "profit_factor")),
                 json.dumps(
                     _row_metric(row, "profit_factor_state") or {},
-                    ensure_ascii=False, sort_keys=True,
+                    ensure_ascii=False,
+                    sort_keys=True,
                 ),
                 str(_row_metric(row, "data_file_label") or ""),
                 _data_quality(n_trades, min_trades),
@@ -1538,12 +1689,20 @@ def _import_runtime_stats(
         """,
         (
             run_id,
-            str(runtime.get("requested_backend") or (payload or {}).get("requested_backend") or ""),
+            str(
+                runtime.get("requested_backend")
+                or (payload or {}).get("requested_backend")
+                or ""
+            ),
             str(runtime.get("effective_backend") or ""),
             str(runtime.get("signal_backend") or ""),
             str(runtime.get("simulation_backend") or ""),
             1 if runtime.get("gpu_available") else 0,
-            str(runtime.get("fallback_reason") or runtime.get("simulation_fallback_reason") or ""),
+            str(
+                runtime.get("fallback_reason")
+                or runtime.get("simulation_fallback_reason")
+                or ""
+            ),
             _as_int(runtime.get("accelerated_runs")),
             _as_float(runtime.get("elapsed_ms")),
             str((payload or {}).get("timeframe") or ""),

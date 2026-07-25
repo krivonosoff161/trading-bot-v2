@@ -114,8 +114,10 @@ def _signals_status(
     candles = synthetic_candles(rows, include_required_data=required_data)
     signals = definition.generate_signals(candles, dict(params))
     invalid = [
-        signal for signal in signals
-        if int(signal.get("idx", -1)) < 0 or int(signal.get("idx", rows)) > max(0, rows - 1)
+        signal
+        for signal in signals
+        if int(signal.get("idx", -1)) < 0
+        or int(signal.get("idx", rows)) > max(0, rows - 1)
     ]
     if invalid:
         return (
@@ -160,9 +162,13 @@ def _parameter_boundary_checks(
     default_params: dict[str, Any],
     default_required: int,
 ) -> dict[str, ParameterBoundaryCheck]:
-    terms = sorted({
-        key for formula in definition.history_formulas for key, _multiplier in formula.terms
-    })
+    terms = sorted(
+        {
+            key
+            for formula in definition.history_formulas
+            for key, _multiplier in formula.terms
+        }
+    )
     checks: dict[str, ParameterBoundaryCheck] = {}
     for parameter in terms:
         params = dict(default_params)
@@ -206,7 +212,11 @@ def _parameter_boundary_checks(
             boundary_source=authority.maximum_source,
             boundary_rule=authority.maximum_rule,
             limit_values=limit_values,
-            limit_validity=tuple(result.ok for result in limit_results),
+            limit_validity=(
+                limit_results[0].ok,
+                limit_results[1].ok,
+                limit_results[2].ok,
+            ),
             above_limit_errors=tuple(limit_results[2].errors),
             history_rows=(before_rows, required, required + 1),
             history_statuses=(before_status, status, after_status),
@@ -227,7 +237,11 @@ def _parameter_boundary_checks(
                 boundary_source=authority.maximum_source,
                 boundary_rule=authority.maximum_rule,
                 limit_values=limit_values,
-                limit_validity=tuple(result.ok for result in limit_results),
+                limit_validity=(
+                    limit_results[0].ok,
+                    limit_results[1].ok,
+                    limit_results[2].ok,
+                ),
                 above_limit_errors=tuple(limit_results[2].errors),
                 history_rows=(before_rows, required, required + 1),
                 history_statuses=(before_status, status, after_status),
@@ -297,6 +311,8 @@ def build_history_proofs() -> dict[str, StrategyHistoryProof]:
             required_data=definition.required_data,
             required_data_missing_status=missing_status,
             required_data_missing_reason=missing_reason,
-            parameter_boundary_checks=_parameter_boundary_checks(definition, params, required),
+            parameter_boundary_checks=_parameter_boundary_checks(
+                definition, params, required
+            ),
         )
     return proofs

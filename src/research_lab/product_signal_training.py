@@ -22,7 +22,11 @@ SCHEMA = "ProductSignalTrainingRow.v1"
 
 def _hash_text(value: Any) -> str:
     raw = str(value or "")
-    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16] if raw else ""
+    return (
+        hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+        if raw
+        else ""
+    )
 
 
 def _clean_artifacts(value: Any) -> dict[str, str]:
@@ -74,7 +78,7 @@ def product_training_row(event: dict[str, Any]) -> dict[str, Any]:
     }
     row_id = stable_id("product_training", payload, length=20)
     artifacts = _clean_artifacts(event.get("artifacts"))
-    extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
+    extra = raw_extra if isinstance(raw_extra := event.get("extra"), dict) else {}
     return {
         "schema": SCHEMA,
         "training_row_id": row_id,
@@ -87,13 +91,19 @@ def product_training_row(event: dict[str, Any]) -> dict[str, Any]:
         "symbol": str(event.get("symbol") or ""),
         "timeframe": str(event.get("timeframe") or ""),
         "side": str(event.get("side") or ""),
-        "entry_zone": event.get("entry_zone") if isinstance(event.get("entry_zone"), list) else [],
+        "entry_zone": event.get("entry_zone")
+        if isinstance(event.get("entry_zone"), list)
+        else [],
         "stop_loss": event.get("stop_loss"),
-        "take_profit_plan": event.get("take_profit_plan") if isinstance(event.get("take_profit_plan"), list) else [],
+        "take_profit_plan": event.get("take_profit_plan")
+        if isinstance(event.get("take_profit_plan"), list)
+        else [],
         "invalidation_rule": str(event.get("invalidation_rule") or ""),
         "max_hold_minutes": event.get("max_hold_minutes"),
         "risk_pct": event.get("risk_pct"),
-        "reason_codes": event.get("reason_codes") if isinstance(event.get("reason_codes"), list) else [],
+        "reason_codes": event.get("reason_codes")
+        if isinstance(event.get("reason_codes"), list)
+        else [],
         "provider": str(event.get("provider") or ""),
         "model": str(event.get("model") or ""),
         "prompt_version": str(event.get("prompt_version") or ""),
@@ -140,8 +150,12 @@ def export_product_signal_training(
     for row in rows:
         by_source[row["source"]] = by_source.get(row["source"], 0) + 1
         by_decision[row["decision"]] = by_decision.get(row["decision"], 0) + 1
-        by_provider[row["provider"] or "none"] = by_provider.get(row["provider"] or "none", 0) + 1
-        by_status[row["status"] or "missing"] = by_status.get(row["status"] or "missing", 0) + 1
+        by_provider[row["provider"] or "none"] = (
+            by_provider.get(row["provider"] or "none", 0) + 1
+        )
+        by_status[row["status"] or "missing"] = (
+            by_status.get(row["status"] or "missing", 0) + 1
+        )
         execution_allowed_true += int(row["execution_allowed"] is True)
         paper_only_false += int(row["paper_only"] is not True)
         write_cycle_link(
@@ -177,7 +191,13 @@ def export_product_signal_training(
         "execution_allowed": False,
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": rows[:200]}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {**summary, "items": rows[:200]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return summary

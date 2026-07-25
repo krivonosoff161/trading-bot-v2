@@ -7,11 +7,13 @@ answer without that context looks like a contradiction. This module only reads
 paper signal state and renders a short explanatory note; it never sends
 Telegram messages and never touches execution/order surfaces.
 """
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT
 from src.research_lab.paper_signals import store
@@ -108,7 +110,9 @@ def active_farm_context_for_symbol(
         if sig.source not in FARM_SOURCES:
             continue
         keys = _signal_keys(sig)
-        if wanted in keys or wanted.replace("_SWAP", "") in {k.replace("_SWAP", "") for k in keys}:
+        if wanted in keys or wanted.replace("_SWAP", "") in {
+            k.replace("_SWAP", "") for k in keys
+        }:
             matches.append(sig)
 
     matches.sort(
@@ -121,7 +125,7 @@ def active_farm_context_for_symbol(
     return [_item(sig) for sig in matches[: max(0, limit)]]
 
 
-def _price(value: object) -> str:
+def _price(value: Any) -> str:
     try:
         num = float(value)
     except (TypeError, ValueError):
@@ -154,7 +158,7 @@ def render_manual_farm_context(items: list[ManualFarmContextItem]) -> str:
             "• "
             f"{readiness}/{item.source}: {item.okx_inst_id or item.symbol} · "
             f"{item.timeframe} · {item.side.upper()} · {item.status}; "
-            f"вход { _zone(item.entry_zone) }, стоп {_price(item.stop_loss)}, tp1 {_tp1(item.take_profit_plan)}."
+            f"вход {_zone(item.entry_zone)}, стоп {_price(item.stop_loss)}, tp1 {_tp1(item.take_profit_plan)}."
         )
     lines.extend(
         [

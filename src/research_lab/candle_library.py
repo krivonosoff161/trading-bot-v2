@@ -48,16 +48,29 @@ def load_canonical_candles(
         coverage = store.coverage(symbol, timeframe)
         if progress is not None:
             progress("coverage_checked")
-        if coverage.row_count and coverage.first_ts is not None and coverage.last_ts is not None:
-            selected_start = int(start_ts) if start_ts is not None else coverage.first_ts
+        if (
+            coverage.row_count
+            and coverage.first_ts is not None
+            and coverage.last_ts is not None
+        ):
+            selected_start = (
+                int(start_ts) if start_ts is not None else coverage.first_ts
+            )
             selected_end = int(end_ts) if end_ts is not None else coverage.last_ts
             snapshot = store.read_snapshot(
-                symbol, timeframe, selected_start, selected_end,
-                as_of_ms=as_of_ms, purpose=purpose, coverage_policy=coverage_policy,
+                symbol,
+                timeframe,
+                selected_start,
+                selected_end,
+                as_of_ms=as_of_ms,
+                purpose=purpose,
+                coverage_policy=coverage_policy,
             )
             if snapshot.rows:
                 label = f"sqlite:{str(symbol).replace('-', '_').upper()}:{str(timeframe).lower()}"
-                candidates.append(CandleSlice(snapshot.rows, "sqlite", label, snapshot.manifest))
+                candidates.append(
+                    CandleSlice(snapshot.rows, "sqlite", label, snapshot.manifest)
+                )
             if progress is not None:
                 progress("sqlite_snapshot_checked")
     except (CandleStoreError, ValueError):
@@ -72,7 +85,9 @@ def load_canonical_candles(
         json_paths.add(Path(chosen))
     for token in (normalized, str(symbol)):
         try:
-            json_paths.update(Path(item) for item in _glob.glob(pattern.format(symbol=token)))
+            json_paths.update(
+                Path(item) for item in _glob.glob(pattern.format(symbol=token))
+            )
         except (KeyError, IndexError, ValueError):
             continue
     for path in sorted(json_paths):
@@ -81,8 +96,10 @@ def load_canonical_candles(
         rows = load_candles(path)
         if progress is not None:
             progress("json_candidate_loaded")
-        if start_ts is not None:
-            rows = [row for row in rows if int(start_ts) <= int(row["ts"]) <= int(end_ts)]
+        if start_ts is not None and end_ts is not None:
+            rows = [
+                row for row in rows if int(start_ts) <= int(row["ts"]) <= int(end_ts)
+            ]
         root = Path(private_root).resolve()
         try:
             label = path.resolve().relative_to(root).as_posix()
@@ -94,11 +111,15 @@ def load_canonical_candles(
             item["_source"] = "legacy-json"
             item["_provenance_status"] = "legacy_unknown"
             legacy_rows.append(item)
-        json_start = int(start_ts) if start_ts is not None else (
-            int(legacy_rows[0]["ts"]) if legacy_rows else None
+        json_start = (
+            int(start_ts)
+            if start_ts is not None
+            else (int(legacy_rows[0]["ts"]) if legacy_rows else None)
         )
-        json_end = int(end_ts) if end_ts is not None else (
-            int(legacy_rows[-1]["ts"]) if legacy_rows else None
+        json_end = (
+            int(end_ts)
+            if end_ts is not None
+            else (int(legacy_rows[-1]["ts"]) if legacy_rows else None)
         )
         snapshot = build_snapshot(
             symbol=symbol,
@@ -112,11 +133,15 @@ def load_canonical_candles(
             source_backend="json",
         )
         if snapshot.rows:
-            candidates.append(CandleSlice(snapshot.rows, "json", label, snapshot.manifest))
+            candidates.append(
+                CandleSlice(snapshot.rows, "json", label, snapshot.manifest)
+            )
 
     acceptable = [
-        candidate for candidate in candidates
-        if coverage_policy == "available" or candidate.manifest.coverage_status == "complete"
+        candidate
+        for candidate in candidates
+        if coverage_policy == "available"
+        or candidate.manifest.coverage_status == "complete"
     ]
     if acceptable:
         selected = max(
@@ -148,8 +173,13 @@ def load_canonical_candles(
 
 
 def sync_json_to_store(
-    private_root: str | Path, symbol: str, timeframe: str, path: str | Path,
-    *, source: str, available_at_ms: int,
+    private_root: str | Path,
+    symbol: str,
+    timeframe: str,
+    path: str | Path,
+    *,
+    source: str,
+    available_at_ms: int,
 ) -> int:
     """Commit a validated legacy enrichment back into the canonical library."""
     from src.research_lab.experiment import load_candles
@@ -158,7 +188,11 @@ def sync_json_to_store(
     if not rows:
         return 0
     outcome = CandleStore(private_root).upsert_candles(
-        symbol, timeframe, rows, source=source, strict=True,
+        symbol,
+        timeframe,
+        rows,
+        source=source,
+        strict=True,
         observed_at_ms=int(available_at_ms),
         available_at_ms=int(available_at_ms),
         acquired_at_ms=int(available_at_ms),

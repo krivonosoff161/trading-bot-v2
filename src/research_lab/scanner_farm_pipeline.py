@@ -14,6 +14,7 @@ drives the whole prepare->queue path in tests with NO network). Dry-run plans an
 classifies but writes nothing (no prepare, no queue, no state). Paper/research only:
 no order engine, no private exchange endpoints, no .env, no AUTO_TRADE.
 """
+
 from __future__ import annotations
 
 import time
@@ -23,7 +24,11 @@ from typing import Any
 from src.research_lab.candle_store import CandleStore
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.data_inventory import inspect_file
-from src.research_lab.data_prepare import MarketDataPrepareItem, prepare_market_data, timeframe_ms
+from src.research_lab.data_prepare import (
+    MarketDataPrepareItem,
+    prepare_market_data,
+    timeframe_ms,
+)
 from src.research_lab.data_readiness_selector import min_rows_for
 from src.research_lab.experiment import choose_symbol_file
 from src.research_lab.farm_scheduler import plan_jobs
@@ -44,7 +49,9 @@ def event_spec_dir(private_root: Path) -> Path:
     return Path(private_root) / "plans" / "event_specs"
 
 
-def _prepare_window(timeframe: str, now_ms: int, days_override: int | None) -> tuple[int, int]:
+def _prepare_window(
+    timeframe: str, now_ms: int, days_override: int | None
+) -> tuple[int, int]:
     tf = str(timeframe).lower()
     days = int(days_override) if days_override else DEFAULT_DATA_DAYS.get(tf, 60)
     interval = timeframe_ms(tf)
@@ -61,16 +68,32 @@ def _synth_backlog_watch(symbol: str, timeframe: str) -> dict:
         "watch_id": None,
         "created_at": "",
         "scanner": {"verdict": "WATCH", "event_type": "universe_backlog"},
-        "trigger": {"source": "universe_backlog", "headline": f"backlog refill {symbol}"},
+        "trigger": {
+            "source": "universe_backlog",
+            "headline": f"backlog refill {symbol}",
+        },
         "asset": {"symbol": symbol, "okx_inst": symbol, "okx_resolved": True},
-        "farm": {"eligible": True, "selected_timeframe": timeframe, "data_readiness_status": "usable"},
+        "farm": {
+            "eligible": True,
+            "selected_timeframe": timeframe,
+            "data_readiness_status": "usable",
+        },
     }
 
 
-def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provider: Any,
-                       apply: bool, now_ms: int, data_days: int | None,
-                       prepares_left: int, allow_public_output: bool,
-                       minimum_bars: int | None = None) -> tuple[str, int]:
+def _ensure_local_data(
+    symbol: str,
+    timeframe: str,
+    *,
+    private_root: Path,
+    provider: Any,
+    apply: bool,
+    now_ms: int,
+    data_days: int | None,
+    prepares_left: int,
+    allow_public_output: bool,
+    minimum_bars: int | None = None,
+) -> tuple[str, int]:
     """Materialize candles if absent. Returns (status, rows).
 
     status: usable | would_prepare | prepared | too_short | missing_prepared_data
@@ -93,8 +116,12 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
     if not listing.may_fetch:
         return listing.status, 0
     selected = load_canonical_candles(
-        private_root, symbol, timeframe, fallback_glob=glob,
-        purpose="scanner_farm_readiness", coverage_policy="gap_free",
+        private_root,
+        symbol,
+        timeframe,
+        fallback_glob=glob,
+        purpose="scanner_farm_readiness",
+        coverage_policy="gap_free",
     )
     if len(selected.rows) >= required_rows:
         return "usable", len(selected.rows)
@@ -109,29 +136,41 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
         end_ts=listing.end_ts,
         status=listing.status,
     )
-    report = prepare_market_data([item], provider=provider, private_root=private_root,
-                                 timeframe=timeframe, apply=True, allow_public_output=allow_public_output)
+    report = prepare_market_data(
+        [item],
+        provider=provider,
+        private_root=private_root,
+        timeframe=timeframe,
+        apply=True,
+        allow_public_output=allow_public_output,
+    )
     if report.skipped:
         reason = str(report.skipped[0].get("reason") or "")
         if reason.startswith("provider_error"):
-            item = report.items[0] if report.items else {}
-            return ("provider_transient" if item.get("provider_error_transient") else "provider_error"), 0
+            report_item = report.items[0] if report.items else {}
+            return (
+                "provider_transient"
+                if report_item.get("provider_error_transient")
+                else "provider_error"
+            ), 0
         if reason == "no_data_returned":
             return "missing_prepared_data", 0
         if reason == "provider_not_configured":
             return "provider_not_configured", 0
         return "data_prepare_failed", 0
     selected = load_canonical_candles(
-        private_root, symbol, timeframe, fallback_glob=glob,
-        purpose="scanner_farm_post_prepare", coverage_policy="gap_free",
+        private_root,
+        symbol,
+        timeframe,
+        fallback_glob=glob,
+        purpose="scanner_farm_post_prepare",
+        coverage_policy="gap_free",
     )
     if selected.rows:
         rows = len(selected.rows)
         if not listing.may_full_validate:
             return "fresh_listing_pending", rows
-        return (
-            "prepared" if rows >= required_rows else "too_short"
-        ), rows
+        return ("prepared" if rows >= required_rows else "too_short"), rows
     path = choose_symbol_file(glob, symbol, timeframe=timeframe)
     if path:
         rows = int(inspect_file(path).get("rows") or 0)
@@ -141,9 +180,17 @@ def _ensure_local_data(symbol: str, timeframe: str, *, private_root: Path, provi
     return "too_short", 0  # downloaded but not enough confirmed bars to be 'usable'
 
 
-def _compile_and_queue(res, *, private_root: Path, profiles, policy, data_glob: str,
-                       priority: int, conn,
-                       data_snapshot_manifest: dict[str, Any]) -> tuple[str, bool]:
+def _compile_and_queue(
+    res,
+    *,
+    private_root: Path,
+    profiles,
+    policy,
+    data_glob: str,
+    priority: int,
+    conn,
+    data_snapshot_manifest: dict[str, Any],
+) -> tuple[str, bool]:
     """Compile the sweep at the prepared-root glob and idempotently queue it.
 
     Returns (experiment_id, created) — created is False when the farm queue already
@@ -176,17 +223,31 @@ def _compile_and_queue(res, *, private_root: Path, profiles, policy, data_glob: 
     out_dir.mkdir(parents=True, exist_ok=True)
     spec_path = out_dir / f"{exp.search_family_id}.json"
     exp.write_json(spec_path)
-    _job_id, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=int(priority))
+    _job_id, created = ensure_experiment_queued(
+        conn, spec_path.resolve(), priority=int(priority)
+    )
     return exp.experiment_id, bool(created)
 
 
 # Counter keys the loop adds on top of plan_jobs' watch-level triage counters.
-_LOOP_COUNTERS = ("jobs_queued", "data_prepared", "would_prepare", "would_queue",
-                  "already_queued", "prepare_failed", "prepare_deferred")
+_LOOP_COUNTERS = (
+    "jobs_queued",
+    "data_prepared",
+    "would_prepare",
+    "would_queue",
+    "already_queued",
+    "prepare_failed",
+    "prepare_deferred",
+)
 # prepare statuses that consumed a real download attempt (budget) — config errors do not.
 _CONSUMES_PREPARE = {
-    "prepared", "provider_error", "provider_transient", "too_short", "missing_prepared_data",
-    "data_prepare_failed", "fresh_listing_pending",
+    "prepared",
+    "provider_error",
+    "provider_transient",
+    "too_short",
+    "missing_prepared_data",
+    "data_prepare_failed",
+    "fresh_listing_pending",
 }
 _RETRYABLE_SKIP_REASONS = {
     "queue_cap_reached",
@@ -207,7 +268,11 @@ def _sweep_minimum_bars(sweep: Any) -> int:
     params = dict(definition.parameter_defaults)
     for grid in (sweep.setup_grid, sweep.exit_grid):
         for key, values in (grid or {}).items():
-            numeric = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+            numeric = [
+                value
+                for value in values
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            ]
             if numeric:
                 params[key] = max(numeric)
     return derive_requirement(
@@ -218,35 +283,74 @@ def _sweep_minimum_bars(sweep: Any) -> int:
     ).min_rows
 
 
-def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, cycle,
-                 private_root, provider, now_ms, data_days, prepares_left, profiles, policy,
-                 priority_base, allow_public_output, conn) -> dict:
+def _process_job(
+    job,
+    *,
+    state,
+    watch_by_id,
+    refill_timeframe,
+    backend,
+    apply,
+    cycle,
+    private_root,
+    provider,
+    now_ms,
+    data_days,
+    prepares_left,
+    profiles,
+    policy,
+    priority_base,
+    allow_public_output,
+    conn,
+) -> dict:
     """Materialize + queue one planned job. Does its own state writes (apply only).
 
     Returns an effects dict: per-counter deltas, optional decision/skip, and
     ``consumed_prepare`` so the caller can decrement the per-cycle prepare budget.
     """
-    eff = {k: 0 for k in _LOOP_COUNTERS}
+    eff: dict[str, Any] = {k: 0 for k in _LOOP_COUNTERS}
     eff.update(consumed_prepare=False, decision=None, skip=None)
-    watch = watch_by_id.get(job.watch_id) or _synth_backlog_watch(job.symbol, job.timeframe or refill_timeframe)
-    res = watch_to_sweep(watch, timeframe=(job.timeframe or refill_timeframe), backend=backend)
+    watch = watch_by_id.get(job.watch_id) or _synth_backlog_watch(
+        job.symbol, job.timeframe or refill_timeframe
+    )
+    res = watch_to_sweep(
+        watch, timeframe=(job.timeframe or refill_timeframe), backend=backend
+    )
     if not res.ok:
-        eff["skip"] = {"symbol": job.symbol, "reason": res.status, "timeframe": job.timeframe}
+        eff["skip"] = {
+            "symbol": job.symbol,
+            "reason": res.status,
+            "timeframe": job.timeframe,
+        }
         return eff
+    if res.sweep is None:
+        raise RuntimeError("successful scanner-to-farm conversion lacks a sweep")
     tf, family, inst = res.sweep.timeframe, res.sweep.setup_family, res.symbol
     job_key = f"{inst.upper()}::{tf}::{family}"
     if apply and state.is_job_queued(job_key):
         eff["already_queued"] = 1
         eff["skip"] = {"symbol": inst, "reason": "already_queued", "timeframe": tf}
         return eff
-    status, rows = _ensure_local_data(inst, tf, private_root=private_root, provider=provider, apply=apply,
-                                      now_ms=now_ms, data_days=data_days, prepares_left=prepares_left,
-                                      allow_public_output=allow_public_output,
-                                      minimum_bars=_sweep_minimum_bars(res.sweep))
+    status, rows = _ensure_local_data(
+        inst,
+        tf,
+        private_root=private_root,
+        provider=provider,
+        apply=apply,
+        now_ms=now_ms,
+        data_days=data_days,
+        prepares_left=prepares_left,
+        allow_public_output=allow_public_output,
+        minimum_bars=_sweep_minimum_bars(res.sweep),
+    )
     eff["consumed_prepare"] = status in _CONSUMES_PREPARE
     if status == "would_prepare":
         eff["would_prepare"] = eff["would_queue"] = 1
-        eff["decision"] = {"symbol": inst, "timeframe": tf, "action": "would_prepare_and_queue"}
+        eff["decision"] = {
+            "symbol": inst,
+            "timeframe": tf,
+            "action": "would_prepare_and_queue",
+        }
         return eff
     if status == "prepare_cap_reached":
         eff["prepare_deferred"] = 1
@@ -262,32 +366,63 @@ def _process_job(job, *, state, watch_by_id, refill_timeframe, backend, apply, c
         return eff
     if not apply:
         eff["would_queue"] = 1
-        eff["decision"] = {"symbol": inst, "timeframe": tf, "family": family, "action": "would_queue"}
+        eff["decision"] = {
+            "symbol": inst,
+            "timeframe": tf,
+            "family": family,
+            "action": "would_queue",
+        }
         return eff
     selected = load_canonical_candles(
-        private_root, inst, tf, fallback_glob=market_data_glob(private_root, tf),
-        purpose="experiment", coverage_policy="gap_free",
+        private_root,
+        inst,
+        tf,
+        fallback_glob=market_data_glob(private_root, tf),
+        purpose="experiment",
+        coverage_policy="gap_free",
     )
     if not selected.rows:
         eff["prepare_failed"] = 1
-        eff["skip"] = {"symbol": inst, "reason": "snapshot_missing_before_queue", "timeframe": tf}
+        eff["skip"] = {
+            "symbol": inst,
+            "reason": "snapshot_missing_before_queue",
+            "timeframe": tf,
+        }
         return eff
-    exp_id, created = _compile_and_queue(res, private_root=private_root, profiles=profiles, policy=policy,
-                                         data_glob=market_data_glob(private_root, tf),
-                                         priority=priority_base + job.priority, conn=conn,
-                                         data_snapshot_manifest=selected.manifest.to_dict())
-    state.mark_job_queued(job_key, symbol=inst, timeframe=tf, family=family, experiment_id=exp_id, cycle=cycle)
+    exp_id, created = _compile_and_queue(
+        res,
+        private_root=private_root,
+        profiles=profiles,
+        policy=policy,
+        data_glob=market_data_glob(private_root, tf),
+        priority=priority_base + job.priority,
+        conn=conn,
+        data_snapshot_manifest=selected.manifest.to_dict(),
+    )
+    state.mark_job_queued(
+        job_key,
+        symbol=inst,
+        timeframe=tf,
+        family=family,
+        experiment_id=exp_id,
+        cycle=cycle,
+    )
     if created:
         eff["jobs_queued"] = 1
         action = "queued"
     else:  # already in the farm queue (queued/running/completed) — re-synced, not double-counted
         eff["already_queued"] = 1
         action = "already_in_farm_queue"
-    eff["decision"] = {"symbol": inst, "timeframe": tf, "family": family,
-                       "experiment_id": exp_id, "action": action,
-                       "data_snapshot_id": selected.manifest.snapshot_id,
-                       "data_evidence_hash": selected.manifest.evidence_hash,
-                       "data_provenance_status": selected.manifest.provenance_status}
+    eff["decision"] = {
+        "symbol": inst,
+        "timeframe": tf,
+        "family": family,
+        "experiment_id": exp_id,
+        "action": action,
+        "data_snapshot_id": selected.manifest.snapshot_id,
+        "data_evidence_hash": selected.manifest.evidence_hash,
+        "data_provenance_status": selected.manifest.provenance_status,
+    }
     return eff
 
 
@@ -296,8 +431,13 @@ def _watch_checkpoint_keys(watch: dict) -> set[str]:
     return {str(v).upper() for v in (asset.get("okx_inst"), asset.get("symbol")) if v}
 
 
-def _checkpoint_watches(state: PipelineState, watches: list[dict], cycle: int,
-                        *, retry_symbols: set[str] | None = None) -> None:
+def _checkpoint_watches(
+    state: PipelineState,
+    watches: list[dict],
+    cycle: int,
+    *,
+    retry_symbols: set[str] | None = None,
+) -> None:
     retry_symbols = {str(s).upper() for s in (retry_symbols or set()) if s}
     for w in watches:
         wid = w.get("watch_id")
@@ -305,8 +445,12 @@ def _checkpoint_watches(state: PipelineState, watches: list[dict], cycle: int,
             continue
         if wid and not state.is_watch_processed(str(wid)):
             asset, farm = w.get("asset") or {}, w.get("farm") or {}
-            state.mark_watch_processed(str(wid), okx_inst=asset.get("okx_inst"),
-                                       timeframe=farm.get("selected_timeframe"), cycle=cycle)
+            state.mark_watch_processed(
+                str(wid),
+                okx_inst=asset.get("okx_inst"),
+                timeframe=farm.get("selected_timeframe"),
+                cycle=cycle,
+            )
 
 
 def run_cycle(
@@ -330,14 +474,30 @@ def run_cycle(
 ) -> dict:
     """Run one coordinator cycle. Returns {cycle, counters, decisions, skipped}."""
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
-    private_root = resolve_private_root(Path(private_root), allow_public_output=allow_public_output) \
-        if apply else Path(private_root)
+    private_root = (
+        resolve_private_root(
+            Path(private_root), allow_public_output=allow_public_output
+        )
+        if apply
+        else Path(private_root)
+    )
     cycle = state.start_cycle() if apply else -1
-    fresh = [w for w in watches if not (apply and w.get("watch_id")
-                                        and state.is_watch_processed(str(w.get("watch_id"))))]
+    fresh = [
+        w
+        for w in watches
+        if not (
+            apply
+            and w.get("watch_id")
+            and state.is_watch_processed(str(w.get("watch_id")))
+        )
+    ]
 
-    plan = plan_jobs(fresh, max_jobs=max_jobs, backlog_symbols=list(backlog_symbols or []),
-                     pending_inst=(state.queued_insts() if apply else set()))
+    plan = plan_jobs(
+        fresh,
+        max_jobs=max_jobs,
+        backlog_symbols=list(backlog_symbols or []),
+        pending_inst=(state.queued_insts() if apply else set()),
+    )
     counters = dict(plan["counters"])
     counters["jobs_planned"] = counters.pop("queued", 0)
     counters.update({k: 0 for k in _LOOP_COUNTERS})
@@ -352,20 +512,40 @@ def run_cycle(
 
     if apply:
         for s in plan["skipped"]:
-            state.record_skip(cycle, symbol=s.get("symbol"), timeframe=None, reason=str(s.get("reason")))
+            state.record_skip(
+                cycle,
+                symbol=s.get("symbol"),
+                timeframe=None,
+                reason=str(s.get("reason")),
+            )
 
     conn, prepares_left = None, max_prepares
     if apply:
         from src.research_lab.state_db import connect, default_db_path, init_db
+
         conn = connect(default_db_path(private_root))
         init_db(conn)
     try:
         for job in plan["jobs"]:
-            eff = _process_job(job, state=state, watch_by_id=watch_by_id, refill_timeframe=refill_timeframe,
-                               backend=backend, apply=apply, cycle=cycle, private_root=private_root,
-                               provider=provider, now_ms=now_ms, data_days=data_days,
-                               prepares_left=prepares_left, profiles=profiles, policy=policy,
-                               priority_base=priority_base, allow_public_output=allow_public_output, conn=conn)
+            eff = _process_job(
+                job,
+                state=state,
+                watch_by_id=watch_by_id,
+                refill_timeframe=refill_timeframe,
+                backend=backend,
+                apply=apply,
+                cycle=cycle,
+                private_root=private_root,
+                provider=provider,
+                now_ms=now_ms,
+                data_days=data_days,
+                prepares_left=prepares_left,
+                profiles=profiles,
+                policy=policy,
+                priority_base=priority_base,
+                allow_public_output=allow_public_output,
+                conn=conn,
+            )
             for key in _LOOP_COUNTERS:
                 counters[key] += eff[key]
             if eff["consumed_prepare"]:
@@ -373,12 +553,18 @@ def run_cycle(
             if eff["decision"]:
                 decisions.append(eff["decision"])
             if eff["skip"]:
-                skipped.append({"symbol": eff["skip"]["symbol"], "reason": eff["skip"]["reason"]})
+                skipped.append(
+                    {"symbol": eff["skip"]["symbol"], "reason": eff["skip"]["reason"]}
+                )
                 if eff["skip"]["reason"] in _RETRYABLE_SKIP_REASONS:
                     retry_symbols.add(str(eff["skip"]["symbol"] or "").upper())
                 if apply:
-                    state.record_skip(cycle, symbol=eff["skip"]["symbol"],
-                                      timeframe=eff["skip"].get("timeframe"), reason=eff["skip"]["reason"])
+                    state.record_skip(
+                        cycle,
+                        symbol=eff["skip"]["symbol"],
+                        timeframe=eff["skip"].get("timeframe"),
+                        reason=eff["skip"]["reason"],
+                    )
     finally:
         if conn is not None:
             conn.close()
@@ -388,4 +574,9 @@ def run_cycle(
     counters["skipped_total"] = len(skipped)
     if apply:
         state.finish_cycle(cycle, counters)
-    return {"cycle": cycle, "counters": counters, "decisions": decisions, "skipped": skipped}
+    return {
+        "cycle": cycle,
+        "counters": counters,
+        "decisions": decisions,
+        "skipped": skipped,
+    }

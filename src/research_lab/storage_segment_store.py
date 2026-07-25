@@ -32,10 +32,13 @@ from src.research_lab.storage_capability import (
 )
 from src.research_lab.storage_os_lock import StorageLockConflict, storage_root_lock
 
+msvcrt: Any
 try:  # pragma: no cover - platform import
-    import msvcrt
+    import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover
     msvcrt = None
+else:
+    msvcrt = _msvcrt
 
 
 PROTOCOL = "segmented-jsonl.v2"
@@ -105,53 +108,142 @@ FIXED_STREAMS: dict[str, StreamSpec] = {
         StreamSpec("scout.llm_budget", "scout-llm-budget", "scanner_budget.v1"),
         StreamSpec("scout.ingest", "scout-ingest", "scanner_ingest.v1"),
         StreamSpec("scout.event_audit", "scout-event-audit", "ScoutEventAudit.v1"),
-        StreamSpec("scout.routing_audit", "scout-routing-audit", "scanner_routing_audit.v1"),
+        StreamSpec(
+            "scout.routing_audit", "scout-routing-audit", "scanner_routing_audit.v1"
+        ),
     )
 }
 
 _MANIFEST_KEYS = {
-    "schema", "protocol", "canonicalization", "store_id", "root_id",
-    "capability_digest", "canonical_root", "registry_sha256", "durability_mode",
-    "filesystem_identity", "max_payload_bytes", "max_json_depth",
-    "max_open_prefix_bytes", "max_segment_records", "manifest_sha256",
+    "schema",
+    "protocol",
+    "canonicalization",
+    "store_id",
+    "root_id",
+    "capability_digest",
+    "canonical_root",
+    "registry_sha256",
+    "durability_mode",
+    "filesystem_identity",
+    "max_payload_bytes",
+    "max_json_depth",
+    "max_open_prefix_bytes",
+    "max_segment_records",
+    "manifest_sha256",
 }
 _HEADER_KEYS = {
-    "schema", "protocol", "canonicalization", "store_id", "root_id",
-    "capability_digest", "registry_sha256", "durability_mode", "stream_id",
-    "payload_schema", "segment_id", "segment_seq", "prior_segment_sha256",
+    "schema",
+    "protocol",
+    "canonicalization",
+    "store_id",
+    "root_id",
+    "capability_digest",
+    "registry_sha256",
+    "durability_mode",
+    "stream_id",
+    "payload_schema",
+    "segment_id",
+    "segment_seq",
+    "prior_segment_sha256",
     "frame_sha256",
 }
 _RECORD_KEYS = {
-    "schema", "protocol", "store_id", "root_id", "capability_digest",
-    "registry_sha256", "stream_id", "payload_schema", "segment_id", "request_id",
-    "operation_id", "segment_seq", "stream_record_seq", "segment_record_seq",
-    "prior_frame_sha256", "payload_sha256", "payload", "frame_sha256",
+    "schema",
+    "protocol",
+    "store_id",
+    "root_id",
+    "capability_digest",
+    "registry_sha256",
+    "stream_id",
+    "payload_schema",
+    "segment_id",
+    "request_id",
+    "operation_id",
+    "segment_seq",
+    "stream_record_seq",
+    "segment_record_seq",
+    "prior_frame_sha256",
+    "payload_sha256",
+    "payload",
+    "frame_sha256",
 }
 _FOOTER_KEYS = {
-    "schema", "protocol", "store_id", "root_id", "capability_digest",
-    "registry_sha256", "stream_id", "payload_schema", "segment_id", "segment_seq",
-    "record_count", "prefix_byte_size", "first_stream_record_seq",
-    "final_stream_record_seq", "final_data_frame_sha256", "prefix_sha256",
-    "prior_segment_sha256", "frame_sha256",
+    "schema",
+    "protocol",
+    "store_id",
+    "root_id",
+    "capability_digest",
+    "registry_sha256",
+    "stream_id",
+    "payload_schema",
+    "segment_id",
+    "segment_seq",
+    "record_count",
+    "prefix_byte_size",
+    "first_stream_record_seq",
+    "final_stream_record_seq",
+    "final_data_frame_sha256",
+    "prefix_sha256",
+    "prior_segment_sha256",
+    "frame_sha256",
 }
 _EVENT_KEYS = {
-    "schema", "protocol", "store_id", "root_id", "capability_digest",
-    "registry_sha256", "durability_mode", "event_type", "event_id", "request_id",
-    "operation_id", "operation_action", "writer_id", "stream_id", "payload_schema",
-    "segment_id", "source_name", "target_name", "event_seq", "segment_seq",
-    "file_identity", "pre_size", "post_size", "intent_size", "pre_sha256",
-    "post_sha256", "intent_sha256", "prior_event_sha256", "reason_code",
+    "schema",
+    "protocol",
+    "store_id",
+    "root_id",
+    "capability_digest",
+    "registry_sha256",
+    "durability_mode",
+    "event_type",
+    "event_id",
+    "request_id",
+    "operation_id",
+    "operation_action",
+    "writer_id",
+    "stream_id",
+    "payload_schema",
+    "segment_id",
+    "source_name",
+    "target_name",
+    "event_seq",
+    "segment_seq",
+    "file_identity",
+    "pre_size",
+    "post_size",
+    "intent_size",
+    "pre_sha256",
+    "post_sha256",
+    "intent_sha256",
+    "prior_event_sha256",
+    "reason_code",
     "event_sha256",
 }
 _APPEND_RECEIPT_KEYS = {
-    "schema", "store_id", "stream_id", "request_id", "operation_id",
-    "segment_id", "frame_sha256", "committed_event_sha256", "segment_seq",
-    "stream_record_seq", "segment_record_seq",
+    "schema",
+    "store_id",
+    "stream_id",
+    "request_id",
+    "operation_id",
+    "segment_id",
+    "frame_sha256",
+    "committed_event_sha256",
+    "segment_seq",
+    "stream_record_seq",
+    "segment_record_seq",
 }
 _SEAL_RECEIPT_KEYS = {
-    "schema", "store_id", "stream_id", "request_id", "operation_id",
-    "segment_id", "final_name", "whole_file_sha256", "sealed_event_sha256",
-    "durability_mode", "segment_seq",
+    "schema",
+    "store_id",
+    "stream_id",
+    "request_id",
+    "operation_id",
+    "segment_id",
+    "final_name",
+    "whole_file_sha256",
+    "sealed_event_sha256",
+    "durability_mode",
+    "segment_seq",
 }
 _SCHEMA_SQL_SHA256 = "d11d28d06dc4ba701b202777e050381281327342e293c64554a4dadd6ea12576"
 
@@ -175,7 +267,9 @@ def _positive_int(value: object) -> bool:
 
 
 def _digest_or_none(value: object) -> bool:
-    return value is None or (isinstance(value, str) and _HEX64.fullmatch(value) is not None)
+    return value is None or (
+        isinstance(value, str) and _HEX64.fullmatch(value) is not None
+    )
 
 
 def _is_strict_intended_prefix(tail: bytes, intended: bytes) -> bool:
@@ -216,13 +310,17 @@ def _validate_json(value: Any, *, level: int) -> None:
             if not isinstance(key, str):
                 raise SegmentStoreError("JSON object keys must be strings")
             _validate_json(key, level=level)
-            _validate_json(child, level=level + 1 if isinstance(child, (dict, list)) else level)
+            _validate_json(
+                child, level=level + 1 if isinstance(child, (dict, list)) else level
+            )
         return
     if isinstance(value, list):
         if level > MAX_JSON_DEPTH:
             raise SegmentStoreError("JSON container depth exceeds fixed limit")
         for child in value:
-            _validate_json(child, level=level + 1 if isinstance(child, (dict, list)) else level)
+            _validate_json(
+                child, level=level + 1 if isinstance(child, (dict, list)) else level
+            )
         return
     raise SegmentStoreError(f"unsupported JSON value type: {type(value).__name__}")
 
@@ -273,12 +371,18 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _statfs_type(path: Path) -> int:
     class StatFs(ctypes.Structure):
         _fields_ = [
-            ("f_type", ctypes.c_long), ("f_bsize", ctypes.c_long),
-            ("f_blocks", ctypes.c_ulong), ("f_bfree", ctypes.c_ulong),
-            ("f_bavail", ctypes.c_ulong), ("f_files", ctypes.c_ulong),
-            ("f_ffree", ctypes.c_ulong), ("f_fsid", ctypes.c_int * 2),
-            ("f_namelen", ctypes.c_long), ("f_frsize", ctypes.c_long),
-            ("f_flags", ctypes.c_long), ("f_spare", ctypes.c_long * 4),
+            ("f_type", ctypes.c_long),
+            ("f_bsize", ctypes.c_long),
+            ("f_blocks", ctypes.c_ulong),
+            ("f_bfree", ctypes.c_ulong),
+            ("f_bavail", ctypes.c_ulong),
+            ("f_files", ctypes.c_ulong),
+            ("f_ffree", ctypes.c_ulong),
+            ("f_fsid", ctypes.c_int * 2),
+            ("f_namelen", ctypes.c_long),
+            ("f_frsize", ctypes.c_long),
+            ("f_flags", ctypes.c_long),
+            ("f_spare", ctypes.c_long * 4),
         ]
 
     libc = ctypes.CDLL(None, use_errno=True)
@@ -298,8 +402,14 @@ def detect_durability_mode(root: Path) -> str:
         fs_name = ctypes.create_unicode_buffer(32)
         serial = ctypes.c_ulong()
         ok = kernel32.GetVolumeInformationW(
-            ctypes.c_wchar_p(root.anchor), None, 0, ctypes.byref(serial),
-            None, None, fs_name, len(fs_name),
+            ctypes.c_wchar_p(root.anchor),
+            None,
+            0,
+            ctypes.byref(serial),
+            None,
+            None,
+            fs_name,
+            len(fs_name),
         )
         if not ok or fs_name.value.upper() != "NTFS":
             raise SegmentStoreUnsupported("segment store requires fixed local NTFS")
@@ -313,9 +423,13 @@ def detect_durability_mode(root: Path) -> str:
 
 def _detect_linux_durability(root: Path) -> str:
     if _statfs_type(root) not in {0xEF53, 0x58465342, 0x9123683E}:
-        raise SegmentStoreUnsupported("Linux filesystem is not in the fixed local allowlist")
+        raise SegmentStoreUnsupported(
+            "Linux filesystem is not in the fixed local allowlist"
+        )
     if not all(hasattr(os, name) for name in ("O_NOFOLLOW", "O_DIRECTORY")):
-        raise SegmentStoreUnsupported("required Linux no-follow directory primitives are absent")
+        raise SegmentStoreUnsupported(
+            "required Linux no-follow directory primitives are absent"
+        )
     libc = ctypes.CDLL(None)
     if not hasattr(libc, "renameat2"):
         raise SegmentStoreUnsupported("renameat2 is unavailable")
@@ -340,7 +454,7 @@ def _open_file(path: Path, *, read_only: bool = False, create: bool = False) -> 
     if not create and (not _path_lexists(path) or is_link_or_reparse(probe)):
         raise SegmentStoreConflict("segment path is missing or link/reparse")
     if os.name != "nt":
-        flags = (os.O_RDONLY if read_only else os.O_RDWR) | os.O_NOFOLLOW
+        flags = (os.O_RDONLY if read_only else os.O_RDWR) | getattr(os, "O_NOFOLLOW", 0)
         if create:
             flags |= os.O_CREAT | os.O_EXCL
         return os.open(path, flags, 0o600)
@@ -354,7 +468,13 @@ def _open_file(path: Path, *, read_only: bool = False, create: bool = False) -> 
     disposition = 1 if create else 3
     flags = 0x00200000 | (0x80000000 if not read_only else 0)
     raw = create_file(
-        ctypes.c_wchar_p(_windows_extended_path(path)), access, share, None, disposition, flags, None
+        ctypes.c_wchar_p(_windows_extended_path(path)),
+        access,
+        share,
+        None,
+        disposition,
+        flags,
+        None,
     )
     if raw in (None, ctypes.c_void_p(-1).value):
         error = ctypes.get_last_error()
@@ -393,7 +513,10 @@ def _sync_fd(fd: int) -> None:
 def _sync_directory(path: Path, durability_mode: str) -> None:
     if durability_mode != DURABILITY_LINUX:
         return
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
         os.fsync(fd)
     finally:
@@ -413,13 +536,17 @@ def _move_no_replace(source: Path, target: Path, durability_mode: str) -> None:
             raise OSError(ctypes.get_last_error(), "MoveFileExW failed", str(source))
         return
     source_dir = os.open(
-        source.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        source.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
     )
     target_dir = source_dir
     try:
         if source.parent != target.parent:
             target_dir = os.open(
-                target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                target.parent,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
             )
         source_info = os.fstat(source_dir)
         target_info = os.fstat(target_dir)
@@ -428,15 +555,20 @@ def _move_no_replace(source: Path, target: Path, durability_mode: str) -> None:
             or not stat.S_ISDIR(target_info.st_mode)
             or source_info.st_dev != target_info.st_dev
         ):
-            raise SegmentStoreConflict("segment move directories are unsafe or cross-volume")
+            raise SegmentStoreConflict(
+                "segment move directories are unsafe or cross-volume"
+            )
         libc = ctypes.CDLL(None, use_errno=True)
-        if libc.renameat2(
-            source_dir,
-            os.fsencode(source.name),
-            target_dir,
-            os.fsencode(target.name),
-            1,
-        ) != 0:
+        if (
+            libc.renameat2(
+                source_dir,
+                os.fsencode(source.name),
+                target_dir,
+                os.fsencode(target.name),
+                1,
+            )
+            != 0
+        ):
             error = ctypes.get_errno()
             if error == errno.EEXIST:
                 raise FileExistsError(str(target))
@@ -503,7 +635,9 @@ class SegmentStore:
         try:
             self.capability = load_capability(Path(root))
         except (OSError, ValueError, StorageCapabilityError) as exc:
-            raise SegmentStoreConflict("storage capability revalidation failed") from exc
+            raise SegmentStoreConflict(
+                "storage capability revalidation failed"
+            ) from exc
         self.root = Path(self.capability.canonical_root)
         self.control = self.root / RESERVED
         self.lock_path = self.control / "locks" / "operation.lock"
@@ -537,7 +671,9 @@ class SegmentStore:
         try:
             current = load_capability(self.root)
         except (OSError, ValueError, StorageCapabilityError) as exc:
-            raise SegmentStoreConflict("storage capability revalidation failed") from exc
+            raise SegmentStoreConflict(
+                "storage capability revalidation failed"
+            ) from exc
         if current != self.capability:
             raise SegmentStoreConflict("storage capability changed after construction")
 
@@ -570,7 +706,9 @@ class SegmentStore:
             raise SegmentStoreConflict("segment manifest key set is invalid")
         digest = manifest.pop("manifest_sha256")
         expected_mode = detect_durability_mode(self.root)
-        expected = self._manifest_payload(str(manifest.get("store_id", "")), expected_mode)
+        expected = self._manifest_payload(
+            str(manifest.get("store_id", "")), expected_mode
+        )
         if manifest != expected or not _HEX64.fullmatch(str(digest)):
             raise SegmentStoreConflict("segment manifest binding mismatch")
         if _sha(_canonical_bytes(manifest)) != digest:
@@ -589,9 +727,7 @@ class SegmentStore:
     def activate(self) -> None:
         with self._locked():
             mode = detect_durability_mode(self.root)
-            activation_artifacts = sorted(
-                self.staging_path.glob("segment-store-*")
-            )
+            activation_artifacts = sorted(self.staging_path.glob("segment-store-*"))
             if activation_artifacts:
                 raise SegmentStoreConflict(
                     "segment activation has preserved staging/ambiguity evidence"
@@ -601,7 +737,9 @@ class SegmentStore:
             else:
                 leftovers = [self.db_path, self.segments_path]
                 if any(_path_lexists(path) for path in leftovers):
-                    raise SegmentStoreConflict("segment activation has unbound partial paths")
+                    raise SegmentStoreConflict(
+                        "segment activation has unbound partial paths"
+                    )
                 store_id = "segstore_" + uuid.uuid4().hex
                 payload = self._manifest_payload(store_id, mode)
                 manifest = _with_hash(payload, "manifest_sha256")
@@ -645,7 +783,10 @@ class SegmentStore:
     def _activate_directories(self) -> None:
         assert self.durability_mode is not None
         if _path_lexists(self.segments_path):
-            if is_link_or_reparse(self.segments_path) or not self.segments_path.is_dir():
+            if (
+                is_link_or_reparse(self.segments_path)
+                or not self.segments_path.is_dir()
+            ):
                 raise SegmentStoreConflict("segment directory is unsafe")
         else:
             self.segments_path.mkdir()
@@ -653,7 +794,9 @@ class SegmentStore:
         expected = {spec.directory_token for spec in FIXED_STREAMS.values()}
         existing = {path.name for path in self.segments_path.iterdir()}
         if not existing.issubset(expected):
-            raise SegmentStoreConflict("segment directory has unexpected activation entries")
+            raise SegmentStoreConflict(
+                "segment directory has unexpected activation entries"
+            )
         for token in sorted(expected):
             path = self.segments_path / token
             if not path.exists():
@@ -891,13 +1034,18 @@ class SegmentStore:
                 else:
                     conn.executemany(
                         "INSERT INTO metadata(key, value) VALUES (?, ?)",
-                        [(key, _canonical_bytes(value).decode("utf-8")) for key, value in expected.items()],
+                        [
+                            (key, _canonical_bytes(value).decode("utf-8"))
+                            for key, value in expected.items()
+                        ],
                     )
                 conn.commit()
             finally:
                 conn.close()
             if _file_identity(fd, self.capability) != identity:
-                raise SegmentStoreConflict("segment database identity changed during activation")
+                raise SegmentStoreConflict(
+                    "segment database identity changed during activation"
+                )
         finally:
             os.close(fd)
         fd = _open_file(self.db_path)
@@ -912,7 +1060,9 @@ class SegmentStore:
         path_fd = _open_file(self.db_path, read_only=True)
         try:
             if _file_identity(path_fd, self.capability) != identity:
-                raise SegmentStoreConflict("segment database held/path identity mismatch")
+                raise SegmentStoreConflict(
+                    "segment database held/path identity mismatch"
+                )
         finally:
             os.close(path_fd)
         return identity
@@ -986,7 +1136,9 @@ class SegmentStore:
                 raise SegmentStoreConflict("segment database schema column mismatch")
             normalized = " ".join(str(sql).lower().split())
             if any(token not in normalized for token in required_sql[str(table)]):
-                raise SegmentStoreConflict("segment database schema constraint mismatch")
+                raise SegmentStoreConflict(
+                    "segment database schema constraint mismatch"
+                )
 
     @contextmanager
     def _mutating_connection(self) -> Iterator[sqlite3.Connection]:
@@ -1003,12 +1155,17 @@ class SegmentStore:
             self._verify_connection(conn, identity)
             yield conn
             self._verify_connection(conn, identity)
-            self._validate_event_rows(conn.execute(
-                "SELECT event_json, intent_bytes FROM events ORDER BY event_seq"
-            ).fetchall(), allow_pending=True)
+            self._validate_event_rows(
+                conn.execute(
+                    "SELECT event_json, intent_bytes FROM events ORDER BY event_seq"
+                ).fetchall(),
+                allow_pending=True,
+            )
             conn.commit()
             if self._database_identity(held) != identity:
-                raise SegmentStoreConflict("segment database identity changed after commit")
+                raise SegmentStoreConflict(
+                    "segment database identity changed after commit"
+                )
         except Exception:
             if conn.in_transaction:
                 conn.rollback()
@@ -1017,7 +1174,9 @@ class SegmentStore:
             conn.close()
             os.close(held)
 
-    def _verify_connection(self, conn: sqlite3.Connection, identity: dict[str, int]) -> None:
+    def _verify_connection(
+        self, conn: sqlite3.Connection, identity: dict[str, int]
+    ) -> None:
         if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "delete":
             raise SegmentStoreConflict("segment database journal mode mismatch")
         if int(conn.execute("PRAGMA synchronous").fetchone()[0]) != 3:
@@ -1046,7 +1205,9 @@ class SegmentStore:
         next_fd = _open_file(self.db_path, read_only=True)
         try:
             if self._database_identity(next_fd) != identity:
-                raise SegmentStoreConflict("segment database identity changed inside transaction")
+                raise SegmentStoreConflict(
+                    "segment database identity changed inside transaction"
+                )
         finally:
             os.close(next_fd)
 
@@ -1071,9 +1232,12 @@ class SegmentStore:
         uri = f"file:{self.db_path.as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         try:
-            return [(str(row[0]), row[1]) for row in conn.execute(
-                "SELECT event_json, intent_bytes FROM events ORDER BY event_seq"
-            )]
+            return [
+                (str(row[0]), row[1])
+                for row in conn.execute(
+                    "SELECT event_json, intent_bytes FROM events ORDER BY event_seq"
+                )
+            ]
         finally:
             conn.close()
 
@@ -1098,9 +1262,15 @@ class SegmentStore:
             try:
                 _require_id(kind, event[kind])
             except SegmentStoreError as exc:
-                raise SegmentStoreConflict("segment event identity evidence is invalid") from exc
+                raise SegmentStoreConflict(
+                    "segment event identity evidence is invalid"
+                ) from exc
         segment_seq = event["segment_seq"]
-        if isinstance(segment_seq, bool) or not isinstance(segment_seq, int) or segment_seq < 1:
+        if (
+            isinstance(segment_seq, bool)
+            or not isinstance(segment_seq, int)
+            or segment_seq < 1
+        ):
             raise SegmentStoreConflict("segment event sequence evidence is invalid")
         if not _HEX64.fullmatch(str(event["event_sha256"])):
             raise SegmentStoreConflict("segment event digest evidence is invalid")
@@ -1125,14 +1295,18 @@ class SegmentStore:
             size = event[size_key]
             digest = event[hash_key]
             if (size is None) != (digest is None):
-                raise SegmentStoreConflict("segment event size/hash evidence is incomplete")
+                raise SegmentStoreConflict(
+                    "segment event size/hash evidence is incomplete"
+                )
             if size is not None and (
                 isinstance(size, bool)
                 or not isinstance(size, int)
                 or size < 0
                 or not _HEX64.fullmatch(str(digest))
             ):
-                raise SegmentStoreConflict("segment event size/hash evidence is invalid")
+                raise SegmentStoreConflict(
+                    "segment event size/hash evidence is invalid"
+                )
         source = event["source_name"]
         expected_source = f"{segment_seq:020d}.{event['segment_id']}.open.jsonl"
         if not isinstance(source, str) or source != expected_source:
@@ -1153,13 +1327,28 @@ class SegmentStore:
             if not all(expected) or event["post_size"] is None:
                 raise SegmentStoreConflict("segment open evidence is invalid")
         elif event_type == "opened":
-            if identity is None or target is not None or event["pre_size"] is not None or event["post_size"] is None:
+            if (
+                identity is None
+                or target is not None
+                or event["pre_size"] is not None
+                or event["post_size"] is None
+            ):
                 raise SegmentStoreConflict("segment opened evidence is invalid")
         elif event_type in {"append_intent", "append_committed"}:
-            if identity is None or target is not None or event["pre_size"] is None or event["post_size"] is None:
+            if (
+                identity is None
+                or target is not None
+                or event["pre_size"] is None
+                or event["post_size"] is None
+            ):
                 raise SegmentStoreConflict("segment append evidence is invalid")
         elif event_type in {"seal_intent", "sealed"}:
-            if identity is None or target is None or event["pre_size"] is None or event["post_size"] is None:
+            if (
+                identity is None
+                or target is None
+                or event["pre_size"] is None
+                or event["post_size"] is None
+            ):
                 raise SegmentStoreConflict("segment seal evidence is invalid")
 
         if pending is not None and not is_intent:
@@ -1179,11 +1368,18 @@ class SegmentStore:
                 "post_sha256",
             )
             if any(event[key] != pending[key] for key in copied):
-                raise SegmentStoreConflict("segment terminal evidence differs from intent")
+                raise SegmentStoreConflict(
+                    "segment terminal evidence differs from intent"
+                )
             if event_type == "conflict" and identity != pending["file_identity"]:
                 raise SegmentStoreConflict("segment conflict identity evidence differs")
-            if event_type in {"append_committed", "sealed"} and identity != pending["file_identity"]:
-                raise SegmentStoreConflict("segment terminal file identity differs from intent")
+            if (
+                event_type in {"append_committed", "sealed"}
+                and identity != pending["file_identity"]
+            ):
+                raise SegmentStoreConflict(
+                    "segment terminal file identity differs from intent"
+                )
 
     def _validate_event_rows(
         self,
@@ -1191,6 +1387,8 @@ class SegmentStore:
         *,
         allow_pending: bool,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        if self.manifest is None:
+            raise SegmentStoreConflict("segment store manifest is unavailable")
         events: list[dict[str, Any]] = []
         prior: str | None = None
         pending: dict[str, Any] | None = None
@@ -1201,7 +1399,10 @@ class SegmentStore:
                 event = json.loads(str(raw), object_pairs_hook=_reject_duplicate_pairs)
             except (ValueError, TypeError, UnicodeError) as exc:
                 raise SegmentStoreConflict("segment event JSON is invalid") from exc
-            if set(event) != _EVENT_KEYS or event.get("schema") != "SegmentStoreEvent.v2":
+            if (
+                set(event) != _EVENT_KEYS
+                or event.get("schema") != "SegmentStoreEvent.v2"
+            ):
                 raise SegmentStoreConflict("segment event key/schema mismatch")
             if (
                 not _positive_int(event.get("event_seq"))
@@ -1216,47 +1417,79 @@ class SegmentStore:
             event["event_sha256"] = supplied
             if supplied != computed:
                 raise SegmentStoreConflict("segment event digest mismatch")
-            if event.get("protocol") != PROTOCOL or event.get("store_id") != self.manifest["store_id"]:
+            if (
+                event.get("protocol") != PROTOCOL
+                or event.get("store_id") != self.manifest["store_id"]
+            ):
                 raise SegmentStoreConflict("segment event store binding mismatch")
-            if event.get("root_id") != self.capability.root_id or event.get("capability_digest") != self.capability.capability_digest:
+            if (
+                event.get("root_id") != self.capability.root_id
+                or event.get("capability_digest") != self.capability.capability_digest
+            ):
                 raise SegmentStoreConflict("segment event root/capability mismatch")
-            if event.get("registry_sha256") != REGISTRY_SHA256 or event.get("durability_mode") != self.durability_mode:
+            if (
+                event.get("registry_sha256") != REGISTRY_SHA256
+                or event.get("durability_mode") != self.durability_mode
+            ):
                 raise SegmentStoreConflict("segment event registry/durability mismatch")
             event_type = str(event.get("event_type"))
-            if event_type not in _EVENT_TYPES or event.get("operation_action") not in _ACTIONS:
+            if (
+                event_type not in _EVENT_TYPES
+                or event.get("operation_action") not in _ACTIONS
+            ):
                 raise SegmentStoreConflict("segment event type/action mismatch")
             stream_id = str(event.get("stream_id"))
             spec = FIXED_STREAMS.get(stream_id)
             if spec is None or event.get("payload_schema") != spec.payload_schema:
                 raise SegmentStoreConflict("segment event stream/schema mismatch")
             expected_operation = _operation_id(
-                str(event["store_id"]), str(event["request_id"]),
-                str(event["operation_action"]), stream_id, int(event["segment_seq"]),
+                str(event["store_id"]),
+                str(event["request_id"]),
+                str(event["operation_action"]),
+                stream_id,
+                int(event["segment_seq"]),
             )
             if event.get("operation_id") != expected_operation:
                 raise SegmentStoreConflict("segment event operation id mismatch")
             if stream_id in blocked_streams:
-                raise SegmentStoreConflict("segment event follows a permanent stream conflict")
+                raise SegmentStoreConflict(
+                    "segment event follows a permanent stream conflict"
+                )
             self._validate_event_semantics(event, intent_blob, pending)
             if event_type in _INTENTS:
                 if pending is not None:
                     raise SegmentStoreConflict("segment intents interleave globally")
-                if intent_blob is None or event.get("intent_size") != len(intent_blob) or event.get("intent_sha256") != _sha(bytes(intent_blob)):
+                if (
+                    intent_blob is None
+                    or event.get("intent_size") != len(intent_blob)
+                    or event.get("intent_sha256") != _sha(bytes(intent_blob))
+                ):
                     raise SegmentStoreConflict("segment intent blob mismatch")
                 if event.get("reason_code") is not None:
                     raise SegmentStoreConflict("intent cannot carry terminal reason")
                 pending = event
             else:
-                if intent_blob is not None or event.get("intent_size") is not None or event.get("intent_sha256") is not None:
+                if (
+                    intent_blob is not None
+                    or event.get("intent_size") is not None
+                    or event.get("intent_sha256") is not None
+                ):
                     raise SegmentStoreConflict("non-intent event carries intent bytes")
-                if pending is None or event.get("operation_id") != pending.get("operation_id"):
-                    raise SegmentStoreConflict("segment terminal event lacks adjacent intent")
+                if pending is None or event.get("operation_id") != pending.get(
+                    "operation_id"
+                ):
+                    raise SegmentStoreConflict(
+                        "segment terminal event lacks adjacent intent"
+                    )
                 expected_terminal = _SUCCESS[str(pending["event_type"])]
                 if event_type == "conflict":
                     if event.get("reason_code") not in _CONFLICT_REASONS:
                         raise SegmentStoreConflict("segment conflict reason is invalid")
                     blocked_streams.add(stream_id)
-                elif event_type != expected_terminal or event.get("reason_code") is not None:
+                elif (
+                    event_type != expected_terminal
+                    or event.get("reason_code") is not None
+                ):
                     raise SegmentStoreConflict("segment event transition is invalid")
                 pending = None
             prior = supplied
@@ -1282,7 +1515,9 @@ class SegmentStore:
                 and event["event_type"] == "append_committed"
             ]
             if len(terminals) > 1:
-                raise SegmentStoreConflict("segment request has multiple append receipts")
+                raise SegmentStoreConflict(
+                    "segment request has multiple append receipts"
+                )
             if not terminals:
                 return None
             terminal = terminals[0]
@@ -1335,12 +1570,15 @@ class SegmentStore:
             try:
                 _require_id("request_id", str(request_id))
             except SegmentStoreError as exc:
-                raise SegmentStoreConflict("segment request summary identity is invalid") from exc
-            if action not in {"append", "manual-seal"} or stream_id not in FIXED_STREAMS:
+                raise SegmentStoreConflict(
+                    "segment request summary identity is invalid"
+                ) from exc
+            if (
+                action not in {"append", "manual-seal"}
+                or stream_id not in FIXED_STREAMS
+            ):
                 raise SegmentStoreConflict("segment request summary binding is invalid")
-            related = [
-                event for event in events if event["request_id"] == request_id
-            ]
+            related = [event for event in events if event["request_id"] == request_id]
             if related and any(event["stream_id"] != stream_id for event in related):
                 raise SegmentStoreConflict("segment request summary stream differs")
             allowed_actions = (
@@ -1354,7 +1592,9 @@ class SegmentStore:
                 raise SegmentStoreConflict("segment request summary action differs")
             if action == "append":
                 if not _HEX64.fullmatch(str(payload_sha256)):
-                    raise SegmentStoreConflict("segment request summary payload is invalid")
+                    raise SegmentStoreConflict(
+                        "segment request summary payload is invalid"
+                    )
                 append_intent = next(
                     (
                         event
@@ -1370,7 +1610,9 @@ class SegmentStore:
                         len(frames) != 1
                         or frames[0][0].get("payload_sha256") != payload_sha256
                     ):
-                        raise SegmentStoreConflict("segment request summary payload differs")
+                        raise SegmentStoreConflict(
+                            "segment request summary payload differs"
+                        )
             elif payload_sha256 is not None:
                 raise SegmentStoreConflict("segment request summary payload is invalid")
             expected = self._derived_request_receipt(
@@ -1383,9 +1625,16 @@ class SegmentStore:
                     str(receipt_json), object_pairs_hook=_reject_duplicate_pairs
                 )
             except (ValueError, TypeError, UnicodeError) as exc:
-                raise SegmentStoreConflict("segment request summary receipt is invalid") from exc
-            if not isinstance(receipt, dict) or _canonical_bytes(receipt).decode("utf-8") != receipt_json:
-                raise SegmentStoreConflict("segment request summary receipt is noncanonical")
+                raise SegmentStoreConflict(
+                    "segment request summary receipt is invalid"
+                ) from exc
+            if (
+                not isinstance(receipt, dict)
+                or _canonical_bytes(receipt).decode("utf-8") != receipt_json
+            ):
+                raise SegmentStoreConflict(
+                    "segment request summary receipt is noncanonical"
+                )
             keys = _APPEND_RECEIPT_KEYS if action == "append" else _SEAL_RECEIPT_KEYS
             if set(receipt) != keys or expected is None or receipt != expected:
                 raise SegmentStoreConflict("segment request summary receipt differs")
@@ -1422,7 +1671,11 @@ class SegmentStore:
         _require_id("request_id", request_id)
         _require_id("segment_id", segment_id)
         operation_id = _operation_id(
-            self.manifest["store_id"], request_id, operation_action, stream_id, segment_seq
+            self.manifest["store_id"],
+            request_id,
+            operation_action,
+            stream_id,
+            segment_seq,
         )
         if Path(source_name).name != source_name or (
             target_name is not None and Path(target_name).name != target_name
@@ -1437,7 +1690,9 @@ class SegmentStore:
                 raise SegmentStoreConflict("another segment intent is globally pending")
             if event_type not in _INTENTS:
                 if pending is None or pending["operation_id"] != operation_id:
-                    raise SegmentStoreConflict("terminal event does not match pending intent")
+                    raise SegmentStoreConflict(
+                        "terminal event does not match pending intent"
+                    )
             seq = len(events) + 1
             prior_hash = events[-1]["event_sha256"] if events else None
             payload: dict[str, Any] = {
@@ -1467,7 +1722,9 @@ class SegmentStore:
                 "intent_size": len(intent_bytes) if intent_bytes is not None else None,
                 "pre_sha256": pre_sha256,
                 "post_sha256": post_sha256,
-                "intent_sha256": _sha(intent_bytes) if intent_bytes is not None else None,
+                "intent_sha256": _sha(intent_bytes)
+                if intent_bytes is not None
+                else None,
                 "prior_event_sha256": prior_hash,
                 "reason_code": reason_code,
             }
@@ -1480,9 +1737,15 @@ class SegmentStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    seq, event["event_id"], operation_id, event_type, request_id,
-                    operation_action, stream_id,
-                    _canonical_bytes(event).decode("utf-8"), intent_bytes,
+                    seq,
+                    event["event_id"],
+                    operation_id,
+                    event_type,
+                    request_id,
+                    operation_action,
+                    stream_id,
+                    _canonical_bytes(event).decode("utf-8"),
+                    intent_bytes,
                 ),
             )
         return event
@@ -1504,7 +1767,9 @@ class SegmentStore:
             segment_seq=intent["segment_seq"],
             source_name=intent["source_name"],
             target_name=intent["target_name"],
-            file_identity=file_identity if file_identity is not None else intent["file_identity"],
+            file_identity=file_identity
+            if file_identity is not None
+            else intent["file_identity"],
             pre_size=intent["pre_size"],
             pre_sha256=intent["pre_sha256"],
             post_size=intent["post_size"],
@@ -1521,7 +1786,10 @@ class SegmentStore:
         payload_sha256: str | None,
     ) -> dict[str, Any] | None:
         _require_id("request_id", request_id)
-        if external_action not in {"append", "manual-seal"} or stream_id not in FIXED_STREAMS:
+        if (
+            external_action not in {"append", "manual-seal"}
+            or stream_id not in FIXED_STREAMS
+        ):
             raise SegmentStoreError("request action/stream is invalid")
         with self._mutating_connection() as conn:
             event_rows = conn.execute(
@@ -1529,7 +1797,9 @@ class SegmentStore:
             ).fetchall()
             events, pending = self._validate_event_rows(event_rows, allow_pending=True)
             if pending is not None:
-                raise SegmentStoreConflict("segment intent must recover before a request")
+                raise SegmentStoreConflict(
+                    "segment intent must recover before a request"
+                )
             row = conn.execute(
                 "SELECT external_action, stream_id, payload_sha256, receipt_json "
                 "FROM requests WHERE request_id=?",
@@ -1596,6 +1866,10 @@ class SegmentStore:
         for raw, blob in self._event_rows():
             event = json.loads(raw)
             if event["event_type"] in _INTENTS:
+                if blob is None:
+                    raise SegmentStoreConflict(
+                        "segment intent is missing its durable payload"
+                    )
                 result[event["operation_id"]] = bytes(blob)
         return result
 
@@ -1617,7 +1891,9 @@ class SegmentStore:
             try:
                 canonical = _canonical_bytes(frame) if isinstance(frame, dict) else None
             except (TypeError, ValueError, UnicodeError) as exc:
-                raise SegmentStoreConflict("segment frame JSON domain is invalid") from exc
+                raise SegmentStoreConflict(
+                    "segment frame JSON domain is invalid"
+                ) from exc
             if canonical is None or canonical + b"\n" != line:
                 raise SegmentStoreConflict("segment frame is not canonical")
             supplied = frame.get("frame_sha256")
@@ -1662,6 +1938,8 @@ class SegmentStore:
         sealed: bool,
         append_intents: dict[str, bytes],
     ) -> dict[str, Any]:
+        if self.manifest is None:
+            raise SegmentStoreConflict("segment store manifest is unavailable")
         probe = _platform_path(path)
         if is_link_or_reparse(probe) or not probe.is_file():
             raise SegmentStoreConflict("declared segment path is unsafe")
@@ -1685,8 +1963,13 @@ class SegmentStore:
         self._common_frame_check(
             header, spec=spec, segment_id=segment_id, segment_seq=segment_seq
         )
-        if header.get("canonicalization") != CANONICALIZATION or header.get("durability_mode") != self.durability_mode:
-            raise SegmentStoreConflict("segment header canonicalization/durability mismatch")
+        if (
+            header.get("canonicalization") != CANONICALIZATION
+            or header.get("durability_mode") != self.durability_mode
+        ):
+            raise SegmentStoreConflict(
+                "segment header canonicalization/durability mismatch"
+            )
         if header.get("prior_segment_sha256") != prior_segment_sha256:
             raise SegmentStoreConflict("segment prior-segment chain mismatch")
         body = frames[1:]
@@ -1703,7 +1986,10 @@ class SegmentStore:
         previous_frame = header["frame_sha256"]
         expected_segment_record = 1
         for record, record_bytes in body:
-            if set(record) != _RECORD_KEYS or record.get("schema") != "SegmentRecord.v2":
+            if (
+                set(record) != _RECORD_KEYS
+                or record.get("schema") != "SegmentRecord.v2"
+            ):
                 raise SegmentStoreConflict("segment record key/schema mismatch")
             if (
                 not _positive_int(record.get("segment_seq"))
@@ -1730,21 +2016,30 @@ class SegmentStore:
             payload = record.get("payload")
             if not isinstance(payload, dict) or set(payload) != {"record", "schema"}:
                 raise SegmentStoreConflict("segment payload wrapper mismatch")
-            if payload.get("schema") != spec.payload_schema or not isinstance(payload.get("record"), dict):
+            if payload.get("schema") != spec.payload_schema or not isinstance(
+                payload.get("record"), dict
+            ):
                 raise SegmentStoreConflict("segment payload schema mismatch")
             try:
                 _validate_json(payload, level=1)
                 payload_bytes = _canonical_bytes(payload)
             except (SegmentStoreError, TypeError, ValueError, UnicodeError) as exc:
-                raise SegmentStoreConflict("segment payload JSON domain is invalid") from exc
+                raise SegmentStoreConflict(
+                    "segment payload JSON domain is invalid"
+                ) from exc
             if len(payload_bytes) > MAX_PAYLOAD_BYTES:
-                raise SegmentStoreConflict("segment payload exceeds the fixed byte limit")
+                raise SegmentStoreConflict(
+                    "segment payload exceeds the fixed byte limit"
+                )
             if record.get("payload_sha256") != _sha(payload_bytes):
                 raise SegmentStoreConflict("segment payload digest mismatch")
             _require_id("request_id", record["request_id"])
             expected_op = _operation_id(
-                self.manifest["store_id"], record["request_id"], "append",
-                spec.stream_id, segment_seq,
+                self.manifest["store_id"],
+                record["request_id"],
+                "append",
+                spec.stream_id,
+                segment_seq,
             )
             if record.get("operation_id") != expected_op:
                 raise SegmentStoreConflict("segment record operation mismatch")
@@ -1755,7 +2050,10 @@ class SegmentStore:
             expected_segment_record += 1
         if sealed:
             assert footer is not None
-            if set(footer) != _FOOTER_KEYS or footer.get("schema") != "SegmentFooter.v2":
+            if (
+                set(footer) != _FOOTER_KEYS
+                or footer.get("schema") != "SegmentFooter.v2"
+            ):
                 raise SegmentStoreConflict("segment footer key/schema mismatch")
             if (
                 not _positive_int(footer.get("segment_seq"))
@@ -1786,8 +2084,10 @@ class SegmentStore:
                 or footer.get("record_count") != len(records)
                 or footer.get("prefix_byte_size") != len(prefix)
                 or footer.get("prefix_sha256") != _sha(prefix)
-                or footer.get("first_stream_record_seq") != records[0]["stream_record_seq"]
-                or footer.get("final_stream_record_seq") != records[-1]["stream_record_seq"]
+                or footer.get("first_stream_record_seq")
+                != records[0]["stream_record_seq"]
+                or footer.get("final_stream_record_seq")
+                != records[-1]["stream_record_seq"]
                 or footer.get("final_data_frame_sha256") != records[-1]["frame_sha256"]
                 or footer.get("prior_segment_sha256") != prior_segment_sha256
             ):
@@ -1813,8 +2113,12 @@ class SegmentStore:
         if pending is not None:
             raise SegmentStoreConflict("segment store has a pending intent")
         intent_blobs = self._intent_blobs()
-        opened: dict[str, dict[str, Any] | None] = {stream: None for stream in FIXED_STREAMS}
-        sealed: dict[str, list[dict[str, Any]]] = {stream: [] for stream in FIXED_STREAMS}
+        opened: dict[str, dict[str, Any] | None] = {
+            stream: None for stream in FIXED_STREAMS
+        }
+        sealed: dict[str, list[dict[str, Any]]] = {
+            stream: [] for stream in FIXED_STREAMS
+        }
         blocked: set[str] = set()
         last_post: dict[tuple[str, str], dict[str, Any]] = {}
         append_success: dict[str, dict[str, Any]] = {}
@@ -1842,7 +2146,9 @@ class SegmentStore:
                     or active["source_name"] != event["source_name"]
                     or active["segment_id"] != event["segment_id"]
                 ):
-                    raise SegmentStoreConflict("sealed event does not match active segment")
+                    raise SegmentStoreConflict(
+                        "sealed event does not match active segment"
+                    )
                 sealed[stream].append(
                     {
                         **active,
@@ -1863,16 +2169,19 @@ class SegmentStore:
             if is_link_or_reparse(directory) or not directory.is_dir():
                 raise SegmentStoreConflict("fixed stream directory is unsafe")
             if stream_id in blocked:
-                views[stream_id] = _PhysicalStream(stream_id, sealed[stream_id], opened[stream_id], [], True)
+                views[stream_id] = _PhysicalStream(
+                    stream_id, sealed[stream_id], opened[stream_id], [], True
+                )
                 continue
-            expected_names = {
-                item["target_name"] for item in sealed[stream_id]
-            }
-            if opened[stream_id] is not None:
-                expected_names.add(opened[stream_id]["source_name"])
+            expected_names = {item["target_name"] for item in sealed[stream_id]}
+            open_segment = opened[stream_id]
+            if open_segment is not None:
+                expected_names.add(open_segment["source_name"])
             actual_names = {path.name for path in directory.iterdir()}
             if actual_names != expected_names:
-                raise SegmentStoreConflict("stream directory has undeclared or missing files")
+                raise SegmentStoreConflict(
+                    "stream directory has undeclared or missing files"
+                )
             parsed_sealed: list[dict[str, Any]] = []
             all_records: list[dict[str, Any]] = []
             prior_digest: str | None = None
@@ -1895,15 +2204,25 @@ class SegmentStore:
                     f"{declaration['segment_seq']:020d}.{declaration['segment_id']}."
                     f"{parsed['sha256']}.sealed.jsonl"
                 )
-                if path.name != expected_name or parsed["sha256"] != declaration["whole_sha256"]:
+                if (
+                    path.name != expected_name
+                    or parsed["sha256"] != declaration["whole_sha256"]
+                ):
                     raise SegmentStoreConflict("sealed segment name/digest mismatch")
                 if parsed["identity"] != declaration["identity"]:
                     raise SegmentStoreConflict("sealed segment identity mismatch")
-                if parsed["header_bytes"] != intent_blobs[declaration["open_operation_id"]]:
-                    raise SegmentStoreConflict("segment header differs from open intent")
+                if (
+                    parsed["header_bytes"]
+                    != intent_blobs[declaration["open_operation_id"]]
+                ):
+                    raise SegmentStoreConflict(
+                        "segment header differs from open intent"
+                    )
                 footer_line = parsed["bytes"].splitlines(keepends=True)[-1]
                 if footer_line != intent_blobs[declaration["seal_operation_id"]]:
-                    raise SegmentStoreConflict("segment footer differs from seal intent")
+                    raise SegmentStoreConflict(
+                        "segment footer differs from seal intent"
+                    )
                 for record in parsed["records"]:
                     if record["stream_record_seq"] != expected_stream_record_seq:
                         raise SegmentStoreConflict("stream record sequence has a gap")
@@ -1918,7 +2237,9 @@ class SegmentStore:
             if active is not None:
                 if active["segment_seq"] != expected_segment_seq:
                     raise SegmentStoreConflict("active segment sequence has a gap")
-                expected_active_name = f"{active['segment_seq']:020d}.{active['segment_id']}.open.jsonl"
+                expected_active_name = (
+                    f"{active['segment_seq']:020d}.{active['segment_id']}.open.jsonl"
+                )
                 if active["source_name"] != expected_active_name:
                     raise SegmentStoreConflict("active segment name mismatch")
                 parsed_active = self._parse_segment(
@@ -1932,14 +2253,19 @@ class SegmentStore:
                 )
                 if parsed_active["identity"] != active["identity"]:
                     raise SegmentStoreConflict("active segment identity mismatch")
-                if parsed_active["header_bytes"] != intent_blobs[active["open_operation_id"]]:
+                if (
+                    parsed_active["header_bytes"]
+                    != intent_blobs[active["open_operation_id"]]
+                ):
                     raise SegmentStoreConflict("active header differs from open intent")
                 terminal = last_post[(stream_id, active["segment_id"])]
                 if (
                     terminal["post_size"] != len(parsed_active["bytes"])
                     or terminal["post_sha256"] != parsed_active["sha256"]
                 ):
-                    raise SegmentStoreConflict("active segment differs from last committed event")
+                    raise SegmentStoreConflict(
+                        "active segment differs from last committed event"
+                    )
                 for record in parsed_active["records"]:
                     if record["stream_record_seq"] != expected_stream_record_seq:
                         raise SegmentStoreConflict("stream record sequence has a gap")
@@ -1958,7 +2284,9 @@ class SegmentStore:
             if event["stream_id"] not in blocked
         }
         if used_append_operations != committed_unblocked:
-            raise SegmentStoreConflict("committed append events and physical frames disagree")
+            raise SegmentStoreConflict(
+                "committed append events and physical frames disagree"
+            )
         return views
 
     def _audit_locked(self) -> dict[str, Any]:
@@ -1999,16 +2327,22 @@ class SegmentStore:
         try:
             capability = load_capability(Path(root))
         except (OSError, ValueError, StorageCapabilityError) as exc:
-            raise SegmentStoreConflict("storage capability revalidation failed") from exc
+            raise SegmentStoreConflict(
+                "storage capability revalidation failed"
+            ) from exc
         manifest = Path(capability.canonical_root) / RESERVED / "segment_store.json"
         if not _path_lexists(manifest):
             return {"activated": False, "status": "absent", "events": 0}
         return cls(Path(capability.canonical_root)).audit()
 
-    def read_records(self, stream_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+    def read_records(
+        self, stream_id: str, *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
         if stream_id not in FIXED_STREAMS:
             raise SegmentStoreError("unknown fixed segment stream")
-        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0
+        ):
             raise SegmentStoreError("read limit must be a positive integer")
         with self._locked():
             self._load_manifest()
@@ -2017,7 +2351,9 @@ class SegmentStore:
             views = self._physical_streams(events, pending)
             view = views[stream_id]
             if view.blocked:
-                raise SegmentStoreConflict("segment stream is blocked by terminal conflict")
+                raise SegmentStoreConflict(
+                    "segment stream is blocked by terminal conflict"
+                )
             result = [
                 json.loads(_canonical_bytes(row["payload"]["record"]))
                 for row in view.records
@@ -2088,7 +2424,9 @@ class SegmentStore:
             os.close(fd)
         _sync_directory(path.parent, self.durability_mode)
         self._fault("after_open_fsync", path)
-        self._publish_terminal_from_intent(intent, event_type="opened", file_identity=identity)
+        self._publish_terminal_from_intent(
+            intent, event_type="opened", file_identity=identity
+        )
 
     def _append_receipt(
         self,
@@ -2141,7 +2479,9 @@ class SegmentStore:
         _events, views = self._views_locked()
         view = views[stream_id]
         if view.blocked or view.active is None:
-            raise SegmentStoreConflict("segment stream is blocked or lacks active segment")
+            raise SegmentStoreConflict(
+                "segment stream is blocked or lacks active segment"
+            )
         active = view.active
         segment_seq = int(active["header"]["segment_seq"])
         segment_id = str(active["header"]["segment_id"])
@@ -2179,7 +2519,9 @@ class SegmentStore:
         ):
             self._seal_segment_locked(stream_id, request_id, action="auto-seal")
             self._open_segment_locked(stream_id, request_id)
-            return self._append_frame_locked(stream_id, wrapper, payload_bytes, request_id)
+            return self._append_frame_locked(
+                stream_id, wrapper, payload_bytes, request_id
+            )
         path = Path(active["path"])
         pre = bytes(active["bytes"])
         post = pre + intended
@@ -2202,7 +2544,10 @@ class SegmentStore:
         self._fault("after_append_intent", path)
         fd = _open_file(path)
         try:
-            if _file_identity(fd, self.capability) != active["identity"] or _read_fd(fd) != pre:
+            if (
+                _file_identity(fd, self.capability) != active["identity"]
+                or _read_fd(fd) != pre
+            ):
                 self._publish_terminal_from_intent(
                     intent, event_type="conflict", reason_code="preimage_mismatch"
                 )
@@ -2246,7 +2591,9 @@ class SegmentStore:
             if existing is not None:
                 return existing
             self._open_segment_locked(stream_id, request_id)
-            return self._append_frame_locked(stream_id, wrapper, payload_bytes, request_id)
+            return self._append_frame_locked(
+                stream_id, wrapper, payload_bytes, request_id
+            )
 
     def _seal_segment_locked(
         self,
@@ -2261,7 +2608,9 @@ class SegmentStore:
         _events, views = self._views_locked()
         view = views[stream_id]
         if view.blocked or view.active is None:
-            raise SegmentStoreConflict("segment stream is blocked or has no active segment")
+            raise SegmentStoreConflict(
+                "segment stream is blocked or has no active segment"
+            )
         active = view.active
         records = active["records"]
         if not records:
@@ -2314,7 +2663,10 @@ class SegmentStore:
         self._fault("after_seal_intent", source)
         fd = _open_file(source)
         try:
-            if _file_identity(fd, self.capability) != active["identity"] or _read_fd(fd) != prefix:
+            if (
+                _file_identity(fd, self.capability) != active["identity"]
+                or _read_fd(fd) != prefix
+            ):
                 self._publish_terminal_from_intent(
                     intent, event_type="conflict", reason_code="preimage_mismatch"
                 )
@@ -2378,7 +2730,9 @@ class SegmentStore:
             )
             if existing is not None:
                 return existing
-            return self._seal_segment_locked(stream_id, request_id, action="manual-seal")
+            return self._seal_segment_locked(
+                stream_id, request_id, action="manual-seal"
+            )
 
     def _pending_with_blob(self) -> tuple[dict[str, Any] | None, bytes | None]:
         rows = self._event_rows()
@@ -2409,7 +2763,11 @@ class SegmentStore:
 
     def _recover_open_locked(self, intent: dict[str, Any], intended: bytes) -> None:
         assert self.durability_mode is not None
-        path = self.segments_path / FIXED_STREAMS[intent["stream_id"]].directory_token / intent["source_name"]
+        path = (
+            self.segments_path
+            / FIXED_STREAMS[intent["stream_id"]].directory_token
+            / intent["source_name"]
+        )
         if not _path_lexists(path):
             fd = _open_file(path, create=True)
             try:
@@ -2425,17 +2783,27 @@ class SegmentStore:
             fd = _open_file(path)
             try:
                 data = _read_fd(fd)
-                if len(data) != intent["post_size"] or _sha(data) != intent["post_sha256"] or data != intended:
+                if (
+                    len(data) != intent["post_size"]
+                    or _sha(data) != intent["post_sha256"]
+                    or data != intended
+                ):
                     self._conflict_pending(intent, "preimage_mismatch")
                 _sync_fd(fd)
                 identity = _file_identity(fd, self.capability)
             finally:
                 os.close(fd)
             _sync_directory(path.parent, self.durability_mode)
-        self._publish_terminal_from_intent(intent, event_type="opened", file_identity=identity)
+        self._publish_terminal_from_intent(
+            intent, event_type="opened", file_identity=identity
+        )
 
     def _recover_append_locked(self, intent: dict[str, Any], intended: bytes) -> None:
-        path = self.segments_path / FIXED_STREAMS[intent["stream_id"]].directory_token / intent["source_name"]
+        path = (
+            self.segments_path
+            / FIXED_STREAMS[intent["stream_id"]].directory_token
+            / intent["source_name"]
+        )
         if not _path_lexists(path):
             self._conflict_pending(intent, "namespace_ambiguous")
         fd = _open_file(path)
@@ -2452,7 +2820,11 @@ class SegmentStore:
             if len(data) == pre_size:
                 os.lseek(fd, 0, os.SEEK_END)
                 _write_all(fd, intended)
-            elif len(data) == post_size and _sha(data) == intent["post_sha256"] and tail == intended:
+            elif (
+                len(data) == post_size
+                and _sha(data) == intent["post_sha256"]
+                and tail == intended
+            ):
                 pass
             elif _is_strict_intended_prefix(tail, intended):
                 os.ftruncate(fd, pre_size)
@@ -2495,14 +2867,19 @@ class SegmentStore:
             os.close(target_fd)
         if target_identity != expected_identity:
             self._conflict_pending(intent, "file_identity_mismatch")
-        if len(target_data) != intent["post_size"] or _sha(target_data) != intent["post_sha256"]:
+        if (
+            len(target_data) != intent["post_size"]
+            or _sha(target_data) != intent["post_sha256"]
+        ):
             self._conflict_pending(intent, "preimage_mismatch")
         _sync_directory(target.parent, self.durability_mode)
         return target_identity
 
     def _recover_seal_locked(self, intent: dict[str, Any], intended: bytes) -> None:
         assert self.durability_mode is not None
-        directory = self.segments_path / FIXED_STREAMS[intent["stream_id"]].directory_token
+        directory = (
+            self.segments_path / FIXED_STREAMS[intent["stream_id"]].directory_token
+        )
         source = directory / intent["source_name"]
         target = directory / intent["target_name"]
         source_exists = _path_lexists(source)
@@ -2520,7 +2897,11 @@ class SegmentStore:
                 data = _read_fd(fd)
             finally:
                 os.close(fd)
-            if identity != intent["file_identity"] or len(data) != intent["post_size"] or _sha(data) != intent["post_sha256"]:
+            if (
+                identity != intent["file_identity"]
+                or len(data) != intent["post_size"]
+                or _sha(data) != intent["post_sha256"]
+            ):
                 self._conflict_pending(intent, "preimage_mismatch")
             _sync_directory(directory, self.durability_mode)
             target_identity = identity
@@ -2532,13 +2913,20 @@ class SegmentStore:
                     self._conflict_pending(intent, "file_identity_mismatch")
                 data = _read_fd(fd)
                 pre_size = int(intent["pre_size"])
-                if len(data) < pre_size or _sha(data[:pre_size]) != intent["pre_sha256"]:
+                if (
+                    len(data) < pre_size
+                    or _sha(data[:pre_size]) != intent["pre_sha256"]
+                ):
                     self._conflict_pending(intent, "tail_mismatch")
                 tail = data[pre_size:]
                 if len(data) == pre_size:
                     os.lseek(fd, 0, os.SEEK_END)
                     _write_all(fd, intended)
-                elif len(data) == intent["post_size"] and _sha(data) == intent["post_sha256"] and tail == intended:
+                elif (
+                    len(data) == intent["post_size"]
+                    and _sha(data) == intent["post_sha256"]
+                    and tail == intended
+                ):
                     pass
                 elif _is_strict_intended_prefix(tail, intended):
                     os.ftruncate(fd, pre_size)
