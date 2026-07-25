@@ -201,9 +201,54 @@ def test_research_profile_methods_are_explicit_ui_actions():
     assert hasattr(MODULE.ManagedContour, "stop")
     assert callable(MODULE.ControlCenter._enqueue_manual_urgent)
     assert callable(MODULE.ControlCenter._system_snapshot)
+    assert callable(MODULE.ControlCenter._compute_pipeline_health)
     assert callable(MODULE.ControlCenter._queue_snapshot)
     assert callable(MODULE.ControlCenter._backend_snapshot)
     assert callable(MODULE.ControlCenter._learning_snapshot)
+
+
+def test_compute_health_exposes_fatal_priority_worker_without_private_identity(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", tmp_path)
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    (state / "farm_priority_worker_status.json").write_text(
+        json.dumps(
+            {
+                "stage": "worker_failed",
+                "updated_at": MODULE.time.time(),
+                "details": {"owner_id": "must-not-propagate"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (state / "worker_status.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "reason_code": "expired_alive_conflict",
+                "updated_at": "2026-07-24T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Farm:
+        running = True
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._json_status_cache = MODULE._JsonStatusCache()
+    center.contours = {"farm": Farm()}
+    center.external_contours = {}
+
+    health = center._compute_pipeline_health()
+
+    assert health["state"] == "failed"
+    assert health["hard_fail"] is True
+    assert "owner_id" not in json.dumps(health)
+    assert health["execution_allowed"] is False
 
 
 def test_learning_snapshot_explains_closed_loop_in_plain_language(monkeypatch, tmp_path):

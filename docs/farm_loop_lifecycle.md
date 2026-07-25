@@ -1,6 +1,6 @@
 # Farm Loop - Continuous Research Lifecycle
 
-Status: **ACTIVE**. Last updated: 2026-06-19. Branch: `feature/calc-farm`.
+Status: **ACTIVE**. Last updated: 2026-07-24.
 
 This is the canonical calculation-farm lifecycle. It supersedes the older
 `universe_farm_loop` and `scanner_farm_loop` operator paths. The core is
@@ -25,7 +25,12 @@ work pivots to deferred-ready work, universe discovery, or `blocked:no_eligible_
 
 The brain decides what should happen. The compute queue only executes bounded jobs. A
 `run_sweep` brain task materializes into `strategy_lab.sqlite` and links back through
-`materialized_queue_job_id`.
+`materialized_queue_job_id`. After the cross-database outbox is acknowledged, the brain
+task is parked as `deferred:materialized_awaiting_worker` with no claim and no
+`deferred_until`. It therefore remains an active dedup key but cannot expire, be
+reclaimed, or be executed a second time while the fenced compute queue owns the job.
+Only the exact acknowledged materialization ID, task fence, queue job ID, and terminal
+queue status can finish that parked task.
 
 ## Task Types And States
 
@@ -60,7 +65,13 @@ clears, for example `NEEDS_OI_DATA`.
 4. **Execute:** in apply mode, bounded prepare/enrich/sweep work runs. Successful prepare
    can re-plan into a sweep in the same cycle.
 5. **Worker:** `--run-worker` drains a bounded number of compute jobs from
-   `strategy_lab.sqlite`.
+   `strategy_lab.sqlite`. Its process ownership lease remains renewable through
+   evaluation, terminal queue publication, secondary indexes, status publication, and
+   release. The queue-job lease stops only at the serialized terminal queue transition;
+   it is never renewed after completion. Real completed candle/variant milestones make
+   progress visible. A process-lease, job-lease, identity, fence, or release failure is
+   a fail-closed priority-worker error that interrupts the foreground farm instead of
+   being reported as `worker_already_running`.
 6. **Classify:** completed runs are read from `metrics.json`, written to
    `unique_candidates`, and exported for validation when eligible.
 7. **Validation:** `--run-validation` exports candidates, runs the honest-backtest bridge
@@ -120,6 +131,20 @@ reports their size but does not rotate or truncate them:
 
 Operators should use `status` and `farm_status_report`; raw logs are audit material, not
 the normal dashboard.
+
+The candidate registry uses an immutable atomic write-ahead segment followed by one
+bounded fsynced append to the compatibility JSONL path. Normal job publication is
+therefore O(delta) and never rewrites the historical registry in the worker critical
+path. A segment is removed only after the append is durable; readers merge and
+deduplicate any segment retained by an interrupted cleanup. An in-place compact rewrite
+fails closed while retained segments exist; transactional offline compaction remains an
+explicit maintenance concern.
+
+`farm_priority_worker_status.json`, `worker_status.json`, RCC heartbeat
+`compute_pipeline`, and `operational_health` expose the same redacted compute state.
+`claim_failed` and `worker_failed` are active hard failures, not ordinary retryable
+source errors. Stale failure artifacts from a stopped farm remain evidence but do not
+impersonate a current hard failure.
 
 Safe coordinated segmentation is not implemented yet. Do not infer rotation authority
 from a normal farm `apply` cycle; it deliberately keeps storage maintenance report-only.

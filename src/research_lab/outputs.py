@@ -151,7 +151,11 @@ def publish_run_indexes(
         for r in registrable
     ]
     if entries:
-        upsert_entries(registry_path(out_root), entries)
+        upsert_entries(
+            registry_path(out_root),
+            entries,
+            append_only=True,
+        )
 
 
 def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str, Any]:

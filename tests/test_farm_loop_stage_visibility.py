@@ -12,11 +12,13 @@ import asyncio
 import threading
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.strategy_lab import farm_loop
 from src.research_lab import farm_journal
+from src.research_lab.farm_coordinator import PriorityWorkerFatalError
 
 
 def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_path) -> None:
@@ -114,6 +116,59 @@ def test_claim_failure_interrupts_even_when_status_write_fails(monkeypatch, tmp_
 
     assert stop.is_set()
     assert interrupted == [True]
+
+
+def test_compute_worker_lifecycle_failure_interrupts_foreground(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    stop = threading.Event()
+    interrupted = []
+    signal = farm_loop._TaskClaimFailureSignal(
+        tmp_path,
+        stop,
+        interrupt_main=lambda: interrupted.append(True),
+    )
+    args = SimpleNamespace(
+        stop_file="",
+        busy_slot_seconds=0.1,
+        idle_poll_seconds=0.1,
+        canonical_owner_id=None,
+        task_claim_failure_signal=signal,
+    )
+
+    class FakeTasks:
+        on_transition = None
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(farm_loop, "FarmTasksDB", lambda *_args, **_kwargs: FakeTasks())
+    monkeypatch.setattr(
+        farm_loop,
+        "_run_priority_slot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PriorityWorkerFatalError("synthetic process lease failure")
+        ),
+    )
+    monkeypatch.setattr(
+        farm_journal,
+        "make_transition_sink",
+        lambda _root: None,
+    )
+
+    farm_loop._priority_worker_loop(args, {}, {}, tmp_path, stop)
+
+    status = json.loads(
+        (tmp_path / "state" / "farm_priority_worker_status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status["stage"] == "worker_failed"
+    assert status["details"]["failure_kind"] == "compute_worker_lifecycle"
+    assert interrupted == [True]
+    with pytest.raises(RuntimeError, match="priority compute worker failed closed"):
+        signal.raise_if_failed()
 
 
 def _args(**over) -> Namespace:
