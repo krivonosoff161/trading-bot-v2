@@ -933,9 +933,19 @@ def learn_known_bad(memory: list[dict[str, Any]], *, min_n: int = 3) -> set[tupl
     # is a missed WIN (price ran the right way) - neither marks the setup known-bad.
     bad_diag = {"wrong_direction", "no_follow_through", "valid_loss"}
     for m in memory:
-        key = (m.get("symbol"), m.get("timeframe"), m.get("family"))
-        if None in key:
+        symbol = m.get("symbol")
+        timeframe = m.get("timeframe")
+        family = m.get("family")
+        if (
+            not isinstance(symbol, str)
+            or not symbol
+            or not isinstance(timeframe, str)
+            or not timeframe
+            or not isinstance(family, str)
+            or not family
+        ):
             continue
+        key = (symbol, timeframe, family)
         is_bad = (m.get("diagnosis") in bad_diag) or (
             m.get("result") == "stop" and m.get("diagnosis") not in ("stop_too_tight", "bad_exit_gave_back"))
         agg.setdefault(key, []).append("bad" if is_bad else "good")
@@ -996,6 +1006,7 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
              apply: bool = True, lock_file: str | Path | None = None,
              pfr_db_path: Path | None = None, pfr_quality_policy: dict | None = None,
              max_pfr_scan: int = 30,
+             max_pfr_fetches: int | None = 12,
              pfr_reserved_new: int = 0,
              max_observe: int | None = None) -> list[dict]:
     private_root = Path(private_root)
@@ -1019,6 +1030,7 @@ def run_loop(private_root: Path, *, cycles: int, sleep_seconds: int = 0, stop_fi
                                      pfr_db_path=pfr_db_path,
                                      pfr_quality_policy=pfr_quality_policy,
                                      max_pfr_scan=max_pfr_scan,
+                                     max_pfr_fetches=max_pfr_fetches,
                                      pfr_reserved_new=pfr_reserved_new,
                                      max_observe=max_observe))
             lock_path.write_text(str(time.time()), encoding="utf-8")
