@@ -38,6 +38,60 @@ PROFILES = load_timeframe_profiles()
 POLICY = load_resource_policy()
 
 
+def _bind_current_training_rows(rows):
+    items = []
+    subject_ids = []
+    for index, row in enumerate(rows):
+        signal_id = f"signal-v2-{index}"
+        subject_id = f"subject-v2-{index}"
+        terminal_id = f"terminal-v2-{index}"
+        row.update(
+            {
+                "paper_only": True,
+                "execution_allowed": False,
+                "immutable_terminal_evidence": True,
+                "paper_generation_run_id": "run-v2",
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+                "account_generation_id": "account-v2",
+                "signal_id": signal_id,
+            }
+        )
+        subject_ids.append(subject_id)
+        items.append(
+            {
+                "source_signal_id": signal_id,
+                "paper_generation_run_id": "run-v2",
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+                "account_generation_id": "account-v2",
+                "paper_account_decision": "position_closed",
+                "okx_inst_id": row.get("okx_inst_id") or row.get("symbol"),
+                "timeframe": row.get("timeframe"),
+                "setup_family": row.get("family"),
+                "side": row.get("side") or "long",
+                "boundary_ts": row.get("boundary_ts") or 100,
+                "farm_geometry_profile_id": row.get("farm_geometry_profile_id")
+                or "",
+                "outcome": {"net_pct": row.get("net_pct")},
+                "paper_account": {"pnl_usdt": row.get("paper_pnl_usdt")},
+            }
+        )
+        row.setdefault("side", "long")
+        row.setdefault("boundary_ts", 100)
+    return {
+        "current": True,
+        "display_only": False,
+        "generation_status": "completed",
+        "paper_only": True,
+        "execution_allowed": False,
+        "paper_generation_run_id": "run-v2",
+        "account_generation_id": "account-v2",
+        "paper_subject_generation_ids": subject_ids,
+        "items": items,
+    }
+
+
 def _usable_state(*, fingerprint="fp1"):
     def _fn(_s, _t):
         return {"status": "usable", "rows": 200, "fingerprint": fingerprint,
@@ -352,8 +406,44 @@ class TestBuildMemoryIndex:
         assert r["outcome_class"] != "POSITIVE_VALIDATED"   # canonical class unchanged
         assert summarize_memory([r])["paper_ready_without_hard_pass"] == 0
 
-    def test_attaches_product_training_money_without_promoting(self, tmp_path):
+    def test_attaches_product_training_money_without_promoting(
+        self, tmp_path, monkeypatch
+    ):
         import json
+        from src.research_lab import setup_outcome_memory
+
+        training_rows = [
+            {
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "setup_candidate_id": "candidate_1",
+                "candidate_id": "candidate_1",
+                "symbol": "X",
+                "timeframe": "1h",
+                "family": "momentum_breakout",
+                "paper_pnl_usdt": -1.5,
+                "net_pct": -1.0,
+                "diagnosis": "bad_exit_gave_back",
+                "outcome_learning_bucket": "gave_back",
+                "outcome_learning_actionability": "retest_exit_or_capture",
+            },
+            {
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "setup_candidate_id": "candidate_1",
+                "candidate_id": "candidate_1",
+                "symbol": "X",
+                "timeframe": "1h",
+                "family": "momentum_breakout",
+                "paper_pnl_usdt": 0.6,
+                "net_pct": 0.4,
+                "outcome_learning_bucket": "win",
+            },
+        ]
+        current_projection = _bind_current_training_rows(training_rows)
+        monkeypatch.setattr(
+            setup_outcome_memory,
+            "read_projection_view",
+            lambda *_args, **_kwargs: current_projection,
+        )
         db = FarmTasksDB(tasks_db_path(tmp_path))
         uc = "X::1h::momentum_breakout::ph::fp"
         db.upsert_unique_candidate({
@@ -367,32 +457,7 @@ class TestBuildMemoryIndex:
         (derived / "paper_signal_training.jsonl").write_text(
             "\n".join(
                 json.dumps(row, sort_keys=True)
-                for row in [
-                    {
-                        "lifecycle_schema": "PaperSignalLifecycle.v2",
-                        "setup_candidate_id": "candidate_1",
-                        "candidate_id": "candidate_1",
-                        "symbol": "X",
-                        "timeframe": "1h",
-                        "family": "momentum_breakout",
-                        "paper_pnl_usdt": -1.5,
-                        "net_pct": -1.0,
-                        "diagnosis": "bad_exit_gave_back",
-                        "outcome_learning_bucket": "gave_back",
-                        "outcome_learning_actionability": "retest_exit_or_capture",
-                    },
-                    {
-                        "lifecycle_schema": "PaperSignalLifecycle.v2",
-                        "setup_candidate_id": "candidate_1",
-                        "candidate_id": "candidate_1",
-                        "symbol": "X",
-                        "timeframe": "1h",
-                        "family": "momentum_breakout",
-                        "paper_pnl_usdt": 0.6,
-                        "net_pct": 0.4,
-                        "outcome_learning_bucket": "win",
-                    },
-                ]
+                for row in training_rows
             )
             + "\n",
             encoding="utf-8",
@@ -444,35 +509,46 @@ class TestBuildMemoryIndex:
         assert summary["outcome_retest_records"] == 1
         assert summary["outcome_retest_by_verdict"] == {"improved_directional": 1}
 
-    def test_summarizes_product_training_memory_separately(self, tmp_path):
+    def test_summarizes_product_training_memory_separately(
+        self, tmp_path, monkeypatch
+    ):
         import json
+        from src.research_lab import setup_outcome_memory
+
+        training_rows = [
+            {
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "symbol": "X-USDT-SWAP",
+                "timeframe": "15m",
+                "family": "early_tp_tactical",
+                "farm_geometry_profile_id": "base",
+                "paper_pnl_usdt": 1.2,
+                "net_pct": 1.0,
+                "outcome_learning_bucket": "win",
+            },
+            {
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "okx_inst_id": "X-USDT-SWAP",
+                "timeframe": "15m",
+                "family": "early_tp_tactical",
+                "farm_geometry_profile_id": "faster_capture",
+                "paper_pnl_usdt": -0.3,
+                "net_pct": -0.25,
+                "diagnosis": "bad_exit_gave_back",
+            },
+        ]
+        current_projection = _bind_current_training_rows(training_rows)
+        monkeypatch.setattr(
+            setup_outcome_memory,
+            "read_projection_view",
+            lambda *_args, **_kwargs: current_projection,
+        )
         derived = tmp_path / "state" / "derived"
         derived.mkdir(parents=True, exist_ok=True)
         (derived / "paper_signal_training.jsonl").write_text(
             "\n".join(
                 json.dumps(row, sort_keys=True)
-                for row in [
-                    {
-                        "lifecycle_schema": "PaperSignalLifecycle.v2",
-                        "symbol": "X-USDT-SWAP",
-                        "timeframe": "15m",
-                        "family": "early_tp_tactical",
-                        "farm_geometry_profile_id": "base",
-                        "paper_pnl_usdt": 1.2,
-                        "net_pct": 1.0,
-                        "outcome_learning_bucket": "win",
-                    },
-                    {
-                        "lifecycle_schema": "PaperSignalLifecycle.v2",
-                        "okx_inst_id": "X-USDT-SWAP",
-                        "timeframe": "15m",
-                        "family": "early_tp_tactical",
-                        "farm_geometry_profile_id": "faster_capture",
-                        "paper_pnl_usdt": -0.3,
-                        "net_pct": -0.25,
-                        "diagnosis": "bad_exit_gave_back",
-                    },
-                ]
+                for row in training_rows
             )
             + "\n",
             encoding="utf-8",
@@ -488,9 +564,45 @@ class TestBuildMemoryIndex:
         assert summary["geometry_profile_cells"] == 2
         assert summary["by_geometry_profile"]["base"]["win_rows"] == 1
         assert summary["by_geometry_profile"]["faster_capture"]["loss_rows"] == 1
+        assert summary["eligible_rows"] == 2
+        assert summary["excluded_rows"] == 0
+        assert summary["current_generation_compatible"] is True
         assert summary["by_geometry_profile_cell"]["X_USDT_SWAP|15m|early_tp_tactical|faster_capture"][
             "gave_back_rows"
         ] == 1
+
+    def test_product_training_memory_rejects_unversioned_file_authority(
+        self, tmp_path
+    ):
+        import json
+
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True, exist_ok=True)
+        (derived / "paper_signal_training.jsonl").write_text(
+            json.dumps(
+                {
+                    "lifecycle_schema": "PaperSignalLifecycle.v2",
+                    "symbol": "X-USDT-SWAP",
+                    "timeframe": "15m",
+                    "family": "early_tp_tactical",
+                    "farm_geometry_profile_id": "base",
+                    "paper_pnl_usdt": 1.2,
+                    "net_pct": 1.0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        summary = summarize_product_training_memory(tmp_path)
+
+        assert summary["source_rows"] == 1
+        assert summary["eligible_rows"] == 0
+        assert summary["summary"]["terminal_rows"] == 0
+        assert summary["display_only"] is True
+        assert summary["evidence_rejection_counts"] == {
+            "generation_not_current_or_complete": 1
+        }
 
 
 class TestCoordinatorGateUsedNextCycle:

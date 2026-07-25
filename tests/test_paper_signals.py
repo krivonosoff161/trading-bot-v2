@@ -598,7 +598,17 @@ class TestLearning:
         from src.research_lab.paper_signals import cycle
 
         product_memory = {
+            "paper_generation_run_id": "run-v2",
+            "account_generation_id": "account-v2",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
             "calibration": {
+                "paper_generation_run_id": "run-v2",
+                "account_generation_id": "account-v2",
+                "generation_status": "completed",
+                "current_generation_compatible": True,
+                "display_only": False,
                 "by_profile": {"runner_probe": {"verdict": "demote"}},
             }
         }
@@ -607,6 +617,84 @@ class TestLearning:
             [], product_memory, symbol="X", timeframe="1h", family="continuation")
 
         assert profiles == ["base"]
+
+    def test_stale_global_calibration_cannot_demote_a_profile(self):
+        from src.research_lab.paper_signals import cycle
+
+        product_memory = {
+            "paper_generation_run_id": "run-v2",
+            "account_generation_id": "account-v2",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+            "calibration": {
+                "paper_generation_run_id": "old-run",
+                "account_generation_id": "old-account",
+                "generation_status": "completed",
+                "current_generation_compatible": True,
+                "display_only": False,
+                "by_profile": {"runner_probe": {"verdict": "demote"}},
+            },
+        }
+
+        profiles = cycle.geometry_profiles_for_cell(
+            [],
+            product_memory,
+            symbol="X",
+            timeframe="1h",
+            family="continuation",
+        )
+
+        assert profiles == ["base", "runner_probe"]
+
+    def test_product_memory_recomputes_calibration_instead_of_trusting_json(
+        self, tmp_path, monkeypatch
+    ):
+        import json
+
+        from src.research_lab import (
+            setup_outcome_memory,
+            trading_policy_calibration,
+        )
+        from src.research_lab.paper_signals import cycle
+
+        current = {
+            "paper_generation_run_id": "run-v2",
+            "account_generation_id": "account-v2",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+        }
+        monkeypatch.setattr(
+            setup_outcome_memory,
+            "summarize_product_training_memory",
+            lambda _root: dict(current),
+        )
+        monkeypatch.setattr(
+            trading_policy_calibration,
+            "summarize_trading_policy_calibration",
+            lambda _root: {
+                **current,
+                "by_profile": {"runner_probe": {"verdict": "retain_probe"}},
+            },
+        )
+        derived = tmp_path / "state" / "derived"
+        derived.mkdir(parents=True)
+        (derived / "trading_policy_calibration.json").write_text(
+            json.dumps(
+                {
+                    **current,
+                    "by_profile": {"runner_probe": {"verdict": "demote"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        memory = cycle.load_product_memory(tmp_path)
+
+        assert memory["calibration"]["by_profile"]["runner_probe"]["verdict"] == (
+            "retain_probe"
+        )
 
     def test_product_memory_overrides_legacy_runner_on_losing_cell(self):
         from src.research_lab.paper_signals import cycle

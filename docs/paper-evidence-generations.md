@@ -77,6 +77,15 @@ Rows used for learning or adaptation must bind the exact terminal lifecycle
 event, paper subject generation, paper generation run, and account generation.
 A mutable runtime ID is not sufficient authority.
 
+`trading_policy_calibration` and the adaptive product-memory summary use the
+same fail-closed row selector. It accepts only numeric terminal account results
+whose run, subject and account IDs match the current completed projection.
+Legacy files, stale generation reports, display-only projections and rows that
+carry only a lifecycle-schema label remain visible as excluded counts; they
+cannot demote, promote or rerank a geometry profile.
+The paper cycle recomputes its calibration view from that selector; it does not
+grant authority to a previously written calibration JSON file.
+
 ## Activation, Migration, And Rollback
 
 No supported launcher currently activates v2, and this package performs no

@@ -14,10 +14,14 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.paper_projection_reader import read_projection_view
+from src.research_lab.paper_projection_reader import (
+    TRUSTED_TRAINING_LIFECYCLE_SCHEMA,
+    read_projection_view,
+    select_current_terminal_training_rows,
+)
 
 SCHEMA = "trading_policy_calibration.v1"
-TRUSTED_LIFECYCLE_SCHEMA = "PaperSignalLifecycle.v2"
+TRUSTED_LIFECYCLE_SCHEMA = TRUSTED_TRAINING_LIFECYCLE_SCHEMA
 MIN_PROFILE_SAMPLE = 20
 MIN_CELL_SAMPLE = 12
 REQUIRED_ACCEPTANCE_SYMBOLS = ("KAITO_USDT_SWAP",)
@@ -197,12 +201,12 @@ def _acceptance_cases(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def build_trading_policy_calibration(
+def summarize_trading_policy_calibration(
     private_root: Path,
     *,
     evidence_database_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Write an aggregate, private calibration view over trusted outcomes."""
+    """Build a pure aggregate calibration view over trusted outcomes."""
     private_root = Path(private_root)
     derived = private_root / "state" / "derived"
     source = derived / "paper_signal_training.jsonl"
@@ -213,23 +217,12 @@ def build_trading_policy_calibration(
         legacy_snapshot=derived / "main_paper_trades.json",
         evidence_database_path=evidence_database_path,
     )
-    run_id = str(generation.get("paper_generation_run_id") or "")
-    trusted = [
-        row
-        for row in rows
-        if generation.get("current")
-        and row.get("paper_only") is True
-        and row.get("execution_allowed") is False
-        and str(row.get("lifecycle_schema") or "") == TRUSTED_LIFECYCLE_SCHEMA
-        and row.get("immutable_terminal_evidence") is True
-        and row.get("paper_generation_run_id") == run_id
-        and bool(row.get("terminal_lifecycle_event_id"))
-        and bool(row.get("account_generation_id"))
-        and _float(row.get("net_pct")) is not None
-    ]
+    evidence_selection = select_current_terminal_training_rows(rows, generation)
+    run_id = str(evidence_selection.get("paper_generation_run_id") or "")
+    trusted = list(evidence_selection["items"])
     for row in trusted:
         row["_calibration_horizon"] = _horizon(row.get("timeframe"))
-    legacy = len(rows) - len(trusted)
+    excluded = len(rows) - len(trusted)
     by_profile = _summaries(
         trusted, ("farm_geometry_profile_id",), min_sample=MIN_PROFILE_SAMPLE
     )
@@ -256,7 +249,9 @@ def build_trading_policy_calibration(
         "trusted_lifecycle_schema": TRUSTED_LIFECYCLE_SCHEMA,
         "source_rows": len(rows),
         "trusted_terminal_rows": len(trusted),
-        "legacy_rows_excluded": legacy,
+        "legacy_rows_excluded": excluded,
+        "excluded_training_rows": excluded,
+        "evidence_rejection_counts": evidence_selection["rejection_counts"],
         "calibration_ready": len(trusted) >= MIN_PROFILE_SAMPLE,
         "minimum_profile_sample": MIN_PROFILE_SAMPLE,
         "minimum_cell_sample": MIN_CELL_SAMPLE,
@@ -269,7 +264,9 @@ def build_trading_policy_calibration(
         "shared_account_primary": _account_primary(
             private_root,
             trusted,
-            current_generation=bool(generation.get("current")),
+            current_generation=bool(
+                evidence_selection.get("current_generation_compatible")
+            ),
         ),
         "acceptance_cases": _acceptance_cases(trusted),
         "profile_verdicts": dict(sorted(verdicts.items())),
@@ -279,12 +276,33 @@ def build_trading_policy_calibration(
         "source_path": str(source),
         "snapshot_path": str(derived / "trading_policy_calibration.json"),
         "paper_generation_run_id": run_id,
-        "generation_status": str(generation.get("generation_status") or ""),
-        "current_generation_compatible": bool(generation.get("current")),
-        "display_only": not bool(generation.get("current")),
+        "account_generation_id": str(
+            evidence_selection.get("account_generation_id") or ""
+        ),
+        "generation_status": str(
+            evidence_selection.get("generation_status") or ""
+        ),
+        "current_generation_compatible": bool(
+            evidence_selection.get("current_generation_compatible")
+        ),
+        "display_only": bool(evidence_selection.get("display_only", True)),
     }
-    derived.mkdir(parents=True, exist_ok=True)
-    (derived / "trading_policy_calibration.json").write_text(
+    return summary
+
+
+def build_trading_policy_calibration(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Write the rebuildable calibration projection after recomputing evidence."""
+    summary = summarize_trading_policy_calibration(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    snapshot_path = Path(summary["snapshot_path"])
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -292,7 +310,16 @@ def build_trading_policy_calibration(
 
 
 def profile_verdict(calibration: dict[str, Any] | None, profile_id: str) -> str:
-    by_profile = (calibration or {}).get("by_profile")
+    payload = calibration or {}
+    if (
+        payload.get("current_generation_compatible") is not True
+        or payload.get("display_only") is not False
+        or str(payload.get("generation_status") or "") != "completed"
+        or not str(payload.get("paper_generation_run_id") or "")
+        or not str(payload.get("account_generation_id") or "")
+    ):
+        return "insufficient_evidence"
+    by_profile = payload.get("by_profile")
     if not isinstance(by_profile, dict):
         return "insufficient_evidence"
     row = by_profile.get(str(profile_id or ""))

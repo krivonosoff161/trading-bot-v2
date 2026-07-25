@@ -154,16 +154,49 @@ def load_product_memory(private_root: Path) -> dict[str, Any]:
     """Broad paper-product memory for search ranking; best-effort and read-only."""
     try:
         from src.research_lab.setup_outcome_memory import summarize_product_training_memory
+        from src.research_lab.trading_policy_calibration import (
+            summarize_trading_policy_calibration,
+        )
+
         memory = summarize_product_training_memory(Path(private_root))
-        calibration_path = Path(private_root) / "state" / "derived" / "trading_policy_calibration.json"
-        try:
-            calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            calibration = {}
-        memory["calibration"] = calibration if isinstance(calibration, dict) else {}
+        calibration = summarize_trading_policy_calibration(Path(private_root))
+        memory["calibration"] = _current_calibration_for_memory(
+            memory,
+            calibration,
+        )
         return memory
     except Exception:  # noqa: BLE001 - search memory must never break the paper loop
         return {}
+
+
+def _current_calibration_for_memory(
+    product_memory: dict[str, Any] | None,
+    calibration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    memory = product_memory if isinstance(product_memory, dict) else {}
+    candidate = (
+        calibration
+        if isinstance(calibration, dict)
+        else memory.get("calibration")
+    )
+    if not isinstance(candidate, dict):
+        return {}
+    memory_run_id = str(memory.get("paper_generation_run_id") or "")
+    memory_account_id = str(memory.get("account_generation_id") or "")
+    if (
+        memory.get("current_generation_compatible") is not True
+        or memory.get("display_only") is not False
+        or str(memory.get("generation_status") or "") != "completed"
+        or not memory_run_id
+        or not memory_account_id
+        or candidate.get("current_generation_compatible") is not True
+        or candidate.get("display_only") is not False
+        or str(candidate.get("generation_status") or "") != "completed"
+        or str(candidate.get("paper_generation_run_id") or "") != memory_run_id
+        or str(candidate.get("account_generation_id") or "") != memory_account_id
+    ):
+        return {}
+    return candidate
 
 
 def _fetch(provider, symbol: str, tf: str, now_ms: int) -> list[dict[str, Any]]:
@@ -516,7 +549,10 @@ def geometry_profiles_for_cell(
     if selected != "base":
         from src.research_lab.trading_policy_calibration import profile_verdict
 
-        calibration_verdict = profile_verdict((product_memory or {}).get("calibration"), selected)
+        calibration_verdict = profile_verdict(
+            _current_calibration_for_memory(product_memory),
+            selected,
+        )
         if calibration_verdict == "demote":
             selected = "base"
         profile_stats = _product_profile_cell_stats(product_memory, symbol, timeframe, family, selected)
