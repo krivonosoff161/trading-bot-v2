@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +52,14 @@ def enrich(symbol: str, timeframe: str, private_root: Path, *, apply: bool) -> d
               "file": path.name}
     if apply:
         path.write_text(json.dumps(enriched, ensure_ascii=False), encoding="utf-8")
-        sync_json_to_store(private_root, symbol, timeframe, path, source="funding_enrichment")
+        sync_json_to_store(
+            private_root,
+            symbol,
+            timeframe,
+            path,
+            source="funding_enrichment",
+            available_at_ms=time.time_ns() // 1_000_000,
+        )
     return result
 
 

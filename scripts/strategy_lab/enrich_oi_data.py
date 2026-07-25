@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +50,14 @@ def enrich(symbol: str, timeframe: str, private_root: Path, *, apply: bool) -> d
               "source": series["source"], "coverage": cov, "file": path.name}
     if apply:
         path.write_text(json.dumps(enriched, ensure_ascii=False), encoding="utf-8")
-        sync_json_to_store(private_root, symbol, timeframe, path, source="oi_enrichment")
+        sync_json_to_store(
+            private_root,
+            symbol,
+            timeframe,
+            path,
+            source="oi_enrichment",
+            available_at_ms=time.time_ns() // 1_000_000,
+        )
         # confirm the loader carries the field through to the feature layer
         result["loaded_with_oi"] = any(c.get("oi") is not None for c in load_candles(path))
     return result
