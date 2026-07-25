@@ -19,6 +19,20 @@ INCREMENTAL_PAPER_MODEL_ID = "incremental_paper_ohlc_lane.v1"
 KNOWN_MODEL_IDS = {LEGACY_MODEL_ID, SCENARIO_MODEL_ID, INCREMENTAL_PAPER_MODEL_ID}
 
 
+def _finite_float(value: Any, field: str, *, positive: bool = False) -> float:
+    """Parse numeric contract evidence without leaking the rejected value."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be numeric and finite")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be numeric and finite") from None
+    if not math.isfinite(parsed) or (positive and parsed <= 0):
+        qualifier = "positive and finite" if positive else "numeric and finite"
+        raise ValueError(f"{field} must be {qualifier}")
+    return parsed
+
+
 def _identity_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in manifest.items() if k != "manifest_id"}
 
@@ -152,11 +166,28 @@ def resolve_ohlc_exit(
     side = str(side).lower()
     if side not in {"long", "short"}:
         raise ValueError("side must be long or short")
-    open_price = float(bar["open"])
-    high, low = float(bar["high"]), float(bar["low"])
+    entry_value = _finite_float(entry_price, "entry price", positive=True)
+    open_price = _finite_float(bar.get("open"), "bar open", positive=True)
+    high = _finite_float(bar.get("high"), "bar high", positive=True)
+    low = _finite_float(bar.get("low"), "bar low", positive=True)
+    if not low <= open_price <= high:
+        raise ValueError("bar OHLC bounds are inconsistent")
+    stop_value = (
+        _finite_float(stop_price, "stop price", positive=True)
+        if stop_price is not None
+        else None
+    )
+    take_value = (
+        _finite_float(take_price, "take price", positive=True)
+        if take_price is not None
+        else None
+    )
     adverse_gap = (
-        stop_price is not None
-        and ((side == "long" and open_price <= stop_price) or (side == "short" and open_price >= stop_price))
+        stop_value is not None
+        and (
+            (side == "long" and open_price <= stop_value)
+            or (side == "short" and open_price >= stop_value)
+        )
     )
     if adverse_gap:
         return {
@@ -165,15 +196,23 @@ def resolve_ohlc_exit(
             "scenarios": [],
             "return_bounds_pct": None,
         }
-    stop_hit = stop_price is not None and (low <= stop_price if side == "long" else high >= stop_price)
-    take_hit = take_price is not None and (high >= take_price if side == "long" else low <= take_price)
+    stop_hit = stop_value is not None and (
+        low <= stop_value if side == "long" else high >= stop_value
+    )
+    take_hit = take_value is not None and (
+        high >= take_value if side == "long" else low <= take_value
+    )
     if stop_hit and take_hit:
+        assert stop_value is not None and take_value is not None
         direction = 1.0 if side == "long" else -1.0
         scenarios = [
-            {"outcome": "stop", "price": float(stop_price)},
-            {"outcome": "take", "price": float(take_price)},
+            {"outcome": "stop", "price": stop_value},
+            {"outcome": "take", "price": take_value},
         ]
-        returns = [direction * (item["price"] / entry_price - 1.0) * 100.0 for item in scenarios]
+        returns = [
+            direction * (price / entry_value - 1.0) * 100.0
+            for price in (stop_value, take_value)
+        ]
         return {
             "status": "ambiguous_intrabar_order",
             "selected": None,
@@ -181,9 +220,9 @@ def resolve_ohlc_exit(
             "return_bounds_pct": [round(min(returns), 10), round(max(returns), 10)],
         }
     if stop_hit:
-        selected = {"outcome": "stop", "price": float(stop_price)}
+        selected = {"outcome": "stop", "price": stop_value}
     elif take_hit:
-        selected = {"outcome": "take", "price": float(take_price)}
+        selected = {"outcome": "take", "price": take_value}
     else:
         selected = None
     return {"status": "resolved_single_event" if selected else "open", "selected": selected,
@@ -439,7 +478,7 @@ def validate_trade_contract(
         and abs(float(trade["gross_pct"]) - gross_return) > 1e-3
     ):
         raise ValueError("trade declared gross return does not reconcile")
-    net_return = float(trade.get("net_pct"))
+    net_return = _finite_float(trade.get("net_pct"), "trade net return")
     if not math.isfinite(net_return) or abs((gross_return - total_cost) - net_return) > 1e-3:
         raise ValueError("trade net return does not reconcile to gross return and costs")
 

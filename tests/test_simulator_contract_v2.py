@@ -97,6 +97,29 @@ def test_dual_touch_is_an_explicit_scenario_not_observed_order() -> None:
     assert result["return_bounds_pct"] == [-1.0, 1.0]
 
 
+@pytest.mark.parametrize(
+    ("entry_price", "bar", "message"),
+    [
+        (0.0, _bar(2, 100.0, 101.0, 99.0, 100.0), "entry price"),
+        (100.0, _bar(2, 100.0, float("nan"), 99.0, 100.0), "bar high"),
+        (100.0, _bar(2, 100.0, 99.0, 101.0, 100.0), "OHLC bounds"),
+    ],
+)
+def test_ohlc_exit_rejects_invalid_numeric_evidence(
+    entry_price: float,
+    bar: dict,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        resolve_ohlc_exit(
+            "long",
+            entry_price=entry_price,
+            bar=bar,
+            stop_price=99.0,
+            take_price=101.0,
+        )
+
+
 def test_maker_touch_does_not_invent_order_or_quantity() -> None:
     impossible = maker_fill(requested_quantity=5.0, available_quantity=5.0, touch_order="exit_before_entry")
     assert impossible["status"] == "not_attainable_from_declared_order"
@@ -190,6 +213,23 @@ def test_trade_contract_binds_cost_ledger_to_net_return() -> None:
     forged["cost_ledger"] = build_cost_ledger()
     with pytest.raises(ValueError, match="net return"):
         validate_trade_contract(forged, manifest)
+
+
+@pytest.mark.parametrize("invalid_net", [None, "not-a-number", float("nan"), True])
+def test_trade_contract_rejects_missing_or_non_finite_net_return(invalid_net) -> None:
+    candles = [_bar(1, 100, 100, 100, 100), _bar(2, 100, 100, 100, 100)]
+    trade = simulate_trades(
+        candles,
+        [{"idx": 0, "side": "long", "reason": "fixture"}],
+        {"hold_bars": 1, "stop_pct": 10, "take_pct": 10},
+        fees_bps=0,
+        slippage_bps=0,
+    )[0]
+    manifest = trade["simulator_manifest"]
+    trade["net_pct"] = invalid_net
+
+    with pytest.raises(ValueError, match="trade net return"):
+        validate_trade_contract(trade, manifest)
 
 
 def test_trade_contract_rejects_claim_amplified_ledgers() -> None:
