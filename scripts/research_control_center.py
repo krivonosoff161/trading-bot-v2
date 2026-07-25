@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
 from typing import Callable
 
+from src.research_lab.compute_pipeline_health import assess_compute_pipeline
+
 if os.name == "nt":
     import msvcrt
 else:  # pragma: no cover - exercised by the Linux CI import path
@@ -953,6 +955,11 @@ class ControlCenter(tk.Tk):
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 base = f"первый цикл · PID {pid}"
             if key == "paper_cards":
+                compute = self._compute_pipeline_health()
+                base += (
+                    f" · compute {compute['state']}"
+                    f" ({compute['reason']})"
+                )
                 delivery_path = PRIVATE_ROOT / "state" / "derived" / "paper_telegram_delivery.json"
                 try:
                     delivery = self._read_cached_json(delivery_path)
@@ -969,6 +976,39 @@ class ControlCenter(tk.Tk):
         if key == "dashboard":
             return f"готов · http://127.0.0.1:8765 · PID {pid}" if self._port_open(8765) else f"запускается · PID {pid}"
         return f"работает · PID {pid}"
+
+    def _compute_pipeline_health(self) -> dict:
+        priority = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "farm_priority_worker_status.json"
+        )
+        worker = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "worker_status.json"
+        )
+        farm_item = self.contours.get("farm")
+        farm_running = bool(farm_item and farm_item.running)
+        owned_started_at = getattr(farm_item, "started_at", None)
+        farm_started_at = (
+            float(owned_started_at)
+            if isinstance(owned_started_at, (int, float))
+            else None
+        )
+        if not farm_running:
+            descriptor = self._external_descriptor("farm")
+            farm_running = descriptor is not None
+            external_started_at = (
+                descriptor.get("started_at") if descriptor else None
+            )
+            farm_started_at = (
+                float(external_started_at)
+                if isinstance(external_started_at, (int, float))
+                else None
+            )
+        return assess_compute_pipeline(
+            priority_status=priority,
+            worker_status=worker,
+            farm_running=farm_running,
+            farm_started_at=farm_started_at,
+        )
 
     @staticmethod
     def _port_open(port: int) -> bool:
@@ -1339,6 +1379,7 @@ class ControlCenter(tk.Tk):
             "pid": os.getpid(),
             "paper_only": True,
             "execution_allowed": False,
+            "compute_pipeline": self._compute_pipeline_health(),
             "contours": contour_rows,
         }
         target = STATE_DIR / "heartbeat.json"

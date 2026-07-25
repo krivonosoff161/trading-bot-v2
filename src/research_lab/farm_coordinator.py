@@ -67,6 +67,10 @@ _COUNTER_KEYS = (
 )
 
 
+class PriorityWorkerFatalError(RuntimeError):
+    """A compute-worker lifecycle failure that the farm must not retry."""
+
+
 def _replay_materialization_outbox(tasks: FarmTasksDB, conn, *, now: float) -> int:
     """Idempotently finish intents that survived a spec/queue interruption."""
     delivered = 0
@@ -948,31 +952,34 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
             if created:
                 _bump(counters, "sweeps_materialized")
             else:
-                # A content-identical existing compute row is still linked through
-                # this task fence's durable intent. Only an already-terminal queue
-                # row makes the brain task terminal here; queued/running rows stay
-                # linked for fenced completion sync.
-                existing = conn.execute(
-                    "SELECT status, run_dir_label FROM queue WHERE job_id=?",
-                    (int(job_id),),
-                ).fetchone()
-                if existing is not None and existing["status"] == "completed":
-                    tasks.complete_task(
-                        task["task_id"], reason="compute_deduped",
-                        materialized_queue_job_id=job_id,
-                        last_result_ref=existing["run_dir_label"],
-                        run_dir_label=existing["run_dir_label"],
-                        now=now,
-                    )
-                elif existing is not None and existing["status"] == "failed":
-                    tasks.fail_task(task["task_id"], "compute_failed", now=now)
+                # A content-identical queue row is still linked through this
+                # task fence's acknowledged intent.  Even when that queue row
+                # is already terminal, `_sync_completions` performs the exact
+                # generation check and enqueues classification idempotently.
                 _bump(counters, "sweeps_deduped")
 
 
 def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
-    for task in tasks.tasks_in_state("running", task_type="run_sweep"):
+    waiting = [
+        task
+        for task in tasks.tasks_in_state("deferred", task_type="run_sweep")
+        if task.get("machine_reason") == "materialized_awaiting_worker"
+    ]
+    # Compatibility for rows created before the parked-materialization
+    # lifecycle.  They remain fenced and require their original live claim.
+    waiting.extend(
+        task
+        for task in tasks.tasks_in_state("running", task_type="run_sweep")
+        if task.get("machine_reason") == "materialized_awaiting_worker"
+    )
+    for task in waiting:
+        parked = task.get("state") == "deferred"
         job_id = task.get("materialized_queue_job_id")
         if not job_id:
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization is missing its compute job binding"
+                )
             continue
         intent = tasks.raw_connection.execute(
             """SELECT materialization_id, task_fencing_token, spec_path, spec_digest
@@ -982,6 +989,10 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
             (int(task["task_id"]), int(job_id)),
         ).fetchone()
         if intent is None or int(intent["task_fencing_token"]) != int(task["fencing_token"]):
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization lost its acknowledged fence binding"
+                )
             continue
         row = conn.execute(
             """SELECT q.status, q.run_dir_label, q.spec_path,
@@ -993,28 +1004,70 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
             (int(job_id), str(intent["materialization_id"])),
         ).fetchone()
         if row is None:
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization is missing its exact compute row"
+                )
             continue
         spec_path = Path(str(row["spec_path"]))
         if not spec_path.exists():
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization spec is unavailable"
+                )
             continue
         payload = spec_path.read_text(encoding="utf-8")
         digest = "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
         if digest != str(intent["spec_digest"]):
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization spec digest changed"
+                )
             continue
         if (
             str(row["materialization_id"]) != str(intent["materialization_id"])
             or str(row["spec_digest"]) != str(intent["spec_digest"])
             or str(row["queue_digest"] or "") != str(intent["spec_digest"])
         ):
+            if parked:
+                raise PriorityWorkerFatalError(
+                    "parked materialization queue binding changed"
+                )
             continue
-        try:
-            tasks.renew_task_claim(task["task_id"], now=now)
-        except StaleTaskClaimError:
-            continue
+        legacy_claimed = task.get("state") == "running"
+        if legacy_claimed:
+            try:
+                tasks.renew_task_claim(task["task_id"], now=now)
+            except StaleTaskClaimError:
+                continue
         if row["status"] == "completed":
             label = row["run_dir_label"]
-            tasks.complete_task(task["task_id"], last_result_ref=label, run_dir_label=label,
-                                materialized_queue_job_id=int(job_id), reason="compute_completed", now=now)
+            try:
+                if legacy_claimed:
+                    tasks.complete_task(
+                        task["task_id"],
+                        last_result_ref=label,
+                        run_dir_label=label,
+                        materialized_queue_job_id=int(job_id),
+                        reason="compute_completed",
+                        now=now,
+                    )
+                else:
+                    tasks.finish_materialized_task(
+                        task["task_id"],
+                        materialization_id=str(intent["materialization_id"]),
+                        queue_job_id=int(job_id),
+                        queue_status="completed",
+                        last_result_ref=label,
+                        run_dir_label=label,
+                        now=now,
+                    )
+            except StaleTaskClaimError:
+                if parked:
+                    raise PriorityWorkerFatalError(
+                        "parked materialization changed during completion"
+                    )
+                continue
             tasks.enqueue_task(task_type="classify_result", task_key=f"classify::{int(job_id)}",
                                symbol=task["symbol"], timeframe=task["timeframe"], family=task["family"],
                                data_fingerprint=task.get("data_fingerprint"),
@@ -1022,8 +1075,28 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
                                         "data_fingerprint": task.get("data_fingerprint")}, now=now)
             _bump(counters, "runs_completed")
         elif row["status"] == "failed":
-            tasks.fail_task(task["task_id"], "compute_failed", now=now)
+            try:
+                if legacy_claimed:
+                    tasks.fail_task(task["task_id"], "compute_failed", now=now)
+                else:
+                    tasks.finish_materialized_task(
+                        task["task_id"],
+                        materialization_id=str(intent["materialization_id"]),
+                        queue_job_id=int(job_id),
+                        queue_status="failed",
+                        now=now,
+                    )
+            except StaleTaskClaimError:
+                if parked:
+                    raise PriorityWorkerFatalError(
+                        "parked materialization changed during failure sync"
+                    )
+                continue
             _bump(counters, "runs_failed")
+        elif row["status"] not in {"queued", "running"} and parked:
+            raise PriorityWorkerFatalError(
+                "parked materialization entered an ambiguous compute state"
+            )
 
 
 def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> None:
@@ -1054,10 +1127,17 @@ def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> 
 def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -> None:
     if max_jobs <= 0:
         return
-    from scripts.strategy_lab.worker_once import run_worker_once
+    from scripts.strategy_lab.worker_once import (
+        WorkerLeaseLifecycleError,
+        run_worker_once,
+    )
     for _ in range(max_jobs):
         try:
             status = run_worker_once(private_root, night_mode=night_mode, ignore_cadence=True)
+        except WorkerLeaseLifecycleError as exc:
+            raise PriorityWorkerFatalError(
+                "compute worker lease lifecycle failed"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 - record, then stop draining this cycle
             errors.append({"where": "worker", "error": f"{type(exc).__name__}: {exc}"})
             break

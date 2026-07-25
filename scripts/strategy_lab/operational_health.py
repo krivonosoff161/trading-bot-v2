@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.llm_provider import load_provider  # noqa: E402
+from src.research_lab.compute_pipeline_health import assess_compute_pipeline  # noqa: E402
 from src.research_lab.paper_signals.contract import PaperActionSignal  # noqa: E402
 from src.research_lab.paper_signals.training_export import TERMINAL_STATUSES  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT  # noqa: E402
@@ -88,6 +89,7 @@ def _farm_loop_runtime_status(private_root: Path) -> dict[str, Any]:
         "pid": 0,
         "updated_age_seconds": 0.0,
         "cycle_age_seconds": 0.0,
+        "cycle_started_at": 0.0,
         "paper_only": True,
         "execution_allowed": False,
     }
@@ -105,12 +107,38 @@ def _farm_loop_runtime_status(private_root: Path) -> dict[str, Any]:
     status["stage"] = str(data.get("stage") or "")
     status["pid"] = int(data.get("pid") or 0)
     status["cycle_age_seconds"] = round(float(data.get("cycle_age_seconds") or 0.0), 3)
+    status["cycle_started_at"] = float(data.get("cycle_started_at") or 0.0)
     status["paper_only"] = bool(data.get("paper_only", True))
     status["execution_allowed"] = bool(data.get("execution_allowed", False))
     status["details"] = data.get("details") if isinstance(data.get("details"), dict) else {}
     if isinstance(updated_at, (int, float)):
         status["updated_age_seconds"] = round(float(time.time() - updated_at), 3)
     return status
+
+
+def _read_status_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _compute_pipeline_status(
+    private_root: Path,
+    *,
+    farm_running: bool,
+    farm_started_at: float | None = None,
+) -> dict[str, Any]:
+    state = Path(private_root) / "state"
+    return assess_compute_pipeline(
+        priority_status=_read_status_object(
+            state / "farm_priority_worker_status.json"
+        ),
+        worker_status=_read_status_object(state / "worker_status.json"),
+        farm_running=farm_running,
+        farm_started_at=farm_started_at,
+    )
 
 
 def _farm_loop_process_gate(
@@ -653,6 +681,7 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         report["active_farm_loop"],
         report["farm_loop_runtime_status"],
     )
+    compute_pipeline = report["compute_pipeline"]
     product_launch_isolated = (
         product_launch["manual_telegram_current_for_farm"] is False
         and product_launch["telegram_bot_main_starts_scanner_loop"] is False
@@ -829,6 +858,27 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             action=(
                 "Start bat/strategy_lab_farm_full_cycle_loop.bat for a live paper/research run."
                 if not farm_loop_process["current"] else ""
+            ),
+        ),
+        "compute_pipeline_current": _gate(
+            "blocked"
+            if compute_pipeline["hard_fail"]
+            else "pass"
+            if compute_pipeline["state"] in {"working", "idle"}
+            else "warn",
+            (
+                "Fenced compute worker is active and operator-visible."
+                if compute_pipeline["state"] == "working"
+                else "Fenced compute worker is idle and operator-visible."
+                if compute_pipeline["state"] == "idle"
+                else "Active compute worker reported a fail-closed lifecycle error."
+                if compute_pipeline["hard_fail"]
+                else "Compute worker is stopped or still publishing startup status."
+            ),
+            action=(
+                "Use the canonical graceful stop and inspect compute lifecycle evidence."
+                if compute_pipeline["hard_fail"]
+                else ""
             ),
         ),
         "legacy_live_runtime_isolated": _gate(
@@ -1504,6 +1554,12 @@ def collect(
             boundary="diagnostic/history only; do not use as canonical paper/farm path",
         ),
     }
+    active_farm_loop = _active_farm_loop(private_root)
+    farm_loop_runtime_status = _farm_loop_runtime_status(private_root)
+    farm_loop_process = _farm_loop_process_gate(
+        active_farm_loop,
+        farm_loop_runtime_status,
+    )
     report = {
         "mode": "paper_research_only",
         "safety": {
@@ -1511,8 +1567,15 @@ def collect(
             "orders_enabled_by_this_report": False,
             "prints_secrets": False,
         },
-        "active_farm_loop": _active_farm_loop(private_root),
-        "farm_loop_runtime_status": _farm_loop_runtime_status(private_root),
+        "active_farm_loop": active_farm_loop,
+        "farm_loop_runtime_status": farm_loop_runtime_status,
+        "compute_pipeline": _compute_pipeline_status(
+            private_root,
+            farm_running=bool(farm_loop_process["current"]),
+            farm_started_at=float(
+                farm_loop_runtime_status.get("cycle_started_at") or 0.0
+            ),
+        ),
         "telegram": {
             "default": telegram_status(),
             "paper": _paper_subscription_delivery_status(),

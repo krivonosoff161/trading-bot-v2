@@ -109,6 +109,45 @@ def test_strategy_lab_evaluates_and_writes_private_outputs(tmp_path):
     assert "[[Symbols/ABC_USDT_SWAP]]" in next((vault / "Candidates").glob("*.md")).read_text(encoding="utf-8")
 
 
+def test_evaluate_spec_reports_only_completed_production_milestones(tmp_path):
+    data = tmp_path / "ABC_USDT_SWAP_80d.json"
+    _write_candles(data)
+    spec = ExperimentSpec(
+        experiment_id="unit_progress",
+        data_glob=str(tmp_path / "{symbol}_*.json"),
+        symbols=["ABC_USDT_SWAP"],
+        families=["momentum_breakout"],
+        parameter_grid={
+            "momentum_breakout": [
+                {
+                    "lookback": 5,
+                    "threshold_pct": 0,
+                    "hold_bars": 2,
+                    "stop_pct": 5,
+                    "take_pct": 10,
+                },
+                {
+                    "lookback": 6,
+                    "threshold_pct": 0,
+                    "hold_bars": 2,
+                    "stop_pct": 5,
+                    "take_pct": 10,
+                },
+            ]
+        },
+        min_trades=1,
+    )
+    milestones: list[str] = []
+
+    results = evaluate_spec(spec, progress=milestones.append)
+
+    assert len(results) == 2
+    assert milestones[0] == "candles_loaded:1/1"
+    assert milestones.count("variant_completed:1/2") == 1
+    assert milestones.count("variant_completed:2/2") == 1
+    assert milestones[-1] == "evaluation_completed:2/2"
+
+
 def test_run_outputs_include_validation_and_registry(tmp_path):
     data = tmp_path / "ABC_USDT_SWAP_80d.json"
     _write_candles(data)

@@ -319,9 +319,12 @@ def test_calculator_advisor_proposal_becomes_materialized_advisor_sweep(tmp_path
     assert out["counters"]["advisor_sweeps_scheduled"] == 1
     assert out["counters"]["advisor_sweeps_planned"] == 1
     assert out["counters"]["sweeps_materialized"] == 1
-    running = tasks.tasks_in_state("running", task_type="run_sweep")
-    assert len(running) == 1
-    payload = json.loads(running[0]["payload_json"])
+    parked = tasks.tasks_in_state("deferred", task_type="run_sweep")
+    assert len(parked) == 1
+    assert parked[0]["machine_reason"] == "materialized_awaiting_worker"
+    assert parked[0]["claim_owner"] is None
+    assert parked[0]["claim_expires_at"] is None
+    payload = json.loads(parked[0]["payload_json"])
     assert payload["origin"] == "calculator_advisor"
     assert payload["dimension"] == "hold"
     assert payload["source_signal_id"] == "sig-advisor"

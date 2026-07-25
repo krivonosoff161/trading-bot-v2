@@ -113,7 +113,15 @@ whose lease expires remains `ambiguous`; a later fence cannot rewrite it.
 Sweep dispatch uses a content-bound brain outbox because two SQLite databases
 cannot share one atomic commit. Worker output remains provisional until a final
 owner/fence check; run import and queue completion then commit together before
-secondary indexes are published.
+secondary indexes are published. Once the outbox is acknowledged, the brain
+task parks without a renewable claim while the compute queue owns execution;
+terminal synchronization requires the exact materialization generation. The
+worker process lease remains active through secondary publication, whereas the
+job lease ends at the serialized terminal queue transition. Runtime candidate
+index publication is append-only and atomic, so historical registry size is
+not part of the worker lease-critical path. Any worker ownership/lease failure
+is propagated to the farm foreground and to the redacted RCC/operational-health
+compute signal; it is never downgraded to a normal active-owner deferral.
 
 ### Paper Evidence Authority
 

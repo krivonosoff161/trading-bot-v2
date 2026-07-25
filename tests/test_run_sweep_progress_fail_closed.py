@@ -141,7 +141,7 @@ class _LogicalHeartbeatContext(AbstractContextManager):
         return self.heartbeat.foreground_db_write()
 
 
-def test_production_run_sweep_keeps_claim_beyond_900_logical_seconds(tmp_path) -> None:
+def test_production_run_sweep_keeps_claim_through_long_work_then_parks(tmp_path) -> None:
     clock = LogicalClock()
     _seed_candles(tmp_path)
     tasks, task_id = _claimed_run_sweep(tmp_path, clock=clock)
@@ -193,8 +193,10 @@ def test_production_run_sweep_keeps_claim_beyond_900_logical_seconds(tmp_path) -
     assert any(stage.startswith("grid_validation:") for stage in stages)
     assert any(stage.startswith("grid_ledger:") for stage in stages)
     task = tasks.get_task(task_id)
-    assert task["state"] == "running"
-    assert task["claim_expires_at"] > clock.value
+    assert task["state"] == "deferred"
+    assert task["machine_reason"] == "materialized_awaiting_worker"
+    assert task["claim_owner"] is None
+    assert task["claim_expires_at"] is None
     assert tasks.raw_connection.execute(
         "SELECT COUNT(*) FROM materialization_outbox"
     ).fetchone()[0] == 1
