@@ -19,13 +19,12 @@ import asyncio
 import json
 import logging
 import logging.handlers
-import os
 import signal
 import sys
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -39,10 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Archive imports stay configuration-free. The explicit entrypoint loads the
 # gated runtime environment before any notification can be sent.
-from src.exchange.okx_meta import fetch_ctvals
-from src.data.ws_feed import Candle, WSFeed, _chunked
-from src.utils.runtime_root import load_runtime_dotenv
-from src.utils.telegram import send_message_to
+from src.exchange.okx_meta import fetch_ctvals  # noqa: E402
+from src.data.ws_feed import Candle, WSFeed, _chunked  # noqa: E402
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
+from src.utils.telegram import send_message_to  # noqa: E402
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
 LOG_DIR = ROOT / "logs" / "pump"
@@ -904,7 +903,7 @@ class PumpOrchestrator:
             counter_n = sum(1 for p in self.pool.values() if p.section == "counter")
             banned_n = sum(1 for p in self.pool.values() if p.section == "banned")
             open_n = sum(1 for p in self.pool.values() if p.position)
-            halted_str = f" | HALTED" if self.cb_halted else ""
+            halted_str = " | HALTED" if self.cb_halted else ""
             self._log(
                 f"HEARTBEAT | main={main_n} counter={counter_n} banned={banned_n} "
                 f"| open={open_n} | daily_pnl={self.cb_daily_pnl:+.2f}%{halted_str}"

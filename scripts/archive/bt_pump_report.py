@@ -87,9 +87,9 @@ def build_signal_table(frames: dict[str, pd.DataFrame], config: Config) -> pd.Da
         if len(df) <= config.lookback + 1:
             continue
 
-        opens = df["open"].to_numpy(dtype="float64")
-        highs = df["high"].to_numpy(dtype="float64")
-        lows = df["low"].to_numpy(dtype="float64")
+        _opens = df["open"].to_numpy(dtype="float64")
+        _highs = df["high"].to_numpy(dtype="float64")
+        _lows = df["low"].to_numpy(dtype="float64")
         closes = df["close"].to_numpy(dtype="float64")
         vols = df["vol"].to_numpy(dtype="float64")
 
@@ -454,7 +454,7 @@ def build_phase2_report() -> str:
         if not robust_equity.empty
         else equity_df.sort_values(["profit_factor", "pnl_pct"], ascending=[False, False]).iloc[0]
     )
-    base_abcde = phase2_signals[
+    _base_abcde = phase2_signals[
         (phase2_signals["filter_a_pump"]) &
         (phase2_signals["filter_b_confirm"]) &
         (phase2_signals["signal_dollar_volume"] >= 50_000.0) &

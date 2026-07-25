@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bt_pump_filters import fetch_ctvals
-from src.data.ws_feed import Candle, WSFeed, _chunked
+from bt_pump_filters import fetch_ctvals  # noqa: E402
+from src.data.ws_feed import Candle, WSFeed, _chunked  # noqa: E402
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
 LOG_DIR = ROOT / "logs" / "pump"

@@ -31,8 +31,8 @@ from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 if __name__ == "__main__":
     load_runtime_dotenv(ROOT)
 
-from src.data.ws_feed import Candle, WSFeed, _chunked
-from src.utils.telegram import send_message_to
+from src.data.ws_feed import Candle, WSFeed, _chunked  # noqa: E402
+from src.utils.telegram import send_message_to  # noqa: E402
 
 ACTIVE_UNIVERSE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"
 COINGECKO_CACHE_PATH = Path(__file__).resolve().parent / "cache" / "coingecko_coins_list.json"

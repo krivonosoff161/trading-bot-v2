@@ -245,7 +245,8 @@ def lead_lag():
     k = max(1, len(rows) // 10)
     low = rows[:k]
     high = rows[-k:]
-    avg = lambda L: sum(x[1] for x in L) / len(L)
+    def avg(items):
+        return sum(item[1] for item in items) / len(items)
     print(f"    top-decile mint days (n={k}):    BTC fwd 3d avg = {avg(high)*100:+0.2f}%")
     print(f"    bottom-decile mint days (n={k}): BTC fwd 3d avg = {avg(low)*100:+0.2f}%")
     print(f"    spread (high-low) = {(avg(high)-avg(low))*100:+0.2f}%")

@@ -5,12 +5,11 @@ Shows: open, high, low, close per candle + cumulative move from session open.
 import sys
 import os
 import time
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding='utf-8')
 
-from scripts.mcp_okx_server import get_candles
+from scripts.mcp_okx_server import get_candles  # noqa: E402
 
 
 def parse_candles(raw: str) -> list[dict]:

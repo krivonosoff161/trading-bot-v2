@@ -109,7 +109,7 @@ def main():
     ]
     wb = [r for r in wins   if r.get("basis_pct") is not None]
     lb = [r for r in losses if r.get("basis_pct") is not None]
-    print(f"\n  Basis aligned with trade direction:")
+    print("\n  Basis aligned with trade direction:")
     print(f"    Winners: {len(correct_basis_wins)}/{len(wb)} = "
           f"{len(correct_basis_wins)*100//len(wb) if wb else 0}%")
     print(f"    Losers:  {len(correct_basis_losses)}/{len(lb)} = "

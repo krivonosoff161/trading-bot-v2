@@ -28,36 +28,46 @@ from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 if __name__ == "__main__":
     load_runtime_dotenv(ROOT)
 
-LOGS_DIR  = Path(__file__).parent.parent / "logs"
-BAR       = "15m"
-BAR_MS    = 15 * 60 * 1000
-BUFFER_MS = 30 * 60 * 1000   # extra buffer after max_hold to ensure full window
+LOGS_DIR = Path(__file__).parent.parent / "logs"
+BAR = "15m"
+BAR_MS = 15 * 60 * 1000
+BUFFER_MS = 30 * 60 * 1000  # extra buffer after max_hold to ensure full window
 
 
 def _find_snapshots():
     paths = []
-    paths += [(p, "scanner") for p in sorted(LOGS_DIR.glob("scanner/*/*_snapshot.json"))]
-    paths += [(p, "user")    for p in sorted(LOGS_DIR.glob("users/*/analyses/*/*_snapshot.json"))]
+    paths += [
+        (p, "scanner") for p in sorted(LOGS_DIR.glob("scanner/*/*_snapshot.json"))
+    ]
+    paths += [
+        (p, "user") for p in sorted(LOGS_DIR.glob("users/*/analyses/*/*_snapshot.json"))
+    ]
     return paths
 
 
-def _check_outcome(candles_newest_first, side, entry, sl, tp1, signal_ts_ms, max_hold_ms):
+def _check_outcome(
+    candles_newest_first, side, entry, sl, tp1, signal_ts_ms, max_hold_ms
+):
     """Walk candles chronologically, return (outcome, exit_price, elapsed_min)."""
     for c in reversed(candles_newest_first):
         ts_c = int(c[0])
         if ts_c <= signal_ts_ms:
             continue
         high = float(c[2])
-        low  = float(c[3])
+        low = float(c[3])
         elapsed_ms = ts_c - signal_ts_ms
         if elapsed_ms > max_hold_ms:
             return "TIME", float(c[4]), elapsed_ms // 60000
         if side == "buy":
-            if low  <= sl:   return "SL",  sl,  elapsed_ms // 60000
-            if high >= tp1:  return "TP1", tp1, elapsed_ms // 60000
+            if low <= sl:
+                return "SL", sl, elapsed_ms // 60000
+            if high >= tp1:
+                return "TP1", tp1, elapsed_ms // 60000
         else:
-            if high >= sl:   return "SL",  sl,  elapsed_ms // 60000
-            if low  <= tp1:  return "TP1", tp1, elapsed_ms // 60000
+            if high >= sl:
+                return "SL", sl, elapsed_ms // 60000
+            if low <= tp1:
+                return "TP1", tp1, elapsed_ms // 60000
     return "OPEN", None, None
 
 
@@ -80,10 +90,10 @@ async def label_all(client: OKXClient):
             continue
 
         entry_price = ctx.get("entry_price")
-        sl_price    = ctx.get("sl_price")
-        tp1_price   = ctx.get("tp1_price")
-        side        = ctx.get("side")
-        max_hold    = int(ctx.get("max_hold_minutes") or 120)
+        sl_price = ctx.get("sl_price")
+        tp1_price = ctx.get("tp1_price")
+        side = ctx.get("side")
+        max_hold = int(ctx.get("max_hold_minutes") or 120)
         captured_at = data.get("captured_at", "")
 
         if not all([entry_price, sl_price, tp1_price, side, captured_at]):
@@ -91,14 +101,16 @@ async def label_all(client: OKXClient):
             continue
 
         try:
-            sig_ts = int(datetime.fromisoformat(
-                captured_at.replace("Z", "+00:00")).timestamp() * 1000)
+            sig_ts = int(
+                datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp()
+                * 1000
+            )
         except Exception:
             skipped_no_entry += 1
             continue
 
-        max_hold_ms  = max_hold * 60 * 1000
-        window_end   = sig_ts + max_hold_ms + BUFFER_MS
+        max_hold_ms = max_hold * 60 * 1000
+        window_end = sig_ts + max_hold_ms + BUFFER_MS
 
         if window_end > now_ms:
             skipped_recent += 1
@@ -118,11 +130,11 @@ async def label_all(client: OKXClient):
             skipped_recent += 1
             continue
 
-        ctx["outcome"]       = outcome
+        ctx["outcome"] = outcome
         ctx["outcome_price"] = round(exit_price, 6) if exit_price else None
-        ctx["outcome_min"]   = elapsed
-        ctx["outcome_src"]   = source
-        ctx["labeled_at"]    = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ctx["outcome_min"] = elapsed
+        ctx["outcome_src"] = source
+        ctx["labeled_at"] = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         snap_path.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -130,19 +142,23 @@ async def label_all(client: OKXClient):
         labeled += 1
 
         sl_pct = abs(entry_price - sl_price) / entry_price * 100
-        print(f"  [{source:7s}] {data['symbol']:12s} {captured_at[:16]}  "
-              f"{side:4s}  {outcome:4s}  {elapsed}min  SL%={sl_pct:.2f}")
+        print(
+            f"  [{source:7s}] {data['symbol']:12s} {captured_at[:16]}  "
+            f"{side:4s}  {outcome:4s}  {elapsed}min  SL%={sl_pct:.2f}"
+        )
 
-    print(f"\nDone: labeled={labeled}  already_done={already_done}  "
-          f"too_recent={skipped_recent}  no_entry={skipped_no_entry}")
+    print(
+        f"\nDone: labeled={labeled}  already_done={already_done}  "
+        f"too_recent={skipped_recent}  no_entry={skipped_no_entry}"
+    )
 
 
 async def main():
     client = OKXClient(
-        api_key    = os.getenv("OKX_API_KEY",    "").strip("'\""),
-        secret_key = os.getenv("OKX_SECRET_KEY", "").strip("'\""),
-        passphrase = os.getenv("OKX_PASSPHRASE", "").strip("'\""),
-        is_demo    = os.getenv("OKX_IS_DEMO", "1") == "1",
+        api_key=os.getenv("OKX_API_KEY", "").strip("'\""),
+        secret_key=os.getenv("OKX_SECRET_KEY", "").strip("'\""),
+        passphrase=os.getenv("OKX_PASSPHRASE", "").strip("'\""),
+        is_demo=os.getenv("OKX_IS_DEMO", "1") == "1",
     )
     try:
         print("Scanning logs/scanner/ and logs/users/*/analyses/ ...")

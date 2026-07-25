@@ -146,7 +146,7 @@ def build_report(rows: list[dict], baseline: dict | None) -> str:
         "- `BT_DRIFT_ETH_BLOCK_HOURS=22,23,0,1`",
         "",
         "Reference row requested by user:",
-        f"- `btc_vol_max=None | hold=90 | tp1=0.4 | n=146 | WR=89% | PF=3.51 | sim=+144.1% | DD=7.3%`",
+        "- `btc_vol_max=None | hold=90 | tp1=0.4 | n=146 | WR=89% | PF=3.51 | sim=+144.1% | DD=7.3%`",
         "",
     ]
     if baseline:

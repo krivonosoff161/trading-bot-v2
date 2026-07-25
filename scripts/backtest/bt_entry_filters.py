@@ -10,15 +10,15 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.backtest.backtest_simulate import (
+from scripts.backtest.backtest_simulate import (  # noqa: E402
     NOTIONAL_RATIO,
     _candle_vol_delta,
     _get_hist_funding,
     _get_oi_delta,
     compute_signal,
 )
-from scripts.backtest.research_common import load_cache
-from src.strategy.indicators import calc_rsi
+from scripts.backtest.research_common import load_cache  # noqa: E402
+from src.strategy.indicators import calc_rsi  # noqa: E402
 
 
 RESULT_JSON = Path(__file__).with_name("bt_entry_filters_results.json")

@@ -1207,8 +1207,6 @@ def test_same_chart_path_with_changed_bytes_has_distinct_content_identity(tmp_pa
     assert first_key != second_key
 
     photo_calls = []
-    text_calls = []
-
     async def fake_photo(chat_id, payload):
         photo_calls.append((chat_id, payload))
         return 200 + len(photo_calls)

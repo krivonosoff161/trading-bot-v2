@@ -11,7 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.backtest.research_common import (
+from scripts.backtest.research_common import (  # noqa: E402
     ADX_PERIOD,
     SYMBOLS,
     arrays,
@@ -22,7 +22,7 @@ from scripts.backtest.research_common import (
     save_json,
     summarize,
 )
-from src.strategy.indicators import calc_adx, calc_atr_series, calc_slope
+from src.strategy.indicators import calc_adx, calc_atr_series, calc_slope  # noqa: E402
 
 
 RESULT_PATH = Path(__file__).with_name("bt_bb_screener_results.json")

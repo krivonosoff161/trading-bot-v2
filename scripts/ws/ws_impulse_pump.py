@@ -24,8 +24,8 @@ from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 if __name__ == "__main__":
     load_runtime_dotenv(ROOT)
 
-from src.data.impulse_pump_config import load_impulse_config
-from src.data.impulse_pump_engine import ImpulsePumpEngine
+from src.data.impulse_pump_config import load_impulse_config  # noqa: E402
+from src.data.impulse_pump_engine import ImpulsePumpEngine  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

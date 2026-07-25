@@ -172,7 +172,7 @@ class WSConnectionTest:
             avg = sum(self.latencies) / len(self.latencies)
             mx  = max(self.latencies)
             mn  = min(self.latencies)
-            print(f"\n⚡ Задержка (тик → Python):")
+            print("\n⚡ Задержка (тик → Python):")
             print(f"   avg={avg:.1f} ms  min={mn:.1f} ms  max={mx:.1f} ms  n={len(self.latencies)}")
         else:
             print("\n⚡ Задержка: нет данных")
@@ -199,7 +199,7 @@ class WSConnectionTest:
 
 async def main(pairs: list[str], duration: int):
     print("=" * 55)
-    print(f"  OKX WebSocket Connection Test")
+    print("  OKX WebSocket Connection Test")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Пары: {pairs}")
     print(f"  Длительность: {duration} сек")

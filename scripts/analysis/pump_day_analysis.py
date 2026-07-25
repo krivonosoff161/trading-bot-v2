@@ -9,10 +9,10 @@ import gzip
 import json
 import sys
 from collections import defaultdict
-
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 ROOT = Path(__file__).resolve().parents[2]
 LABELS = ROOT / "logs" / "pump" / "pump_labels.jsonl"

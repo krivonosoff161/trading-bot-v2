@@ -4,20 +4,20 @@ label_main_ws.py — fetch outcomes for unlabeled main screener signals.
 Reads:  logs/signals/main_signals.jsonl
 Writes: logs/signals/main_signals_labels.jsonl
 """
+
 import asyncio
 import json
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
 
-ROOT         = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2]
 MAIN_SIGNALS = ROOT / "logs" / "signals" / "main_signals.jsonl"
-MAIN_LABELS  = ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
+MAIN_LABELS = ROOT / "logs" / "signals" / "main_signals_labels.jsonl"
 REST_HISTORY = "https://www.okx.com/api/v5/market/history-candles"
-BUFFER_MS    = 3_600_000  # wait 1h after hold expires before labeling
+BUFFER_MS = 3_600_000  # wait 1h after hold expires before labeling
 
 
 def _load_jsonl(path: Path) -> list:
@@ -38,18 +38,29 @@ def _ts_ms(ts_str: str) -> int:
     return int(datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp() * 1000)
 
 
-async def _fetch_candles(session: aiohttp.ClientSession, sym: str, after_ms: int, limit: int) -> list:
+async def _fetch_candles(
+    session: aiohttp.ClientSession, sym: str, after_ms: int, limit: int
+) -> list:
     params = {"instId": sym, "bar": "15m", "after": str(after_ms), "limit": str(limit)}
-    async with session.get(REST_HISTORY, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
+    async with session.get(
+        REST_HISTORY, params=params, timeout=aiohttp.ClientTimeout(total=10)
+    ) as r:
         body = await r.json(content_type=None)
     rows = body.get("data", [])
     rows.reverse()
     return rows
 
 
-def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
-                   entry: float, sl: float, tp1: float, tp2: float,
-                   side: str = "buy"):
+def _check_outcome(
+    rows: list,
+    signal_ms: int,
+    hold_ms: int,
+    entry: float,
+    sl: float,
+    tp1: float,
+    tp2: float,
+    side: str = "buy",
+):
     """Direction-aware outcome check — MARKET-entry semantics (matches production).
 
     Production bot uses ordType='market' (okx_client.py:300). Position opens
@@ -74,15 +85,15 @@ def _check_outcome(rows: list, signal_ms: int, hold_ms: int,
         if t_ms - signal_ms > hold_ms:
             break
         high = float(row[2])
-        low  = float(row[3])
+        low = float(row[3])
         last_close = float(row[4])  # close of last in-window bar -> TIME exit price
 
         if is_buy:
-            sl_hit  = low <= sl
+            sl_hit = low <= sl
             tp1_hit = high >= tp1
             tp2_hit = bool(tp2 and high >= tp2)
         else:
-            sl_hit  = high >= sl
+            sl_hit = high >= sl
             tp1_hit = low <= tp1
             tp2_hit = bool(tp2 and low <= tp2)
 
@@ -112,12 +123,12 @@ async def run() -> None:
         sig_id = sig.get("id") or sig.get("signal_id", "")
         if not sig_id or sig_id in labeled_ids:
             continue
-        ts_ms   = _ts_ms(sig["ts"])
+        ts_ms = _ts_ms(sig["ts"])
         hold_ms = int(sig.get("hold_min", 75) * 60_000)
         if ts_ms + hold_ms + BUFFER_MS > now_ms:
             continue
-        sig["_id"]      = sig_id
-        sig["_ts_ms"]   = ts_ms
+        sig["_id"] = sig_id
+        sig["_ts_ms"] = ts_ms
         sig["_hold_ms"] = hold_ms
         pending.append(sig)
 
@@ -132,26 +143,40 @@ async def run() -> None:
         with open(MAIN_LABELS, "a", encoding="utf-8") as f:
             for sig in pending:
                 try:
-                    ts_ms   = sig["_ts_ms"]
+                    ts_ms = sig["_ts_ms"]
                     hold_ms = sig["_hold_ms"]
                     # Cover the FULL hold window starting at/before the fill bar.
                     # (was +2h offset with limit hold//15+4 -> under-covered the first
                     # ~hour for SWING, so early bars were never fetched.) 30min buffer
                     # past hold-end for candle availability; +6 bars margin to reach ts.
                     after_ms = ts_ms + hold_ms + 30 * 60_000
-                    limit    = sig.get("hold_min", 75) // 15 + 6
+                    limit = sig.get("hold_min", 75) // 15 + 6
 
                     # Degenerate-geometry guard: sub-cent round(x,4) collisions where
                     # SL==TP1 (or SL within 0.15% of entry) make R meaningless. Exclude
                     # from metrics (outcome=INVALID) instead of scoring noise.
-                    e_v = float(sig["entry"]); sl_v = float(sig["sl"]); tp1_v = float(sig["tp1"])
+                    e_v = float(sig["entry"])
+                    sl_v = float(sig["sl"])
+                    tp1_v = float(sig["tp1"])
                     if e_v <= 0 or sl_v == tp1_v or abs(e_v - sl_v) / e_v < 0.0015:
-                        f.write(json.dumps({
-                            "signal_id": sig["_id"], "ts": sig["ts"], "symbol": sig["symbol"],
-                            "regime": sig.get("regime", ""), "outcome": "INVALID",
-                            "exit_price": None, "hold_min": 0, "tp2_hit": False,
-                            "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        }) + "\n")
+                        f.write(
+                            json.dumps(
+                                {
+                                    "signal_id": sig["_id"],
+                                    "ts": sig["ts"],
+                                    "symbol": sig["symbol"],
+                                    "regime": sig.get("regime", ""),
+                                    "outcome": "INVALID",
+                                    "exit_price": None,
+                                    "hold_min": 0,
+                                    "tp2_hit": False,
+                                    "labeled_at": datetime.now(timezone.utc).strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ"
+                                    ),
+                                }
+                            )
+                            + "\n"
+                        )
                         labeled += 1
                         continue
 
@@ -159,22 +184,28 @@ async def run() -> None:
                     await asyncio.sleep(0.15)
 
                     outcome, exit_px, hold_actual, tp2_hit = _check_outcome(
-                        rows, ts_ms, hold_ms,
-                        float(sig["entry"]), float(sig["sl"]),
-                        float(sig["tp1"]), float(sig.get("tp2") or 0),
+                        rows,
+                        ts_ms,
+                        hold_ms,
+                        float(sig["entry"]),
+                        float(sig["sl"]),
+                        float(sig["tp1"]),
+                        float(sig.get("tp2") or 0),
                         side=sig.get("side", "buy"),
                     )
 
                     label = {
                         "signal_id": sig["_id"],
-                        "ts":        sig["ts"],
-                        "symbol":    sig["symbol"],
-                        "regime":    sig.get("regime", ""),
-                        "outcome":   outcome,
+                        "ts": sig["ts"],
+                        "symbol": sig["symbol"],
+                        "regime": sig.get("regime", ""),
+                        "outcome": outcome,
                         "exit_price": exit_px,
-                        "hold_min":  hold_actual,
-                        "tp2_hit":   tp2_hit,
-                        "labeled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "hold_min": hold_actual,
+                        "tp2_hit": tp2_hit,
+                        "labeled_at": datetime.now(timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        ),
                     }
                     f.write(json.dumps(label) + "\n")
                     labeled += 1

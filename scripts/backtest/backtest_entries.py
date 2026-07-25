@@ -9,12 +9,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from datetime import datetime, timezone
-from src.utils.runtime_root import load_runtime_dotenv
+from datetime import datetime, timezone  # noqa: E402
+from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 
 if __name__ == "__main__":
     load_runtime_dotenv(ROOT)
-from src.exchange.okx_client import OKXClient
+from src.exchange.okx_client import OKXClient  # noqa: E402
 
 BASE = os.path.join(os.path.dirname(__file__), "analysis_output")
 
