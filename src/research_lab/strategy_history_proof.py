@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Synthetic history-boundary proof for the public strategy registry.
 
 This module does not read market history or private paper/runtime state. It builds
@@ -7,6 +5,8 @@ deterministic public-safe OHLCV fixtures and checks that every registered strate
 can be evaluated at its declared candle-history boundary without pretending that a
 missing side-data family was satisfied by extra candles.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any

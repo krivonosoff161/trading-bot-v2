@@ -421,6 +421,27 @@ class TestCycle:
         assert len(mem) == 3
         assert ("Z", "15m", "momentum_continuation") in cycle.learn_known_bad(mem, min_n=3)
 
+    def test_learn_known_bad_ignores_incomplete_or_non_string_identity(self):
+        from src.research_lab.paper_signals import cycle
+
+        malformed = [
+            {"symbol": "Z", "timeframe": "15m", "diagnosis": "valid_loss"},
+            {
+                "symbol": 7,
+                "timeframe": "15m",
+                "family": "momentum_continuation",
+                "diagnosis": "valid_loss",
+            },
+            {
+                "symbol": "",
+                "timeframe": "15m",
+                "family": "momentum_continuation",
+                "diagnosis": "valid_loss",
+            },
+        ]
+
+        assert cycle.learn_known_bad(malformed, min_n=1) == set()
+
 
 class TestFamilies:
     def test_continuation_rejects_exhausted(self):
@@ -814,6 +835,33 @@ class TestPaperLoopSafety:
         lock = tmp_path / "state" / "paper_signals_loop.lock"
         cycle.run_loop(tmp_path, cycles=1, lock_file=lock, provider=_FakeProvider([100 + i * 0.5 for i in range(80)]))
         assert not lock.exists()
+
+    def test_run_loop_forwards_bounded_pfr_fetch_budget(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from src.research_lab.paper_signals import cycle
+
+        observed = []
+
+        def fake_run_cycle(_private_root, **kwargs):
+            observed.append(kwargs)
+            return {"cycle": len(observed)}
+
+        monkeypatch.setattr(cycle, "run_cycle", fake_run_cycle)
+
+        reports = cycle.run_loop(
+            tmp_path,
+            cycles=2,
+            max_pfr_scan=7,
+            max_pfr_fetches=3,
+        )
+
+        assert reports == [{"cycle": 1}, {"cycle": 2}]
+        assert [row["max_pfr_scan"] for row in observed] == [7, 7]
+        assert [row["max_pfr_fetches"] for row in observed] == [3, 3]
+        assert not (tmp_path / "state" / "paper_signals_loop.lock").exists()
 
 
 class TestAgeOut:
