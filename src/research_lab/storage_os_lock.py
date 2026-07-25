@@ -12,14 +12,22 @@ from typing import Any, Iterator
 
 from src.research_lab.storage_capability import is_link_or_reparse
 
+msvcrt: Any
+fcntl: Any
+_WIN_DLL: Any = getattr(ctypes, "WinDLL", None)
+_GET_LAST_ERROR: Any = getattr(ctypes, "get_last_error", lambda: 0)
 try:  # pragma: no cover - imported on the matching platform
-    import msvcrt
+    import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover
     msvcrt = None
+else:
+    msvcrt = _msvcrt
 try:  # pragma: no cover - imported on the matching platform
-    import fcntl
+    import fcntl as _fcntl
 except ImportError:  # pragma: no cover
     fcntl = None
+else:
+    fcntl = _fcntl
 
 
 class StorageLockConflict(RuntimeError):
@@ -50,9 +58,9 @@ def _open_lock_nofollow(path: Path) -> tuple[Any, dict[str, int]]:
         flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
     else:
-        if msvcrt is None:  # pragma: no cover
+        if msvcrt is None or _WIN_DLL is None:  # pragma: no cover
             raise StorageLockConflict("Windows lock handle support is unavailable")
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _WIN_DLL("kernel32", use_last_error=True)
         create_file = kernel32.CreateFileW
         create_file.restype = ctypes.c_void_p
         raw_handle = create_file(
@@ -65,7 +73,7 @@ def _open_lock_nofollow(path: Path) -> tuple[Any, dict[str, int]]:
             None,
         )
         if raw_handle in (None, ctypes.c_void_p(-1).value):
-            raise OSError(ctypes.get_last_error(), "CreateFileW failed", str(path))
+            raise OSError(_GET_LAST_ERROR(), "CreateFileW failed", str(path))
         try:
             fd = msvcrt.open_osfhandle(
                 int(raw_handle), os.O_RDWR | getattr(os, "O_BINARY", 0)
@@ -91,7 +99,9 @@ def storage_root_lock(path: Path, *, wait_seconds: float = 0.0) -> Iterator[None
     global _LOCAL_OWNER
     owner = threading.get_ident()
     if _LOCAL_OWNER == owner:
-        raise StorageLockConflict("storage operation lock is already held by this thread")
+        raise StorageLockConflict(
+            "storage operation lock is already held by this thread"
+        )
     acquired = _LOCAL_LOCK.acquire(timeout=max(0.0, float(wait_seconds)))
     if not acquired:
         raise StorageLockConflict("storage operation lock is already held")

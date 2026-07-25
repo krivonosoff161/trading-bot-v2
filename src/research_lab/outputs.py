@@ -14,7 +14,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.candidate_registry import build_entry, registry_path, upsert_entries
+from src.research_lab.candidate_registry import (
+    build_entry,
+    registry_path,
+    upsert_entries,
+)
 from src.research_lab.experiment import ExperimentSpec, RunResult
 from src.research_lab.paths import resolve_private_root
 from src.research_lab.reducer import reduce_results
@@ -49,7 +53,9 @@ def write_run_outputs(
     run_dir.mkdir(parents=True, exist_ok=False)
     if publication_generation:
         (run_dir / "publication_generation.json").write_text(
-            json.dumps(publication_generation, ensure_ascii=False, indent=2, sort_keys=True),
+            json.dumps(
+                publication_generation, ensure_ascii=False, indent=2, sort_keys=True
+            ),
             encoding="utf-8",
         )
     trial_evidence = build_search_trial_evidence(spec, results, runtime_meta)
@@ -89,7 +95,9 @@ def write_run_outputs(
         "multiple_testing_family_hash": trial_evidence["multiple_testing_family_hash"],
         "results": result_rows,
     }
-    (run_dir / "metrics.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "metrics.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     write_search_trial_evidence(run_dir, trial_evidence)
     _write_candidates_csv(run_dir / "candidates.csv", results)
     _write_graph_edges(run_dir / "graph_edges.csv", results)
@@ -99,7 +107,11 @@ def write_run_outputs(
         encoding="utf-8",
     )
     (run_dir / "llm_review_pack.json").write_text(
-        json.dumps(build_llm_review_pack(spec, results, reduce_report), ensure_ascii=False, indent=2),
+        json.dumps(
+            build_llm_review_pack(spec, results, reduce_report),
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     (run_dir / "llm_review_prompt.md").write_text(
@@ -108,7 +120,10 @@ def write_run_outputs(
     (run_dir / "summary.md").write_text(_summary_md(spec, results), encoding="utf-8")
     if output_state == "completed":
         publish_run_indexes(
-            spec, results, out_root, run_dir,
+            spec,
+            results,
+            out_root,
+            run_dir,
             include_rejects=include_rejects,
             allow_public_output=allow_public_output,
         )
@@ -138,7 +153,9 @@ def publish_run_indexes(
     # full run artifacts (metrics.json / candidates.csv) but do not pollute the
     # registry unless explicitly requested for debugging.
     registrable = [
-        r for r in results if include_rejects or r.validation_status in REGISTRY_STATUSES
+        r
+        for r in results
+        if include_rejects or r.validation_status in REGISTRY_STATUSES
     ]
     entries = [
         build_entry(
@@ -159,7 +176,7 @@ def publish_run_indexes(
 
 
 def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str, Any]:
-    out = {
+    out: dict[str, Any] = {
         "run_id": result.run_id,
         "symbol": result.symbol,
         "family": result.family,
@@ -183,50 +200,101 @@ def result_dict(result: RunResult, *, include_trades: bool = False) -> dict[str,
 
 def _write_candidates_csv(path: Path, results: list[RunResult]) -> None:
     fields = [
-        "run_id", "symbol", "family", "decision", "reasons", "n_trades",
-        "win_rate", "avg_net_pct", "total_net_pct", "profit_factor", "profit_factor_state",
-        "max_drawdown_pct", "test_avg_net_pct", "best_trade_share",
-        "validation_status", "validation_reasons", "next_action",
+        "run_id",
+        "symbol",
+        "family",
+        "decision",
+        "reasons",
+        "n_trades",
+        "win_rate",
+        "avg_net_pct",
+        "total_net_pct",
+        "profit_factor",
+        "profit_factor_state",
+        "max_drawdown_pct",
+        "test_avg_net_pct",
+        "best_trade_share",
+        "validation_status",
+        "validation_reasons",
+        "next_action",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in results:
             m = r.metrics
-            writer.writerow({
-                "run_id": r.run_id,
-                "symbol": r.symbol,
-                "family": r.family,
-                "decision": r.decision,
-                "reasons": "|".join(r.reasons),
-                "n_trades": m["n_trades"],
-                "win_rate": m["win_rate"],
-                "avg_net_pct": m["avg_net_pct"],
-                "total_net_pct": m["total_net_pct"],
-                "profit_factor": m["profit_factor"],
-                "profit_factor_state": json.dumps(
-                    m.get("profit_factor_state") or {}, sort_keys=True, separators=(",", ":")
-                ),
-                "max_drawdown_pct": m["max_drawdown_pct"],
-                "test_avg_net_pct": m["test_avg_net_pct"],
-                "best_trade_share": m["best_trade_share"],
-                "validation_status": r.validation_status,
-                "validation_reasons": "|".join(r.validation_reasons),
-                "next_action": r.next_action,
-            })
+            writer.writerow(
+                {
+                    "run_id": r.run_id,
+                    "symbol": r.symbol,
+                    "family": r.family,
+                    "decision": r.decision,
+                    "reasons": "|".join(r.reasons),
+                    "n_trades": m["n_trades"],
+                    "win_rate": m["win_rate"],
+                    "avg_net_pct": m["avg_net_pct"],
+                    "total_net_pct": m["total_net_pct"],
+                    "profit_factor": m["profit_factor"],
+                    "profit_factor_state": json.dumps(
+                        m.get("profit_factor_state") or {},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "max_drawdown_pct": m["max_drawdown_pct"],
+                    "test_avg_net_pct": m["test_avg_net_pct"],
+                    "best_trade_share": m["best_trade_share"],
+                    "validation_status": r.validation_status,
+                    "validation_reasons": "|".join(r.validation_reasons),
+                    "next_action": r.next_action,
+                }
+            )
 
 
 def _write_graph_edges(path: Path, results: list[RunResult]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["source", "target", "relation", "weight", "run_id"])
+        writer = csv.DictWriter(
+            f, fieldnames=["source", "target", "relation", "weight", "run_id"]
+        )
         writer.writeheader()
         for r in results:
-            writer.writerow({"source": r.symbol, "target": r.family, "relation": "tested_with", "weight": 1, "run_id": r.run_id})
-            writer.writerow({"source": r.family, "target": r.decision, "relation": "produced", "weight": 1, "run_id": r.run_id})
+            writer.writerow(
+                {
+                    "source": r.symbol,
+                    "target": r.family,
+                    "relation": "tested_with",
+                    "weight": 1,
+                    "run_id": r.run_id,
+                }
+            )
+            writer.writerow(
+                {
+                    "source": r.family,
+                    "target": r.decision,
+                    "relation": "produced",
+                    "weight": 1,
+                    "run_id": r.run_id,
+                }
+            )
             if r.validation_status:
-                writer.writerow({"source": r.run_id, "target": r.validation_status, "relation": "validated_as", "weight": 1, "run_id": r.run_id})
+                writer.writerow(
+                    {
+                        "source": r.run_id,
+                        "target": r.validation_status,
+                        "relation": "validated_as",
+                        "weight": 1,
+                        "run_id": r.run_id,
+                    }
+                )
             for reason in r.reasons:
-                writer.writerow({"source": r.run_id, "target": reason, "relation": "has_reason", "weight": 1, "run_id": r.run_id})
+                writer.writerow(
+                    {
+                        "source": r.run_id,
+                        "target": reason,
+                        "relation": "has_reason",
+                        "weight": 1,
+                        "run_id": r.run_id,
+                    }
+                )
 
 
 def validation_counts(results: list[RunResult]) -> dict[str, int]:
@@ -237,23 +305,31 @@ def validation_counts(results: list[RunResult]) -> dict[str, int]:
     return counts
 
 
-def build_llm_review_pack(spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None) -> dict[str, Any]:
+def build_llm_review_pack(
+    spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None
+) -> dict[str, Any]:
     by_decision: dict[str, int] = {}
     for r in results:
         by_decision[r.decision] = by_decision.get(r.decision, 0) + 1
     by_family: dict[str, dict[str, Any]] = {}
     for r in results:
-        agg = by_family.setdefault(r.family, {"runs": 0, "sum_avg_net_pct": 0.0, "forward_paper": 0})
+        agg = by_family.setdefault(
+            r.family, {"runs": 0, "sum_avg_net_pct": 0.0, "forward_paper": 0}
+        )
         agg["runs"] += 1
         agg["sum_avg_net_pct"] += float(r.metrics.get("avg_net_pct") or 0.0)
         if r.validation_status == "FORWARD_PAPER":
             agg["forward_paper"] += 1
     for agg in by_family.values():
-        agg["mean_avg_net_pct"] = round(agg.pop("sum_avg_net_pct") / agg["runs"], 4) if agg["runs"] else 0.0
+        agg["mean_avg_net_pct"] = (
+            round(agg.pop("sum_avg_net_pct") / agg["runs"], 4) if agg["runs"] else 0.0
+        )
     top = sorted(
         results,
         key=lambda r: (
-            -VALIDATION_ORDER.index(r.validation_status) if r.validation_status in VALIDATION_ORDER else -9,
+            -VALIDATION_ORDER.index(r.validation_status)
+            if r.validation_status in VALIDATION_ORDER
+            else -9,
             r.metrics.get("avg_net_pct") or 0.0,
         ),
         reverse=True,
@@ -293,7 +369,11 @@ def build_llm_review_pack(spec: ExperimentSpec, results: list[RunResult], reduce
 
 def entry_timing_aggregate(results: list[RunResult]) -> dict[str, Any]:
     """Mean of per-run entry-timing blocks (empty if none recorded)."""
-    blocks = [r.metrics.get("entry_timing") for r in results if isinstance(r.metrics.get("entry_timing"), dict)]
+    blocks = [
+        block
+        for result in results
+        if isinstance(block := result.metrics.get("entry_timing"), dict)
+    ]
     keys = ("avg_capture_ratio", "avg_mfe_pct", "avg_mae_pct", "late_entry_rate")
     out: dict[str, Any] = {}
     for k in keys:
@@ -303,7 +383,9 @@ def entry_timing_aggregate(results: list[RunResult]) -> dict[str, Any]:
     return out
 
 
-def _llm_review_prompt(spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None) -> str:
+def _llm_review_prompt(
+    spec: ExperimentSpec, results: list[RunResult], reduce_report: Any = None
+) -> str:
     pack = build_llm_review_pack(spec, results, reduce_report)
     v_counts = validation_counts(results)
     return "\n".join(
@@ -359,18 +441,30 @@ def _safe_note_name(value: str) -> str:
     return "".join(keep).strip("_") or "unknown"
 
 
-def _write_obsidian_notes(spec: ExperimentSpec, results: list[RunResult], out_root: Path, run_name: str) -> None:
+def _write_obsidian_notes(
+    spec: ExperimentSpec, results: list[RunResult], out_root: Path, run_name: str
+) -> None:
     vault = out_root / "obsidian-vault"
     dirs = {
         name: vault / name
-        for name in ("Runs", "Candidates", "Symbols", "Families", "Decisions", "Reasons", "Validation")
+        for name in (
+            "Runs",
+            "Candidates",
+            "Symbols",
+            "Families",
+            "Decisions",
+            "Reasons",
+            "Validation",
+        )
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
 
     run_note = dirs["Runs"] / f"{_safe_note_name(run_name)}.md"
     run_links = []
-    for r in sorted(results, key=lambda item: (item.decision, item.symbol, item.family, item.run_id)):
+    for r in sorted(
+        results, key=lambda item: (item.decision, item.symbol, item.family, item.run_id)
+    ):
         note_id = _candidate_note_id(r)
         run_links.append(
             f"- [[Candidates/{note_id}|{r.run_id}]] - [[Symbols/{r.symbol}]] - "
@@ -412,17 +506,39 @@ def _write_obsidian_notes(spec: ExperimentSpec, results: list[RunResult], out_ro
     )
 
     for r in results:
-        _write_candidate_note(dirs["Candidates"] / f"{_candidate_note_id(r)}.md", r, run_name)
+        _write_candidate_note(
+            dirs["Candidates"] / f"{_candidate_note_id(r)}.md", r, run_name
+        )
     for symbol in sorted({r.symbol for r in results}):
-        _append_index_note(dirs["Symbols"] / f"{_safe_note_name(symbol)}.md", f"# {symbol}", _links_for(results, lambda r: r.symbol == symbol))
+        _append_index_note(
+            dirs["Symbols"] / f"{_safe_note_name(symbol)}.md",
+            f"# {symbol}",
+            _links_for(results, lambda r: r.symbol == symbol),
+        )
     for family in sorted({r.family for r in results}):
-        _append_index_note(dirs["Families"] / f"{_safe_note_name(family)}.md", f"# {family}", _links_for(results, lambda r: r.family == family))
+        _append_index_note(
+            dirs["Families"] / f"{_safe_note_name(family)}.md",
+            f"# {family}",
+            _links_for(results, lambda r: r.family == family),
+        )
     for decision in sorted({r.decision for r in results}):
-        _append_index_note(dirs["Decisions"] / f"{_safe_note_name(decision)}.md", f"# {decision}", _links_for(results, lambda r: r.decision == decision))
+        _append_index_note(
+            dirs["Decisions"] / f"{_safe_note_name(decision)}.md",
+            f"# {decision}",
+            _links_for(results, lambda r: r.decision == decision),
+        )
     for status in sorted({r.validation_status or "UNKNOWN" for r in results}):
-        _append_index_note(dirs["Validation"] / f"{_safe_note_name(status)}.md", f"# {status}", _links_for(results, lambda r: (r.validation_status or "UNKNOWN") == status))
+        _append_index_note(
+            dirs["Validation"] / f"{_safe_note_name(status)}.md",
+            f"# {status}",
+            _links_for(results, lambda r: (r.validation_status or "UNKNOWN") == status),
+        )
     for reason in sorted({reason for r in results for reason in r.reasons}):
-        _append_index_note(dirs["Reasons"] / f"{_safe_note_name(reason)}.md", f"# {reason}", _links_for(results, lambda r: reason in r.reasons))
+        _append_index_note(
+            dirs["Reasons"] / f"{_safe_note_name(reason)}.md",
+            f"# {reason}",
+            _links_for(results, lambda r: reason in r.reasons),
+        )
 
 
 def _candidate_note_id(result: RunResult) -> str:
@@ -466,7 +582,10 @@ def _write_candidate_note(path: Path, result: RunResult, run_name: str) -> None:
 
 
 def _append_index_note(path: Path, title: str, links: list[str]) -> None:
-    path.write_text("\n".join([title, "", "## Linked Candidates", "", *sorted(set(links)), ""]), encoding="utf-8")
+    path.write_text(
+        "\n".join([title, "", "## Linked Candidates", "", *sorted(set(links)), ""]),
+        encoding="utf-8",
+    )
 
 
 def _links_for(results: list[RunResult], match) -> list[str]:
@@ -500,7 +619,9 @@ def _summary_md(spec: ExperimentSpec, results: list[RunResult]) -> str:
         "",
     ]
     top = sorted(results, key=lambda r: r.metrics["avg_net_pct"], reverse=True)[:12]
-    lines.append("| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | pf_state | reasons |")
+    lines.append(
+        "| run_id | symbol | family | decision | validation | trades | avg_net_pct | test_avg_net_pct | pf | pf_state | reasons |"
+    )
     lines.append("|---|---|---|---|---|---:|---:|---:|---:|---|")
     for r in top:
         m = r.metrics

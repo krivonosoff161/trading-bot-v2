@@ -27,7 +27,12 @@ DEFAULT_MAX_READ_ROWS = 50_000
 WARNING_BUDGET_BYTES = 1_500_000_000
 HARD_BUDGET_BYTES = 2_000_000_000
 _OPTIONAL_FIELDS = (
-    "funding", "oi", "index_px", "obi_top5", "spread_bps", "trade_delta_100",
+    "funding",
+    "oi",
+    "index_px",
+    "obi_top5",
+    "spread_bps",
+    "trade_delta_100",
 )
 _TIMEFRAME_MS = {
     "1m": 60_000,
@@ -80,7 +85,9 @@ class UpsertResult:
 
 def normalize_symbol(symbol: str) -> str:
     token = str(symbol).strip().upper().replace("-", "_").replace("/", "_")
-    if not token or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for ch in token):
+    if not token or any(
+        ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for ch in token
+    ):
         raise ValueError(f"unsupported candle symbol: {symbol!r}")
     return token
 
@@ -119,9 +126,13 @@ class CandleStore:
     def storage_usage_bytes(self) -> int:
         """Database + WAL/SHM footprint; never scans unrelated private artifacts."""
         return sum(
-            path.stat().st_size for path in (
-                self.path, Path(f"{self.path}-wal"), Path(f"{self.path}-shm"),
-            ) if path.is_file()
+            path.stat().st_size
+            for path in (
+                self.path,
+                Path(f"{self.path}-wal"),
+                Path(f"{self.path}-shm"),
+            )
+            if path.is_file()
         )
 
     def budget_status(self) -> dict[str, Any]:
@@ -130,9 +141,9 @@ class CandleStore:
             "bytes": used,
             "warning_bytes": WARNING_BUDGET_BYTES,
             "hard_bytes": HARD_BUDGET_BYTES,
-            "status": "hard_limit" if used >= HARD_BUDGET_BYTES else (
-                "warning" if used >= WARNING_BUDGET_BYTES else "ok"
-            ),
+            "status": "hard_limit"
+            if used >= HARD_BUDGET_BYTES
+            else ("warning" if used >= WARNING_BUDGET_BYTES else "ok"),
         }
 
     def initialize(self) -> None:
@@ -242,13 +253,18 @@ class CandleStore:
         list_time_ms: int | None = None,
         updated_at_ms: int | None = None,
     ) -> None:
-        self.upsert_instruments([{
-            "inst_id": inst_id,
-            "state": state,
-            "inst_type": inst_type,
-            "settle_ccy": settle_ccy,
-            "list_time_ms": list_time_ms,
-        }], updated_at_ms=updated_at_ms)
+        self.upsert_instruments(
+            [
+                {
+                    "inst_id": inst_id,
+                    "state": state,
+                    "inst_type": inst_type,
+                    "settle_ccy": settle_ccy,
+                    "list_time_ms": list_time_ms,
+                }
+            ],
+            updated_at_ms=updated_at_ms,
+        )
 
     def upsert_instruments(
         self,
@@ -266,17 +282,30 @@ class CandleStore:
             canonical = normalize_symbol(str(inst_id)).replace("_", "-")
             list_time = instrument.get("list_time_ms", instrument.get("listTime"))
             try:
-                parsed_list_time = int(list_time) if list_time not in (None, "") else None
+                parsed_list_time = (
+                    int(list_time)
+                    if isinstance(list_time, (str, bytes, bytearray, int, float))
+                    and list_time != ""
+                    else None
+                )
             except (TypeError, ValueError):
                 parsed_list_time = None
-            rows.append((
-                canonical,
-                str(instrument.get("state") or ""),
-                str(instrument.get("inst_type") or instrument.get("instType") or ""),
-                str(instrument.get("settle_ccy") or instrument.get("settleCcy") or ""),
-                parsed_list_time,
-                now,
-            ))
+            rows.append(
+                (
+                    canonical,
+                    str(instrument.get("state") or ""),
+                    str(
+                        instrument.get("inst_type") or instrument.get("instType") or ""
+                    ),
+                    str(
+                        instrument.get("settle_ccy")
+                        or instrument.get("settleCcy")
+                        or ""
+                    ),
+                    parsed_list_time,
+                    now,
+                )
+            )
         if not rows:
             return 0
         with self._connect(write=True) as conn:
@@ -327,12 +356,14 @@ class CandleStore:
             if int(ingested_at_ms) != int(acquired_at_ms):
                 raise ValueError("ingested_at_ms and acquired_at_ms disagree")
         now = int(
-            acquired_at_ms if acquired_at_ms is not None else (
-                ingested_at_ms if ingested_at_ms is not None else time.time() * 1000
-            )
+            acquired_at_ms
+            if acquired_at_ms is not None
+            else (ingested_at_ms if ingested_at_ms is not None else time.time() * 1000)
         )
         default_available = int(available_at_ms if available_at_ms is not None else now)
-        default_observed = int(observed_at_ms if observed_at_ms is not None else default_available)
+        default_observed = int(
+            observed_at_ms if observed_at_ms is not None else default_available
+        )
         _validate_provenance_times(default_observed, default_available, now)
         normalized: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         accepted_ts: set[int] = set()
@@ -344,7 +375,9 @@ class CandleStore:
                 row_observed = _row_time(row, "observed_at_ms", default_observed)
                 _validate_provenance_times(row_observed, row_available, row_acquired)
                 row_source = str(row.get("_source") or row.get("source") or source)
-                clean = _normalize_row(row, source=row_source, ingested_at_ms=row_acquired)
+                clean = _normalize_row(
+                    row, source=row_source, ingested_at_ms=row_acquired
+                )
             except CandleValidationError:
                 if strict:
                     raise
@@ -353,24 +386,39 @@ class CandleStore:
             content = _clean_to_candle(clean)
             content_hash = candle_row_content_hash(content)
             revision_id = candle_revision_id(
-                sym, tf, int(clean[0]), content_hash, row_source,
-                row_observed, row_available,
+                sym,
+                tf,
+                int(clean[0]),
+                content_hash,
+                row_source,
+                row_observed,
+                row_available,
             )
             field_provenance = _field_provenance(
-                content, revision_id=revision_id, source=row_source,
-                observed_at_ms=row_observed, available_at_ms=row_available,
+                content,
+                revision_id=revision_id,
+                source=row_source,
+                observed_at_ms=row_observed,
+                available_at_ms=row_available,
             )
-            normalized.append((clean, {
-                "revision_id": revision_id,
-                "content_hash": content_hash,
-                "observed_at_ms": row_observed,
-                "available_at_ms": row_available,
-                "acquired_at_ms": row_acquired,
-                "acquisition_order": order,
-                "field_provenance_json": json.dumps(
-                    field_provenance, sort_keys=True, separators=(",", ":"),
-                ),
-            }))
+            normalized.append(
+                (
+                    clean,
+                    {
+                        "revision_id": revision_id,
+                        "content_hash": content_hash,
+                        "observed_at_ms": row_observed,
+                        "available_at_ms": row_available,
+                        "acquired_at_ms": row_acquired,
+                        "acquisition_order": order,
+                        "field_provenance_json": json.dumps(
+                            field_provenance,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    },
+                )
+            )
             accepted_ts.add(int(clean[0]))
 
         self.initialize()
@@ -412,9 +460,14 @@ class CandleStore:
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                    ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
-                            meta["revision_id"], sym, tf, *clean[:-1],
-                            meta["content_hash"], meta["observed_at_ms"],
-                            meta["available_at_ms"], meta["acquired_at_ms"],
+                            meta["revision_id"],
+                            sym,
+                            tf,
+                            *clean[:-1],
+                            meta["content_hash"],
+                            meta["observed_at_ms"],
+                            meta["available_at_ms"],
+                            meta["acquired_at_ms"],
                             meta["acquisition_order"],
                             str(parent[0]) if parent is not None else None,
                             meta["field_provenance_json"],
@@ -434,7 +487,9 @@ class CandleStore:
                     ).fetchone()
                     if latest is not None:
                         conn.execute(statement, (sym, tf, *tuple(latest)))
-            coverage = self._refresh_series(conn, sym, tf, source=str(source), now_ms=now)
+            coverage = self._refresh_series(
+                conn, sym, tf, source=str(source), now_ms=now
+            )
         return UpsertResult(
             symbol=sym,
             timeframe=tf,
@@ -459,8 +514,13 @@ class CandleStore:
             raise ValueError(f"unsupported candle reader version: {reader_version!r}")
         if version == "v2":
             return self.read_snapshot(
-                symbol, timeframe, start_ts, end_ts,
-                as_of_ms=None, purpose="compat_read", coverage_policy="available",
+                symbol,
+                timeframe,
+                start_ts,
+                end_ts,
+                as_of_ms=None,
+                purpose="compat_read",
+                coverage_policy="available",
                 limit=limit,
             ).rows
         return self._read_v1(symbol, timeframe, start_ts, end_ts, limit=limit)
@@ -525,11 +585,18 @@ class CandleStore:
         rows: list[dict[str, Any]] = []
         if self.exists:
             with self._connect() as conn:
-                has_v2 = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='candle_revisions'"
-                ).fetchone() is not None
+                has_v2 = (
+                    conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='candle_revisions'"
+                    ).fetchone()
+                    is not None
+                )
                 if has_v2:
-                    boundary = int(as_of_ms) if as_of_ms is not None else 9_223_372_036_854_775_807
+                    boundary = (
+                        int(as_of_ms)
+                        if as_of_ms is not None
+                        else 9_223_372_036_854_775_807
+                    )
                     selected = conn.execute(
                         """WITH ranked AS (
                                SELECT *, ROW_NUMBER() OVER (
@@ -593,13 +660,23 @@ class CandleStore:
 
     def series_summary(self) -> dict[str, Any]:
         if not self.exists:
-            return {"available": False, "series": 0, "rows": 0, "gaps": 0, "by_timeframe": {}}
+            return {
+                "available": False,
+                "series": 0,
+                "rows": 0,
+                "gaps": 0,
+                "by_timeframe": {},
+            }
         with self._connect() as conn:
             totals = conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(row_count),0), COALESCE(SUM(gap_count),0) FROM series"
             ).fetchone()
             by_timeframe = {
-                str(row[0]): {"series": int(row[1]), "rows": int(row[2]), "gaps": int(row[3])}
+                str(row[0]): {
+                    "series": int(row[1]),
+                    "rows": int(row[2]),
+                    "gaps": int(row[3]),
+                }
                 for row in conn.execute(
                     "SELECT timeframe, COUNT(*), COALESCE(SUM(row_count),0), "
                     "COALESCE(SUM(gap_count),0) FROM series GROUP BY timeframe ORDER BY timeframe"
@@ -621,7 +698,9 @@ class CandleStore:
         mode = "TRUNCATE" if truncate else "PASSIVE"
         with self._connect(write=True) as conn:
             row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
-        return tuple(int(value) for value in row)
+        if row is None or len(row) != 3:
+            raise CandleStoreError("unexpected WAL checkpoint response")
+        return int(row[0]), int(row[1]), int(row[2])
 
     def _refresh_series(
         self,
@@ -653,10 +732,25 @@ class CandleStore:
                  first_ts=excluded.first_ts, last_ts=excluded.last_ts,
                  row_count=excluded.row_count, gap_count=excluded.gap_count,
                  source=excluded.source, updated_at_ms=excluded.updated_at_ms""",
-            (symbol, timeframe, first_ts, last_ts, int(count), int(gaps), source, now_ms),
+            (
+                symbol,
+                timeframe,
+                first_ts,
+                last_ts,
+                int(count),
+                int(gaps),
+                source,
+                now_ms,
+            ),
         )
         return _coverage_from_values(
-            symbol, timeframe, first_ts, last_ts, int(count), int(gaps), now_ms,
+            symbol,
+            timeframe,
+            first_ts,
+            last_ts,
+            int(count),
+            int(gaps),
+            now_ms,
         )
 
     @contextmanager
@@ -679,7 +773,9 @@ class CandleStore:
         except sqlite3.Error as exc:
             if write and conn is not None:
                 conn.rollback()
-            raise CandleStoreError("canonical candle database operation failed") from exc
+            raise CandleStoreError(
+                "canonical candle database operation failed"
+            ) from exc
         except Exception:
             if write and conn is not None:
                 conn.rollback()
@@ -708,7 +804,9 @@ def _normalize_row(
         raise CandleValidationError("candle has invalid required fields") from exc
     values = (open_, high, low, close, vol)
     if ts < 0 or not all(math.isfinite(value) for value in values):
-        raise CandleValidationError("candle contains a negative timestamp or non-finite number")
+        raise CandleValidationError(
+            "candle contains a negative timestamp or non-finite number"
+        )
     if vol < 0:
         raise CandleValidationError("candle volume must be non-negative")
     if high < max(open_, low, close) or low > min(open_, high, close):
@@ -716,9 +814,13 @@ def _normalize_row(
     confirm = str(row.get("confirm", "1")).strip().lower()
     if confirm in {"0", "false", "no"}:
         raise CandleValidationError("unconfirmed candle is not durable market data")
-    date = str(row.get("date") or dt.datetime.fromtimestamp(
-        ts / 1000, tz=dt.timezone.utc,
-    ).isoformat())
+    date = str(
+        row.get("date")
+        or dt.datetime.fromtimestamp(
+            ts / 1000,
+            tz=dt.timezone.utc,
+        ).isoformat()
+    )
     optional: list[float | None] = []
     for field in _OPTIONAL_FIELDS:
         value = row.get(field)
@@ -728,26 +830,53 @@ def _normalize_row(
         try:
             number = float(value)
         except (TypeError, ValueError) as exc:
-            raise CandleValidationError(f"invalid optional candle field: {field}") from exc
+            raise CandleValidationError(
+                f"invalid optional candle field: {field}"
+            ) from exc
         if not math.isfinite(number):
             raise CandleValidationError(f"non-finite optional candle field: {field}")
         optional.append(number)
     known = {
-        "ts", "date", "open", "high", "low", "close", "vol", "confirm", "source",
-        "observed_at_ms", "available_at_ms", "acquired_at_ms", "ingested_at_ms",
+        "ts",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "vol",
+        "confirm",
+        "source",
+        "observed_at_ms",
+        "available_at_ms",
+        "acquired_at_ms",
+        "ingested_at_ms",
         *_OPTIONAL_FIELDS,
     }
     extras = {
-        str(key): value for key, value in row.items()
+        str(key): value
+        for key, value in row.items()
         if key not in known and not str(key).startswith("_")
     }
     try:
-        extra_json = json.dumps(extras, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        extra_json = json.dumps(
+            extras, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
     except (TypeError, ValueError) as exc:
-        raise CandleValidationError("candle extra fields are not JSON-serializable") from exc
+        raise CandleValidationError(
+            "candle extra fields are not JSON-serializable"
+        ) from exc
     return (
-        ts, open_, high, low, close, vol, date, str(source),
-        *optional, extra_json, int(ingested_at_ms),
+        ts,
+        open_,
+        high,
+        low,
+        close,
+        vol,
+        date,
+        str(source),
+        *optional,
+        extra_json,
+        int(ingested_at_ms),
     )
 
 
@@ -756,7 +885,9 @@ def _row_time(row: dict[str, Any], field: str, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise CandleValidationError(f"invalid candle provenance field: {field}") from exc
+        raise CandleValidationError(
+            f"invalid candle provenance field: {field}"
+        ) from exc
 
 
 def _validate_provenance_times(observed: int, available: int, acquired: int) -> None:
@@ -791,8 +922,12 @@ def _clean_to_candle(clean: tuple[Any, ...]) -> dict[str, Any]:
 
 
 def _field_provenance(
-    row: dict[str, Any], *, revision_id: str, source: str,
-    observed_at_ms: int, available_at_ms: int,
+    row: dict[str, Any],
+    *,
+    revision_id: str,
+    source: str,
+    observed_at_ms: int,
+    available_at_ms: int,
 ) -> dict[str, dict[str, Any]]:
     common = {
         "revision_id": revision_id,
@@ -821,7 +956,9 @@ def _row_to_candle(row: sqlite3.Row) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         extras = {}
     if isinstance(extras, dict):
-        candle.update({key: value for key, value in extras.items() if key not in candle})
+        candle.update(
+            {key: value for key, value in extras.items() if key not in candle}
+        )
     keys = set(row.keys())
     if "source" in keys and row["source"]:
         candle["_source"] = str(row["source"])

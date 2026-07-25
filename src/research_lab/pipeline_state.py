@@ -10,6 +10,7 @@ State only — it never fetches, queues, or touches an order path. Writes happen
 only in --apply runs (the CLI passes a real path); --dry-run uses an in-memory
 path so nothing is persisted.
 """
+
 from __future__ import annotations
 
 import json
@@ -63,8 +64,12 @@ class PipelineState:
 
     # ── cycles ────────────────────────────────────────────────────────────────
     def start_cycle(self) -> int:
-        cur = self._conn.execute("INSERT INTO cycles(started_ts) VALUES (?)", (time.time(),))
+        cur = self._conn.execute(
+            "INSERT INTO cycles(started_ts) VALUES (?)", (time.time(),)
+        )
         self._conn.commit()
+        if cur.lastrowid is None:
+            raise RuntimeError("cycle insert did not return an id")
         return int(cur.lastrowid)
 
     def finish_cycle(self, cycle: int, counters: dict[str, Any]) -> None:
@@ -76,12 +81,16 @@ class PipelineState:
 
     # ── checkpoint / dedup ──────────────────────────────────────────────────────
     def is_watch_processed(self, watch_id: str) -> bool:
-        return self._conn.execute(
-            "SELECT 1 FROM processed_watches WHERE watch_id=?", (str(watch_id),)
-        ).fetchone() is not None
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM processed_watches WHERE watch_id=?", (str(watch_id),)
+            ).fetchone()
+            is not None
+        )
 
-    def mark_watch_processed(self, watch_id: str, *, okx_inst: str | None, timeframe: str | None,
-                             cycle: int) -> None:
+    def mark_watch_processed(
+        self, watch_id: str, *, okx_inst: str | None, timeframe: str | None, cycle: int
+    ) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO processed_watches(watch_id, okx_inst, timeframe, cycle, ts)"
             " VALUES (?, ?, ?, ?, ?)",
@@ -90,32 +99,66 @@ class PipelineState:
         self._conn.commit()
 
     def is_job_queued(self, job_key: str) -> bool:
-        return self._conn.execute(
-            "SELECT 1 FROM queued_jobs WHERE job_key=?", (str(job_key),)
-        ).fetchone() is not None
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM queued_jobs WHERE job_key=?", (str(job_key),)
+            ).fetchone()
+            is not None
+        )
 
-    def mark_job_queued(self, job_key: str, *, symbol: str | None, timeframe: str | None,
-                        family: str | None, experiment_id: str | None, cycle: int) -> None:
+    def mark_job_queued(
+        self,
+        job_key: str,
+        *,
+        symbol: str | None,
+        timeframe: str | None,
+        family: str | None,
+        experiment_id: str | None,
+        cycle: int,
+    ) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO queued_jobs(job_key, symbol, timeframe, family, experiment_id,"
             " cycle, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(job_key), symbol, timeframe, family, experiment_id, int(cycle), time.time()),
+            (
+                str(job_key),
+                symbol,
+                timeframe,
+                family,
+                experiment_id,
+                int(cycle),
+                time.time(),
+            ),
         )
         self._conn.commit()
 
     def queued_insts(self) -> set[str]:
-        return {str(r["symbol"]).upper() for r in self._conn.execute(
-            "SELECT symbol FROM queued_jobs WHERE symbol IS NOT NULL")}
+        return {
+            str(r["symbol"]).upper()
+            for r in self._conn.execute(
+                "SELECT symbol FROM queued_jobs WHERE symbol IS NOT NULL"
+            )
+        }
 
-    def record_prepared(self, okx_inst: str, timeframe: str, *, rows: int, cycle: int) -> None:
+    def record_prepared(
+        self, okx_inst: str, timeframe: str, *, rows: int, cycle: int
+    ) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO prepared_data(key, okx_inst, timeframe, rows, cycle, ts)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (f"{okx_inst}::{timeframe}", okx_inst, timeframe, int(rows), int(cycle), time.time()),
+            (
+                f"{okx_inst}::{timeframe}",
+                okx_inst,
+                timeframe,
+                int(rows),
+                int(cycle),
+                time.time(),
+            ),
         )
         self._conn.commit()
 
-    def record_skip(self, cycle: int, *, symbol: str | None, timeframe: str | None, reason: str) -> None:
+    def record_skip(
+        self, cycle: int, *, symbol: str | None, timeframe: str | None, reason: str
+    ) -> None:
         self._conn.execute(
             "INSERT INTO skips(cycle, symbol, timeframe, reason, ts) VALUES (?, ?, ?, ?, ?)",
             (int(cycle), symbol, timeframe, str(reason), time.time()),
@@ -127,11 +170,16 @@ class PipelineState:
         def _scalar(sql: str) -> int:
             return int(self._conn.execute(sql).fetchone()[0])
 
-        skip_reasons = {str(r["reason"]): int(r["n"]) for r in self._conn.execute(
-            "SELECT reason, COUNT(*) AS n FROM skips GROUP BY reason ORDER BY n DESC")}
+        skip_reasons = {
+            str(r["reason"]): int(r["n"])
+            for r in self._conn.execute(
+                "SELECT reason, COUNT(*) AS n FROM skips GROUP BY reason ORDER BY n DESC"
+            )
+        }
         last = self._conn.execute(
             "SELECT cycle, started_ts, finished_ts, counters_json FROM cycles"
-            " WHERE finished_ts IS NOT NULL ORDER BY cycle DESC LIMIT 1").fetchone()
+            " WHERE finished_ts IS NOT NULL ORDER BY cycle DESC LIMIT 1"
+        ).fetchone()
         last_cycle = None
         if last is not None:
             last_cycle = {

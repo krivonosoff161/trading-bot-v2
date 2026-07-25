@@ -80,9 +80,18 @@ class _FamilyStats:
         take_rate = self.take / decisive if decisive else 0.0
         stop_rate = self.stop / decisive if decisive else 0.0
         avg_net_r = self.net_r_sum / self.net_r_count if self.net_r_count else 0.0
-        avg_net_pct = self.net_pct_sum / self.net_pct_count if self.net_pct_count else 0.0
-        avg_paper_pnl = self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
-        label = _quality_label(rows=self.rows, take_rate=take_rate, stop_rate=stop_rate, avg_net_r=avg_net_r)
+        avg_net_pct = (
+            self.net_pct_sum / self.net_pct_count if self.net_pct_count else 0.0
+        )
+        avg_paper_pnl = (
+            self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
+        )
+        label = _quality_label(
+            rows=self.rows,
+            take_rate=take_rate,
+            stop_rate=stop_rate,
+            avg_net_r=avg_net_r,
+        )
         return {
             "family": self.family,
             "rows": self.rows,
@@ -150,7 +159,9 @@ class _GeometryProfileStats:
         decisive = self.take + self.stop
         take_rate = self.take / decisive if decisive else 0.0
         avg_net_r = self.net_r_sum / self.net_r_count if self.net_r_count else 0.0
-        avg_paper_pnl = self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
+        avg_paper_pnl = (
+            self.paper_pnl_sum / self.paper_pnl_count if self.paper_pnl_count else 0.0
+        )
         return {
             "profile_id": self.profile_id,
             "rows": self.rows,
@@ -165,7 +176,9 @@ class _GeometryProfileStats:
             "paper_pnl_usdt": round(self.paper_pnl_sum, 6),
             "avg_paper_pnl_usdt": round(avg_paper_pnl, 6),
             "top_families": _top_counts(self.by_family or {}),
-            "sample_label": "sample_too_small" if self.rows < 10 else "ready_for_compare",
+            "sample_label": "sample_too_small"
+            if self.rows < 10
+            else "ready_for_compare",
         }
 
 
@@ -204,7 +217,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _quality_label(*, rows: int, take_rate: float, stop_rate: float, avg_net_r: float) -> str:
+def _quality_label(
+    *, rows: int, take_rate: float, stop_rate: float, avg_net_r: float
+) -> str:
     if rows < MIN_FAMILY_SAMPLE:
         return "sample_too_small"
     if take_rate >= 0.45 and stop_rate <= 0.35 and avg_net_r >= 0:
@@ -217,7 +232,9 @@ def _quality_label(*, rows: int, take_rate: float, stop_rate: float, avg_net_r: 
 
 
 def _sent_key_summary(private_root: Path) -> dict[str, int]:
-    data = _read_json(private_root / "state" / "derived" / "paper_telegram_sent_keys.json")
+    data = _read_json(
+        private_root / "state" / "derived" / "paper_telegram_sent_keys.json"
+    )
     keys = [str(item) for item in data.get("sent_keys", []) if str(item)]
     previews = {key.rsplit(":", 1)[0] for key in keys if ":" in key}
     recipients = {key.rsplit(":", 1)[1] for key in keys if ":" in key}
@@ -247,7 +264,9 @@ def _pfr_live_trigger_reasons(pfr_counts: dict[str, Any]) -> dict[str, int]:
     reasons: dict[str, int] = {}
     for key, value in pfr_counts.items():
         key_text = str(key)
-        if key_text.startswith(("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder")):
+        if key_text.startswith(
+            ("pfr_rejected:", "pfr_fetch_", "pfr_dedup_", "pfr_tf_", "pfr_no_builder")
+        ):
             reasons[key_text] = int(value or 0)
     return _top_counts(reasons, limit=12)
 
@@ -256,7 +275,10 @@ def _cycle_resource_reasons(gate_counts: dict[str, Any]) -> dict[str, int]:
     reasons: dict[str, int] = {}
     for key, value in gate_counts.items():
         key_text = str(key)
-        if key_text in {"network_fetch_limit_reached", "stale_data"} or key_text.startswith(
+        if key_text in {
+            "network_fetch_limit_reached",
+            "stale_data",
+        } or key_text.startswith(
             ("observe_network_fetch_limit_reached", "live_fetch_limit_reached")
         ):
             reasons[key_text] = reasons.get(key_text, 0) + int(value or 0)
@@ -265,7 +287,11 @@ def _cycle_resource_reasons(gate_counts: dict[str, Any]) -> dict[str, int]:
 
 def _pfr_near_trigger_counts(pfr_counts: dict[str, Any]) -> dict[str, int]:
     return _top_counts(
-        {str(key): int(value or 0) for key, value in pfr_counts.items() if str(key).startswith("pfr_near_trigger:")},
+        {
+            str(key): int(value or 0)
+            for key, value in pfr_counts.items()
+            if str(key).startswith("pfr_near_trigger:")
+        },
         limit=12,
     )
 
@@ -282,12 +308,20 @@ def _validated_bridge_instructions(bridge: dict[str, Any]) -> int:
         metadata = contract.get("metadata") if isinstance(contract, dict) else {}
         if not isinstance(metadata, dict):
             metadata = {}
-        ready_strategy_id = str(item.get("ready_strategy_id") or metadata.get("ready_strategy_id") or "").strip()
-        verdict = str(
-            item.get("source_validation_verdict") or metadata.get("source_validation_verdict") or ""
+        ready_strategy_id = str(
+            item.get("ready_strategy_id") or metadata.get("ready_strategy_id") or ""
         ).strip()
-        tier = str(item.get("validation_tier") or metadata.get("validation_tier") or "").strip()
-        if tier == "validated_pfr" or (ready_strategy_id and verdict == "PAPER_FORWARD_READY"):
+        verdict = str(
+            item.get("source_validation_verdict")
+            or metadata.get("source_validation_verdict")
+            or ""
+        ).strip()
+        tier = str(
+            item.get("validation_tier") or metadata.get("validation_tier") or ""
+        ).strip()
+        if tier == "validated_pfr" or (
+            ready_strategy_id and verdict == "PAPER_FORWARD_READY"
+        ):
             total += 1
     return total
 
@@ -327,11 +361,14 @@ def _hour_bucket(hours: float) -> str:
     return "gt_24h"
 
 
-def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> dict[str, Any]:
+def _active_signal_lifecycle(
+    paper_signals: dict[str, Any], *, now: float
+) -> dict[str, Any]:
     active_rows = [
         row
         for row in paper_signals.get("active") or []
-        if isinstance(row, dict) and str(row.get("status") or "") in ACTIVE_PRODUCT_STATUSES
+        if isinstance(row, dict)
+        and str(row.get("status") or "") in ACTIVE_PRODUCT_STATUSES
     ]
     by_status: dict[str, int] = {}
     by_outcome_result: dict[str, int] = {}
@@ -344,7 +381,9 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> di
     for row in active_rows:
         status = str(row.get("status") or "unknown")
         by_status[status] = by_status.get(status, 0) + 1
-        outcome = row.get("outcome") if isinstance(row.get("outcome"), dict) else {}
+        outcome = (
+            raw_outcome if isinstance(raw_outcome := row.get("outcome"), dict) else {}
+        )
         result = str(outcome.get("result") or "")
         if result:
             by_outcome_result[result] = by_outcome_result.get(result, 0) + 1
@@ -365,7 +404,11 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> di
                 overdue_expiry += 1
             elif next_expiry_hours is None or expiry_hours < next_expiry_hours:
                 next_expiry_hours = expiry_hours
-    pending = sum(count for result, count in by_outcome_result.items() if result in PENDING_OUTCOME_RESULTS)
+    pending = sum(
+        count
+        for result, count in by_outcome_result.items()
+        if result in PENDING_OUTCOME_RESULTS
+    )
     return {
         "active": len(active_rows),
         "by_status": _top_counts(by_status),
@@ -373,7 +416,9 @@ def _active_signal_lifecycle(paper_signals: dict[str, Any], *, now: float) -> di
         "pending_outcomes": pending,
         "active_without_outcome": no_outcome,
         "oldest_age_hours": round(oldest_age_hours, 2),
-        "next_expiry_hours": round(next_expiry_hours, 2) if next_expiry_hours is not None else None,
+        "next_expiry_hours": round(next_expiry_hours, 2)
+        if next_expiry_hours is not None
+        else None,
         "overdue_expiry": overdue_expiry,
         "age_buckets": _top_counts(age_buckets),
         "expiry_buckets": _top_counts(expiry_buckets),
@@ -393,8 +438,7 @@ def _lifecycle_integrity(training_rows: list[dict[str, Any]]) -> dict[str, Any]:
         for row in rows
     )
     negative_hold = sum(
-        (_float_or_none(row.get("bars_held")) or 0.0) < 0
-        for row in rows
+        (_float_or_none(row.get("bars_held")) or 0.0) < 0 for row in rows
     )
     return {
         "schema": "paper_signal_lifecycle_integrity.v1",
@@ -411,22 +455,42 @@ def _pfr_funnel(
     bridge: dict[str, Any],
     paper_status: dict[str, Any],
 ) -> dict[str, Any]:
-    last_cycle = paper_status.get("last_cycle") if isinstance(paper_status.get("last_cycle"), dict) else {}
-    pfr_counts = last_cycle.get("pfr_counts") if isinstance(last_cycle.get("pfr_counts"), dict) else {}
-    gate_counts = last_cycle.get("gate_counts") if isinstance(last_cycle.get("gate_counts"), dict) else {}
+    last_cycle = (
+        raw_last_cycle
+        if isinstance(raw_last_cycle := paper_status.get("last_cycle"), dict)
+        else {}
+    )
+    pfr_counts = (
+        raw_pfr_counts
+        if isinstance(raw_pfr_counts := last_cycle.get("pfr_counts"), dict)
+        else {}
+    )
+    gate_counts = (
+        raw_gate_counts
+        if isinstance(raw_gate_counts := last_cycle.get("gate_counts"), dict)
+        else {}
+    )
     return {
         "catalog_ready": int(ready_catalog.get("ready") or 0),
         "catalog_rejected_quality": int(ready_catalog.get("rejected_quality") or 0),
-        "catalog_ready_by_family": _top_counts(ready_catalog.get("ready_by_family") or {}),
-        "catalog_ready_by_timeframe": _top_counts(ready_catalog.get("ready_by_timeframe") or {}),
+        "catalog_ready_by_family": _top_counts(
+            ready_catalog.get("ready_by_family") or {}
+        ),
+        "catalog_ready_by_timeframe": _top_counts(
+            ready_catalog.get("ready_by_timeframe") or {}
+        ),
         "bridge_active_source_signals": int(bridge.get("active_source_signals") or 0),
         "bridge_instructions": int(bridge.get("instructions") or 0),
         "bridge_validated_instructions": _validated_bridge_instructions(bridge),
         "bridge_skip_reasons": _top_counts(bridge.get("skip_reasons") or {}),
-        "last_cycle_generated": int(last_cycle.get("generated") or 0) if last_cycle else 0,
+        "last_cycle_generated": int(last_cycle.get("generated") or 0)
+        if last_cycle
+        else 0,
         "last_cycle_pfr_generated": int(pfr_counts.get("pfr_generated") or 0)
         + int(pfr_counts.get("pfr_generated_pretrigger") or 0),
-        "last_cycle_observed": int(last_cycle.get("observed") or 0) if last_cycle else 0,
+        "last_cycle_observed": int(last_cycle.get("observed") or 0)
+        if last_cycle
+        else 0,
         "last_cycle_pfr_counts": _top_counts(pfr_counts),
         "last_cycle_gate_counts": _top_counts(gate_counts),
         "live_trigger_reasons": _pfr_live_trigger_reasons(pfr_counts),
@@ -438,12 +502,18 @@ def _pfr_funnel(
 def _pfr_trigger_state(pfr_funnel: dict[str, Any]) -> dict[str, Any]:
     catalog_ready = int(pfr_funnel.get("catalog_ready") or 0)
     bridge_instructions = int(pfr_funnel.get("bridge_instructions") or 0)
-    bridge_validated_instructions = int(pfr_funnel.get("bridge_validated_instructions") or 0)
+    bridge_validated_instructions = int(
+        pfr_funnel.get("bridge_validated_instructions") or 0
+    )
     generated = int(pfr_funnel.get("last_cycle_pfr_generated") or 0)
-    trigger_reasons = pfr_funnel.get("live_trigger_reasons") if isinstance(
-        pfr_funnel.get("live_trigger_reasons"),
-        dict,
-    ) else {}
+    trigger_reasons = (
+        pfr_funnel.get("live_trigger_reasons")
+        if isinstance(
+            pfr_funnel.get("live_trigger_reasons"),
+            dict,
+        )
+        else {}
+    )
     if catalog_ready <= 0:
         state = "no_pfr_catalog_ready"
     elif bridge_validated_instructions > 0:
@@ -479,16 +549,22 @@ def _operator_action(
         return "wait_for_new_active_paper_candidates"
     if int(product_trades.get("active_live_ready") or 0) == 0:
         active_sources = product_trades.get("active_by_source") or {}
-        if active_blockers.get("missing_ready_strategy_id") and _only_research_sources(active_sources):
+        if active_blockers.get("missing_ready_strategy_id") and _only_research_sources(
+            active_sources
+        ):
             return "strict_main_waiting_for_active_pfr_candidates"
         if active_blockers.get("missing_ready_strategy_id"):
             return "fix_pfr_context_missing_ready_strategy_id"
         return "inspect_active_live_blockers"
-    if _delivery_int(delivery, "sent_messages", "sent") == 0 and _delivery_int(
-        delivery,
-        "duplicate_messages",
-        "duplicates",
-    ) > 0:
+    if (
+        _delivery_int(delivery, "sent_messages", "sent") == 0
+        and _delivery_int(
+            delivery,
+            "duplicate_messages",
+            "duplicates",
+        )
+        > 0
+    ):
         return "no_new_telegram_cards_duplicates_only"
     return "collect_outcomes"
 
@@ -497,7 +573,9 @@ def _only_research_sources(active_sources: Any) -> bool:
     if not isinstance(active_sources, dict) or not active_sources:
         return False
     research_sources = {"farm", "scanner", "manual", "tactical"}
-    present = {str(source) for source, count in active_sources.items() if int(count or 0) > 0}
+    present = {
+        str(source) for source, count in active_sources.items() if int(count or 0) > 0
+    }
     return bool(present) and present.issubset(research_sources)
 
 
@@ -521,7 +599,9 @@ def _geometry_profile_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row.get("schema") != "TrainingRow.v2":
             continue
         profile_id = str(row.get("farm_geometry_profile_id") or "legacy_or_unknown")
-        by_profile.setdefault(profile_id, _GeometryProfileStats(profile_id=profile_id)).add(row)
+        by_profile.setdefault(
+            profile_id, _GeometryProfileStats(profile_id=profile_id)
+        ).add(row)
     ranked = sorted(
         (stat.to_dict() for stat in by_profile.values()),
         key=lambda item: (-int(item["rows"]), str(item["profile_id"])),
@@ -683,12 +763,16 @@ def build_paper_product_quality_report(
 
     active_blockers = _active_live_blockers(product_trades)
     total_blockers = _top_counts(product_trades.get("by_live_block") or {})
-    pfr_funnel = _pfr_funnel(ready_catalog=ready_catalog, bridge=bridge, paper_status=paper_status)
+    pfr_funnel = _pfr_funnel(
+        ready_catalog=ready_catalog, bridge=bridge, paper_status=paper_status
+    )
     families = _family_stats(training_rows)
     geometry_profiles = _geometry_profile_stats(training_rows)
     paper_pnl_values = [
         value
-        for value in (_float_or_none(row.get("paper_pnl_usdt")) for row in training_rows)
+        for value in (
+            _float_or_none(row.get("paper_pnl_usdt")) for row in training_rows
+        )
         if value is not None
     ]
     quality_labels: dict[str, int] = {}
@@ -706,7 +790,9 @@ def build_paper_product_quality_report(
         "sent_messages": _delivery_int(delivery, "sent_messages", "sent"),
         "sent_cards": int(delivery.get("sent_cards") or 0),
         "duplicates": int(delivery.get("duplicates") or 0),
-        "duplicate_messages": _delivery_int(delivery, "duplicate_messages", "duplicates"),
+        "duplicate_messages": _delivery_int(
+            delivery, "duplicate_messages", "duplicates"
+        ),
         "duplicate_cards": int(delivery.get("duplicate_cards") or 0),
         "errors": int(delivery.get("errors") or 0),
         "error_messages": _delivery_int(delivery, "error_messages", "errors"),
@@ -746,7 +832,9 @@ def build_paper_product_quality_report(
         "training_by_result": _top_counts(training_summary.get("by_result") or {}),
         "training_paper_pnl_usdt": round(sum(paper_pnl_values), 6),
         "training_avg_paper_pnl_usdt": (
-            round(sum(paper_pnl_values) / len(paper_pnl_values), 6) if paper_pnl_values else 0.0
+            round(sum(paper_pnl_values) / len(paper_pnl_values), 6)
+            if paper_pnl_values
+            else 0.0
         ),
         "quality_labels": dict(sorted(quality_labels.items())),
         "families": families,

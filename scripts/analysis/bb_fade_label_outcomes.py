@@ -9,7 +9,6 @@ Usage:
 import asyncio
 import json
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,16 +37,16 @@ def simulate_outcome(candles: list, side: str, entry: float,
                      tp: float, sl: float, hold_min: int) -> tuple[str, float]:
     max_bars = hold_min // 5
     for i, c in enumerate(candles[:max_bars]):
-        h, l = float(c[2]), float(c[3])
+        high, low = float(c[2]), float(c[3])
         if side == "sell":
-            if h >= sl:
+            if high >= sl:
                 return "SL", (entry - sl) / entry * 100 - FEE_RT * 100
-            if l <= tp:
+            if low <= tp:
                 return "TP", (entry - tp) / entry * 100 - FEE_RT * 100
         else:
-            if l <= sl:
+            if low <= sl:
                 return "SL", (sl - entry) / entry * 100 - FEE_RT * 100
-            if h >= tp:
+            if high >= tp:
                 return "TP", (tp - entry) / entry * 100 - FEE_RT * 100
     exit_p = float(candles[min(max_bars - 1, len(candles) - 1)][4]) if candles else entry
     gross  = ((exit_p - entry) / entry * 100) * (1 if side == "buy" else -1)
@@ -67,7 +66,6 @@ async def label_all() -> None:
                 signals.append(json.loads(line))
 
     unlabeled = [s for s in signals if s.get("outcome") is None]
-    now_ms = int(time.time() * 1000)
     ready = []
     for s in unlabeled:
         ts = datetime.fromisoformat(s["ts"].replace("Z", "+00:00"))
@@ -121,7 +119,7 @@ async def label_all() -> None:
         avg   = sum(s["net_pct"] for s in done) / len(done)
         pf_n  = sum(s["net_pct"] for s in done if s["outcome"] == "TP") or 0
         pf_d  = abs(sum(s["net_pct"] for s in done if s["outcome"] == "SL")) or 1
-        print(f"\n=== BB Fade Live Stats ===")
+        print("\n=== BB Fade Live Stats ===")
         print(f"Labeled (excl TIME): {len(done)}  TP={tp_n}  SL={sl_n}")
         print(f"WR:     {wr:.1f}%")
         print(f"Avg net: {avg:+.3f}%")

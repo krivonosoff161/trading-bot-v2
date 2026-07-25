@@ -8,6 +8,7 @@ and turns each result into a ``unique_candidates`` row keyed by
 grader/validator; this only KEYS them so the operator sees the freshest unique result
 per logical candidate without duplicates. Read-only over artifacts.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,12 @@ def _safe(symbol: str) -> str:
 
 
 def classify_run(
-    private_root: Path, run_dir_label: str, *, timeframe: str,
-    data_fingerprint: str | None, task_id: int | None = None,
+    private_root: Path,
+    run_dir_label: str,
+    *,
+    timeframe: str,
+    data_fingerprint: str | None,
+    task_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Read a completed run dir -> unique_candidate dicts (one per result row)."""
     run_dir = Path(private_root) / run_dir_label
@@ -46,27 +51,39 @@ def classify_run(
         symbol = _safe(row.get("symbol") or "")
         family = str(row.get("family") or "")
         ph = params_hash(row.get("params") or {})
-        metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
-        regime = row.get("regime_summary") if isinstance(row.get("regime_summary"), dict) else {}
-        out.append({
-            "uc_key": f"{symbol}::{timeframe}::{family}::{ph}::{fp}",
-            "symbol": symbol, "timeframe": timeframe, "family": family,
-            "params_hash": ph, "data_fingerprint": fp,
-            "decision": str(row.get("decision") or "UNKNOWN"),
-            "validation_status": str(row.get("validation_status") or ""),
-            "hard_status": "",
-            "n_trades": int(metrics.get("n_trades") or 0),
-            "avg_net_pct": float(metrics.get("avg_net_pct") or 0.0),
-            "candidate_id": str(row.get("run_id") or row.get("candidate_id") or ""),
-            "params": dict(row.get("params") or {}),
-            "regime_bucket": str(regime.get("dominant_bucket") or ""),
-            "search_family_id": str(
-                row.get("search_family_id") or metrics.get("search_family_id") or ""
-            ),
-            "search_trial_id": str(
-                row.get("search_trial_id") or metrics.get("search_trial_id") or ""
-            ),
-            "effective_n_trials": int(metrics.get("effective_n_trials") or 0),
-            "run_dir_label": run_dir_label, "task_id": task_id,
-        })
+        metrics = (
+            raw_metrics if isinstance(raw_metrics := row.get("metrics"), dict) else {}
+        )
+        regime = (
+            raw_regime
+            if isinstance(raw_regime := row.get("regime_summary"), dict)
+            else {}
+        )
+        out.append(
+            {
+                "uc_key": f"{symbol}::{timeframe}::{family}::{ph}::{fp}",
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "family": family,
+                "params_hash": ph,
+                "data_fingerprint": fp,
+                "decision": str(row.get("decision") or "UNKNOWN"),
+                "validation_status": str(row.get("validation_status") or ""),
+                "hard_status": "",
+                "n_trades": int(metrics.get("n_trades") or 0),
+                "avg_net_pct": float(metrics.get("avg_net_pct") or 0.0),
+                "candidate_id": str(row.get("run_id") or row.get("candidate_id") or ""),
+                "params": dict(row.get("params") or {}),
+                "regime_bucket": str(regime.get("dominant_bucket") or ""),
+                "search_family_id": str(
+                    row.get("search_family_id") or metrics.get("search_family_id") or ""
+                ),
+                "search_trial_id": str(
+                    row.get("search_trial_id") or metrics.get("search_trial_id") or ""
+                ),
+                "effective_n_trials": int(metrics.get("effective_n_trials") or 0),
+                "run_dir_label": run_dir_label,
+                "task_id": task_id,
+            }
+        )
     return out

@@ -29,8 +29,15 @@ from src.research_lab.llm_provider import (  # noqa: E402
     OpenAICompatibleProvider,
     ProposalProvider,
 )
-from src.research_lab.llm_role_reviews import request_role_review, review_summary  # noqa: E402
-from src.research_lab.outcome_learning import build_outcome_review_pack, learning_summary  # noqa: E402
+from src.research_lab.llm_role_reviews import (  # noqa: E402
+    LLMRoleReview,
+    request_role_review,
+    review_summary,
+)
+from src.research_lab.outcome_learning import (  # noqa: E402
+    build_outcome_review_pack,
+    learning_summary,
+)
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
 
@@ -117,11 +124,15 @@ def _review_state(path: Path, role_id: str) -> tuple[set[str], dict[str, int]]:
 
 def _eligible_source_refs(path: Path, role_id: str) -> tuple[set[str], dict[str, int]]:
     accepted, failed = _review_state(path, role_id)
-    exhausted = {ref for ref, attempts in failed.items() if attempts >= MAX_REVIEW_ATTEMPTS}
+    exhausted = {
+        ref for ref, attempts in failed.items() if attempts >= MAX_REVIEW_ATTEMPTS
+    }
     return accepted | exhausted, failed
 
 
-def _load_unreviewed_training_rows(private_root: Path, limit: int) -> list[dict[str, Any]]:
+def _load_unreviewed_training_rows(
+    private_root: Path, limit: int
+) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
     training_path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
@@ -132,7 +143,12 @@ def _load_unreviewed_training_rows(private_root: Path, limit: int) -> list[dict[
     )
     missing = []
     for row in rows:
-        source_ref = str(row.get("training_row_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
+        source_ref = str(
+            row.get("training_row_id")
+            or row.get("paper_signal_id")
+            or row.get("signal_id")
+            or ""
+        )
         if source_ref and source_ref in completed_refs:
             continue
         missing.append(row)
@@ -149,42 +165,56 @@ def _load_validator_memory(private_root: Path, limit: int) -> list[dict[str, Any
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except json.JSONDecodeError:
         return []
-    rows = [row for row in (data.get("records") or data.get("items") or []) if isinstance(row, dict)]
+    rows = [
+        row
+        for row in (data.get("records") or data.get("items") or [])
+        if isinstance(row, dict)
+    ]
     interesting = [
-        row for row in rows
-        if str(row.get("outcome_class") or row.get("lite_status") or row.get("validation_status") or "")
+        row
+        for row in rows
+        if str(
+            row.get("outcome_class")
+            or row.get("lite_status")
+            or row.get("validation_status")
+            or ""
+        )
     ]
     completed_refs, _ = _eligible_source_refs(
         private_root / "state" / "llm_advice" / "validator_reviews.jsonl",
         "validator_reviewer",
     )
     eligible = [
-        row for row in (interesting or rows)
+        row
+        for row in (interesting or rows)
         if str(row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or "")
         not in completed_refs
     ]
     return eligible[-limit:]
 
 
-def _load_unreviewed_source_rows(private_root: Path, limit: int) -> list[dict[str, Any]]:
+def _load_unreviewed_source_rows(
+    private_root: Path, limit: int
+) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
-    rows = _read_jsonl(
-        private_root / "state" / "lineage" / "scanner_events.jsonl"
-    )
+    rows = _read_jsonl(private_root / "state" / "lineage" / "scanner_events.jsonl")
     completed_refs, _ = _eligible_source_refs(
         private_root / "state" / "llm_advice" / "source_trust_events.jsonl",
         "source_trust_reviewer",
     )
     eligible = [
-        row for row in rows
+        row
+        for row in rows
         if str(row.get("scanner_event_id") or row.get("symbol") or "")
         not in completed_refs
     ]
     return eligible[-limit:]
 
 
-def _load_unreviewed_system_results(private_root: Path, limit: int) -> list[dict[str, Any]]:
+def _load_unreviewed_system_results(
+    private_root: Path, limit: int
+) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
     rows = _read_jsonl(
@@ -195,8 +225,7 @@ def _load_unreviewed_system_results(private_root: Path, limit: int) -> list[dict
         "system_analyst",
     )
     return [
-        row for row in rows
-        if str(row.get("result_id") or "") not in completed_refs
+        row for row in rows if str(row.get("result_id") or "") not in completed_refs
     ][-limit:]
 
 
@@ -204,7 +233,9 @@ def _pick(row: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
     return {key: row[key] for key in keys if key in row}
 
 
-def _outcome_payload(row: dict[str, Any], peers: Iterable[dict[str, Any]], private_root: Path) -> dict[str, Any]:
+def _outcome_payload(
+    row: dict[str, Any], peers: Iterable[dict[str, Any]], private_root: Path
+) -> dict[str, Any]:
     return build_outcome_review_pack(row, peers=peers, private_root=private_root)
 
 
@@ -278,9 +309,14 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
         private_root, int(getattr(args, "max_analyst", 1))
     )
 
-    reviews = []
+    reviews: list[LLMRoleReview] = []
     for row in training_rows:
-        source_ref = str(row.get("training_row_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
+        source_ref = str(
+            row.get("training_row_id")
+            or row.get("paper_signal_id")
+            or row.get("signal_id")
+            or ""
+        )
         reviews.append(
             request_role_review(
                 private_root,
@@ -292,7 +328,9 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
         )
         time.sleep(args.sleep_seconds)
     for row in validator_rows:
-        source_ref = str(row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or "")
+        source_ref = str(
+            row.get("candidate_id") or row.get("uc_key") or row.get("symbol") or ""
+        )
         reviews.append(
             request_role_review(
                 private_root,
@@ -351,7 +389,10 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     }
     path = _summary_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return summary
 
 
@@ -363,7 +404,9 @@ def main() -> None:
     parser.add_argument("--api-key-env", default="ALIBABA_API_KEY")
     parser.add_argument("--model", default="")
     parser.add_argument("--timeout", type=float, default=60.0)
-    parser.add_argument("--rate-rub-per-1k", type=float, default=DEFAULT_RATE_RUB_PER_1K)
+    parser.add_argument(
+        "--rate-rub-per-1k", type=float, default=DEFAULT_RATE_RUB_PER_1K
+    )
     parser.add_argument("--max-outcomes", type=int, default=3)
     parser.add_argument("--max-validator", type=int, default=2)
     parser.add_argument("--max-sources", type=int, default=2)

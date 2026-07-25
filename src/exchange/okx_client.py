@@ -7,9 +7,8 @@ import base64
 import hashlib
 import hmac
 import json
-import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import aiohttp
 from loguru import logger
@@ -291,8 +290,6 @@ class OKXClient:
         size: number of contracts
         """
         inst_id = f"{symbol}-SWAP"
-        pos_side = "long" if side == "buy" else "short"
-
         body = {
             "instId": inst_id,
             "tdMode": "cross",

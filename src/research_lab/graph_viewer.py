@@ -40,7 +40,9 @@ def graph_viewer_dir(private_root: Path) -> Path:
     return private_root / "graph-viewer"
 
 
-def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350) -> dict[str, Any]:
+def build_graph_data(
+    entries: list[dict[str, Any]], *, max_candidates: int = 350
+) -> dict[str, Any]:
     """Build a compact graph from candidate registry entries.
 
     Nodes are intentionally typed for visual scanning:
@@ -58,7 +60,10 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
 
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
-    counts = {"candidates": 0, "symbols": set(), "strategies": set(), "reasons": set()}
+    candidate_count = 0
+    symbols: set[str] = set()
+    strategies: set[str] = set()
+    reasons_seen: set[str] = set()
     by_status: dict[str, int] = {}
 
     def add_node(node_id: str, label: str, kind: str, **extra: Any) -> None:
@@ -73,7 +78,9 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
         }
 
     def add_edge(source: str, target: str, relation: str, weight: float = 1.0) -> None:
-        edges.append({"source": source, "target": target, "relation": relation, "weight": weight})
+        edges.append(
+            {"source": source, "target": target, "relation": relation, "weight": weight}
+        )
 
     for entry in selected:
         cid = str(entry.get("candidate_id") or "unknown")
@@ -83,10 +90,18 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
         status = str(entry.get("validation_status") or "UNKNOWN")
         if status not in STATUS_COLOR:
             status = "UNKNOWN"
-        regime_summary = entry.get("regime_summary") if isinstance(entry.get("regime_summary"), dict) else {}
+        regime_summary = (
+            raw_regime_summary
+            if isinstance(raw_regime_summary := entry.get("regime_summary"), dict)
+            else {}
+        )
         regime = str(regime_summary.get("dominant_bucket") or "unclassified")
         reasons = [str(r) for r in (entry.get("validation_reasons") or []) if str(r)]
-        metrics = entry.get("metrics_summary") if isinstance(entry.get("metrics_summary"), dict) else {}
+        metrics = (
+            raw_metrics
+            if isinstance(raw_metrics := entry.get("metrics_summary"), dict)
+            else {}
+        )
 
         candidate_node = f"candidate:{experiment_id}:{cid}"
         symbol_node = f"symbol:{symbol}"
@@ -95,9 +110,9 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
         regime_node = f"regime:{regime}"
 
         by_status[status] = by_status.get(status, 0) + 1
-        counts["candidates"] += 1
-        counts["symbols"].add(symbol)
-        counts["strategies"].add(strategy)
+        candidate_count += 1
+        symbols.add(symbol)
+        strategies.add(strategy)
 
         add_node(
             candidate_node,
@@ -128,7 +143,7 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
 
         for reason in reasons[:5]:
             reason_node = f"reason:{reason}"
-            counts["reasons"].add(reason)
+            reasons_seen.add(reason)
             add_node(reason_node, reason, "reason")
             add_edge(candidate_node, reason_node, "reason", 0.7)
 
@@ -137,16 +152,20 @@ def build_graph_data(entries: list[dict[str, Any]], *, max_candidates: int = 350
         "nodes": list(nodes.values()),
         "edges": edges,
         "summary": {
-            "candidates": counts["candidates"],
-            "symbols": len(counts["symbols"]),
-            "strategies": len(counts["strategies"]),
-            "reasons": len(counts["reasons"]),
-            "by_status": {k: by_status.get(k, 0) for k in STATUS_ORDER if by_status.get(k, 0)},
+            "candidates": candidate_count,
+            "symbols": len(symbols),
+            "strategies": len(strategies),
+            "reasons": len(reasons_seen),
+            "by_status": {
+                k: by_status.get(k, 0) for k in STATUS_ORDER if by_status.get(k, 0)
+            },
         },
     }
 
 
-def build_lineage_graph_data(rows: list[dict[str, Any]], *, max_links: int = 500) -> dict[str, Any]:
+def build_lineage_graph_data(
+    rows: list[dict[str, Any]], *, max_links: int = 500
+) -> dict[str, Any]:
     """Build a compact graph from LineageLink rows.
 
     Shape: asset -> event -> data packet -> feature packet -> candidate/setup ->
@@ -171,7 +190,14 @@ def build_lineage_graph_data(rows: list[dict[str, Any]], *, max_links: int = 500
 
     def add_edge(source: str, target: str, relation: str, weight: float = 1.0) -> None:
         if source in nodes and target in nodes:
-            edges.append({"source": source, "target": target, "relation": relation, "weight": weight})
+            edges.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "relation": relation,
+                    "weight": weight,
+                }
+            )
 
     by_source: dict[str, int] = {}
     for row in selected:
@@ -200,7 +226,12 @@ def build_lineage_graph_data(rows: list[dict[str, Any]], *, max_links: int = 500
         add_node(asset_node, symbol, "symbol")
         add_node(event_node, event_id[:18], "event", source=source)
         add_node(data_node, data_id[:18], "data_packet", timeframe=row.get("timeframe"))
-        add_node(feature_node, feature_id[:18], "feature_packet", family=row.get("setup_family"))
+        add_node(
+            feature_node,
+            feature_id[:18],
+            "feature_packet",
+            family=row.get("setup_family"),
+        )
         add_node(setup_node, setup_id[:18], "candidate")
         add_node(validation_node, validation_id[:18], "validation")
         add_node(signal_node, signal_id[:18], "paper_signal")
@@ -239,7 +270,9 @@ def write_graph_viewer(
     max_candidates: int = 350,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     out_dir = graph_viewer_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     data = build_graph_data(entries, max_candidates=max_candidates)
@@ -277,7 +310,9 @@ def write_lineage_graph_viewer(
     max_links: int = 500,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     out_dir = graph_viewer_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = _load_jsonl(private_root / "state" / "lineage" / "cycle_links.jsonl")

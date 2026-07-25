@@ -844,6 +844,7 @@ def test_sender_rejects_invalid_preview(tmp_path):
 def test_sender_records_ambiguous_ack_when_sent_key_write_fails(monkeypatch, tmp_path):
     _write_preview_snapshot(tmp_path, [_preview()])
     calls = []
+    synthetic_recipient = "synthetic-target-alpha"
     original_save = sender._save_sent_keys
 
     def fail_after_transport_ack(private_root, sent_keys):
@@ -862,7 +863,7 @@ def test_sender_records_ambiguous_ack_when_sent_key_write_fails(monkeypatch, tmp
         apply=True,
         paper_chat_configured=True,
         paper_chat_ids_count=1,
-        recipient_ids=["111"],
+        recipient_ids=[synthetic_recipient],
         send_text=fake_send,
     )
 
@@ -874,10 +875,12 @@ def test_sender_records_ambiguous_ack_when_sent_key_write_fails(monkeypatch, tmp
     assert item["status"] == "external_ack_ambiguous"
     assert item["message_id"] == 101
     assert item["problem"] == "sent_key_write_failed"
-    assert item["recipient_hash"] == sender._recipient_hash("111")
-    assert item["delivery_key"] == sender._delivery_key(_preview(), "111")
+    assert item["recipient_hash"] == sender._recipient_hash(synthetic_recipient)
+    assert item["delivery_key"] == sender._delivery_key(
+        _preview(), synthetic_recipient
+    )
     assert "recipient_id" not in item
-    assert "111" not in json.dumps(data, ensure_ascii=False)
+    assert synthetic_recipient not in json.dumps(data, ensure_ascii=False)
 
 
 def test_sender_fails_closed_on_ambiguous_ack_without_resend(tmp_path):
@@ -1207,8 +1210,6 @@ def test_same_chart_path_with_changed_bytes_has_distinct_content_identity(tmp_pa
     assert first_key != second_key
 
     photo_calls = []
-    text_calls = []
-
     async def fake_photo(chat_id, payload):
         photo_calls.append((chat_id, payload))
         return 200 + len(photo_calls)

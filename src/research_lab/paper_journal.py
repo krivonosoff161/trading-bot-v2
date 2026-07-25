@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Append-only paper-trade journal under the private research root."""
+
 from __future__ import annotations
 
 import json
@@ -39,7 +40,9 @@ def append_paper_outcome(private_root: Path, outcome: PaperTradeOutcome) -> Path
     path = paper_trades_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(outcome.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+        fh.write(
+            json.dumps(outcome.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+        )
     _upsert_paper_outcome(private_root, outcome)
     return path
 
@@ -48,6 +51,7 @@ def _upsert_paper_outcome(private_root: Path, outcome: PaperTradeOutcome) -> Non
     """Best-effort SQLite aggregate; JSONL remains the append-only source."""
     try:
         from src.research_lab.state_db import connect, default_db_path, init_db
+
         conn = connect(default_db_path(Path(private_root)))
         init_db(conn)
         payload = outcome.to_dict()
@@ -63,11 +67,23 @@ def _upsert_paper_outcome(private_root: Path, outcome: PaperTradeOutcome) -> Non
                  r_multiple=excluded.r_multiple, recorded_at=excluded.recorded_at,
                  payload_json=excluded.payload_json""",
             (
-                outcome.trade_id, outcome.setup_id, outcome.candidate_id,
-                outcome.symbol, outcome.timeframe, outcome.family, outcome.direction,
-                outcome.state, outcome.reason, outcome.outcome, outcome.opened_at,
-                outcome.closed_at, float(outcome.net_pct), float(outcome.r_multiple),
-                outcome.data_fingerprint, outcome.params_hash, outcome.recorded_at,
+                outcome.trade_id,
+                outcome.setup_id,
+                outcome.candidate_id,
+                outcome.symbol,
+                outcome.timeframe,
+                outcome.family,
+                outcome.direction,
+                outcome.state,
+                outcome.reason,
+                outcome.outcome,
+                outcome.opened_at,
+                outcome.closed_at,
+                float(outcome.net_pct),
+                float(outcome.r_multiple),
+                outcome.data_fingerprint,
+                outcome.params_hash,
+                outcome.recorded_at,
                 json.dumps(payload, ensure_ascii=False, sort_keys=True),
             ),
         )
@@ -79,7 +95,9 @@ def _upsert_paper_outcome(private_root: Path, outcome: PaperTradeOutcome) -> Non
         # If this candidate came from the lifecycle exporter, use its request metadata
         # to stamp the original farm_result and unique_candidate too.
         req = _request_context(Path(private_root), outcome.candidate_id)
-        metrics = req.get("metrics") if isinstance(req.get("metrics"), dict) else {}
+        metrics = (
+            raw_metrics if isinstance(raw_metrics := req.get("metrics"), dict) else {}
+        )
         original_candidate = str(metrics.get("source_candidate_id") or "")
         run_id = Path(str(req.get("source_run_id") or "").replace("\\", "/")).name
         if run_id and original_candidate:
@@ -92,6 +110,7 @@ def _upsert_paper_outcome(private_root: Path, outcome: PaperTradeOutcome) -> Non
         uc_key = str(metrics.get("uc_key") or "")
         if uc_key:
             from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+
             db = FarmTasksDB(tasks_db_path(Path(private_root)))
             try:
                 db.set_unique_paper_status(uc_key, status)

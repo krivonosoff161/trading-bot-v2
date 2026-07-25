@@ -45,10 +45,10 @@ from src.utils.runtime_root import load_runtime_dotenv  # noqa: E402
 if __name__ == "__main__":
     load_runtime_dotenv(ROOT)
 
-from scripts.subscriptions import is_subscribed, list_users
-from src.data.ws_feed import WSFeed
-from src.strategy.indicators import calc_adx
-from src.utils.telegram import send_message, send_message_to
+from scripts.subscriptions import is_subscribed, list_users  # noqa: E402
+from src.data.ws_feed import WSFeed  # noqa: E402
+from src.strategy.indicators import calc_adx  # noqa: E402
+from src.utils.telegram import send_message, send_message_to  # noqa: E402
 
 SIGNALS_LOG  = ROOT / "logs" / "bb_fade" / "bb_fade_signals.jsonl"
 LOG_PATH     = ROOT / "logs" / "bb_fade" / "ws_bb_fade.log"

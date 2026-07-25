@@ -5,6 +5,7 @@ This module does not create a second source of truth. It rebuilds a read-only
 view from canonical artifacts: farm_tasks.unique_candidates, hard-validation
 requests/verdicts/setup cards, and the append-only paper_trades.jsonl journal.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,8 +18,13 @@ from src.research_lab.paper_journal import read_paper_outcomes
 from src.research_lab.validation_handoff import validation_state
 
 HARD_FAILED = {
-    "HARD_REJECT", "FAILED_OVERFIT", "FAILED_COSTS", "FAILED_FRAGILITY",
-    "FAILED_OOS", "FAILED_DATA_QUALITY", "REGIME_ONLY",
+    "HARD_REJECT",
+    "FAILED_OVERFIT",
+    "FAILED_COSTS",
+    "FAILED_FRAGILITY",
+    "FAILED_OOS",
+    "FAILED_DATA_QUALITY",
+    "REGIME_ONLY",
 }
 
 # Coarse tactical shelf derived ONLY from unique_candidates columns (the per-candidate
@@ -26,8 +32,14 @@ HARD_FAILED = {
 # CLOSED vocabulary, research-only — NONE of these ever equals PAPER_FORWARD_READY or
 # grants paper/trade access. NOT_TACTICAL / '' means "no tactical claim".
 TACTICAL_STATUSES = (
-    "NEEDS_OI_CONTEXT", "NEEDS_MICRO_DATA", "TACTICAL_REGIME_ONLY", "TACTICAL_COST_SENSITIVE",
-    "TACTICAL_THIN_WINDOW", "TACTICAL_UNDERDATA", "REJECTED_CONFIRMED_BAD", "NOT_TACTICAL",
+    "NEEDS_OI_CONTEXT",
+    "NEEDS_MICRO_DATA",
+    "TACTICAL_REGIME_ONLY",
+    "TACTICAL_COST_SENSITIVE",
+    "TACTICAL_THIN_WINDOW",
+    "TACTICAL_UNDERDATA",
+    "REJECTED_CONFIRMED_BAD",
+    "NOT_TACTICAL",
 )
 POWER_FLOOR = 10  # validator _check_splits has no power below n=10
 
@@ -35,6 +47,7 @@ POWER_FLOOR = 10  # validator _check_splits has no power below n=10
 def _oi_micro_families() -> dict[str, str]:
     """family -> 'oi'|'micro' for families that declare those data needs (reuse registry)."""
     from src.research_lab.strategy_registry import REGISTRY, get_strategy
+
     out: dict[str, str] = {}
     for fam in REGISTRY:
         req = set(get_strategy(fam).required_data)
@@ -45,7 +58,9 @@ def _oi_micro_families() -> dict[str, str]:
     return out
 
 
-def derive_tactical_status(row: dict[str, Any], hard_status: str, oi_micro: dict[str, str]) -> str:
+def derive_tactical_status(
+    row: dict[str, Any], hard_status: str, oi_micro: dict[str, str]
+) -> str:
     """Coarse research-only tactical shelf from unique_candidates columns. Never promotable."""
     family = str(row.get("family") or "")
     decision = str(row.get("decision") or "")
@@ -89,13 +104,17 @@ def _load_unique_candidates(private_root: Path) -> list[dict[str, Any]]:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute("SELECT * FROM unique_candidates ORDER BY updated_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM unique_candidates ORDER BY updated_at DESC"
+        ).fetchall()
     finally:
         conn.close()
     return [dict(r) for r in rows]
 
 
-def _request_contexts(private_root: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+def _request_contexts(
+    private_root: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     from src.research_lab.validation_generation import (
         current_candidate_ids,
         read_current_validation_artifact,
@@ -110,7 +129,11 @@ def _request_contexts(private_root: Path) -> tuple[dict[str, dict[str, Any]], di
             if not data:
                 continue
             by_candidate[cid] = data
-            metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+            metrics = (
+                raw_metrics
+                if isinstance(raw_metrics := data.get("metrics"), dict)
+                else {}
+            )
             uc_key = str(metrics.get("uc_key") or "")
             if uc_key:
                 candidate_to_uc[cid] = uc_key
@@ -124,7 +147,9 @@ def _request_contexts(private_root: Path) -> tuple[dict[str, dict[str, Any]], di
         if not cid:
             continue
         by_candidate[cid] = data
-        metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+        metrics = (
+            raw_metrics if isinstance(raw_metrics := data.get("metrics"), dict) else {}
+        )
         uc_key = str(metrics.get("uc_key") or "")
         if uc_key:
             candidate_to_uc[cid] = uc_key
@@ -171,14 +196,19 @@ def _cards(private_root: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _paper_by_uc(private_root: Path, candidate_to_uc: dict[str, str]) -> dict[str, dict[str, Any]]:
+def _paper_by_uc(
+    private_root: Path, candidate_to_uc: dict[str, str]
+) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in read_paper_outcomes(private_root):
         cid = str(row.get("candidate_id") or "")
         uc_key = candidate_to_uc.get(cid)
         if not uc_key:
             continue
-        bucket = out.setdefault(uc_key, {"count": 0, "net_sum": 0.0, "wins": 0, "losses": 0, "latest_state": ""})
+        bucket = out.setdefault(
+            uc_key,
+            {"count": 0, "net_sum": 0.0, "wins": 0, "losses": 0, "latest_state": ""},
+        )
         net = float(row.get("net_pct") or 0.0)
         bucket["count"] += 1
         bucket["net_sum"] += net
@@ -188,13 +218,19 @@ def _paper_by_uc(private_root: Path, candidate_to_uc: dict[str, str]) -> dict[st
     return out
 
 
-def _candidate_validation_id(row: dict[str, Any], uc_to_validation: dict[str, str]) -> str:
+def _candidate_validation_id(
+    row: dict[str, Any], uc_to_validation: dict[str, str]
+) -> str:
     uc_key = str(row.get("uc_key") or "")
     return uc_to_validation.get(uc_key, str(row.get("candidate_id") or ""))
 
 
-def _derive_state(row: dict[str, Any], hard_status: str, card: dict[str, Any] | None,
-                  paper: dict[str, Any]) -> str:
+def _derive_state(
+    row: dict[str, Any],
+    hard_status: str,
+    card: dict[str, Any] | None,
+    paper: dict[str, Any],
+) -> str:
     if int(paper.get("count") or 0) > 0:
         net = float(paper.get("net_sum") or 0.0)
         if net > 0:
@@ -236,33 +272,39 @@ def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
         p = paper.get(str(row.get("uc_key") or ""), {})
         state = _derive_state(row, hard_status, card, p)
         tactical = derive_tactical_status(row, hard_status, oi_micro)
-        rows.append({
-            "uc_key": str(row.get("uc_key") or ""),
-            "validation_candidate_id": validation_id,
-            "setup_id": str((card or {}).get("setup_id") or ""),
-            "source_candidate_id": str(row.get("candidate_id") or ""),
-            "symbol": str(row.get("symbol") or ""),
-            "timeframe": str(row.get("timeframe") or ""),
-            "family": str(row.get("family") or ""),
-            "params_hash": str(row.get("params_hash") or ""),
-            "data_fingerprint": str(row.get("data_fingerprint") or ""),
-            "lite_status": str(row.get("validation_status") or ""),
-            "hard_status": hard_status,
-            "validation_state": validation_state(str(row.get("validation_status") or ""), hard_status, exported),
-            "setup_card_exists": bool(card),
-            "paper_forward_ready": bool((card or {}).get("paper_forward_ready")),
-            "paper_outcome_count": int(p.get("count") or 0),
-            "paper_net_sum": round(float(p.get("net_sum") or 0.0), 6),
-            "paper_avg_net": round(float(p.get("net_sum") or 0.0) / max(1, int(p.get("count") or 0)), 6),
-            "paper_win_count": int(p.get("wins") or 0),
-            "paper_loss_count": int(p.get("losses") or 0),
-            "latest_paper_state": str(p.get("latest_state") or ""),
-            "derived_lifecycle_state": state,
-            "n_trades": int(row.get("n_trades") or 0),
-            "avg_net_pct": round(float(row.get("avg_net_pct") or 0.0), 6),
-            "regime_bucket": str(row.get("regime_bucket") or ""),
-            "tactical_status": tactical,
-        })
+        rows.append(
+            {
+                "uc_key": str(row.get("uc_key") or ""),
+                "validation_candidate_id": validation_id,
+                "setup_id": str((card or {}).get("setup_id") or ""),
+                "source_candidate_id": str(row.get("candidate_id") or ""),
+                "symbol": str(row.get("symbol") or ""),
+                "timeframe": str(row.get("timeframe") or ""),
+                "family": str(row.get("family") or ""),
+                "params_hash": str(row.get("params_hash") or ""),
+                "data_fingerprint": str(row.get("data_fingerprint") or ""),
+                "lite_status": str(row.get("validation_status") or ""),
+                "hard_status": hard_status,
+                "validation_state": validation_state(
+                    str(row.get("validation_status") or ""), hard_status, exported
+                ),
+                "setup_card_exists": bool(card),
+                "paper_forward_ready": bool((card or {}).get("paper_forward_ready")),
+                "paper_outcome_count": int(p.get("count") or 0),
+                "paper_net_sum": round(float(p.get("net_sum") or 0.0), 6),
+                "paper_avg_net": round(
+                    float(p.get("net_sum") or 0.0) / max(1, int(p.get("count") or 0)), 6
+                ),
+                "paper_win_count": int(p.get("wins") or 0),
+                "paper_loss_count": int(p.get("losses") or 0),
+                "latest_paper_state": str(p.get("latest_state") or ""),
+                "derived_lifecycle_state": state,
+                "n_trades": int(row.get("n_trades") or 0),
+                "avg_net_pct": round(float(row.get("avg_net_pct") or 0.0), 6),
+                "regime_bucket": str(row.get("regime_bucket") or ""),
+                "tactical_status": tactical,
+            }
+        )
     return rows
 
 
@@ -272,7 +314,9 @@ def summarize_setup_lifecycle(private_root: Path) -> dict[str, Any]:
     by_hard: dict[str, int] = {}
     by_tactical: dict[str, int] = {}
     for row in rows:
-        by_state[row["derived_lifecycle_state"]] = by_state.get(row["derived_lifecycle_state"], 0) + 1
+        by_state[row["derived_lifecycle_state"]] = (
+            by_state.get(row["derived_lifecycle_state"], 0) + 1
+        )
         hard = row["hard_status"]
         if hard:
             by_hard[hard] = by_hard.get(hard, 0) + 1
@@ -285,9 +329,15 @@ def summarize_setup_lifecycle(private_root: Path) -> dict[str, Any]:
         "by_state": by_state,
         "hard_status": by_hard,
         "by_tactical": dict(sorted(by_tactical.items(), key=lambda kv: -kv[1])),
-        "positive_setups": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_POSITIVE_OBSERVED"),
-        "negative_setups": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_NEGATIVE_OBSERVED"),
-        "mixed_or_flat": sum(1 for r in rows if r["derived_lifecycle_state"] == "PAPER_MIXED_OR_FLAT"),
+        "positive_setups": sum(
+            1 for r in rows if r["derived_lifecycle_state"] == "PAPER_POSITIVE_OBSERVED"
+        ),
+        "negative_setups": sum(
+            1 for r in rows if r["derived_lifecycle_state"] == "PAPER_NEGATIVE_OBSERVED"
+        ),
+        "mixed_or_flat": sum(
+            1 for r in rows if r["derived_lifecycle_state"] == "PAPER_MIXED_OR_FLAT"
+        ),
         "no_paper_sample": sum(1 for r in rows if int(r["paper_outcome_count"]) == 0),
     }
 
@@ -296,6 +346,12 @@ def write_setup_lifecycle_snapshot(private_root: Path) -> Path:
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "setup_lifecycle.json"
-    payload = {"summary": summarize_setup_lifecycle(private_root), "rows": derive_setup_lifecycle(private_root)}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = {
+        "summary": summarize_setup_lifecycle(private_root),
+        "rows": derive_setup_lifecycle(private_root),
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return path

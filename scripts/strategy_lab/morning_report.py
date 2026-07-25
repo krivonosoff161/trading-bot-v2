@@ -25,14 +25,21 @@ from src.research_lab.candidate_registry import registry_path, registry_summary 
 from src.research_lab.farm_cockpit import build_cockpit  # noqa: E402
 from src.research_lab.llm_provider import today_usage  # noqa: E402
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
-from src.research_lab.proposal_store import load_proposals, proposals_path, rejection_reason_counts, status_counts  # noqa: E402
+from src.research_lab.proposal_store import (  # noqa: E402
+    load_proposals,
+    proposals_path,
+    rejection_reason_counts,
+    status_counts,
+)
 from src.research_lab.research_loop import loop_summary, read_loop_report  # noqa: E402
 from src.research_lab.state_db import dashboard_snapshot, default_db_path  # noqa: E402
 from src.research_lab.stop_intent import read_stop_intent  # noqa: E402
 
 
-def _fmt_counts(counts: dict) -> str:
-    return ", ".join(f"{k}: {v}" for k, v in sorted((counts or {}).items())) or "none"
+def _fmt_counts(counts: object) -> str:
+    if not isinstance(counts, dict):
+        return "none"
+    return ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "none"
 
 
 def _missing_by_timeframe(state: dict) -> str:
@@ -52,7 +59,9 @@ def _stale_hints(state: dict) -> list[str]:
     qc = sd.get("queue_counts") or {}
     running = qc.get("running", 0)
     if running > 0:
-        hints.append(f"{running} job(s) in running state (may be stale if worker is not alive)")
+        hints.append(
+            f"{running} job(s) in running state (may be stale if worker is not alive)"
+        )
     return hints
 
 
@@ -67,7 +76,9 @@ def _count_jsonl_rows(root: Path, rel: str, filename: str) -> int:
     path = root / rel / filename
     if not path.exists():
         return 0
-    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    return sum(
+        1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    )
 
 
 def _stop_hint(private_root: Path) -> str:
@@ -92,7 +103,9 @@ def generate_morning_report(private_root: Path) -> dict:
 
     reg = registry_summary(registry_path(private_root))
     props = status_counts(load_proposals(proposals_path(private_root)))
-    prop_reject_reasons = rejection_reason_counts(load_proposals(proposals_path(private_root)))
+    prop_reject_reasons = rejection_reason_counts(
+        load_proposals(proposals_path(private_root))
+    )
 
     families_tested = set()
     symbols_tested = set()
@@ -168,12 +181,16 @@ def generate_morning_report(private_root: Path) -> dict:
             "requests": _count_files(private_root, "hard_validation/requests"),
             "reports": _count_files(private_root, "hard_validation/reports"),
             "verdicts": _count_files(private_root, "hard_validation/verdicts"),
-            "feedback": _count_jsonl_rows(private_root, "hard_validation/feedback", "feedback.jsonl"),
+            "feedback": _count_jsonl_rows(
+                private_root, "hard_validation/feedback", "feedback.jsonl"
+            ),
         },
         "setup_library": {
             "cards": _count_files(private_root, "setup_library/cards"),
             "reports": _count_files(private_root, "setup_library/reports", "*.md"),
-            "index": _count_jsonl_rows(private_root, "setup_library", "setup_index.jsonl"),
+            "index": _count_jsonl_rows(
+                private_root, "setup_library", "setup_index.jsonl"
+            ),
         },
         "farm_core": {
             "lifecycle": (cockpit.get("lifecycle") or {}),
@@ -191,19 +208,25 @@ def _print_report(report: dict) -> None:
     print("  Strategy Lab — Morning Report")
     print("=" * 56)
     loop = report["loop"]
-    print(f"\nLast loop: {loop['mode']} ({loop['iterations']} iterations, "
-          f"{loop['duration_minutes']} min)")
+    print(
+        f"\nLast loop: {loop['mode']} ({loop['iterations']} iterations, "
+        f"{loop['duration_minutes']} min)"
+    )
     if loop.get("stop_requested"):
         print("  ** Stop was requested during the loop **")
 
     jobs = report["jobs"]
-    print(f"\nJobs: completed={jobs['completed']}, deferred={jobs['deferred']}, "
-          f"failed={jobs['failed']}  (this loop's own worker steps)")
+    print(
+        f"\nJobs: completed={jobs['completed']}, deferred={jobs['deferred']}, "
+        f"failed={jobs['failed']}  (this loop's own worker steps)"
+    )
 
     queue = report["queue"]
-    print(f"Queue: pending={queue['pending']}, running={queue['running']}, "
-          f"completed={queue['completed']}, failed={queue['failed']}  (DB cumulative; "
-          f"a concurrent worker can drain it too)")
+    print(
+        f"Queue: pending={queue['pending']}, running={queue['running']}, "
+        f"completed={queue['completed']}, failed={queue['failed']}  (DB cumulative; "
+        f"a concurrent worker can drain it too)"
+    )
 
     rec = report.get("llm_recovery") or {}
     status = str(rec.get("last_status") or "")
@@ -238,26 +261,36 @@ def _print_report(report: dict) -> None:
             print(f"  {reason}: {count}")
 
     llm = report["llm"]
-    print(f"\nLLM: validated={llm['validated']}, rejected={llm['rejected']}, "
-          f"cost={llm['cost_rub']} RUB")
+    print(
+        f"\nLLM: validated={llm['validated']}, rejected={llm['rejected']}, "
+        f"cost={llm['cost_rub']} RUB"
+    )
 
     print(f"\nData missing: {report['data_missing_by_timeframe']}")
     print(f"Proposals: {_fmt_counts(report['proposals'])}")
     hv = report["hard_validation"]
-    print(f"Hard validation: requests={hv['requests']}, reports={hv['reports']}, "
-          f"verdicts={hv['verdicts']}, feedback={hv['feedback']}")
+    print(
+        f"Hard validation: requests={hv['requests']}, reports={hv['reports']}, "
+        f"verdicts={hv['verdicts']}, feedback={hv['feedback']}"
+    )
     sl = report["setup_library"]
-    print(f"Setup library: cards={sl['cards']}, reports={sl['reports']}, index={sl['index']}")
+    print(
+        f"Setup library: cards={sl['cards']}, reports={sl['reports']}, index={sl['index']}"
+    )
     fc = report.get("farm_core") or {}
     lc = fc.get("lifecycle") or {}
     rs = fc.get("results") or {}
     if lc.get("available"):
-        print(f"Farm core: unique={lc.get('unique_candidates', 0)}, "
-              f"tasks={_fmt_counts(lc.get('by_state'))}, "
-              f"hard={_fmt_counts(lc.get('validation'))}, "
-              f"paper={_fmt_counts(lc.get('paper_status'))}")
-        print(f"Paper outcomes: {rs.get('paper_outcomes', 0)} "
-              f"(farm paper status: {_fmt_counts(rs.get('paper_status'))})")
+        print(
+            f"Farm core: unique={lc.get('unique_candidates', 0)}, "
+            f"tasks={_fmt_counts(lc.get('by_state'))}, "
+            f"hard={_fmt_counts(lc.get('validation'))}, "
+            f"paper={_fmt_counts(lc.get('paper_status'))}"
+        )
+        print(
+            f"Paper outcomes: {rs.get('paper_outcomes', 0)} "
+            f"(farm paper status: {_fmt_counts(rs.get('paper_status'))})"
+        )
     if report.get("proposal_reject_reasons"):
         print(f"  Rejection reasons: {_fmt_counts(report['proposal_reject_reasons'])}")
 
@@ -274,9 +307,16 @@ def _print_report(report: dict) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Morning report for Strategy Lab overnight run")
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
-    ap.add_argument("--json", action="store_true", help="Output as JSON instead of formatted text")
+    ap = argparse.ArgumentParser(
+        description="Morning report for Strategy Lab overnight run"
+    )
+    ap.add_argument(
+        "--private-root",
+        default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
+    )
+    ap.add_argument(
+        "--json", action="store_true", help="Output as JSON instead of formatted text"
+    )
     args = ap.parse_args()
 
     private_root = Path(args.private_root).expanduser()
@@ -284,6 +324,7 @@ def main() -> None:
 
     if args.json:
         import json
+
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         _print_report(report)

@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.research_lab.content_reference import content_reference_from_mapping, validate_content_sha256
+from src.research_lab.content_reference import (
+    content_reference_from_mapping,
+    validate_content_sha256,
+)
 from src.research_lab.lineage_contract import utc_now
 
 SCHEMA = "AdaptiveTrial.v1"
@@ -16,7 +19,11 @@ RECORD_SCHEMA = "AdaptiveTrialRecord.v1"
 
 def _sha256(payload: Any) -> str:
     raw = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"),
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
@@ -31,7 +38,7 @@ def adaptive_trial_id(task_spec: dict[str, Any]) -> str:
     producer_completion_id = str(task_spec.get("producer_completion_id") or "").strip()
     if not producer_completion_id:
         raise ValueError("adaptive trial requires source producer_completion_id")
-    identity = {
+    identity: dict[str, Any] = {
         "subject": dict(task_spec.get("subject") or {}),
         "source_ref": str(task_spec.get("source_ref") or ""),
         "source_content_sha256": source_content_sha256,
@@ -80,7 +87,9 @@ def write_adaptive_trial_record(
     content_refs: list[dict[str, Any]] = []
     for item in evidence_refs:
         if not isinstance(item, dict):
-            raise ValueError("evidence refs require content digest and producer completion evidence")
+            raise ValueError(
+                "evidence refs require content digest and producer completion evidence"
+            )
         content_refs.append(content_reference_from_mapping(item).to_dict())
     identity = {
         "adaptive_trial_id": trial_id,

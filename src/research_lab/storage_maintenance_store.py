@@ -39,10 +39,15 @@ from src.research_lab.storage_os_lock import (
     storage_root_lock as _os_lock,
 )
 
+msvcrt: Any
+_WIN_DLL: Any = getattr(ctypes, "WinDLL", None)
+_GET_LAST_ERROR: Any = getattr(ctypes, "get_last_error", lambda: 0)
 try:
-    import msvcrt
+    import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover - platform branch
     msvcrt = None
+else:
+    msvcrt = _msvcrt
 StorageMaintenanceConflict = StorageLockConflict
 
 
@@ -120,7 +125,9 @@ def _open_nofollow_read(path: Path) -> int:
         return os.open(path, flags)
     if msvcrt is None:  # pragma: no cover - guarded platform branch
         raise StorageMaintenanceConflict("Windows file handle support is unavailable")
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if _WIN_DLL is None:  # pragma: no cover - guarded by the Windows call path
+        raise StorageMaintenanceConflict("Windows DLL loading is unavailable")
+    kernel32 = _WIN_DLL("kernel32", use_last_error=True)
     create_file = kernel32.CreateFileW
     create_file.restype = ctypes.c_void_p
     handle = create_file(
@@ -133,7 +140,7 @@ def _open_nofollow_read(path: Path) -> int:
         None,
     )
     if handle in (None, ctypes.c_void_p(-1).value):
-        raise OSError(ctypes.get_last_error(), "CreateFileW failed", str(path))
+        raise OSError(_GET_LAST_ERROR(), "CreateFileW failed", str(path))
     try:
         return msvcrt.open_osfhandle(int(handle), flags)
     except Exception:
@@ -142,7 +149,14 @@ def _open_nofollow_read(path: Path) -> int:
 
 
 class StorageMaintenanceStore:
-    _EVENT_TYPES = {"planned", "claimed", "quarantined", "restored", "conflict", "failed"}
+    _EVENT_TYPES = {
+        "planned",
+        "claimed",
+        "quarantined",
+        "restored",
+        "conflict",
+        "failed",
+    }
     _TRANSITIONS = {
         None: {"planned"},
         "planned": {"claimed", "conflict", "failed"},
@@ -165,9 +179,13 @@ class StorageMaintenanceStore:
         try:
             current = load_capability(self.root)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise StorageMaintenanceConflict("storage capability revalidation failed") from exc
+            raise StorageMaintenanceConflict(
+                "storage capability revalidation failed"
+            ) from exc
         if current != self.capability:
-            raise StorageMaintenanceConflict("storage capability changed after construction")
+            raise StorageMaintenanceConflict(
+                "storage capability changed after construction"
+            )
         return current
 
     def _meta_payload(self) -> dict[str, str]:
@@ -176,7 +194,9 @@ class StorageMaintenanceStore:
             "root_id": self.capability.root_id,
             "capability_digest": self.capability.capability_digest,
             "canonical_root": self.capability.canonical_root,
-            "filesystem_identity_json": canonical_json(self.capability.filesystem_identity),
+            "filesystem_identity_json": canonical_json(
+                self.capability.filesystem_identity
+            ),
         }
 
     def activate(self) -> None:
@@ -234,37 +254,69 @@ class StorageMaintenanceStore:
 
     def _connect_unverified(self, *, readonly: bool = False) -> sqlite3.Connection:
         if not self.path.exists():
-            raise StorageMaintenanceConflict("storage operation journal is not activated")
+            raise StorageMaintenanceConflict(
+                "storage operation journal is not activated"
+            )
         if is_link_or_reparse(self.path) or not self.path.is_file():
             raise StorageMaintenanceConflict("operation journal path is unsafe")
         before = _path_identity(self.path)
         if readonly:
-            conn = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True, timeout=5.0)
+            conn = sqlite3.connect(
+                f"file:{self.path.as_posix()}?mode=ro", uri=True, timeout=5.0
+            )
         else:
             conn = sqlite3.connect(self.path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         if is_link_or_reparse(self.path) or _path_identity(self.path) != before:
             conn.close()
-            raise StorageMaintenanceConflict("operation journal identity changed during open")
+            raise StorageMaintenanceConflict(
+                "operation journal identity changed during open"
+            )
         return conn
 
     def _verify_store_binding(self, conn: sqlite3.Connection) -> None:
         try:
-            actual = {str(row[0]): str(row[1]) for row in conn.execute("SELECT key,value FROM store_meta")}
-            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(item_events)")}
+            actual = {
+                str(row[0]): str(row[1])
+                for row in conn.execute("SELECT key,value FROM store_meta")
+            }
+            columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(item_events)")
+            }
         except sqlite3.Error as exc:
-            raise StorageMaintenanceConflict("operation journal schema is invalid") from exc
+            raise StorageMaintenanceConflict(
+                "operation journal schema is invalid"
+            ) from exc
         required = {
-            "event_id", "operation_id", "item_id", "event_seq", "prior_event_hash",
-            "event_hash", "event_type", "relative_path", "quarantine_path",
-            "content_digest", "inventory_digest", "inventory_json", "capability_digest",
-            "root_id", "canonical_root", "filesystem_identity_json", "detail_json",
-            "owner_id", "writer_fence", "created_at",
+            "event_id",
+            "operation_id",
+            "item_id",
+            "event_seq",
+            "prior_event_hash",
+            "event_hash",
+            "event_type",
+            "relative_path",
+            "quarantine_path",
+            "content_digest",
+            "inventory_digest",
+            "inventory_json",
+            "capability_digest",
+            "root_id",
+            "canonical_root",
+            "filesystem_identity_json",
+            "detail_json",
+            "owner_id",
+            "writer_fence",
+            "created_at",
         }
         if actual != self._meta_payload() or not required.issubset(columns):
-            raise StorageMaintenanceConflict("operation journal root/capability binding mismatch")
+            raise StorageMaintenanceConflict(
+                "operation journal root/capability binding mismatch"
+            )
 
-    def _authorize_conn(self, conn: sqlite3.Connection, lease: MaintenanceLease) -> None:
+    def _authorize_conn(
+        self, conn: sqlite3.Connection, lease: MaintenanceLease
+    ) -> None:
         self._reload_capability()
         self._verify_store_binding(conn)
         row = conn.execute("SELECT * FROM lease WHERE singleton=1").fetchone()
@@ -309,9 +361,13 @@ class StorageMaintenanceStore:
                 same_owner = row["owner_id"] == owner_id and all(
                     row[key] == value for key, value in asdict(identity).items()
                 )
-                live = row["owner_id"] is not None and float(row["expires_at"] or 0) > now
+                live = (
+                    row["owner_id"] is not None and float(row["expires_at"] or 0) > now
+                )
                 if live and not same_owner:
-                    raise StorageMaintenanceConflict("storage writer lease is held by another owner")
+                    raise StorageMaintenanceConflict(
+                        "storage writer lease is held by another owner"
+                    )
                 fence = int(row["fence"]) if same_owner else int(row["fence"]) + 1
                 mutation_seq = int(row["mutation_seq"]) + 1
                 expires = now + float(lease_seconds)
@@ -319,11 +375,21 @@ class StorageMaintenanceStore:
                     """UPDATE lease SET owner_id=?,pid=?,started_at=?,executable=?,
                        command_digest=?,expires_at=?,fence=?,mutation_seq=?
                        WHERE singleton=1""",
-                    (owner_id, identity.pid, identity.started_at, identity.executable,
-                     identity.command_digest, expires, fence, mutation_seq),
+                    (
+                        owner_id,
+                        identity.pid,
+                        identity.started_at,
+                        identity.executable,
+                        identity.command_digest,
+                        expires,
+                        fence,
+                        mutation_seq,
+                    ),
                 )
                 conn.commit()
-                return MaintenanceLease(owner_id, identity, fence, mutation_seq, expires)
+                return MaintenanceLease(
+                    owner_id, identity, fence, mutation_seq, expires
+                )
             except Exception:
                 conn.rollback()
                 raise
@@ -339,8 +405,10 @@ class StorageMaintenanceStore:
     def _validate_item_id(value: str) -> None:
         prefix = "storageitem_"
         suffix = value.removeprefix(prefix)
-        if not value.startswith(prefix) or len(suffix) != 64 or any(
-            ch not in "0123456789abcdef" for ch in suffix
+        if (
+            not value.startswith(prefix)
+            or len(suffix) != 64
+            or any(ch not in "0123456789abcdef" for ch in suffix)
         ):
             raise StorageMaintenanceConflict("item id is not canonical")
 
@@ -348,23 +416,35 @@ class StorageMaintenanceStore:
         try:
             relative = path.parent.relative_to(self.control)
         except ValueError as exc:
-            raise StorageMaintenanceConflict("internal destination escaped control root") from exc
+            raise StorageMaintenanceConflict(
+                "internal destination escaped control root"
+            ) from exc
         current = self.control
         for part in relative.parts:
             if part in {"", ".", ".."}:
-                raise StorageMaintenanceConflict("internal destination is not canonical")
+                raise StorageMaintenanceConflict(
+                    "internal destination is not canonical"
+                )
             current /= part
             if os.path.lexists(current):
                 if is_link_or_reparse(current) or not current.is_dir():
-                    raise StorageMaintenanceConflict("internal destination ancestor is unsafe")
+                    raise StorageMaintenanceConflict(
+                        "internal destination ancestor is unsafe"
+                    )
             else:
                 current.mkdir()
             if filesystem_identity(current) != self.capability.filesystem_identity:
-                raise StorageMaintenanceConflict("internal destination changed filesystem")
+                raise StorageMaintenanceConflict(
+                    "internal destination changed filesystem"
+                )
 
-    def _validated_paths(self, operation_id: str, relative_path: str) -> tuple[Path, str, Path]:
+    def _validated_paths(
+        self, operation_id: str, relative_path: str
+    ) -> tuple[Path, str, Path]:
         self._validate_operation_id(operation_id)
-        relative = validate_relative_path_text(self.capability, relative_path).as_posix()
+        relative = validate_relative_path_text(
+            self.capability, relative_path
+        ).as_posix()
         quarantine_relative = f"quarantine/{operation_id}/{relative}"
         source = self.root / Path(*relative.split("/"))
         destination = self.control / Path(*quarantine_relative.split("/"))
@@ -380,7 +460,9 @@ class StorageMaintenanceStore:
                 raise StorageMaintenanceConflict("candidate is not a regular file")
             snapshot = FileSnapshot(relative, _stat_identity(info), _fd_digest(fd))
             if _path_identity(path) != snapshot.identity:
-                raise StorageMaintenanceConflict("candidate identity changed during no-follow open")
+                raise StorageMaintenanceConflict(
+                    "candidate identity changed during no-follow open"
+                )
             yield fd, snapshot
         finally:
             os.close(fd)
@@ -397,12 +479,16 @@ class StorageMaintenanceStore:
             for name in list(names):
                 child = base / name
                 if is_link_or_reparse(child) or not child.is_dir():
-                    raise StorageMaintenanceConflict("cache contains a reparse directory")
+                    raise StorageMaintenanceConflict(
+                        "cache contains a reparse directory"
+                    )
             for name in files:
                 path = base / name
                 safe_relative_file(self.capability, path)
                 candidates.append(path)
-        return sorted(candidates, key=lambda path: (_path_identity(path)["mtime_ns"], str(path)))
+        return sorted(
+            candidates, key=lambda path: (_path_identity(path)["mtime_ns"], str(path))
+        )
 
     def _inventory_payload(self, snapshot: FileSnapshot) -> dict[str, Any]:
         return snapshot.payload(self.capability)
@@ -460,7 +546,9 @@ class StorageMaintenanceStore:
         if event_type not in self._EVENT_TYPES:
             raise StorageMaintenanceConflict("unknown storage event type")
         self._validate_item_id(item_id)
-        _source, expected_quarantine, _destination = self._validated_paths(operation_id, relative_path)
+        _source, expected_quarantine, _destination = self._validated_paths(
+            operation_id, relative_path
+        )
         if quarantine_path != expected_quarantine:
             raise StorageMaintenanceConflict("quarantine path is not canonical")
         if inventory != self._validated_inventory(inventory, relative_path):
@@ -474,16 +562,30 @@ class StorageMaintenanceStore:
         next_seq = 1 if last is None else int(last["event_seq"]) + 1
         prior_hash = "" if last is None else str(last["event_hash"])
         payload = self._event_payload(
-            operation_id=operation_id, item_id=item_id, event_seq=next_seq,
-            prior_event_hash=prior_hash, event_type=event_type,
-            relative_path=relative_path, quarantine_path=quarantine_path,
-            inventory=inventory, detail=detail, owner_id=lease.owner_id,
+            operation_id=operation_id,
+            item_id=item_id,
+            event_seq=next_seq,
+            prior_event_hash=prior_hash,
+            event_type=event_type,
+            relative_path=relative_path,
+            quarantine_path=quarantine_path,
+            inventory=inventory,
+            detail=detail,
+            owner_id=lease.owner_id,
             writer_fence=lease.fence,
         )
         if last is not None:
             previous_payload = self._payload_from_row(last)
-            comparable_previous = {key: value for key, value in previous_payload.items() if key not in {"event_seq", "prior_event_hash"}}
-            comparable_new = {key: value for key, value in payload.items() if key not in {"event_seq", "prior_event_hash"}}
+            comparable_previous = {
+                key: value
+                for key, value in previous_payload.items()
+                if key not in {"event_seq", "prior_event_hash"}
+            }
+            comparable_new = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"event_seq", "prior_event_hash"}
+            }
             if comparable_previous == comparable_new:
                 conn.commit()
                 return last
@@ -492,8 +594,12 @@ class StorageMaintenanceStore:
             and event_type == "quarantined"
             and detail == {"action": "restore_pending"}
         )
-        if not restore_pending and event_type not in self._TRANSITIONS.get(prior_type, set()):
-            raise StorageMaintenanceConflict(f"illegal storage event transition {prior_type!r}->{event_type!r}")
+        if not restore_pending and event_type not in self._TRANSITIONS.get(
+            prior_type, set()
+        ):
+            raise StorageMaintenanceConflict(
+                f"illegal storage event transition {prior_type!r}->{event_type!r}"
+            )
         event_hash = _digest(payload)
         event_id = "storageevent_" + event_hash.removeprefix("sha256:")
         conn.execute(
@@ -503,22 +609,48 @@ class StorageMaintenanceStore:
                capability_digest,root_id,canonical_root,filesystem_identity_json,detail_json,
                owner_id,writer_fence,created_at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (event_id, operation_id, item_id, next_seq, prior_hash, event_hash, event_type,
-             relative_path, quarantine_path, inventory["content_digest"], _digest(inventory),
-             canonical_json(inventory), self.capability.capability_digest,
-             self.capability.root_id, self.capability.canonical_root,
-             canonical_json(self.capability.filesystem_identity), canonical_json(detail),
-             lease.owner_id, lease.fence, self._clock()),
+            (
+                event_id,
+                operation_id,
+                item_id,
+                next_seq,
+                prior_hash,
+                event_hash,
+                event_type,
+                relative_path,
+                quarantine_path,
+                inventory["content_digest"],
+                _digest(inventory),
+                canonical_json(inventory),
+                self.capability.capability_digest,
+                self.capability.root_id,
+                self.capability.canonical_root,
+                canonical_json(self.capability.filesystem_identity),
+                canonical_json(detail),
+                lease.owner_id,
+                lease.fence,
+                self._clock(),
+            ),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM item_events WHERE event_id=?", (event_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM item_events WHERE event_id=?", (event_id,)
+        ).fetchone()
         assert row is not None
         return row
 
-    def _validated_inventory(self, inventory: dict[str, Any], relative_path: str) -> dict[str, Any]:
+    def _validated_inventory(
+        self, inventory: dict[str, Any], relative_path: str
+    ) -> dict[str, Any]:
         expected_keys = {
-            "schema", "root_id", "capability_digest", "canonical_root",
-            "filesystem_identity", "relative_path", "identity", "content_digest",
+            "schema",
+            "root_id",
+            "capability_digest",
+            "canonical_root",
+            "filesystem_identity",
+            "relative_path",
+            "identity",
+            "content_digest",
         }
         if set(inventory) != expected_keys:
             raise StorageMaintenanceConflict("inventory fields are incomplete")
@@ -531,10 +663,13 @@ class StorageMaintenanceStore:
             or inventory["relative_path"] != relative_path
             or not str(inventory["content_digest"]).startswith("sha256:")
         ):
-            raise StorageMaintenanceConflict("inventory root or content binding mismatch")
+            raise StorageMaintenanceConflict(
+                "inventory root or content binding mismatch"
+            )
         identity = inventory["identity"]
         if set(identity) != {"device", "inode", "size", "mtime_ns"} or any(
-            isinstance(value, bool) or not isinstance(value, int) for value in identity.values()
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in identity.values()
         ):
             raise StorageMaintenanceConflict("inventory identity is invalid")
         return inventory
@@ -547,14 +682,23 @@ class StorageMaintenanceStore:
         except (json.JSONDecodeError, TypeError) as exc:
             raise StorageMaintenanceConflict("storage event JSON is invalid") from exc
         return {
-            "operation_id": row["operation_id"], "item_id": row["item_id"],
-            "event_seq": row["event_seq"], "prior_event_hash": row["prior_event_hash"],
-            "event_type": row["event_type"], "relative_path": row["relative_path"],
-            "quarantine_path": row["quarantine_path"], "content_digest": row["content_digest"],
-            "inventory_digest": row["inventory_digest"], "inventory": inventory,
-            "capability_digest": row["capability_digest"], "root_id": row["root_id"],
-            "canonical_root": row["canonical_root"], "filesystem_identity": filesystem,
-            "detail": detail, "owner_id": row["owner_id"], "writer_fence": row["writer_fence"],
+            "operation_id": row["operation_id"],
+            "item_id": row["item_id"],
+            "event_seq": row["event_seq"],
+            "prior_event_hash": row["prior_event_hash"],
+            "event_type": row["event_type"],
+            "relative_path": row["relative_path"],
+            "quarantine_path": row["quarantine_path"],
+            "content_digest": row["content_digest"],
+            "inventory_digest": row["inventory_digest"],
+            "inventory": inventory,
+            "capability_digest": row["capability_digest"],
+            "root_id": row["root_id"],
+            "canonical_root": row["canonical_root"],
+            "filesystem_identity": filesystem,
+            "detail": detail,
+            "owner_id": row["owner_id"],
+            "writer_fence": row["writer_fence"],
         }
 
     def _verify_file_matches(self, path: Path, inventory: dict[str, Any]) -> bool:
@@ -567,12 +711,16 @@ class StorageMaintenanceStore:
         except (OSError, StorageCapabilityError, StorageMaintenanceConflict):
             return False
 
-    def _authorize_before_move(self, conn: sqlite3.Connection, lease: MaintenanceLease, *paths: Path) -> None:
+    def _authorize_before_move(
+        self, conn: sqlite3.Connection, lease: MaintenanceLease, *paths: Path
+    ) -> None:
         self._authorize_conn(conn, lease)
         for path in paths:
             existing = path if os.path.lexists(path) else path.parent
             if is_link_or_reparse(existing):
-                raise StorageMaintenanceConflict("mutation path contains a link or reparse point")
+                raise StorageMaintenanceConflict(
+                    "mutation path contains a link or reparse point"
+                )
             if filesystem_identity(existing) != self.capability.filesystem_identity:
                 raise StorageMaintenanceConflict("mutation path changed filesystem")
 
@@ -603,84 +751,170 @@ class StorageMaintenanceStore:
                         inventory = self._inventory_payload(snapshot)
                         inventory_digest = _digest(inventory)
                         item_id = "storageitem_" + _digest(
-                            {"operation_id": operation_id, "relative_path": relative,
-                             "inventory_digest": inventory_digest}
+                            {
+                                "operation_id": operation_id,
+                                "relative_path": relative,
+                                "inventory_digest": inventory_digest,
+                            }
                         ).removeprefix("sha256:")
-                        _source, quarantine_relative, destination = self._validated_paths(
-                            operation_id, relative
+                        _source, quarantine_relative, destination = (
+                            self._validated_paths(operation_id, relative)
                         )
                         self._append_event_locked(
-                            conn, lease, operation_id=operation_id, item_id=item_id,
-                            event_type="planned", relative_path=relative,
-                            quarantine_path=quarantine_relative, inventory=inventory,
+                            conn,
+                            lease,
+                            operation_id=operation_id,
+                            item_id=item_id,
+                            event_type="planned",
+                            relative_path=relative,
+                            quarantine_path=quarantine_relative,
+                            inventory=inventory,
                         )
                         if after_validate is not None:
                             after_validate(source)
                         self._authorize_conn(conn, lease)
-                        if _stat_identity(os.fstat(fd)) != snapshot.identity or _fd_digest(fd) != snapshot.content_digest:
+                        if (
+                            _stat_identity(os.fstat(fd)) != snapshot.identity
+                            or _fd_digest(fd) != snapshot.content_digest
+                        ):
                             self._append_event_locked(
-                                conn, lease, operation_id=operation_id, item_id=item_id,
-                                event_type="conflict", relative_path=relative,
-                                quarantine_path=quarantine_relative, inventory=inventory,
+                                conn,
+                                lease,
+                                operation_id=operation_id,
+                                item_id=item_id,
+                                event_type="conflict",
+                                relative_path=relative,
+                                quarantine_path=quarantine_relative,
+                                inventory=inventory,
                                 detail={"reason": "open_file_changed_before_claim"},
                             )
-                            results.append({"item_id": item_id, "relative_path": relative, "state": "conflict"})
+                            results.append(
+                                {
+                                    "item_id": item_id,
+                                    "relative_path": relative,
+                                    "state": "conflict",
+                                }
+                            )
                             continue
                         if _path_identity(source) != snapshot.identity:
                             self._append_event_locked(
-                                conn, lease, operation_id=operation_id, item_id=item_id,
-                                event_type="conflict", relative_path=relative,
-                                quarantine_path=quarantine_relative, inventory=inventory,
+                                conn,
+                                lease,
+                                operation_id=operation_id,
+                                item_id=item_id,
+                                event_type="conflict",
+                                relative_path=relative,
+                                quarantine_path=quarantine_relative,
+                                inventory=inventory,
                                 detail={"reason": "path_identity_changed_before_claim"},
                             )
-                            results.append({"item_id": item_id, "relative_path": relative, "state": "conflict"})
+                            results.append(
+                                {
+                                    "item_id": item_id,
+                                    "relative_path": relative,
+                                    "state": "conflict",
+                                }
+                            )
                             continue
-                        staging = self.control / "staging" / operation_id / f"{item_id}.claimed"
+                        staging = (
+                            self.control
+                            / "staging"
+                            / operation_id
+                            / f"{item_id}.claimed"
+                        )
                         self._ensure_control_parent(staging)
                         self._authorize_before_move(conn, lease, source, staging)
                         os.replace(source, staging)
                         if fail_phase == "after_claim_move":
-                            raise StorageMaintenanceConflict("synthetic crash after claim move")
+                            raise StorageMaintenanceConflict(
+                                "synthetic crash after claim move"
+                            )
                         if not self._verify_file_matches(staging, inventory):
                             self._append_event_locked(
-                                conn, lease, operation_id=operation_id, item_id=item_id,
-                                event_type="conflict", relative_path=relative,
-                                quarantine_path=quarantine_relative, inventory=inventory,
+                                conn,
+                                lease,
+                                operation_id=operation_id,
+                                item_id=item_id,
+                                event_type="conflict",
+                                relative_path=relative,
+                                quarantine_path=quarantine_relative,
+                                inventory=inventory,
                                 detail={"reason": "claimed_identity_mismatch"},
                             )
-                            results.append({"item_id": item_id, "relative_path": relative, "state": "conflict"})
+                            results.append(
+                                {
+                                    "item_id": item_id,
+                                    "relative_path": relative,
+                                    "state": "conflict",
+                                }
+                            )
                             continue
                         self._append_event_locked(
-                            conn, lease, operation_id=operation_id, item_id=item_id,
-                            event_type="claimed", relative_path=relative,
-                            quarantine_path=quarantine_relative, inventory=inventory,
+                            conn,
+                            lease,
+                            operation_id=operation_id,
+                            item_id=item_id,
+                            event_type="claimed",
+                            relative_path=relative,
+                            quarantine_path=quarantine_relative,
+                            inventory=inventory,
                         )
                         if fail_phase == "after_claim_event":
-                            raise StorageMaintenanceConflict("synthetic crash after claim event")
+                            raise StorageMaintenanceConflict(
+                                "synthetic crash after claim event"
+                            )
                         self._ensure_control_parent(destination)
                         if os.path.lexists(destination):
-                            raise StorageMaintenanceConflict("quarantine destination already exists")
+                            raise StorageMaintenanceConflict(
+                                "quarantine destination already exists"
+                            )
                         self._authorize_before_move(conn, lease, staging, destination)
                         os.replace(staging, destination)
                         if fail_phase == "after_quarantine_move":
-                            raise StorageMaintenanceConflict("synthetic crash after quarantine move")
+                            raise StorageMaintenanceConflict(
+                                "synthetic crash after quarantine move"
+                            )
                         if not self._verify_file_matches(destination, inventory):
-                            raise StorageMaintenanceConflict("quarantine verification failed")
+                            raise StorageMaintenanceConflict(
+                                "quarantine verification failed"
+                            )
                         self._append_event_locked(
-                            conn, lease, operation_id=operation_id, item_id=item_id,
-                            event_type="quarantined", relative_path=relative,
-                            quarantine_path=quarantine_relative, inventory=inventory,
+                            conn,
+                            lease,
+                            operation_id=operation_id,
+                            item_id=item_id,
+                            event_type="quarantined",
+                            relative_path=relative,
+                            quarantine_path=quarantine_relative,
+                            inventory=inventory,
                         )
                         total -= int(snapshot.identity["size"])
-                        results.append({"item_id": item_id, "relative_path": relative, "state": "quarantined"})
-                        if fail_after_items is not None and index + 1 >= fail_after_items:
-                            raise StorageMaintenanceConflict("synthetic failure after item mutation")
+                        results.append(
+                            {
+                                "item_id": item_id,
+                                "relative_path": relative,
+                                "state": "quarantined",
+                            }
+                        )
+                        if (
+                            fail_after_items is not None
+                            and index + 1 >= fail_after_items
+                        ):
+                            raise StorageMaintenanceConflict(
+                                "synthetic failure after item mutation"
+                            )
             finally:
                 conn.close()
-        return {"operation_id": operation_id, "items": results,
-                "active_after_bytes": total, "physical_bytes_reclaimed": 0}
+        return {
+            "operation_id": operation_id,
+            "items": results,
+            "active_after_bytes": total,
+            "physical_bytes_reclaimed": 0,
+        }
 
-    def _latest_rows(self, conn: sqlite3.Connection, states: tuple[str, ...]) -> list[sqlite3.Row]:
+    def _latest_rows(
+        self, conn: sqlite3.Connection, states: tuple[str, ...]
+    ) -> list[sqlite3.Row]:
         placeholders = ",".join("?" for _ in states)
         return conn.execute(
             f"""SELECT e.* FROM item_events e
@@ -690,18 +924,30 @@ class StorageMaintenanceStore:
             states,
         ).fetchall()
 
-    def _validated_row(self, row: sqlite3.Row) -> tuple[dict[str, Any], Path, Path, Path]:
+    def _validated_row(
+        self, row: sqlite3.Row
+    ) -> tuple[dict[str, Any], Path, Path, Path]:
         payload = self._payload_from_row(row)
         self._validate_item_id(str(row["item_id"]))
-        inventory = self._validated_inventory(payload["inventory"], str(row["relative_path"]))
-        if _digest(inventory) != row["inventory_digest"] or inventory["content_digest"] != row["content_digest"]:
+        inventory = self._validated_inventory(
+            payload["inventory"], str(row["relative_path"])
+        )
+        if (
+            _digest(inventory) != row["inventory_digest"]
+            or inventory["content_digest"] != row["content_digest"]
+        ):
             raise StorageMaintenanceConflict("event inventory digest mismatch")
         source, expected_quarantine, destination = self._validated_paths(
             str(row["operation_id"]), str(row["relative_path"])
         )
         if row["quarantine_path"] != expected_quarantine:
             raise StorageMaintenanceConflict("event quarantine path is invalid")
-        staging = self.control / "staging" / str(row["operation_id"]) / f"{row['item_id']}.claimed"
+        staging = (
+            self.control
+            / "staging"
+            / str(row["operation_id"])
+            / f"{row['item_id']}.claimed"
+        )
         return inventory, source, staging, destination
 
     def recover(self, lease: MaintenanceLease) -> dict[str, int]:
@@ -712,13 +958,17 @@ class StorageMaintenanceStore:
             try:
                 self._authorize_conn(conn, lease)
                 self._audit_conn(conn)
-                for row in self._latest_rows(conn, ("planned", "claimed", "quarantined")):
+                for row in self._latest_rows(
+                    conn, ("planned", "claimed", "quarantined")
+                ):
                     inventory, source, staging, destination = self._validated_row(row)
                     row_detail = json.loads(str(row["detail_json"]))
-                    kwargs = {
-                        "operation_id": str(row["operation_id"]), "item_id": str(row["item_id"]),
+                    kwargs: dict[str, Any] = {
+                        "operation_id": str(row["operation_id"]),
+                        "item_id": str(row["item_id"]),
                         "relative_path": str(row["relative_path"]),
-                        "quarantine_path": str(row["quarantine_path"]), "inventory": inventory,
+                        "quarantine_path": str(row["quarantine_path"]),
+                        "inventory": inventory,
                     }
                     if row["event_type"] == "quarantined":
                         if row_detail != {"action": "restore_pending"}:
@@ -727,8 +977,12 @@ class StorageMaintenanceStore:
                         quarantine_exists = os.path.lexists(destination)
                         if source_exists and quarantine_exists:
                             self._append_event_locked(
-                                conn, lease, event_type="conflict",
-                                detail={"reason": "restore_has_two_authoritative_paths"},
+                                conn,
+                                lease,
+                                event_type="conflict",
+                                detail={
+                                    "reason": "restore_has_two_authoritative_paths"
+                                },
                                 **kwargs,
                             )
                             conflicts += 1
@@ -739,17 +993,23 @@ class StorageMaintenanceStore:
                             except StorageCapabilityError:
                                 source_matches = False
                             else:
-                                source_matches = self._verify_file_matches(source, inventory)
+                                source_matches = self._verify_file_matches(
+                                    source, inventory
+                                )
                             if source_matches:
                                 self._append_event_locked(
-                                    conn, lease, event_type="restored",
+                                    conn,
+                                    lease,
+                                    event_type="restored",
                                     detail={"recovered": True, "action": "restore"},
                                     **kwargs,
                                 )
                                 recovered += 1
                             else:
                                 self._append_event_locked(
-                                    conn, lease, event_type="conflict",
+                                    conn,
+                                    lease,
+                                    event_type="conflict",
                                     detail={"reason": "restored_identity_mismatch"},
                                     **kwargs,
                                 )
@@ -759,60 +1019,123 @@ class StorageMaintenanceStore:
                             self._ensure_control_parent(destination)
                             if not self._verify_file_matches(destination, inventory):
                                 self._append_event_locked(
-                                    conn, lease, event_type="conflict",
-                                    detail={"reason": "restore_source_identity_mismatch"},
+                                    conn,
+                                    lease,
+                                    event_type="conflict",
+                                    detail={
+                                        "reason": "restore_source_identity_mismatch"
+                                    },
                                     **kwargs,
                                 )
                                 conflicts += 1
                                 continue
-                            ensure_safe_parent(self.capability, str(row["relative_path"]))
-                            self._authorize_before_move(conn, lease, destination, source)
+                            ensure_safe_parent(
+                                self.capability, str(row["relative_path"])
+                            )
+                            self._authorize_before_move(
+                                conn, lease, destination, source
+                            )
                             os.replace(destination, source)
                             if not self._verify_file_matches(source, inventory):
                                 raise StorageMaintenanceConflict(
                                     "recovered restore verification failed"
                                 )
                             self._append_event_locked(
-                                conn, lease, event_type="restored",
+                                conn,
+                                lease,
+                                event_type="restored",
                                 detail={"recovered": True, "action": "restore"},
                                 **kwargs,
                             )
                             recovered += 1
                             continue
                         self._append_event_locked(
-                            conn, lease, event_type="failed",
-                            detail={"reason": "restore_bytes_missing"}, **kwargs,
+                            conn,
+                            lease,
+                            event_type="failed",
+                            detail={"reason": "restore_bytes_missing"},
+                            **kwargs,
                         )
                         failed += 1
                         continue
                     if os.path.lexists(destination):
                         if not self._verify_file_matches(destination, inventory):
-                            self._append_event_locked(conn, lease, event_type="conflict", detail={"reason": "quarantine_identity_mismatch"}, **kwargs)
+                            self._append_event_locked(
+                                conn,
+                                lease,
+                                event_type="conflict",
+                                detail={"reason": "quarantine_identity_mismatch"},
+                                **kwargs,
+                            )
                             conflicts += 1
                             continue
                         if row["event_type"] == "planned":
-                            self._append_event_locked(conn, lease, event_type="claimed", detail={"recovered": True}, **kwargs)
-                        self._append_event_locked(conn, lease, event_type="quarantined", detail={"recovered": True}, **kwargs)
+                            self._append_event_locked(
+                                conn,
+                                lease,
+                                event_type="claimed",
+                                detail={"recovered": True},
+                                **kwargs,
+                            )
+                        self._append_event_locked(
+                            conn,
+                            lease,
+                            event_type="quarantined",
+                            detail={"recovered": True},
+                            **kwargs,
+                        )
                         recovered += 1
                     elif os.path.lexists(staging):
                         if not self._verify_file_matches(staging, inventory):
-                            self._append_event_locked(conn, lease, event_type="conflict", detail={"reason": "claimed_identity_mismatch"}, **kwargs)
+                            self._append_event_locked(
+                                conn,
+                                lease,
+                                event_type="conflict",
+                                detail={"reason": "claimed_identity_mismatch"},
+                                **kwargs,
+                            )
                             conflicts += 1
                             continue
                         if row["event_type"] == "planned":
-                            self._append_event_locked(conn, lease, event_type="claimed", detail={"recovered": True}, **kwargs)
+                            self._append_event_locked(
+                                conn,
+                                lease,
+                                event_type="claimed",
+                                detail={"recovered": True},
+                                **kwargs,
+                            )
                         self._ensure_control_parent(destination)
                         self._authorize_before_move(conn, lease, staging, destination)
                         os.replace(staging, destination)
                         if not self._verify_file_matches(destination, inventory):
-                            raise StorageMaintenanceConflict("recovered quarantine verification failed")
-                        self._append_event_locked(conn, lease, event_type="quarantined", detail={"recovered": True}, **kwargs)
+                            raise StorageMaintenanceConflict(
+                                "recovered quarantine verification failed"
+                            )
+                        self._append_event_locked(
+                            conn,
+                            lease,
+                            event_type="quarantined",
+                            detail={"recovered": True},
+                            **kwargs,
+                        )
                         recovered += 1
                     elif os.path.lexists(source):
-                        self._append_event_locked(conn, lease, event_type="failed", detail={"reason": "claim_not_started"}, **kwargs)
+                        self._append_event_locked(
+                            conn,
+                            lease,
+                            event_type="failed",
+                            detail={"reason": "claim_not_started"},
+                            **kwargs,
+                        )
                         failed += 1
                     else:
-                        self._append_event_locked(conn, lease, event_type="failed", detail={"reason": "no_authoritative_bytes"}, **kwargs)
+                        self._append_event_locked(
+                            conn,
+                            lease,
+                            event_type="failed",
+                            detail={"reason": "no_authoritative_bytes"},
+                            **kwargs,
+                        )
                         failed += 1
             finally:
                 conn.close()
@@ -841,29 +1164,50 @@ class StorageMaintenanceStore:
                 if os.path.lexists(source):
                     raise StorageMaintenanceConflict("restore destination is occupied")
                 if not self._verify_file_matches(quarantined, inventory):
-                    raise StorageMaintenanceConflict("quarantine bytes do not match the item identity")
+                    raise StorageMaintenanceConflict(
+                        "quarantine bytes do not match the item identity"
+                    )
                 ensure_safe_parent(self.capability, str(row["relative_path"]))
                 self._append_event_locked(
-                    conn, lease, operation_id=str(row["operation_id"]), item_id=item_id,
-                    event_type="quarantined", relative_path=str(row["relative_path"]),
-                    quarantine_path=str(row["quarantine_path"]), inventory=inventory,
+                    conn,
+                    lease,
+                    operation_id=str(row["operation_id"]),
+                    item_id=item_id,
+                    event_type="quarantined",
+                    relative_path=str(row["relative_path"]),
+                    quarantine_path=str(row["quarantine_path"]),
+                    inventory=inventory,
                     detail={"action": "restore_pending"},
                 )
                 if fail_phase == "after_restore_intent":
-                    raise StorageMaintenanceConflict("synthetic crash after restore intent")
+                    raise StorageMaintenanceConflict(
+                        "synthetic crash after restore intent"
+                    )
                 self._authorize_before_move(conn, lease, quarantined, source)
                 os.replace(quarantined, source)
                 if fail_phase == "after_restore_move":
-                    raise StorageMaintenanceConflict("synthetic crash after restore move")
+                    raise StorageMaintenanceConflict(
+                        "synthetic crash after restore move"
+                    )
                 if not self._verify_file_matches(source, inventory):
-                    raise StorageMaintenanceConflict("restored bytes failed identity verification")
+                    raise StorageMaintenanceConflict(
+                        "restored bytes failed identity verification"
+                    )
                 self._append_event_locked(
-                    conn, lease, operation_id=str(row["operation_id"]), item_id=item_id,
-                    event_type="restored", relative_path=str(row["relative_path"]),
-                    quarantine_path=str(row["quarantine_path"]), inventory=inventory,
+                    conn,
+                    lease,
+                    operation_id=str(row["operation_id"]),
+                    item_id=item_id,
+                    event_type="restored",
+                    relative_path=str(row["relative_path"]),
+                    quarantine_path=str(row["quarantine_path"]),
+                    inventory=inventory,
                 )
-                return {"item_id": item_id, "state": "restored",
-                        "relative_path": row["relative_path"]}
+                return {
+                    "item_id": item_id,
+                    "state": "restored",
+                    "relative_path": row["relative_path"],
+                }
             finally:
                 conn.close()
 
@@ -880,7 +1224,9 @@ class StorageMaintenanceStore:
             seq = int(row["event_seq"])
             event_type = str(row["event_type"])
             if seq != prior_seq.get(item_id, 0) + 1:
-                raise StorageMaintenanceConflict("storage event sequence is not contiguous")
+                raise StorageMaintenanceConflict(
+                    "storage event sequence is not contiguous"
+                )
             if str(row["prior_event_hash"]) != prior_hash.get(item_id, ""):
                 raise StorageMaintenanceConflict("storage event prior hash mismatch")
             detail = json.loads(str(row["detail_json"]))
@@ -895,19 +1241,36 @@ class StorageMaintenanceStore:
                 raise StorageMaintenanceConflict("storage event transition is illegal")
             inventory, _source, _staging, _destination = self._validated_row(row)
             binding = (
-                row["operation_id"], row["relative_path"], row["quarantine_path"],
-                row["content_digest"], row["inventory_digest"], row["root_id"],
+                row["operation_id"],
+                row["relative_path"],
+                row["quarantine_path"],
+                row["content_digest"],
+                row["inventory_digest"],
+                row["root_id"],
                 row["capability_digest"],
             )
             if item_id in bindings and bindings[item_id] != binding:
-                raise StorageMaintenanceConflict("storage item binding changed across events")
+                raise StorageMaintenanceConflict(
+                    "storage item binding changed across events"
+                )
             bindings[item_id] = binding
-            if row["capability_digest"] != self.capability.capability_digest or row["root_id"] != self.capability.root_id:
-                raise StorageMaintenanceConflict("storage event capability binding mismatch")
-            if row["canonical_root"] != self.capability.canonical_root or json.loads(row["filesystem_identity_json"]) != self.capability.filesystem_identity:
+            if (
+                row["capability_digest"] != self.capability.capability_digest
+                or row["root_id"] != self.capability.root_id
+            ):
+                raise StorageMaintenanceConflict(
+                    "storage event capability binding mismatch"
+                )
+            if (
+                row["canonical_root"] != self.capability.canonical_root
+                or json.loads(row["filesystem_identity_json"])
+                != self.capability.filesystem_identity
+            ):
                 raise StorageMaintenanceConflict("storage event root binding mismatch")
             if _digest(inventory) != row["inventory_digest"]:
-                raise StorageMaintenanceConflict("storage event inventory hash mismatch")
+                raise StorageMaintenanceConflict(
+                    "storage event inventory hash mismatch"
+                )
             payload = self._payload_from_row(row)
             event_hash = _digest(payload)
             if event_hash != row["event_hash"]:
@@ -918,8 +1281,16 @@ class StorageMaintenanceStore:
             prior_seq[item_id] = seq
             prior_state[item_id] = event_type
             states[item_id] = event_type
-        counts = {state: sum(value == state for value in states.values()) for state in sorted(self._EVENT_TYPES)}
-        return {"activated": True, "events": len(rows), "items": len(states), "state_counts": counts}
+        counts = {
+            state: sum(value == state for value in states.values())
+            for state in sorted(self._EVENT_TYPES)
+        }
+        return {
+            "activated": True,
+            "events": len(rows),
+            "items": len(states),
+            "state_counts": counts,
+        }
 
     @classmethod
     def audit_readonly(cls, root: Path) -> dict[str, Any]:

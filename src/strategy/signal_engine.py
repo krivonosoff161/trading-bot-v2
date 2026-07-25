@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -460,10 +459,8 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     entry_signal = eng["entry_signal"]
     side = eng["side"]
     bias_1h = eng["bias_1h"]
-    adx_1h = eng["adx_1h"]
     adx_rising = eng["adx_1h_rising"]
     vol_ratio = eng["vol_ratio_sig"]
-    bb_expanding = eng["bb_expanding"]
     vwap_ok = eng["vwap_ok"]
     oi_weak = eng.get("oi_weak_veto", eng["oi_weak"])
     is_night = eng["is_night"]
@@ -485,7 +482,6 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     four_h_conflict = eng.get("four_h_conflict", False)
     adx_4h_ok = eng.get("adx_4h_ok", True)
     five_m_trigger = eng.get("five_m_trigger", True)
-    adx_4h = eng.get("adx_4h", 0.0)
     regime = eng.get("regime", "RANGING")
     exit_rule = eng.get("exit_rule") if isinstance(eng.get("exit_rule"), dict) else {}
     exit_rule_type = str(exit_rule.get("type") or "").lower()
@@ -508,7 +504,8 @@ def build_engine_summary(symbol: str, captured_at: str, eng: dict) -> str:
     else:
         direction_text = "направления нет — ни LONG, ни SHORT не рассматриваются"
 
-    fp = lambda p: _fmt_price(symbol, p)
+    def fp(price):
+        return _fmt_price(symbol, price)
     sep = "═" * 46
     lines = [sep, f"  {symbol}  |  {ts_str}", sep, "", f"  Статус:      {status}"]
     if type_str and entry_signal != "NO_TRADE":

@@ -85,7 +85,12 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _source_id(row: dict[str, Any]) -> str:
-    return str(row.get("source_signal_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
+    return str(
+        row.get("source_signal_id")
+        or row.get("paper_signal_id")
+        or row.get("signal_id")
+        or ""
+    )
 
 
 def _put(bucket: dict[str, set[str]], field: str, value: Any) -> None:
@@ -94,7 +99,12 @@ def _put(bucket: dict[str, set[str]], field: str, value: Any) -> None:
     bucket.setdefault(field, set()).add(str(value))
 
 
-def _merge(bucket: dict[str, set[str]], row: dict[str, Any], *, aliases: dict[str, str] | None = None) -> None:
+def _merge(
+    bucket: dict[str, set[str]],
+    row: dict[str, Any],
+    *,
+    aliases: dict[str, str] | None = None,
+) -> None:
     aliases = aliases or {}
     for field in ID_FIELDS:
         _put(bucket, field, row.get(aliases.get(field, field)))
@@ -143,18 +153,30 @@ def build_paper_lineage(
             thesis_payload = json.loads(thesis_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             thesis_payload = {}
-    thesis_events = [] if trade_generation["authority_database_exists"] else _load_jsonl(
-        derived / "trade_thesis_events.jsonl"
+    thesis_events = (
+        []
+        if trade_generation["authority_database_exists"]
+        else _load_jsonl(derived / "trade_thesis_events.jsonl")
     )
     if not thesis_events:
-        thesis_events = [row for row in thesis_payload.get("event_items") or [] if isinstance(row, dict)]
-    thesis_items = [] if trade_generation["authority_database_exists"] else _load_jsonl(
-        derived / "trade_theses.jsonl"
+        thesis_events = [
+            row
+            for row in thesis_payload.get("event_items") or []
+            if isinstance(row, dict)
+        ]
+    thesis_items = (
+        []
+        if trade_generation["authority_database_exists"]
+        else _load_jsonl(derived / "trade_theses.jsonl")
     )
     if not thesis_items:
-        thesis_items = [row for row in thesis_payload.get("items") or [] if isinstance(row, dict)]
-    account_events = [] if trade_generation["authority_database_exists"] else _load_jsonl(
-        derived / "paper_account_events.jsonl"
+        thesis_items = [
+            row for row in thesis_payload.get("items") or [] if isinstance(row, dict)
+        ]
+    account_events = (
+        []
+        if trade_generation["authority_database_exists"]
+        else _load_jsonl(derived / "paper_account_events.jsonl")
     )
 
     all_source_ids = {
@@ -170,9 +192,15 @@ def build_paper_lineage(
         if str(row.get("primary_signal_id") or row.get("source_signal_id") or "")
     )
     all_source_ids.update(_source_id(row) for row in account_events if _source_id(row))
-    buckets: dict[str, dict[str, set[str]]] = {source_id: {} for source_id in all_source_ids}
-    seen_surfaces: dict[str, set[str]] = {source_id: set() for source_id in all_source_ids}
-    metadata: dict[str, dict[str, str]] = {source_id: {} for source_id in all_source_ids}
+    buckets: dict[str, dict[str, set[str]]] = {
+        source_id: {} for source_id in all_source_ids
+    }
+    seen_surfaces: dict[str, set[str]] = {
+        source_id: set() for source_id in all_source_ids
+    }
+    metadata: dict[str, dict[str, str]] = {
+        source_id: {} for source_id in all_source_ids
+    }
 
     for surface, rows in surfaces.items():
         for row in rows:
@@ -189,7 +217,9 @@ def build_paper_lineage(
                 buckets[source_id],
                 lineage_row,
                 aliases={
-                    "runtime_id": "main_paper_runtime_id" if surface == "training" else "runtime_id",
+                    "runtime_id": "main_paper_runtime_id"
+                    if surface == "training"
+                    else "runtime_id",
                     "paper_signal_id": "paper_signal_id",
                 },
             )
@@ -200,7 +230,11 @@ def build_paper_lineage(
                 ("setup_family", "setup_family"),
                 ("source", "source"),
             ):
-                value = str(row.get(source) or row.get("family") or "") if target == "setup_family" else str(row.get(source) or "")
+                value = (
+                    str(row.get(source) or row.get("family") or "")
+                    if target == "setup_family"
+                    else str(row.get(source) or "")
+                )
                 if value and not metadata[source_id].get(target):
                     metadata[source_id][target] = value
 
@@ -210,7 +244,9 @@ def build_paper_lineage(
             seen_surfaces[source_id].add("thesis")
             _put(buckets[source_id], "thesis_id", row.get("thesis_id"))
     for row in thesis_items:
-        source_id = str(row.get("primary_signal_id") or row.get("source_signal_id") or "")
+        source_id = str(
+            row.get("primary_signal_id") or row.get("source_signal_id") or ""
+        )
         if source_id in buckets:
             seen_surfaces[source_id].add("thesis")
             _put(buckets[source_id], "thesis_id", row.get("thesis_id"))
@@ -218,23 +254,33 @@ def build_paper_lineage(
         source_id = _source_id(row)
         if source_id in buckets:
             seen_surfaces[source_id].add("account")
-            _put(buckets[source_id], "paper_account_scenario_id", row.get("scenario_id"))
+            _put(
+                buckets[source_id], "paper_account_scenario_id", row.get("scenario_id")
+            )
 
     envelopes: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
     for source_id in sorted(buckets):
         values = buckets[source_id]
-        ids: dict[str, str] = {}
+        ids: dict[str, Any] = {}
         for field in ID_FIELDS:
             candidates = sorted(values.get(field) or [])
             ids[field] = candidates[0] if candidates else ""
             if field in MULTI_ID_FIELDS:
                 ids[f"{field}s"] = candidates
             elif len(candidates) > 1:
-                conflicts.append({"source_signal_id": source_id, "field": field, "values": candidates})
+                conflicts.append(
+                    {
+                        "source_signal_id": source_id,
+                        "field": field,
+                        "values": candidates,
+                    }
+                )
         envelope = {
             "schema": SCHEMA,
-            "lineage_id": stable_id("paperlineage", {"source_signal_id": source_id}, length=20),
+            "lineage_id": stable_id(
+                "paperlineage", {"source_signal_id": source_id}, length=20
+            ),
             "source_signal_id": source_id,
             **ids,
             **metadata[source_id],
@@ -249,7 +295,8 @@ def build_paper_lineage(
     terminal_ids = {
         _source_id(row)
         for row in surfaces["product"]
-        if _source_id(row) and str(row.get("status") or "") not in {"armed", "opened_paper"}
+        if _source_id(row)
+        and str(row.get("status") or "") not in {"armed", "opened_paper"}
     }
     training_ids = {_source_id(row) for row in surfaces["training"] if _source_id(row)}
     main_without_trade = sorted(queue_ids - trade_ids)

@@ -26,7 +26,11 @@ COLLECT_TRUE_FORWARD = "collect_true_forward"
 OPERATOR_REVIEW_ONLY = "operator_review_only"
 ELIGIBLE_FOR_OPERATOR_REVIEW = "eligible_for_operator_review"
 
-_RETEST_ACTIONS = {"retest_exit_or_capture", "retest_entry_timing", "compare_breakeven_policy"}
+_RETEST_ACTIONS = {
+    "retest_exit_or_capture",
+    "retest_entry_timing",
+    "compare_breakeven_policy",
+}
 _REVIEW_ACTIONS = {"cluster_before_retest", "observe_more"}
 _PRESERVE_ACTIONS = {"preserve_pattern"}
 
@@ -59,7 +63,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _items_by_candidate(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rows = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+    raw_rows = snapshot.get("items")
+    rows = raw_rows if isinstance(raw_rows, list) else []
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -72,7 +77,7 @@ def _items_by_candidate(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _registry_by_uc(private_root: Path, name: str) -> dict[str, dict[str, Any]]:
     data = _read_json(Path(private_root) / "state" / "derived" / name)
-    rows = data.get("by_uc_key") if isinstance(data.get("by_uc_key"), dict) else {}
+    rows = raw_rows if isinstance(raw_rows := data.get("by_uc_key"), dict) else {}
     return {str(key): value for key, value in rows.items() if isinstance(value, dict)}
 
 
@@ -86,7 +91,9 @@ def _candidate_keys(row: dict[str, Any]) -> set[str]:
     return {key for key in keys if key}
 
 
-def _lookup_any(index: dict[str, dict[str, Any]], keys: Iterable[str]) -> tuple[str, dict[str, Any]]:
+def _lookup_any(
+    index: dict[str, dict[str, Any]], keys: Iterable[str]
+) -> tuple[str, dict[str, Any]]:
     for key in keys:
         row = index.get(key)
         if row is not None:
@@ -160,7 +167,9 @@ def build_gate_verdicts(
     retest_index = retest_index or {}
     verdicts: list[PromotionGateVerdict] = []
     for review in outcome_reviews:
-        if str(review.get("role_id") or "") != "outcome_reviewer" or not bool(review.get("accepted")):
+        if str(review.get("role_id") or "") != "outcome_reviewer" or not bool(
+            review.get("accepted")
+        ):
             continue
         source_ref = str(review.get("source_ref") or "")
         row = rows_by_ref.get(source_ref, {})
@@ -179,25 +188,29 @@ def build_gate_verdicts(
             ready=ready,
             retest=retest,
         )
-        verdicts.append(PromotionGateVerdict(
-            review_id=review_id,
-            source_ref=source_ref,
-            candidate_id=candidate_id,
-            symbol=str(row.get("symbol") or ""),
-            timeframe=str(row.get("timeframe") or ""),
-            family=str(row.get("family") or ""),
-            gate_stage=stage,
-            reasons=reasons,
-            evidence_refs={
-                "shadow_uc_key": shadow_key,
-                "true_forward_uc_key": true_key,
-                "ready_strategy_id": str(ready.get("ready_strategy_id") or ""),
-                "outcome_retest_id": str(retest.get("retest_id") or ""),
-                "outcome_retest_verdict": str(retest.get("verdict") or ""),
-                "outcome_retest_evidence_stage": str(retest.get("evidence_stage") or ""),
-                "required_evaluation": str(retest.get("required_evaluation") or ""),
-            },
-        ))
+        verdicts.append(
+            PromotionGateVerdict(
+                review_id=review_id,
+                source_ref=source_ref,
+                candidate_id=candidate_id,
+                symbol=str(row.get("symbol") or ""),
+                timeframe=str(row.get("timeframe") or ""),
+                family=str(row.get("family") or ""),
+                gate_stage=stage,
+                reasons=reasons,
+                evidence_refs={
+                    "shadow_uc_key": shadow_key,
+                    "true_forward_uc_key": true_key,
+                    "ready_strategy_id": str(ready.get("ready_strategy_id") or ""),
+                    "outcome_retest_id": str(retest.get("retest_id") or ""),
+                    "outcome_retest_verdict": str(retest.get("verdict") or ""),
+                    "outcome_retest_evidence_stage": str(
+                        retest.get("evidence_stage") or ""
+                    ),
+                    "required_evaluation": str(retest.get("required_evaluation") or ""),
+                },
+            )
+        )
     return verdicts
 
 
@@ -222,10 +235,15 @@ def build_outcome_promotion_gate(private_root: Path) -> dict[str, Any]:
         load_outcome_reviews(private_root),
         shadow_index=_registry_by_uc(private_root, "shadow_forward.json"),
         true_forward_index=_registry_by_uc(private_root, "true_forward.json"),
-        ready_index=_items_by_candidate(_read_json(catalog_snapshot_path(private_root))),
+        ready_index=_items_by_candidate(
+            _read_json(catalog_snapshot_path(private_root))
+        ),
         retest_index={
             str(row.get("review_id") or ""): row
-            for row in _read_json(Path(private_root) / "state" / "derived" / "outcome_retest_results.json").get("items") or []
+            for row in _read_json(
+                Path(private_root) / "state" / "derived" / "outcome_retest_results.json"
+            ).get("items")
+            or []
             if isinstance(row, dict) and str(row.get("review_id") or "")
         },
     )

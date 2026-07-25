@@ -15,6 +15,7 @@ The denylist (src.exchange.okx_client, scripts.auto_execute, main, src.utils.tel
 src.config, src.scout.scanner_v0, src.data.*_engine) is enforced by the AST
 import-boundary test in tests/test_farm_loop_integration.py and tests/test_paper_contract.py.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -77,6 +78,7 @@ _STATE_VALUES = {s.value for s in PaperRuntimeState}
 
 # Field validators (pure; raise PaperPlanError on a missing/invalid value).
 
+
 def _require_str(name: str, value: Any) -> None:
     if not isinstance(value, str) or not value.strip():
         raise PaperPlanError(f"{name} is required and must be a non-empty string")
@@ -85,8 +87,11 @@ def _require_str(name: str, value: Any) -> None:
 def _require_pct_rule(name: str, rule: Any) -> None:
     if not isinstance(rule, dict):
         raise PaperPlanError(f"{name} must be a dict like {{'type':'pct','value':...}}")
+    raw_value = rule.get("value")
+    if raw_value is None:
+        raise PaperPlanError(f"{name} needs a numeric 'value'")
     try:
-        value = float(rule.get("value"))
+        value = float(raw_value)
     except (TypeError, ValueError):
         raise PaperPlanError(f"{name} needs a numeric 'value'") from None
     if value <= 0:
@@ -114,6 +119,7 @@ def _require_verdict(verdict: Any) -> None:
 
 
 # PaperTradePlan (farm -> paper).
+
 
 @dataclass(frozen=True)
 class PaperTradePlan:
@@ -159,14 +165,19 @@ class PaperTradePlan:
         _require_str("family", self.family)
         _require_str("entry_rule", self.entry_rule)
         if self.direction not in _VALID_DIRECTIONS:
-            raise PaperPlanError(f"direction must be long|short|both, got {self.direction!r}")
+            raise PaperPlanError(
+                f"direction must be long|short|both, got {self.direction!r}"
+            )
         if not isinstance(self.params, dict) or not self.params:
             raise PaperPlanError("params must be a non-empty dict")
         _require_pct_rule("stop_loss", self.stop_loss)
         _require_take_profit(self.take_profit)
         if not isinstance(self.invalidation, dict):
             raise PaperPlanError("invalidation must be a dict")
-        if not isinstance(self.max_hold, dict) or int(self.max_hold.get("bars") or 0) <= 0:
+        if (
+            not isinstance(self.max_hold, dict)
+            or int(self.max_hold.get("bars") or 0) <= 0
+        ):
             raise PaperPlanError("max_hold must specify a positive 'bars'")
         if self.fees_bps < 0 or self.slippage_bps < 0:
             raise PaperPlanError("fees_bps and slippage_bps must be >= 0")
@@ -208,7 +219,9 @@ class PaperTradePlan:
             simulator_claim_ceiling=str(d.get("simulator_claim_ceiling") or ""),
             fees_bps=float(d.get("fees_bps", _DEFAULT_FEES_BPS)),
             slippage_bps=float(d.get("slippage_bps", _DEFAULT_SLIPPAGE_BPS)),
-            funding_handling=str(d.get("funding_handling") or _DEFAULT_FUNDING_HANDLING),
+            funding_handling=str(
+                d.get("funding_handling") or _DEFAULT_FUNDING_HANDLING
+            ),
             risk_limits=dict(d.get("risk_limits") or {}),
             metadata=dict(d.get("metadata") or {}),
             contract_version=str(d.get("contract_version") or PAPER_CONTRACT_VERSION),
@@ -216,6 +229,7 @@ class PaperTradePlan:
 
 
 # Builder: the ONLY path into a PaperTradePlan.
+
 
 def _resolve_direction(params: dict[str, Any]) -> str:
     raw = str(params.get("direction") or params.get("side") or "both").lower()
@@ -230,7 +244,9 @@ def _require_param_pct(params: dict[str, Any], key: str) -> float:
     try:
         value = float(params[key])
     except (KeyError, TypeError, ValueError):
-        raise PaperPlanError(f"params['{key}'] is required and must be numeric") from None
+        raise PaperPlanError(
+            f"params['{key}'] is required and must be numeric"
+        ) from None
     if value <= 0:
         raise PaperPlanError(f"params['{key}'] must be positive")
     return value
@@ -240,7 +256,9 @@ def _require_param_int(params: dict[str, Any], key: str) -> int:
     try:
         value = int(params[key])
     except (KeyError, TypeError, ValueError):
-        raise PaperPlanError(f"params['{key}'] is required and must be an int") from None
+        raise PaperPlanError(
+            f"params['{key}'] is required and must be an int"
+        ) from None
     if value <= 0:
         raise PaperPlanError(f"params['{key}'] must be positive")
     return value
@@ -309,7 +327,9 @@ def plan_from_setup_card(
     try:
         manifest = validate_simulator_assumption_manifest(card.simulator_manifest)
     except (TypeError, ValueError) as exc:
-        raise PaperPlanError(f"SetupCard has invalid simulator manifest: {exc}") from exc
+        raise PaperPlanError(
+            f"SetupCard has invalid simulator manifest: {exc}"
+        ) from exc
     if card.unsupported_simulator_dimensions != manifest["unsupported_dimensions"]:
         raise PaperPlanError("SetupCard simulator unsupported dimensions mismatch")
     if card.simulator_claim_ceiling != manifest["claim_ceiling"]:
@@ -347,6 +367,7 @@ def plan_from_setup_card(
 
 
 # PaperTradeOutcome (paper -> journal / feedback) skeleton record.
+
 
 @dataclass(frozen=True)
 class PaperTradeOutcome:
@@ -401,7 +422,9 @@ class PaperTradeOutcome:
         _require_str("data_fingerprint", self.data_fingerprint)
         _require_str("params_hash", self.params_hash)
         if self.direction and self.direction not in _VALID_DIRECTIONS:
-            raise PaperPlanError(f"direction must be long|short|both, got {self.direction!r}")
+            raise PaperPlanError(
+                f"direction must be long|short|both, got {self.direction!r}"
+            )
         if self.state not in _STATE_VALUES:
             raise PaperPlanError(
                 f"state must be one of {sorted(_STATE_VALUES)}, got {self.state!r}"
@@ -439,7 +462,9 @@ class PaperTradeOutcome:
         **overrides: Any,
     ) -> PaperTradeOutcome:
         """Seed a terminal outcome from a plan, carrying the join keys forward."""
-        state_value = state.value if isinstance(state, PaperRuntimeState) else str(state)
+        state_value = (
+            state.value if isinstance(state, PaperRuntimeState) else str(state)
+        )
         base: dict[str, Any] = {
             "trade_id": trade_id,
             "setup_id": plan.setup_id,
@@ -452,10 +477,13 @@ class PaperTradeOutcome:
             "data_fingerprint": plan.data_fingerprint,
             "params_hash": plan.params_hash,
             "simulator_manifest": dict(plan.simulator_manifest),
-            "unsupported_simulator_dimensions": list(plan.unsupported_simulator_dimensions),
+            "unsupported_simulator_dimensions": list(
+                plan.unsupported_simulator_dimensions
+            ),
             "simulator_claim_ceiling": plan.simulator_claim_ceiling,
             "cost_ledger": build_cost_ledger(
-                fees_bps=plan.fees_bps, slippage_bps=plan.slippage_bps,
+                fees_bps=plan.fees_bps,
+                slippage_bps=plan.slippage_bps,
             ),
         }
         base.update(overrides)

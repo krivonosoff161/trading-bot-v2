@@ -24,8 +24,12 @@ TERMINAL_STATUSES = {"closed_paper", "expired", "invalidated", "reviewed"}
 
 
 def _source_hash(signals: list[PaperActionSignal]) -> str:
-    payload = [sig.to_dict() for sig in sorted(signals, key=lambda item: item.signal_id)]
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = [
+        sig.to_dict() for sig in sorted(signals, key=lambda item: item.signal_id)
+    ]
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -49,10 +53,15 @@ def _refs_hash(
                 "trade": trades.get(sig.signal_id) or {},
                 "advice": advice_by_feature.get(sig.feature_packet_id) or {},
                 "policy": policy_by_signal.get(sig.signal_id) or {},
-                "outcome_review": outcome_reviews_by_training.get(f"training_{sig.signal_id}") or {},
+                "outcome_review": outcome_reviews_by_training.get(
+                    f"training_{sig.signal_id}"
+                )
+                or {},
             }
         )
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -95,7 +104,9 @@ def _trade_refs(
         legacy_snapshot=private_root / "state" / "derived" / "main_paper_trades.json",
         evidence_database_path=evidence_database_path,
     )
-    names = ("paper_product_trades.json",) if not view["authority_database_exists"] else ()
+    names = (
+        ("paper_product_trades.json",) if not view["authority_database_exists"] else ()
+    )
     for name in names:
         path = private_root / "state" / "derived" / name
         if not path.exists():
@@ -135,7 +146,11 @@ def _calculator_refs(private_root: Path) -> dict[str, dict[str, Any]]:
         if not fid:
             continue
         current = refs.get(fid)
-        if current is None or bool(row.get("accepted")) or not bool(current.get("accepted")):
+        if (
+            current is None
+            or bool(row.get("accepted"))
+            or not bool(current.get("accepted"))
+        ):
             refs[fid] = row
     return refs
 
@@ -178,7 +193,11 @@ def _outcome_review_refs(private_root: Path) -> dict[str, dict[str, Any]]:
         if not source_ref:
             continue
         current = refs.get(source_ref)
-        if current is None or bool(row.get("accepted")) or not bool(current.get("accepted")):
+        if (
+            current is None
+            or bool(row.get("accepted"))
+            or not bool(current.get("accepted"))
+        ):
             refs[source_ref] = row
     return refs
 
@@ -207,10 +226,20 @@ def training_row(
     advice = calculator_advice or {}
     policy = adaptive_policy or {}
     review_ref = outcome_review or {}
-    review_payload = review_ref.get("payload") if isinstance(review_ref.get("payload"), dict) else {}
-    paper_account = trade.get("paper_account") if isinstance(trade.get("paper_account"), dict) else {}
+    review_payload = (
+        raw_review_payload
+        if isinstance(raw_review_payload := review_ref.get("payload"), dict)
+        else {}
+    )
+    paper_account = (
+        raw_paper_account
+        if isinstance(raw_paper_account := trade.get("paper_account"), dict)
+        else {}
+    )
     card_text = str(card.get("text") or "")
-    calculator_advice_id = str(advice.get("calculator_advice_id") or advice.get("advisor_ref") or "")
+    calculator_advice_id = str(
+        advice.get("calculator_advice_id") or advice.get("advisor_ref") or ""
+    )
     llm_ref = calculator_advice_id or sig.llm_interpretation_ref
     validator_context = sig.validator_context or {}
     geometry_profile_id = str(
@@ -240,7 +269,9 @@ def training_row(
         "ready_strategy_id": str(validator_context.get("ready_strategy_id") or ""),
         "setup_id": str(validator_context.get("setup_id") or ""),
         "candidate_id": str(validator_context.get("candidate_id") or ""),
-        "source_validation_verdict": str(validator_context.get("source_validation_verdict") or ""),
+        "source_validation_verdict": str(
+            validator_context.get("source_validation_verdict") or ""
+        ),
         "search_family_id": str(validator_context.get("search_family_id") or ""),
         "search_trial_id": str(validator_context.get("search_trial_id") or ""),
         "effective_n_trials": int(validator_context.get("effective_n_trials") or 0),
@@ -273,7 +304,9 @@ def training_row(
             and trade.get("terminal_lifecycle_event_id")
             and trade.get("account_generation_id")
         ),
-        "outcome_id": f"outcome_{sig.signal_id}" if sig.status in TERMINAL_STATUSES else "",
+        "outcome_id": f"outcome_{sig.signal_id}"
+        if sig.status in TERMINAL_STATUSES
+        else "",
         "source": sig.source,
         "symbol": sig.symbol,
         "okx_inst_id": sig.okx_inst_id,
@@ -288,7 +321,9 @@ def training_row(
         "boundary_ts": sig.boundary_ts,
         "entry_mid": midpoint(sig.entry_zone),
         "entry_zone_low": float(sig.entry_zone[0]) if len(sig.entry_zone) == 2 else 0.0,
-        "entry_zone_high": float(sig.entry_zone[1]) if len(sig.entry_zone) == 2 else 0.0,
+        "entry_zone_high": float(sig.entry_zone[1])
+        if len(sig.entry_zone) == 2
+        else 0.0,
         "stop_loss": float(sig.stop_loss),
         "tp1": first_tp(sig.take_profit_plan),
         "geometry": geom,
@@ -311,9 +346,11 @@ def training_row(
         "mfe_pct": outcome.get("mfe_pct"),
         "mae_pct": outcome.get("mae_pct"),
         "capture": outcome.get("capture") or review.get("capture_of_mfe"),
-        "fees_bps_round_trip": outcome.get("fees_bps_round_trip") or geom["cost_assumptions"]["fees_bps_round_trip"],
+        "fees_bps_round_trip": outcome.get("fees_bps_round_trip")
+        or geom["cost_assumptions"]["fees_bps_round_trip"],
         "slippage_bps_round_trip": (
-            outcome.get("slippage_bps_round_trip") or geom["cost_assumptions"]["slippage_bps_round_trip"]
+            outcome.get("slippage_bps_round_trip")
+            or geom["cost_assumptions"]["slippage_bps_round_trip"]
         ),
         "paper_deposit_usdt": paper_account.get("deposit_usdt"),
         "paper_position_margin_usdt": paper_account.get("position_margin_usdt"),
@@ -338,10 +375,14 @@ def training_row(
         "adaptive_policy_confidence": policy.get("confidence"),
         "adaptive_policy_reasons": list(policy.get("reason_codes") or []),
         "outcome_review_id": str(review_ref.get("review_id") or ""),
-        "outcome_review_accepted": bool(review_ref.get("accepted")) if review_ref else False,
+        "outcome_review_accepted": bool(review_ref.get("accepted"))
+        if review_ref
+        else False,
         "outcome_learning_review_kind": str(review_payload.get("review_kind") or ""),
         "outcome_learning_bucket": str(review_payload.get("outcome_bucket") or ""),
-        "outcome_learning_actionability": str(review_payload.get("actionability") or ""),
+        "outcome_learning_actionability": str(
+            review_payload.get("actionability") or ""
+        ),
         "llm_provider": str(advice.get("provider") or ""),
         "llm_model": str(advice.get("model") or ""),
         "prompt_version": str(advice.get("prompt_version") or ""),
@@ -504,7 +545,13 @@ def export_training_rows(
         "display_only": not bool(trade_generation.get("current")),
     }
     out_snapshot.write_text(
-        json.dumps({**summary, "items": rows[:200]}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            {**summary, "items": rows[:200]},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return summary

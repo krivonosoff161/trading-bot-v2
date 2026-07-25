@@ -17,6 +17,7 @@ machine-readable reason:
 Side effects (prepare, materialize, worker, validation) happen only in ``apply``.
 Paper/research only: no order path, no .env, no AUTO_TRADE, no Telegram.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,22 +49,50 @@ from src.research_lab.validation_feedback import load_feedback_queue
 
 DEFAULT_FAMILIES = ("momentum_breakout", "mean_reversion_fade", "bb_volume_fade")
 _COUNTER_KEYS = (
-    "events_ingested", "events_consumed", "tasks_created", "tasks_deduped",
-    "planned_prepare", "planned_run_sweep", "planned_blocked", "planned_deferred",
-    "planned_skipped", "prepared_ok", "prepared_deferred", "prepared_blocked",
-    "enriched_ok", "enrich_deferred", "enriched_oi_ok", "enrich_oi_deferred",
+    "events_ingested",
+    "events_consumed",
+    "tasks_created",
+    "tasks_deduped",
+    "planned_prepare",
+    "planned_run_sweep",
+    "planned_blocked",
+    "planned_deferred",
+    "planned_skipped",
+    "prepared_ok",
+    "prepared_deferred",
+    "prepared_blocked",
+    "enriched_ok",
+    "enrich_deferred",
+    "enriched_oi_ok",
+    "enrich_oi_deferred",
     "oi_marked_unmeasured",
     "prepare_provider_error_parked",
-    "unblocked", "sweeps_materialized",
-    "sweeps_deduped", "sweeps_skipped_memory", "sweeps_deprioritized",
-    "runs_completed", "runs_failed", "classified",
-    "unique_upserted", "exports_created", "followups_scheduled",
-    "followups_deduped", "followup_notes", "followup_sweeps_planned",
-    "followup_invalid", "outcome_retests_cataloged", "outcome_retests_scheduled",
-    "outcome_retests_deduped", "outcome_retest_sweeps_planned",
-    "outcome_retest_invalid", "outcome_retest_notes",
-    "advisor_proposals_loaded", "advisor_sweeps_scheduled",
-    "advisor_sweeps_deduped", "advisor_sweep_invalid", "advisor_sweeps_planned",
+    "unblocked",
+    "sweeps_materialized",
+    "sweeps_deduped",
+    "sweeps_skipped_memory",
+    "sweeps_deprioritized",
+    "runs_completed",
+    "runs_failed",
+    "classified",
+    "unique_upserted",
+    "exports_created",
+    "followups_scheduled",
+    "followups_deduped",
+    "followup_notes",
+    "followup_sweeps_planned",
+    "followup_invalid",
+    "outcome_retests_cataloged",
+    "outcome_retests_scheduled",
+    "outcome_retests_deduped",
+    "outcome_retest_sweeps_planned",
+    "outcome_retest_invalid",
+    "outcome_retest_notes",
+    "advisor_proposals_loaded",
+    "advisor_sweeps_scheduled",
+    "advisor_sweeps_deduped",
+    "advisor_sweep_invalid",
+    "advisor_sweeps_planned",
 )
 
 
@@ -79,9 +108,7 @@ def _replay_materialization_outbox(tasks: FarmTasksDB, conn, *, now: float) -> i
         try:
             # Authority is checked before the first filesystem or compute-DB
             # side effect.  A pending record alone grants no replay authority.
-            intent = tasks.authorize_materialization_replay(
-                materialization_id, now=now
-            )
+            intent = tasks.authorize_materialization_replay(materialization_id, now=now)
         except StaleTaskClaimError:
             continue
         payload = str(intent["spec_json"])
@@ -116,9 +143,7 @@ def _replay_materialization_outbox(tasks: FarmTasksDB, conn, *, now: float) -> i
             materialization_digest=str(intent["spec_digest"]),
         )
         try:
-            tasks.mark_materialization_dispatched(
-                materialization_id, job_id, now=now
-            )
+            tasks.mark_materialization_dispatched(materialization_id, job_id, now=now)
             tasks.commit_materialization(
                 int(intent["task_id"]),
                 materialization_id=materialization_id,
@@ -145,9 +170,15 @@ def _bump_created(counters: dict[str, int], planned_key: str, created: bool) -> 
 
 
 # ── planning ─────────────────────────────────────────────────────────────────
-def _create_from_decision(tasks: FarmTasksDB, dec: dict[str, Any], event: dict[str, Any],
-                          families: tuple[str, ...], counters: dict[str, int], now: float,
-                          gate_index: GateIndex | None = None) -> None:
+def _create_from_decision(
+    tasks: FarmTasksDB,
+    dec: dict[str, Any],
+    event: dict[str, Any],
+    families: tuple[str, ...],
+    counters: dict[str, int],
+    now: float,
+    gate_index: GateIndex | None = None,
+) -> None:
     sym, tf = _norm(dec["symbol"]), str(dec.get("timeframe") or "")
     action = dec["action"]
     src = event.get("event_id")
@@ -158,43 +189,86 @@ def _create_from_decision(tasks: FarmTasksDB, dec: dict[str, Any], event: dict[s
         _bump(counters, "planned_skipped")
         return
     if action == "prepare_data":
-        _, created = tasks.enqueue_task(task_type="prepare_data", task_key=f"prepare::{sym}::{tf}",
-                                        symbol=sym, timeframe=tf, priority=pri, source_event_id=src,
-                                        machine_reason=dec["reason"], payload=plan_ctx, now=now)
+        _, created = tasks.enqueue_task(
+            task_type="prepare_data",
+            task_key=f"prepare::{sym}::{tf}",
+            symbol=sym,
+            timeframe=tf,
+            priority=pri,
+            source_event_id=src,
+            machine_reason=dec["reason"],
+            payload=plan_ctx,
+            now=now,
+        )
         _bump_created(counters, "planned_prepare", created)
         return
     if action == "defer":
-        _, created = tasks.enqueue_task(task_type="prepare_data", task_key=f"prepare::{sym}::{tf}",
-                                        symbol=sym, timeframe=tf, priority=pri, source_event_id=src,
-                                        state="deferred", deferred_until=dec["deferred_until"],
-                                        machine_reason=dec["reason"], payload=plan_ctx, now=now)
+        _, created = tasks.enqueue_task(
+            task_type="prepare_data",
+            task_key=f"prepare::{sym}::{tf}",
+            symbol=sym,
+            timeframe=tf,
+            priority=pri,
+            source_event_id=src,
+            state="deferred",
+            deferred_until=dec["deferred_until"],
+            machine_reason=dec["reason"],
+            payload=plan_ctx,
+            now=now,
+        )
         _bump_created(counters, "planned_deferred", created)
         return
     if action == "run_sweep":
         _create_run_sweep(tasks, dec, sym, tf, pri, src, counters, now, gate_index)
 
 
-def _create_run_sweep(tasks: FarmTasksDB, dec: dict[str, Any], sym: str, tf: str, pri: int,
-                      src: str | None, counters: dict[str, int], now: float,
-                      gate_index: GateIndex | None = None) -> None:
+def _create_run_sweep(
+    tasks: FarmTasksDB,
+    dec: dict[str, Any],
+    sym: str,
+    tf: str,
+    pri: int,
+    src: str | None,
+    counters: dict[str, int],
+    now: float,
+    gate_index: GateIndex | None = None,
+) -> None:
     fam = dec["family"]
     if dec.get("block"):
         key = f"run_sweep::{sym}::{tf}::{fam}::gate"
-        _, created = tasks.enqueue_task(task_type="run_sweep", task_key=key, symbol=sym, timeframe=tf,
-                                        family=fam, priority=pri, source_event_id=src, state="blocked",
-                                        machine_reason=dec["reason"], now=now)
+        _, created = tasks.enqueue_task(
+            task_type="run_sweep",
+            task_key=key,
+            symbol=sym,
+            timeframe=tf,
+            family=fam,
+            priority=pri,
+            source_event_id=src,
+            state="blocked",
+            machine_reason=dec["reason"],
+            now=now,
+        )
         _bump_created(counters, "planned_blocked", created)
         enrich = dec.get("needs_enrich")
         if enrich in ("funding", "oi"):
-            tasks.enqueue_task(task_type=f"enrich_{enrich}", task_key=f"enrich_{enrich}::{sym}::{tf}",
-                               symbol=sym, timeframe=tf, priority=pri, source_event_id=src, now=now)
+            tasks.enqueue_task(
+                task_type=f"enrich_{enrich}",
+                task_key=f"enrich_{enrich}::{sym}::{tf}",
+                symbol=sym,
+                timeframe=tf,
+                priority=pri,
+                source_event_id=src,
+                now=now,
+            )
         return
     fp = dec.get("data_fingerprint") or "nofp"
     machine_reason = "data_ready"
     # Read-through Setup Outcome Memory BEFORE spending compute: identical data already
     # proven dead is skipped; a historically all-rejected family cell is down-ranked.
     if gate_index is not None:
-        verdict = lookup(gate_index, symbol=sym, timeframe=tf, family=fam, data_fingerprint=fp)
+        verdict = lookup(
+            gate_index, symbol=sym, timeframe=tf, family=fam, data_fingerprint=fp
+        )
         if verdict.action == "skip_known_bad":
             _bump(counters, "sweeps_skipped_memory")
             return
@@ -203,19 +277,40 @@ def _create_run_sweep(tasks: FarmTasksDB, dec: dict[str, Any], sym: str, tf: str
             machine_reason = "data_ready:memory_deprioritized"
             _bump(counters, "sweeps_deprioritized")
     key = f"run_sweep::{sym}::{tf}::{fam}::{fp}"
-    _, created = tasks.enqueue_task(task_type="run_sweep", task_key=key, symbol=sym, timeframe=tf,
-                                    family=fam, params_hash=None, data_fingerprint=fp, priority=pri,
-                                    source_event_id=src, machine_reason=machine_reason, now=now)
+    _, created = tasks.enqueue_task(
+        task_type="run_sweep",
+        task_key=key,
+        symbol=sym,
+        timeframe=tf,
+        family=fam,
+        params_hash=None,
+        data_fingerprint=fp,
+        priority=pri,
+        source_event_id=src,
+        machine_reason=machine_reason,
+        now=now,
+    )
     _bump_created(counters, "planned_run_sweep", created)
 
 
-def _plan_events(tasks: FarmTasksDB, events: list[dict[str, Any]], families: tuple[str, ...],
-                 data_state_fn: Callable, counters: dict[str, int], now: float,
-                 gate_index: GateIndex | None = None) -> int:
+def _plan_events(
+    tasks: FarmTasksDB,
+    events: list[dict[str, Any]],
+    families: tuple[str, ...],
+    data_state_fn: Callable,
+    counters: dict[str, int],
+    now: float,
+    gate_index: GateIndex | None = None,
+) -> int:
     created_before = _count_active(tasks)
     for ev in events:
-        decs = plan_symbol(ev["symbol"], ev.get("asset_class"), families,
-                           data_state=lambda s, t: data_state_fn(s, t), now=now)
+        decs = plan_symbol(
+            ev["symbol"],
+            ev.get("asset_class"),
+            families,
+            data_state=lambda s, t: data_state_fn(s, t),
+            now=now,
+        )
         for dec in decs:
             _create_from_decision(tasks, dec, ev, families, counters, now, gate_index)
         tasks.mark_event_consumed(ev["event_id"])
@@ -248,7 +343,9 @@ def _gate_clear(task: dict[str, Any], data_state_fn: Callable) -> bool:
     return True
 
 
-def _unblock(tasks: FarmTasksDB, data_state_fn: Callable, counters: dict[str, int], now: float) -> None:
+def _unblock(
+    tasks: FarmTasksDB, data_state_fn: Callable, counters: dict[str, int], now: float
+) -> None:
     for task in tasks.tasks_in_state("blocked", task_type="run_sweep"):
         if _gate_clear(task, data_state_fn):
             tasks.requeue_task(task["task_id"], reason="gate_cleared", now=now)
@@ -327,15 +424,25 @@ def _candidate_context_by_id(tasks: FarmTasksDB) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
-                            now: float, limit: int) -> None:
-    recs = fr.build_recommendations(load_feedback_queue(private_root), _load_setup_cards(private_root))
+def _schedule_due_followups(
+    tasks: FarmTasksDB,
+    *,
+    private_root: Path,
+    counters: dict[str, int],
+    now: float,
+    limit: int,
+) -> None:
+    recs = fr.build_recommendations(
+        load_feedback_queue(private_root), _load_setup_cards(private_root)
+    )
     from src.research_lab.outcome_retest_result import build_outcome_retest_results
 
     build_outcome_retest_results(private_root)
     retest_catalog = write_outcome_retest_specs(private_root, max_specs=limit)
     if int(retest_catalog.get("specs") or 0):
-        _bump(counters, "outcome_retests_cataloged", int(retest_catalog.get("specs") or 0))
+        _bump(
+            counters, "outcome_retests_cataloged", int(retest_catalog.get("specs") or 0)
+        )
     for spec in retest_catalog.get("items") or []:
         if not isinstance(spec, dict) or not bool(spec.get("queueable")):
             continue
@@ -351,15 +458,23 @@ def _schedule_due_followups(tasks: FarmTasksDB, *, private_root: Path, counters:
             payload={"retest_spec": spec, "followup_depth": 0},
             now=now,
         )
-        _bump(counters, "outcome_retests_scheduled" if created else "outcome_retests_deduped")
+        _bump(
+            counters,
+            "outcome_retests_scheduled" if created else "outcome_retests_deduped",
+        )
     for rec in recs[: max(0, int(limit))]:
         cid = rec.candidate_ids[0] if rec.candidate_ids else ""
         key = f"followup_schedule::{cid or rec.symbol}::{rec.strategy_id}::{rec.action}::{rec.hard_status}"
         _, created = tasks.enqueue_task(
-            task_type="schedule_followup", task_key=key,
-            priority=_REC_PRIORITY.get(rec.priority, 80), symbol=rec.symbol,
-            timeframe=rec.timeframe, family=rec.strategy_id, source_event_id=cid,
-            payload={"recommendation": rec.to_dict(), "followup_depth": 0}, now=now,
+            task_type="schedule_followup",
+            task_key=key,
+            priority=_REC_PRIORITY.get(rec.priority, 80),
+            symbol=rec.symbol,
+            timeframe=rec.timeframe,
+            family=rec.strategy_id,
+            source_event_id=cid,
+            payload={"recommendation": rec.to_dict(), "followup_depth": 0},
+            now=now,
         )
         _bump(counters, "followups_scheduled" if created else "followups_deduped")
 
@@ -406,7 +521,9 @@ def _sweep_from_payload(data: dict[str, Any]) -> SweepSpec:
         parent_family_id=str(data.get("parent_family_id") or ""),
         parent_trial_id=str(data.get("parent_trial_id") or ""),
         parent_effective_n_trials=int(data.get("parent_effective_n_trials") or 0),
-        cumulative_family_policy=str(data.get("cumulative_family_policy") or "independent"),
+        cumulative_family_policy=str(
+            data.get("cumulative_family_policy") or "independent"
+        ),
     )
 
 
@@ -482,13 +599,21 @@ def _drain_retest_task(
         return
     sweep_data = spec_row.get("sweep_spec")
     if not isinstance(sweep_data, dict):
-        tasks.complete_task(task["task_id"], reason=spec_row.get("not_queueable_reason") or "no_sweep_spec", now=now)
+        tasks.complete_task(
+            task["task_id"],
+            reason=spec_row.get("not_queueable_reason") or "no_sweep_spec",
+            now=now,
+        )
         _bump(counters, "outcome_retest_notes")
         return
     sweep = _sweep_from_payload(sweep_data)
-    check = validate_sweep_spec(sweep, timeframe_profiles=profiles, resource_policy=policy)
+    check = validate_sweep_spec(
+        sweep, timeframe_profiles=profiles, resource_policy=policy
+    )
     if not check.ok:
-        tasks.skip_task(task["task_id"], "invalid_retest_spec:" + "|".join(check.errors), now=now)
+        tasks.skip_task(
+            task["task_id"], "invalid_retest_spec:" + "|".join(check.errors), now=now
+        )
         _bump(counters, "outcome_retest_invalid")
         return
     run_payload = {
@@ -521,12 +646,23 @@ def _drain_retest_task(
         payload=run_payload,
         now=now,
     )
-    tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
-    _bump(counters, "outcome_retest_sweeps_planned" if created else "outcome_retests_deduped")
+    tasks.complete_task(
+        task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now
+    )
+    _bump(
+        counters,
+        "outcome_retest_sweeps_planned" if created else "outcome_retests_deduped",
+    )
 
 
-def _schedule_advisor_sweeps(tasks: FarmTasksDB, *, private_root: Path, counters: dict[str, int],
-                             now: float, limit: int) -> None:
+def _schedule_advisor_sweeps(
+    tasks: FarmTasksDB,
+    *,
+    private_root: Path,
+    counters: dict[str, int],
+    now: float,
+    limit: int,
+) -> None:
     from src.research_lab.advisor_sweep_bridge import schedule_advisor_sweep_tasks
 
     summary = schedule_advisor_sweep_tasks(private_root, tasks, limit=limit, now=now)
@@ -536,7 +672,10 @@ def _schedule_advisor_sweeps(tasks: FarmTasksDB, *, private_root: Path, counters
 
 
 def _safe_part(value: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in str(value or ""))[:48].strip("_") or "x"
+    return (
+        "".join(ch if ch.isalnum() else "_" for ch in str(value or ""))[:48].strip("_")
+        or "x"
+    )
 
 
 def _drain_advisor_sweeps(
@@ -558,19 +697,35 @@ def _drain_advisor_sweeps(
         except (TypeError, json.JSONDecodeError):
             payload = {}
         proposal = payload.get("proposal") if isinstance(payload, dict) else {}
-        source_signal = payload.get("source_signal") if isinstance(payload, dict) else {}
+        source_signal = (
+            payload.get("source_signal") if isinstance(payload, dict) else {}
+        )
         if not isinstance(proposal, dict) or not isinstance(source_signal, dict):
             tasks.skip_task(task["task_id"], "malformed_advisor_payload", now=now)
             _bump(counters, "advisor_sweep_invalid")
             continue
         sym, tf = task["symbol"], task["timeframe"]
-        source_family = str(source_signal.get("setup_family") or task.get("family") or "")
-        fam = str(source_signal.get("executable_family") or paper_to_executable_family(source_family))
-        fp = str(source_signal.get("data_fingerprint") or task.get("data_fingerprint") or "nofp")
+        source_family = str(
+            source_signal.get("setup_family") or task.get("family") or ""
+        )
+        fam = str(
+            source_signal.get("executable_family")
+            or paper_to_executable_family(source_family)
+        )
+        fp = str(
+            source_signal.get("data_fingerprint")
+            or task.get("data_fingerprint")
+            or "nofp"
+        )
         dimension = str(proposal.get("dimension") or "unknown")
         try:
             base = build_sweep_spec(
-                sym, tf, fam, fingerprint=fp, backend=backend, tier="normal",
+                sym,
+                tf,
+                fam,
+                fingerprint=fp,
+                backend=backend,
+                tier="normal",
                 dimensions=(dimension,),
             )
         except ValueError as exc:
@@ -586,10 +741,16 @@ def _drain_advisor_sweeps(
                 f"{_safe_part(dimension)}_{_safe_part(fp)}"
             ),
         )
-        check = validate_sweep_spec(sweep, timeframe_profiles=profiles, resource_policy=policy)
+        check = validate_sweep_spec(
+            sweep, timeframe_profiles=profiles, resource_policy=policy
+        )
         blocking_errors = [err for err in check.errors if "variant grid" not in err]
         if blocking_errors:
-            tasks.skip_task(task["task_id"], "invalid_advisor_spec:" + "|".join(blocking_errors), now=now)
+            tasks.skip_task(
+                task["task_id"],
+                "invalid_advisor_spec:" + "|".join(blocking_errors),
+                now=now,
+            )
             _bump(counters, "advisor_sweep_invalid")
             continue
         run_payload = {
@@ -616,19 +777,41 @@ def _drain_advisor_sweeps(
             payload=run_payload,
             now=now,
         )
-        tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
-        _bump(counters, "advisor_sweeps_planned" if created else "advisor_sweeps_deduped")
+        tasks.complete_task(
+            task["task_id"],
+            reason="planned_run_sweep" if created else "deduped",
+            now=now,
+        )
+        _bump(
+            counters, "advisor_sweeps_planned" if created else "advisor_sweeps_deduped"
+        )
 
 
-def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
-                     counters: dict[str, int], now: float) -> None:
+def _drain_followups(
+    tasks: FarmTasksDB,
+    *,
+    profiles,
+    policy,
+    limit: int,
+    counters: dict[str, int],
+    now: float,
+) -> None:
     contexts = _candidate_context_by_id(tasks)
     for _ in range(limit):
-        task = tasks.claim_next_task(task_types=("schedule_followup", "schedule_retest"), now=now)
+        task = tasks.claim_next_task(
+            task_types=("schedule_followup", "schedule_retest"), now=now
+        )
         if task is None:
             break
         if task.get("task_type") == "schedule_retest":
-            _drain_retest_task(tasks, task, profiles=profiles, policy=policy, counters=counters, now=now)
+            _drain_retest_task(
+                tasks,
+                task,
+                profiles=profiles,
+                policy=policy,
+                counters=counters,
+                now=now,
+            )
             continue
         try:
             payload = json.loads(task.get("payload_json") or "{}")
@@ -641,73 +824,143 @@ def _drain_followups(tasks: FarmTasksDB, *, profiles, policy, limit: int,
             continue
         depth = int(payload.get("followup_depth") or 0)
         if depth >= MAX_FOLLOWUP_DEPTH:
-            tasks.complete_task(task["task_id"], reason="followup_depth_capped", now=now)
+            tasks.complete_task(
+                task["task_id"], reason="followup_depth_capped", now=now
+            )
             _bump(counters, "followup_notes")
             continue
         cid = rec.candidate_ids[0] if rec.candidate_ids else ""
         plan = plan_followup(rec, contexts.get(cid), max_variants=8)
         if not plan.queued or plan.sweep is None:
-            tasks.complete_task(task["task_id"], reason=plan.not_queued_reason or "note", now=now)
+            tasks.complete_task(
+                task["task_id"], reason=plan.not_queued_reason or "note", now=now
+            )
             _bump(counters, "followup_notes")
             continue
-        check = validate_sweep_spec(plan.sweep, timeframe_profiles=profiles, resource_policy=policy)
+        check = validate_sweep_spec(
+            plan.sweep, timeframe_profiles=profiles, resource_policy=policy
+        )
         if not check.ok:
-            tasks.skip_task(task["task_id"], "invalid_followup_spec:" + "|".join(check.errors), now=now)
+            tasks.skip_task(
+                task["task_id"],
+                "invalid_followup_spec:" + "|".join(check.errors),
+                now=now,
+            )
             _bump(counters, "followup_invalid")
             continue
         run_payload = {
-            "origin": "feedback_followup", "action": plan.action,
-            "source_candidate_id": plan.candidate_id, "hard_status": rec.hard_status,
-            "sweep_spec": _sweep_payload(plan.sweep), "followup_depth": depth + 1,
+            "origin": "feedback_followup",
+            "action": plan.action,
+            "source_candidate_id": plan.candidate_id,
+            "hard_status": rec.hard_status,
+            "sweep_spec": _sweep_payload(plan.sweep),
+            "followup_depth": depth + 1,
         }
         _, created = tasks.enqueue_task(
-            task_type="run_sweep", task_key=f"run_sweep::followup::{plan.sweep.sweep_id}",
-            priority=int(task.get("priority") or 70), symbol=plan.symbol,
-            timeframe=plan.timeframe, family=plan.strategy_id,
-            source_event_id=plan.candidate_id, payload=run_payload, now=now,
+            task_type="run_sweep",
+            task_key=f"run_sweep::followup::{plan.sweep.sweep_id}",
+            priority=int(task.get("priority") or 70),
+            symbol=plan.symbol,
+            timeframe=plan.timeframe,
+            family=plan.strategy_id,
+            source_event_id=plan.candidate_id,
+            payload=run_payload,
+            now=now,
         )
-        tasks.complete_task(task["task_id"], reason="planned_run_sweep" if created else "deduped", now=now)
+        tasks.complete_task(
+            task["task_id"],
+            reason="planned_run_sweep" if created else "deduped",
+            now=now,
+        )
         _bump(counters, "followup_sweeps_planned" if created else "followups_deduped")
 
 
 # ── execution (apply only) ────────────────────────────────────────────────────
-def _replan_after_prepare(tasks: FarmTasksDB, task: dict, *, data_state_fn, counters, now,
-                          gate_index=None) -> None:
+def _replan_after_prepare(
+    tasks: FarmTasksDB, task: dict, *, data_state_fn, counters, now, gate_index=None
+) -> None:
     """Data just landed for this symbol -> plan its run_sweep/enrich tasks now (chain prepare->sweep)."""
     import json
+
     payload = json.loads(task.get("payload_json") or "{}")
     families = tuple(payload.get("families") or DEFAULT_FAMILIES)
-    synth = {"event_id": task.get("source_event_id"), "priority": task.get("priority"),
-             "asset_class": payload.get("asset_class")}
-    for dec in plan_symbol(task["symbol"], payload.get("asset_class"), families,
-                           data_state=lambda s, t: data_state_fn(s, t), now=now):
+    synth = {
+        "event_id": task.get("source_event_id"),
+        "priority": task.get("priority"),
+        "asset_class": payload.get("asset_class"),
+    }
+    for dec in plan_symbol(
+        task["symbol"],
+        payload.get("asset_class"),
+        families,
+        data_state=lambda s, t: data_state_fn(s, t),
+        now=now,
+    ):
         if dec["action"] in ("run_sweep",):  # only the now-unlocked compute step
-            _create_from_decision(tasks, dec, synth, families, counters, now, gate_index)
+            _create_from_decision(
+                tasks, dec, synth, families, counters, now, gate_index
+            )
 
 
-def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_days,
-                   allow_public, limit, counters, now, data_state_fn, gate_index=None) -> None:
+def _drain_prepare(
+    tasks: FarmTasksDB,
+    *,
+    private_root,
+    provider,
+    now_ms,
+    data_days,
+    allow_public,
+    limit,
+    counters,
+    now,
+    data_state_fn,
+    gate_index=None,
+) -> None:
     from src.research_lab.data_planner import _defer_until
     from src.research_lab.scanner_farm_pipeline import _ensure_local_data
+
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("prepare_data",), now=now)
         if task is None:
             break
         if provider is None:
-            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_provider_configured", now=now)
+            tasks.defer_task(
+                task["task_id"],
+                until=now + 3600,
+                reason="no_provider_configured",
+                now=now,
+            )
             _bump(counters, "prepared_deferred")
             continue
-        status, rows = _ensure_local_data(task["symbol"], task["timeframe"], private_root=private_root,
-                                          provider=provider, apply=True, now_ms=now_ms, data_days=data_days,
-                                          prepares_left=1, allow_public_output=allow_public)
+        status, rows = _ensure_local_data(
+            task["symbol"],
+            task["timeframe"],
+            private_root=private_root,
+            provider=provider,
+            apply=True,
+            now_ms=now_ms,
+            data_days=data_days,
+            prepares_left=1,
+            allow_public_output=allow_public,
+        )
         if status in ("usable", "prepared"):
             tasks.complete_task(task["task_id"], reason=status, now=now)
             _bump(counters, "prepared_ok")
-            _replan_after_prepare(tasks, task, data_state_fn=data_state_fn, counters=counters,
-                                  now=now, gate_index=gate_index)
+            _replan_after_prepare(
+                tasks,
+                task,
+                data_state_fn=data_state_fn,
+                counters=counters,
+                now=now,
+                gate_index=gate_index,
+            )
         elif status in ("too_short", "fresh_listing_pending"):
-            tasks.defer_task(task["task_id"], until=_defer_until(now, task["timeframe"], rows),
-                             reason=status, now=now)
+            tasks.defer_task(
+                task["task_id"],
+                until=_defer_until(now, task["timeframe"], rows),
+                reason=status,
+                now=now,
+            )
             _bump(counters, "prepared_deferred")
         elif status in ("provider_transient", "preopen"):
             attempts = max(1, int(task.get("attempts") or 1))
@@ -715,45 +968,73 @@ def _drain_prepare(tasks: FarmTasksDB, *, private_root, provider, now_ms, data_d
             tasks.defer_task(task["task_id"], until=now + delay, reason=status, now=now)
             _bump(counters, "prepared_deferred")
         elif int(task.get("attempts") or 0) >= 3:
-            tasks.block_task(task["task_id"], reason=f"prepare_backoff:{status}", now=now)
+            tasks.block_task(
+                task["task_id"], reason=f"prepare_backoff:{status}", now=now
+            )
             _bump(counters, "prepared_blocked")
         else:
             tasks.defer_task(task["task_id"], until=now + 3600, reason=status, now=now)
             _bump(counters, "prepared_deferred")
 
 
-def _drain_enrich(tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, limit, counters, now) -> None:
+def _drain_enrich(
+    tasks: FarmTasksDB, *, private_root, flow_provider, now_ms, limit, counters, now
+) -> None:
     from src.research_lab.candle_library import sync_json_to_store
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import COUNTER_KEYS, FlowEnrichState, _enrich_one
+
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("enrich_funding",), now=now)
         if task is None:
             break
         if flow_provider is None:
-            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_funding_provider", now=now)
+            tasks.defer_task(
+                task["task_id"], until=now + 3600, reason="no_funding_provider", now=now
+            )
             _bump(counters, "enrich_deferred")
             continue
         glob = market_data_glob(private_root, task["timeframe"])
         path = choose_symbol_file(glob, task["symbol"], timeframe=task["timeframe"])
         if not path:
-            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_prepared_file", now=now)
+            tasks.defer_task(
+                task["task_id"], until=now + 3600, reason="no_prepared_file", now=now
+            )
             _bump(counters, "enrich_deferred")
             continue
         cc = {k: 0 for k in COUNTER_KEYS}
-        key = f'{task["symbol"]}::{task["timeframe"]}::{path.name}'
-        _enrich_one(path, key, task["symbol"], provider=flow_provider, state=FlowEnrichState(),
-                    now_ms=now_ms, ttl_seconds=12 * 3600, cooldown_seconds=6 * 3600, max_attempts=3,
-                    budget=1, counters=cc)
+        key = f"{task['symbol']}::{task['timeframe']}::{path.name}"
+        _enrich_one(
+            path,
+            key,
+            task["symbol"],
+            provider=flow_provider,
+            state=FlowEnrichState(),
+            now_ms=now_ms,
+            ttl_seconds=12 * 3600,
+            cooldown_seconds=6 * 3600,
+            max_attempts=3,
+            budget=1,
+            counters=cc,
+        )
         if cc.get("enriched"):
             sync_json_to_store(
-                private_root, task["symbol"], task["timeframe"], path,
-                source="funding_enrichment", available_at_ms=now_ms,
+                private_root,
+                task["symbol"],
+                task["timeframe"],
+                path,
+                source="funding_enrichment",
+                available_at_ms=now_ms,
             )
             tasks.complete_task(task["task_id"], reason="enriched", now=now)
             _bump(counters, "enriched_ok")
         else:
-            tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason="enrich_no_points", now=now)
+            tasks.defer_task(
+                task["task_id"],
+                until=now + 6 * 3600,
+                reason="enrich_no_points",
+                now=now,
+            )
             _bump(counters, "enrich_deferred")
 
 
@@ -769,60 +1050,96 @@ _OI_DEFER_REASON = {
 _OI_STRUCTURAL = {"no_candles", "no_points", "not_enough_coverage"}
 
 
-def _mark_oi_unmeasured_sweeps(tasks: FarmTasksDB, symbol: str, timeframe: str, now: float) -> int:
+def _mark_oi_unmeasured_sweeps(
+    tasks: FarmTasksDB, symbol: str, timeframe: str, now: float
+) -> int:
     """Free OI sweeps blocked on NEEDS_OI_DATA for (symbol, tf): terminal oi_unmeasured, not pending."""
     freed = 0
     for t in tasks.tasks_in_state("blocked", task_type="run_sweep"):
-        if (t.get("symbol") == symbol and t.get("timeframe") == timeframe
-                and t.get("machine_reason") == "NEEDS_OI_DATA"):
+        if (
+            t.get("symbol") == symbol
+            and t.get("timeframe") == timeframe
+            and t.get("machine_reason") == "NEEDS_OI_DATA"
+        ):
             tasks.skip_task(t["task_id"], reason="oi_unmeasured", now=now)
             freed += 1
     return freed
 
 
-def _drain_enrich_oi(tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now) -> None:
+def _drain_enrich_oi(
+    tasks: FarmTasksDB, *, private_root, oi_provider, now_ms, limit, counters, now
+) -> None:
     from src.research_lab.candle_library import sync_json_to_store
     from src.research_lab.experiment import choose_symbol_file
     from src.research_lab.flow_enrich import enrich_oi_one
     from src.research_lab.oi_status import OI_MAX_ATTEMPTS
+
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("enrich_oi",), now=now)
         if task is None:
             break
         if oi_provider is None:
-            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_oi_provider", now=now)
+            tasks.defer_task(
+                task["task_id"], until=now + 3600, reason="no_oi_provider", now=now
+            )
             _bump(counters, "enrich_oi_deferred")
             continue
         glob = market_data_glob(private_root, task["timeframe"])
         path = choose_symbol_file(glob, task["symbol"], timeframe=task["timeframe"])
         if not path:
-            tasks.defer_task(task["task_id"], until=now + 3600, reason="no_prepared_file", now=now)
+            tasks.defer_task(
+                task["task_id"], until=now + 3600, reason="no_prepared_file", now=now
+            )
             _bump(counters, "enrich_oi_deferred")
             continue
-        status, _n = enrich_oi_one(path, task["symbol"], task["timeframe"], provider=oi_provider, now_ms=now_ms)
+        status, _n = enrich_oi_one(
+            path, task["symbol"], task["timeframe"], provider=oi_provider, now_ms=now_ms
+        )
         if status == "enriched":
             sync_json_to_store(
-                private_root, task["symbol"], task["timeframe"], path,
-                source="oi_enrichment", available_at_ms=now_ms,
+                private_root,
+                task["symbol"],
+                task["timeframe"],
+                path,
+                source="oi_enrichment",
+                available_at_ms=now_ms,
             )
             tasks.complete_task(task["task_id"], reason="oi_loaded", now=now)
             _bump(counters, "enriched_oi_ok")
-        elif status in _OI_STRUCTURAL and int(task.get("attempts") or 0) >= OI_MAX_ATTEMPTS:
+        elif (
+            status in _OI_STRUCTURAL
+            and int(task.get("attempts") or 0) >= OI_MAX_ATTEMPTS
+        ):
             # Honest terminal state: stop re-polling structurally-absent OI and free the sweep.
             tasks.skip_task(task["task_id"], reason="oi_unmeasured", now=now)
             _mark_oi_unmeasured_sweeps(tasks, task["symbol"], task["timeframe"], now)
             _bump(counters, "oi_marked_unmeasured")
         else:
             reason = _OI_DEFER_REASON.get(status, f"oi_{status}")
-            tasks.defer_task(task["task_id"], until=now + 6 * 3600, reason=reason, now=now)
+            tasks.defer_task(
+                task["task_id"], until=now + 6 * 3600, reason=reason, now=now
+            )
             _bump(counters, "enrich_oi_deferred")
 
 
-def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy, backend,
-                     priority_base, limit, counters, now, sweep_tier="normal",
-                     task_claim_guard_factory=None) -> None:
+def _drain_run_sweep(
+    tasks: FarmTasksDB,
+    *,
+    conn,
+    private_root,
+    profiles,
+    policy,
+    backend,
+    priority_base,
+    limit,
+    counters,
+    now,
+    sweep_tier="normal",
+    task_claim_guard_factory=None,
+) -> None:
     from src.research_lab.candle_library import load_canonical_candles
     from src.research_lab.search_family_definition import resolve_snapshot_set
+
     replayed = _replay_materialization_outbox(tasks, conn, now=now)
     if replayed:
         _bump(counters, "sweeps_materialized", replayed)
@@ -846,17 +1163,28 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                 payload = {}
             glob = market_data_glob(private_root, tf)
             selected = load_canonical_candles(
-                private_root, sym, tf, fallback_glob=glob,
-                purpose="experiment", coverage_policy="gap_free", progress=progress,
+                private_root,
+                sym,
+                tf,
+                fallback_glob=glob,
+                purpose="experiment",
+                coverage_policy="gap_free",
+                progress=progress,
             )
             if not selected.rows or not selected.manifest.evidence_hash:
                 tasks.defer_task(
-                    task["task_id"], until=now + 3600,
-                    reason="snapshot_missing_before_queue", now=now,
+                    task["task_id"],
+                    until=now + 3600,
+                    reason="snapshot_missing_before_queue",
+                    now=now,
                 )
                 _bump(counters, "sweeps_snapshot_drift")
                 continue
-            fp = selected.manifest.evidence_hash or task.get("data_fingerprint") or "nofp"
+            fp = (
+                selected.manifest.evidence_hash
+                or task.get("data_fingerprint")
+                or "nofp"
+            )
             if isinstance(payload.get("sweep_spec"), dict):
                 spec = _sweep_from_payload(payload["sweep_spec"])
             else:
@@ -875,8 +1203,10 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                 )
             except ValueError:
                 tasks.defer_task(
-                    task["task_id"], until=now + 3600,
-                    reason="snapshot_set_incomplete_before_queue", now=now,
+                    task["task_id"],
+                    until=now + 3600,
+                    reason="snapshot_set_incomplete_before_queue",
+                    now=now,
                 )
                 _bump(counters, "sweeps_snapshot_drift")
                 continue
@@ -884,7 +1214,9 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                 f"task:{int(task['task_id'])}:fence:{int(task['fencing_token'])}"
             )
 
-            def prepare_intent(spec_path: Path, spec_json: str, spec_digest: str) -> None:
+            def prepare_intent(
+                spec_path: Path, spec_json: str, spec_digest: str
+            ) -> None:
                 if claim_guard is not None:
                     with claim_guard.foreground_db_write():
                         tasks.prepare_materialization(
@@ -893,7 +1225,8 @@ def _drain_run_sweep(tasks: FarmTasksDB, *, conn, private_root, profiles, policy
                             spec_path=str(spec_path),
                             spec_digest=spec_digest,
                             spec_json=spec_json,
-                            priority=priority_base + priority_value(task.get("priority")),
+                            priority=priority_base
+                            + priority_value(task.get("priority")),
                             now=now,
                         )
                 else:
@@ -988,7 +1321,9 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
                ORDER BY updated_at DESC LIMIT 1""",
             (int(task["task_id"]), int(job_id)),
         ).fetchone()
-        if intent is None or int(intent["task_fencing_token"]) != int(task["fencing_token"]):
+        if intent is None or int(intent["task_fencing_token"]) != int(
+            task["fencing_token"]
+        ):
             if parked:
                 raise PriorityWorkerFatalError(
                     "parked materialization lost its acknowledged fence binding"
@@ -1068,11 +1403,20 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
                         "parked materialization changed during completion"
                     )
                 continue
-            tasks.enqueue_task(task_type="classify_result", task_key=f"classify::{int(job_id)}",
-                               symbol=task["symbol"], timeframe=task["timeframe"], family=task["family"],
-                               data_fingerprint=task.get("data_fingerprint"),
-                               payload={"run_dir_label": label, "timeframe": task["timeframe"],
-                                        "data_fingerprint": task.get("data_fingerprint")}, now=now)
+            tasks.enqueue_task(
+                task_type="classify_result",
+                task_key=f"classify::{int(job_id)}",
+                symbol=task["symbol"],
+                timeframe=task["timeframe"],
+                family=task["family"],
+                data_fingerprint=task.get("data_fingerprint"),
+                payload={
+                    "run_dir_label": label,
+                    "timeframe": task["timeframe"],
+                    "data_fingerprint": task.get("data_fingerprint"),
+                },
+                now=now,
+            )
             _bump(counters, "runs_completed")
         elif row["status"] == "failed":
             try:
@@ -1101,23 +1445,37 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
 
 def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> None:
     import json
+
     for _ in range(limit):
         task = tasks.claim_next_task(task_types=("classify_result",), now=now)
         if task is None:
             break
         payload = json.loads(task.get("payload_json") or "{}")
-        rows = classify_run(private_root, payload.get("run_dir_label", ""),
-                            timeframe=payload.get("timeframe") or task["timeframe"],
-                            data_fingerprint=payload.get("data_fingerprint"), task_id=task["task_id"])
+        rows = classify_run(
+            private_root,
+            payload.get("run_dir_label", ""),
+            timeframe=payload.get("timeframe") or task["timeframe"],
+            data_fingerprint=payload.get("data_fingerprint"),
+            task_id=task["task_id"],
+        )
         for uc in rows:
             tasks.upsert_unique_candidate(uc, now=now)
             _bump(counters, "unique_upserted")
             if uc["validation_status"] in VALIDATION_ELIGIBLE:
                 _, created = tasks.enqueue_task(
-                    task_type="export_validation", task_key=f'export::{uc["uc_key"]}',
-                    symbol=uc["symbol"], timeframe=uc["timeframe"], family=uc["family"],
-                    params_hash=uc["params_hash"], data_fingerprint=uc["data_fingerprint"],
-                    payload={"candidate_id": uc["candidate_id"], "uc_key": uc["uc_key"]}, now=now)
+                    task_type="export_validation",
+                    task_key=f"export::{uc['uc_key']}",
+                    symbol=uc["symbol"],
+                    timeframe=uc["timeframe"],
+                    family=uc["family"],
+                    params_hash=uc["params_hash"],
+                    data_fingerprint=uc["data_fingerprint"],
+                    payload={
+                        "candidate_id": uc["candidate_id"],
+                        "uc_key": uc["uc_key"],
+                    },
+                    now=now,
+                )
                 if created:
                     _bump(counters, "exports_created")
         tasks.complete_task(task["task_id"], reason="classified", now=now)
@@ -1131,9 +1489,12 @@ def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -
         WorkerLeaseLifecycleError,
         run_worker_once,
     )
+
     for _ in range(max_jobs):
         try:
-            status = run_worker_once(private_root, night_mode=night_mode, ignore_cadence=True)
+            status = run_worker_once(
+                private_root, night_mode=night_mode, ignore_cadence=True
+            )
         except WorkerLeaseLifecycleError as exc:
             raise PriorityWorkerFatalError(
                 "compute worker lease lifecycle failed"
@@ -1146,9 +1507,19 @@ def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -
 
 
 # ── pivot ─────────────────────────────────────────────────────────────────────
-def _decide_pivot(tasks: FarmTasksDB, *, new_tasks: int, did_work: bool, now: float,
-                  snapshot, families, data_state_fn, max_discovery: int, counters: dict,
-                  gate_index=None) -> str:
+def _decide_pivot(
+    tasks: FarmTasksDB,
+    *,
+    new_tasks: int,
+    did_work: bool,
+    now: float,
+    snapshot,
+    families,
+    data_state_fn,
+    max_discovery: int,
+    counters: dict,
+    gate_index=None,
+) -> str:
     """Never spin on already_queued: report work, or actively pull discovery, or say blocked."""
     if tasks.eligible_count(now) > 0:
         return "work_available"
@@ -1156,10 +1527,20 @@ def _decide_pivot(tasks: FarmTasksDB, *, new_tasks: int, did_work: bool, now: fl
         return "advanced_lifecycle"
     if snapshot:
         covered = tasks.active_symbols() | {
-            str(c["symbol"]).upper() for c in tasks.latest_unique_candidates(limit=2000)}
-        events = discovery_intake_events(snapshot, covered=covered, now=now, limit=max_discovery)
-        created = _plan_events(tasks, [_with_id(tasks, e, now) for e in events], families,
-                               data_state_fn, counters, now, gate_index)
+            str(c["symbol"]).upper() for c in tasks.latest_unique_candidates(limit=2000)
+        }
+        events = discovery_intake_events(
+            snapshot, covered=covered, now=now, limit=max_discovery
+        )
+        created = _plan_events(
+            tasks,
+            [_with_id(tasks, e, now) for e in events],
+            families,
+            data_state_fn,
+            counters,
+            now,
+            gate_index,
+        )
         if created > 0:
             return "discovery_refill"
     return "blocked:no_eligible_tasks"
@@ -1172,99 +1553,232 @@ def _with_id(tasks: FarmTasksDB, event: dict, now: float) -> dict:
 
 # ── cycle ──────────────────────────────────────────────────────────────────────
 def run_coordinator_cycle(
-    tasks: FarmTasksDB, *, private_root, profiles, policy,
-    intake_events: list[dict] | None = None, families: tuple[str, ...] = DEFAULT_FAMILIES,
-    data_state_fn: Callable | None = None, provider=None, flow_provider=None, oi_provider=None,
+    tasks: FarmTasksDB,
+    *,
+    private_root,
+    profiles,
+    policy,
+    intake_events: list[dict] | None = None,
+    families: tuple[str, ...] = DEFAULT_FAMILIES,
+    data_state_fn: Callable | None = None,
+    provider=None,
+    flow_provider=None,
+    oi_provider=None,
     apply: bool = False,
-    now: float | None = None, now_ms: int | None = None, backend: str = "auto",
-    data_days: int | None = None, max_plan_events: int = 20, max_prepares: int = 4,
-    max_enrich: int = 4, max_sweeps: int = 4, max_classify: int = 8, run_worker: bool = False,
-    max_worker_jobs: int = 4, night_mode: bool = False, priority_base: int = 100,
-    allow_public_output: bool = False, discovery_snapshot=None, max_discovery: int = 20,
-    run_validation: bool = False, max_validations: int = 10,
-    run_followups: bool = True, max_followups: int = 10, sweep_tier: str = "normal",
+    now: float | None = None,
+    now_ms: int | None = None,
+    backend: str = "auto",
+    data_days: int | None = None,
+    max_plan_events: int = 20,
+    max_prepares: int = 4,
+    max_enrich: int = 4,
+    max_sweeps: int = 4,
+    max_classify: int = 8,
+    run_worker: bool = False,
+    max_worker_jobs: int = 4,
+    night_mode: bool = False,
+    priority_base: int = 100,
+    allow_public_output: bool = False,
+    discovery_snapshot=None,
+    max_discovery: int = 20,
+    run_validation: bool = False,
+    max_validations: int = 10,
+    run_followups: bool = True,
+    max_followups: int = 10,
+    sweep_tier: str = "normal",
     use_outcome_memory: bool = True,
     task_claim_guard_factory=None,
 ) -> dict[str, Any]:
     """Advance the research lifecycle by one cycle. Returns counters + pivot + status."""
     now = time.time() if now is None else now
     now_ms = int(now * 1000) if now_ms is None else now_ms
-    private_root = resolve_private_root(Path(private_root), allow_public_output=allow_public_output) \
-        if apply else Path(private_root)
+    private_root = (
+        resolve_private_root(
+            Path(private_root), allow_public_output=allow_public_output
+        )
+        if apply
+        else Path(private_root)
+    )
     if data_state_fn is None:
+
         def data_state_fn(s, t):  # noqa: E306 - bound to resolved private_root
             return farm_data_state.data_state(private_root, s, t)
-    counters = {k: 0 for k in _COUNTER_KEYS}
+
+    counters: dict[str, Any] = {k: 0 for k in _COUNTER_KEYS}
     errors: list[dict] = []
 
     # Read-through Setup Outcome Memory (built once per cycle from the brain; read-only): a
     # repeated signal consults prior outcomes before a fresh sweep is keyed. Off => fresh always.
-    gate_index = build_gate_index(tasks.unique_candidates_for_gate()) if use_outcome_memory else None
+    gate_index = (
+        build_gate_index(tasks.unique_candidates_for_gate())
+        if use_outcome_memory
+        else None
+    )
 
-    for ev in (intake_events or []):
+    for ev in intake_events or []:
         _, created = tasks.upsert_intake_event(ev, now=now)
         if created:
             _bump(counters, "events_ingested")
     fresh = tasks.unconsumed_events(limit=max_plan_events)
-    new_tasks = _plan_events(tasks, fresh, families, data_state_fn, counters, now, gate_index)
+    new_tasks = _plan_events(
+        tasks, fresh, families, data_state_fn, counters, now, gate_index
+    )
     _unblock(tasks, data_state_fn, counters, now)
-    _park_terminal_prepare_provider_errors(tasks, private_root=private_root, counters=counters, now=now)
+    _park_terminal_prepare_provider_errors(
+        tasks, private_root=private_root, counters=counters, now=now
+    )
 
     conn = None
     if apply:
         from src.research_lab.state_db import connect, default_db_path, init_db
+
         conn = connect(default_db_path(private_root))
         init_db(conn)
     try:
         if apply:
-            _drain_prepare(tasks, private_root=private_root, provider=provider, now_ms=now_ms,
-                           data_days=data_days, allow_public=allow_public_output, limit=max_prepares,
-                           counters=counters, now=now, data_state_fn=data_state_fn, gate_index=gate_index)
-            _drain_enrich(tasks, private_root=private_root, flow_provider=flow_provider, now_ms=now_ms,
-                          limit=max_enrich, counters=counters, now=now)
-            _drain_enrich_oi(tasks, private_root=private_root, oi_provider=oi_provider, now_ms=now_ms,
-                             limit=max_enrich, counters=counters, now=now)
+            _drain_prepare(
+                tasks,
+                private_root=private_root,
+                provider=provider,
+                now_ms=now_ms,
+                data_days=data_days,
+                allow_public=allow_public_output,
+                limit=max_prepares,
+                counters=counters,
+                now=now,
+                data_state_fn=data_state_fn,
+                gate_index=gate_index,
+            )
+            _drain_enrich(
+                tasks,
+                private_root=private_root,
+                flow_provider=flow_provider,
+                now_ms=now_ms,
+                limit=max_enrich,
+                counters=counters,
+                now=now,
+            )
+            _drain_enrich_oi(
+                tasks,
+                private_root=private_root,
+                oi_provider=oi_provider,
+                now_ms=now_ms,
+                limit=max_enrich,
+                counters=counters,
+                now=now,
+            )
             if run_followups:
-                _schedule_advisor_sweeps(tasks, private_root=private_root, counters=counters,
-                                         now=now, limit=max_followups)
-                _drain_advisor_sweeps(tasks, profiles=profiles, policy=policy, backend=backend,
-                                      counters=counters, now=now, limit=max_followups)
-            _drain_run_sweep(tasks, conn=conn, private_root=private_root, profiles=profiles, policy=policy,
-                             backend=backend, priority_base=priority_base, limit=max_sweeps,
-                             counters=counters, now=now, sweep_tier=sweep_tier,
-                             task_claim_guard_factory=task_claim_guard_factory)
+                _schedule_advisor_sweeps(
+                    tasks,
+                    private_root=private_root,
+                    counters=counters,
+                    now=now,
+                    limit=max_followups,
+                )
+                _drain_advisor_sweeps(
+                    tasks,
+                    profiles=profiles,
+                    policy=policy,
+                    backend=backend,
+                    counters=counters,
+                    now=now,
+                    limit=max_followups,
+                )
+            _drain_run_sweep(
+                tasks,
+                conn=conn,
+                private_root=private_root,
+                profiles=profiles,
+                policy=policy,
+                backend=backend,
+                priority_base=priority_base,
+                limit=max_sweeps,
+                counters=counters,
+                now=now,
+                sweep_tier=sweep_tier,
+                task_claim_guard_factory=task_claim_guard_factory,
+            )
             _sync_completions(tasks, conn=conn, counters=counters, now=now)
             if run_worker:
                 _drain_worker(private_root, max_worker_jobs, night_mode, errors)
                 _sync_completions(tasks, conn=conn, counters=counters, now=now)
-            _classify_due(tasks, private_root=private_root, limit=max_classify, counters=counters, now=now)
+            _classify_due(
+                tasks,
+                private_root=private_root,
+                limit=max_classify,
+                counters=counters,
+                now=now,
+            )
             if run_followups:
-                _schedule_due_followups(tasks, private_root=private_root, counters=counters,
-                                        now=now, limit=max_followups)
-                _drain_followups(tasks, profiles=profiles, policy=policy, limit=max_followups,
-                                 counters=counters, now=now)
+                _schedule_due_followups(
+                    tasks,
+                    private_root=private_root,
+                    counters=counters,
+                    now=now,
+                    limit=max_followups,
+                )
+                _drain_followups(
+                    tasks,
+                    profiles=profiles,
+                    policy=policy,
+                    limit=max_followups,
+                    counters=counters,
+                    now=now,
+                )
     finally:
         if conn is not None:
             conn.close()
 
     if apply and run_validation:
         from src.research_lab.validation_orchestrator import run_due_validations
-        counters["validation"] = run_due_validations(tasks, private_root, apply=True,
-                                                      limit=max_validations, now=now)
-        if run_followups:
-            _schedule_due_followups(tasks, private_root=private_root, counters=counters,
-                                    now=now, limit=max_followups)
 
-    did_work = any(counters[k] for k in ("prepared_ok", "enriched_ok", "enriched_oi_ok",
-                                         "sweeps_materialized", "runs_completed", "classified",
-                                         "unblocked", "followup_sweeps_planned",
-                                         "outcome_retest_sweeps_planned",
-                                         "followups_scheduled", "advisor_sweeps_planned"))
-    pivot = _decide_pivot(tasks, new_tasks=new_tasks, did_work=did_work, now=now,
-                          snapshot=discovery_snapshot, families=families, data_state_fn=data_state_fn,
-                          max_discovery=max_discovery, counters=counters, gate_index=gate_index)
-    return {"counters": counters, "pivot": pivot, "active_tasks": _count_active(tasks),
-            "status": tasks.status_counts(), "errors": errors}
+        counters["validation"] = run_due_validations(
+            tasks, private_root, apply=True, limit=max_validations, now=now
+        )
+        if run_followups:
+            _schedule_due_followups(
+                tasks,
+                private_root=private_root,
+                counters=counters,
+                now=now,
+                limit=max_followups,
+            )
+
+    did_work = any(
+        counters[k]
+        for k in (
+            "prepared_ok",
+            "enriched_ok",
+            "enriched_oi_ok",
+            "sweeps_materialized",
+            "runs_completed",
+            "classified",
+            "unblocked",
+            "followup_sweeps_planned",
+            "outcome_retest_sweeps_planned",
+            "followups_scheduled",
+            "advisor_sweeps_planned",
+        )
+    )
+    pivot = _decide_pivot(
+        tasks,
+        new_tasks=new_tasks,
+        did_work=did_work,
+        now=now,
+        snapshot=discovery_snapshot,
+        families=families,
+        data_state_fn=data_state_fn,
+        max_discovery=max_discovery,
+        counters=counters,
+        gate_index=gate_index,
+    )
+    return {
+        "counters": counters,
+        "pivot": pivot,
+        "active_tasks": _count_active(tasks),
+        "status": tasks.status_counts(),
+        "errors": errors,
+    }
 
 
 def main() -> None:  # pragma: no cover - thin CLI shim lives in scripts/

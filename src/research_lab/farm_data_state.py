@@ -6,6 +6,7 @@ dict the planner consumes: ``{status, rows, fingerprint, enrichment, oi_availabl
 ``status`` is the local-file readiness (usable / too_short / missing) — it does NOT
 fetch; whether to download is the planner/coordinator's decision. Pure, no network.
 """
+
 from __future__ import annotations
 
 import glob as _glob
@@ -33,13 +34,17 @@ def data_state(private_root: Path, symbol: str, timeframe: str) -> dict[str, Any
     """Local readiness facts for one (symbol, timeframe). No fetch."""
     oi_available = oi_slot_path(private_root, symbol) is not None
     selected = load_canonical_candles(
-        private_root, symbol, timeframe,
-        purpose="farm_readiness", coverage_policy="gap_free",
+        private_root,
+        symbol,
+        timeframe,
+        purpose="farm_readiness",
+        coverage_policy="gap_free",
     )
     if selected.rows:
         rows = selected.rows
         enrichment = tuple(
-            field for field in ("funding", "oi", "obi_top5", "spread_bps", "trade_delta_100")
+            field
+            for field in ("funding", "oi", "obi_top5", "spread_bps", "trade_delta_100")
             if any(row.get(field) is not None for row in rows)
         )
         minimum = min_rows_for(timeframe)
@@ -58,8 +63,11 @@ def data_state(private_root: Path, symbol: str, timeframe: str) -> dict[str, Any
     usable = choose_symbol_file(pattern, symbol, timeframe=timeframe)
     if usable:
         fallback = load_canonical_candles(
-            private_root, symbol, timeframe,
-            purpose="farm_readiness_diagnostic", coverage_policy="available",
+            private_root,
+            symbol,
+            timeframe,
+            purpose="farm_readiness_diagnostic",
+            coverage_policy="available",
         )
         return {
             "status": "too_short",
@@ -73,10 +81,20 @@ def data_state(private_root: Path, symbol: str, timeframe: str) -> dict[str, Any
         }
     existing = _best_existing(pattern, symbol)
     if existing is None:
-        return {"status": "missing", "rows": 0, "fingerprint": None,
-                "enrichment": (), "oi_available": oi_available}
+        return {
+            "status": "missing",
+            "rows": 0,
+            "fingerprint": None,
+            "enrichment": (),
+            "oi_available": oi_available,
+        }
     info = inspect_file(existing)
-    rows = int(info.get("rows") or 0)
-    status = "too_short" if 0 < rows < min_rows_for(timeframe) else "missing"
-    return {"status": status, "rows": rows, "fingerprint": None,
-            "enrichment": (), "oi_available": oi_available}
+    row_count = int(info.get("rows") or 0)
+    status = "too_short" if 0 < row_count < min_rows_for(timeframe) else "missing"
+    return {
+        "status": status,
+        "rows": row_count,
+        "fingerprint": None,
+        "enrichment": (),
+        "oi_available": oi_available,
+    }

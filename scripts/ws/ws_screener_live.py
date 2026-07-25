@@ -18,7 +18,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.data.ws_feed import Candle, WSFeed
+from src.data.ws_feed import Candle, WSFeed  # noqa: E402
 
 REST_TICKERS_URL = "https://www.okx.com/api/v5/market/tickers"
 CACHE_PATH = Path(__file__).resolve().parent / "cache" / "active_universe.json"

@@ -9,11 +9,9 @@ For each trade from bt_bb_fade backtest:
 
 import gzip
 import sys
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))

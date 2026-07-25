@@ -216,7 +216,7 @@ def main():
         if not s:
             continue
 
-        label = f"0 (идеал)" if delay == 0 else f"+{delay*5} мин"
+        label = "0 (идеал)" if delay == 0 else f"+{delay*5} мин"
 
         if baseline is None:
             baseline = s

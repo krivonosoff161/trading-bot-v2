@@ -15,7 +15,6 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-import aiohttp
 import numpy as np
 import pandas as pd
 

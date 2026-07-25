@@ -62,19 +62,41 @@ def _results_section(db_path: Path) -> dict[str, Any]:
     try:
         return {
             "available": True,
-            "decisions": _try_counts(conn, "SELECT decision, COUNT(*) FROM farm_results GROUP BY decision"),
+            "decisions": _try_counts(
+                conn, "SELECT decision, COUNT(*) FROM farm_results GROUP BY decision"
+            ),
             "validation": _try_counts(
-                conn, "SELECT validation_status, COUNT(*) FROM farm_results GROUP BY validation_status"),
+                conn,
+                "SELECT validation_status, COUNT(*) FROM farm_results GROUP BY validation_status",
+            ),
             "needs_data": _try_counts(
-                conn, "SELECT decision, COUNT(*) FROM farm_results WHERE decision LIKE 'NEEDS_%' GROUP BY decision"),
-            "exported": int(_try_scalar(conn, "SELECT COUNT(*) FROM farm_results WHERE validation_exported=1")),
+                conn,
+                "SELECT decision, COUNT(*) FROM farm_results WHERE decision LIKE 'NEEDS_%' GROUP BY decision",
+            ),
+            "exported": int(
+                _try_scalar(
+                    conn,
+                    "SELECT COUNT(*) FROM farm_results WHERE validation_exported=1",
+                )
+            ),
             "hard_status": _try_counts(
-                conn, "SELECT hard_status, COUNT(*) FROM farm_results WHERE hard_status<>'' GROUP BY hard_status"),
+                conn,
+                "SELECT hard_status, COUNT(*) FROM farm_results WHERE hard_status<>'' GROUP BY hard_status",
+            ),
             "paper_status": _try_counts(
-                conn, "SELECT paper_status, COUNT(*) FROM farm_results WHERE paper_status<>'' GROUP BY paper_status"),
-            "paper_outcomes": int(_try_scalar(conn, "SELECT COUNT(*) FROM paper_outcomes")),
-            "unique_symbols": int(_try_scalar(conn, "SELECT COUNT(DISTINCT symbol) FROM farm_results")),
-            "by_group": _try_counts(conn, "SELECT asset_group, COUNT(*) FROM farm_results GROUP BY asset_group"),
+                conn,
+                "SELECT paper_status, COUNT(*) FROM farm_results WHERE paper_status<>'' GROUP BY paper_status",
+            ),
+            "paper_outcomes": int(
+                _try_scalar(conn, "SELECT COUNT(*) FROM paper_outcomes")
+            ),
+            "unique_symbols": int(
+                _try_scalar(conn, "SELECT COUNT(DISTINCT symbol) FROM farm_results")
+            ),
+            "by_group": _try_counts(
+                conn,
+                "SELECT asset_group, COUNT(*) FROM farm_results GROUP BY asset_group",
+            ),
         }
     finally:
         conn.close()
@@ -90,15 +112,26 @@ def _gpu_cpu_section(db_path: Path) -> dict[str, Any]:
     try:
         rows = []
         try:
-            rows = [dict(r) for r in conn.execute(
-                "SELECT effective_backend, signal_backend, simulation_backend, "
-                "SUM(gpu_available) gpu_runs, COUNT(*) runs FROM runtime_stats "
-                "GROUP BY effective_backend, signal_backend, simulation_backend")]
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT effective_backend, signal_backend, simulation_backend, "
+                    "SUM(gpu_available) gpu_runs, COUNT(*) runs FROM runtime_stats "
+                    "GROUP BY effective_backend, signal_backend, simulation_backend"
+                )
+            ]
         except sqlite3.Error:
             rows = []
-        return {"available": bool(rows), "backends": rows,
-                "gpu_signal_rows": int(_try_scalar(
-                    conn, "SELECT COALESCE(SUM(gpu_signal_supported),0) FROM farm_results"))}
+        return {
+            "available": bool(rows),
+            "backends": rows,
+            "gpu_signal_rows": int(
+                _try_scalar(
+                    conn,
+                    "SELECT COALESCE(SUM(gpu_signal_supported),0) FROM farm_results",
+                )
+            ),
+        }
     finally:
         conn.close()
 
@@ -136,39 +169,53 @@ def _loop_state(private_root: Path) -> dict[str, Any]:
 
 def _universe_coverage(private_root: Path, db_path: Path) -> dict[str, Any]:
     from src.research_lab.instrument_discovery import load_snapshot
+
     manual = {"groups": 0, "symbols": 0}
     try:
         from src.research_lab.universe import load_universe
+
         uni = load_universe()
         manual = {"groups": len(uni.groups), "symbols": len(uni.all_symbols())}
     except Exception:  # noqa: BLE001 - config optional
         pass
     snap = load_snapshot(private_root)
-    discovered = {"count": int(snap.get("count") or 0),
-                  "group_sizes": {g: len(v) for g, v in (snap.get("groups") or {}).items()},
-                  "generated_at": str(snap.get("generated_at") or "")}
+    discovered: dict[str, Any] = {
+        "count": int(snap.get("count") or 0),
+        "group_sizes": {g: len(v) for g, v in (snap.get("groups") or {}).items()},
+        "generated_at": str(snap.get("generated_at") or ""),
+    }
     processed = 0
     if db_path.exists():
         try:
             conn = _ro_conn(db_path)
-            processed = int(_try_scalar(conn, "SELECT COUNT(DISTINCT symbol) FROM farm_results"))
+            processed = int(
+                _try_scalar(conn, "SELECT COUNT(DISTINCT symbol) FROM farm_results")
+            )
             conn.close()
         except sqlite3.Error:
             processed = 0
     unprocessed_discovered = max(0, discovered["count"] - processed)
-    return {"manual": manual, "discovered": discovered,
-            "symbols_processed": processed, "discovered_not_yet_processed": unprocessed_discovered}
+    return {
+        "manual": manual,
+        "discovered": discovered,
+        "symbols_processed": processed,
+        "discovered_not_yet_processed": unprocessed_discovered,
+    }
 
 
 def _start_of_utc_day(now: float) -> float:
     import datetime as dt
-    d = dt.datetime.fromtimestamp(now, dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    d = dt.datetime.fromtimestamp(now, dt.timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     return d.timestamp()
 
 
 def _lifecycle_section(private_root: Path) -> dict[str, Any]:
     """The continuous-farm task lifecycle from farm_tasks.sqlite (intake -> validation)."""
     from src.research_lab.farm_tasks_db import tasks_db_path
+
     db_path = tasks_db_path(private_root)
     if not db_path.exists():
         return {"available": False}
@@ -178,29 +225,52 @@ def _lifecycle_section(private_root: Path) -> dict[str, Any]:
         return {"available": False}
     try:
         import time as _time
+
         today = _start_of_utc_day(_time.time())
         calcs_today = _try_scalar(
-            conn, "SELECT COUNT(*) FROM tasks WHERE task_type='run_sweep' AND state='completed' "
-                  f"AND updated_at>={today}")
+            conn,
+            "SELECT COUNT(*) FROM tasks WHERE task_type='run_sweep' AND state='completed' "
+            f"AND updated_at>={today}",
+        )
         return {
             "available": True,
-            "by_state": _try_counts(conn, "SELECT state, COUNT(*) FROM tasks GROUP BY state"),
-            "by_task_type": _try_counts(conn, "SELECT task_type, COUNT(*) FROM tasks GROUP BY task_type"),
+            "by_state": _try_counts(
+                conn, "SELECT state, COUNT(*) FROM tasks GROUP BY state"
+            ),
+            "by_task_type": _try_counts(
+                conn, "SELECT task_type, COUNT(*) FROM tasks GROUP BY task_type"
+            ),
             "blocked_reasons": _try_counts(
-                conn, "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='blocked' GROUP BY machine_reason"),
+                conn,
+                "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='blocked' GROUP BY machine_reason",
+            ),
             "deferred_reasons": _try_counts(
-                conn, "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='deferred' GROUP BY machine_reason"),
-            "intake_unconsumed": int(_try_scalar(conn, "SELECT COUNT(*) FROM intake_events WHERE consumed=0")),
+                conn,
+                "SELECT machine_reason, COUNT(*) FROM tasks WHERE state='deferred' GROUP BY machine_reason",
+            ),
+            "intake_unconsumed": int(
+                _try_scalar(conn, "SELECT COUNT(*) FROM intake_events WHERE consumed=0")
+            ),
             "calcs_completed_today": int(calcs_today),
-            "unique_candidates": int(_try_scalar(conn, "SELECT COUNT(*) FROM unique_candidates")),
+            "unique_candidates": int(
+                _try_scalar(conn, "SELECT COUNT(*) FROM unique_candidates")
+            ),
             "validation": _try_counts(
-                conn, "SELECT hard_status, COUNT(*) FROM unique_candidates WHERE hard_status<>'' "
-                      "GROUP BY hard_status"),
+                conn,
+                "SELECT hard_status, COUNT(*) FROM unique_candidates WHERE hard_status<>'' "
+                "GROUP BY hard_status",
+            ),
             "paper_status": _try_counts(
-                conn, "SELECT paper_status, COUNT(*) FROM unique_candidates WHERE paper_status<>'' "
-                      "GROUP BY paper_status"),
-            "export_followups": int(_try_scalar(
-                conn, "SELECT COUNT(*) FROM tasks WHERE task_type='export_validation'")),
+                conn,
+                "SELECT paper_status, COUNT(*) FROM unique_candidates WHERE paper_status<>'' "
+                "GROUP BY paper_status",
+            ),
+            "export_followups": int(
+                _try_scalar(
+                    conn,
+                    "SELECT COUNT(*) FROM tasks WHERE task_type='export_validation'",
+                )
+            ),
         }
     finally:
         conn.close()
@@ -217,11 +287,17 @@ def _farm_activity_section(private_root: Path) -> dict[str, Any]:
         read_recent_errors,
         skipped_stages,
     )
+
     cycles = read_recent_cycles(private_root, limit=10)
     errors = read_recent_errors(private_root, limit=10)
     if not cycles:
-        return {"available": False, "recent_errors": errors[-5:], "error_count": len(errors)}
+        return {
+            "available": False,
+            "recent_errors": errors[-5:],
+            "error_count": len(errors),
+        }
     import time as _time
+
     last = cycles[-1]
     age = int(_time.time() - float(last.get("ts") or 0))
     return {
@@ -233,12 +309,20 @@ def _farm_activity_section(private_root: Path) -> dict[str, Any]:
         "skipped_stages": skipped_stages(last),
         "discovery": last.get("discovery") or {},
         "recent_cycles": [
-            {"ts": c.get("ts"), "pivot": c.get("pivot"),
-             "counters": c.get("counters"), "active_tasks": c.get("active_tasks")}
+            {
+                "ts": c.get("ts"),
+                "pivot": c.get("pivot"),
+                "counters": c.get("counters"),
+                "active_tasks": c.get("active_tasks"),
+            }
             for c in cycles[-8:]
         ],
         "recent_errors": [
-            {"ts": e.get("ts"), "where": e.get("where"), "error": (e.get("error") or "")[:160]}
+            {
+                "ts": e.get("ts"),
+                "where": e.get("where"),
+                "error": (e.get("error") or "")[:160],
+            }
             for e in errors[-5:]
         ],
         "error_count": len(errors),
@@ -251,6 +335,7 @@ def _paper_pnl_section(private_root: Path) -> dict[str, Any]:
     Research evidence only - net_pct is a backtest-window outcome, not a profit claim.
     """
     from src.research_lab.paper_journal import read_paper_outcomes
+
     rows = read_paper_outcomes(private_root)
     closed = [r for r in rows if r.get("net_pct") is not None]
     n = len(closed)
@@ -283,15 +368,23 @@ def _research_outcomes_section(private_root: Path) -> dict[str, Any]:
     tactical = _read_json(derived / "tactical_probe.json").get("probe") or {}
     cost_mode = _read_json(derived / "cost_mode_analysis.json").get("report") or {}
     return {
-        "shadow_oos": {"evaluated": shadow_oos.get("evaluated"), "by_class": shadow_oos.get("by_class"),
-                       "survived": len(shadow_oos.get("survived") or [])},
+        "shadow_oos": {
+            "evaluated": shadow_oos.get("evaluated"),
+            "by_class": shadow_oos.get("by_class"),
+            "survived": len(shadow_oos.get("survived") or []),
+        },
         "true_forward": _summary("true_forward.json"),
-        "cost_mode": {"funnel": cost_mode.get("funnel"), "cost_sensitivity": cost_mode.get("cost_sensitivity"),
-                      "cost_bound_families": cost_mode.get("cost_bound_families")},
-        "tactical_probe": {"thin_total": tactical.get("thin_total"),
-                           "thin_positive": tactical.get("thin_positive"),
-                           "probe_families": tactical.get("probe_families"),
-                           "verdict": tactical.get("meat_grinder_verdict")},
+        "cost_mode": {
+            "funnel": cost_mode.get("funnel"),
+            "cost_sensitivity": cost_mode.get("cost_sensitivity"),
+            "cost_bound_families": cost_mode.get("cost_bound_families"),
+        },
+        "tactical_probe": {
+            "thin_total": tactical.get("thin_total"),
+            "thin_positive": tactical.get("thin_positive"),
+            "probe_families": tactical.get("probe_families"),
+            "verdict": tactical.get("meat_grinder_verdict"),
+        },
         "exit_phase2": _summary("exit_phase2.json"),
         "oi_family": _summary("oi_family_research.json"),
         "oi_diagnostic_15m": _summary("oi_diagnostic_15m.json"),
@@ -314,6 +407,10 @@ def build_cockpit(private_root: Path) -> dict[str, Any]:
         "results": _results_section(db_path),
         "research_outcomes": _research_outcomes_section(private_root),
         "universe_coverage": _universe_coverage(private_root, db_path),
-        "safety": {"read_only": True, "secrets_exposed": False, "network": False,
-                   "live_trading": False},
+        "safety": {
+            "read_only": True,
+            "secrets_exposed": False,
+            "network": False,
+            "live_trading": False,
+        },
     }

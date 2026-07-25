@@ -15,6 +15,7 @@ farm_tasks.unique_candidates rows, and derives, WITHOUT re-running any sweep/sim
 It writes nothing back to the source DBs and never re-computes a trade; it is a pure
 read of what already happened. No money path, no orders, no live.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,9 +29,11 @@ from src.research_lab.strategy_registry import REGISTRY, get_strategy
 # Round-trip taker cost floor (fees 7bps + slippage 3bps = 0.1%) — the same assumption
 # the validator's cost check uses; a tactical window must clear it to be worth recycling.
 COST_PCT = 0.1
-CAPTURE_LATE = 0.3          # avg_capture_ratio below this => entry gave back the move
-THIN_MAX = 2               # n_trades in 1..THIN_MAX = a tactical (too-thin-for-validator) window
-POWER_FLOOR = 10           # validator _check_splits fails below n=10 => below this it had no power
+CAPTURE_LATE = 0.3  # avg_capture_ratio below this => entry gave back the move
+THIN_MAX = 2  # n_trades in 1..THIN_MAX = a tactical (too-thin-for-validator) window
+POWER_FLOOR = (
+    10  # validator _check_splits fails below n=10 => below this it had no power
+)
 
 
 def oi_micro_families() -> set[str]:
@@ -52,6 +55,7 @@ def _read_json(path: Path) -> Any:
 
 def _load_rejected_uc(private_root: Path) -> list[dict[str, Any]]:
     import sqlite3
+
     path = tasks_db_path(private_root)
     if not path.exists():
         return []
@@ -72,7 +76,9 @@ def _load_rejected_uc(private_root: Path) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def _index_run_results(private_root: Path, run_dir_label: str) -> dict[str, dict[str, Any]]:
+def _index_run_results(
+    private_root: Path, run_dir_label: str
+) -> dict[str, dict[str, Any]]:
     """params_hash -> result dict for one run's metrics.json (empty if missing)."""
     if not run_dir_label:
         return {}
@@ -89,31 +95,38 @@ def _index_run_results(private_root: Path, run_dir_label: str) -> dict[str, dict
 
 def _trade_path_facts(result: dict[str, Any]) -> dict[str, Any]:
     """Aggregate trade-path facts from a result's stored per-trade records + entry_timing."""
-    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    metrics = (
+        raw_metrics if isinstance(raw_metrics := result.get("metrics"), dict) else {}
+    )
     trades = result.get("trades") or result.get("_trades") or []
     nets = [float(t.get("net_pct") or 0.0) for t in trades if isinstance(t, dict)]
     outcomes = [str(t.get("outcome") or "") for t in trades if isinstance(t, dict)]
-    et = metrics.get("entry_timing") if isinstance(metrics.get("entry_timing"), dict) else {}
+    et = raw_et if isinstance(raw_et := metrics.get("entry_timing"), dict) else {}
     n_tp = sum(1 for o in outcomes if o == "tp")
     n_sl = sum(1 for o in outcomes if o in ("stop", "sl"))
     n_timeout = sum(1 for o in outcomes if o in ("time_exit", "timeout"))
     return {
         "n_trades": int(metrics.get("n_trades") or len(trades)),
-        "avg_net_pct": round(sum(nets) / len(nets), 4) if nets else float(metrics.get("avg_net_pct") or 0.0),
+        "avg_net_pct": round(sum(nets) / len(nets), 4)
+        if nets
+        else float(metrics.get("avg_net_pct") or 0.0),
         "best_net_pct": round(max(nets), 4) if nets else 0.0,
         "worst_net_pct": round(min(nets), 4) if nets else 0.0,
         "avg_mfe_pct": float(et.get("avg_mfe_pct") or 0.0),
         "avg_mae_pct": float(et.get("avg_mae_pct") or 0.0),
         "avg_capture_ratio": float(et.get("avg_capture_ratio") or 0.0),
         "late_entry_rate": float(et.get("late_entry_rate") or 0.0),
-        "n_tp": n_tp, "n_sl": n_sl, "n_timeout": n_timeout,
+        "n_tp": n_tp,
+        "n_sl": n_sl,
+        "n_timeout": n_timeout,
         "tp_before_sl_share": round(n_tp / len(outcomes), 4) if outcomes else 0.0,
         "trades_available": bool(trades),
     }
 
 
-def classify_subreason(facts: dict[str, Any], hard_status: str, family: str,
-                       oi_micro: set[str]) -> str:
+def classify_subreason(
+    facts: dict[str, Any], hard_status: str, family: str, oi_micro: set[str]
+) -> str:
     """Deterministic 8-way reject taxonomy from trade-path facts + hard_status + family."""
     n = int(facts.get("n_trades") or 0)
     avg = float(facts.get("avg_net_pct") or 0.0)
@@ -126,10 +139,18 @@ def classify_subreason(facts: dict[str, Any], hard_status: str, family: str,
     if n == 0:
         return "insufficient_data"
     # Edge existed but the exit gave the move back (positive MFE, poor capture).
-    if facts.get("trades_available") and mfe > avg + COST_PCT and capture < CAPTURE_LATE:
+    if (
+        facts.get("trades_available")
+        and mfe > avg + COST_PCT
+        and capture < CAPTURE_LATE
+    ):
         return "wrong_exit"
     # Late entry on a real move (capture poor / majority late).
-    if facts.get("trades_available") and (late >= 0.5 or (0.0 < capture < CAPTURE_LATE)) and mfe > COST_PCT:
+    if (
+        facts.get("trades_available")
+        and (late >= 0.5 or (0.0 < capture < CAPTURE_LATE))
+        and mfe > COST_PCT
+    ):
         return "wrong_timeframe"
     if hard_status == "FAILED_COSTS" and (mfe > COST_PCT or best > COST_PCT):
         return "wrong_costs"
@@ -145,11 +166,19 @@ def classify_subreason(facts: dict[str, Any], hard_status: str, family: str,
     return "uncharacterized"
 
 
-_RECYCLABLE = {"tactical_candidate", "wrong_exit", "wrong_timeframe", "wrong_costs",
-               "missing_oi_micro", "validator_too_strict"}
+_RECYCLABLE = {
+    "tactical_candidate",
+    "wrong_exit",
+    "wrong_timeframe",
+    "wrong_costs",
+    "missing_oi_micro",
+    "validator_too_strict",
+}
 
 
-def characterize_rejects(private_root: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
+def characterize_rejects(
+    private_root: Path, *, limit: int | None = None
+) -> list[dict[str, Any]]:
     """One row per rejected unique_candidate with sub-reason + trade-path facts."""
     private_root = Path(private_root)
     oi_micro = oi_micro_families()
@@ -163,30 +192,63 @@ def characterize_rejects(private_root: Path, *, limit: int | None = None) -> lis
         if label not in cache:
             cache[label] = _index_run_results(private_root, label)
         result = cache[label].get(str(r.get("params_hash") or ""))
-        facts = _trade_path_facts(result) if result else {
-            "n_trades": int(r.get("n_trades") or 0),
-            "avg_net_pct": float(r.get("avg_net_pct") or 0.0),
-            "best_net_pct": 0.0, "worst_net_pct": 0.0, "avg_mfe_pct": 0.0, "avg_mae_pct": 0.0,
-            "avg_capture_ratio": 0.0, "late_entry_rate": 0.0, "n_tp": 0, "n_sl": 0,
-            "n_timeout": 0, "tp_before_sl_share": 0.0, "trades_available": False,
-        }
+        facts = (
+            _trade_path_facts(result)
+            if result
+            else {
+                "n_trades": int(r.get("n_trades") or 0),
+                "avg_net_pct": float(r.get("avg_net_pct") or 0.0),
+                "best_net_pct": 0.0,
+                "worst_net_pct": 0.0,
+                "avg_mfe_pct": 0.0,
+                "avg_mae_pct": 0.0,
+                "avg_capture_ratio": 0.0,
+                "late_entry_rate": 0.0,
+                "n_tp": 0,
+                "n_sl": 0,
+                "n_timeout": 0,
+                "tp_before_sl_share": 0.0,
+                "trades_available": False,
+            }
+        )
         hard = str(r.get("hard_status") or "")
         sub = classify_subreason(facts, hard, str(r.get("family") or ""), oi_micro)
-        rows.append({
-            "uc_key": str(r.get("uc_key") or ""), "symbol": str(r.get("symbol") or ""),
-            "timeframe": str(r.get("timeframe") or ""), "family": str(r.get("family") or ""),
-            "regime_bucket": str(r.get("regime_bucket") or ""), "hard_status": hard,
-            "reject_subreason": sub, "recyclable": sub in _RECYCLABLE,
-            "trades_available": facts["trades_available"], **{k: facts[k] for k in (
-                "n_trades", "avg_net_pct", "best_net_pct", "worst_net_pct", "avg_mfe_pct",
-                "avg_mae_pct", "avg_capture_ratio", "late_entry_rate", "n_tp", "n_sl",
-                "n_timeout", "tp_before_sl_share")},
-        })
+        rows.append(
+            {
+                "uc_key": str(r.get("uc_key") or ""),
+                "symbol": str(r.get("symbol") or ""),
+                "timeframe": str(r.get("timeframe") or ""),
+                "family": str(r.get("family") or ""),
+                "regime_bucket": str(r.get("regime_bucket") or ""),
+                "hard_status": hard,
+                "reject_subreason": sub,
+                "recyclable": sub in _RECYCLABLE,
+                "trades_available": facts["trades_available"],
+                **{
+                    k: facts[k]
+                    for k in (
+                        "n_trades",
+                        "avg_net_pct",
+                        "best_net_pct",
+                        "worst_net_pct",
+                        "avg_mfe_pct",
+                        "avg_mae_pct",
+                        "avg_capture_ratio",
+                        "late_entry_rate",
+                        "n_tp",
+                        "n_sl",
+                        "n_timeout",
+                        "tp_before_sl_share",
+                    )
+                },
+            }
+        )
     return rows
 
 
 def summarize_characterization(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Deliverable tables: counts by sub-reason, family, timeframe + recyclable totals."""
+
     def _tally(key: str) -> dict[str, int]:
         out: dict[str, int] = {}
         for r in rows:
@@ -198,11 +260,15 @@ def summarize_characterization(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for r in rows:
         by_sub_tf.setdefault(r["reject_subreason"], {})
         tf = r["timeframe"]
-        by_sub_tf[r["reject_subreason"]][tf] = by_sub_tf[r["reject_subreason"]].get(tf, 0) + 1
+        by_sub_tf[r["reject_subreason"]][tf] = (
+            by_sub_tf[r["reject_subreason"]].get(tf, 0) + 1
+        )
     return {
         "total_rejects": len(rows),
         "recyclable_total": len(recyclable),
-        "confirmed_bad_total": sum(1 for r in rows if r["reject_subreason"] == "confirmed_bad"),
+        "confirmed_bad_total": sum(
+            1 for r in rows if r["reject_subreason"] == "confirmed_bad"
+        ),
         "by_subreason": _tally("reject_subreason"),
         "by_family": _tally("family"),
         "recyclable_by_family": _tally_subset(recyclable, "family"),

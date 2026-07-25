@@ -37,17 +37,18 @@ architecture.
 
 ## Development Quality Gate
 
-The canonical research surface is linted in CI with:
+All tracked Python surfaces are linted in CI, and the active canonical research
+surface is type-checked with:
 
 ```powershell
-python -m ruff check src/research_lab scripts/strategy_lab scripts/research_control_center.py
+python -m ruff check .
+python -m mypy --explicit-package-bases --follow-imports=skip --ignore-missing-imports src/research_lab scripts/strategy_lab scripts/research_control_center.py
 ```
 
-The broader repository still contains classified legacy, archive, and
-diagnostic Python debt. It is not silently excluded from review or represented
-as type-clean. Repository-wide typing becomes a blocking gate only after an
-explicit checked-module manifest and its existing findings have been repaired;
-until then, full non-live pytest and the public safety guards remain mandatory.
+The Ruff gate is repository-wide. The mypy gate deliberately covers the 327-file
+active research surface above; legacy, archive, and unrelated diagnostic
+surfaces are not represented as type-clean. Full non-live pytest and the public
+safety guards remain mandatory.
 
 ## Active System Documents
 

@@ -16,7 +16,17 @@ from src.research_lab.universe import Universe
 REVIEW_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC", "OBSERVE"}
 CAPTURE_LATE = 0.3
 MAX_NEIGHBORS = 6
-_INT_KEYS = {"lookback", "period", "ma", "trend_ma", "pullback_ma", "below_bars", "hold_bars", "retest_window", "move_bars"}
+_INT_KEYS = {
+    "lookback",
+    "period",
+    "ma",
+    "trend_ma",
+    "pullback_ma",
+    "below_bars",
+    "hold_bars",
+    "retest_window",
+    "move_bars",
+}
 
 
 def generate_proposals_from_registry(
@@ -44,7 +54,9 @@ def generate_proposals_from_registry(
     return proposals
 
 
-def _proposal_payload(entry: dict[str, Any], universe: Universe, created_at: str) -> dict[str, Any] | None:
+def _proposal_payload(
+    entry: dict[str, Any], universe: Universe, created_at: str
+) -> dict[str, Any] | None:
     symbol = str(entry.get("symbol") or "")
     family = str(entry.get("strategy_id") or "")
     params = entry.get("params")
@@ -52,11 +64,21 @@ def _proposal_payload(entry: dict[str, Any], universe: Universe, created_at: str
         return None
     status = str(entry.get("validation_status"))
     reasons = [str(r) for r in (entry.get("validation_reasons") or [])]
-    metrics = entry.get("metrics_summary") if isinstance(entry.get("metrics_summary"), dict) else {}
-    entry_timing = metrics.get("entry_timing") if isinstance(metrics.get("entry_timing"), dict) else {}
+    metrics = (
+        raw_metrics
+        if isinstance(raw_metrics := entry.get("metrics_summary"), dict)
+        else {}
+    )
+    entry_timing = (
+        raw_entry_timing
+        if isinstance(raw_entry_timing := metrics.get("entry_timing"), dict)
+        else {}
+    )
 
     rule = _pick_rule(status, reasons, entry_timing)
-    grid, symbols, timeframe, filters = _shape_for_rule(rule, params, symbol, family, entry, universe)
+    grid, symbols, timeframe, filters = _shape_for_rule(
+        rule, params, symbol, family, entry, universe
+    )
     payload = {
         "created_by": "rule_based",
         "hypothesis": _hypothesis(rule, family, symbol),

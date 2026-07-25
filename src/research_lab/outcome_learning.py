@@ -51,7 +51,7 @@ class OutcomeLearningCase:
 
 def _float(row: dict[str, Any], key: str) -> float | None:
     value = row.get(key)
-    if value in ("", None):
+    if value is None or value == "":
         return None
     try:
         return float(value)
@@ -61,7 +61,7 @@ def _float(row: dict[str, Any], key: str) -> float | None:
 
 def _int(row: dict[str, Any], key: str) -> int | None:
     value = row.get(key)
-    if value in ("", None):
+    if value is None or value == "":
         return None
     try:
         return int(float(value))
@@ -79,7 +79,11 @@ def _bucket(row: dict[str, Any]) -> str:
     net = _float(row, "net_pct")
     mfe = _float(row, "mfe_pct")
     capture = _float(row, "capture")
-    if result in WIN_RESULTS or diagnosis == "good_signal" or (net is not None and net > 0):
+    if (
+        result in WIN_RESULTS
+        or diagnosis == "good_signal"
+        or (net is not None and net > 0)
+    ):
         if capture is not None and capture < 0.35 and mfe is not None and mfe > 0.5:
             return "win_low_capture"
         return "win"
@@ -137,7 +141,9 @@ def _deterministic_hints(row: dict[str, Any], outcome_bucket: str) -> list[str]:
     if outcome_bucket == "expired_no_entry":
         hints.append("setup never filled within paper entry window")
     if outcome_bucket == "win_low_capture":
-        hints.append("profitable outcome captured a small share of favourable excursion")
+        hints.append(
+            "profitable outcome captured a small share of favourable excursion"
+        )
     if mfe is not None and mae is not None and mfe > abs(mae):
         hints.append("mfe exceeded adverse excursion")
     if capture is not None and capture < 0.35:
@@ -148,7 +154,10 @@ def _deterministic_hints(row: dict[str, Any], outcome_bucket: str) -> list[str]:
 def _next_test_dimensions(outcome_bucket: str) -> list[str]:
     mapping = {
         "loss": ["regime_filter", "confirmation_gate"],
-        "loss_after_positive_mfe": ["exit_mode_partial_be_vs_fixed", "earlier_profit_lock"],
+        "loss_after_positive_mfe": [
+            "exit_mode_partial_be_vs_fixed",
+            "earlier_profit_lock",
+        ],
         "gave_back": ["exit_mode_partial_be_vs_fixed", "time_stop_after_mfe"],
         "expired_no_entry": ["entry_zone_width", "entry_timeout", "pretrigger_watch"],
         "breakeven": ["breakeven_policy", "tp1_size_fraction"],
@@ -213,7 +222,9 @@ def _planned_trade(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _observed_trade(row: dict[str, Any]) -> dict[str, Any]:
-    entry = _compact_float(row.get("observed_entry")) or _compact_float(row.get("entry_mid"))
+    entry = _compact_float(row.get("observed_entry")) or _compact_float(
+        row.get("entry_mid")
+    )
     exit_price = _compact_float(row.get("observed_exit"))
     return {
         "observed_entry": entry,
@@ -255,7 +266,9 @@ def _candle_price(row: dict[str, Any], key: str) -> float | None:
         return None
 
 
-def _compact_candles(candles: list[dict[str, Any]], *, entry: float | None, side: str) -> list[dict[str, Any]]:
+def _compact_candles(
+    candles: list[dict[str, Any]], *, entry: float | None, side: str
+) -> list[dict[str, Any]]:
     compact: list[dict[str, Any]] = []
     for idx, row in enumerate(candles):
         high = _candle_price(row, "high")
@@ -278,7 +291,9 @@ def _compact_candles(candles: list[dict[str, Any]], *, entry: float | None, side
     return compact
 
 
-def _path_summary(candles: list[dict[str, Any]], *, entry: float | None, side: str) -> dict[str, Any]:
+def _path_summary(
+    candles: list[dict[str, Any]], *, entry: float | None, side: str
+) -> dict[str, Any]:
     if not candles or entry is None or entry <= 0:
         return {"bars": len(candles), "status": "no_entry_or_empty_path"}
     favourable: list[tuple[int, float]] = []
@@ -330,8 +345,11 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
         }
     try:
         candle_slice = load_canonical_candles(
-            private_root, symbol, timeframe,
-            purpose="outcome_learning", coverage_policy="available",
+            private_root,
+            symbol,
+            timeframe,
+            purpose="outcome_learning",
+            coverage_policy="available",
         )
         candles = candle_slice.rows
     except (OSError, json.JSONDecodeError, ValueError, TypeError):
@@ -346,10 +364,13 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
             "timeframe": timeframe,
             "candles": [],
         }
+    assert candle_slice is not None
     boundary = _int(row, "boundary_ts")
     tf_ms = _timeframe_ms(timeframe)
     hold = max(1, _int(row, "max_hold_bars") or 1)
-    entry = _compact_float(row.get("observed_entry")) or _compact_float(row.get("entry_mid"))
+    entry = _compact_float(row.get("observed_entry")) or _compact_float(
+        row.get("entry_mid")
+    )
     side = str(row.get("side") or "")
     if boundary:
         before = 24
@@ -385,7 +406,12 @@ def _market_context(row: dict[str, Any], private_root: Path | None) -> dict[str,
 def peer_stats(row: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     family = str(row.get("family") or "")
     timeframe = str(row.get("timeframe") or "")
-    peers = [r for r in rows if str(r.get("family") or "") == family and str(r.get("timeframe") or "") == timeframe]
+    peers = [
+        r
+        for r in rows
+        if str(r.get("family") or "") == family
+        and str(r.get("timeframe") or "") == timeframe
+    ]
     counts: dict[str, int] = {}
     net_values: list[float] = []
     for peer in peers:
@@ -403,9 +429,16 @@ def peer_stats(row: dict[str, Any], rows: Iterable[dict[str, Any]]) -> dict[str,
     }
 
 
-def build_outcome_learning_case(row: dict[str, Any], *, peers: Iterable[dict[str, Any]] = ()) -> OutcomeLearningCase:
+def build_outcome_learning_case(
+    row: dict[str, Any], *, peers: Iterable[dict[str, Any]] = ()
+) -> OutcomeLearningCase:
     outcome_bucket = _bucket(row)
-    source_ref = str(row.get("training_row_id") or row.get("paper_signal_id") or row.get("signal_id") or "")
+    source_ref = str(
+        row.get("training_row_id")
+        or row.get("paper_signal_id")
+        or row.get("signal_id")
+        or ""
+    )
     payload = {
         "source_ref": source_ref,
         "paper_signal_id": row.get("paper_signal_id"),
@@ -511,7 +544,9 @@ def learning_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         case = build_outcome_learning_case(row, peers=items)
         by_kind[case.review_kind] = by_kind.get(case.review_kind, 0) + 1
         by_bucket[case.outcome_bucket] = by_bucket.get(case.outcome_bucket, 0) + 1
-        by_actionability[case.actionability] = by_actionability.get(case.actionability, 0) + 1
+        by_actionability[case.actionability] = (
+            by_actionability.get(case.actionability, 0) + 1
+        )
     return {
         "schema": "OutcomeLearningSummary.v1",
         "rows": len(items),
@@ -548,12 +583,18 @@ def load_training_rows(private_root: Path) -> list[dict[str, Any]]:
 
 
 def load_outcome_reviews(private_root: Path) -> list[dict[str, Any]]:
-    return _read_jsonl(Path(private_root) / "state" / "llm_advice" / "outcome_reviews.jsonl")
+    return _read_jsonl(
+        Path(private_root) / "state" / "llm_advice" / "outcome_reviews.jsonl"
+    )
 
 
 def _action_from_review(payload: dict[str, Any]) -> str:
     actionability = str(payload.get("actionability") or "").strip()
-    if actionability in {"retest_exit_or_capture", "retest_entry_timing", "compare_breakeven_policy"}:
+    if actionability in {
+        "retest_exit_or_capture",
+        "retest_entry_timing",
+        "compare_breakeven_policy",
+    }:
         return fr.NARROW_PARAMS
     if actionability == "preserve_pattern":
         return fr.PROMOTE
@@ -589,7 +630,11 @@ def recommendations_from_outcome_reviews(
             continue
         if not bool(review.get("accepted")):
             continue
-        payload = review.get("payload") if isinstance(review.get("payload"), dict) else {}
+        payload = (
+            raw_payload
+            if isinstance(raw_payload := review.get("payload"), dict)
+            else {}
+        )
         source_ref = str(review.get("source_ref") or "")
         row = rows_by_ref.get(source_ref)
         if not row:
@@ -622,7 +667,9 @@ def recommendations_from_outcome_reviews(
                 strategy_id=strategy_id,
                 symbol=symbol,
                 timeframe=timeframe,
-                reason=str(payload.get("summary") or f"outcome review suggests {actionability}"),
+                reason=str(
+                    payload.get("summary") or f"outcome review suggests {actionability}"
+                ),
                 hard_status=f"OUTCOME_{bucket.upper()}",
                 priority=_priority_from_review(payload),
                 candidate_ids=[candidate_id],
@@ -632,7 +679,9 @@ def recommendations_from_outcome_reviews(
     return out
 
 
-def build_outcome_review_recommendations(private_root: Path, *, max_recommendations: int = 20) -> list[fr.Recommendation]:
+def build_outcome_review_recommendations(
+    private_root: Path, *, max_recommendations: int = 20
+) -> list[fr.Recommendation]:
     return recommendations_from_outcome_reviews(
         load_training_rows(private_root),
         load_outcome_reviews(private_root),

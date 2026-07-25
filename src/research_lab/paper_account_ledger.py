@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.lineage_contract import stable_id
-from src.research_lab.paper_money_model import PaperMoneyModel, default_paper_money_model
+from src.research_lab.paper_money_model import (
+    PaperMoneyModel,
+    default_paper_money_model,
+)
 
 EVENT_SCHEMA = "PaperAccountEvent.v1"
 SUMMARY_SCHEMA = "paper_account_ledger.v1"
@@ -52,7 +55,10 @@ def _load_events(path: Path) -> list[dict[str, Any]]:
         row = json.loads(raw)
         if row.get("schema") != EVENT_SCHEMA:
             raise ValueError("unexpected paper account event schema")
-        if row.get("paper_only") is not True or row.get("execution_allowed") is not False:
+        if (
+            row.get("paper_only") is not True
+            or row.get("execution_allowed") is not False
+        ):
             raise ValueError("paper account event crossed the execution boundary")
         rows.append(row)
     return rows
@@ -75,17 +81,20 @@ def _scenario_id(trade: dict[str, Any]) -> str:
 
 
 def _opened_ts(trade: dict[str, Any]) -> int:
-    outcome = trade.get("outcome") if isinstance(trade.get("outcome"), dict) else {}
+    raw_outcome = trade.get("outcome")
+    outcome = raw_outcome if isinstance(raw_outcome, dict) else {}
     return _int(outcome.get("opened_at_bar_ts") or trade.get("boundary_ts"))
 
 
 def _closed_ts(trade: dict[str, Any]) -> int:
-    outcome = trade.get("outcome") if isinstance(trade.get("outcome"), dict) else {}
+    raw_outcome = trade.get("outcome")
+    outcome = raw_outcome if isinstance(raw_outcome, dict) else {}
     return _int(outcome.get("last_observed_bar_ts") or _opened_ts(trade))
 
 
 def _has_opened(trade: dict[str, Any]) -> bool:
-    outcome = trade.get("outcome") if isinstance(trade.get("outcome"), dict) else {}
+    raw_outcome = trade.get("outcome")
+    outcome = raw_outcome if isinstance(raw_outcome, dict) else {}
     return bool(
         outcome.get("opened_at_bar_ts")
         or trade.get("signal_status") == "opened_paper"
@@ -94,7 +103,8 @@ def _has_opened(trade: dict[str, Any]) -> bool:
 
 
 def _is_terminal(trade: dict[str, Any]) -> bool:
-    outcome = trade.get("outcome") if isinstance(trade.get("outcome"), dict) else {}
+    raw_outcome = trade.get("outcome")
+    outcome = raw_outcome if isinstance(raw_outcome, dict) else {}
     return bool(
         trade.get("signal_status") in TERMINAL_SIGNAL_STATUSES
         or str(trade.get("status") or "").startswith("closed_")
@@ -121,16 +131,27 @@ def _event(
 ) -> dict[str, Any]:
     trade_id = str(trade.get("paper_trade_id") or "")
     scenario_id = _scenario_id(trade)
-    outcome = trade.get("outcome") if isinstance(trade.get("outcome"), dict) else {}
-    net_pct = _float(outcome.get("net_pct")) if outcome.get("net_pct") not in (None, "") else None
+    raw_outcome = trade.get("outcome")
+    outcome = raw_outcome if isinstance(raw_outcome, dict) else {}
+    net_pct = (
+        _float(outcome.get("net_pct"))
+        if outcome.get("net_pct") not in (None, "")
+        else None
+    )
     fees_bps = _float(outcome.get("fees_bps_round_trip"))
     slippage_bps = _float(outcome.get("slippage_bps_round_trip"))
-    pnl_usdt = round(model.notional_usdt * net_pct / 100.0, 6) if net_pct is not None else None
+    pnl_usdt = (
+        round(model.notional_usdt * net_pct / 100.0, 6) if net_pct is not None else None
+    )
     return {
         "schema": EVENT_SCHEMA,
         "event_id": stable_id(
             "paperaccountevent",
-            {"event_type": event_type, "paper_trade_id": trade_id, "scenario_id": scenario_id},
+            {
+                "event_type": event_type,
+                "paper_trade_id": trade_id,
+                "scenario_id": scenario_id,
+            },
             length=24,
         ),
         "event_type": event_type,
@@ -165,14 +186,30 @@ def _replay(events: list[dict[str, Any]], model: PaperMoneyModel) -> dict[str, A
     total_fees = 0.0
     total_slippage = 0.0
 
-    order = {"position_opened": 0, "position_closed": 1, "allocation_rejected": 2, "counterfactual_excluded": 3}
-    for row in sorted(events, key=lambda item: (_int(item.get("event_ts")), order.get(str(item.get("event_type")), 9), str(item.get("event_id")))):
+    order = {
+        "position_opened": 0,
+        "position_closed": 1,
+        "allocation_rejected": 2,
+        "counterfactual_excluded": 3,
+    }
+    for row in sorted(
+        events,
+        key=lambda item: (
+            _int(item.get("event_ts")),
+            order.get(str(item.get("event_type")), 9),
+            str(item.get("event_id")),
+        ),
+    ):
         event_type = str(row.get("event_type") or "")
         trade_id = str(row.get("paper_trade_id") or "")
         if event_type == "position_opened" and trade_id not in opened:
             reserved[trade_id] = _float(row.get("position_margin_usdt"))
             opened.add(trade_id)
-        elif event_type == "position_closed" and trade_id in opened and trade_id not in closed:
+        elif (
+            event_type == "position_closed"
+            and trade_id in opened
+            and trade_id not in closed
+        ):
             pnl = _float(row.get("pnl_usdt"))
             balance += pnl
             reserved.pop(trade_id, None)
@@ -239,23 +276,62 @@ def build_paper_account_ledger(
         for trade in candidates:
             trade_id = str(trade.get("paper_trade_id") or "")
             if trade_id != owner_id:
-                planned.append(_event("counterfactual_excluded", trade, event_ts=_opened_ts(trade), model=model, reason="non_primary_scenario_variant"))
+                planned.append(
+                    _event(
+                        "counterfactual_excluded",
+                        trade,
+                        event_ts=_opened_ts(trade),
+                        model=model,
+                        reason="non_primary_scenario_variant",
+                    )
+                )
                 continue
-            planned.append(_event("position_opened", trade, event_ts=_opened_ts(trade), model=model, reason="primary_scenario_thesis"))
+            planned.append(
+                _event(
+                    "position_opened",
+                    trade,
+                    event_ts=_opened_ts(trade),
+                    model=model,
+                    reason="primary_scenario_thesis",
+                )
+            )
             if _is_terminal(trade):
-                planned.append(_event("position_closed", trade, event_ts=_closed_ts(trade), model=model, reason="observed_terminal_outcome"))
+                planned.append(
+                    _event(
+                        "position_closed",
+                        trade,
+                        event_ts=_closed_ts(trade),
+                        model=model,
+                        reason="observed_terminal_outcome",
+                    )
+                )
 
     added: list[dict[str, Any]] = []
-    for candidate in sorted(planned, key=lambda row: (_int(row.get("event_ts")), 0 if row.get("event_type") == "position_opened" else 1, str(row.get("event_id")))):
+    for candidate in sorted(
+        planned,
+        key=lambda row: (
+            _int(row.get("event_ts")),
+            0 if row.get("event_type") == "position_opened" else 1,
+            str(row.get("event_id")),
+        ),
+    ):
         if candidate["event_id"] in event_ids:
             continue
         if candidate["event_type"] == "position_opened":
             state = _replay(events + added, model)
             if state["available_margin_usdt"] < model.position_margin_usdt:
-                candidate = {**candidate, "event_type": "allocation_rejected", "reason": "insufficient_available_margin"}
+                candidate = {
+                    **candidate,
+                    "event_type": "allocation_rejected",
+                    "reason": "insufficient_available_margin",
+                }
                 candidate["event_id"] = stable_id(
                     "paperaccountevent",
-                    {"event_type": "allocation_rejected", "paper_trade_id": candidate["paper_trade_id"], "scenario_id": candidate["scenario_id"]},
+                    {
+                        "event_type": "allocation_rejected",
+                        "paper_trade_id": candidate["paper_trade_id"],
+                        "scenario_id": candidate["scenario_id"],
+                    },
                     length=24,
                 )
         elif candidate["event_type"] == "position_closed":
@@ -291,7 +367,9 @@ def build_paper_account_ledger(
     return summary
 
 
-def audit_paper_account_ledger(private_root: Path, *, model: PaperMoneyModel | None = None) -> dict[str, Any]:
+def audit_paper_account_ledger(
+    private_root: Path, *, model: PaperMoneyModel | None = None
+) -> dict[str, Any]:
     """Independently replay the append-only account log and compare its snapshot."""
     private_root = Path(private_root)
     model = model or default_paper_money_model()

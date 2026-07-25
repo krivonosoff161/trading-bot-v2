@@ -38,11 +38,18 @@ from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.search_family_definition import resolve_snapshot_set  # noqa: E402
 from src.research_lab.sweep_compile import compile_sweep  # noqa: E402
 from src.research_lab.sweep_spec import validate_sweep_spec  # noqa: E402
-from src.research_lab.state_db import connect, default_db_path, ensure_experiment_queued, init_db  # noqa: E402
+from src.research_lab.state_db import (  # noqa: E402
+    connect,
+    default_db_path,
+    ensure_experiment_queued,
+    init_db,
+)
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 from src.research_lab.validation_feedback import load_feedback_queue  # noqa: E402
 
-DEFAULT_DATA_GLOB = "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json"
+DEFAULT_DATA_GLOB = (
+    "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json"
+)
 
 
 def _load_cards(private_root: Path) -> list[dict]:
@@ -87,7 +94,10 @@ def _context_score(context: dict) -> int:
         score += 20
     if context.get("filters"):
         score += 10
-    if any(str(r).startswith("strong_regime_bucket:") for r in context.get("validation_reasons") or []):
+    if any(
+        str(r).startswith("strong_regime_bucket:")
+        for r in context.get("validation_reasons") or []
+    ):
         score += 10
     if context.get("regime_summary"):
         score += 1
@@ -95,44 +105,86 @@ def _context_score(context: dict) -> int:
 
 
 def _night_mode() -> bool:
-    return os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {"1", "true", "yes"}
+    return os.getenv("STRATEGY_LAB_NIGHT_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Apply feedback recommendations as bounded follow-up research.")
+    ap = argparse.ArgumentParser(
+        description="Apply feedback recommendations as bounded follow-up research."
+    )
     mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--apply", action="store_true", help="Compile + queue allowed follow-ups (default: dry-run)")
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="Compile + queue allowed follow-ups (default: dry-run)",
+    )
     mode.add_argument("--dry-run", action="store_true", help="Preview only (default)")
-    ap.add_argument("--limit", type=int, default=10, help="Max recommendations to process")
-    ap.add_argument("--max-variants", type=int, default=8, help="Cap variants per follow-up sweep")
-    ap.add_argument("--max-symbols", type=int, default=5, help="Cap distinct follow-up symbols to queue")
-    ap.add_argument("--allowed-actions", default="NARROW_PARAMS,REGIME_SWEEP",
-                    help="Comma-separated actions allowed to queue (default: NARROW_PARAMS,REGIME_SWEEP)")
+    ap.add_argument(
+        "--limit", type=int, default=10, help="Max recommendations to process"
+    )
+    ap.add_argument(
+        "--max-variants", type=int, default=8, help="Cap variants per follow-up sweep"
+    )
+    ap.add_argument(
+        "--max-symbols",
+        type=int,
+        default=5,
+        help="Cap distinct follow-up symbols to queue",
+    )
+    ap.add_argument(
+        "--allowed-actions",
+        default="NARROW_PARAMS,REGIME_SWEEP",
+        help="Comma-separated actions allowed to queue (default: NARROW_PARAMS,REGIME_SWEEP)",
+    )
     ap.add_argument("--data-glob", default=DEFAULT_DATA_GLOB)
     ap.add_argument("--priority", type=int, default=70)
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
+    ap.add_argument(
+        "--private-root",
+        default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
+    )
     ap.add_argument("--allow-public-output", action="store_true")
     args = ap.parse_args()
 
-    private_root = resolve_private_root(Path(args.private_root), allow_public_output=args.allow_public_output)
+    private_root = resolve_private_root(
+        Path(args.private_root), allow_public_output=args.allow_public_output
+    )
     dry_run = not args.apply
-    allowed = {a.strip().upper() for a in args.allowed_actions.split(",") if a.strip()} & QUEUEABLE_ACTIONS
+    allowed = {
+        a.strip().upper() for a in args.allowed_actions.split(",") if a.strip()
+    } & QUEUEABLE_ACTIONS
 
-    recs = build_recommendations(load_feedback_queue(private_root), _load_cards(private_root))
+    recs = build_recommendations(
+        load_feedback_queue(private_root), _load_cards(private_root)
+    )
     plans = plan_followups(
-        recs, _candidate_context_by_id(private_root),
-        max_recommendations=args.limit, max_variants=args.max_variants,
-        max_symbols=args.max_symbols, allowed_actions=allowed,
+        recs,
+        _candidate_context_by_id(private_root),
+        max_recommendations=args.limit,
+        max_variants=args.max_variants,
+        max_symbols=args.max_symbols,
+        allowed_actions=allowed,
     )
 
-    print(f"=== APPLY FEEDBACK RECOMMENDATIONS [{'DRY-RUN' if dry_run else 'APPLY'}] ===")
-    print(f"  recommendations: {len(recs)}  plans: {len(plans)}  allowed-to-queue: {sorted(allowed) or '(none)'}")
+    print(
+        f"=== APPLY FEEDBACK RECOMMENDATIONS [{'DRY-RUN' if dry_run else 'APPLY'}] ==="
+    )
+    print(
+        f"  recommendations: {len(recs)}  plans: {len(plans)}  allowed-to-queue: {sorted(allowed) or '(none)'}"
+    )
     print()
     for p in plans:
         if p.queued:
-            print(f"  QUEUE   {p.strategy_id}/{p.symbol}@{p.timeframe}  [{p.action}] {p.grid_preview}")
+            print(
+                f"  QUEUE   {p.strategy_id}/{p.symbol}@{p.timeframe}  [{p.action}] {p.grid_preview}"
+            )
         else:
-            print(f"  NOTE    {p.strategy_id}/{p.symbol}@{p.timeframe}  [{p.action}] not_queued={p.not_queued_reason}")
+            print(
+                f"  NOTE    {p.strategy_id}/{p.symbol}@{p.timeframe}  [{p.action}] not_queued={p.not_queued_reason}"
+            )
     print()
 
     queued = already = 0
@@ -143,11 +195,16 @@ def main() -> None:
     # Deterministic validation gate before any compile/queue.
     valid_plans = []
     for p in queueable:
-        result = validate_sweep_spec(p.sweep, timeframe_profiles=profiles, resource_policy=policy)
+        sweep = p.sweep
+        if sweep is None:
+            continue
+        result = validate_sweep_spec(
+            sweep, timeframe_profiles=profiles, resource_policy=policy
+        )
         if result.ok:
             valid_plans.append(p)
         else:
-            print(f"  SKIP (invalid spec) {p.sweep.sweep_id}: {'; '.join(result.errors)}")
+            print(f"  SKIP (invalid spec) {sweep.sweep_id}: {'; '.join(result.errors)}")
 
     if not dry_run and valid_plans:
         out_dir = private_root / "plans" / "feedback_specs"
@@ -157,24 +214,34 @@ def main() -> None:
         init_db(conn)
         try:
             for p in valid_plans:
+                sweep = p.sweep
+                if sweep is None:
+                    continue
                 snapshot_id, evidence_hash, snapshot_bindings = resolve_snapshot_set(
                     private_root=private_root,
-                    symbols=[p.sweep.anchor_symbol, *p.sweep.related_symbols],
-                    timeframe=p.sweep.timeframe,
+                    symbols=[sweep.anchor_symbol, *sweep.related_symbols],
+                    timeframe=sweep.timeframe,
                     data_glob=args.data_glob,
                 )
                 exp = compile_sweep(
-                    p.sweep, data_glob=args.data_glob, timeframe_profiles=profiles,
-                    resource_policy=policy, event_context={"origin": "feedback_followup",
-                                                            "candidate_id": p.candidate_id,
-                                                            "hard_status_action": p.action},
+                    sweep,
+                    data_glob=args.data_glob,
+                    timeframe_profiles=profiles,
+                    resource_policy=policy,
+                    event_context={
+                        "origin": "feedback_followup",
+                        "candidate_id": p.candidate_id,
+                        "hard_status_action": p.action,
+                    },
                     data_snapshot_id=snapshot_id,
                     data_evidence_hash=evidence_hash,
                     data_snapshot_bindings=snapshot_bindings,
                 )
                 spec_path = out_dir / f"{exp.search_family_id}.json"
                 exp.write_json(spec_path)
-                _, created = ensure_experiment_queued(conn, spec_path.resolve(), priority=args.priority)
+                _, created = ensure_experiment_queued(
+                    conn, spec_path.resolve(), priority=args.priority
+                )
                 queued += int(created)
                 already += int(not created)
         finally:
@@ -184,7 +251,8 @@ def main() -> None:
         log_dir = private_root / "hard_validation"
         log_dir.mkdir(parents=True, exist_ok=True)
         (log_dir / "followups.jsonl").write_text(
-            "".join(json.dumps(p.to_dict(), ensure_ascii=False) + "\n" for p in plans), encoding="utf-8"
+            "".join(json.dumps(p.to_dict(), ensure_ascii=False) + "\n" for p in plans),
+            encoding="utf-8",
         )
 
     n_queue_plans = sum(1 for p in plans if p.queued)
@@ -196,7 +264,9 @@ def main() -> None:
     else:
         print(f"  queued new: {queued}  already-pending: {already}")
         print("  decision log: hard_validation/followups.jsonl (private root)")
-    print("  No live trading. No order engine. Recommendations queue research sweeps only.")
+    print(
+        "  No live trading. No order engine. Recommendations queue research sweeps only."
+    )
 
 
 def _exp_to_dict(exp) -> dict:

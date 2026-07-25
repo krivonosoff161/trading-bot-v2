@@ -9,7 +9,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.backtest.research_common import FEE_RT_PCT, net_r, save_json, summarize
+from scripts.backtest.research_common import FEE_RT_PCT, net_r, save_json, summarize  # noqa: E402
 WS_CACHE = ROOT / "scripts" / "ws" / "cache"
 SIGNALS_LOG = ROOT / "logs" / "pump" / "pump_signals.jsonl"
 LABELS_LOG = ROOT / "logs" / "pump" / "pump_labels.jsonl"
@@ -26,7 +26,6 @@ def baseline_stats() -> dict:
     exits = [row for row in load_jsonl(LABELS_LOG) if row.get("type") == "EXIT"]
     trades = []
     for row in exits:
-        stop = row["entry_price"] * (1 - 0.008) if row["net_pnl_pct"] >= 0 or row["exit_reason"] == "SL" else row["entry_price"]
         trades.append({"outcome": row["exit_reason"], "hold_min": row["hold_min"], "result_r": row["net_pnl_pct"] / 0.8})
     return summarize(trades)
 

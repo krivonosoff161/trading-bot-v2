@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -68,12 +69,12 @@ class NullReviewSender:
         )
 
 
-def env_enabled(environ: dict[str, str] | None = None) -> bool:
+def env_enabled(environ: Mapping[str, str] | None = None) -> bool:
     env = environ if environ is not None else os.environ
     return str(env.get(ENV_ENABLED, "")).strip().lower() in {"1", "true", "yes"}
 
 
-def daily_cap(environ: dict[str, str] | None = None) -> float | None:
+def daily_cap(environ: Mapping[str, str] | None = None) -> float | None:
     """Parsed daily budget cap from the env, or None if unset/invalid/non-positive."""
     env = environ if environ is not None else os.environ
     raw = str(env.get(ENV_DAILY_CAP, "")).strip()

@@ -2,7 +2,7 @@
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 _ROOT   = Path(__file__).resolve().parents[2]
@@ -41,7 +41,6 @@ def load() -> list[dict]:
         # derive ts_ms from ts string if missing
         if not s.get("ts_ms") and s.get("ts"):
             try:
-                from datetime import timezone
                 s["ts_ms"] = int(datetime.fromisoformat(
                     s["ts"].replace("Z", "+00:00")).timestamp() * 1000)
             except Exception:

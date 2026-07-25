@@ -73,7 +73,9 @@ def reduce_results(results: list[Any]) -> ReduceReport:
     for r in results:
         key = (_get(r, "family"), _get(r, "symbol"))
         groups.setdefault(key, []).append(r)
-    verdicts = [_reduce_group(fam, sym, rows) for (fam, sym), rows in sorted(groups.items())]
+    verdicts = [
+        _reduce_group(fam, sym, rows) for (fam, sym), rows in sorted(groups.items())
+    ]
     counts: dict[str, int] = {}
     for v in verdicts:
         counts[v.verdict] = counts.get(v.verdict, 0) + 1
@@ -84,7 +86,9 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
     metrics = [_metrics(r) for r in rows]
     n_variants = len(metrics)
     total_trades = sum(int(m.get("n_trades") or 0) for m in metrics)
-    positive = [m for m in metrics if _f(m, "avg_net_pct") > 0 and _f(m, "test_avg_net_pct") > 0]
+    positive = [
+        m for m in metrics if _f(m, "avg_net_pct") > 0 and _f(m, "test_avg_net_pct") > 0
+    ]
     support_ratio = round(len(positive) / n_variants, 4) if n_variants else 0.0
     best = max(metrics, key=lambda m: _f(m, "test_avg_net_pct"), default={})
     entry = _entry_timing_aggregate(metrics)
@@ -94,10 +98,20 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
 
     reasons: list[str] = []
     if total_trades < MIN_TRADES_FOR_DECISION:
-        return GroupVerdict(family, symbol, NEEDS_MORE_DATA, [TOO_FEW_TRADES], n_variants,
-                            len(positive), support_ratio, total_trades,
-                            _f(best, "test_avg_net_pct"), _pf_display(best),
-                            dict(best.get("profit_factor_state") or {}), entry)
+        return GroupVerdict(
+            family,
+            symbol,
+            NEEDS_MORE_DATA,
+            [TOO_FEW_TRADES],
+            n_variants,
+            len(positive),
+            support_ratio,
+            total_trades,
+            _f(best, "test_avg_net_pct"),
+            _pf_display(best),
+            dict(best.get("profit_factor_state") or {}),
+            entry,
+        )
     if int(best.get("n_trades") or 0) < MIN_TRADES:
         reasons.append(TOO_FEW_TRADES)
 
@@ -109,13 +123,25 @@ def _reduce_group(family: str, symbol: str, rows: list[Any]) -> GroupVerdict:
     verdict = _verdict_for(positive, support_ratio, best, reasons, single_lucky)
     if verdict == FORWARD_PAPER:
         reasons.append(CANDIDATE_FOR_FORWARD)
-    return GroupVerdict(family, symbol, verdict, sorted(set(reasons)), n_variants,
-                        len(positive), support_ratio, total_trades,
-                        _f(best, "test_avg_net_pct"), _pf_display(best),
-                        dict(best.get("profit_factor_state") or {}), entry)
+    return GroupVerdict(
+        family,
+        symbol,
+        verdict,
+        sorted(set(reasons)),
+        n_variants,
+        len(positive),
+        support_ratio,
+        total_trades,
+        _f(best, "test_avg_net_pct"),
+        _pf_display(best),
+        dict(best.get("profit_factor_state") or {}),
+        entry,
+    )
 
 
-def _structural_reasons(best: dict[str, Any], entry: dict[str, Any], reasons: list[str]) -> None:
+def _structural_reasons(
+    best: dict[str, Any], entry: dict[str, Any], reasons: list[str]
+) -> None:
     total = _f(best, "total_net_pct")
     if total > 0 and _f(best, "max_drawdown_pct") > total * 0.8:
         reasons.append(DRAWDOWN_TOO_HIGH)
@@ -149,7 +175,11 @@ def _verdict_for(positive, support_ratio, best, reasons, single_lucky) -> str:
 
 
 def _entry_timing_aggregate(metrics: list[dict[str, Any]]) -> dict[str, Any]:
-    blocks = [m.get("entry_timing") for m in metrics if isinstance(m.get("entry_timing"), dict)]
+    blocks = [
+        block
+        for metric in metrics
+        if isinstance(block := metric.get("entry_timing"), dict)
+    ]
     if not blocks:
         return {}
     keys = ("avg_capture_ratio", "avg_mfe_pct", "avg_mae_pct", "late_entry_rate")
@@ -163,17 +193,26 @@ def _entry_timing_aggregate(metrics: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _event_timing_aggregate(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate event-anchored timing across variants (empty if no event context)."""
-    blocks = [m.get("event_entry_timing") for m in metrics if isinstance(m.get("event_entry_timing"), dict)]
+    blocks = [
+        block
+        for metric in metrics
+        if isinstance(block := metric.get("event_entry_timing"), dict)
+    ]
     if not blocks:
         return {}
     out: dict[str, Any] = {"event_variants": len(blocks)}
-    caps = [float(b["capture_ratio"]) for b in blocks if b.get("capture_ratio") is not None]
+    caps = [
+        float(b["capture_ratio"]) for b in blocks if b.get("capture_ratio") is not None
+    ]
     lags = [float(b["lag_bars"]) for b in blocks if b.get("lag_bars") is not None]
     if caps:
         out["event_capture_ratio"] = round(sum(caps) / len(caps), 4)
     if lags:
         out["event_avg_lag_bars"] = round(sum(lags) / len(lags), 4)
-    out["event_late_entry_rate"] = round(sum(1 for b in blocks if b.get("late_entry")) / len(blocks), 4)
+    out["event_late_entry_rate"] = round(
+        sum(bool(block.get("late_entry")) for block in blocks) / len(blocks),
+        4,
+    )
     return out
 
 
@@ -196,7 +235,9 @@ def _regime_carry(best: dict[str, Any]) -> bool:
     for key, bucket in breakdown.items():
         if "unknown" in key:
             continue
-        if int(bucket.get("n_trades") or 0) >= 8 and float(bucket.get("avg_net_pct") or 0.0) > max(0.0, overall):
+        if int(bucket.get("n_trades") or 0) >= 8 and float(
+            bucket.get("avg_net_pct") or 0.0
+        ) > max(0.0, overall):
             return True
     return False
 

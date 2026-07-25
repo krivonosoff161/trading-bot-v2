@@ -5,11 +5,12 @@ Usage:
 """
 import os
 import sys
+from collections import Counter
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from scripts.analysis.feedback import load_all_entries
+from scripts.analysis.feedback import load_all_entries  # noqa: E402
 
 entries = load_all_entries()
 
@@ -54,7 +55,6 @@ if open_:
 
 print("=" * 60)
 print("ПО ПАРЕ:")
-from collections import Counter
 pair_wins   = Counter(e["symbol"] for e in wins)
 pair_losses = Counter(e["symbol"] for e in losses)
 all_pairs   = sorted(set(pair_wins) | set(pair_losses))
@@ -63,10 +63,10 @@ print(fmt.format("Пара", "✅", "❌", "Winrate"))
 print("-" * 35)
 for sym in all_pairs:
     w = pair_wins.get(sym, 0)
-    l = pair_losses.get(sym, 0)
-    total_p = w + l
+    losses_count = pair_losses.get(sym, 0)
+    total_p = w + losses_count
     wr_p = f"{w*100//total_p}%" if total_p else "—"
-    print(fmt.format(sym, w, l, wr_p))
+    print(fmt.format(sym, w, losses_count, wr_p))
 
 print()
 print("ПО СТИЛЮ:")
@@ -75,7 +75,7 @@ style_losses = Counter(e.get("style","") for e in losses)
 all_styles   = sorted(set(style_wins) | set(style_losses))
 for s in all_styles:
     w = style_wins.get(s, 0)
-    l = style_losses.get(s, 0)
-    total_s = w + l
+    losses_count = style_losses.get(s, 0)
+    total_s = w + losses_count
     wr_s = f"{w*100//total_s}%" if total_s else "—"
-    print(f"  {s:<10} ✅{w}  ❌{l}  WR {wr_s}")
+    print(f"  {s:<10} ✅{w}  ❌{losses_count}  WR {wr_s}")

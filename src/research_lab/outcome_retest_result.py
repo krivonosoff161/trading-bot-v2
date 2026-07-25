@@ -36,7 +36,9 @@ def _training_index(private_root: Path) -> dict[str, dict[str, str]]:
         except json.JSONDecodeError:
             continue
         source_ref = str(row.get("training_row_id") or "")
-        candidate_id = str(row.get("candidate_id") or row.get("setup_candidate_id") or "")
+        candidate_id = str(
+            row.get("candidate_id") or row.get("setup_candidate_id") or ""
+        )
         if source_ref:
             out[source_ref] = {
                 "candidate_id": candidate_id,
@@ -127,7 +129,9 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
             task_payload = json.loads(task.get("payload_json") or "{}")
         except (TypeError, json.JSONDecodeError):
             continue
-        retest_id = str(task_payload.get("retest_id") or task.get("source_event_id") or "")
+        retest_id = str(
+            task_payload.get("retest_id") or task.get("source_event_id") or ""
+        )
         label = str(task.get("run_dir_label") or task.get("last_result_ref") or "")
         metrics_path = private_root / label / "metrics.json"
         try:
@@ -135,13 +139,19 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             unreadable += 1
             continue
-        context = metrics_payload.get("event_context") if isinstance(metrics_payload.get("event_context"), dict) else task_payload
+        context = (
+            metrics_payload.get("event_context")
+            if isinstance(metrics_payload.get("event_context"), dict)
+            else task_payload
+        )
         if not retest_id:
             retest_id = str(context.get("retest_id") or "")
         if not retest_id:
             continue
         best = _best_result(metrics_payload)
-        metrics = best.get("metrics") if isinstance(best.get("metrics"), dict) else {}
+        metrics = (
+            raw_metrics if isinstance(raw_metrics := best.get("metrics"), dict) else {}
+        )
         n_trades = int(metrics.get("n_trades") or 0)
         best_net = _float(metrics.get("avg_net_pct"))
         source_ref = str(context.get("source_ref") or "")
@@ -152,10 +162,28 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
             "review_id": str(context.get("review_id") or ""),
             "source_ref": source_ref,
             "paper_signal_id": str(context.get("paper_signal_id") or ""),
-            "source_candidate_id": str(context.get("source_candidate_id") or source_training.get("candidate_id") or ""),
-            "source_symbol": str(source_training.get("symbol") or best.get("symbol") or task.get("symbol") or ""),
-            "source_timeframe": str(source_training.get("timeframe") or metrics_payload.get("timeframe") or ""),
-            "source_family": str(source_training.get("family") or context.get("source_family") or best.get("family") or ""),
+            "source_candidate_id": str(
+                context.get("source_candidate_id")
+                or source_training.get("candidate_id")
+                or ""
+            ),
+            "source_symbol": str(
+                source_training.get("symbol")
+                or best.get("symbol")
+                or task.get("symbol")
+                or ""
+            ),
+            "source_timeframe": str(
+                source_training.get("timeframe")
+                or metrics_payload.get("timeframe")
+                or ""
+            ),
+            "source_family": str(
+                source_training.get("family")
+                or context.get("source_family")
+                or best.get("family")
+                or ""
+            ),
             "symbol": str(best.get("symbol") or task.get("symbol") or ""),
             "timeframe": str(metrics_payload.get("timeframe") or ""),
             "family": str(best.get("family") or ""),
@@ -180,7 +208,9 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
         if prior is None or row["completed_at"] >= prior["completed_at"]:
             latest[retest_id] = row
 
-    items = sorted(latest.values(), key=lambda row: (row["completed_at"], row["retest_id"]))
+    items = sorted(
+        latest.values(), key=lambda row: (row["completed_at"], row["retest_id"])
+    )
     by_verdict: dict[str, int] = {}
     for row in items:
         verdict = str(row.get("verdict") or "")
@@ -203,5 +233,8 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
         "jsonl_path": str(out_jsonl),
         "snapshot_path": str(out_snapshot),
     }
-    out_snapshot.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out_snapshot.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return summary

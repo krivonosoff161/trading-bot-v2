@@ -28,10 +28,10 @@ def arrays(raw: list) -> tuple[np.ndarray, ...]:
     ts = np.array([int(row[0]) for row in rows], dtype=np.int64)
     o = np.array([float(row[1]) for row in rows], dtype=float)
     h = np.array([float(row[2]) for row in rows], dtype=float)
-    l = np.array([float(row[3]) for row in rows], dtype=float)
+    low = np.array([float(row[3]) for row in rows], dtype=float)
     c = np.array([float(row[4]) for row in rows], dtype=float)
     v = np.array([float(row[5]) for row in rows], dtype=float)
-    return ts, o, h, l, c, v
+    return ts, o, h, low, c, v
 
 
 def bollinger_series(closes: np.ndarray, period: int = 20, mult: float = 2.0) -> tuple[np.ndarray, ...]:

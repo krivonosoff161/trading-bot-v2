@@ -5,7 +5,6 @@ Tape aggregation and tape-aware research for Phase 2.
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 import math
 import sys

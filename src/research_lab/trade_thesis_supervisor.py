@@ -130,13 +130,20 @@ def _visual_evidence(row: dict[str, Any]) -> VisualEvidence | None:
     if not reference:
         return None
     content_hash = str(raw.get("content_hash") or "")
-    if len(content_hash) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in content_hash):
+    if len(content_hash) != 64 or any(
+        ch not in "0123456789abcdefABCDEF" for ch in content_hash
+    ):
         return None
     observed_at = str(raw.get("observed_at") or _created_sort_key(row))
     return VisualEvidence(
-        evidence_id=str(raw.get("evidence_id") or "") or stable_id(
+        evidence_id=str(raw.get("evidence_id") or "")
+        or stable_id(
             "visual",
-            {"reference": reference, "content_hash": content_hash, "observed_at": observed_at},
+            {
+                "reference": reference,
+                "content_hash": content_hash,
+                "observed_at": observed_at,
+            },
             length=20,
         ),
         reference=reference,
@@ -160,21 +167,25 @@ def replay_symbol_fsm(
     watermark = str(prior.get("fsm_watermark") or "")
     transitions: list[dict[str, Any]] = list(prior.get("fsm_transitions") or [])
     prior_seen: set[str] = {
-        str(item.get("signal_id") or "") for item in transitions if item.get("signal_id")
+        str(item.get("signal_id") or "")
+        for item in transitions
+        if item.get("signal_id")
     }
     current_ids = {
         str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
         for row in group
     }
     if primary_signal_id and primary_signal_id not in current_ids:
-        transitions.append({
-            "signal_id": primary_signal_id,
-            "observed_at": watermark,
-            "from_state": state,
-            "to_state": "idle",
-            "event_type": "primary_ended",
-            "action": "reselect_watch",
-        })
+        transitions.append(
+            {
+                "signal_id": primary_signal_id,
+                "observed_at": watermark,
+                "from_state": state,
+                "to_state": "idle",
+                "event_type": "primary_ended",
+                "action": "reselect_watch",
+            }
+        )
         state = "idle"
         primary_side = ""
         primary_timeframe = ""
@@ -190,12 +201,18 @@ def replay_symbol_fsm(
         ),
     )
     for row in ordered:
-        signal_id = str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+        signal_id = str(
+            row.get("source_signal_id") or row.get("paper_product_trade_id") or ""
+        )
         observed_at = _created_sort_key(row)
         side = str(row.get("side") or "")
         timeframe = str(row.get("timeframe") or "")
         before = state
-        degraded = str(row.get("data_quality") or "").lower() in {"degraded", "missing", "invalid"}
+        degraded = str(row.get("data_quality") or "").lower() in {
+            "degraded",
+            "missing",
+            "invalid",
+        }
         degraded = degraded or bool(row.get("data_quality_flags"))
         if signal_id in prior_seen:
             continue
@@ -208,14 +225,22 @@ def replay_symbol_fsm(
             event_type, action = "data_degraded", "suspend_decision"
         elif state == "idle":
             state = "active"
-            primary_side, primary_timeframe, primary_signal_id = side, timeframe, signal_id
+            primary_side, primary_timeframe, primary_signal_id = (
+                side,
+                timeframe,
+                signal_id,
+            )
             event_type, action = "activated", "start_watch"
         elif side == primary_side:
             state = "active"
             event_type, action = "confirmation", "update_watch"
         elif _tf_rank(timeframe) > _tf_rank(primary_timeframe):
             state = "reversed"
-            primary_side, primary_timeframe, primary_signal_id = side, timeframe, signal_id
+            primary_side, primary_timeframe, primary_signal_id = (
+                side,
+                timeframe,
+                signal_id,
+            )
             event_type, action = "reversal", "flip_watch"
         else:
             state = "contradicted"
@@ -223,14 +248,16 @@ def replay_symbol_fsm(
         if event_type not in {"duplicate_ignored", "stale_ignored"}:
             seen.add(signal_id)
             watermark = observed_at
-        transitions.append({
-            "signal_id": signal_id,
-            "observed_at": observed_at,
-            "from_state": before,
-            "to_state": state,
-            "event_type": event_type,
-            "action": action,
-        })
+        transitions.append(
+            {
+                "signal_id": signal_id,
+                "observed_at": observed_at,
+                "from_state": before,
+                "to_state": state,
+                "event_type": event_type,
+                "action": action,
+            }
+        )
     return {
         "schema": FSM_SCHEMA,
         "state": state,
@@ -244,27 +271,35 @@ def replay_symbol_fsm(
     }
 
 
-def _market_context(symbol: str, group: list[dict[str, Any]]) -> tuple[MarketContextSnapshot, list[VisualEvidence]]:
+def _market_context(
+    symbol: str, group: list[dict[str, Any]]
+) -> tuple[MarketContextSnapshot, list[VisualEvidence]]:
     evidence = [item for row in group if (item := _visual_evidence(row)) is not None]
-    signal_ids = [str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "") for row in group]
+    signal_ids = [
+        str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+        for row in group
+    ]
     observed_at = max((_created_sort_key(row) for row in group), default="")
+    sides = [str(row.get("side") or "") for row in group]
+    timeframes = [str(row.get("timeframe") or "") for row in group]
+    visual_evidence_ids = [item.evidence_id for item in evidence]
     payload = {
         "version": 1,
         "symbol": symbol,
         "observed_at": observed_at,
         "signal_ids": signal_ids,
-        "sides": [str(row.get("side") or "") for row in group],
-        "timeframes": [str(row.get("timeframe") or "") for row in group],
-        "visual_evidence_ids": [item.evidence_id for item in evidence],
+        "sides": sides,
+        "timeframes": timeframes,
+        "visual_evidence_ids": visual_evidence_ids,
     }
     return MarketContextSnapshot(
         snapshot_id=stable_id("market_context", payload, length=20),
         symbol=symbol,
         observed_at=observed_at,
         signal_ids=signal_ids,
-        sides=payload["sides"],
-        timeframes=payload["timeframes"],
-        visual_evidence_ids=payload["visual_evidence_ids"],
+        sides=sides,
+        timeframes=timeframes,
+        visual_evidence_ids=visual_evidence_ids,
     ), evidence
 
 
@@ -316,7 +351,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = payload.get("items")
-    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    return (
+        [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    )
 
 
 def _tf_rank(value: Any) -> int:
@@ -350,15 +387,19 @@ def _leader_score(row: dict[str, Any]) -> tuple[int, int, int, str]:
     )
 
 
-def _state_hash(symbol: str, leader: dict[str, Any], group: list[dict[str, Any]]) -> str:
+def _state_hash(
+    symbol: str, leader: dict[str, Any], group: list[dict[str, Any]]
+) -> str:
     return stable_id(
         "thesisstate",
         {
             "symbol": symbol,
-            "primary_signal_id": leader.get("source_signal_id") or leader.get("paper_product_trade_id"),
+            "primary_signal_id": leader.get("source_signal_id")
+            or leader.get("paper_product_trade_id"),
             "signals": [
                 {
-                    "id": row.get("source_signal_id") or row.get("paper_product_trade_id"),
+                    "id": row.get("source_signal_id")
+                    or row.get("paper_product_trade_id"),
                     "side": row.get("side"),
                     "timeframe": row.get("timeframe"),
                     "status": row.get("status"),
@@ -366,7 +407,9 @@ def _state_hash(symbol: str, leader: dict[str, Any], group: list[dict[str, Any]]
                     "stop": row.get("stop"),
                     "targets": row.get("take_profit_plan"),
                 }
-                for row in sorted(group, key=lambda item: str(item.get("source_signal_id") or ""))
+                for row in sorted(
+                    group, key=lambda item: str(item.get("source_signal_id") or "")
+                )
             ],
         },
         length=20,
@@ -379,8 +422,13 @@ def _thesis_from_leader(
     previous: dict[str, Any] | None,
 ) -> TradeThesis:
     symbol = str(leader.get("okx_inst_id") or leader.get("symbol") or "")
-    signal_id = str(leader.get("source_signal_id") or leader.get("paper_product_trade_id") or "")
-    started_at = str((previous or {}).get("created_at") or min(_created_sort_key(row) for row in group))
+    signal_id = str(
+        leader.get("source_signal_id") or leader.get("paper_product_trade_id") or ""
+    )
+    started_at = str(
+        (previous or {}).get("created_at")
+        or min(_created_sort_key(row) for row in group)
+    )
     thesis_id = str((previous or {}).get("thesis_id") or "") or stable_id(
         "thesis", {"symbol": symbol, "started_at": started_at}, length=20
     )
@@ -388,8 +436,11 @@ def _thesis_from_leader(
     fsm = replay_symbol_fsm(group, previous)
     fsm_leader = next(
         (
-            row for row in group
-            if str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+            row
+            for row in group
+            if str(
+                row.get("source_signal_id") or row.get("paper_product_trade_id") or ""
+            )
             == str(fsm.get("primary_signal_id") or "")
         ),
         leader,
@@ -417,9 +468,13 @@ def _thesis_from_leader(
     )
 
 
-def _classify_signal(thesis: TradeThesis, row: dict[str, Any]) -> tuple[str, str, list[str]]:
+def _classify_signal(
+    thesis: TradeThesis, row: dict[str, Any]
+) -> tuple[str, str, list[str]]:
     side = str(row.get("side") or "")
-    signal_id = str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+    signal_id = str(
+        row.get("source_signal_id") or row.get("paper_product_trade_id") or ""
+    )
     signal_rank = _tf_rank(row.get("timeframe"))
     thesis_rank = _tf_rank(thesis.primary_timeframe)
     reasons = [
@@ -433,12 +488,24 @@ def _classify_signal(thesis: TradeThesis, row: dict[str, Any]) -> tuple[str, str
         return "primary_thesis", "track_primary", reasons + ["primary_signal"]
     if side == thesis.side:
         if signal_rank >= thesis_rank:
-            return "confirmation", "hold_or_add_watch", reasons + ["same_side_equal_or_higher_tf"]
+            return (
+                "confirmation",
+                "hold_or_add_watch",
+                reasons + ["same_side_equal_or_higher_tf"],
+            )
         return "lower_tf_confirmation", "add_watch", reasons + ["same_side_lower_tf"]
     if signal_rank < thesis_rank:
-        return "countertrend_bounce", "hold_primary_tighten_watch", reasons + ["opposite_lower_tf"]
+        return (
+            "countertrend_bounce",
+            "hold_primary_tighten_watch",
+            reasons + ["opposite_lower_tf"],
+        )
     if signal_rank == thesis_rank:
-        return "invalidation_warning", "tighten_or_flip_watch", reasons + ["opposite_equal_tf"]
+        return (
+            "invalidation_warning",
+            "tighten_or_flip_watch",
+            reasons + ["opposite_equal_tf"],
+        )
     return "higher_tf_conflict", "flip_watch", reasons + ["opposite_higher_tf"]
 
 
@@ -454,7 +521,9 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
     }
     existing_events = _read_jsonl(_event_jsonl_path(private_root))
     existing_event_ids = {str(item.get("event_id") or "") for item in existing_events}
-    active_rows = [row for row in rows if str(row.get("status") or "") in ACTIVE_STATUSES]
+    active_rows = [
+        row for row in rows if str(row.get("status") or "") in ACTIVE_STATUSES
+    ]
     by_symbol: dict[str, list[dict[str, Any]]] = {}
     for row in active_rows:
         symbol = str(row.get("okx_inst_id") or row.get("symbol") or "")
@@ -470,7 +539,11 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
             (
                 row
                 for row in group
-                if str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+                if str(
+                    row.get("source_signal_id")
+                    or row.get("paper_product_trade_id")
+                    or ""
+                )
                 == previous_primary
             ),
             None,
@@ -503,7 +576,11 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
         elif str(previous.get("state_hash") or "") != thesis.state_hash:
             event_id = stable_id(
                 "thesis_event",
-                {"thesis_id": thesis.thesis_id, "event_type": "scenario_updated", "state_hash": thesis.state_hash},
+                {
+                    "thesis_id": thesis.thesis_id,
+                    "event_type": "scenario_updated",
+                    "state_hash": thesis.state_hash,
+                },
                 length=20,
             )
             reasons = ["active_state_changed"]
@@ -526,9 +603,17 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
                     state_hash=thesis.state_hash,
                 )
             )
-        for row in sorted(group, key=lambda item: (_created_sort_key(item), str(item.get("source_signal_id") or ""))):
+        for row in sorted(
+            group,
+            key=lambda item: (
+                _created_sort_key(item),
+                str(item.get("source_signal_id") or ""),
+            ),
+        ):
             event_type, action, reasons = _classify_signal(thesis, row)
-            signal_id = str(row.get("source_signal_id") or row.get("paper_product_trade_id") or "")
+            signal_id = str(
+                row.get("source_signal_id") or row.get("paper_product_trade_id") or ""
+            )
             event_id = stable_id(
                 "thesis_event",
                 {
@@ -566,8 +651,14 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
             continue
         now = utc_now()
         primary = rows_by_signal.get(str(previous.get("primary_signal_id") or "")) or {}
-        outcome = primary.get("outcome") if isinstance(primary.get("outcome"), dict) else {}
-        result = str(outcome.get("result") or primary.get("status") or "observation_ended")
+        outcome = (
+            raw_outcome
+            if isinstance(raw_outcome := primary.get("outcome"), dict)
+            else {}
+        )
+        result = str(
+            outcome.get("result") or primary.get("status") or "observation_ended"
+        )
         net_pct = outcome.get("net_pct")
         closed = TradeThesis(
             thesis_id=str(previous.get("thesis_id") or ""),
@@ -578,7 +669,9 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
             primary_family=str(previous.get("primary_family") or ""),
             primary_status=str(primary.get("status") or "closed"),
             primary_source=str(previous.get("primary_source") or ""),
-            primary_validation_tier=str(previous.get("primary_validation_tier") or "farm_calculated"),
+            primary_validation_tier=str(
+                previous.get("primary_validation_tier") or "farm_calculated"
+            ),
             active_signals=0,
             created_at=str(previous.get("created_at") or ""),
             state_hash=str(previous.get("state_hash") or ""),
@@ -595,7 +688,11 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
         theses.append(closed)
         event_id = stable_id(
             "thesis_event",
-            {"thesis_id": closed.thesis_id, "event_type": "scenario_closed", "result": result},
+            {
+                "thesis_id": closed.thesis_id,
+                "event_type": "scenario_closed",
+                "result": result,
+            },
             length=20,
         )
         new_events.append(
@@ -614,11 +711,15 @@ def build_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
                 event_ts=now,
                 state_hash=closed.state_hash,
                 terminal_result=result,
-                terminal_net_pct=float(net_pct) if net_pct not in (None, "") else None,
+                terminal_net_pct=(
+                    float(net_pct) if net_pct is not None and net_pct != "" else None
+                ),
             )
         )
 
-    appended_events = [event for event in new_events if event.event_id not in existing_event_ids]
+    appended_events = [
+        event for event in new_events if event.event_id not in existing_event_ids
+    ]
     event_rows = existing_events + [event.to_dict() for event in appended_events]
 
     by_event_type: dict[str, int] = {}
@@ -665,7 +766,11 @@ def write_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
     theses = summary.pop("items")
     events = summary.pop("event_items")
     prior_thesis_revisions = {
-        (str(row.get("thesis_id") or ""), str(row.get("state_hash") or ""), str(row.get("status") or ""))
+        (
+            str(row.get("thesis_id") or ""),
+            str(row.get("state_hash") or ""),
+            str(row.get("status") or ""),
+        )
         for row in _read_jsonl(out_theses)
     }
     with out_theses.open("a", encoding="utf-8") as fh:
@@ -692,5 +797,8 @@ def write_trade_thesis_supervisor(private_root: Path) -> dict[str, Any]:
     summary["snapshot_path"] = str(out_summary)
     summary["theses_jsonl_path"] = str(out_theses)
     summary["events_jsonl_path"] = str(out_events)
-    out_summary.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out_summary.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return summary

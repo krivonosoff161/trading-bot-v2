@@ -80,10 +80,14 @@ class LLMUsage:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "provider": self.provider, "model": self.model,
-            "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
-            "total_tokens": self.total_tokens, "cost_rub": self.cost_rub,
-            "status": self.status, "error_type": self.error_type,
+            "provider": self.provider,
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "cost_rub": self.cost_rub,
+            "status": self.status,
+            "error_type": self.error_type,
         }
 
 
@@ -118,12 +122,20 @@ class SyntheticProposalProvider:
 
     def generate(self, system: str, user: str) -> tuple[str, LLMUsage]:
         text = json.dumps(self._candidates, ensure_ascii=False)
-        usage = LLMUsage(provider="synthetic", model="offline",
-                         input_tokens=0, output_tokens=0, total_tokens=0, cost_rub=0.0)
+        usage = LLMUsage(
+            provider="synthetic",
+            model="offline",
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            cost_rub=0.0,
+        )
         return text, usage
 
 
-HttpPost = Callable[[str, dict, dict, float], Any]  # (url, payload, headers, timeout) -> parsed json
+HttpPost = Callable[
+    [str, dict, dict, float], Any
+]  # (url, payload, headers, timeout) -> parsed json
 
 
 def _default_http_post(url: str, payload: dict, headers: dict, timeout: float) -> Any:
@@ -136,14 +148,24 @@ def _default_http_post(url: str, payload: dict, headers: dict, timeout: float) -
 class OpenAICompatibleProvider:
     """Synchronous OpenAI-compatible chat client (Alibaba/Qwen/OpenAI-compatible)."""
 
-    def __init__(self, *, provider: str, base_url: str, api_key: str, model: str,
-                 timeout: float = DEFAULT_TIMEOUT, rate_rub_per_1k: float = DEFAULT_RATE_RUB_PER_1K,
-                 http_post: HttpPost | None = None):
+    def __init__(
+        self,
+        *,
+        provider: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float = DEFAULT_TIMEOUT,
+        rate_rub_per_1k: float = DEFAULT_RATE_RUB_PER_1K,
+        http_post: HttpPost | None = None,
+    ):
         self.name = provider
         self.configured = bool(base_url and api_key and model)
         self.base_url = base_url.rstrip("/")
         self._url = self.base_url + "/chat/completions"
-        self._key = api_key  # held only for the Authorization header; never logged/returned
+        self._key = (
+            api_key  # held only for the Authorization header; never logged/returned
+        )
         self._model = model
         self.model_name = model
         self._timeout = float(timeout)
@@ -153,12 +175,18 @@ class OpenAICompatibleProvider:
     def generate(self, system: str, user: str) -> tuple[str, LLMUsage]:
         if not self.configured:
             raise LLMProviderError("provider_not_configured")
-        headers = {"Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
-                   "User-Agent": _USER_AGENT}
+        headers = {
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+            "User-Agent": _USER_AGENT,
+        }
         payload = {
             "model": self._model,
             "response_format": {"type": "json_object"},
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
         }
         try:
             data = self._http_post(self._url, payload, headers, self._timeout)
@@ -184,8 +212,14 @@ class OpenAICompatibleProvider:
         out = int(raw.get("completion_tokens") or raw.get("output_tokens") or 0)
         total = int(raw.get("total_tokens") or (inp + out))
         cost = round(total / 1000.0 * self._rate, 4)
-        return LLMUsage(provider=self.name, model=self._model, input_tokens=inp,
-                        output_tokens=out, total_tokens=total, cost_rub=cost)
+        return LLMUsage(
+            provider=self.name,
+            model=self._model,
+            input_tokens=inp,
+            output_tokens=out,
+            total_tokens=total,
+            cost_rub=cost,
+        )
 
 
 class OllamaProposalProvider:
@@ -226,12 +260,17 @@ class OllamaProposalProvider:
                 "num_ctx": self._num_ctx,
                 "num_predict": self._num_predict,
             },
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
         }
         try:
             data = self._http_post(self._url, payload, headers, self._timeout)
         except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
-            raise LLMProviderError(f"ollama request failed: {type(exc).__name__}") from exc
+            raise LLMProviderError(
+                f"ollama request failed: {type(exc).__name__}"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise LLMProviderError("ollama returned invalid JSON envelope") from exc
         if not isinstance(data, dict):
@@ -241,7 +280,7 @@ class OllamaProposalProvider:
             text = str(choice["message"]["content"] or "").strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMProviderError("ollama response missing choices/content") from exc
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        usage = raw_usage if isinstance(raw_usage := data.get("usage"), dict) else {}
         inp = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         total = int(usage.get("total_tokens") or (inp + out))
@@ -295,7 +334,11 @@ def load_provider(
         return NullProposalProvider()
     provider = _provider_name(env)
     if provider == "synthetic":
-        return SyntheticProposalProvider(synthetic_candidates or []) if allow_synthetic else NullProposalProvider()
+        return (
+            SyntheticProposalProvider(synthetic_candidates or [])
+            if allow_synthetic
+            else NullProposalProvider()
+        )
     if provider in OPENAI_COMPATIBLE:
         key_env = _api_key_env_name(env)
         api_key = str(env.get(key_env, "") or "").strip()
@@ -303,9 +346,15 @@ def load_provider(
         model = _env_first(env, ENV_MODEL_CHEAP, SCANNER_ENV_CHEAP_MODEL)
         if api_key and base_url and model:
             return OpenAICompatibleProvider(
-                provider=provider, base_url=base_url, api_key=api_key, model=model,
+                provider=provider,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
                 timeout=float(env.get(ENV_TIMEOUT, DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT),
-                rate_rub_per_1k=float(env.get(ENV_RATE, DEFAULT_RATE_RUB_PER_1K) or DEFAULT_RATE_RUB_PER_1K),
+                rate_rub_per_1k=float(
+                    env.get(ENV_RATE, DEFAULT_RATE_RUB_PER_1K)
+                    or DEFAULT_RATE_RUB_PER_1K
+                ),
                 http_post=http_post,
             )
     if provider in LOCAL_OLLAMA:
@@ -314,9 +363,21 @@ def load_provider(
         return OllamaProposalProvider(
             base_url=base_url,
             model=model,
-            timeout=float(env.get(ENV_TIMEOUT, DEFAULT_OLLAMA_TIMEOUT) or DEFAULT_OLLAMA_TIMEOUT),
-            num_ctx=int(float(env.get(ENV_OLLAMA_NUM_CTX, DEFAULT_OLLAMA_NUM_CTX) or DEFAULT_OLLAMA_NUM_CTX)),
-            num_predict=int(float(env.get(ENV_OLLAMA_NUM_PREDICT, DEFAULT_OLLAMA_NUM_PREDICT) or DEFAULT_OLLAMA_NUM_PREDICT)),
+            timeout=float(
+                env.get(ENV_TIMEOUT, DEFAULT_OLLAMA_TIMEOUT) or DEFAULT_OLLAMA_TIMEOUT
+            ),
+            num_ctx=int(
+                float(
+                    env.get(ENV_OLLAMA_NUM_CTX, DEFAULT_OLLAMA_NUM_CTX)
+                    or DEFAULT_OLLAMA_NUM_CTX
+                )
+            ),
+            num_predict=int(
+                float(
+                    env.get(ENV_OLLAMA_NUM_PREDICT, DEFAULT_OLLAMA_NUM_PREDICT)
+                    or DEFAULT_OLLAMA_NUM_PREDICT
+                )
+            ),
             http_post=http_post,
         )
     return NullProposalProvider()
@@ -324,13 +385,18 @@ def load_provider(
 
 # ── private usage log (lab-only; never the scanner's budget) ───────────────────
 
+
 def usage_log_path(private_root: Path) -> Path:
     return private_root / "reports" / "llm_usage" / "llm_usage.jsonl"
 
 
-def record_usage(private_root: Path, usage: LLMUsage, *, allow_public_output: bool = False) -> Path:
+def record_usage(
+    private_root: Path, usage: LLMUsage, *, allow_public_output: bool = False
+) -> Path:
     """Append one usage row (tokens/cost, no keys) under the private root."""
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     path = usage_log_path(private_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(), **usage.to_dict()}

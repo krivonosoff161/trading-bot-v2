@@ -12,6 +12,7 @@ bounded pass it re-runs the candidate's own signals on the new-bar region, accum
 outcome (trades / net / MFE / MAE / TP-before-SL), and matures a candidate once it has enough forward
 trades. Bounded: caps + stop-file + dedup. NOTHING is promoted; no order/money/live path.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,11 +28,16 @@ from src.research_lab.experiment import (
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.param_schemas import executable_exit_params
 from src.research_lab.stop_intent import is_stop_requested
-from src.research_lab.simulator_contract import legacy_fixture_manifest, validate_trade_contract
+from src.research_lab.simulator_contract import (
+    legacy_fixture_manifest,
+    validate_trade_contract,
+)
 
 FEES_BPS = 7.0
 SLIP_BPS = 3.0
-MATURE_TRADES = 10          # forward trades needed before a candidate is "matured" (still not edge)
+MATURE_TRADES = (
+    10  # forward trades needed before a candidate is "matured" (still not edge)
+)
 DEFAULT_MAX_CANDIDATES = 20
 STATUS_PENDING = "pending_new_bars"
 STATUS_COLLECTING = "collecting"
@@ -49,9 +55,16 @@ class ForwardWatch:
     source: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {"uc_key": self.uc_key, "symbol": self.symbol, "timeframe": self.timeframe,
-                "family": self.family, "exit": self.exit, "params": self.params, "source": self.source,
-                "paper_forward_ready": False}
+        return {
+            "uc_key": self.uc_key,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "family": self.family,
+            "exit": self.exit,
+            "params": self.params,
+            "source": self.source,
+            "paper_forward_ready": False,
+        }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -62,27 +75,48 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES) -> list[ForwardWatch]:
+def build_watchlist(
+    private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
+) -> list[ForwardWatch]:
     """Watch list from existing registries: shadow_forward survivors + memory one_shot_candidates."""
     private_root = Path(private_root)
     derived = private_root / "state" / "derived"
     out: list[ForwardWatch] = []
     seen: set[str] = set()
-    for uc, row in (_read_json(derived / "shadow_forward.json").get("by_uc_key") or {}).items():
+    for uc, row in (
+        _read_json(derived / "shadow_forward.json").get("by_uc_key") or {}
+    ).items():
         if not isinstance(row, dict) or uc in seen:
             continue
         seen.add(uc)
-        out.append(ForwardWatch(str(uc), str(row.get("symbol") or ""), str(row.get("timeframe") or ""),
-                                str(row.get("family") or ""), str(row.get("recovered_exit") or "baseline"),
-                                dict(row.get("params") or {}), "shadow_forward"))
+        out.append(
+            ForwardWatch(
+                str(uc),
+                str(row.get("symbol") or ""),
+                str(row.get("timeframe") or ""),
+                str(row.get("family") or ""),
+                str(row.get("recovered_exit") or "baseline"),
+                dict(row.get("params") or {}),
+                "shadow_forward",
+            )
+        )
     # tactical-track LEADS (thin positive + good capture) — the gems the statistical validator drops
-    for r in (_read_json(derived / "tactical_track.json").get("rows") or []):
+    for r in _read_json(derived / "tactical_track.json").get("rows") or []:
         uc = str(r.get("uc_key") or "")
         if not uc or uc in seen or r.get("tactical_status") != "TACTICAL_LEAD":
             continue
         seen.add(uc)
-        out.append(ForwardWatch(uc, str(r.get("symbol") or ""), str(r.get("timeframe") or ""),
-                                str(r.get("family") or ""), "baseline", {}, "tactical_lead"))
+        out.append(
+            ForwardWatch(
+                uc,
+                str(r.get("symbol") or ""),
+                str(r.get("timeframe") or ""),
+                str(r.get("family") or ""),
+                "baseline",
+                {},
+                "tactical_lead",
+            )
+        )
         if len(out) >= max_candidates:
             return out[:max_candidates]
     mem = _read_json(derived / "setup_outcome_memory.json").get("records") or []
@@ -91,8 +125,17 @@ def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CAN
         if not uc or uc in seen or r.get("tactical_class") != "one_shot_candidate":
             continue
         seen.add(uc)
-        out.append(ForwardWatch(uc, str(r.get("symbol") or ""), str(r.get("timeframe") or ""),
-                                str(r.get("family") or ""), "baseline", {}, "one_shot_candidate"))
+        out.append(
+            ForwardWatch(
+                uc,
+                str(r.get("symbol") or ""),
+                str(r.get("timeframe") or ""),
+                str(r.get("family") or ""),
+                "baseline",
+                {},
+                "one_shot_candidate",
+            )
+        )
         if len(out) >= max_candidates:
             break
     return out[:max_candidates]
@@ -100,12 +143,17 @@ def build_watchlist(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CAN
 
 def _boundary_snapshot(private_root: Path, symbol: str, timeframe: str):
     return load_canonical_candles(
-        private_root, symbol, timeframe,
-        purpose="true_forward_registration", coverage_policy="gap_free",
+        private_root,
+        symbol,
+        timeframe,
+        purpose="true_forward_registration",
+        coverage_policy="gap_free",
     )
 
 
-def register(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES) -> dict[str, Any]:
+def register(
+    private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
+) -> dict[str, Any]:
     """Pin the forward boundary (last bar now present) for each watch candidate. Idempotent: an already
     registered candidate keeps its original boundary so new bars are measured from first registration."""
     private_root = Path(private_root)
@@ -115,20 +163,30 @@ def register(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
             continue  # keep the original boundary
         selected = _boundary_snapshot(private_root, w.symbol, w.timeframe)
         boundary = int(selected.rows[-1].get("ts") or 0) if selected.rows else 0
-        reg[w.uc_key] = {**w.to_dict(), "boundary_ts": boundary, "last_collected_ts": boundary,
-                         "boundary_snapshot_id": selected.manifest.snapshot_id,
-                         "boundary_evidence_hash": selected.manifest.evidence_hash,
-                         "boundary_provenance_status": selected.manifest.provenance_status,
-                         "status": STATUS_PENDING, "forward_trades": 0, "forward_net_sum": 0.0,
-                         "forward_tp_before_sl": 0, "forward_mfe_sum": 0.0, "forward_mae_sum": 0.0}
+        reg[w.uc_key] = {
+            **w.to_dict(),
+            "boundary_ts": boundary,
+            "last_collected_ts": boundary,
+            "boundary_snapshot_id": selected.manifest.snapshot_id,
+            "boundary_evidence_hash": selected.manifest.evidence_hash,
+            "boundary_provenance_status": selected.manifest.provenance_status,
+            "status": STATUS_PENDING,
+            "forward_trades": 0,
+            "forward_net_sum": 0.0,
+            "forward_tp_before_sl": 0,
+            "forward_mfe_sum": 0.0,
+            "forward_mae_sum": 0.0,
+        }
         manifest = legacy_fixture_manifest()
-        reg[w.uc_key].update({
-            "simulator_manifest": manifest,
-            "simulator_model_id": manifest["simulator_model_id"],
-            "simulator_evidence_tier": manifest["evidence_tier"],
-            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
-            "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
-        })
+        reg[w.uc_key].update(
+            {
+                "simulator_manifest": manifest,
+                "simulator_model_id": manifest["simulator_model_id"],
+                "simulator_evidence_tier": manifest["evidence_tier"],
+                "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+                "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
+            }
+        )
         reg[w.uc_key]["pending_signals"] = []
     _write_registry(private_root, reg)
     return {"registered": len(reg), "boundaries_pinned": True}
@@ -148,27 +206,46 @@ def _write_registry(private_root: Path, reg: dict[str, dict[str, Any]]) -> Path:
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = _registry_path(private_root)
-    payload = {"schema": "true_forward.v1",
-               "disclaimer": "True-forward watch on GENUINELY NEW bars (boundary pinned at registration). "
-                             "Research-only, no execution path; matured != edge; nothing paper-ready.",
-               "summary": summarize_registry(reg), "by_uc_key": reg}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = {
+        "schema": "true_forward.v1",
+        "disclaimer": "True-forward watch on GENUINELY NEW bars (boundary pinned at registration). "
+        "Research-only, no execution path; matured != edge; nothing paper-ready.",
+        "summary": summarize_registry(reg),
+        "by_uc_key": reg,
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return path
 
 
-def _simulate(candles: list[dict[str, Any]], signals: list[dict[str, Any]], params: dict[str, Any],
-              exit_name: str) -> list[dict[str, Any]]:
+def _simulate(
+    candles: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    params: dict[str, Any],
+    exit_name: str,
+) -> list[dict[str, Any]]:
     if not signals:
         return []
     if exit_name and exit_name != "baseline":
         mode = dict(_exit_modes(params)).get(exit_name)
         if mode is not None:
             return simulate_exit_mode(
-                candles, signals, params, mode, fees_bps=FEES_BPS, slip_bps=SLIP_BPS,
+                candles,
+                signals,
+                params,
+                mode,
+                fees_bps=FEES_BPS,
+                slip_bps=SLIP_BPS,
                 require_complete_horizon=True,
             )
     return simulate_trades(
-        candles, signals, params, fees_bps=FEES_BPS, slippage_bps=SLIP_BPS,
+        candles,
+        signals,
+        params,
+        fees_bps=FEES_BPS,
+        slippage_bps=SLIP_BPS,
         require_complete_horizon=True,
     )
 
@@ -182,16 +259,22 @@ def _rehydrate_pending_signals(
         idx = by_ts.get(int(item.get("entry_ts") or 0))
         if idx is None:
             continue
-        signals.append({
-            "idx": idx, "side": str(item.get("side") or ""),
-            "reason": item.get("reason"), "regime": dict(item.get("regime") or {}),
-        })
+        signals.append(
+            {
+                "idx": idx,
+                "side": str(item.get("side") or ""),
+                "reason": item.get("reason"),
+                "regime": dict(item.get("regime") or {}),
+            }
+        )
     return signals
 
 
 def _pending_forward_signals(
-    candles: list[dict[str, Any]], signals: list[dict[str, Any]],
-    trades: list[dict[str, Any]], hold_bars: int,
+    candles: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    hold_bars: int,
 ) -> list[dict[str, Any]]:
     completed = {
         (int(trade.get("entry_ts") or 0), str(trade.get("side") or ""))
@@ -207,7 +290,9 @@ def _pending_forward_signals(
         if key in completed:
             continue
         pending[key] = {
-            "entry_ts": entry_ts, "side": key[1], "reason": signal.get("reason"),
+            "entry_ts": entry_ts,
+            "side": key[1],
+            "reason": signal.get("reason"),
             "regime": dict(signal.get("regime") or {}),
         }
     return [pending[key] for key in sorted(pending)]
@@ -221,8 +306,11 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     if not row:
         return {"uc_key": uc_key, "skipped": "not_registered"}
     selected = load_canonical_candles(
-        private_root, row["symbol"], row["timeframe"],
-        purpose="true_forward_collection", coverage_policy="gap_free",
+        private_root,
+        row["symbol"],
+        row["timeframe"],
+        purpose="true_forward_collection",
+        coverage_policy="gap_free",
     )
     candles = selected.rows
     if not candles:
@@ -232,57 +320,85 @@ def collect_one(private_root: Path, uc_key: str) -> dict[str, Any]:
     if not new_bars:
         return {"uc_key": uc_key, "status": STATUS_PENDING, "new_bars": 0}
     params = dict(row.get("params") or {}) or executable_exit_params(row["family"])
-    new_signals = [s for s in generate_signals(candles, row["family"], params)
-                   if int(candles[int(s["idx"])].get("ts") or 0) > boundary]
+    new_signals = [
+        s
+        for s in generate_signals(candles, row["family"], params)
+        if int(candles[int(s["idx"])].get("ts") or 0) > boundary
+    ]
     prior_pending = _rehydrate_pending_signals(
-        candles, list(row.get("pending_signals") or []),
+        candles,
+        list(row.get("pending_signals") or []),
     )
     by_key: dict[tuple[int, str], dict[str, Any]] = {}
     for signal in [*prior_pending, *new_signals]:
-        key = (int(candles[int(signal["idx"])].get("ts") or 0), str(signal.get("side") or ""))
+        key = (
+            int(candles[int(signal["idx"])].get("ts") or 0),
+            str(signal.get("side") or ""),
+        )
         by_key[key] = signal
     signals = [by_key[key] for key in sorted(by_key)]
     trades = _simulate(candles, signals, params, str(row.get("exit") or "baseline"))
     exit_name = str(row.get("exit") or "baseline")
     mode = dict(_exit_modes(params)).get(exit_name) if exit_name != "baseline" else None
-    hold_bars = int((mode or {}).get("hold_bars", params.get("hold_bars", 5)))
-    row["pending_signals"] = _pending_forward_signals(candles, signals, trades, hold_bars)
+    raw_hold_bars = (mode or {}).get("hold_bars", params.get("hold_bars", 5))
+    hold_bars = int(raw_hold_bars if raw_hold_bars is not None else 5)
+    row["pending_signals"] = _pending_forward_signals(
+        candles, signals, trades, hold_bars
+    )
     _accumulate(row, trades, len(new_bars), int(candles[-1].get("ts") or 0))
     row["last_snapshot_id"] = selected.manifest.snapshot_id
     row["last_evidence_hash"] = selected.manifest.evidence_hash
     row["last_provenance_status"] = selected.manifest.provenance_status
     reg[uc_key] = row
     _write_registry(private_root, reg)
-    return {"uc_key": uc_key, "status": row["status"], "new_bars": len(new_bars),
-            "forward_trades": row["forward_trades"],
-            "forward_open": len(row["pending_signals"]),
-            "data_snapshot_id": selected.manifest.snapshot_id,
-            "data_provenance_status": selected.manifest.provenance_status}
+    return {
+        "uc_key": uc_key,
+        "status": row["status"],
+        "new_bars": len(new_bars),
+        "forward_trades": row["forward_trades"],
+        "forward_open": len(row["pending_signals"]),
+        "data_snapshot_id": selected.manifest.snapshot_id,
+        "data_provenance_status": selected.manifest.provenance_status,
+    }
 
 
-def _accumulate(row: dict[str, Any], trades: list[dict[str, Any]], new_bars: int, last_ts: int) -> None:
+def _accumulate(
+    row: dict[str, Any], trades: list[dict[str, Any]], new_bars: int, last_ts: int
+) -> None:
     manifest = legacy_fixture_manifest()
     for t in trades:
         validate_trade_contract(t, manifest)
         row["forward_trades"] += 1
-        row["forward_net_sum"] = round(row["forward_net_sum"] + float(t.get("net_pct") or 0.0), 4)
-        row["forward_mfe_sum"] = round(row["forward_mfe_sum"] + float(t.get("mfe_pct") or 0.0), 4)
-        row["forward_mae_sum"] = round(row["forward_mae_sum"] + float(t.get("mae_pct") or 0.0), 4)
+        row["forward_net_sum"] = round(
+            row["forward_net_sum"] + float(t.get("net_pct") or 0.0), 4
+        )
+        row["forward_mfe_sum"] = round(
+            row["forward_mfe_sum"] + float(t.get("mfe_pct") or 0.0), 4
+        )
+        row["forward_mae_sum"] = round(
+            row["forward_mae_sum"] + float(t.get("mae_pct") or 0.0), 4
+        )
         if t.get("tp_before_sl") is True:
             row["forward_tp_before_sl"] += 1
     row["last_collected_ts"] = last_ts
-    row["status"] = STATUS_MATURED if row["forward_trades"] >= MATURE_TRADES else STATUS_COLLECTING
+    row["status"] = (
+        STATUS_MATURED if row["forward_trades"] >= MATURE_TRADES else STATUS_COLLECTING
+    )
     row["paper_forward_ready"] = False
-    row.update({
-        "simulator_manifest": manifest,
-        "simulator_model_id": manifest["simulator_model_id"],
-        "simulator_evidence_tier": manifest["evidence_tier"],
-        "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
-        "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
-    })
+    row.update(
+        {
+            "simulator_manifest": manifest,
+            "simulator_model_id": manifest["simulator_model_id"],
+            "simulator_evidence_tier": manifest["evidence_tier"],
+            "unsupported_simulator_dimensions": manifest["unsupported_dimensions"],
+            "aggregate_basis": "independent_what_if_trade_sum_not_account_equity",
+        }
+    )
 
 
-def collect_once(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES) -> dict[str, Any]:
+def collect_once(
+    private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDIDATES
+) -> dict[str, Any]:
     """One bounded pass over the registry (stop-file aware). Returns per-status counts."""
     private_root = Path(private_root)
     if is_stop_requested(private_root):
@@ -293,7 +409,10 @@ def collect_once(private_root: Path, *, max_candidates: int = DEFAULT_MAX_CANDID
         if is_stop_requested(private_root):
             break
         results.append(collect_one(private_root, uc))
-    return {"passed": len(results), "summary": summarize_registry(_load_registry(private_root))}
+    return {
+        "passed": len(results),
+        "summary": summarize_registry(_load_registry(private_root)),
+    }
 
 
 def summarize_registry(reg: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -301,9 +420,15 @@ def summarize_registry(reg: dict[str, dict[str, Any]]) -> dict[str, Any]:
     for row in reg.values():
         by_status[str(row.get("status"))] = by_status.get(str(row.get("status")), 0) + 1
     matured = [r for r in reg.values() if r.get("status") == STATUS_MATURED]
-    return {"watched": len(reg), "by_status": dict(sorted(by_status.items(), key=lambda kv: -kv[1])),
-            "matured": len(matured), "all_research_only": all(not r.get("paper_forward_ready") for r in reg.values()),
-            "note": "true-forward on new bars; pending until data-prepare fetches newer candles; matured != edge"}
+    return {
+        "watched": len(reg),
+        "by_status": dict(sorted(by_status.items(), key=lambda kv: -kv[1])),
+        "matured": len(matured),
+        "all_research_only": all(
+            not r.get("paper_forward_ready") for r in reg.values()
+        ),
+        "note": "true-forward on new bars; pending until data-prepare fetches newer candles; matured != edge",
+    }
 
 
 def summarize(private_root: Path) -> dict[str, Any]:
@@ -314,23 +439,52 @@ def main() -> None:
     import argparse
     import os
     import sys
+
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     from src.research_lab.paths import DEFAULT_PRIVATE_ROOT
-    ap = argparse.ArgumentParser(description="True-forward collector on new bars (research-only).")
-    ap.add_argument("--private-root", default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)))
-    ap.add_argument("--register", action="store_true", help="pin forward boundaries for the watch list")
-    ap.add_argument("--collect", action="store_true", help="one bounded collection pass over new bars")
+
+    ap = argparse.ArgumentParser(
+        description="True-forward collector on new bars (research-only)."
+    )
+    ap.add_argument(
+        "--private-root",
+        default=os.getenv("TRADING_BOT_RESEARCH_ROOT", str(DEFAULT_PRIVATE_ROOT)),
+    )
+    ap.add_argument(
+        "--register",
+        action="store_true",
+        help="pin forward boundaries for the watch list",
+    )
+    ap.add_argument(
+        "--collect",
+        action="store_true",
+        help="one bounded collection pass over new bars",
+    )
     ap.add_argument("--max-candidates", type=int, default=DEFAULT_MAX_CANDIDATES)
     args = ap.parse_args()
     if args.register:
-        print(json.dumps(register(Path(args.private_root), max_candidates=args.max_candidates), ensure_ascii=False))
+        print(
+            json.dumps(
+                register(Path(args.private_root), max_candidates=args.max_candidates),
+                ensure_ascii=False,
+            )
+        )
     if args.collect:
-        print(json.dumps(collect_once(Path(args.private_root), max_candidates=args.max_candidates),
-                         ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                collect_once(
+                    Path(args.private_root), max_candidates=args.max_candidates
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     if not args.register and not args.collect:
-        print(json.dumps(summarize(Path(args.private_root)), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(summarize(Path(args.private_root)), ensure_ascii=False, indent=2)
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ the current completed request/report/verdict/card chain.  Readers independently 
 the manifest identity, current code bytes, every linked artifact, and cross-artifact
 status before accepting any candidate.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -92,13 +93,17 @@ def _task_inputs(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for task in tasks:
         raw_payload = str(task.get("payload_json") or "{}")
-        rows.append({
-            "task_id": int(task["task_id"]),
-            "task_type": str(task.get("task_type") or ""),
-            "task_key": str(task.get("task_key") or ""),
-            "candidate_id": str(task.get("candidate_id") or ""),
-            "payload_sha256": hashlib.sha256(raw_payload.encode("utf-8")).hexdigest(),
-        })
+        rows.append(
+            {
+                "task_id": int(task["task_id"]),
+                "task_type": str(task.get("task_type") or ""),
+                "task_key": str(task.get("task_key") or ""),
+                "candidate_id": str(task.get("candidate_id") or ""),
+                "payload_sha256": hashlib.sha256(
+                    raw_payload.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
     return sorted(rows, key=lambda row: row["task_id"])
 
 
@@ -110,15 +115,24 @@ def _load_dict(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _current_candidate_path(private_root: Path, subdir: str, candidate_id: str) -> Path | None:
-    path = Path(private_root) / "hard_validation" / subdir / f"{_artifact_stem(candidate_id)}.json"
+def _current_candidate_path(
+    private_root: Path, subdir: str, candidate_id: str
+) -> Path | None:
+    path = (
+        Path(private_root)
+        / "hard_validation"
+        / subdir
+        / f"{_artifact_stem(candidate_id)}.json"
+    )
     payload = _load_dict(path)
     if payload is None or str(payload.get("candidate_id") or "") != candidate_id:
         return None
     return path
 
 
-def _legacy_candidate_path(private_root: Path, subdir: str, candidate_id: str) -> Path | None:
+def _legacy_candidate_path(
+    private_root: Path, subdir: str, candidate_id: str
+) -> Path | None:
     """Preserve explicit pre-manifest filename compatibility, then content lookup."""
     directory = (Path(private_root) / "hard_validation" / subdir).resolve()
     try:
@@ -135,7 +149,10 @@ def _legacy_candidate_path(private_root: Path, subdir: str, candidate_id: str) -
         return None
     for path in sorted(directory.glob("*.json")):
         payload = _load_dict(path)
-        if payload is not None and str(payload.get("candidate_id") or "") == candidate_id:
+        if (
+            payload is not None
+            and str(payload.get("candidate_id") or "") == candidate_id
+        ):
             return path
     return None
 
@@ -158,7 +175,9 @@ def _identity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _generation_id(identity: dict[str, Any]) -> str:
-    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return "hvg_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -190,15 +209,18 @@ def write_pending_generation(
         "active": {},
         "incomplete_ids": [],
     }
-    return _publish(Path(private_root), {
-        "schema": SCHEMA,
-        "generation_id": _generation_id(identity),
-        "producer_time": producer_time,
-        "producer_complete": False,
-        **identity,
-        "paper_only": True,
-        "execution_allowed": False,
-    })
+    return _publish(
+        Path(private_root),
+        {
+            "schema": SCHEMA,
+            "generation_id": _generation_id(identity),
+            "producer_time": producer_time,
+            "producer_complete": False,
+            **identity,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
 
 
 def write_current_generation(
@@ -226,7 +248,12 @@ def write_current_generation(
         report_path = _current_candidate_path(private_root, "reports", candidate_id)
         verdict_path = _current_candidate_path(private_root, "verdicts", candidate_id)
         card_path = _current_setup_path(private_root, candidate_id)
-        if None in (request_path, report_path, verdict_path, card_path):
+        if (
+            request_path is None
+            or report_path is None
+            or verdict_path is None
+            or card_path is None
+        ):
             incomplete.append(candidate_id)
             continue
         verdict = _load_dict(verdict_path)
@@ -250,15 +277,18 @@ def write_current_generation(
         "active": active,
         "incomplete_ids": sorted(incomplete),
     }
-    return _publish(private_root, {
-        "schema": SCHEMA,
-        "generation_id": _generation_id(identity),
-        "producer_time": producer_time,
-        "producer_complete": True,
-        **identity,
-        "paper_only": True,
-        "execution_allowed": False,
-    })
+    return _publish(
+        private_root,
+        {
+            "schema": SCHEMA,
+            "generation_id": _generation_id(identity),
+            "producer_time": producer_time,
+            "producer_complete": True,
+            **identity,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
 
 
 def load_current_generation(private_root: Path) -> dict[str, Any] | None:
@@ -324,9 +354,16 @@ def _active_payloads(
         return None
     active = manifest.get("active")
     record = active.get(candidate_id) if isinstance(active, dict) else None
-    if not isinstance(record, dict) or str(record.get("candidate_id") or "") != candidate_id:
+    if (
+        not isinstance(record, dict)
+        or str(record.get("candidate_id") or "") != candidate_id
+    ):
         return None
-    requests = manifest.get("requests") if isinstance(manifest.get("requests"), dict) else {}
+    requests = (
+        raw_requests
+        if isinstance(raw_requests := manifest.get("requests"), dict)
+        else {}
+    )
     if requests.get(candidate_id) != record.get("request"):
         return None
     payloads: dict[str, tuple[Path, dict[str, Any]]] = {}
@@ -337,7 +374,11 @@ def _active_payloads(
         payloads[kind] = artifact
     hard_status = str(record.get("hard_status") or "")
     report_verdict = payloads["report"][1].get("verdict")
-    report_status = str(report_verdict.get("hard_status") or "") if isinstance(report_verdict, dict) else ""
+    report_status = (
+        str(report_verdict.get("hard_status") or "")
+        if isinstance(report_verdict, dict)
+        else ""
+    )
     if (
         not isinstance(report_verdict, dict)
         or str(report_verdict.get("candidate_id") or "") != candidate_id
@@ -380,7 +421,8 @@ def current_candidate_ids(private_root: Path) -> set[str] | None:
     return {
         str(candidate_id)
         for candidate_id in manifest.get("active", {})
-        if str(candidate_id) and _active_payloads(private_root, manifest, str(candidate_id)) is not None
+        if str(candidate_id)
+        and _active_payloads(private_root, manifest, str(candidate_id)) is not None
     }
 
 

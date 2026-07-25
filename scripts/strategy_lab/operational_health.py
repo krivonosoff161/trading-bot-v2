@@ -34,6 +34,7 @@ from scripts.subscriptions import list_delivery_users  # noqa: E402
 
 PAPER_TRAINING_STALE_GRACE_SECONDS = 900.0
 ACTIVE_FARM_LOOP_STALE_GRACE_SECONDS = 3600.0
+_WINDLL: Any = getattr(ctypes, "windll", None)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -41,14 +42,16 @@ def _pid_is_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         process_query_limited_information = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
+        if _WINDLL is None:  # pragma: no cover - guarded by the Windows call path
+            return False
+        handle = _WINDLL.kernel32.OpenProcess(
             process_query_limited_information,
             False,
             int(pid),
         )
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
+        _WINDLL.kernel32.CloseHandle(handle)
         return True
     try:
         os.kill(pid, 0)
@@ -110,7 +113,9 @@ def _farm_loop_runtime_status(private_root: Path) -> dict[str, Any]:
     status["cycle_started_at"] = float(data.get("cycle_started_at") or 0.0)
     status["paper_only"] = bool(data.get("paper_only", True))
     status["execution_allowed"] = bool(data.get("execution_allowed", False))
-    status["details"] = data.get("details") if isinstance(data.get("details"), dict) else {}
+    status["details"] = (
+        data.get("details") if isinstance(data.get("details"), dict) else {}
+    )
     if isinstance(updated_at, (int, float)):
         status["updated_age_seconds"] = round(float(time.time() - updated_at), 3)
     return status
@@ -132,9 +137,7 @@ def _compute_pipeline_status(
 ) -> dict[str, Any]:
     state = Path(private_root) / "state"
     return assess_compute_pipeline(
-        priority_status=_read_status_object(
-            state / "farm_priority_worker_status.json"
-        ),
+        priority_status=_read_status_object(state / "farm_priority_worker_status.json"),
         worker_status=_read_status_object(state / "worker_status.json"),
         farm_running=farm_running,
         farm_started_at=farm_started_at,
@@ -218,7 +221,12 @@ def _paper_subscription_delivery_status() -> dict[str, Any]:
 
 
 def _snapshot_metrics(path: Path, fields: tuple[str, ...]) -> dict[str, Any]:
-    metrics: dict[str, Any] = {"path": str(path), "exists": path.exists(), "items": 0, "read_error": ""}
+    metrics: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "items": 0,
+        "read_error": "",
+    }
     for field in fields:
         metrics[field] = 0
     if not path.exists():
@@ -287,7 +295,9 @@ def _snapshot_status_breakdown(path: Path, field: str = "status") -> dict[str, A
     return metrics
 
 
-def _bump_field_count(target: dict[str, dict[str, int]], field: str, value: Any) -> None:
+def _bump_field_count(
+    target: dict[str, dict[str, int]], field: str, value: Any
+) -> None:
     key = str(value or "missing")
     bucket = target.setdefault(field, {})
     bucket[key] = bucket.get(key, 0) + 1
@@ -364,7 +374,9 @@ def _snapshot_field_breakdown(path: Path, fields: tuple[str, ...]) -> dict[str, 
     return metrics
 
 
-def _jsonl_schema_metrics(path: Path, *, schema: str | tuple[str, ...] | None = None) -> dict[str, Any]:
+def _jsonl_schema_metrics(
+    path: Path, *, schema: str | tuple[str, ...] | None = None
+) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "path": str(path),
         "exists": path.exists(),
@@ -462,10 +474,16 @@ def _paper_terminal_source_metrics(source: Path) -> dict[str, Any]:
         sig = PaperActionSignal.from_dict(row)
         if sig.status in TERMINAL_STATUSES:
             terminal.append(sig)
-    payload = [sig.to_dict() for sig in sorted(terminal, key=lambda item: item.signal_id)]
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = [
+        sig.to_dict() for sig in sorted(terminal, key=lambda item: item.signal_id)
+    ]
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     metrics["terminal_rows"] = len(payload)
-    metrics["source_terminal_hash"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    metrics["source_terminal_hash"] = hashlib.sha256(
+        encoded.encode("utf-8")
+    ).hexdigest()
     return metrics
 
 
@@ -503,7 +521,9 @@ def _paper_training_freshness(
     snapshot_hash = str(data.get("source_terminal_hash") or "")
     snapshot_rows = data.get("source_terminal_rows", 0)
     metrics["snapshot_source_terminal_hash"] = snapshot_hash
-    metrics["snapshot_source_terminal_rows"] = snapshot_rows if isinstance(snapshot_rows, int) else 0
+    metrics["snapshot_source_terminal_rows"] = (
+        snapshot_rows if isinstance(snapshot_rows, int) else 0
+    )
     if snapshot_hash:
         metrics["freshness_mode"] = "terminal_hash"
         mismatch = snapshot_hash != source_metrics["source_terminal_hash"]
@@ -516,10 +536,7 @@ def _paper_training_freshness(
         metrics["age_delta_seconds"] = round(delta, 3)
         metrics["in_motion"] = bool(
             mismatch
-            and (
-                abs(delta) <= PAPER_TRAINING_STALE_GRACE_SECONDS
-                or active_loop_fresh
-            )
+            and (abs(delta) <= PAPER_TRAINING_STALE_GRACE_SECONDS or active_loop_fresh)
         )
         metrics["stale_vs_source"] = mismatch and not metrics["in_motion"]
     return metrics
@@ -610,7 +627,12 @@ def _text_quality_metrics(paths: tuple[Path, ...]) -> dict[str, Any]:
         ),
     }
     for path in paths:
-        item: dict[str, Any] = {"path": str(path), "exists": path.exists(), "marker_hits": 0, "read_error": ""}
+        item: dict[str, Any] = {
+            "path": str(path),
+            "exists": path.exists(),
+            "marker_hits": 0,
+            "read_error": "",
+        }
         if not path.exists():
             metrics["items"].append(item)
             continue
@@ -665,9 +687,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             "queue_rows": len(projection_items),
             "trades": len(projection_items),
             "invalid": 0 if generation.get("current") else len(projection_items),
-            "read_error": "" if generation.get("current") else str(
-                generation.get("generation_status") or "unavailable"
-            ),
+            "read_error": ""
+            if generation.get("current")
+            else str(generation.get("generation_status") or "unavailable"),
         }
     bridge = report["main_bridge"]
     chain = report["paper_chain"]
@@ -760,29 +782,25 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and paper_training["read_error"] == ""
         and not paper_training_freshness["stale_vs_source"]
     )
-    product_signal_events_ready = (
-        not journals["product_signal_events"]["exists"]
-        or (
-            product_signal_events["schema_rows"] == product_signal_events["rows"]
-            and product_signal_events["invalid_json"] == 0
-            and product_signal_events["paper_only_false"] == 0
-            and product_signal_events["execution_allowed_true"] == 0
-            and product_signal_events["read_error"] == ""
-        )
+    product_signal_events_ready = not journals["product_signal_events"]["exists"] or (
+        product_signal_events["schema_rows"] == product_signal_events["rows"]
+        and product_signal_events["invalid_json"] == 0
+        and product_signal_events["paper_only_false"] == 0
+        and product_signal_events["execution_allowed_true"] == 0
+        and product_signal_events["read_error"] == ""
     )
-    product_signal_training_ready = (
-        not journals["product_signal_events"]["exists"]
-        or (
-            journals["product_signal_training"]["exists"]
-            and product_signal_training["schema_rows"] == product_signal_training["rows"]
-            and product_signal_training["invalid_json"] == 0
-            and product_signal_training["paper_only_false"] == 0
-            and product_signal_training["execution_allowed_true"] == 0
-            and product_signal_training["read_error"] == ""
-            and not product_training_freshness["stale_vs_source"]
-        )
+    product_signal_training_ready = not journals["product_signal_events"]["exists"] or (
+        journals["product_signal_training"]["exists"]
+        and product_signal_training["schema_rows"] == product_signal_training["rows"]
+        and product_signal_training["invalid_json"] == 0
+        and product_signal_training["paper_only_false"] == 0
+        and product_signal_training["execution_allowed_true"] == 0
+        and product_signal_training["read_error"] == ""
+        and not product_training_freshness["stale_vs_source"]
     )
-    excel_journal_current = journals["excel"]["exists"] and not excel_journal_freshness["stale_vs_source"]
+    excel_journal_current = (
+        journals["excel"]["exists"] and not excel_journal_freshness["stale_vs_source"]
+    )
     visible_cycle_blocked = (
         safety["auto_trade"]
         or not canonical_surface_ready
@@ -791,7 +809,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         or not telegram_ownership_ready
         or (lab_llm["enabled"] and not lab_llm["configured"])
     )
-    last_cycle = ((report.get("farm_loop_runtime_status") or {}).get("details") or {}).get("last_summary") or {}
+    last_cycle = (
+        (report.get("farm_loop_runtime_status") or {}).get("details") or {}
+    ).get("last_summary") or {}
     last_pfr_counts = last_cycle.get("pfr_counts") or {}
     last_main_bridge = last_cycle.get("main_paper_bridge") or {}
     pfr_idle_no_validated_trigger = (
@@ -809,18 +829,15 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         and training_export_ready
         and paper_training_ready
     )
-    visible_cycle_ready = (
-        not visible_cycle_blocked
-        and (
-            (
-                pfr["exists"]
-                and paper_chain_ready
-                and runtime_observation_ready
-                and training_export_ready
-                and paper_training_ready
-            )
-            or visible_cycle_idle_ready
+    visible_cycle_ready = not visible_cycle_blocked and (
+        (
+            pfr["exists"]
+            and paper_chain_ready
+            and runtime_observation_ready
+            and training_export_ready
+            and paper_training_ready
         )
+        or visible_cycle_idle_ready
     )
     visible_cycle_needs_journal_rebuild = (
         not visible_cycle_blocked
@@ -836,15 +853,20 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "auto_trade_off": _gate(
             "pass" if not safety["auto_trade"] else "blocked",
             "AUTO_TRADE is off for paper/research mode."
-            if not safety["auto_trade"] else "AUTO_TRADE is enabled; do not run research wrappers.",
-            action="Unset AUTO_TRADE before paper/research operation." if safety["auto_trade"] else "",
+            if not safety["auto_trade"]
+            else "AUTO_TRADE is enabled; do not run research wrappers.",
+            action="Unset AUTO_TRADE before paper/research operation."
+            if safety["auto_trade"]
+            else "",
         ),
         "canonical_launch_surface": _gate(
             "pass" if canonical_surface_ready else "blocked",
             "Canonical Strategy Lab control-room launch/loop/stop scripts are present."
-            if canonical_surface_ready else "Canonical Strategy Lab launch scripts are missing.",
+            if canonical_surface_ready
+            else "Canonical Strategy Lab launch scripts are missing.",
             action="Restore bat/strategy_lab_control_room.bat and farm full-cycle scripts."
-            if not canonical_surface_ready else "",
+            if not canonical_surface_ready
+            else "",
         ),
         "farm_loop_process_current": _gate(
             "pass" if farm_loop_process["current"] else "warn",
@@ -857,7 +879,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             ),
             action=(
                 "Start bat/strategy_lab_farm_full_cycle_loop.bat for a live paper/research run."
-                if not farm_loop_process["current"] else ""
+                if not farm_loop_process["current"]
+                else ""
             ),
         ),
         "compute_pipeline_current": _gate(
@@ -884,71 +907,94 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "legacy_live_runtime_isolated": _gate(
             "pass" if legacy_main_isolated else "blocked",
             "Old live/order-capable main.py is present but isolated from the farm/PFR paper bridge."
-            if legacy_main_isolated else "Old main runtime ownership is ambiguous.",
+            if legacy_main_isolated
+            else "Old main runtime ownership is ambiguous.",
             action="Do not wire farm/PFR into main.py; use paper runtime observer."
-            if not legacy_main_isolated else "",
+            if not legacy_main_isolated
+            else "",
         ),
         "legacy_loop_guards": _gate(
             "pass" if legacy_loops_guarded else "blocked",
             "Archived farm loops require explicit legacy acknowledgement; canonical loop is farm_loop."
-            if legacy_loops_guarded else "Archived farm loop guard is missing or ambiguous.",
+            if legacy_loops_guarded
+            else "Archived farm loop guard is missing or ambiguous.",
             action="Restore ARCHIVE-LEGACY abort guards and use scripts.strategy_lab.farm_loop."
-            if not legacy_loops_guarded else "",
+            if not legacy_loops_guarded
+            else "",
         ),
         "pfr_source_available": _gate(
             "pass" if pfr["exists"] else "warn",
             "PFR database is available for paper-signal seeding."
-            if pfr["exists"] else "PFR database is missing; farm can still run, but PFR seeding is inactive.",
-            action="Run the farm/validator first or pass --pfr-db-path." if not pfr["exists"] else "",
+            if pfr["exists"]
+            else "PFR database is missing; farm can still run, but PFR seeding is inactive.",
+            action="Run the farm/validator first or pass --pfr-db-path."
+            if not pfr["exists"]
+            else "",
         ),
         "paper_signal_store_available": _gate(
             "pass" if journals["paper_signals"]["exists"] else "warn",
             "Paper-signal JSONL store exists."
-            if journals["paper_signals"]["exists"] else "No paper-signal store yet; first cycle will create it.",
-            action="Run farm_loop with --run-paper-signals." if not journals["paper_signals"]["exists"] else "",
+            if journals["paper_signals"]["exists"]
+            else "No paper-signal store yet; first cycle will create it.",
+            action="Run farm_loop with --run-paper-signals."
+            if not journals["paper_signals"]["exists"]
+            else "",
         ),
         "main_instruction_view_available": _gate(
             "pass" if bridge["instruction_view_exists"] else "warn",
             "Main-readable paper instruction view exists."
-            if bridge["instruction_view_exists"] else "Main-readable paper instruction view is not built yet.",
-            action="Run python -m scripts.strategy_lab.main_paper_bridge." if not bridge["instruction_view_exists"] else "",
+            if bridge["instruction_view_exists"]
+            else "Main-readable paper instruction view is not built yet.",
+            action="Run python -m scripts.strategy_lab.main_paper_bridge."
+            if not bridge["instruction_view_exists"]
+            else "",
         ),
         "main_paper_consumer_available": _gate(
             "pass" if bridge["consumer_view_exists"] else "warn",
             "Paper-only main consumer audit view exists."
-            if bridge["consumer_view_exists"] else "Paper-only main consumer audit view is not built yet.",
+            if bridge["consumer_view_exists"]
+            else "Paper-only main consumer audit view is not built yet.",
             action="Run python -m scripts.strategy_lab.main_paper_consumer."
-            if not bridge["consumer_view_exists"] else "",
+            if not bridge["consumer_view_exists"]
+            else "",
         ),
         "main_paper_runtime_queue_available": _gate(
             "pass" if bridge["runtime_queue_exists"] else "warn",
             "Paper-only main runtime queue exists."
-            if bridge["runtime_queue_exists"] else "Paper-only main runtime queue is not built yet.",
+            if bridge["runtime_queue_exists"]
+            else "Paper-only main runtime queue is not built yet.",
             action="Run python -m scripts.strategy_lab.main_paper_runtime_adapter."
-            if not bridge["runtime_queue_exists"] else "",
+            if not bridge["runtime_queue_exists"]
+            else "",
         ),
         "main_paper_runtime_observation_available": _gate(
             "pass" if bridge["runtime_observation_exists"] else "warn",
             "Paper-only main runtime observer has produced a status artifact."
-            if bridge["runtime_observation_exists"] else "Paper-only main runtime observer has not run yet.",
+            if bridge["runtime_observation_exists"]
+            else "Paper-only main runtime observer has not run yet.",
             action="Run python -m scripts.strategy_lab.main_paper_runtime --apply."
-            if not bridge["runtime_observation_exists"] else "",
+            if not bridge["runtime_observation_exists"]
+            else "",
         ),
         "paper_chain_counts": _gate(
             "pass" if paper_chain_ready else "warn",
             "Paper chain has non-empty, valid instruction/consumer/runtime/preview counts."
-            if paper_chain_ready else "Paper chain is incomplete, empty, or has rejected/invalid rows.",
+            if paper_chain_ready
+            else "Paper chain is incomplete, empty, or has rejected/invalid rows.",
             action=(
                 "Run a bounded farm_loop --run-paper-signals smoke, then rebuild bridge/consumer/runtime/preview."
-                if not paper_chain_ready else ""
+                if not paper_chain_ready
+                else ""
             ),
         ),
         "paper_runtime_observed": _gate(
             "pass" if runtime_observation_ready else "warn",
             "Paper runtime observer read the queue without invalid/provider errors."
-            if runtime_observation_ready else "Paper runtime observer has no clean observation yet.",
+            if runtime_observation_ready
+            else "Paper runtime observer has no clean observation yet.",
             action="Run python -m scripts.strategy_lab.main_paper_runtime --apply after queue rebuild."
-            if not runtime_observation_ready else "",
+            if not runtime_observation_ready
+            else "",
         ),
         "main_paper_trade_ledger_available": _gate(
             "pass" if chain["trade_ledger"]["trades"] > 0 else "warn",
@@ -956,7 +1002,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if chain["trade_ledger"]["trades"] > 0
             else "Main-paper trade ledger is empty or not built; this is OK when no validator/PFR setup is active.",
             action="Run a bounded farm_loop --run-paper-signals cycle; ledger builds after runtime observation."
-            if chain["trade_ledger"]["trades"] <= 0 else "",
+            if chain["trade_ledger"]["trades"] <= 0
+            else "",
         ),
         "paper_main_runtime_current": _gate(
             "pass" if runtime_observation_ready else "warn",
@@ -971,7 +1018,9 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             else "",
         ),
         "ready_for_visible_paper_research_loop": _gate(
-            "pass" if visible_cycle_ready else ("blocked" if visible_cycle_blocked else "warn"),
+            "pass"
+            if visible_cycle_ready
+            else ("blocked" if visible_cycle_blocked else "warn"),
             (
                 "Visible farm/PFR/paper/main-paper/journal cycle is assembled; "
                 "current validator/PFR catalog has no live entry trigger."
@@ -1007,16 +1056,20 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "scanner_telegram_surface": _gate(
             "pass" if telegram["scanner"]["configured"] else "warn",
             "Scanner Telegram channel is configured."
-            if telegram["scanner"]["configured"] else "Scanner Telegram channel is not configured.",
+            if telegram["scanner"]["configured"]
+            else "Scanner Telegram channel is not configured.",
             action="Set SCANNER_CHAT_ID only when operator notifications are desired."
-            if not telegram["scanner"]["configured"] else "",
+            if not telegram["scanner"]["configured"]
+            else "",
         ),
         "paper_telegram_surface": _gate(
             "pass" if telegram["paper"]["configured"] else "warn",
             "Paper Telegram subscriber delivery is configured."
-            if telegram["paper"]["configured"] else "Paper Telegram subscriber delivery is not configured; paper loop still works.",
+            if telegram["paper"]["configured"]
+            else "Paper Telegram subscriber delivery is not configured; paper loop still works.",
             action="Configure TELEGRAM_BOT_TOKEN and active subscriptions after paper-alert text/chart review."
-            if not telegram["paper"]["configured"] else "",
+            if not telegram["paper"]["configured"]
+            else "",
         ),
         "paper_telegram_preview_available": _gate(
             "pass" if journals["paper_telegram_preview_snapshot"]["exists"] else "warn",
@@ -1024,7 +1077,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if journals["paper_telegram_preview_snapshot"]["exists"]
             else "Paper Telegram preview artifact is not built yet.",
             action="Run python -m scripts.strategy_lab.paper_telegram_preview."
-            if not journals["paper_telegram_preview_snapshot"]["exists"] else "",
+            if not journals["paper_telegram_preview_snapshot"]["exists"]
+            else "",
         ),
         "paper_telegram_sender_available": _gate(
             (
@@ -1053,12 +1107,16 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
         "telegram_delivery_ownership": _gate(
             "pass" if telegram_ownership_ready else "blocked",
             "Telegram surfaces are separated from farm execution; paper alerts are preview-only by default."
-            if telegram_ownership_ready else "Telegram ownership is ambiguous.",
+            if telegram_ownership_ready
+            else "Telegram ownership is ambiguous.",
             action="Keep Telegram as a surface; do not import it into farm compute or paper execution."
-            if not telegram_ownership_ready else "",
+            if not telegram_ownership_ready
+            else "",
         ),
         "telegram_analyzer_execution_boundary": _gate(
-            "pass" if telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"] else "blocked",
+            "pass"
+            if telegram_flow["telegram_analyzer_requires_auto_execute_opt_in"]
+            else "blocked",
             (
                 "Legacy Telegram analyzer is explicitly not the farm/PFR launcher; old "
                 "execution-adjacent paths require explicit auto-execute opt-in and are isolated "
@@ -1102,14 +1160,17 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 "farm/PFR is unaffected, but product delivery is not ready."
             ),
             action="Clean or migrate legacy product text before using old Telegram/analyze_chart surfaces."
-            if not legacy_text["clean"] else "",
+            if not legacy_text["clean"]
+            else "",
         ),
         "scanner_llm_provider": _gate(
             "pass" if _scanner_llm_ready(scanner_llm) else "warn",
             "Scanner LLM provider has a configured key."
-            if _scanner_llm_ready(scanner_llm) else "Scanner LLM provider has no matching key configured.",
+            if _scanner_llm_ready(scanner_llm)
+            else "Scanner LLM provider has no matching key configured.",
             action="Set the key for the selected LLM_PROVIDER if scanner analysis is needed."
-            if not _scanner_llm_ready(scanner_llm) else "",
+            if not _scanner_llm_ready(scanner_llm)
+            else "",
         ),
         "strategy_lab_llm_policy": _gate(
             "pass" if not lab_llm["enabled"] or lab_llm["configured"] else "blocked",
@@ -1117,7 +1178,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if not lab_llm["enabled"] or lab_llm["configured"]
             else "Strategy Lab LLM is enabled but provider is not configured.",
             action="Configure STRATEGY_LAB_LLM_* or turn STRATEGY_LAB_LLM_ENABLED off."
-            if lab_llm["enabled"] and not lab_llm["configured"] else "",
+            if lab_llm["enabled"] and not lab_llm["configured"]
+            else "",
         ),
         "telegram_analyzer_llm_provider_review": _gate(
             "pass" if telegram_analyzer_provider_ready else "warn",
@@ -1144,7 +1206,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
                 "Set ALIBABA_API_KEY/ALIBABA_VISION_MODEL or a valid Yandex vision URI "
                 "before using VIP screenshots."
             )
-            if not llm_boundaries["premium_vision_configured"] else "",
+            if not llm_boundaries["premium_vision_configured"]
+            else "",
         ),
         "product_analyzer_prompt_integrity": _gate(
             "pass"
@@ -1163,22 +1226,22 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             else "",
         ),
         "journal_rebuild_available": _gate(
-            (
-                "pass"
-                if excel_journal_current
-                else "warn"
-            ),
+            ("pass" if excel_journal_current else "warn"),
             "Excel journal exists and is current against the paper-signal training export."
             if excel_journal_current
             else "Excel journal is missing or older than the paper-signal training export.",
-            action="Run python -X utf8 scripts/build_journal.py." if not excel_journal_current else "",
+            action="Run python -X utf8 scripts/build_journal.py."
+            if not excel_journal_current
+            else "",
         ),
         "training_data_exports": _gate(
             "pass" if training_export_ready else "warn",
             "At least one training-data export exists."
-            if training_export_ready else "No paper/impulse training export is present yet.",
+            if training_export_ready
+            else "No paper/impulse training export is present yet.",
             action="Modernize journal/training export after paper outcomes stabilize."
-            if not training_export_ready else "",
+            if not training_export_ready
+            else "",
         ),
         "paper_signal_training_export": _gate(
             "pass" if paper_training_ready else "warn",
@@ -1186,7 +1249,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if paper_training_ready
             else "Paper signal training export is missing, stale, empty, invalid, or not paper-only.",
             action="Run python -m scripts.strategy_lab.paper_signal_training_export, then rebuild the journal."
-            if not paper_training_ready else "",
+            if not paper_training_ready
+            else "",
         ),
         "product_signal_event_log": _gate(
             "pass" if product_signal_events_ready else "warn",
@@ -1194,7 +1258,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if product_signal_events_ready
             else "Product/manual/VIP signal-event log has invalid rows or execution-enabled rows.",
             action="Inspect logs/signals/signal_events.jsonl before using product events for training."
-            if not product_signal_events_ready else "",
+            if not product_signal_events_ready
+            else "",
         ),
         "product_signal_training_export": _gate(
             "pass" if product_signal_training_ready else "warn",
@@ -1202,7 +1267,8 @@ def _build_readiness(report: dict[str, Any]) -> dict[str, dict[str, str]]:
             if product_signal_training_ready
             else "Product/manual/VIP events exist but private training export is missing, stale, invalid, or not paper-only.",
             action="Run python -m scripts.strategy_lab.product_signal_training_export."
-            if not product_signal_training_ready else "",
+            if not product_signal_training_ready
+            else "",
         ),
     }
 
@@ -1233,7 +1299,9 @@ def _operator_gate_item(name: str, gate: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _build_operator_next_actions(readiness: dict[str, dict[str, str]]) -> dict[str, Any]:
+def _build_operator_next_actions(
+    readiness: dict[str, dict[str, str]],
+) -> dict[str, Any]:
     """Classify readiness gates into operator-facing action groups."""
     status_counts: dict[str, int] = {}
     blocking: list[dict[str, str]] = []
@@ -1276,7 +1344,9 @@ def _build_product_analyzer_revival_checklist(report: dict[str, Any]) -> dict[st
     llm = report["llm_surface_boundaries"]
     analyzer = report["product_analyzer_boundary"]
     launch = report["product_analyzer_launch_contract"]
-    premium_ready = bool(llm["premium_vision_configured"]) and not bool(llm["premium_vision_review_required"])
+    premium_ready = bool(llm["premium_vision_configured"]) and not bool(
+        llm["premium_vision_review_required"]
+    )
     text_path_ready = (
         llm["telegram_chart_formatter_prompt_integrity"] is True
         and llm["telegram_chart_formatter_mojibake_detected"] is False
@@ -1300,14 +1370,29 @@ def _build_product_analyzer_revival_checklist(report: dict[str, Any]) -> dict[st
         "live_execution_allowed": False,
         "validated": {
             "text_prompt_integrity": llm["telegram_chart_formatter_prompt_integrity"],
-            "text_prompt_no_mojibake": not llm["telegram_chart_formatter_mojibake_detected"],
-            "text_cards_use_effective_shared_router": llm["telegram_chart_formatter_effective_shared_router"],
+            "text_prompt_no_mojibake": not llm[
+                "telegram_chart_formatter_mojibake_detected"
+            ],
+            "text_cards_use_effective_shared_router": llm[
+                "telegram_chart_formatter_effective_shared_router"
+            ],
             "premium_vision_provider_configured": premium_ready,
-            "scanner_formatter_provider_aligned": not llm["scanner_formatter_provider_mismatch"],
-            "manual_chart_send_default_off": analyzer["analyze_chart_send_default"] is False,
-            "manual_latest_auto_execute_double_gated": launch["manual_latest_auto_execute_import_gated"],
-            "farm_pfr_does_not_use_manual_product_stack": launch["farm_pfr_runtime_uses_manual_product_stack"] is False,
-            "old_main_does_not_consume_paper_queue": launch["old_main_consumes_paper_queue"] is False,
+            "scanner_formatter_provider_aligned": not llm[
+                "scanner_formatter_provider_mismatch"
+            ],
+            "manual_chart_send_default_off": analyzer["analyze_chart_send_default"]
+            is False,
+            "manual_latest_auto_execute_double_gated": launch[
+                "manual_latest_auto_execute_import_gated"
+            ],
+            "farm_pfr_does_not_use_manual_product_stack": launch[
+                "farm_pfr_runtime_uses_manual_product_stack"
+            ]
+            is False,
+            "old_main_does_not_consume_paper_queue": launch[
+                "old_main_consumes_paper_queue"
+            ]
+            is False,
         },
         "remaining_review": (
             ([] if premium_ready else ["premium_vision_provider_and_prompt"])
@@ -1358,24 +1443,60 @@ def collect(
     pfr_db = pfr_db_path or (private_root / "state" / "strategy_lab.sqlite")
     paper_signal_snapshot = private_root / "state" / "derived" / "paper_signals.json"
     paper_signal_log = private_root / "state" / "derived" / "paper_signals.jsonl"
-    paper_signal_training = private_root / "state" / "derived" / "paper_signal_training.jsonl"
-    paper_signal_training_snapshot = private_root / "state" / "derived" / "paper_signal_training.json"
-    product_signal_training = private_root / "state" / "derived" / "product_signal_training.jsonl"
-    product_signal_training_snapshot = private_root / "state" / "derived" / "product_signal_training.json"
-    main_paper_instruction_snapshot = private_root / "state" / "derived" / "main_paper_instructions.json"
-    main_paper_instruction_log = private_root / "state" / "derived" / "main_paper_instructions.jsonl"
-    main_paper_consumed_snapshot = private_root / "state" / "derived" / "main_paper_consumed.json"
-    main_paper_consumed_log = private_root / "state" / "derived" / "main_paper_consumed.jsonl"
-    main_paper_runtime_queue_snapshot = private_root / "state" / "derived" / "main_paper_runtime_queue.json"
-    main_paper_runtime_queue_log = private_root / "state" / "derived" / "main_paper_runtime_queue.jsonl"
-    main_paper_runtime_observation_snapshot = private_root / "state" / "derived" / "main_paper_runtime_observation.json"
-    main_paper_runtime_observation_log = private_root / "state" / "derived" / "main_paper_runtime_observation.jsonl"
-    main_paper_trade_ledger_snapshot = private_root / "state" / "derived" / "main_paper_trades.json"
-    main_paper_trade_ledger_log = private_root / "state" / "derived" / "main_paper_trades.jsonl"
-    paper_telegram_preview_snapshot = private_root / "state" / "derived" / "paper_telegram_preview.json"
-    paper_telegram_preview_log = private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
-    paper_telegram_delivery_snapshot = private_root / "state" / "derived" / "paper_telegram_delivery.json"
-    paper_telegram_delivery_log = private_root / "state" / "derived" / "paper_telegram_delivery.jsonl"
+    paper_signal_training = (
+        private_root / "state" / "derived" / "paper_signal_training.jsonl"
+    )
+    paper_signal_training_snapshot = (
+        private_root / "state" / "derived" / "paper_signal_training.json"
+    )
+    product_signal_training = (
+        private_root / "state" / "derived" / "product_signal_training.jsonl"
+    )
+    product_signal_training_snapshot = (
+        private_root / "state" / "derived" / "product_signal_training.json"
+    )
+    main_paper_instruction_snapshot = (
+        private_root / "state" / "derived" / "main_paper_instructions.json"
+    )
+    main_paper_instruction_log = (
+        private_root / "state" / "derived" / "main_paper_instructions.jsonl"
+    )
+    main_paper_consumed_snapshot = (
+        private_root / "state" / "derived" / "main_paper_consumed.json"
+    )
+    main_paper_consumed_log = (
+        private_root / "state" / "derived" / "main_paper_consumed.jsonl"
+    )
+    main_paper_runtime_queue_snapshot = (
+        private_root / "state" / "derived" / "main_paper_runtime_queue.json"
+    )
+    main_paper_runtime_queue_log = (
+        private_root / "state" / "derived" / "main_paper_runtime_queue.jsonl"
+    )
+    main_paper_runtime_observation_snapshot = (
+        private_root / "state" / "derived" / "main_paper_runtime_observation.json"
+    )
+    main_paper_runtime_observation_log = (
+        private_root / "state" / "derived" / "main_paper_runtime_observation.jsonl"
+    )
+    main_paper_trade_ledger_snapshot = (
+        private_root / "state" / "derived" / "main_paper_trades.json"
+    )
+    main_paper_trade_ledger_log = (
+        private_root / "state" / "derived" / "main_paper_trades.jsonl"
+    )
+    paper_telegram_preview_snapshot = (
+        private_root / "state" / "derived" / "paper_telegram_preview.json"
+    )
+    paper_telegram_preview_log = (
+        private_root / "state" / "derived" / "paper_telegram_preview.jsonl"
+    )
+    paper_telegram_delivery_snapshot = (
+        private_root / "state" / "derived" / "paper_telegram_delivery.json"
+    )
+    paper_telegram_delivery_log = (
+        private_root / "state" / "derived" / "paper_telegram_delivery.jsonl"
+    )
     from src.research_lab.paper_generation_contract import verify_stage_envelope
     from src.research_lab.paper_projection_reader import read_projection_view
 
@@ -1401,7 +1522,9 @@ def collect(
                 expected_input_digest=bridge_context.input_digest,
             )
             queue_context = verify_stage_envelope(
-                json.loads(main_paper_runtime_queue_snapshot.read_text(encoding="utf-8")),
+                json.loads(
+                    main_paper_runtime_queue_snapshot.read_text(encoding="utf-8")
+                ),
                 stage="queue",
                 expected_run_id=run_id,
                 expected_input_digest=consumer_context.input_digest,
@@ -1415,7 +1538,9 @@ def collect(
                 expected_input_digest=queue_context.input_digest,
             )
             verify_stage_envelope(
-                json.loads(main_paper_trade_ledger_snapshot.read_text(encoding="utf-8")),
+                json.loads(
+                    main_paper_trade_ledger_snapshot.read_text(encoding="utf-8")
+                ),
                 stage="account",
                 expected_run_id=run_id,
                 expected_input_digest=observer_context.input_digest,
@@ -1442,7 +1567,9 @@ def collect(
     run_latest_analysis = ROOT / "scripts" / "run_latest_analysis.py"
     llm_formatter_status = formatter_provider_status()
     premium_status = premium_vision_status()
-    product_start_sets_shared_router = _contains(start_bat, "PRODUCT_ANALYZER_LLM_ROUTER=llm_client")
+    product_start_sets_shared_router = _contains(
+        start_bat, "PRODUCT_ANALYZER_LLM_ROUTER=llm_client"
+    )
     product_tg_start_sets_shared_router = _contains(
         start_telegram_bot_bat,
         "PRODUCT_ANALYZER_LLM_ROUTER=llm_client",
@@ -1451,7 +1578,8 @@ def collect(
         product_start_sets_shared_router and product_tg_start_sets_shared_router
     )
     chart_formatter_effective_shared_router = (
-        llm_formatter_status["shared_router_active"] or product_launcher_sets_shared_router
+        llm_formatter_status["shared_router_active"]
+        or product_launcher_sets_shared_router
     )
     chart_formatter_effective_provider = (
         os.getenv("LLM_PROVIDER", "yandex").strip().lower()
@@ -1464,13 +1592,17 @@ def collect(
         else llm_formatter_status["provider_scope"]
     )
     chart_formatter_effective_shared_entrypoints = (
-        ["generate_client_text", "generate_edu_text"] if chart_formatter_effective_shared_router else []
+        ["generate_client_text", "generate_edu_text"]
+        if chart_formatter_effective_shared_router
+        else []
     )
-    telegram_bot_main_body = _section_between(telegram_bot, "async def main() -> None:", "def _setup_rotating_log")
+    telegram_bot_main_body = _section_between(
+        telegram_bot, "async def main() -> None:", "def _setup_rotating_log"
+    )
     run_latest_entry_block = _section_between(
         run_latest_analysis,
         'if result and result.get("entry_signal") == "ENTRY":',
-        '    print()',
+        "    print()",
     )
     llm_formatter_prompt_markers = (
         "\u0422\u044b \u2014 \u0430\u043d\u0430\u043b\u0438\u0442\u0438\u043a",
@@ -1560,10 +1692,11 @@ def collect(
         active_farm_loop,
         farm_loop_runtime_status,
     )
-    report = {
+    report: dict[str, Any] = {
         "mode": "paper_research_only",
         "safety": {
-            "auto_trade": os.getenv("AUTO_TRADE", "").strip().lower() in {"1", "true", "yes", "on"},
+            "auto_trade": os.getenv("AUTO_TRADE", "").strip().lower()
+            in {"1", "true", "yes", "on"},
             "orders_enabled_by_this_report": False,
             "prints_secrets": False,
         },
@@ -1601,20 +1734,30 @@ def collect(
             "premium_vision_configured": premium_status["configured"],
             "premium_vision_review_required": premium_status["review_required"],
             "telegram_chart_formatter_configured": llm_formatter_status["configured"],
-            "telegram_chart_formatter_uses_llm_provider_env": llm_formatter_status["follows_llm_provider_env"],
+            "telegram_chart_formatter_uses_llm_provider_env": llm_formatter_status[
+                "follows_llm_provider_env"
+            ],
             "telegram_chart_formatter_launcher_sets_shared_router": product_launcher_sets_shared_router,
             "telegram_chart_formatter_effective_shared_router": chart_formatter_effective_shared_router,
             "telegram_chart_formatter_effective_provider": chart_formatter_effective_provider,
             "telegram_chart_formatter_effective_provider_scope": chart_formatter_effective_scope,
             "telegram_chart_formatter_effective_shared_entrypoints": chart_formatter_effective_shared_entrypoints,
-            "telegram_chart_formatter_uses_budget_guard": llm_formatter_status["budget_guard"],
-            "telegram_chart_formatter_prompt_integrity": _contains_all(llm_formatter, llm_formatter_prompt_markers),
-            "telegram_chart_formatter_mojibake_detected": _contains_any(llm_formatter, mojibake_markers),
+            "telegram_chart_formatter_uses_budget_guard": llm_formatter_status[
+                "budget_guard"
+            ],
+            "telegram_chart_formatter_prompt_integrity": _contains_all(
+                llm_formatter, llm_formatter_prompt_markers
+            ),
+            "telegram_chart_formatter_mojibake_detected": _contains_any(
+                llm_formatter, mojibake_markers
+            ),
             "scanner_formatter_provider_mismatch": (
                 os.getenv("LLM_PROVIDER", "yandex").strip().lower()
                 != chart_formatter_effective_provider
             ),
-            "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
+            "analyze_chart_can_send_telegram": _contains(
+                analyze_chart, "--send-telegram"
+            ),
             "analyze_chart_send_default": False,
             "strategy_lab_llm_separate_provider": "src.research_lab.llm_provider",
             "strategy_lab_llm_default_enabled": False,
@@ -1636,7 +1779,8 @@ def collect(
             )
         ),
         "strategy_lab_llm": {
-            "enabled": os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
+            "enabled": os.getenv("STRATEGY_LAB_LLM_ENABLED", "").strip().lower()
+            in {"1", "true", "yes", "on"},
             "provider_name": getattr(provider, "name", "unknown"),
             "configured": bool(getattr(provider, "configured", False)),
         },
@@ -1716,7 +1860,13 @@ def collect(
             "runtime_queue": {
                 "order": 4,
                 "owner": "src.research_lab.main_paper_runtime_adapter",
-                "sort_order": ["family", "timeframe", "risk", "symbol", "source_signal_id"],
+                "sort_order": [
+                    "family",
+                    "timeframe",
+                    "risk",
+                    "symbol",
+                    "source_signal_id",
+                ],
                 "rule": "accepted paper instructions become watch_paper queue items",
             },
             "execution_allowed": False,
@@ -1731,16 +1881,24 @@ def collect(
             "paper_sender_cli": "scripts.strategy_lab.paper_telegram_sender",
             "paper_sender_chat_env": "SUBSCRIPTION_USERS",
             "paper_delivery_target": "active_subscription_users",
-            "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"]["exists"],
+            "scanner_surface_sends_to_subscribers": launch_surfaces["scanner_runtime"][
+                "exists"
+            ],
             "telegram_analyzer_surface": "start.bat / scripts.telegram_bot",
             "telegram_analyzer_current_for_farm": False,
-            "telegram_analyzer_imports_auto_execute": _contains(telegram_bot, "scripts.auto_execute"),
-            "telegram_analyzer_auto_trade_guarded": _contains(auto_execute, "AUTO_TRADE"),
+            "telegram_analyzer_imports_auto_execute": _contains(
+                telegram_bot, "scripts.auto_execute"
+            ),
+            "telegram_analyzer_auto_trade_guarded": _contains(
+                auto_execute, "AUTO_TRADE"
+            ),
             "telegram_analyzer_requires_auto_execute_opt_in": _contains(
                 telegram_bot,
                 "TELEGRAM_BOT_ALLOW_AUTO_EXECUTE",
             ),
-            "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"]["exists"],
+            "legacy_ws_scanner_uses_okx_client": launch_surfaces["legacy_ws_scanner"][
+                "exists"
+            ],
             "scanner_provider_path": "src.utils.llm_client (LLM_PROVIDER: alibaba/yandex)",
             "chart_formatter_path": "src.utils.llm_formatter (text shared-router via launcher; vision legacy Yandex)",
             "secrets_printed": False,
@@ -1750,16 +1908,30 @@ def collect(
             "schema": "product_analyzer_boundary.v1",
             "analyze_chart_path": "scripts.analyze_chart",
             "analyze_chart_imports_okx_client": _contains(analyze_chart, "OKXClient"),
-            "analyze_chart_reads_okx_credentials": _contains(analyze_chart, "OKX_API_KEY"),
-            "analyze_chart_uses_llm_formatter": _contains(analyze_chart, "generate_client_text"),
-            "analyze_chart_can_send_telegram": _contains(analyze_chart, "--send-telegram"),
+            "analyze_chart_reads_okx_credentials": _contains(
+                analyze_chart, "OKX_API_KEY"
+            ),
+            "analyze_chart_uses_llm_formatter": _contains(
+                analyze_chart, "generate_client_text"
+            ),
+            "analyze_chart_can_send_telegram": _contains(
+                analyze_chart, "--send-telegram"
+            ),
             "analyze_chart_send_default": False,
-            "analyze_chart_imports_auto_execute": _contains(analyze_chart, "scripts.auto_execute"),
+            "analyze_chart_imports_auto_execute": _contains(
+                analyze_chart, "scripts.auto_execute"
+            ),
             "run_latest_analysis_path": "scripts.run_latest_analysis",
             "run_latest_analysis_interactive": _contains(run_latest_analysis, "input("),
-            "run_latest_analysis_wraps_analyze_chart": _contains(run_latest_analysis, "from scripts.analyze_chart import run"),
-            "run_latest_analysis_imports_auto_execute": _contains(run_latest_analysis, "scripts.auto_execute"),
-            "run_latest_analysis_auto_trade_guarded": _contains(run_latest_analysis, "if AUTO_TRADE"),
+            "run_latest_analysis_wraps_analyze_chart": _contains(
+                run_latest_analysis, "from scripts.analyze_chart import run"
+            ),
+            "run_latest_analysis_imports_auto_execute": _contains(
+                run_latest_analysis, "scripts.auto_execute"
+            ),
+            "run_latest_analysis_auto_trade_guarded": _contains(
+                run_latest_analysis, "if AUTO_TRADE"
+            ),
             "run_latest_analysis_requires_auto_execute_opt_in": _contains(
                 run_latest_analysis,
                 "RUN_LATEST_ANALYSIS_ALLOW_AUTO_EXECUTE",
@@ -1780,7 +1952,8 @@ def collect(
             "manual_telegram_launcher": "start.bat",
             "manual_telegram_role": "legacy product analyzer bot",
             "manual_telegram_current_for_farm": False,
-            "telegram_bot_main_starts_scanner_loop": "_scanner_loop" in telegram_bot_main_body,
+            "telegram_bot_main_starts_scanner_loop": "_scanner_loop"
+            in telegram_bot_main_body,
             "telegram_bot_main_polls_updates": "getUpdates" in telegram_bot_main_body,
             "telegram_bot_auto_execute_opt_in": _contains(
                 telegram_bot,
@@ -1788,13 +1961,20 @@ def collect(
             ),
             "manual_chart_analyzer": "scripts.analyze_chart",
             "manual_chart_send_default": False,
-            "manual_chart_can_send_with_flag": _contains(analyze_chart, "--send-telegram"),
-            "manual_chart_uses_private_okx_client": _contains(analyze_chart, "OKXClient"),
+            "manual_chart_can_send_with_flag": _contains(
+                analyze_chart, "--send-telegram"
+            ),
+            "manual_chart_uses_private_okx_client": _contains(
+                analyze_chart, "OKXClient"
+            ),
             "manual_latest_wrapper": "scripts.run_latest_analysis",
-            "manual_latest_requires_human_prompt": _contains(run_latest_analysis, "input("),
+            "manual_latest_requires_human_prompt": _contains(
+                run_latest_analysis, "input("
+            ),
             "manual_latest_auto_execute_import_gated": (
                 "ALLOW_AUTO_EXECUTE_ENV" in run_latest_entry_block
-                and "from scripts.auto_execute import AUTO_TRADE, execute_signal" in run_latest_entry_block
+                and "from scripts.auto_execute import AUTO_TRADE, execute_signal"
+                in run_latest_entry_block
             ),
             "text_card_shared_router_entrypoint": "generate_client_text",
             "educational_qa_shared_router_entrypoint": "generate_edu_text",
@@ -1809,8 +1989,10 @@ def collect(
             "premium_vision_configured": premium_status["configured"],
             "premium_vision_review_required": premium_status["review_required"],
             "premium_vision_yandex_only": premium_status["provider"] == "yandex",
-            "edu_qa_yandex_only": "generate_edu_text" in llm_formatter_status["yandex_only_entrypoints"],
-            "edu_qa_shared_router_entrypoint": "generate_edu_text" in chart_formatter_effective_shared_entrypoints,
+            "edu_qa_yandex_only": "generate_edu_text"
+            in llm_formatter_status["yandex_only_entrypoints"],
+            "edu_qa_shared_router_entrypoint": "generate_edu_text"
+            in chart_formatter_effective_shared_entrypoints,
             "farm_pfr_runtime_uses_manual_product_stack": False,
             "old_main_consumes_paper_queue": False,
             "telegram_send_default": False,
@@ -1832,7 +2014,9 @@ def collect(
             "imports_telegram_sender": _contains(old_main, "send_message"),
             "consumes_farm_tasks_db": _contains(old_main, "farm_tasks.sqlite"),
             "consumes_strategy_lab_db": _contains(old_main, "strategy_lab.sqlite"),
-            "consumes_main_paper_queue": _contains(old_main, "main_paper_runtime_queue"),
+            "consumes_main_paper_queue": _contains(
+                old_main, "main_paper_runtime_queue"
+            ),
             "safe_to_use_as_paper_executor": False,
             "replacement_path": "src.research_lab.main_paper_runtime",
             "note": (
@@ -1857,8 +2041,12 @@ def collect(
         },
         "journals": {
             "excel": _exists(ROOT / "scripts" / "journal.xlsx"),
-            "impulse_training": _exists(ROOT / "logs" / "impulse_pump" / "impulse_pump_training.jsonl"),
-            "main_impulse_training": _exists(ROOT / "logs" / "main_impulse" / "main_impulse_training.jsonl"),
+            "impulse_training": _exists(
+                ROOT / "logs" / "impulse_pump" / "impulse_pump_training.jsonl"
+            ),
+            "main_impulse_training": _exists(
+                ROOT / "logs" / "main_impulse" / "main_impulse_training.jsonl"
+            ),
             "paper_signals": _exists(paper_signal_log),
             "paper_signal_snapshot": _exists(paper_signal_snapshot),
             "paper_signal_training": _exists(paper_signal_training),
@@ -1868,24 +2056,40 @@ def collect(
             "main_paper_consumed": _exists(main_paper_consumed_log),
             "main_paper_consumed_snapshot": _exists(main_paper_consumed_snapshot),
             "main_paper_runtime_queue": _exists(main_paper_runtime_queue_log),
-            "main_paper_runtime_queue_snapshot": _exists(main_paper_runtime_queue_snapshot),
-            "main_paper_runtime_observation": _exists(main_paper_runtime_observation_log),
-            "main_paper_runtime_observation_snapshot": _exists(main_paper_runtime_observation_snapshot),
+            "main_paper_runtime_queue_snapshot": _exists(
+                main_paper_runtime_queue_snapshot
+            ),
+            "main_paper_runtime_observation": _exists(
+                main_paper_runtime_observation_log
+            ),
+            "main_paper_runtime_observation_snapshot": _exists(
+                main_paper_runtime_observation_snapshot
+            ),
             "main_paper_trade_ledger": _exists(main_paper_trade_ledger_log),
-            "main_paper_trade_ledger_snapshot": _exists(main_paper_trade_ledger_snapshot),
+            "main_paper_trade_ledger_snapshot": _exists(
+                main_paper_trade_ledger_snapshot
+            ),
             "paper_telegram_preview": _exists(paper_telegram_preview_log),
             "paper_telegram_preview_snapshot": _exists(paper_telegram_preview_snapshot),
             "paper_telegram_delivery": _exists(paper_telegram_delivery_log),
-            "paper_telegram_delivery_snapshot": _exists(paper_telegram_delivery_snapshot),
+            "paper_telegram_delivery_snapshot": _exists(
+                paper_telegram_delivery_snapshot
+            ),
             "main_signals": _exists(main_signal_log),
             "product_signal_events": _exists(product_signal_events_log),
             "product_signal_training": _exists(product_signal_training),
-            "product_signal_training_snapshot": _exists(product_signal_training_snapshot),
+            "product_signal_training_snapshot": _exists(
+                product_signal_training_snapshot
+            ),
         },
         "training_data": {
             "paper_signal_training": _jsonl_schema_metrics(
                 paper_signal_training,
-                schema=("TrainingRow.v2", "PaperSignalTrainingRow.v2", "PaperSignalTrainingRow.v1"),
+                schema=(
+                    "TrainingRow.v2",
+                    "PaperSignalTrainingRow.v2",
+                    "PaperSignalTrainingRow.v1",
+                ),
             ),
             "paper_signal_training_freshness": _paper_training_freshness(
                 paper_signal_training,
@@ -1893,7 +2097,9 @@ def collect(
                 paper_signal_log,
                 private_root=private_root,
             ),
-            "excel_journal_freshness": _excel_journal_freshness(ROOT, paper_signal_training),
+            "excel_journal_freshness": _excel_journal_freshness(
+                ROOT, paper_signal_training
+            ),
             "product_signal_events": _jsonl_schema_metrics(
                 product_signal_events_log,
                 schema="signal_event.v1",
@@ -1911,14 +2117,20 @@ def collect(
             "db": _exists(pfr_db),
         },
         "main_bridge": {
-            "paper_sources_ready": paper_signal_snapshot.exists() or paper_signal_log.exists() or pfr_db.exists(),
-            "instruction_view_exists": main_paper_instruction_snapshot.exists() or main_paper_instruction_log.exists(),
-            "consumer_view_exists": main_paper_consumed_snapshot.exists() or main_paper_consumed_log.exists(),
+            "paper_sources_ready": paper_signal_snapshot.exists()
+            or paper_signal_log.exists()
+            or pfr_db.exists(),
+            "instruction_view_exists": main_paper_instruction_snapshot.exists()
+            or main_paper_instruction_log.exists(),
+            "consumer_view_exists": main_paper_consumed_snapshot.exists()
+            or main_paper_consumed_log.exists(),
             "runtime_queue_exists": (
-                main_paper_runtime_queue_snapshot.exists() or main_paper_runtime_queue_log.exists()
+                main_paper_runtime_queue_snapshot.exists()
+                or main_paper_runtime_queue_log.exists()
             ),
             "runtime_observation_exists": (
-                main_paper_runtime_observation_snapshot.exists() or main_paper_runtime_observation_log.exists()
+                main_paper_runtime_observation_snapshot.exists()
+                or main_paper_runtime_observation_log.exists()
             ),
             "main_signal_log_exists": main_signal_log.exists(),
             "orders_enabled_by_bridge": False,
@@ -1928,14 +2140,30 @@ def collect(
             ),
         },
         "paper_chain": {
-            "instructions": _snapshot_metrics(main_paper_instruction_snapshot, ("instructions",)),
-            "consumer": _snapshot_metrics(main_paper_consumed_snapshot, ("instructions_read", "accepted", "rejected")),
-            "runtime_queue": _snapshot_metrics(main_paper_runtime_queue_snapshot, ("rows_read", "queued", "invalid")),
+            "instructions": _snapshot_metrics(
+                main_paper_instruction_snapshot, ("instructions",)
+            ),
+            "consumer": _snapshot_metrics(
+                main_paper_consumed_snapshot,
+                ("instructions_read", "accepted", "rejected"),
+            ),
+            "runtime_queue": _snapshot_metrics(
+                main_paper_runtime_queue_snapshot, ("rows_read", "queued", "invalid")
+            ),
             "runtime_observation": _snapshot_metrics(
                 main_paper_runtime_observation_snapshot,
-                ("rows_read", "observed", "reviewed", "pending", "invalid", "provider_error"),
+                (
+                    "rows_read",
+                    "observed",
+                    "reviewed",
+                    "pending",
+                    "invalid",
+                    "provider_error",
+                ),
             ),
-            "trade_ledger": _snapshot_metrics(main_paper_trade_ledger_snapshot, ("queue_rows", "trades", "invalid")),
+            "trade_ledger": _snapshot_metrics(
+                main_paper_trade_ledger_snapshot, ("queue_rows", "trades", "invalid")
+            ),
             "telegram_preview": _snapshot_metrics(
                 paper_telegram_preview_snapshot,
                 ("records_read", "rendered", "invalid"),
@@ -1944,7 +2172,9 @@ def collect(
                 paper_telegram_delivery_snapshot,
                 ("records_read", "eligible", "sent", "skipped", "errors"),
             ),
-            "telegram_delivery_breakdown": _snapshot_status_breakdown(paper_telegram_delivery_snapshot),
+            "telegram_delivery_breakdown": _snapshot_status_breakdown(
+                paper_telegram_delivery_snapshot
+            ),
             "telegram_delivery_freshness": _freshness_metrics(
                 paper_telegram_delivery_snapshot,
                 paper_telegram_preview_snapshot,
@@ -1958,7 +2188,9 @@ def collect(
         runtime_queue_exists=bridge["runtime_queue_exists"],
         runtime_observation_exists=bridge["runtime_observation_exists"],
     )
-    report["product_analyzer_revival_checklist"] = _build_product_analyzer_revival_checklist(report)
+    report["product_analyzer_revival_checklist"] = (
+        _build_product_analyzer_revival_checklist(report)
+    )
     report["readiness"] = _build_readiness(report)
     report["operator_next_actions"] = _build_operator_next_actions(report["readiness"])
     return report
@@ -2018,7 +2250,9 @@ def _print_human(report: dict[str, Any]) -> None:
         f"marker_hits={legacy_text['marker_hits']} read_errors={legacy_text['read_errors']}"
     )
     lab = report["strategy_lab_llm"]
-    print(f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}")
+    print(
+        f"strategy_lab_llm: enabled={lab['enabled']} provider={lab['provider_name']} configured={lab['configured']}"
+    )
     surfaces = report["launch_surfaces"]
     print(
         "launch_surfaces: "
@@ -2127,7 +2361,9 @@ def _print_human(report: dict[str, Any]) -> None:
         f"universe_current={legacy_loops['universe_farm_loop_current']} "
         f"universe_guard={legacy_loops['universe_farm_loop_has_abort_guard']}"
     )
-    print(f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}")
+    print(
+        f"pfr_db: exists={report['pfr']['db']['exists']} path={report['pfr']['db']['path']}"
+    )
     bridge = report["main_bridge"]
     print(
         "main_bridge: "
@@ -2179,7 +2415,9 @@ def _print_human(report: dict[str, Any]) -> None:
     )
     product_events = report["training_data"]["product_signal_events"]
     product_training = report["training_data"]["product_signal_training"]
-    product_training_freshness = report["training_data"]["product_signal_training_freshness"]
+    product_training_freshness = report["training_data"][
+        "product_signal_training_freshness"
+    ]
     print(
         "product_signal_events: "
         f"exists={report['journals']['product_signal_events']['exists']} "
@@ -2227,7 +2465,9 @@ def _print_human(report: dict[str, Any]) -> None:
         print(f"  REBUILD {item['name']}: {item['message']} action={item['action']}")
     print("journals:")
     for name, item in report["journals"].items():
-        print(f"  {name}: exists={item['exists']} bytes={item['size_bytes']} path={item['path']}")
+        print(
+            f"  {name}: exists={item['exists']} bytes={item['size_bytes']} path={item['path']}"
+        )
 
 
 def has_blocked_readiness(report: dict[str, Any]) -> bool:
@@ -2235,7 +2475,10 @@ def has_blocked_readiness(report: dict[str, Any]) -> bool:
     readiness = report.get("readiness")
     if not isinstance(readiness, dict):
         return False
-    return any(isinstance(gate, dict) and gate.get("status") == "blocked" for gate in readiness.values())
+    return any(
+        isinstance(gate, dict) and gate.get("status") == "blocked"
+        for gate in readiness.values()
+    )
 
 
 def exit_code_for_report(report: dict[str, Any], *, fail_on_blocked: bool) -> int:

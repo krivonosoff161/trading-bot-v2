@@ -19,7 +19,9 @@ from src.research_lab.candidate_registry import load_entries, registry_path
 from src.research_lab.paths import resolve_private_root
 
 SCHEMA = "strategy_lab_proposal.v1"
-DEFAULT_DATA_GLOB = "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json"
+DEFAULT_DATA_GLOB = (
+    "scripts/analysis/research/_okxhist/ai_scanner_feasibility/{symbol}_*.json"
+)
 STATUS_RANK = {"FORWARD_PAPER": 3, "REGIME_SPECIFIC": 2, "OBSERVE": 1}
 MAX_PARAMS_PER_SPEC = 7
 
@@ -84,11 +86,16 @@ def write_proposals(
     *,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     out_dir = spec_dir(private_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = proposal_log_path(private_root)
-    existing = {str(row.get("proposal_key") or _proposal_key(row)) for row in load_proposal_log(log_path)}
+    existing = {
+        str(row.get("proposal_key") or _proposal_key(row))
+        for row in load_proposal_log(log_path)
+    }
     written = []
     for proposal in proposals:
         key = _proposal_key(proposal)
@@ -96,7 +103,10 @@ def write_proposals(
             continue
         filename = f"{proposal['experiment_id']}.json"
         path = out_dir / filename
-        path.write_text(json.dumps(proposal["spec"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(proposal["spec"], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         row = {
             "schema": SCHEMA,
             "proposal_id": proposal["proposal_id"],
@@ -125,15 +135,21 @@ def generate_and_write_from_registry(
     max_proposals: int = 8,
     allow_public_output: bool = False,
 ) -> dict[str, Any]:
-    private_root = resolve_private_root(private_root, allow_public_output=allow_public_output)
+    private_root = resolve_private_root(
+        private_root, allow_public_output=allow_public_output
+    )
     entries = load_entries(registry_path(private_root))
     proposals = generate_proposals(entries, max_proposals=max_proposals)
-    result = write_proposals(private_root, proposals, allow_public_output=allow_public_output)
+    result = write_proposals(
+        private_root, proposals, allow_public_output=allow_public_output
+    )
     result["registry_entries"] = len(entries)
     return result
 
 
-def _proposal_for_entry(entry: dict[str, Any], *, data_glob: str) -> dict[str, Any] | None:
+def _proposal_for_entry(
+    entry: dict[str, Any], *, data_glob: str
+) -> dict[str, Any] | None:
     status = str(entry.get("validation_status") or "")
     symbol = str(entry.get("symbol") or "")
     strategy_id = str(entry.get("strategy_id") or "")
@@ -153,7 +169,14 @@ def _proposal_for_entry(entry: dict[str, Any], *, data_glob: str) -> dict[str, A
         reason = "parameter_neighborhood_sweep"
 
     source_id = str(entry.get("candidate_id") or "")
-    proposal_id = _short_hash({"source": source_id, "status": status, "variants": variants, "filters": filters})
+    proposal_id = _short_hash(
+        {
+            "source": source_id,
+            "status": status,
+            "variants": variants,
+            "filters": filters,
+        }
+    )
     experiment_id = f"auto_{reason}_{strategy_id}_{symbol}_{proposal_id}"
     spec = {
         "experiment_id": experiment_id,
@@ -197,7 +220,16 @@ def _parameter_neighborhood(params: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _scaled_value(key: str, value: int | float, mult: float) -> int | float:
     raw = float(value) * mult
-    if key in {"lookback", "period", "ma", "trend_ma", "pullback_ma", "below_bars", "hold_bars", "retest_window"}:
+    if key in {
+        "lookback",
+        "period",
+        "ma",
+        "trend_ma",
+        "pullback_ma",
+        "below_bars",
+        "hold_bars",
+        "retest_window",
+    }:
         return max(1, int(round(raw)))
     return round(max(0.01, raw), 4)
 
@@ -219,7 +251,11 @@ def _filters_from_entry(entry: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def _entry_sort_key(entry: dict[str, Any]) -> tuple[int, float, float, int, str]:
-    metrics = entry.get("metrics_summary") if isinstance(entry.get("metrics_summary"), dict) else {}
+    metrics = (
+        raw_metrics
+        if isinstance(raw_metrics := entry.get("metrics_summary"), dict)
+        else {}
+    )
     return (
         -STATUS_RANK.get(str(entry.get("validation_status") or ""), 0),
         -_float(metrics.get("test_avg_net_pct")),
@@ -248,11 +284,19 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _fee_guess(symbol: str) -> float:
-    return 9.0 if any(tag in symbol for tag in ("PEPE", "PENGU", "PUMP", "DOGE", "WLD")) else 7.0
+    return (
+        9.0
+        if any(tag in symbol for tag in ("PEPE", "PENGU", "PUMP", "DOGE", "WLD"))
+        else 7.0
+    )
 
 
 def _slippage_guess(symbol: str) -> float:
-    return 6.0 if any(tag in symbol for tag in ("PEPE", "PENGU", "PUMP", "DOGE", "WLD")) else 3.0
+    return (
+        6.0
+        if any(tag in symbol for tag in ("PEPE", "PENGU", "PUMP", "DOGE", "WLD"))
+        else 3.0
+    )
 
 
 def _min_trades_guess(status: str) -> int:

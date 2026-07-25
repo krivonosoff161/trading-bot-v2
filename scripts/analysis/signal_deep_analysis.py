@@ -1,8 +1,8 @@
 """Deep signal analysis with correct field names."""
 import json
 
-labels  = [json.loads(l) for l in open('logs/signals/main_signals_labels.jsonl') if l.strip()]
-signals = [json.loads(l) for l in open('logs/signals/main_signals.jsonl') if l.strip()]
+labels  = [json.loads(line) for line in open('logs/signals/main_signals_labels.jsonl') if line.strip()]
+signals = [json.loads(line) for line in open('logs/signals/main_signals.jsonl') if line.strip()]
 sig_map = {s.get('id') or s.get('signal_id'): s for s in signals}
 
 rows = []

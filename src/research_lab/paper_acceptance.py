@@ -50,7 +50,8 @@ def _training_integrity(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and row.get("immutable_terminal_evidence") is True
     ]
     contradictions = sum(
-        row.get("opened_at_bar_ts") not in (None, "") and row.get("result") == "expired_no_entry"
+        row.get("opened_at_bar_ts") not in (None, "")
+        and row.get("result") == "expired_no_entry"
         for row in v2
     )
     negative_hold = sum(int(row.get("bars_held") or 0) < 0 for row in v2)
@@ -64,8 +65,11 @@ def _training_integrity(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _card_history(derived: Path) -> dict[str, Any]:
     payload = _read_json(derived / "paper_telegram_card_ledger.json")
-    items = payload.get("items") if isinstance(payload.get("items"), list) else []
-    charts = [str(item.get("chart_path") or "") for item in items if isinstance(item, dict)]
+    raw_items = payload.get("items")
+    items = raw_items if isinstance(raw_items, list) else []
+    charts = [
+        str(item.get("chart_path") or "") for item in items if isinstance(item, dict)
+    ]
     scenario_closed = sum(
         str(item.get("consumer_status") or "") == "scenario_closed"
         for item in items
@@ -89,7 +93,10 @@ def _artifact_sizes(derived: Path) -> dict[str, int]:
         "outcome_retest_results.json",
         "paper_lineage.jsonl",
     )
-    return {name: (derived / name).stat().st_size if (derived / name).exists() else 0 for name in names}
+    return {
+        name: (derived / name).stat().st_size if (derived / name).exists() else 0
+        for name in names
+    }
 
 
 def capture_snapshot(
@@ -134,7 +141,12 @@ def capture_snapshot(
         )
     else:
         account = audit_paper_account_ledger(private_root)
-    unsafe_env = str(os.environ.get("AUTO_TRADE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    unsafe_env = str(os.environ.get("AUTO_TRADE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     return {
         "schema": SCHEMA,
         "captured_at": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
@@ -143,14 +155,18 @@ def capture_snapshot(
         "account": account,
         "scenario": {
             "events": len(thesis_events),
-            "closed_events": sum(row.get("event_type") == "scenario_closed" for row in thesis_events),
+            "closed_events": sum(
+                row.get("event_type") == "scenario_closed" for row in thesis_events
+            ),
         },
         "cards": _card_history(derived),
         "lineage": {
             "envelopes": int(lineage.get("envelopes") or 0),
             "conflicts": int(lineage.get("conflicts") or 0),
             "main_without_trade": int(lineage.get("main_without_trade") or 0),
-            "terminal_without_training": int(lineage.get("terminal_without_training") or 0),
+            "terminal_without_training": int(
+                lineage.get("terminal_without_training") or 0
+            ),
             "valid": bool(lineage.get("valid")),
         },
         "retests": {
@@ -207,7 +223,9 @@ def start_acceptance(
         raise RuntimeError("AUTO_TRADE is enabled in the current process environment")
     if snapshot["farm"]["execution_allowed"]:
         raise RuntimeError("farm snapshot reports execution_allowed=true")
-    run_id = datetime.fromtimestamp(now, tz=timezone.utc).strftime("acceptance_%Y%m%dT%H%M%SZ")
+    run_id = datetime.fromtimestamp(now, tz=timezone.utc).strftime(
+        "acceptance_%Y%m%dT%H%M%SZ"
+    )
     run_dir = _run_dir(private_root, run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     baseline = {
@@ -217,14 +235,21 @@ def start_acceptance(
         "paper_only": True,
         "execution_allowed": False,
     }
-    (run_dir / "baseline.json").write_text(json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (run_dir / "baseline.json").write_text(
+        json.dumps(baseline, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     active = Path(private_root) / "reports" / "paper_acceptance" / "active.json"
-    active.write_text(json.dumps({"run_id": run_id, "run_dir": str(run_dir)}, indent=2) + "\n", encoding="utf-8")
+    active.write_text(
+        json.dumps({"run_id": run_id, "run_dir": str(run_dir)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return baseline
 
 
 def load_active(private_root: Path) -> tuple[dict[str, Any], Path]:
-    active = _read_json(Path(private_root) / "reports" / "paper_acceptance" / "active.json")
+    active = _read_json(
+        Path(private_root) / "reports" / "paper_acceptance" / "active.json"
+    )
     run_dir = Path(str(active.get("run_dir") or ""))
     baseline = _read_json(run_dir / "baseline.json") if run_dir else {}
     if not baseline:
@@ -247,14 +272,21 @@ def evaluate_acceptance(
     )
     duration = (current["captured_at_epoch"] - baseline["captured_at_epoch"]) / 3600.0
     delta_v2 = current["lifecycle"]["v2_rows"] - baseline["lifecycle"]["v2_rows"]
-    delta_closed = current["scenario"]["closed_events"] - baseline["scenario"]["closed_events"]
-    delta_close_cards = current["cards"]["scenario_closed_cards"] - baseline["cards"]["scenario_closed_cards"]
+    delta_closed = (
+        current["scenario"]["closed_events"] - baseline["scenario"]["closed_events"]
+    )
+    delta_close_cards = (
+        current["cards"]["scenario_closed_cards"]
+        - baseline["cards"]["scenario_closed_cards"]
+    )
     artifact_growth = {
         name: int(size) - int((baseline.get("artifact_sizes") or {}).get(name) or 0)
         for name, size in current["artifact_sizes"].items()
     }
     checks = {
-        "generation_current": bool(current["generation"]["current_generation_compatible"]),
+        "generation_current": bool(
+            current["generation"]["current_generation_compatible"]
+        ),
         "duration_met": duration >= float(baseline_doc["required_hours"]),
         "lifecycle_clean": current["lifecycle"]["valid"] and delta_v2 > 0,
         "account_reconciles": bool(current["account"].get("valid")),
@@ -264,11 +296,15 @@ def evaluate_acceptance(
         and current["lineage"]["conflicts"] == 0
         and current["lineage"]["main_without_trade"] == 0
         and current["lineage"]["terminal_without_training"] == 0,
-        "retests_progressed": current["retests"]["results"] > baseline["retests"]["results"]
+        "retests_progressed": current["retests"]["results"]
+        > baseline["retests"]["results"]
         or current["retests"]["pending_specs"] == 0,
-        "chart_history_reconstructible": current["cards"]["charts_existing"] >= baseline["cards"]["charts_existing"],
+        "chart_history_reconstructible": current["cards"]["charts_existing"]
+        >= baseline["cards"]["charts_existing"],
         "resource_growth_bounded": current["farm"]["errors"] == 0
-        and all(0 <= growth <= 2 * 1024 * 1024 * 1024 for growth in artifact_growth.values()),
+        and all(
+            0 <= growth <= 2 * 1024 * 1024 * 1024 for growth in artifact_growth.values()
+        ),
         "safety_clean": not current["safety"]["auto_trade_env_enabled"]
         and current["farm"]["paper_only"]
         and not current["farm"]["execution_allowed"],
@@ -284,7 +320,8 @@ def evaluate_acceptance(
             "trusted_lifecycle_rows": delta_v2,
             "scenario_closed_events": delta_closed,
             "scenario_closed_cards": delta_close_cards,
-            "retest_results": current["retests"]["results"] - baseline["retests"]["results"],
+            "retest_results": current["retests"]["results"]
+            - baseline["retests"]["results"],
             "artifact_growth_bytes": artifact_growth,
         },
         "baseline": baseline,
@@ -292,5 +329,7 @@ def evaluate_acceptance(
         "paper_only": True,
         "execution_allowed": False,
     }
-    (run_dir / "latest_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (run_dir / "latest_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return report
