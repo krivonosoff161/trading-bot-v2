@@ -1,6 +1,8 @@
+from src.research_lab import outcome_learning
 from src.research_lab.outcome_learning import (
     build_outcome_learning_case,
     build_outcome_review_pack,
+    load_current_training_evidence,
     recommendations_from_outcome_reviews,
     learning_summary,
 )
@@ -56,6 +58,57 @@ def _row(**overrides):
     }
     row.update(overrides)
     return row
+
+
+def _current_projection(rows):
+    items = []
+    subject_ids = []
+    for index, row in enumerate(rows):
+        signal_id = str(row.get("paper_signal_id") or f"signal-{index}")
+        subject_id = f"subject-{index}"
+        terminal_id = f"terminal-{index}"
+        row.update(
+            {
+                "paper_signal_id": signal_id,
+                "paper_generation_run_id": "run-current",
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+                "account_generation_id": "account-current",
+                "immutable_terminal_evidence": True,
+                "lifecycle_schema": "PaperSignalLifecycle.v2",
+                "paper_pnl_usdt": float(row.get("paper_pnl_usdt") or 0.0),
+            }
+        )
+        subject_ids.append(subject_id)
+        items.append(
+            {
+                "source_signal_id": signal_id,
+                "paper_generation_run_id": "run-current",
+                "paper_subject_generation_id": subject_id,
+                "terminal_lifecycle_event_id": terminal_id,
+                "account_generation_id": "account-current",
+                "paper_account_decision": "position_closed",
+                "okx_inst_id": row.get("okx_inst_id") or row.get("symbol"),
+                "timeframe": row.get("timeframe"),
+                "setup_family": row.get("family"),
+                "side": row.get("side"),
+                "boundary_ts": row.get("boundary_ts"),
+                "farm_geometry_profile_id": row.get("farm_geometry_profile_id") or "",
+                "outcome": {"net_pct": row.get("net_pct")},
+                "paper_account": {"pnl_usdt": row.get("paper_pnl_usdt")},
+            }
+        )
+    return {
+        "current": True,
+        "display_only": False,
+        "generation_status": "completed",
+        "paper_only": True,
+        "execution_allowed": False,
+        "paper_generation_run_id": "run-current",
+        "account_generation_id": "account-current",
+        "paper_subject_generation_ids": subject_ids,
+        "items": items,
+    }
 
 
 def test_outcome_learning_case_routes_give_back_loss_to_exit_retest():
@@ -346,7 +399,7 @@ def test_retest_specs_dedupe_same_trade_and_dimensions_across_reviews():
     assert specs[0].review_id == "llmr_first"
 
 
-def test_retest_catalog_rotates_past_completed_reviews(tmp_path):
+def test_retest_catalog_rotates_past_completed_reviews(tmp_path, monkeypatch):
     rows = [
         _row(training_row_id="training_1", paper_signal_id="sig_1"),
         _row(training_row_id="training_2", paper_signal_id="sig_2", symbol="B_USDT_SWAP"),
@@ -378,6 +431,10 @@ def test_retest_catalog_rotates_past_completed_reviews(tmp_path):
         encoding="utf-8",
     )
     first_id = build_outcome_retest_specs(rows, reviews)[0].retest_id
+    monkeypatch.setattr(
+        "src.research_lab.outcome_retest.load_current_training_rows",
+        lambda _private_root: rows,
+    )
     (derived / "outcome_retest_results.json").write_text(
         json.dumps({"items": [{"retest_id": first_id}]}),
         encoding="utf-8",
@@ -390,3 +447,55 @@ def test_retest_catalog_rotates_past_completed_reviews(tmp_path):
     assert catalog["remaining_total"] == 1
     assert catalog["specs"] == 1
     assert catalog["items"][0]["source_ref"] == "training_2"
+
+
+def test_training_file_without_current_generation_cannot_steer_learning(tmp_path):
+    row = _row(
+        family="momentum_breakout",
+        candidate_id="candidate_legacy",
+        paper_pnl_usdt=-1.0,
+    )
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps(row) + "\n",
+        encoding="utf-8",
+    )
+
+    selection = load_current_training_evidence(tmp_path)
+
+    assert selection["source_rows"] == 1
+    assert selection["eligible_rows"] == 0
+    assert selection["items"] == []
+    assert selection["rejection_counts"] == {
+        "generation_not_current_or_complete": 1
+    }
+
+
+def test_training_row_requires_exact_current_projection_binding(
+    tmp_path, monkeypatch
+):
+    row = _row(
+        family="momentum_breakout",
+        candidate_id="candidate_current",
+        paper_pnl_usdt=-1.0,
+    )
+    projection = _current_projection([row])
+    derived = tmp_path / "state" / "derived"
+    derived.mkdir(parents=True)
+    (derived / "paper_signal_training.jsonl").write_text(
+        json.dumps(row) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        outcome_learning,
+        "read_projection_view",
+        lambda *_args, **_kwargs: projection,
+    )
+
+    selection = load_current_training_evidence(tmp_path)
+
+    assert selection["eligible_rows"] == 1
+    assert selection["items"][0]["candidate_id"] == "candidate_current"
+    assert selection["paper_generation_run_id"] == "run-current"
+    assert selection["account_generation_id"] == "account-current"

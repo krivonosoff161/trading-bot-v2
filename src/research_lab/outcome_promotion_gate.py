@@ -13,7 +13,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.research_lab.outcome_learning import load_outcome_reviews, load_training_rows
+from src.research_lab.outcome_learning import (
+    load_current_training_rows,
+    load_outcome_reviews,
+)
 from src.research_lab.ready_strategy_catalog import catalog_snapshot_path
 
 SCHEMA = "OutcomePromotionGate.v1"
@@ -172,7 +175,9 @@ def build_gate_verdicts(
         ):
             continue
         source_ref = str(review.get("source_ref") or "")
-        row = rows_by_ref.get(source_ref, {})
+        row = rows_by_ref.get(source_ref)
+        if row is None:
+            continue
         payload = _review_payload(review)
         keys = _candidate_keys(row)
         candidate_id = str(row.get("candidate_id") or "")
@@ -231,7 +236,7 @@ def summarize_gate(verdicts: Iterable[PromotionGateVerdict]) -> dict[str, Any]:
 def build_outcome_promotion_gate(private_root: Path) -> dict[str, Any]:
     private_root = Path(private_root)
     verdicts = build_gate_verdicts(
-        load_training_rows(private_root),
+        load_current_training_rows(private_root),
         load_outcome_reviews(private_root),
         shadow_index=_registry_by_uc(private_root, "shadow_forward.json"),
         true_forward_index=_registry_by_uc(private_root, "true_forward.json"),

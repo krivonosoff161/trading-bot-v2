@@ -423,8 +423,10 @@ def test_paper_product_status_reads_only_aggregate_private_snapshots(tmp_path) -
     assert status["training_outcome_review_linked"] == 1
     assert status["training_learning_kind"] == {"loss": 1}
     assert status["training_learning_bucket"] == {"gave_back": 1}
-    assert status["outcome_gate_verdicts"] == 1
-    assert status["outcome_gate_by_stage"] == {"review_only": 1}
+    # Aggregate legacy snapshots remain visible, but their unversioned training
+    # rows cannot create an adaptive promotion-gate verdict.
+    assert status["outcome_gate_verdicts"] == 0
+    assert status["outcome_gate_by_stage"] == {}
     assert status["quality_operator_action"] == "fix_promotion_gap_missing_ready_strategy_id"
     assert status["quality_labels"] == {"needs_review": 2, "candidate_watch": 1}
     assert status["geometry_profiles"] == [
