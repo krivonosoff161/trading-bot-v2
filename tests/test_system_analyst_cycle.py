@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from src.research_lab import system_analyst_cycle
 from src.research_lab.role_environment import gate_role_environment
 from tests.test_role_environment import _gate_artifacts
 from src.research_lab.system_analyst_cycle import (
@@ -11,6 +14,35 @@ from src.research_lab.system_analyst_cycle import (
 )
 
 FRESH_REVIEW_NOW = "2026-07-11T13:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _trusted_training_projection(monkeypatch):
+    def load(private_root):
+        path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
+        rows = []
+        if path.exists():
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        return {
+            "items": rows,
+            "source_rows": len(rows),
+            "eligible_rows": len(rows),
+            "excluded_rows": 0,
+            "rejection_counts": {},
+            "paper_generation_run_id": "synthetic-current-run",
+            "account_generation_id": "synthetic-current-account",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    monkeypatch.setattr(system_analyst_cycle, "load_current_training_evidence", load)
 
 
 def _training():

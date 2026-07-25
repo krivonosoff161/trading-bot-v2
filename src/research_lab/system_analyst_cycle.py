@@ -10,7 +10,10 @@ from typing import Any, Iterable
 from src.research_lab.lineage_contract import stable_id
 from src.research_lab.lineage_contract import utc_now
 from src.research_lab.adaptive_trial import adaptive_trial_id
-from src.research_lab.outcome_learning import load_outcome_reviews, load_training_rows
+from src.research_lab.outcome_learning import (
+    load_current_training_evidence,
+    load_outcome_reviews,
+)
 from src.research_lab.role_environment import (
     accept_role_request,
     materialize_role_environment,
@@ -399,8 +402,9 @@ def run_system_analyst_cycle(
 ) -> dict[str, Any]:
     if max_feedback < 1:
         raise ValueError("max_feedback must be positive")
+    training_evidence = load_current_training_evidence(private_root)
     all_payloads = feedback_payloads_from_outcomes(
-        load_training_rows(private_root), load_outcome_reviews(private_root)
+        training_evidence["items"], load_outcome_reviews(private_root)
     )
     all_payloads.extend(
         feedback_payloads_from_system_results(
@@ -435,6 +439,11 @@ def run_system_analyst_cycle(
         "rejection_reasons": {},
         "role_environment_candidates": {},
         "accepted_role_requests": {},
+        "training_evidence": {
+            key: value
+            for key, value in training_evidence.items()
+            if key != "items"
+        },
         "paper_only": True,
         "execution_allowed": False,
         "apply": bool(apply),

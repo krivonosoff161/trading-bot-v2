@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from src.research_lab import system_analyst_cycle
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.role_environment_dispatch import (
     dispatch_role_environments,
@@ -15,7 +16,9 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_dispatches_three_accepted_role_requests_to_real_owners(tmp_path):
+def test_dispatches_three_accepted_role_requests_to_real_owners(
+    tmp_path, monkeypatch
+):
     training = {
         "training_row_id": "training-1",
         "candidate_id": "candidate-1",
@@ -56,6 +59,24 @@ def test_dispatches_three_accepted_role_requests_to_real_owners(tmp_path):
         "created_at": "2026-07-13T04:05:00+00:00", "timeframe": "15m",
         "data_quality": "ok",
     }])
+    monkeypatch.setattr(
+        system_analyst_cycle,
+        "load_current_training_evidence",
+        lambda _private_root: {
+            "items": [training],
+            "source_rows": 1,
+            "eligible_rows": 1,
+            "excluded_rows": 0,
+            "rejection_counts": {},
+            "paper_generation_run_id": "synthetic-current-run",
+            "account_generation_id": "synthetic-current-account",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        },
+    )
 
     system = run_system_analyst_cycle(
         tmp_path, apply=True, now="2026-07-13T04:30:00+00:00"

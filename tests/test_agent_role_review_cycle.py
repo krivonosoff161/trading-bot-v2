@@ -2,9 +2,45 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
+from scripts.strategy_lab import agent_role_review_cycle
 from scripts.strategy_lab.agent_role_review_cycle import run_cycle
 from src.research_lab.llm_provider import LLMUsage
 from src.research_lab.llm_role_reviews import LOCAL_OUTCOME_REVIEW_PROMPT, request_role_review
+
+
+@pytest.fixture(autouse=True)
+def _trusted_training_projection(monkeypatch):
+    def load(private_root):
+        path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
+        rows = []
+        if path.exists():
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        return {
+            "items": rows,
+            "source_rows": len(rows),
+            "eligible_rows": len(rows),
+            "excluded_rows": 0,
+            "rejection_counts": {},
+            "paper_generation_run_id": "synthetic-current-run",
+            "account_generation_id": "synthetic-current-account",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    monkeypatch.setattr(
+        agent_role_review_cycle,
+        "load_current_training_evidence",
+        load,
+    )
 
 
 class _Provider:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.research_lab.farm_tasks_db import tasks_db_path
+from src.research_lab.outcome_learning import load_current_training_evidence
 from src.research_lab.state_db import default_db_path
 
 SCHEMA = "OutcomeRetestResult.v1"
@@ -23,18 +24,9 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _training_index(private_root: Path) -> dict[str, dict[str, str]]:
-    path = Path(private_root) / "state" / "derived" / "paper_signal_training.jsonl"
-    if not path.exists():
-        return {}
+def _training_index(rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        if not raw.strip():
-            continue
-        try:
-            row = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
+    for row in rows:
         source_ref = str(row.get("training_row_id") or "")
         candidate_id = str(
             row.get("candidate_id") or row.get("setup_candidate_id") or ""
@@ -45,6 +37,19 @@ def _training_index(private_root: Path) -> dict[str, dict[str, str]]:
                 "symbol": str(row.get("symbol") or row.get("okx_inst_id") or ""),
                 "timeframe": str(row.get("timeframe") or ""),
                 "family": str(row.get("family") or row.get("setup_family") or ""),
+                "paper_signal_id": str(
+                    row.get("paper_signal_id") or row.get("signal_id") or ""
+                ),
+                "paper_generation_run_id": str(
+                    row.get("paper_generation_run_id") or ""
+                ),
+                "paper_subject_generation_id": str(
+                    row.get("paper_subject_generation_id") or ""
+                ),
+                "terminal_lifecycle_event_id": str(
+                    row.get("terminal_lifecycle_event_id") or ""
+                ),
+                "account_generation_id": str(row.get("account_generation_id") or ""),
             }
     return out
 
@@ -121,9 +126,11 @@ def _iso_from_epoch(value: Any) -> str:
 
 def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
     private_root = Path(private_root)
-    training_index = _training_index(private_root)
+    training_evidence = load_current_training_evidence(private_root)
+    training_index = _training_index(training_evidence["items"])
     latest: dict[str, dict[str, Any]] = {}
     unreadable = 0
+    stale_evidence = 0
     for task in _completed_tasks(private_root):
         try:
             task_payload = json.loads(task.get("payload_json") or "{}")
@@ -155,7 +162,21 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
         n_trades = int(metrics.get("n_trades") or 0)
         best_net = _float(metrics.get("avg_net_pct"))
         source_ref = str(context.get("source_ref") or "")
-        source_training = training_index.get(source_ref) or {}
+        source_training = training_index.get(source_ref)
+        binding_fields = (
+            "paper_signal_id",
+            "paper_generation_run_id",
+            "paper_subject_generation_id",
+            "terminal_lifecycle_event_id",
+            "account_generation_id",
+        )
+        if source_training is None or any(
+            not str(context.get(field) or "")
+            or str(context.get(field) or "") != str(source_training.get(field) or "")
+            for field in binding_fields
+        ):
+            stale_evidence += 1
+            continue
         row = {
             "schema": SCHEMA,
             "retest_id": retest_id,
@@ -227,6 +248,12 @@ def build_outcome_retest_results(private_root: Path) -> dict[str, Any]:
         "results": len(items),
         "by_verdict": dict(sorted(by_verdict.items())),
         "unreadable_completed_tasks": unreadable,
+        "stale_or_unbound_completed_tasks": stale_evidence,
+        "training_evidence": {
+            key: value
+            for key, value in training_evidence.items()
+            if key != "items"
+        },
         "items": items,
         "paper_only": True,
         "execution_allowed": False,

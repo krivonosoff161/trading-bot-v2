@@ -13,6 +13,11 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.research_lab.paper_projection_reader import (
+    read_projection_view,
+    select_current_terminal_training_rows,
+)
+
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab import feedback_reader as fr
 from src.research_lab.lineage_contract import stable_id
@@ -579,7 +584,48 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def load_training_rows(private_root: Path) -> list[dict[str, Any]]:
+    """Load the rebuildable export without granting it evidence authority."""
     return _read_jsonl(training_rows_path(private_root))
+
+
+def load_current_training_evidence(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Select exact current-generation terminal rows for adaptive consumers.
+
+    ``paper_signal_training.jsonl`` is a rebuildable projection.  Its rows may
+    remain useful for forensic display, but they can steer an LLM review,
+    retest, recommendation, or System Analyst task only when they bind to the
+    exact current completed paper-evidence generation and terminal account
+    result.
+    """
+    private_root = Path(private_root)
+    rows = load_training_rows(private_root)
+    generation = read_projection_view(
+        private_root,
+        "trades",
+        legacy_snapshot=private_root
+        / "state"
+        / "derived"
+        / "main_paper_trades.json",
+        evidence_database_path=evidence_database_path,
+    )
+    return select_current_terminal_training_rows(rows, generation)
+
+
+def load_current_training_rows(
+    private_root: Path,
+    *,
+    evidence_database_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Return copies of only current evidence-authoritative training rows."""
+    selection = load_current_training_evidence(
+        private_root,
+        evidence_database_path=evidence_database_path,
+    )
+    return list(selection["items"])
 
 
 def load_outcome_reviews(private_root: Path) -> list[dict[str, Any]]:
@@ -683,7 +729,7 @@ def build_outcome_review_recommendations(
     private_root: Path, *, max_recommendations: int = 20
 ) -> list[fr.Recommendation]:
     return recommendations_from_outcome_reviews(
-        load_training_rows(private_root),
+        load_current_training_rows(private_root),
         load_outcome_reviews(private_root),
         max_recommendations=max_recommendations,
     )

@@ -37,6 +37,7 @@ from src.research_lab.llm_role_reviews import (  # noqa: E402
 from src.research_lab.outcome_learning import (  # noqa: E402
     build_outcome_review_pack,
     learning_summary,
+    load_current_training_evidence,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
 
@@ -130,13 +131,13 @@ def _eligible_source_refs(path: Path, role_id: str) -> tuple[set[str], dict[str,
     return accepted | exhausted, failed
 
 
-def _load_unreviewed_training_rows(
-    private_root: Path, limit: int
+def _unreviewed_training_rows(
+    private_root: Path,
+    rows: Iterable[dict[str, Any]],
+    limit: int,
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
-    training_path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
-    rows = _read_jsonl(training_path)
     completed_refs, _ = _eligible_source_refs(
         private_root / "state" / "llm_advice" / "outcome_reviews.jsonl",
         "outcome_reviewer",
@@ -302,7 +303,12 @@ def _summary_path(private_root: Path) -> Path:
 def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
     private_root = resolve_private_root(args.private_root)
     provider = _make_provider(args)
-    training_rows = _load_unreviewed_training_rows(private_root, args.max_outcomes)
+    training_evidence = load_current_training_evidence(private_root)
+    training_rows = _unreviewed_training_rows(
+        private_root,
+        training_evidence["items"],
+        args.max_outcomes,
+    )
     validator_rows = _load_validator_memory(private_root, args.max_validator)
     source_rows = _load_unreviewed_source_rows(private_root, args.max_sources)
     analyst_rows = _load_unreviewed_system_results(
@@ -379,6 +385,11 @@ def run_cycle(args: argparse.Namespace) -> dict[str, Any]:
             "analyst_results": len(analyst_rows),
         },
         "outcome_learning": learning_summary(training_rows),
+        "training_evidence": {
+            key: value
+            for key, value in training_evidence.items()
+            if key != "items"
+        },
         "reviews": len(reviews),
         "accepted": accepted,
         "rejected": len(reviews) - accepted,

@@ -2,11 +2,47 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
 from src.research_lab.farm_tasks_db import FarmTasksDB, tasks_db_path
+from src.research_lab import outcome_retest_result
 from src.research_lab.outcome_retest_result import build_outcome_retest_results
 
 
-def _completed_retest(root: Path, *, n_trades: int = 20, avg_net_pct: float = 0.4) -> None:
+@pytest.fixture(autouse=True)
+def _trusted_training_projection(monkeypatch):
+    def load(private_root):
+        path = private_root / "state" / "derived" / "paper_signal_training.jsonl"
+        rows = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return {
+            "items": rows,
+            "source_rows": len(rows),
+            "eligible_rows": len(rows),
+            "excluded_rows": 0,
+            "rejection_counts": {},
+            "paper_generation_run_id": "run-current",
+            "account_generation_id": "account-current",
+            "generation_status": "completed",
+            "current_generation_compatible": True,
+            "display_only": False,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    monkeypatch.setattr(outcome_retest_result, "load_current_training_evidence", load)
+
+
+def _completed_retest(
+    root: Path,
+    *,
+    n_trades: int = 20,
+    avg_net_pct: float = 0.4,
+    paper_generation_run_id: str = "run-current",
+) -> None:
     run_label = "experiments/completed/retest_run"
     run_dir = root / run_label
     run_dir.mkdir(parents=True)
@@ -16,6 +52,10 @@ def _completed_retest(root: Path, *, n_trades: int = 20, avg_net_pct: float = 0.
         "review_id": "review_1",
         "source_ref": "training_1",
         "paper_signal_id": "sig_1",
+        "paper_generation_run_id": paper_generation_run_id,
+        "paper_subject_generation_id": "subject-current",
+        "terminal_lifecycle_event_id": "terminal-current",
+        "account_generation_id": "account-current",
         "baseline": {"net_pct": -0.8},
         "selection_window_start": "2026-01-01T00:00:00+00:00",
         "selection_window_end": "2026-02-01T00:00:00+00:00",
@@ -41,7 +81,18 @@ def _completed_retest(root: Path, *, n_trades: int = 20, avg_net_pct: float = 0.
     derived = root / "state" / "derived"
     derived.mkdir(parents=True, exist_ok=True)
     (derived / "paper_signal_training.jsonl").write_text(
-        json.dumps({"training_row_id": "training_1", "candidate_id": "candidate_1"}) + "\n",
+        json.dumps(
+            {
+                "training_row_id": "training_1",
+                "candidate_id": "candidate_1",
+                "paper_signal_id": "sig_1",
+                "paper_generation_run_id": "run-current",
+                "paper_subject_generation_id": "subject-current",
+                "terminal_lifecycle_event_id": "terminal-current",
+                "account_generation_id": "account-current",
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     db = FarmTasksDB(tasks_db_path(root), clock=lambda: 1.0)
@@ -90,6 +141,15 @@ def test_completed_retest_requires_minimum_evidence(tmp_path):
     summary = build_outcome_retest_results(tmp_path)
 
     assert summary["by_verdict"] == {"insufficient_evidence": 1}
+
+
+def test_completed_retest_from_stale_generation_is_not_materialized(tmp_path):
+    _completed_retest(tmp_path, paper_generation_run_id="run-stale")
+
+    summary = build_outcome_retest_results(tmp_path)
+
+    assert summary["results"] == 0
+    assert summary["stale_or_unbound_completed_tasks"] == 1
 
 
 def test_outcome_retest_result_has_no_live_order_provider_or_sender_imports():

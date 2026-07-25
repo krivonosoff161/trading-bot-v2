@@ -98,6 +98,15 @@ The analyst does not promote its own counterfactual. A result selected from a
 grid on one data window is only a hypothesis for a later untouched shadow or
 forward window.
 
+The rebuildable `paper_signal_training.jsonl` export is display/forensic input,
+not adaptive authority by itself. Outcome review, System Analyst feedback,
+bounded retest creation, promotion views, and completed-retest ingestion share
+one fail-closed selector. A row is eligible only when it matches the exact
+current completed paper generation, subject generation, terminal lifecycle
+event, account generation, policy identity, and numeric terminal account
+result. Queued retests repeat that check before creating a sweep, and completed
+retests repeat it before returning evidence to the adaptive loop.
+
 The canonical cycle acknowledges only that a recipient accepted a bounded
 research request. That acknowledgement is not policy application. A separate
 recipient gate may mark an environment accepted only after it cites the

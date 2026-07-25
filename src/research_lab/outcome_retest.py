@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.research_lab.lineage_contract import stable_id
-from src.research_lab.outcome_learning import load_outcome_reviews, load_training_rows
+from src.research_lab.outcome_learning import (
+    load_current_training_rows,
+    load_outcome_reviews,
+)
 from src.research_lab.strategy_registry import REGISTRY
 from src.research_lab.sweep_spec import SweepSpec
 
@@ -42,6 +45,10 @@ class OutcomeRetestSpec:
     source_ref: str
     paper_signal_id: str
     candidate_id: str
+    paper_generation_run_id: str
+    paper_subject_generation_id: str
+    terminal_lifecycle_event_id: str
+    account_generation_id: str
     symbol: str
     timeframe: str
     family: str
@@ -340,6 +347,10 @@ def build_outcome_retest_specs(
         identity = {
             "source_ref": source_ref,
             "paper_signal_id": row.get("paper_signal_id") or row.get("signal_id"),
+            "paper_generation_run_id": row.get("paper_generation_run_id"),
+            "paper_subject_generation_id": row.get("paper_subject_generation_id"),
+            "terminal_lifecycle_event_id": row.get("terminal_lifecycle_event_id"),
+            "account_generation_id": row.get("account_generation_id"),
             "actionability": actionability,
             "dimensions": dimensions,
         }
@@ -355,6 +366,16 @@ def build_outcome_retest_specs(
                 source_ref=source_ref,
                 paper_signal_id=str(row.get("paper_signal_id") or row.get("signal_id") or ""),
                 candidate_id=str(row.get("candidate_id") or row.get("setup_candidate_id") or ""),
+                paper_generation_run_id=str(
+                    row.get("paper_generation_run_id") or ""
+                ),
+                paper_subject_generation_id=str(
+                    row.get("paper_subject_generation_id") or ""
+                ),
+                terminal_lifecycle_event_id=str(
+                    row.get("terminal_lifecycle_event_id") or ""
+                ),
+                account_generation_id=str(row.get("account_generation_id") or ""),
                 symbol=str(row.get("symbol") or ""),
                 timeframe=str(row.get("timeframe") or ""),
                 family=family,
@@ -382,7 +403,7 @@ def outcome_retest_snapshot_path(private_root: Path) -> Path:
 
 def write_outcome_retest_specs(private_root: Path, *, max_specs: int = 50) -> dict[str, Any]:
     all_specs = build_outcome_retest_specs(
-        load_training_rows(private_root),
+        load_current_training_rows(private_root),
         load_outcome_reviews(private_root),
         max_specs=10_000,
     )

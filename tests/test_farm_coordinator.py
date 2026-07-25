@@ -9,6 +9,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from src.research_lab import farm_coordinator  # noqa: E402
 from src.research_lab.farm_coordinator import run_coordinator_cycle  # noqa: E402
 from src.research_lab.farm_tasks_db import FarmTasksDB  # noqa: E402
 from src.research_lab.farm_sweep_runner import build_sweep_spec  # noqa: E402
@@ -389,7 +390,7 @@ def test_multi_symbol_farm_payload_freezes_complete_snapshot_set(tmp_path):
     tasks.close()
 
 
-def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
+def test_outcome_review_followup_becomes_retest_sweep(tmp_path, monkeypatch):
     tasks = FarmTasksDB(":memory:")
     _seed_candles(tmp_path, "BTC")
     tasks.upsert_unique_candidate({
@@ -406,34 +407,48 @@ def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     llm_advice = tmp_path / "state" / "llm_advice"
     derived.mkdir(parents=True, exist_ok=True)
     llm_advice.mkdir(parents=True, exist_ok=True)
+    training_row = {
+        "schema": "TrainingRow.v2",
+        "training_row_id": "training_s1",
+        "paper_signal_id": "s1",
+        "candidate_id": "candidate_1",
+        "search_family_id": "sfd_parent",
+        "search_trial_id": "stept_parent",
+        "effective_n_trials": 4,
+        "symbol": "BTC",
+        "timeframe": "1h",
+        "family": "momentum_breakout",
+        "result": "stop",
+        "diagnosis": "bad_exit_gave_back",
+        "entry_mid": 100.0,
+        "stop_loss": 96.0,
+        "tp1": 108.0,
+        "max_hold_bars": 5,
+        "net_pct": -0.8,
+        "mfe_pct": 1.6,
+        "paper_generation_run_id": "run-current",
+        "paper_subject_generation_id": "subject-current",
+        "terminal_lifecycle_event_id": "terminal-current",
+        "account_generation_id": "account-current",
+        "paper_only": True,
+        "execution_allowed": False,
+    }
     (derived / "paper_signal_training.jsonl").write_text(
         json.dumps(
-            {
-                "schema": "TrainingRow.v2",
-                "training_row_id": "training_s1",
-                "paper_signal_id": "s1",
-                    "candidate_id": "candidate_1",
-                    "search_family_id": "sfd_parent",
-                    "search_trial_id": "stept_parent",
-                    "effective_n_trials": 4,
-                "symbol": "BTC",
-                "timeframe": "1h",
-                "family": "momentum_breakout",
-                "result": "stop",
-                "diagnosis": "bad_exit_gave_back",
-                "entry_mid": 100.0,
-                "stop_loss": 96.0,
-                "tp1": 108.0,
-                "max_hold_bars": 5,
-                "net_pct": -0.8,
-                "mfe_pct": 1.6,
-                "paper_only": True,
-                "execution_allowed": False,
-            },
+            training_row,
             sort_keys=True,
         )
         + "\n",
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        farm_coordinator,
+        "load_current_training_rows",
+        lambda _private_root: [training_row],
+    )
+    monkeypatch.setattr(
+        "src.research_lab.outcome_retest.load_current_training_rows",
+        lambda _private_root: [training_row],
     )
     (llm_advice / "outcome_reviews.jsonl").write_text(
         json.dumps(
@@ -495,4 +510,72 @@ def test_outcome_review_followup_becomes_retest_sweep(tmp_path):
     assert ctx["retest_id"] == payload["retest_id"]
     assert ctx["source_ref"] == "training_s1"
     assert ctx["paper_signal_id"] == "s1"
+    assert ctx["paper_generation_run_id"] == "run-current"
+    assert ctx["paper_subject_generation_id"] == "subject-current"
+    assert ctx["terminal_lifecycle_event_id"] == "terminal-current"
+    assert ctx["account_generation_id"] == "account-current"
+    tasks.close()
+
+
+def test_stale_outcome_retest_is_skipped_before_run_sweep(tmp_path, monkeypatch):
+    tasks = FarmTasksDB(":memory:")
+    retest_spec = {
+        "schema": "OutcomeRetestSpec.v1",
+        "retest_id": "ort_stale",
+        "review_id": "review_stale",
+        "source_ref": "training_stale",
+        "paper_signal_id": "signal_stale",
+        "paper_generation_run_id": "run-stale",
+        "paper_subject_generation_id": "subject-stale",
+        "terminal_lifecycle_event_id": "terminal-stale",
+        "account_generation_id": "account-stale",
+        "sweep_spec": asdict(
+            build_sweep_spec(
+                "BTC-USDT-SWAP",
+                "1h",
+                "momentum_breakout",
+                fingerprint="fp-stale",
+            )
+        ),
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+    tasks.enqueue_task(
+        task_type="schedule_retest",
+        task_key="schedule_retest::stale",
+        symbol="BTC-USDT-SWAP",
+        timeframe="1h",
+        family="momentum_breakout",
+        payload={"retest_spec": retest_spec},
+        now=1.0,
+    )
+    monkeypatch.setattr(
+        farm_coordinator,
+        "load_current_training_rows",
+        lambda _private_root: [],
+    )
+
+    out = run_coordinator_cycle(
+        tasks,
+        private_root=tmp_path,
+        profiles=PROFILES,
+        policy=POLICY,
+        intake_events=[],
+        data_state_fn=_usable_state(),
+        apply=True,
+        now=2.0,
+        run_worker=False,
+        run_validation=False,
+        run_followups=True,
+        max_followups=1,
+    )
+
+    assert out["counters"]["outcome_retest_stale_evidence"] == 1
+    assert not tasks.tasks_in_state("queued", task_type="run_sweep")
+    skipped = tasks.tasks_in_state("skipped", task_type="schedule_retest")
+    assert len(skipped) == 1
+    assert (
+        skipped[0]["machine_reason"]
+        == "stale_or_unbound_outcome_retest_evidence"
+    )
     tasks.close()

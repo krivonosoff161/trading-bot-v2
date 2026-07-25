@@ -1,5 +1,6 @@
 import json
 
+from src.research_lab import outcome_promotion_gate
 from src.research_lab.outcome_promotion_gate import (
     COLLECT_TRUE_FORWARD,
     ELIGIBLE_FOR_OPERATOR_REVIEW,
@@ -176,7 +177,9 @@ def test_summary_counts_gate_stages():
     assert summary["execution_allowed"] is False
 
 
-def test_build_outcome_promotion_gate_reads_existing_private_artifacts(tmp_path):
+def test_build_outcome_promotion_gate_reads_existing_private_artifacts(
+    tmp_path, monkeypatch
+):
     derived = tmp_path / "state" / "derived"
     advice = tmp_path / "state" / "llm_advice"
     derived.mkdir(parents=True)
@@ -196,9 +199,20 @@ def test_build_outcome_promotion_gate_reads_existing_private_artifacts(tmp_path)
         }),
         encoding="utf-8",
     )
+    monkeypatch.setattr(
+        outcome_promotion_gate,
+        "load_current_training_rows",
+        lambda _private_root: [_training(candidate_id="uc_1")],
+    )
 
     gate = build_outcome_promotion_gate(tmp_path)
 
     assert gate["verdicts"] == 1
     assert gate["by_stage"] == {NEEDS_TRUE_FORWARD: 1}
     assert gate["items"][0]["execution_allowed"] is False
+
+
+def test_review_without_authoritative_training_row_has_no_gate_verdict():
+    verdicts = build_gate_verdicts([], [_review("preserve_pattern")])
+
+    assert verdicts == []

@@ -37,6 +37,7 @@ from src.research_lab.farm_tasks_db import FarmTasksDB, StaleTaskClaimError
 from src.research_lab.farm_priority import priority_value
 from src.research_lab.feedback_followup import plan_followup
 from src.research_lab.intake_adapter import discovery_intake_events
+from src.research_lab.outcome_learning import load_current_training_rows
 from src.research_lab.outcome_retest import paper_to_executable_family
 from src.research_lab.outcome_retest import write_outcome_retest_specs
 from src.research_lab.paths import market_data_glob, resolve_private_root
@@ -534,6 +535,10 @@ _SWEEP_EVENT_CONTEXT_KEYS = {
     "review_id",
     "source_ref",
     "paper_signal_id",
+    "paper_generation_run_id",
+    "paper_subject_generation_id",
+    "terminal_lifecycle_event_id",
+    "account_generation_id",
     "actionability",
     "outcome_bucket",
     "baseline",
@@ -578,6 +583,7 @@ def _drain_retest_task(
     tasks: FarmTasksDB,
     task: dict[str, Any],
     *,
+    private_root: Path,
     profiles,
     policy,
     counters: dict[str, int],
@@ -591,6 +597,39 @@ def _drain_retest_task(
     if spec_row is None:
         tasks.skip_task(task["task_id"], "malformed_retest_payload", now=now)
         _bump(counters, "outcome_retest_invalid")
+        return
+    source_ref = str(spec_row.get("source_ref") or "")
+    current_training = {
+        str(row.get("training_row_id") or ""): row
+        for row in load_current_training_rows(private_root)
+    }
+    source_row = current_training.get(source_ref)
+    binding_fields = (
+        "paper_generation_run_id",
+        "paper_subject_generation_id",
+        "terminal_lifecycle_event_id",
+        "account_generation_id",
+    )
+    signal_matches = bool(
+        source_row is not None
+        and str(spec_row.get("paper_signal_id") or "")
+        == str(source_row.get("paper_signal_id") or source_row.get("signal_id") or "")
+    )
+    binding_matches = bool(
+        source_row is not None
+        and all(
+            str(spec_row.get(field) or "")
+            and str(spec_row.get(field) or "") == str(source_row.get(field) or "")
+            for field in binding_fields
+        )
+    )
+    if not source_ref or not signal_matches or not binding_matches:
+        tasks.skip_task(
+            task["task_id"],
+            "stale_or_unbound_outcome_retest_evidence",
+            now=now,
+        )
+        _bump(counters, "outcome_retest_stale_evidence")
         return
     depth = int(payload.get("followup_depth") or 0)
     if depth >= MAX_FOLLOWUP_DEPTH:
@@ -622,6 +661,10 @@ def _drain_retest_task(
         "review_id": spec_row.get("review_id"),
         "source_ref": spec_row.get("source_ref"),
         "paper_signal_id": spec_row.get("paper_signal_id"),
+        "paper_generation_run_id": spec_row.get("paper_generation_run_id"),
+        "paper_subject_generation_id": spec_row.get("paper_subject_generation_id"),
+        "terminal_lifecycle_event_id": spec_row.get("terminal_lifecycle_event_id"),
+        "account_generation_id": spec_row.get("account_generation_id"),
         "actionability": spec_row.get("actionability"),
         "outcome_bucket": spec_row.get("outcome_bucket"),
         "baseline": spec_row.get("baseline") or {},
@@ -790,6 +833,7 @@ def _drain_advisor_sweeps(
 def _drain_followups(
     tasks: FarmTasksDB,
     *,
+    private_root: Path,
     profiles,
     policy,
     limit: int,
@@ -807,6 +851,7 @@ def _drain_followups(
             _drain_retest_task(
                 tasks,
                 task,
+                private_root=private_root,
                 profiles=profiles,
                 policy=policy,
                 counters=counters,
@@ -1719,6 +1764,7 @@ def run_coordinator_cycle(
                 )
                 _drain_followups(
                     tasks,
+                    private_root=private_root,
                     profiles=profiles,
                     policy=policy,
                     limit=max_followups,

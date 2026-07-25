@@ -107,7 +107,7 @@ class TestSweepPayloadTier:
 
 
 class TestDepthCap:
-    def test_drain_caps_depth(self) -> None:
+    def test_drain_caps_depth(self, tmp_path: Path) -> None:
         tasks = FarmTasksDB(":memory:")
         rec = _regime_rec()
         tasks.enqueue_task(task_type="schedule_followup", task_key="sf::r1",
@@ -115,7 +115,15 @@ class TestDepthCap:
                            payload={"recommendation": rec.to_dict(),
                                     "followup_depth": MAX_FOLLOWUP_DEPTH}, now=1.0)
         counters: dict[str, int] = {}
-        _drain_followups(tasks, profiles=PROFILES, policy=POLICY, limit=5, counters=counters, now=2.0)
+        _drain_followups(
+            tasks,
+            private_root=tmp_path,
+            profiles=PROFILES,
+            policy=POLICY,
+            limit=5,
+            counters=counters,
+            now=2.0,
+        )
         # capped: no run_sweep produced
         assert not tasks.tasks_in_state("queued", task_type="run_sweep")
         assert counters.get("followup_notes", 0) >= 1

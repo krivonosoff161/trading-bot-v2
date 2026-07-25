@@ -65,7 +65,8 @@ exchange endpoints, and no LLM authority over execution.
 ```text
 terminal paper outcome
   -> paper_signals.lane.review()
-  -> TrainingRow.v2
+  -> TrainingRow.v2 rebuildable export
+  -> exact current completed PaperGenerationRun.v2 binding
   -> OutcomeLearningCase.v1 + read-only plan/outcome/path pack
   -> outcome_reviewer advisory JSON
   -> state/llm_advice/outcome_reviews.jsonl
@@ -74,6 +75,21 @@ terminal paper outcome
   -> existing feedback_followup path plans a bounded run_sweep or a note
   -> OutcomePromotionGate.v1 explains the next non-execution stage
 ```
+
+The JSONL filename is not evidence authority. Before any adaptive consumer sees
+a row, the shared selector requires the exact current completed projection and
+matches the paper generation run, subject generation, terminal lifecycle event,
+account generation, policy fields, and terminal account result. Unversioned,
+stale, incomplete, display-only, or mismatched rows remain available for
+forensic reporting but cannot reach the outcome reviewer, System Analyst,
+retest catalog, promotion gate, or retest-result materialization.
+
+An `OutcomeRetestSpec` carries those four immutable generation bindings. The
+farm revalidates them against current evidence when the queued retest is
+claimed, then propagates them into the materialized sweep context. Completed
+retest output is accepted only if that context still matches the current source
+row. This prevents an old queued or completed sweep from being attributed to a
+new paper-evidence generation.
 
 The important change is the backlink:
 
