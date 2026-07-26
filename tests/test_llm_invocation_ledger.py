@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 
 from src.research_lab.llm_invocation_ledger import (
+    finish_transport_invocation,
     invocation_summary,
+    make_trace_context,
     preflight_invocation,
     record_invocation,
+    start_transport_invocation,
 )
 from src.research_lab.llm_boundary_identity import endpoint_identity_from_url
 from src.research_lab.llm_provider import LLMUsage
@@ -23,6 +26,84 @@ class _EndpointProvider(_Provider):
     def __init__(self, base_url: str, name="ollama", model="calculator-swarm"):
         super().__init__(name, model)
         self.base_url = base_url
+
+
+def test_transport_trace_correlates_start_and_response_without_raw_content(
+    tmp_path,
+):
+    context = make_trace_context(
+        tmp_path,
+        surface="scanner.layer_agent",
+        source_ref="doc-1",
+    )
+    permit = start_transport_invocation(
+        context,
+        role_id="cheap",
+        provider="alibaba",
+        model="synthetic-model",
+        input_payload={
+            "system": "SYNTHETIC_PROMPT_MARKER",
+            "user": "SYNTHETIC_USER_MARKER",
+        },
+        provider_class="synthetic.transport",
+    )
+    finish_transport_invocation(
+        context,
+        permit,
+        status="accepted",
+        output_text="SYNTHETIC_RESPONSE_MARKER",
+        usage={
+            "provider": "alibaba",
+            "model": "synthetic-model",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "cost_rub": 0.25,
+        },
+        response_received=True,
+    )
+
+    path = tmp_path / "state" / "llm_advice" / "invocations.jsonl"
+    raw = path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in raw.splitlines()]
+    assert len(rows) == 2
+    assert [row["event_phase"] for row in rows] == ["started", "completed"]
+    assert {row["correlation_id"] for row in rows} == {context.correlation_id}
+    assert rows[1]["output_hash"]
+    assert rows[1]["response_received"] is True
+    assert rows[0]["source_ref"].startswith("sha256:")
+    assert rows[0]["source_ref"] == rows[1]["source_ref"]
+    assert "doc-1" not in raw
+    assert "SYNTHETIC_PROMPT_MARKER" not in raw
+    assert "SYNTHETIC_USER_MARKER" not in raw
+    assert "SYNTHETIC_RESPONSE_MARKER" not in raw
+    summary = invocation_summary(tmp_path)
+    assert summary["invocations"] == 1
+    assert summary["invocation_events"] == 2
+    assert summary["by_status"] == {"accepted": 1}
+    assert summary["total_tokens"] == 15
+
+
+def test_trace_context_without_source_ref_persists_only_a_hash(tmp_path):
+    context = make_trace_context(
+        tmp_path,
+        surface="telegram.education",
+        source_payload={"question": "SYNTHETIC_PRIVATE_QUESTION"},
+    )
+
+    assert context.source_ref.startswith("sha256:")
+    assert "SYNTHETIC_PRIVATE_QUESTION" not in context.source_ref
+
+
+def test_trace_context_hashes_supplied_source_reference(tmp_path):
+    context = make_trace_context(
+        tmp_path,
+        surface="public_news.editor",
+        source_ref="SYNTHETIC_SOURCE_REFERENCE",
+    )
+
+    assert context.source_ref.startswith("sha256:")
+    assert "SYNTHETIC_SOURCE_REFERENCE" not in context.source_ref
 
 
 def test_local_only_ollama_rejects_remote_endpoint_identity(tmp_path):

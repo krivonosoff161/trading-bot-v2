@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -366,13 +367,21 @@ def test_manual_analyzer_fallback_summary_is_user_facing():
 def test_chart_formatter_shared_router_opt_in_uses_text_adapter(monkeypatch):
     calls = []
 
-    async def fake_shared_router(system_prompt, user_text, *, max_tokens, timeout):
+    async def fake_shared_router(
+        system_prompt,
+        user_text,
+        *,
+        max_tokens,
+        timeout,
+        trace_context,
+    ):
         calls.append(
             {
                 "system_prompt": system_prompt,
                 "user_text": user_text,
                 "max_tokens": max_tokens,
                 "timeout": timeout,
+                "trace_surface": trace_context.surface,
             }
         )
         return "shared router body", {
@@ -399,12 +408,21 @@ def test_chart_formatter_shared_router_opt_in_uses_text_adapter(monkeypatch):
     assert calls
     assert "\U0001f4ca \u0421\u0415\u0419\u0427\u0410\u0421 \u041d\u0410 \u0420\u042b\u041d\u041a\u0415" in calls[0]["system_prompt"]
     assert "BTC-USDT-SWAP" in calls[0]["user_text"]
+    assert calls[0]["trace_surface"] == "telegram.chart_text"
 
 
 def test_educational_qa_shared_router_opt_in_uses_text_adapter(monkeypatch):
     calls = []
 
-    async def fake_shared_router(system_prompt, user_text, *, max_tokens, timeout, role="chief"):
+    async def fake_shared_router(
+        system_prompt,
+        user_text,
+        *,
+        max_tokens,
+        timeout,
+        role="chief",
+        trace_context,
+    ):
         calls.append(
             {
                 "system_prompt": system_prompt,
@@ -412,6 +430,7 @@ def test_educational_qa_shared_router_opt_in_uses_text_adapter(monkeypatch):
                 "max_tokens": max_tokens,
                 "timeout": timeout,
                 "role": role,
+                "trace_surface": trace_context.surface,
             }
         )
         return "educational shared answer", {
@@ -435,8 +454,52 @@ def test_educational_qa_shared_router_opt_in_uses_text_adapter(monkeypatch):
             "max_tokens": 400,
             "timeout": llm_formatter._TIMEOUT,
             "role": "mid",
+            "trace_surface": "telegram.education",
         }
     ]
+
+
+def test_premium_vision_records_safe_correlated_trace(monkeypatch, tmp_path):
+    async def fake_vision(*_args):
+        return llm_formatter._DirectLLMResult(
+            "synthetic premium response",
+            {
+                "prompt_tokens": 5,
+                "completion_tokens": 4,
+                "total_tokens": 9,
+            },
+            response_received=True,
+            attempt_count=1,
+        )
+
+    monkeypatch.setenv("TRADING_BOT_RESEARCH_ROOT", str(tmp_path))
+    monkeypatch.setattr(llm_formatter, "_PREMIUM_VISION_PROVIDER", "alibaba")
+    monkeypatch.setattr(
+        llm_formatter,
+        "_call_alibaba_premium_vision",
+        fake_vision,
+    )
+
+    text = asyncio.run(
+        llm_formatter.generate_premium_analysis(
+            "CRYPTO",
+            b"synthetic-image-bytes",
+        )
+    )
+
+    assert text == "synthetic premium response"
+    ledger = (
+        tmp_path / "state" / "llm_advice" / "invocations.jsonl"
+    ).read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in ledger.splitlines()]
+    assert [row["status"] for row in rows] == ["started", "accepted"]
+    assert rows[-1]["surface"] == "telegram.premium_vision"
+    assert rows[-1]["response_received"] is True
+    assert rows[-1]["output_hash"]
+    assert rows[-1]["attempt_count"] == 1
+    assert rows[-1]["total_tokens"] == 9
+    assert "synthetic premium response" not in ledger
+    assert "synthetic-image-bytes" not in ledger
 
 
 def test_manual_analyzer_and_latest_wrapper_boundaries():

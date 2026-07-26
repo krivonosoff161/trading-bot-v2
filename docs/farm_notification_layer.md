@@ -153,9 +153,10 @@ The scanner/analyzer Telegram code remains separate from the farm:
 
 - `src.utils.llm_client` routes scanner/advisory LLM calls through `LLM_PROVIDER`
   (`alibaba` or `yandex`) and role-specific models.
-- `src.utils.llm_formatter` is the Yandex-only chart/text formatter path used by the
-  older Telegram analyzer surface. It does not follow the scanner `LLM_PROVIDER`
-  router.
+- `src.utils.llm_formatter` retains direct legacy fallbacks for manual/reference
+  entrypoints. The supported RCC launcher selects the shared `llm_client` router
+  for chart text and education and the reviewed premium-vision adapter for
+  screenshot analysis.
 - `src.utils.telegram` owns token/chat lookup and message sending for surfaces that are
   explicitly started by the operator.
 
@@ -189,10 +190,11 @@ Strategy Lab paper/PFR launcher. The current paper chain uses
 `paper_telegram_preview` first; real paper Telegram delivery is available only through
 the reviewed, opt-in `paper_telegram_sender` surface over derived paper artifacts.
 
-Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory provider path,
-not the legacy Telegram chart analyzer. The chart analyzer must be audited separately
-because it calls `llm_formatter.generate_client_text`, `generate_edu_text`, and
-`generate_premium_analysis`; only the text-only entrypoints can use the shared router.
+Provider boundary: `LLM_PROVIDER=alibaba` proves the scanner/advisory and shared
+text-router provider path, not every legacy fallback in `llm_formatter`. The supported
+RCC launcher explicitly sets `PRODUCT_ANALYZER_LLM_ROUTER=llm_client` and
+`PREMIUM_VISION_PROVIDER=alibaba`; other manual/reference launch conditions must still
+be audited separately.
 
 The machine-readable formatter status is intentionally sanitized. It reports only
 provider shape (`provider=yandex`, `provider_scope=yandex_only`, key presence booleans,
@@ -202,9 +204,9 @@ keys, folder ids, chat ids, prompts, or request payloads. A mismatch such as
 the product analyzer is migrated through a dedicated adapter review. The text-only chart
 card can now be tested through the shared router with an explicit opt-in:
 `PRODUCT_ANALYZER_LLM_ROUTER=llm_client`. That opt-in covers the text-only
-`generate_client_text` and `generate_edu_text` entrypoints; premium screenshot
-analysis remains on the legacy Yandex formatter path until it receives a separate
-vision provider/prompt review.
+`generate_client_text` and `generate_edu_text` entrypoints. Premium screenshot
+analysis uses its separate reviewed provider/prompt adapter and the same private
+invocation-ledger correlation contract.
 
 Manual analyzer boundary: `scripts.analyze_chart` writes a report/snapshot/chart and
 does not send Telegram unless `--send-telegram` is passed. `scripts.run_latest_analysis`

@@ -16,11 +16,19 @@ Falls back to None on any error — caller uses build_client_summary() instead.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+import hashlib
 import os
 from pathlib import Path
 
 import aiohttp
 
+from src.research_lab.llm_invocation_ledger import (
+    LLMTraceContext,
+    finish_transport_invocation,
+    make_runtime_trace_context,
+    start_transport_invocation,
+)
 from src.utils import llm_budget_guard as budget_guard
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -186,6 +194,7 @@ async def _call_shared_router(
     max_tokens: int,
     timeout: int,
     role: str = "chief",
+    trace_context: LLMTraceContext,
 ) -> tuple[str | None, dict]:
     """Opt-in text-only adapter over src.utils.llm_client.
 
@@ -200,6 +209,7 @@ async def _call_shared_router(
         user_text,
         max_tokens=max_tokens,
         timeout=timeout,
+        trace_context=trace_context,
     )
 
 _SYSTEM_PROMPT = """\
@@ -820,11 +830,17 @@ async def generate_client_text(
     analysis_text += _build_market_backdrop(symbol, market_context)
 
     if shared_router:
+        trace_context = make_runtime_trace_context(
+            surface="telegram.chart_text",
+            source_ref=f"{symbol}:{captured_at}",
+            source_payload={"symbol": symbol, "captured_at": captured_at},
+        )
         body, usage = await _call_shared_router(
             _SYSTEM_PROMPT,
             analysis_text,
             max_tokens=_MAX_TOKENS,
             timeout=_TIMEOUT,
+            trace_context=trace_context,
         )
         if not body:
             return None
@@ -918,6 +934,15 @@ _GEMMA_MAX_TOKENS = 500
 _GEMMA_TIMEOUT   = 90
 
 
+@dataclass(frozen=True)
+class _DirectLLMResult:
+    text: str | None
+    usage: dict
+    error_type: str = ""
+    response_received: bool = False
+    attempt_count: int = 0
+
+
 def _image_mime(image_bytes: bytes) -> str:
     if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -932,10 +957,10 @@ async def _call_alibaba_premium_vision(
     system_prompt: str,
     user_prompt: str,
     image_bytes: bytes,
-) -> str | None:
+) -> _DirectLLMResult:
     if not _ALIBABA_KEY or not _ALIBABA_VISION_MODEL:
         print("Alibaba vision: ALIBABA_API_KEY or ALIBABA_VISION_MODEL not set — skipping")
-        return None
+        return _DirectLLMResult(None, {}, error_type="missing_api_key")
     if not _budget_allowed(
         "audit",
         _ALIBABA_VISION_MODEL,
@@ -943,7 +968,7 @@ async def _call_alibaba_premium_vision(
         user_prompt,
         max_output_tokens=_GEMMA_MAX_TOKENS,
     ):
-        return None
+        return _DirectLLMResult(None, {}, error_type="budget_blocked")
     b64 = base64.b64encode(image_bytes).decode()
     payload = {
         "model": _ALIBABA_VISION_MODEL,
@@ -975,28 +1000,44 @@ async def _call_alibaba_premium_vision(
                 timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
-                    body = await resp.text()
-                    print(f"Alibaba vision: HTTP {resp.status} — {body[:200]}")
-                    return None
+                    await resp.read()
+                    print(f"Alibaba vision: HTTP {resp.status}")
+                    return _DirectLLMResult(
+                        None,
+                        {},
+                        error_type=f"http_{resp.status}",
+                        response_received=True,
+                        attempt_count=1,
+                    )
                 data = await resp.json()
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
         _record_budget("audit", int(tokens.get("total_tokens") or 0))
         print(f"Alibaba vision: OK — {tokens.get('total_tokens', '?')} tokens")
-        return body or None
+        return _DirectLLMResult(
+            body or None,
+            tokens,
+            response_received=True,
+            attempt_count=1,
+        )
     except Exception as exc:
-        print(f"Alibaba vision: error — {exc}")
-        return None
+        print(f"Alibaba vision: error — {type(exc).__name__}")
+        return _DirectLLMResult(
+            None,
+            {},
+            error_type=type(exc).__name__,
+            attempt_count=1,
+        )
 
 
 async def _call_yandex_premium_vision(
     system_prompt: str,
     user_prompt: str,
     image_bytes: bytes,
-) -> str | None:
+) -> _DirectLLMResult:
     if not _API_KEY or not _GEMMA_MODEL_URI:
         print("Gemma: YANDEX_API_KEY or YANDEX_GEMMA_MODEL_URI not set — skipping")
-        return None
+        return _DirectLLMResult(None, {}, error_type="missing_api_key")
     if not _budget_allowed(
         "audit",
         _GEMMA_MODEL_URI,
@@ -1004,7 +1045,7 @@ async def _call_yandex_premium_vision(
         user_prompt,
         max_output_tokens=_GEMMA_MAX_TOKENS,
     ):
-        return None
+        return _DirectLLMResult(None, {}, error_type="budget_blocked")
     b64 = base64.b64encode(image_bytes).decode()
     payload = {
         "model": _GEMMA_MODEL_URI,
@@ -1031,18 +1072,34 @@ async def _call_yandex_premium_vision(
                 timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
-                    body = await resp.text()
-                    print(f"Gemma: HTTP {resp.status} — {body[:200]}")
-                    return None
+                    await resp.read()
+                    print(f"Gemma: HTTP {resp.status}")
+                    return _DirectLLMResult(
+                        None,
+                        {},
+                        error_type=f"http_{resp.status}",
+                        response_received=True,
+                        attempt_count=1,
+                    )
                 data = await resp.json()
         body = data["choices"][0]["message"]["content"].strip()
         tokens = data.get("usage", {})
         _record_budget("audit", int(tokens.get("total_tokens") or 0))
         print(f"Gemma: OK — {tokens.get('total_tokens', '?')} tokens")
-        return body or None
+        return _DirectLLMResult(
+            body or None,
+            tokens,
+            response_received=True,
+            attempt_count=1,
+        )
     except Exception as exc:
-        print(f"Gemma: error — {exc}")
-        return None
+        print(f"Gemma: error — {type(exc).__name__}")
+        return _DirectLLMResult(
+            None,
+            {},
+            error_type=type(exc).__name__,
+            attempt_count=1,
+        )
 
 
 async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | None:
@@ -1051,68 +1108,75 @@ async def generate_premium_analysis(category: str, image_bytes: bytes) -> str | 
     provider = _PREMIUM_VISION_PROVIDER
     if provider not in {"auto", "alibaba", "yandex"}:
         provider = "alibaba"
+    active_provider = "alibaba" if provider in {"auto", "alibaba"} else "yandex"
+    model = (
+        _ALIBABA_VISION_MODEL
+        if active_provider == "alibaba"
+        else _GEMMA_MODEL_URI
+    )
+    trace_context = make_runtime_trace_context(
+        surface="telegram.premium_vision",
+        source_payload={
+            "category": category,
+            "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+        },
+    )
+    try:
+        permit = start_transport_invocation(
+            trace_context,
+            role_id="premium_vision",
+            provider=active_provider,
+            model=model,
+            input_payload={
+                "system_prompt": system_prompt,
+                "user_prompt": PREMIUM_USER_PROMPT,
+                "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
+            },
+            provider_class="src.utils.llm_formatter",
+        )
+    except Exception:
+        return None
 
     if provider in {"auto", "alibaba"}:
-        return await _call_alibaba_premium_vision(
+        direct_result = await _call_alibaba_premium_vision(
             system_prompt, PREMIUM_USER_PROMPT, image_bytes
         )
-
-    if provider == "yandex":
-        return await _call_yandex_premium_vision(system_prompt, PREMIUM_USER_PROMPT, image_bytes)
-
-    return None
-    """Call Gemma 3 27B IT (vision) to analyze a chart screenshot."""
-    if not _API_KEY or not _GEMMA_MODEL_URI:
-        print("Gemma: YANDEX_API_KEY or YANDEX_GEMMA_MODEL_URI not set — skipping")
-        return None
-
-    from scripts.premium_prompts import PREMIUM_SYSTEM_PROMPTS, PREMIUM_USER_PROMPT
-    system_prompt = PREMIUM_SYSTEM_PROMPTS.get(category, PREMIUM_SYSTEM_PROMPTS["CRYPTO"])
-    if not _budget_allowed(
-        "audit",
-        _GEMMA_MODEL_URI,
-        system_prompt,
-        PREMIUM_USER_PROMPT,
-        max_output_tokens=_GEMMA_MAX_TOKENS,
-    ):
-        return None
-    b64 = base64.b64encode(image_bytes).decode()
-
-    payload = {
-        "model": _GEMMA_MODEL_URI,
-        "max_tokens": _GEMMA_MAX_TOKENS,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": [
-                {"type": "text", "text": PREMIUM_USER_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ]},
-        ],
-    }
-    headers = {
-        "Authorization": f"Api-Key {_API_KEY}",
-        "Content-Type":  "application/json",
-    }
-
+    else:
+        direct_result = await _call_yandex_premium_vision(
+            system_prompt,
+            PREMIUM_USER_PROMPT,
+            image_bytes,
+        )
+    result = direct_result.text
+    error_type = direct_result.error_type
+    if not result and not error_type:
+        error_type = (
+            "empty_response"
+            if direct_result.response_received
+            else "no_response"
+        )
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                _API_URL, json=payload, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=_GEMMA_TIMEOUT),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    print(f"Gemma: HTTP {resp.status} — {body[:200]}")
-                    return None
-                data = await resp.json()
-        body = data["choices"][0]["message"]["content"].strip()
-        tokens = data.get("usage", {})
-        _record_budget("audit", int(tokens.get("total_tokens") or 0))
-        print(f"Gemma: OK — {tokens.get('total_tokens', '?')} tokens")
-        return body or None
-    except Exception as exc:
-        print(f"Gemma: error — {exc}")
+        finish_transport_invocation(
+            trace_context,
+            permit,
+            status="accepted" if result else "provider_error",
+            output_text=result,
+            usage={
+                "provider": active_provider,
+                "model": model,
+                "input_tokens": int(direct_result.usage.get("prompt_tokens") or 0),
+                "output_tokens": int(
+                    direct_result.usage.get("completion_tokens") or 0
+                ),
+                "total_tokens": int(direct_result.usage.get("total_tokens") or 0),
+            },
+            error_type=error_type,
+            response_received=direct_result.response_received,
+            attempt_count=direct_result.attempt_count,
+        )
+    except Exception:
         return None
+    return result
 
 
 # ── Educational Q&A ────────────────────────────────────────────────────────────
@@ -1142,12 +1206,17 @@ async def generate_edu_text(question: str) -> str | None:
     """Answer a user's educational question via Qwen. Returns None on error."""
     shared_router = _use_shared_router()
     if shared_router:
+        trace_context = make_runtime_trace_context(
+            surface="telegram.education",
+            source_payload={"question": question},
+        )
         body, usage = await _call_shared_router(
             _EDU_SYSTEM_PROMPT,
             question,
             max_tokens=400,
             timeout=_TIMEOUT,
             role="mid",
+            trace_context=trace_context,
         )
         if not body:
             return None

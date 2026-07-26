@@ -16,6 +16,11 @@ import os
 
 import aiohttp
 
+from src.research_lab.llm_invocation_ledger import (
+    LLMTraceContext,
+    finish_transport_invocation,
+    start_transport_invocation,
+)
 from src.utils import llm_budget_guard as budget_guard
 
 # ── провайдер ────────────────────────────────────────────────────────────────
@@ -113,21 +118,107 @@ def _usage(provider: str, model: str, role: str, data: dict, *,
 
 async def call(role: str, system: str, user: str, *,
                json_mode: bool = False, max_tokens: int = 900,
-               timeout: int | None = None) -> tuple[str | None, dict]:
+               timeout: int | None = None,
+               trace_context: LLMTraceContext | None = None) -> tuple[str | None, dict]:
     """Вызвать модель роли на активном провайдере. (text|None, usage). Retry с backoff."""
     provider = PROVIDER
     model = model_for(role, provider)
     timeout = timeout or _TIMEOUT
+    permit = None
+    if trace_context is not None:
+        try:
+            permit = start_transport_invocation(
+                trace_context,
+                role_id=role,
+                provider=provider,
+                model=model,
+                input_payload={
+                    "system": system,
+                    "user": user,
+                    "json_mode": bool(json_mode),
+                    "max_tokens": int(max_tokens),
+                },
+                provider_class="src.utils.llm_client",
+            )
+        except Exception:
+            return None, _usage(
+                provider,
+                model,
+                role,
+                {},
+                status="error",
+                error_type="trace_start_failed",
+            )
+
+    def traced_result(
+        text: str | None,
+        usage: dict,
+        *,
+        status: str,
+        error_type: str = "",
+        response_received: bool = False,
+        attempt_count: int = 0,
+    ) -> tuple[str | None, dict]:
+        if trace_context is None or permit is None:
+            return text, usage
+        try:
+            finish_transport_invocation(
+                trace_context,
+                permit,
+                status=status,
+                output_text=text,
+                usage=usage,
+                error_type=error_type,
+                response_received=response_received,
+                attempt_count=attempt_count,
+            )
+        except Exception:
+            failed = _usage(
+                provider,
+                model,
+                role,
+                {},
+                status="error",
+                error_type="trace_finish_failed",
+            )
+            failed["correlation_id"] = trace_context.correlation_id
+            failed["invocation_id"] = permit.invocation_id
+            failed["surface"] = trace_context.surface
+            return None, failed
+        usage["correlation_id"] = trace_context.correlation_id
+        usage["invocation_id"] = permit.invocation_id
+        usage["surface"] = trace_context.surface
+        return text, usage
+
     est_tokens, est_cost_rub = _estimate_pre_call_cost(provider, model, system, user, max_tokens)
     blocked, reason, ctx = budget_guard.should_block(role, est_tokens, est_cost_rub)
     if blocked:
         print(f"llm_client[{provider}/{role}]: budget skipped - {reason}")
-        return None, budget_guard.usage_for_block(provider, model, role, reason, ctx)
+        usage = budget_guard.usage_for_block(provider, model, role, reason, ctx)
+        return traced_result(
+            None,
+            usage,
+            status="blocked",
+            error_type=str(reason),
+        )
 
     if provider == "alibaba":
         if not _ALIBABA_KEY:
             print("llm_client: ALIBABA_API_KEY не задан")
-            return None, _usage(provider, model, role, {}, status="error", error_type="missing_api_key")
+            usage = _usage(
+                provider,
+                model,
+                role,
+                {},
+                status="error",
+                error_type="missing_api_key",
+            )
+            return traced_result(
+                None,
+                usage,
+                status="provider_error",
+                error_type="missing_api_key",
+            )
         url = _ALIBABA_URL
         headers = {"Authorization": f"Bearer {_ALIBABA_KEY}", "Content-Type": "application/json"}
         payload = {"model": model, "max_tokens": max_tokens,
@@ -137,33 +228,86 @@ async def call(role: str, system: str, user: str, *,
     else:  # yandex
         if not _YANDEX_KEY:
             print("llm_client: YANDEX_API_KEY не задан")
-            return None, _usage(provider, model, role, {}, status="error", error_type="missing_api_key")
+            usage = _usage(
+                provider,
+                model,
+                role,
+                {},
+                status="error",
+                error_type="missing_api_key",
+            )
+            return traced_result(
+                None,
+                usage,
+                status="provider_error",
+                error_type="missing_api_key",
+            )
         url = _YANDEX_URL
         headers = {"Authorization": f"Api-Key {_YANDEX_KEY}", "Content-Type": "application/json"}
         payload = {"model": model, "max_tokens": max_tokens,
                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
 
     last_err = None
+    response_received_any = False
     for attempt in range(_RETRIES + 1):
+        attempt_count = attempt + 1
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.post(url, json=payload, headers=headers,
                                   timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                    response_received_any = True
                     if r.status == 429 or r.status >= 500:
                         last_err = f"HTTP {r.status}"
                         await asyncio.sleep(min(2 ** attempt, 8))
                         continue
                     if r.status != 200:
-                        body = await r.text()
-                        print(f"llm_client[{provider}/{role}]: HTTP {r.status} — {body[:200]}")
-                        return None, _usage(provider, model, role, {}, status="error", error_type=f"http_{r.status}")
+                        await r.read()
+                        print(f"llm_client[{provider}/{role}]: HTTP {r.status}")
+                        error_type = f"http_{r.status}"
+                        usage = _usage(
+                            provider,
+                            model,
+                            role,
+                            {},
+                            status="error",
+                            error_type=error_type,
+                        )
+                        return traced_result(
+                            None,
+                            usage,
+                            status="provider_error",
+                            error_type=error_type,
+                            response_received=True,
+                            attempt_count=attempt_count,
+                        )
                     data = await r.json()
             text = (data["choices"][0]["message"]["content"] or "").strip()
             usage = _usage(provider, model, role, data)
             budget_guard.record_usage(role, usage.get("total_tokens") or 0, usage.get("cost_rub") or 0.0)
-            return (text or None), usage
+            return traced_result(
+                text or None,
+                usage,
+                status="accepted",
+                response_received=True,
+                attempt_count=attempt_count,
+            )
         except Exception as e:
-            last_err = str(e)
+            last_err = type(e).__name__
             await asyncio.sleep(min(2 ** attempt, 8))
     print(f"llm_client[{provider}/{role}]: провал после ретраев — {last_err}")
-    return None, _usage(provider, model, role, {}, status="error", error_type="retry_exhausted")
+    usage = _usage(
+        provider,
+        model,
+        role,
+        {},
+        status="error",
+        error_type="retry_exhausted",
+    )
+    return traced_result(
+        None,
+        usage,
+        status="provider_error",
+        error_type="retry_exhausted",
+        response_received=response_received_any,
+        attempt_count=_RETRIES + 1,
+    )
