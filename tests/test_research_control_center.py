@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 
@@ -14,6 +15,42 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+def test_canonical_bat_launches_control_center_as_repo_module():
+    text = (ROOT / "bat" / "research_control_center.bat").read_text(encoding="utf-8")
+
+    assert "python -X utf8 -m scripts.research_control_center %*" in text
+    assert "python -X utf8 scripts\\research_control_center.py %*" not in text
+
+
+def test_canonical_bat_help_resolves_repo_packages_without_dotenv():
+    if os.name != "nt":
+        return
+    env = os.environ.copy()
+    env["TRADING_BOT_DOTENV_AUTOLOAD"] = "disabled"
+    completed = subprocess.run(
+        [
+            "cmd.exe",
+            "/d",
+            "/c",
+            "call",
+            str(ROOT / "bat" / "research_control_center.bat"),
+            "--help",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ModuleNotFoundError" not in completed.stdout + completed.stderr
+    assert "--start" in completed.stdout
 
 
 def test_format_age_uses_human_units():
