@@ -17,6 +17,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from src.research_lab.llm_invocation_ledger import make_runtime_trace_context  # noqa: E402
 from src.utils import llm_client  # noqa: E402
 
 _SYSTEM = """\
@@ -117,8 +118,19 @@ async def decide(event: dict, agent: dict, price: float | None, market_ctx: str 
     if body:
         parts += ["", "ТЕКСТ (сжато): " + body[:1500]]
 
-    raw, usage = await llm_client.call("chief", _SYSTEM, "\n".join(p for p in parts if p),
-                                       json_mode=True, max_tokens=750)
+    trace_context = make_runtime_trace_context(
+        surface="scanner.chief",
+        source_ref=str(event.get("doc_id") or event.get("key") or ""),
+        source_payload={"event": event, "agent": agent},
+    )
+    raw, usage = await llm_client.call(
+        "chief",
+        _SYSTEM,
+        "\n".join(p for p in parts if p),
+        json_mode=True,
+        max_tokens=750,
+        trace_context=trace_context,
+    )
     data = _parse(raw)
     if not isinstance(data, dict):
         if usage.get("status") == "budget_skipped":

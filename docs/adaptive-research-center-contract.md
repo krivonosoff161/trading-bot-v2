@@ -54,6 +54,37 @@ non-loopback endpoints fail closed before a provider call. Malformed endpoint
 syntax, including non-numeric or out-of-range ports, produces an explicit
 `invalid_endpoint` permit denial and never escapes as a parser exception.
 
+### Canonical LLM Invocation Trace
+
+The private `LLMInvocation.v1` ledger is the single canonical audit surface for
+model transport attempts. Farm roles already use it through
+`src.research_lab.llm_provider`. The supported RCC profile also records the
+following call sites:
+
+| RCC contour | Production call site | Trace surface |
+| --- | --- | --- |
+| scanner | `src.scout.agents.layer_agent` | `scanner.layer_agent` |
+| scanner | `src.scout.agents.chief` | `scanner.chief` |
+| public news | `src.scout.public_channel.editor` | `public_news.editor` |
+| Telegram chart text | `src.utils.llm_formatter.generate_client_text` through the shared router | `telegram.chart_text` |
+| Telegram education | `src.utils.llm_formatter.generate_edu_text` through the shared router | `telegram.education` |
+| Telegram premium vision | `src.utils.llm_formatter.generate_premium_analysis` | `telegram.premium_vision` |
+
+Each network-capable call writes a correlated `started` event before transport
+and one terminal event after a response, budget/configuration block, or provider
+failure. The terminal event records status, response-received state, attempt
+count, sanitized usage, and an output hash. Source references, prompt inputs,
+image bytes, and returned text are hashed; raw prompt/response content is not
+written to the ledger. A failure to write either trace boundary is fail-closed:
+the transport is not started, or an otherwise received response is not exposed
+downstream.
+
+This trace is evidence, not authority. It cannot enable a provider, Telegram
+delivery, execution, `AUTO_TRADE`, or a private endpoint. Diagnostic scripts,
+manual analyzer fallback transports, `scripts/ws`, and archive/reference
+surfaces are outside the canonical RCC profile and are not represented as
+covered by this matrix.
+
 ### Independent Validator
 
 Owns evidence quality and the only `PAPER_FORWARD_READY` verdict. It receives an

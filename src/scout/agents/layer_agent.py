@@ -20,6 +20,7 @@ if str(_ROOT) not in sys.path:
 
 import yaml  # noqa: E402
 
+from src.research_lab.llm_invocation_ledger import make_runtime_trace_context  # noqa: E402
 from src.utils import llm_client  # noqa: E402
 
 _CFG = Path(__file__).resolve().parents[1] / "config" / "layer_agents.yaml"
@@ -208,7 +209,19 @@ async def analyze(event: dict, layer: int, asset: str | None = None) -> dict:
         parts.append(f"КОНТЕКСТ ИЗ ИСТОЧНИКОВ: {event['context_package']}")
     user = "\n".join(p for p in parts if p)
 
-    raw, usage = await llm_client.call("cheap", system, user, json_mode=True, max_tokens=700)
+    trace_context = make_runtime_trace_context(
+        surface="scanner.layer_agent",
+        source_ref=str(event.get("doc_id") or event.get("key") or ""),
+        source_payload={"event": event, "layer": layer, "asset": asset},
+    )
+    raw, usage = await llm_client.call(
+        "cheap",
+        system,
+        user,
+        json_mode=True,
+        max_tokens=700,
+        trace_context=trace_context,
+    )
     data = _parse(raw) or {}
     data = _apply_l5_preipo_guard(data, event, layer)
 

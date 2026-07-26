@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from src.research_lab.llm_invocation_ledger import make_runtime_trace_context
 from src.scout.public_channel.contracts import PublicChannelItem, PublicChannelPost, layer_label
 from src.scout.public_channel.heuristics import cap, category_for, headline_for, what_happened_for, why_matters
 from src.scout.public_channel.prompts import SYSTEM_PROMPT
@@ -96,7 +97,19 @@ async def build_post(item: PublicChannelItem, *, use_llm: bool = False) -> tuple
             },
             ensure_ascii=False,
         )
-        raw, usage = await llm_client.call("mid", SYSTEM_PROMPT, user, json_mode=True, max_tokens=700)
+        trace_context = make_runtime_trace_context(
+            surface="public_news.editor",
+            source_ref=str(item.key or ""),
+            source_payload={"item": item.to_dict()},
+        )
+        raw, usage = await llm_client.call(
+            "mid",
+            SYSTEM_PROMPT,
+            user,
+            json_mode=True,
+            max_tokens=700,
+            trace_context=trace_context,
+        )
         data = _json_from_text(raw)
         if isinstance(data, dict):
             watch_points = _clean_watch_points(data.get("watch_points"))
