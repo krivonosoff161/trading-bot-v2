@@ -111,6 +111,40 @@ DB/WAL/SHM-safe backup and restore proof where applicable, producer quiescence,
 reader/writer parity, abort metrics, operational evidence, and an owner-approved
 cutover/rollback procedure.
 
+## Materialization ledger size boundary
+
+`SearchFamilyDefinition.v3` preserves the complete bounded Cartesian audit as a
+streamed, length-prefixed canonical-record digest with record, disposition, and
+reason counts. Only genuinely selected points remain inline. Validation re-derives
+every point and requires the exact ledger digest and counts, so compact storage does
+not turn omitted search-space evidence into an unverifiable summary. Existing v2
+definitions remain readable only when their preserved full point ledgers replay
+exactly; malformed historical code identities fail closed.
+
+For reader compatibility the v3 `points` field is the bounded selected subset;
+`point_ledger.record_count` and its digest/counts represent the complete Cartesian
+space. Consumers that need total search accounting must use the ledger rather than
+the selected-subset length.
+
+The farm materialization outbox retains a full replay payload only until the
+content-bound event-spec artifact and compute queue binding are acknowledged. The
+acknowledgement transaction then releases the redundant JSON while retaining the
+spec path/digest, materialization identity, fence, and queue job evidence. Historical
+acknowledged copies require a quiescent, backed-up dry-run/apply migration: every
+artifact is checked, apply is bound to the exact dry-run plan digest, and no
+pending/dispatched/ambiguous row is changed. Physical SQLite reclamation is an
+explicit post-commit option with a final integrity check, never automatic runtime
+maintenance.
+
+The supported operator surface is
+`python -m scripts.strategy_lab.release_materialization_payloads --private-root
+<exact-private-root>`. It is read-only by default. A reviewed apply repeats all
+verification and requires `--apply --expected-plan-digest <dry-run-digest>`;
+after an idempotence dry-run reports zero eligible rows, a second bound
+zero-row apply with `--compact` performs the checkpoint, vacuum, and integrity
+check. Keeping logical release and physical reclamation in separate invocations
+makes a compaction failure non-ambiguous and safely retryable.
+
 No public command activates quarantine for current private data. A future rollout needs
 an exact path inventory, backup, quiescence/writer adoption, dry reachability/parity
 report, abort metrics, rollback, and a new owner decision.

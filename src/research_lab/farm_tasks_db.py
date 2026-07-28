@@ -24,6 +24,7 @@ State only. No fetch, no compute, no order path. Paper/research only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -1087,7 +1088,7 @@ class FarmTasksDB:
                 raise StaleTaskClaimError("task changed during materialization commit")
             outbox_cur = self._conn.execute(
                 """UPDATE materialization_outbox SET state='acknowledged',
-                       queue_job_id=?, updated_at=?
+                       queue_job_id=?, updated_at=?, spec_json=''
                    WHERE materialization_id=? AND task_id=?
                      AND task_fencing_token=? AND state IN ('pending','dispatched')""",
                 (int(queue_job_id), current, materialization_id, tid, fence),
@@ -1305,6 +1306,145 @@ class FarmTasksDB:
                WHERE state IN ('pending','dispatched') ORDER BY created_at"""
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def release_acknowledged_materialization_payloads(
+        self,
+        *,
+        apply: bool = False,
+        expected_plan_digest: str = "",
+        compact: bool = False,
+    ) -> dict[str, Any]:
+        """Verify and release terminal replay payload copies.
+
+        ``spec_json`` is recovery authority only until the content-bound spec file
+        and compute-queue binding are durably acknowledged.  Afterwards the exact
+        spec digest/path and queue binding remain evidence, while retaining the
+        complete JSON in the brain DB only duplicates the immutable spec artifact.
+
+        The apply path holds ``BEGIN IMMEDIATE`` across verification and compare-
+        and-swap updates.  It is intended for a quiescent, backed-up operational
+        migration; this method does not infer that authority.  ``compact`` is an
+        explicit post-commit storage operation and is accepted only with an exact
+        dry-run plan digest.
+        """
+
+        if self.read_only and apply:
+            raise RuntimeError("payload release requires a writable farm DB")
+        if compact and not apply:
+            raise ValueError("storage compaction requires apply mode")
+        if apply and not expected_plan_digest:
+            raise ValueError("apply requires the exact dry-run plan digest")
+        if self.path == ":memory:":
+            allowed_root: Path | None = None
+        else:
+            private_root = Path(self.path).resolve().parent.parent
+            allowed_root = (private_root / "plans" / "event_specs").resolve()
+        if apply:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = self._conn.execute(
+                """SELECT materialization_id, spec_path, spec_digest, spec_json
+                   FROM materialization_outbox
+                   WHERE state='acknowledged' AND LENGTH(spec_json)>0
+                   ORDER BY materialization_id"""
+            )
+            released_bytes = 0
+            plan_digest = hashlib.sha256()
+            planned_updates: list[tuple[str, str, int]] = []
+            for row in cursor:
+                payload = str(row["spec_json"])
+                payload_bytes = payload.encode("utf-8")
+                digest = "sha256:" + hashlib.sha256(payload_bytes).hexdigest()
+                if digest != str(row["spec_digest"]):
+                    raise ValueError(
+                        "acknowledged materialization payload digest mismatch"
+                    )
+                spec_path = Path(str(row["spec_path"]))
+                if self.path != ":memory:":
+                    if not spec_path.is_absolute() or not spec_path.is_file():
+                        raise ValueError(
+                            "acknowledged materialization spec artifact is absent"
+                        )
+                    resolved = spec_path.resolve(strict=True)
+                    assert allowed_root is not None
+                    try:
+                        resolved.relative_to(allowed_root)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "acknowledged materialization spec escapes event-spec root"
+                        ) from exc
+                    file_digest = hashlib.sha256()
+                    with resolved.open(
+                        "r", encoding="utf-8", newline=None
+                    ) as handle:
+                        while chunk := handle.read(8 * 1024 * 1024):
+                            file_digest.update(chunk.encode("utf-8"))
+                    if "sha256:" + file_digest.hexdigest() != digest:
+                        raise ValueError(
+                            "acknowledged materialization spec artifact digest mismatch"
+                        )
+                identity = json.dumps(
+                    {
+                        "materialization_id": str(row["materialization_id"]),
+                        "spec_digest": digest,
+                        "payload_bytes": len(payload_bytes),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                plan_digest.update(len(identity).to_bytes(8, "big"))
+                plan_digest.update(identity)
+                released_bytes += len(payload_bytes)
+                planned_updates.append(
+                    (
+                        str(row["materialization_id"]),
+                        digest,
+                        len(payload),
+                    )
+                )
+            cursor.close()
+            if apply:
+                actual_plan_digest = "sha256:" + plan_digest.hexdigest()
+                if actual_plan_digest != expected_plan_digest:
+                    raise ValueError("materialization payload release plan changed")
+                for materialization_id, digest, payload_length in planned_updates:
+                    cur = self._conn.execute(
+                        """UPDATE materialization_outbox SET spec_json=''
+                           WHERE materialization_id=? AND state='acknowledged'
+                             AND spec_digest=? AND LENGTH(spec_json)=?""",
+                        (
+                            materialization_id,
+                            digest,
+                            payload_length,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "materialization payload changed during release"
+                        )
+                self._conn.commit()
+                if compact:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    self._conn.execute("VACUUM")
+                    integrity = str(
+                        self._conn.execute("PRAGMA integrity_check").fetchone()[0]
+                    )
+                    if integrity != "ok":
+                        raise RuntimeError(
+                            "farm task database integrity failed after compaction"
+                        )
+            return {
+                "schema": "MaterializationPayloadRelease.v1",
+                "mode": "apply" if apply else "dry_run",
+                "eligible_rows": len(planned_updates),
+                "released_payload_bytes": released_bytes,
+                "plan_digest": "sha256:" + plan_digest.hexdigest(),
+                "storage_compacted": bool(compact),
+            }
+        except Exception:
+            if apply:
+                self._conn.rollback()
+            raise
 
     def renew_task_claim(
         self,

@@ -9,6 +9,7 @@ from scripts.strategy_lab.apply_feedback_recommendations import _exp_to_dict as 
 from scripts.strategy_lab.generate_event_sweeps import _exp_to_dict as event_exp_to_dict
 from scripts.strategy_lab.queue_validated_proposals import _exp_to_dict as proposal_exp_to_dict
 from src.research_lab.experiment import ExperimentSpec, RunResult
+from src.research_lab.farm_sweep_runner import build_sweep_spec
 from src.research_lab.hard_validation_export import (
     _build_candidate,
     _comparable_trial_panel,
@@ -16,6 +17,7 @@ from src.research_lab.hard_validation_export import (
 )
 from src.research_lab.resource_policy import load_resource_policy
 from src.research_lab.search_family_definition import (
+    LEGACY_SCHEMA,
     content_hash,
     effective_family_n_trials,
     family_definition_id,
@@ -28,7 +30,7 @@ from src.research_lab.search_trial_evidence import (
     search_trial_evidence_migration_report,
     validate_search_trial_evidence,
 )
-from src.research_lab.sweep_compile import compile_sweep
+from src.research_lab.sweep_compile import compile_sweep, expand_grids_bounded
 from src.research_lab.sweep_spec import SweepSpec
 from src.research_lab.timeframes import load_timeframe_profiles
 
@@ -93,16 +95,10 @@ def test_baseline_only_sweep_has_one_complete_point() -> None:
 def test_invalid_points_preserve_flat_index_and_reason() -> None:
     exp = _compile(_rsi_spec("invalid-ledger", [30, 80]))
 
-    points = exp.search_family_definition["points"]
-    invalid = [point for point in points if point["pre_disposition"] == "dependency_invalid"]
-    assert invalid == [
-        {
-            "flat_index": 1,
-            "params": {"overbought": 70, "oversold": 80},
-            "pre_disposition": "dependency_invalid",
-            "reason": "oversold_must_be_less_than_overbought",
-        }
-    ]
+    ledger = exp.search_family_definition["point_ledger"]
+    assert ledger["record_count"] == 2
+    assert ledger["disposition_counts"]["dependency_invalid"] == 1
+    assert ledger["reason_counts"]["oversold_must_be_less_than_overbought"] == 1
 
 
 def test_raw_sweep_tampering_fails_even_with_recomputed_family_id() -> None:
@@ -110,11 +106,76 @@ def test_raw_sweep_tampering_fails_even_with_recomputed_family_id() -> None:
     definition = json.loads(json.dumps(exp.search_family_definition))
     definition["raw_sweep_spec"]["setup_grid"]["oversold"] = [30]
 
-    with pytest.raises(ValueError, match="points disagree with raw sweep"):
+    with pytest.raises(ValueError, match="point ledger disagrees with raw sweep"):
         validate_search_family_definition(
             definition,
             expected_id=family_definition_id(definition),
         )
+
+
+def test_compact_point_ledger_tampering_fails_with_recomputed_family_id() -> None:
+    exp = _compile(_rsi_spec("ledger-tamper", [30, 80]))
+    definition = json.loads(json.dumps(exp.search_family_definition))
+    definition["point_ledger"]["sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="point ledger disagrees with raw sweep"):
+        validate_search_family_definition(
+            definition,
+            expected_id=family_definition_id(definition),
+        )
+
+
+def test_legacy_v2_full_ledger_remains_replayable_after_v3_compaction() -> None:
+    spec = _rsi_spec("legacy-v2", [30, 80])
+    exp = _compile(spec)
+    audit: dict = {}
+    expand_grids_bounded(
+        spec.setup_grid,
+        spec.entry_grid,
+        spec.exit_grid,
+        cap=1,
+        seed_material=f"{spec.sweep_id}|{spec.setup_family}|{spec.timeframe}",
+        baseline={"oversold": 30, "overbought": 70},
+        strategy_id=spec.setup_family,
+        audit=audit,
+        audit_format="legacy_full",
+    )
+    definition = json.loads(json.dumps(exp.search_family_definition))
+    definition["schema"] = LEGACY_SCHEMA
+    definition["compiler"]["version"] = "bounded-cartesian/v2"
+    definition["points"] = audit["points"]
+    definition.pop("point_ledger")
+    definition.pop("selected_points", None)
+
+    counts = validate_search_family_definition(
+        definition,
+        expected_id=family_definition_id(definition),
+    )
+
+    assert counts["raw_points"] == 2
+    assert counts["dependency_invalid"] == 1
+
+
+def test_large_production_sweep_uses_bounded_compact_ledger() -> None:
+    spec = build_sweep_spec(
+        "BTC_USDT_SWAP",
+        "1h",
+        "bb_volume_fade",
+        fingerprint="fingerprint",
+        tier="normal",
+    )
+    exp = _compile(spec)
+    encoded = json.dumps(
+        exp.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    ledger = exp.search_family_definition["point_ledger"]
+
+    assert ledger["record_count"] > 100_000
+    assert ledger["disposition_counts"]["selected"] <= 48
+    assert len(exp.search_family_definition["points"]) <= 48
+    assert "selected_points" not in exp.search_family_definition
+    assert "selected_points" not in exp.plan_meta["search_space"]["point_ledger"]
+    assert len(encoded) < 250_000
 
 
 def test_selection_policy_and_timeframe_profile_are_fully_bound() -> None:
