@@ -65,6 +65,15 @@ gaining calculation, verdict, state-transition, or execution authority.
 
 ## Next: Paper Evidence Collection
 
+Before another long observation window, finish the private storage rollout as a
+separate operational package. The public repository now has an off-by-default
+exact-root archive capability, immutable catalog, bounded public-safe retrieval,
+and synthetic migration/cutover/rollback proof. It does not activate a private
+root or migrate a producer. The rollout exit gate is an exact inventory,
+independent-volume and capacity proof, DB/WAL/SHM-safe backup/restore where
+applicable, quiesced copy parity, reader/writer cutover evidence, abort metrics,
+and a non-destructive rollback under separate owner authority.
+
 1. Run bounded paper-only cycles with the canonical launcher.
 2. Keep outcomes, lineage, and validation evidence in the local private root.
 3. Review only sanitized aggregates and deterministic acceptance reports.

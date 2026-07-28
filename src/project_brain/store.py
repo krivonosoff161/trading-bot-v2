@@ -341,34 +341,49 @@ class ProjectBrainStore:
                 for row in conn.execute(query, params)
             ]
 
-    def rebuild_index(self, graph: ProjectGraph | None = None) -> None:
+    def rebuild_index(
+        self,
+        graph: ProjectGraph | None = None,
+        *,
+        archived_events: Iterable[Mapping[str, Any]] = (),
+    ) -> None:
         if self.index_path.exists():
             self.index_path.unlink()
         self._initialize_index()
         if graph is not None:
             self.index_graph(graph)
+        for row in archived_events:
+            self._index_event(row)
         if not self.events_path.exists():
             return
         for line in self.events_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            row = json.loads(line)
-            if row.get("event") == "record":
-                self._upsert_record(MemoryRecord(**row["record"]))
-            elif row.get("event") == "causal_link":
-                with _connection(self.index_path) as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO causal_links VALUES (?,?,?,?,?,?,?)",
-                        (
-                            row["link_id"],
-                            row["chain_id"],
-                            row["source_record_id"],
-                            row["target_record_id"],
-                            row["relation"],
-                            json.dumps(row["evidence_refs"]),
-                            row["created_at"],
-                        ),
-                    )
+            self._index_event(json.loads(line))
+
+    def _index_event(self, row: Mapping[str, Any]) -> None:
+        reject_sensitive_data(row)
+        if row.get("event") == "record":
+            value = row.get("record")
+            if not isinstance(value, Mapping):
+                raise ValueError("Project Brain memory event is malformed")
+            self._upsert_record(MemoryRecord(**dict(value)))
+        elif row.get("event") == "causal_link":
+            with _connection(self.index_path) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO causal_links VALUES (?,?,?,?,?,?,?)",
+                    (
+                        row["link_id"],
+                        row["chain_id"],
+                        row["source_record_id"],
+                        row["target_record_id"],
+                        row["relation"],
+                        json.dumps(row["evidence_refs"]),
+                        row["created_at"],
+                    ),
+                )
+        else:
+            raise ValueError("unsupported Project Brain memory event")
 
     def _append_event_unlocked(self, row: Mapping[str, Any]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
