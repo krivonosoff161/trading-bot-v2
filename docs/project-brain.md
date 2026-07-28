@@ -30,6 +30,15 @@ The canonical graph is JSON. Markdown and Mermaid are projections. A local
 append-only event stream and SQLite query index live outside public Git. The
 index is disposable and rebuildable; it cannot override graph or event bytes.
 
+The optional Project Brain archive adapter can rebuild that disposable index
+from verified `project_brain_events` archive objects in addition to the active
+event stream. Retrieval requires explicit dialogue contours, allowed commit
+SHAs, record and byte budgets; it deduplicates records and retains a causal link
+only when both endpoints are selected. The adapter accepts only
+`public_safe_derived` archive payloads. It is not wired into hooks or the
+default store path, and archive contents do not grant authority or override
+current Git evidence.
+
 ## Main Chat Algorithm
 
 For every owner message the Project Orchestrator:

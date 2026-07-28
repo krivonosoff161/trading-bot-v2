@@ -43,6 +43,11 @@ rows, provider state, and local findings belong outside public Git.
   with renewable leases and monotonic fences. Cross-database sweep dispatch is
   content-bound and replayable; worker results remain provisional until fenced
   import and queue completion commit together.
+- An off-by-default private archive foundation can bind an exact dedicated
+  root, create immutable hashed objects/manifests, rebuild its metadata index,
+  and perform bounded public-safe retrieval. Synthetic tests prove
+  migration/copy parity and reversible append-only read selection. No
+  production launcher, private path, producer, or canonical database uses it.
 
 ## Explicitly Not Supported
 
@@ -64,6 +69,7 @@ rows, provider state, and local findings belong outside public Git.
 | Telegram | Delivery is opt-in and deduplicated; it must never be mistaken for execution. |
 | Legacy surfaces | Old engine, `start_all.bat`, and execution-adjacent scripts are isolated references, not supported farm paths. |
 | Ownership rollout | Additive v2 schemas are public and tested, but applying them to private runtime databases requires a separate quiesced, backed-up operator rollout. |
+| Archive rollout | Exact-root archive capability and synthetic cutover proofs are public, but no private root is activated and no producer/reader is migrated. Real adoption requires separate inventory, backup/restore, quiescence, parity, abort, and rollback authority. |
 
 ## How To Verify A Local Run
 

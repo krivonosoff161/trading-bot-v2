@@ -74,6 +74,43 @@ import, merge, dual-write, rotate, or migrate current logs. Any private adoption
 requires an exact producer/reader inventory, backup, quiescence or atomic cutover,
 parity/dedupe rules, abort metrics, rollback, and a new owner decision.
 
+## Private archive foundation
+
+The repository also contains an off-by-default `private_archive_storage.v1`
+foundation. It is a capability and verification library, not a launcher,
+configured path, producer migration, retention daemon, or authorization source.
+It performs no environment discovery and exposes no default private root.
+
+Activation requires an exact existing empty archive directory, an exact source
+root, and a typed, current owner-authority input bound to this project, action,
+roots, allowed artifact kinds, turn, and expiry. A non-synthetic archive must
+be on a filesystem distinct from the source. The resulting root is bound by a
+hashed capability and marker; links/reparse points and identity drift fail
+closed.
+
+Archive bytes are deterministic, content-addressed gzip objects. Immutable
+hashed manifests are the source of truth; the local SQLite catalog is a
+disposable query index that can be rebuilt from those manifests. Public-safe
+derived JSONL is schema-checked and secret-scanned before archival and again
+before bounded retrieval. Private payload archives are catalogued as
+`metadata_only` and cannot be returned by the bounded public reader.
+
+Migration plans bind the exact source path, digest, size, row count, revision,
+schema, logical stream, and destination capability. Apply revalidates the
+source, proves copy parity, and performs the requested decompression/restore
+check itself before recording success. Read selection is a hash-chained,
+append-only compare-and-append event bound to that same logical stream:
+promotion requires copy and restore verification, rollback selects the
+preserved legacy source, and neither transition deletes either copy.
+
+The current repository does **not** activate this capability, connect it to an
+RCC/farm producer, archive private runtime data, rotate files, reclaim disk, or
+perform a real cutover. The checked tests use temporary synthetic roots only.
+A private rollout still requires a separate exact-root authority, inventory,
+DB/WAL/SHM-safe backup and restore proof where applicable, producer quiescence,
+reader/writer parity, abort metrics, operational evidence, and an owner-approved
+cutover/rollback procedure.
+
 No public command activates quarantine for current private data. A future rollout needs
 an exact path inventory, backup, quiescence/writer adoption, dry reachability/parity
 report, abort metrics, rollback, and a new owner decision.

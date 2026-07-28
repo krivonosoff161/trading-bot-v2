@@ -156,3 +156,12 @@ full-stream reads only for explicit adapters over the same synthetic capability 
 lock. No launcher or current farm/scanner producer or reader selects it. Legacy append
 logs remain `legacy_uncoordinated_storage` until a separately authorized private
 inventory, cutover, parity, and rollback package is completed.
+
+The off-by-default private archive foundation adds exact-root capability
+binding, immutable content-addressed objects and manifests, a rebuildable
+catalog, bounded public-safe retrieval, and append-only reversible read
+selection. It has no launcher, environment discovery, default path, producer
+integration, or runtime activation. Private artifacts remain metadata-only to
+the bounded reader. All checked migration/cutover/rollback paths use synthetic
+temporary fixtures; adopting a real root or changing a producer/reader remains
+a separate operational gate.
