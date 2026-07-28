@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 from scripts import research_control_center as control_center
+from scripts.strategy_lab.release_materialization_payloads import (
+    run as run_payload_release,
+)
 from src.research_lab.farm_coordinator import _replay_materialization_outbox
 from src.research_lab.farm_tasks_db import (
     FarmFencingMigrationRequired,
@@ -471,9 +474,121 @@ def test_content_bound_materialization_replays_same_job_and_acknowledges(tmp_pat
         now=100.0,
     )
     outbox = brain.raw_connection.execute(
-        "SELECT state, queue_job_id FROM materialization_outbox"
+        "SELECT state, queue_job_id, spec_json FROM materialization_outbox"
     ).fetchone()
-    assert tuple(outbox) == ("acknowledged", first)
+    assert tuple(outbox) == ("acknowledged", first, "")
+
+
+def test_acknowledged_payload_release_is_verified_bounded_and_idempotent(
+    tmp_path,
+) -> None:
+    private_root = tmp_path / "private"
+    state = private_root / "state"
+    state.mkdir(parents=True)
+    spec = private_root / "plans" / "event_specs" / "spec.json"
+    spec.parent.mkdir(parents=True)
+    payload = json.dumps({"experiment_id": "e"}, sort_keys=True) + "\n"
+    digest = "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+    spec.write_text(payload, encoding="utf-8")
+    brain = FarmTasksDB(
+        state / "farm_tasks.sqlite", owner_id="farm", clock=lambda: 100.0
+    )
+    task_id, _ = brain.enqueue_task(
+        task_type="run_sweep", task_key="release", now=100.0
+    )
+    task = brain.claim_next_task(now=100.0)
+    assert task
+    materialization_id = f"task:{task_id}:fence:{task['fencing_token']}"
+    brain.prepare_materialization(
+        task_id,
+        materialization_id=materialization_id,
+        spec_path=str(spec.resolve()),
+        spec_digest=digest,
+        spec_json=payload,
+        priority=10,
+        now=100.0,
+    )
+    compute = _compute_db(private_root)
+    job_id, _ = ensure_experiment_queued(
+        compute,
+        spec,
+        materialization_id=materialization_id,
+        materialization_digest=digest,
+    )
+    brain.mark_materialization_dispatched(materialization_id, job_id, now=100.0)
+    brain.commit_materialization(
+        task_id,
+        materialization_id=materialization_id,
+        queue_job_id=job_id,
+        now=100.0,
+    )
+    # Recreate one legacy acknowledged row as the operational migration input.
+    brain.raw_connection.execute(
+        "UPDATE materialization_outbox SET spec_json=? WHERE materialization_id=?",
+        (payload, materialization_id),
+    )
+    brain.raw_connection.commit()
+
+    dry = brain.release_acknowledged_materialization_payloads()
+    spec.write_text(payload + "tamper", encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="spec artifact digest mismatch"
+    ):
+        brain.release_acknowledged_materialization_payloads(
+            apply=True,
+            expected_plan_digest=dry["plan_digest"],
+        )
+    assert brain.raw_connection.execute(
+        "SELECT LENGTH(spec_json) FROM materialization_outbox WHERE materialization_id=?",
+        (materialization_id,),
+    ).fetchone()[0] == len(payload)
+    spec.write_text(payload, encoding="utf-8")
+    with pytest.raises(ValueError, match="plan changed"):
+        brain.release_acknowledged_materialization_payloads(
+            apply=True,
+            expected_plan_digest="sha256:" + ("0" * 64),
+        )
+    assert brain.raw_connection.execute(
+        "SELECT LENGTH(spec_json) FROM materialization_outbox WHERE materialization_id=?",
+        (materialization_id,),
+    ).fetchone()[0] == len(payload)
+    applied = brain.release_acknowledged_materialization_payloads(
+        apply=True,
+        expected_plan_digest=dry["plan_digest"],
+    )
+    repeat_dry = brain.release_acknowledged_materialization_payloads()
+    compacted = brain.release_acknowledged_materialization_payloads(
+        apply=True,
+        expected_plan_digest=repeat_dry["plan_digest"],
+        compact=True,
+    )
+    repeated = brain.release_acknowledged_materialization_payloads()
+
+    assert dry == {
+        "schema": "MaterializationPayloadRelease.v1",
+        "mode": "dry_run",
+        "eligible_rows": 1,
+        "released_payload_bytes": len(payload.encode()),
+        "plan_digest": dry["plan_digest"],
+        "storage_compacted": False,
+    }
+    assert applied == {**dry, "mode": "apply"}
+    assert compacted == {
+        **repeat_dry,
+        "mode": "apply",
+        "storage_compacted": True,
+    }
+    assert repeated["eligible_rows"] == 0
+    assert repeated["released_payload_bytes"] == 0
+    assert brain.raw_connection.execute(
+        "SELECT spec_json FROM materialization_outbox WHERE materialization_id=?",
+        (materialization_id,),
+    ).fetchone()[0] == ""
+    brain.close()
+    assert run_payload_release(
+        private_root=private_root,
+        apply=False,
+    ) == repeated
 
 
 def test_same_spec_path_never_reuses_a_different_content_generation(tmp_path) -> None:

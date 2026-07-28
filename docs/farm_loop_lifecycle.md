@@ -32,6 +32,15 @@ reclaimed, or be executed a second time while the fenced compute queue owns the 
 Only the exact acknowledged materialization ID, task fence, queue job ID, and terminal
 queue status can finish that parked task.
 
+Newly acknowledged outbox rows retain the content-bound spec path, digest, task fence,
+and compute queue binding, but release the redundant replay `spec_json`. The immutable
+event-spec artifact remains the replay input. Historical acknowledged payload copies
+may be released only by the project-level verified migration method while the farm is
+quiescent: its dry-run validates every artifact and produces a plan digest; apply
+requires that exact digest, uses compare-and-swap updates, and optionally performs the
+post-commit SQLite compaction and integrity check. Pending, dispatched, ambiguous, and
+superseded rows are never eligible.
+
 ## Task Types And States
 
 Task types: `intake_event`, `resolve_instrument`, `prepare_data`, `enrich_funding`,

@@ -28,7 +28,12 @@ from src.research_lab.param_schemas import (
 )
 from src.research_lab.resource_policy import ResourcePolicy
 from src.research_lab.runtime_policy import effective_variant_cap
-from src.research_lab.search_family_definition import build_sweep_family_definition
+from src.research_lab.search_family_definition import (
+    POINT_LEDGER_ALGORITHM,
+    POINT_LEDGER_SCHEMA,
+    build_sweep_family_definition,
+    canonical_bytes,
+)
 from src.research_lab.sweep_spec import SweepSpec, validate_sweep_spec
 from src.research_lab.strategy_registry import get_strategy
 from src.research_lab.timeframes import TimeframeProfiles
@@ -36,6 +41,38 @@ from src.research_lab.timeframes import TimeframeProfiles
 
 ProgressCallback = Callable[[str], None]
 PROGRESS_CHUNK_SIZE = 1_024
+
+
+def _append_point_digest(digest: Any, point: dict[str, Any]) -> None:
+    payload = canonical_bytes(point)
+    digest.update(len(payload).to_bytes(8, "big"))
+    digest.update(payload)
+
+
+def _compact_point_ledger(
+    points: list[dict[str, Any]],
+) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    dispositions: dict[str, int] = {}
+    reasons: dict[str, int] = {}
+    selected: list[dict[str, Any]] = []
+    for point in points:
+        _append_point_digest(digest, point)
+        disposition = str(point["pre_disposition"])
+        reason = str(point["reason"])
+        dispositions[disposition] = dispositions.get(disposition, 0) + 1
+        reasons[reason] = reasons.get(reason, 0) + 1
+        if disposition == "selected":
+            selected.append(point)
+    return {
+        "schema": POINT_LEDGER_SCHEMA,
+        "algorithm": POINT_LEDGER_ALGORITHM,
+        "record_count": len(points),
+        "sha256": digest.hexdigest(),
+        "disposition_counts": dict(sorted(dispositions.items())),
+        "reason_counts": dict(sorted(reasons.items())),
+        "selected_points": selected,
+    }
 
 
 def _completed_chunk_progress(
@@ -86,10 +123,13 @@ def expand_grids_bounded(
     baseline: dict[str, Any] | None = None,
     strategy_id: str = "",
     audit: dict[str, Any] | None = None,
+    audit_format: str = "compact",
     progress: ProgressCallback | None = None,
     progress_chunk_size: int = PROGRESS_CHUNK_SIZE,
 ) -> list[dict[str, Any]]:
     """Sample a Cartesian grid without materializing the full search space."""
+    if audit_format not in {"compact", "legacy_full"}:
+        raise ValueError("unknown search-space audit format")
     merged: dict[str, list[Any]] = {}
     for grid in grids:
         for key, values in grid.items():
@@ -104,6 +144,14 @@ def expand_grids_bounded(
                 detail = ";".join(schema.errors) if not schema.ok else reason
                 raise ValueError(f"baseline parameters are invalid: {detail}")
         if audit is not None:
+            baseline_points = [
+                {
+                    "flat_index": 0,
+                    "params": {},
+                    "pre_disposition": "selected",
+                    "reason": "selected_by_sampler",
+                }
+            ]
             audit.update(
                 {
                     "axis_order": [],
@@ -113,14 +161,15 @@ def expand_grids_bounded(
                     "omitted_invalid": 0,
                     "omitted_by_variant_cap": 0,
                     "selected_flat_indices": [0],
-                    "points": [
-                        {
-                            "flat_index": 0,
-                            "params": {},
-                            "pre_disposition": "selected",
-                            "reason": "selected_by_sampler",
+                    **(
+                        {"points": baseline_points}
+                        if audit_format == "legacy_full"
+                        else {
+                            "point_ledger": _compact_point_ledger(
+                                baseline_points
+                            )
                         }
-                    ],
+                    ),
                 }
             )
         return [{}]
@@ -215,7 +264,11 @@ def expand_grids_bounded(
         variants.append(decode(selected_index))
     if audit is not None:
         selected = set(indices)
-        points = []
+        points: list[dict[str, Any]] = []
+        ledger_digest = hashlib.sha256()
+        disposition_counts: dict[str, int] = {}
+        reason_counts: dict[str, int] = {}
+        selected_points: list[dict[str, Any]] = []
         for candidate_index in range(total):
             params = decode(candidate_index)
             if candidate_index in invalid:
@@ -227,14 +280,22 @@ def expand_grids_bounded(
                     "omitted_variant_cap",
                     "eligible_not_selected_by_cap",
                 )
-            points.append(
-                {
-                    "flat_index": candidate_index,
-                    "params": params,
-                    "pre_disposition": disposition,
-                    "reason": reason,
-                }
-            )
+            point = {
+                "flat_index": candidate_index,
+                "params": params,
+                "pre_disposition": disposition,
+                "reason": reason,
+            }
+            if audit_format == "legacy_full":
+                points.append(point)
+            else:
+                _append_point_digest(ledger_digest, point)
+                disposition_counts[disposition] = (
+                    disposition_counts.get(disposition, 0) + 1
+                )
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                if disposition == "selected":
+                    selected_points.append(point)
             _completed_chunk_progress(
                 progress,
                 "grid_ledger",
@@ -251,7 +312,23 @@ def expand_grids_bounded(
                 "omitted_invalid": int(total - len(valid_indices)),
                 "omitted_by_variant_cap": int(len(valid_indices) - limit),
                 "selected_flat_indices": list(indices),
-                "points": points,
+                **(
+                    {"points": points}
+                    if audit_format == "legacy_full"
+                    else {
+                        "point_ledger": {
+                            "schema": POINT_LEDGER_SCHEMA,
+                            "algorithm": POINT_LEDGER_ALGORITHM,
+                            "record_count": int(total),
+                            "sha256": ledger_digest.hexdigest(),
+                            "disposition_counts": dict(
+                                sorted(disposition_counts.items())
+                            ),
+                            "reason_counts": dict(sorted(reason_counts.items())),
+                            "selected_points": selected_points,
+                        }
+                    }
+                ),
             }
         )
     return variants
@@ -297,7 +374,7 @@ def compile_sweep(
         for key, values in grid.items()
         if values
     }
-    search_space: dict[str, int] = {}
+    search_space: dict[str, Any] = {}
     variants = expand_grids_bounded(
         spec.setup_grid,
         spec.entry_grid,
@@ -341,6 +418,12 @@ def compile_sweep(
     if progress is not None:
         progress("compile_family_bound")
 
+    plan_search_space = dict(search_space)
+    if isinstance(plan_search_space.get("point_ledger"), dict):
+        plan_ledger = dict(plan_search_space["point_ledger"])
+        plan_ledger.pop("selected_points", None)
+        plan_search_space["point_ledger"] = plan_ledger
+
     experiment = ExperimentSpec(
         experiment_id=f"sweep_{spec.sweep_id}",
         data_glob=data_glob,
@@ -362,7 +445,7 @@ def compile_sweep(
         search_family_id=family_id,
         plan_meta={
             "search_space": {
-                **search_space,
+                **plan_search_space,
                 "symbol_total": len(symbols),
                 "selected_run_total": runs,
                 "execution_cap": int(job_cap),

@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 
-SCHEMA = "SearchFamilyDefinition.v2"
-COMPILER_VERSION = "bounded-cartesian/v2"
+LEGACY_SCHEMA = "SearchFamilyDefinition.v2"
+SCHEMA = "SearchFamilyDefinition.v3"
+COMPILER_VERSION = "bounded-cartesian/v3"
+LEGACY_COMPILER_VERSION = "bounded-cartesian/v2"
 DECLARED_GRID_VERSION = "declared-grid/v2"
 FAMILY_POLICIES = {"independent", "cumulative", "confirmatory"}
+POINT_LEDGER_SCHEMA = "SearchFamilyPointLedger.v1"
+POINT_LEDGER_ALGORITHM = "sha256-length-prefixed-canonical-json/v1"
 
 
 def _report_snapshot_progress(
@@ -37,6 +41,11 @@ def canonical_bytes(payload: Any) -> bytes:
 
 def content_hash(payload: Any) -> str:
     return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+
+
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(char in "0123456789abcdef" for char in text)
 
 
 def normalize_snapshot_bindings(
@@ -244,15 +253,21 @@ def build_sweep_family_definition(
     data_snapshot_bindings: Sequence[Mapping[str, Any]] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    points = [dict(point) for point in search_space.get("points", [])]
     selected = [int(value) for value in search_space.get("selected_flat_indices", [])]
+    point_ledger = dict(search_space.get("point_ledger") or {})
+    selected_points = [
+        dict(point) for point in point_ledger.pop("selected_points", [])
+    ]
     definition = {
         "schema": SCHEMA,
         "origin": "sweep",
         "raw_sweep_spec": _raw_sweep_payload(spec),
         "canonical_axis_order": "section_then_name/value_order_preserved/v1",
         "merged_axis_order": list(search_space.get("axis_order", [])),
-        "points": points,
+        "point_ledger": point_ledger,
+        # Preserve the established reader surface while v3 changes its meaning
+        # from the full Cartesian ledger to the bounded selected subset.
+        "points": selected_points,
         "selected_flat_indices": selected,
         "symbols": [str(symbol) for symbol in symbols],
         "filters": {str(key): list(values) for key, values in sorted(filters.items())},
@@ -324,7 +339,7 @@ def build_declared_grid_definition(spec: Any) -> tuple[dict[str, Any], str]:
             index += 1
     policy = dict((spec.plan_meta or {}).get("search_family_policy") or {})
     definition = {
-        "schema": SCHEMA,
+        "schema": LEGACY_SCHEMA,
         "origin": "declared_grid",
         "declared_grid": {
             "experiment_id": str(spec.experiment_id),
@@ -397,35 +412,90 @@ def validate_search_family_definition(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, int]:
     value = dict(definition)
-    if value.get("schema") != SCHEMA:
+    schema = str(value.get("schema") or "")
+    if schema not in {LEGACY_SCHEMA, SCHEMA}:
         raise ValueError("unsupported search family definition schema")
     if value.get("origin") not in {"sweep", "declared_grid"}:
         raise ValueError("unknown search family definition origin")
-    points = value.get("points")
-    if not isinstance(points, list) or not points:
-        raise ValueError("search family definition has no points")
-    indices = [point.get("flat_index") for point in points if isinstance(point, dict)]
-    if indices != list(range(len(points))):
-        raise ValueError("search family flat indices must be unique and contiguous")
     allowed = {
         "selected",
         "schema_invalid",
         "dependency_invalid",
         "omitted_variant_cap",
     }
-    dispositions = [str(point.get("pre_disposition") or "") for point in points]
-    if any(disposition not in allowed for disposition in dispositions):
-        raise ValueError("invalid search family pre-execution disposition")
-    if any(not str(point.get("reason") or "") for point in points):
-        raise ValueError("search family point reason is required")
     selected = [int(value) for value in value.get("selected_flat_indices", [])]
-    from_points = [
-        int(point["flat_index"])
-        for point in points
-        if point.get("pre_disposition") == "selected"
-    ]
-    if selected != from_points:
-        raise ValueError("selected flat indices disagree with point dispositions")
+    if selected != sorted(set(selected)):
+        raise ValueError("selected flat indices must be sorted and unique")
+    if schema == LEGACY_SCHEMA:
+        points = value.get("points")
+        if not isinstance(points, list) or not points:
+            raise ValueError("search family definition has no points")
+        indices = [
+            point.get("flat_index") for point in points if isinstance(point, dict)
+        ]
+        if indices != list(range(len(points))):
+            raise ValueError("search family flat indices must be unique and contiguous")
+        dispositions = [str(point.get("pre_disposition") or "") for point in points]
+        if any(disposition not in allowed for disposition in dispositions):
+            raise ValueError("invalid search family pre-execution disposition")
+        if any(not str(point.get("reason") or "") for point in points):
+            raise ValueError("search family point reason is required")
+        from_points = [
+            int(point["flat_index"])
+            for point in points
+            if point.get("pre_disposition") == "selected"
+        ]
+        if selected != from_points:
+            raise ValueError("selected flat indices disagree with point dispositions")
+        disposition_counts = {
+            disposition: dispositions.count(disposition) for disposition in allowed
+        }
+        raw_points = len(points)
+    else:
+        ledger = value.get("point_ledger")
+        selected_points = value.get("points")
+        if not isinstance(ledger, dict) or not isinstance(selected_points, list):
+            raise ValueError("compact search family point ledger is missing")
+        if (
+            ledger.get("schema") != POINT_LEDGER_SCHEMA
+            or ledger.get("algorithm") != POINT_LEDGER_ALGORITHM
+            or not _is_sha256(ledger.get("sha256"))
+        ):
+            raise ValueError("compact search family point ledger identity is invalid")
+        raw_points = int(ledger.get("record_count") or 0)
+        disposition_counts = dict(ledger.get("disposition_counts") or {})
+        reason_counts = dict(ledger.get("reason_counts") or {})
+        if (
+            raw_points < 1
+            or set(disposition_counts) - allowed
+            or any(
+                not isinstance(count, int) or count < 0
+                for count in disposition_counts.values()
+            )
+            or sum(disposition_counts.values()) != raw_points
+            or any(
+                not str(reason)
+                or not isinstance(count, int)
+                or count < 1
+                for reason, count in reason_counts.items()
+            )
+            or sum(reason_counts.values()) != raw_points
+        ):
+            raise ValueError("compact search family point ledger counts are invalid")
+        selected_point_indices = []
+        for point in selected_points:
+            if (
+                not isinstance(point, dict)
+                or point.get("pre_disposition") != "selected"
+                or not isinstance(point.get("params"), dict)
+                or not str(point.get("reason") or "")
+            ):
+                raise ValueError("compact selected point is invalid")
+            selected_point_indices.append(int(point.get("flat_index", -1)))
+        if selected_point_indices != selected:
+            raise ValueError("selected flat indices disagree with compact point ledger")
+        if int(disposition_counts.get("selected") or 0) != len(selected):
+            raise ValueError("compact selected point count mismatch")
     resource = value.get("resource_policy")
     if not isinstance(resource, dict):
         raise ValueError("search family resource policy is missing")
@@ -488,21 +558,51 @@ def validate_search_family_definition(
         compiler = value.get("compiler") or {}
         validity = value.get("validity") or {}
         sampler = value.get("sampler") or {}
-        if compiler.get("digest") != compiler_code_identity():
-            raise ValueError("historical search-family compiler is unavailable")
-        if validity.get("digest") != validity_code_identity():
-            raise ValueError(
-                "historical search-family validity contract is unavailable"
+        expected_compiler_version = (
+            COMPILER_VERSION
+            if schema == SCHEMA and value.get("origin") == "sweep"
+            else LEGACY_COMPILER_VERSION
+            if value.get("origin") == "sweep"
+            else DECLARED_GRID_VERSION
+        )
+        if compiler.get("version") != expected_compiler_version:
+            raise ValueError("search-family compiler version is unavailable")
+        if schema == SCHEMA:
+            if compiler.get("digest") != compiler_code_identity():
+                raise ValueError("historical search-family compiler is unavailable")
+            if validity.get("digest") != validity_code_identity():
+                raise ValueError(
+                    "historical search-family validity contract is unavailable"
+                )
+            if (
+                sampler.get("version") != "none"
+                and sampler.get("digest") != sampler_code_identity()
+            ):
+                raise ValueError("historical search-family sampler is unavailable")
+            if value.get("origin") == "sweep" and (
+                resource.get("selection_policy_digest")
+                != selection_policy_code_identity()
+            ):
+                raise ValueError(
+                    "historical search-family selection policy is unavailable"
+                )
+        # Legacy v2 artifacts carry historical source digests that naturally
+        # differ after a reviewed compiler repair.  They remain admissible only
+        # when all digests are well formed and the preserved v2 derivation below
+        # replays every point and disposition exactly.
+        elif not (
+            _is_sha256(compiler.get("digest"))
+            and _is_sha256(validity.get("digest"))
+            and (
+                sampler.get("version") == "none"
+                or _is_sha256(sampler.get("digest"))
             )
-        if (
-            sampler.get("version") != "none"
-            and sampler.get("digest") != sampler_code_identity()
+            and (
+                value.get("origin") != "sweep"
+                or _is_sha256(resource.get("selection_policy_digest"))
+            )
         ):
-            raise ValueError("historical search-family sampler is unavailable")
-        if value.get("origin") == "sweep" and (
-            resource.get("selection_policy_digest") != selection_policy_code_identity()
-        ):
-            raise ValueError("historical search-family selection policy is unavailable")
+            raise ValueError("legacy search-family code identity is malformed")
     if value.get("origin") == "sweep":
         _validate_sweep_derivation(value, progress=progress)
     else:
@@ -511,15 +611,17 @@ def validate_search_family_definition(
     if expected_id and actual_id != expected_id:
         raise ValueError("search family definition id mismatch")
     return {
-        "raw_points": len(points),
-        "schema_invalid": dispositions.count("schema_invalid"),
-        "dependency_invalid": dispositions.count("dependency_invalid"),
-        "eligible_points": sum(
-            disposition in {"selected", "omitted_variant_cap"}
-            for disposition in dispositions
+        "raw_points": raw_points,
+        "schema_invalid": int(disposition_counts.get("schema_invalid") or 0),
+        "dependency_invalid": int(
+            disposition_counts.get("dependency_invalid") or 0
         ),
+        "eligible_points": int(disposition_counts.get("selected") or 0)
+        + int(disposition_counts.get("omitted_variant_cap") or 0),
         "selected_points": len(selected),
-        "omitted_variant_cap": dispositions.count("omitted_variant_cap"),
+        "omitted_variant_cap": int(
+            disposition_counts.get("omitted_variant_cap") or 0
+        ),
     }
 
 
@@ -607,10 +709,27 @@ def _validate_sweep_derivation(
         baseline=baseline,
         strategy_id=spec.setup_family,
         audit=audit,
+        audit_format=(
+            "legacy_full"
+            if definition.get("schema") == LEGACY_SCHEMA
+            else "compact"
+        ),
         progress=progress,
     )
-    if definition.get("points") != audit.get("points"):
-        raise ValueError("search family points disagree with raw sweep derivation")
+    if definition.get("schema") == LEGACY_SCHEMA:
+        if definition.get("points") != audit.get("points"):
+            raise ValueError("search family points disagree with raw sweep derivation")
+    else:
+        derived_ledger = dict(audit.get("point_ledger") or {})
+        derived_selected = derived_ledger.pop("selected_points", [])
+        if definition.get("point_ledger") != derived_ledger:
+            raise ValueError(
+                "compact search family point ledger disagrees with raw sweep derivation"
+            )
+        if definition.get("points") != derived_selected:
+            raise ValueError(
+                "compact selected points disagree with raw sweep derivation"
+            )
     if definition.get("merged_axis_order") != audit.get("axis_order"):
         raise ValueError("search family axis order disagrees with raw sweep derivation")
     if definition.get("selected_flat_indices") != audit.get("selected_flat_indices"):
