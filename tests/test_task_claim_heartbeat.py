@@ -420,17 +420,32 @@ def test_persistent_sqlite_writer_contention_fails_before_claim_expiry(tmp_path)
         assert _wait_until(
             lambda: heartbeat.snapshot()["renewal_connection_ready"]
         )
+        assert _wait_until(
+            lambda: float(
+                tasks.get_task(task["task_id"])["claim_expires_at"]
+            )
+            > original_expiry
+        )
         blocker.execute("BEGIN IMMEDIATE")
+        # Bind the no-renew assertion to the exact claim generation observed
+        # after a proven renewal and under the persistent writer lock.
+        contention_expiry = float(
+            tasks.get_task(task["task_id"])["claim_expires_at"]
+        )
         heartbeat.progress("canonical_candles_loaded")
         assert _wait_until(
             lambda: isinstance(
                 heartbeat.failure, TaskClaimRenewalContentionExceeded
             )
         )
-        assert time.time() < original_expiry
+        assert contention_expiry > original_expiry
+        assert time.time() < contention_expiry
         assert len(observed) == 1
         assert observed[0][1]["renewal_contention_active"] is True
-        assert tasks.get_task(task["task_id"])["claim_expires_at"] == original_expiry
+        assert (
+            tasks.get_task(task["task_id"])["claim_expires_at"]
+            == contention_expiry
+        )
         assert tasks.raw_connection.execute(
             "SELECT COUNT(*) FROM materialization_outbox"
         ).fetchone()[0] == 0
