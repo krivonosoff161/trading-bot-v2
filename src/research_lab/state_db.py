@@ -56,24 +56,54 @@ def default_db_path(private_root: Path) -> Path:
     return private_root / "state" / "strategy_lab.sqlite"
 
 
-def connect(db_path: Path, *, clock: Any = time.time) -> sqlite3.Connection:
+def connect(
+    db_path: Path,
+    *,
+    clock: Any = time.time,
+    busy_timeout_seconds: float = 30.0,
+    configure_journal_mode: bool = True,
+    required_journal_mode: str | None = None,
+) -> sqlite3.Connection:
+    if busy_timeout_seconds <= 0:
+        raise ValueError("busy timeout must be positive")
+    busy_timeout_ms = max(1, int(float(busy_timeout_seconds) * 1000.0))
     if db_path.exists():
         uri = db_path.resolve().as_posix()
-        preflight = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        preflight = sqlite3.connect(
+            f"file:{uri}?mode=ro",
+            uri=True,
+            timeout=float(busy_timeout_seconds),
+        )
         preflight.row_factory = sqlite3.Row
         try:
+            preflight.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
             _require_activated_fencing(preflight)
         finally:
             preflight.close()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), factory=ResearchStateConnection)
-    conn.authority_clock = clock
-    conn.authority_time_floor = float(clock())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+    conn = sqlite3.connect(
+        str(db_path),
+        timeout=float(busy_timeout_seconds),
+        factory=ResearchStateConnection,
+    )
+    try:
+        conn.authority_clock = clock
+        conn.authority_time_floor = float(clock())
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        if configure_journal_mode:
+            conn.execute("PRAGMA journal_mode = WAL")
+        if required_journal_mode is not None:
+            observed_journal_mode = str(
+                conn.execute("PRAGMA journal_mode").fetchone()[0]
+            ).casefold()
+            if observed_journal_mode != str(required_journal_mode).casefold():
+                raise RuntimeError("required SQLite journal mode is not active")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
