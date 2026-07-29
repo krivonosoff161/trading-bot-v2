@@ -79,6 +79,30 @@ a sanitized aggregate if a result needs discussion.
 - A PID, fresh heartbeat, old lock path or expected executable is not proof of
   ownership. Recovered processes remain visible but non-stoppable.
 
+### Provenance-bound RCC marker clearance
+
+The three contour markers written by a canonical Research Control Center
+graceful stop are separate from the generic Strategy Lab JSON stop intent.
+After independently proving project processes, live owners, and owned ports are
+all zero, record the exact marker hashes and run:
+
+```powershell
+python -m scripts.strategy_lab.clear_rcc_stop_intents `
+  --private-root <canonical-private-root> `
+  --expect STOP_FARM_FULL_CYCLE.txt=<sha256> `
+  --expect STOP_NEWS_SCANNER.txt=<sha256> `
+  --expect STOP_PUBLIC_NEWS.txt=<sha256> `
+  --json
+```
+
+Only after this dry check reports all three markers eligible may the exact
+command be repeated with `--apply`. The utility accepts only the canonical RCC
+payload shape and recorded hashes, validates every present marker before
+changing any marker, and never reads or mutates a database. Repeating the
+exact apply changes zero markers. A missing hash, changed marker, foreign
+payload, active process, owner, or port is a blocked operational preflight; do
+not substitute `del`, `Remove-Item`, or raw SQL.
+
 ## Schema Rollout And Rollback
 
 The v2 task/queue changes are additive, but this public code does not authorize

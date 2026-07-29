@@ -77,6 +77,7 @@ file is catalogued and that public documentation links resolve locally.
 | `strategy_lab_status.bat` | supported utility | local | Read-only status. |
 | `strategy_lab_status_monitor.bat` | supported utility | local | Read-only periodic status window. |
 | `strategy_lab_clear_stop.bat` | supported utility | local | Clears a private stop intent before an intentional restart. |
+| `python -m scripts.strategy_lab.clear_rcc_stop_intents` | supported utility | local | Hash-bound dry-run/apply acknowledgement for the three canonical RCC stop markers after an independent quiescence preflight. |
 | `strategy_lab_graceful_stop.bat` | supported utility | local | Requests a generic Strategy Lab graceful stop. |
 | `strategy_lab_paper_telegram_sender_loop.bat` | diagnostic fallback | credential, send | Do not run beside the canonical farm; it can duplicate delivery ownership. |
 
