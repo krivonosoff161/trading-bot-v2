@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 import hashlib
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -63,10 +64,18 @@ from src.research_lab.search_trial_evidence import (  # noqa: E402
 _LEASE_SECONDS = 90.0
 _RENEW_SECONDS = 30.0
 _HEARTBEAT_STOP_SECONDS = 35.0
+_JOB_RENEWAL_BUSY_TIMEOUT_SECONDS = 2.0
+_JOB_RENEWAL_RETRY_SECONDS = 0.25
+_JOB_MAX_RENEWAL_CONTENTION_SECONDS = 30.0
+_JOB_LEASE_SAFETY_MARGIN_SECONDS = 5.0
 
 
 class WorkerLeaseLifecycleError(RuntimeError):
     """The compute worker can no longer prove or release its process authority."""
+
+
+class JobLeaseRenewalContentionExceeded(RuntimeError):
+    """SQLite contention outlived the compute claim's bounded safety budget."""
 
 
 def _worker_lock_path(private_root: Path) -> Path:
@@ -143,14 +152,84 @@ class _JobLeaseHeartbeat:
         job_id: int,
         owner_id: str,
         fencing_token: int,
+        claim_expires_at: float,
+        lease_seconds: float | None = None,
+        renew_interval_seconds: float | None = None,
+        renewal_busy_timeout_seconds: float | None = None,
+        renewal_retry_seconds: float | None = None,
+        max_renewal_contention_seconds: float | None = None,
+        lease_safety_margin_seconds: float | None = None,
+        clock=time.time,
+        monotonic=time.monotonic,
     ) -> None:
         self.db_path = db_path
         self.job_id = int(job_id)
         self.owner_id = str(owner_id)
         self.fencing_token = int(fencing_token)
+        self.lease_seconds = float(
+            _LEASE_SECONDS if lease_seconds is None else lease_seconds
+        )
+        self.renew_interval_seconds = float(
+            _RENEW_SECONDS
+            if renew_interval_seconds is None
+            else renew_interval_seconds
+        )
+        self.renewal_busy_timeout_seconds = float(
+            min(_JOB_RENEWAL_BUSY_TIMEOUT_SECONDS, self.lease_seconds / 20.0)
+            if renewal_busy_timeout_seconds is None
+            else renewal_busy_timeout_seconds
+        )
+        self.renewal_retry_seconds = float(
+            min(_JOB_RENEWAL_RETRY_SECONDS, self.lease_seconds / 50.0)
+            if renewal_retry_seconds is None
+            else renewal_retry_seconds
+        )
+        self.max_renewal_contention_seconds = float(
+            min(_JOB_MAX_RENEWAL_CONTENTION_SECONDS, self.lease_seconds / 3.0)
+            if max_renewal_contention_seconds is None
+            else max_renewal_contention_seconds
+        )
+        self.lease_safety_margin_seconds = float(
+            min(_JOB_LEASE_SAFETY_MARGIN_SECONDS, self.lease_seconds / 10.0)
+            if lease_safety_margin_seconds is None
+            else lease_safety_margin_seconds
+        )
+        if min(
+            self.lease_seconds,
+            self.renew_interval_seconds,
+            self.renewal_busy_timeout_seconds,
+            self.renewal_retry_seconds,
+            self.max_renewal_contention_seconds,
+            self.lease_safety_margin_seconds,
+        ) <= 0:
+            raise ValueError("job heartbeat intervals must be positive")
+        if self.renew_interval_seconds >= self.lease_seconds:
+            raise ValueError("job renew interval must be shorter than the lease")
+        if (
+            self.renewal_busy_timeout_seconds
+            > self.max_renewal_contention_seconds
+        ):
+            raise ValueError("job renewal busy timeout must fit the contention budget")
+        if (
+            self.renew_interval_seconds
+            + self.max_renewal_contention_seconds
+            + self.lease_safety_margin_seconds
+            >= self.lease_seconds
+        ):
+            raise ValueError("job contention budget must expire before the claim")
+        self._clock = clock
+        self._monotonic = monotonic
         self.stop_event = threading.Event()
         self.ready_event = threading.Event()
-        self.failure: BaseException | None = None
+        self._state_lock = threading.Lock()
+        self._failure: BaseException | None = None
+        self._claim_expires_at = float(claim_expires_at)
+        if self._claim_expires_at <= float(self._clock()):
+            raise ValueError("job heartbeat requires an unexpired claim")
+        self._renewals = 0
+        self._renewal_contention_started_mono: float | None = None
+        self._renewal_contention_events = 0
+        self._last_renewal_contention: str | None = None
         self._transition_lock = threading.Lock()
         self._terminal = False
         self._started = False
@@ -160,12 +239,27 @@ class _JobLeaseHeartbeat:
             daemon=True,
         )
 
+    @property
+    def failure(self) -> BaseException | None:
+        with self._state_lock:
+            return self._failure
+
     def start(self) -> None:
+        if self._started:
+            raise RuntimeError("compute job lease heartbeat already started")
         self.thread.start()
         self._started = True
-        if not self.ready_event.wait(timeout=5):
-            self.failure = TimeoutError(
-                "compute job lease heartbeat did not initialize"
+        startup_budget = (
+            self.max_renewal_contention_seconds
+            + self.renewal_busy_timeout_seconds
+            + self.renewal_retry_seconds
+            + 1.0
+        )
+        if not self.ready_event.wait(timeout=startup_budget):
+            self._record_failure(
+                TimeoutError(
+                    "compute job lease heartbeat did not initialize"
+                )
             )
         if self.failure is not None:
             raise WorkerLeaseLifecycleError(
@@ -185,35 +279,189 @@ class _JobLeaseHeartbeat:
     def _run(self) -> None:
         job_conn = None
         try:
-            job_conn = connect(self.db_path)
+            job_conn = self._connect_with_bounded_contention()
+            if job_conn is None:
+                return
             self.ready_event.set()
-            while not self.stop_event.wait(_RENEW_SECONDS):
-                with self._transition_lock:
-                    if self._terminal:
-                        break
-                    renew_job_lease(
-                        job_conn,
-                        self.job_id,
-                        owner_id=self.owner_id,
-                        fencing_token=self.fencing_token,
-                        lease_seconds=_LEASE_SECONDS,
-                    )
+            while self._wait_for_renewal():
+                self._renew_with_bounded_contention(job_conn)
         except BaseException as exc:
-            self.failure = exc
+            self._record_failure(exc)
         finally:
             self.ready_event.set()
             if job_conn is not None:
                 job_conn.close()
+
+    def assert_active(self, *, stage: str) -> None:
+        failure = self.failure
+        if failure is not None:
+            raise WorkerLeaseLifecycleError(
+                f"compute job lease heartbeat failed during {stage}"
+            ) from failure
+        if self.stop_event.is_set() and not self._terminal:
+            raise WorkerLeaseLifecycleError(
+                f"compute job lease heartbeat stopped during {stage}"
+            )
+
+    def snapshot(self) -> dict:
+        with self._state_lock:
+            failure = self._failure
+            contention_started = self._renewal_contention_started_mono
+            return {
+                "job_id": self.job_id,
+                "fencing_token": self.fencing_token,
+                "claim_expires_at": self._claim_expires_at,
+                "renewals": self._renewals,
+                "renewal_contention_active": contention_started is not None,
+                "renewal_contention_age_seconds": (
+                    0.0
+                    if contention_started is None
+                    else max(
+                        0.0,
+                        float(self._monotonic()) - contention_started,
+                    )
+                ),
+                "renewal_contention_events": self._renewal_contention_events,
+                "last_renewal_contention": self._last_renewal_contention,
+                "failure": None if failure is None else type(failure).__name__,
+                "thread_alive": self.thread.is_alive(),
+            }
+
+    def _record_failure(self, failure: BaseException) -> None:
+        with self._state_lock:
+            if self._failure is None:
+                self._failure = failure
+        self.stop_event.set()
+
+    def _wait_for_renewal(self) -> bool:
+        deadline = float(self._monotonic()) + self.renew_interval_seconds
+        while True:
+            if self.stop_event.is_set():
+                return False
+            remaining = deadline - float(self._monotonic())
+            if remaining <= 0:
+                return True
+            self.stop_event.wait(min(0.25, remaining))
+
+    def _connect_with_bounded_contention(self):
+        while not self.stop_event.is_set():
+            attempt_started = float(self._monotonic())
+            try:
+                job_conn = connect(
+                    self.db_path,
+                    clock=self._clock,
+                    busy_timeout_seconds=self.renewal_busy_timeout_seconds,
+                    configure_journal_mode=False,
+                    required_journal_mode="wal",
+                )
+            except sqlite3.OperationalError as exc:
+                if not self._is_sqlite_contention(exc):
+                    raise
+                self._record_renewal_contention(attempt_started, exc)
+                self._assert_contention_budget()
+                if not self._wait_for_contention_retry():
+                    return None
+                continue
+            self._clear_active_contention()
+            return job_conn
+        return None
+
+    def _renew_with_bounded_contention(self, job_conn) -> bool:
+        while not self.stop_event.is_set():
+            attempt_started = float(self._monotonic())
+            try:
+                with self._transition_lock:
+                    if self._terminal or self.stop_event.is_set():
+                        self._clear_active_contention()
+                        return False
+                    claim_expires_at = renew_job_lease(
+                        job_conn,
+                        self.job_id,
+                        owner_id=self.owner_id,
+                        fencing_token=self.fencing_token,
+                        lease_seconds=self.lease_seconds,
+                        now=self._clock(),
+                    )
+            except sqlite3.OperationalError as exc:
+                if not self._is_sqlite_contention(exc):
+                    raise
+                job_conn.rollback()
+                self._record_renewal_contention(attempt_started, exc)
+                self._assert_contention_budget()
+                if not self._wait_for_contention_retry():
+                    return False
+                continue
+            with self._state_lock:
+                self._claim_expires_at = float(claim_expires_at)
+                self._renewals += 1
+            self._clear_active_contention()
+            return True
+        return False
+
+    @staticmethod
+    def _is_sqlite_contention(exc: sqlite3.OperationalError) -> bool:
+        code = getattr(exc, "sqlite_errorcode", None)
+        if isinstance(code, int) and (code & 0xFF) in {
+            sqlite3.SQLITE_BUSY,
+            sqlite3.SQLITE_LOCKED,
+        }:
+            return True
+        message = str(exc).casefold()
+        return "database is locked" in message or "database table is locked" in message
+
+    def _record_renewal_contention(
+        self,
+        attempt_started: float,
+        exc: sqlite3.OperationalError,
+    ) -> None:
+        with self._state_lock:
+            if self._renewal_contention_started_mono is None:
+                self._renewal_contention_started_mono = attempt_started
+            self._renewal_contention_events += 1
+            self._last_renewal_contention = str(
+                getattr(exc, "sqlite_errorname", None) or "SQLITE_LOCKED"
+            )[:64]
+
+    def _clear_active_contention(self) -> None:
+        with self._state_lock:
+            self._renewal_contention_started_mono = None
+
+    def _assert_contention_budget(self) -> None:
+        with self._state_lock:
+            started = self._renewal_contention_started_mono
+            claim_expires_at = self._claim_expires_at
+        now_mono = float(self._monotonic())
+        age = 0.0 if started is None else max(0.0, now_mono - started)
+        next_attempt_latest = (
+            float(self._clock())
+            + self.renewal_retry_seconds
+            + self.renewal_busy_timeout_seconds
+            + self.lease_safety_margin_seconds
+        )
+        if (
+            age >= self.max_renewal_contention_seconds
+            or next_attempt_latest >= claim_expires_at
+        ):
+            raise JobLeaseRenewalContentionExceeded(
+                f"job {self.job_id} renewal contention exceeded its bounded budget"
+            )
+
+    def _wait_for_contention_retry(self) -> bool:
+        deadline = float(self._monotonic()) + self.renewal_retry_seconds
+        while True:
+            if self.stop_event.is_set():
+                return False
+            remaining = deadline - float(self._monotonic())
+            if remaining <= 0:
+                return True
+            self.stop_event.wait(min(0.25, remaining))
 
     @contextmanager
     def terminal_transition(self):
         """Serialize the terminal queue write against the final renewal."""
 
         with self._transition_lock:
-            if self.failure is not None:
-                raise WorkerLeaseLifecycleError(
-                    "compute job lease renewal failed before terminal publication"
-                ) from self.failure
+            self.assert_active(stage="terminal publication")
             yield
             self._terminal = True
             self.stop_event.set()
@@ -376,8 +624,10 @@ def run_worker_once(
             job_id=job_id,
             owner_id=owner_id,
             fencing_token=fencing_token,
+            claim_expires_at=float(job["claim_expires_at"]),
         )
         job_heartbeat.start()
+        job_heartbeat.assert_active(stage="initialization")
         spec = None
         runtime_meta: dict = {}
         try:
@@ -406,6 +656,7 @@ def run_worker_once(
                 families=len(spec.families),
                 max_runs=spec.max_runs,
                 mode=policy.mode,
+                job_lease=job_heartbeat.snapshot(),
             )
             if verbose:
                 print(
@@ -431,6 +682,7 @@ def run_worker_once(
                     process_heartbeat,
                     stage=f"evaluation:{stage}",
                 )
+                job_heartbeat.assert_active(stage=f"evaluation:{stage}")
                 sampled = time.monotonic()
                 if (
                     sampled - last_progress_status >= 5.0
@@ -443,6 +695,7 @@ def run_worker_once(
                         experiment_id=spec.experiment_id,
                         progress_stage=stage,
                         mode=policy.mode,
+                        job_lease=job_heartbeat.snapshot(),
                     )
                     last_progress_status = sampled
 
@@ -452,6 +705,7 @@ def run_worker_once(
                 candle_store=CandleStore(private_root),
                 progress=compute_progress,
             )
+            job_heartbeat.assert_active(stage="provisional output")
             if verbose:
                 print(f"backend requested={runtime_meta.get('requested_backend')} "
                       f"effective={runtime_meta.get('effective_backend')} "
@@ -513,6 +767,7 @@ def run_worker_once(
                 status_path, status="completed", job_id=job_id, run_label=label,
                 results=len(results), mode=policy.mode,
                 index_publication_pending=bool(index_error),
+                job_lease=job_heartbeat.snapshot(),
                 index_error=index_error,
             )
             if verbose:
@@ -553,7 +808,14 @@ def run_worker_once(
                 # Losing the lease must not be disguised as an authoritative
                 # failure transition by the stale worker.
                 pass
-            write_worker_status(status_path, status="failed", job_id=job_id, reason=reason[:300], mode=policy.mode)
+            write_worker_status(
+                status_path,
+                status="failed",
+                job_id=job_id,
+                reason=reason[:300],
+                mode=policy.mode,
+                job_lease=job_heartbeat.snapshot(),
+            )
             if verbose:
                 print(f"failed job_id={job_id} error={exc}")
             raise
