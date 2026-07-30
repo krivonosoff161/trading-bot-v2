@@ -78,6 +78,11 @@ a sanitized aggregate if a result needs discussion.
   launcher therefore cannot erase another operator's stop request.
 - A PID, fresh heartbeat, old lock path or expected executable is not proof of
   ownership. Recovered processes remain visible but non-stoppable.
+- The RCC liveness heartbeat is deliberately smaller than its UI status
+  snapshot. A heartbeat `ui_snapshot.stage` that remains active identifies a
+  slow display probe; it is diagnostic evidence, not authority and not proof
+  that the owned contours stopped. Child identity, ownership, fencing, ports,
+  and process liveness remain separate hard-fail inputs.
 
 ### Provenance-bound RCC marker clearance
 

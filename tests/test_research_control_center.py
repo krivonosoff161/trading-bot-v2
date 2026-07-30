@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -367,6 +369,11 @@ def test_required_contour_exit_is_latched_once_without_restart(
     )
     monkeypatch.setattr(MODULE, "PRIVATE_ROOT", private_root)
     monkeypatch.setattr(MODULE, "STATE_DIR", state_dir)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (private_root / "state" / "not-requested.stop",),
+    )
 
     class Process:
         pid = 4242
@@ -431,3 +438,307 @@ def test_intentional_stop_disarms_required_contour_exit() -> None:
 
     assert item.expected_running is False
     assert item.consume_unexpected_exit() is None
+
+
+def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
+    tmp_path: Path,
+) -> None:
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return None
+
+    class Item:
+        process = Process()
+        started_at = 123.0
+        unexpected_exit_reported = False
+
+    class Events:
+        def put(self, _event):
+            return None
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {"paper_cards": Item()}
+    center._ui_snapshot_lock = threading.Lock()
+    center._ui_snapshot_state = {
+        "stage": "not_started",
+        "stage_started_at": None,
+        "last_completed_at": None,
+        "last_duration_seconds": None,
+        "last_error_type": None,
+    }
+    center._last_compute_pipeline = {
+        "state": "unknown",
+        "reason": "synthetic",
+        "hard_fail": False,
+        "execution_allowed": False,
+    }
+    center.events = Events()
+    center.selected_key = "paper_cards"
+
+    target = tmp_path / "heartbeat.json"
+    publish_count = 0
+    published_thrice = threading.Event()
+
+    def snapshot():
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count >= 3:
+            published_thrice.set()
+        return center._heartbeat_payload()
+
+    publisher = MODULE._HeartbeatPublisher(
+        target,
+        snapshot,
+        interval_seconds=0.02,
+    )
+    blocked = threading.Event()
+    release = threading.Event()
+
+    def blocked_probe():
+        blocked.set()
+        assert release.wait(2.0)
+        return "done"
+
+    ui_thread = threading.Thread(
+        target=center._run_ui_snapshot_stage,
+        args=("synthetic_blocking_probe", blocked_probe, lambda _value: None),
+    )
+    publisher.start()
+    ui_thread.start()
+    assert blocked.wait(1.0)
+    deadline = time.monotonic() + 1.0
+    while not target.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert target.exists()
+    assert published_thrice.wait(1.0)
+    payload = json.loads(target.read_text(encoding="utf-8"))
+
+    assert publish_count >= 3
+    assert payload["schema"] == "ResearchControlCenterHeartbeat.v2"
+    assert payload["paper_only"] is True
+    assert payload["execution_allowed"] is False
+    assert payload["contours"]["paper_cards"]["running"] is True
+    assert payload["ui_snapshot"]["stage"] == "synthetic_blocking_probe"
+    assert payload["ui_snapshot"]["stage_age_seconds"] > 0
+
+    release.set()
+    ui_thread.join(timeout=1.0)
+    assert publisher.stop(timeout=1.0) is True
+    assert publisher.thread_alive is False
+
+
+def test_heartbeat_publisher_stops_without_leaving_background_thread(
+    tmp_path: Path,
+) -> None:
+    publisher = MODULE._HeartbeatPublisher(
+        tmp_path / "heartbeat.json",
+        lambda: {"schema": "synthetic"},
+        interval_seconds=0.01,
+    )
+
+    publisher.start()
+    assert publisher.thread_alive is True
+    assert publisher.stop(timeout=1.0) is True
+    assert publisher.thread_alive is False
+
+
+def test_ui_probe_failure_is_sanitized_and_next_refresh_remains_scheduled() -> None:
+    events: list[tuple[str, str, str]] = []
+    scheduled: list[tuple[int, object]] = []
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    class Variable:
+        def set(self, _value):
+            return None
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._ui_snapshot_lock = threading.Lock()
+    center._ui_snapshot_state = {
+        "stage": "not_started",
+        "stage_started_at": None,
+        "last_completed_at": None,
+        "last_duration_seconds": None,
+        "last_error_type": None,
+    }
+    center._last_compute_pipeline = {}
+    center.selected_key = "paper_cards"
+    center.events = Events()
+    center.system_var = Variable()
+    center.learning_var = Variable()
+    center.candles_var = Variable()
+    center._system_snapshot = lambda: (_ for _ in ()).throw(
+        RuntimeError("synthetic-private-value-must-not-leak")
+    )
+    center._learning_snapshot = lambda: "learning"
+    center._candle_snapshot = lambda: "candles"
+    center._compute_pipeline_health = lambda: {
+        "state": "healthy",
+        "execution_allowed": False,
+    }
+    center.after = lambda delay, callback: scheduled.append((delay, callback))
+
+    center._heartbeat()
+
+    assert events == [
+        (
+            "paper_cards",
+            "log",
+            "UI status probe failed at system_snapshot: RuntimeError",
+        )
+    ]
+    assert "synthetic-private-value" not in json.dumps(events)
+    assert center._last_compute_pipeline["state"] == "healthy"
+    assert scheduled == [
+        (int(MODULE.HEARTBEAT_INTERVAL_SECONDS * 1000), center._heartbeat)
+    ]
+
+
+def test_canonical_stop_intent_disarms_external_fail_closed_exit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state" / "control-center"
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    stop_intents = tuple(
+        state / name
+        for name in (
+            "STOP_FARM_FULL_CYCLE.txt",
+            "STOP_NEWS_SCANNER.txt",
+            "STOP_PUBLIC_NEWS.txt",
+        )
+    )
+    for stop_intent in stop_intents:
+        stop_intent.write_text("synthetic coordinated stop\n", encoding="utf-8")
+    monkeypatch.setattr(MODULE, "STATE_DIR", state_dir)
+    monkeypatch.setattr(MODULE, "CANONICAL_STOP_INTENTS", stop_intents)
+
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 1
+
+    class Status:
+        value = ""
+
+        def set(self, value):
+            self.value = value
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "ollama"),
+        MODULE.queue.Queue(),
+    )
+    item.process = Process()
+    item.started_at = min(path.stat().st_mtime for path in stop_intents) - 1.0
+    item.expected_running = True
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._logs = {"ollama": []}
+    center.status_vars = {"ollama": Status()}
+    center.selected_key = "ollama"
+    center._render_log = lambda: None
+
+    assert center._record_required_contour_exit("ollama", item) is False
+    assert item.expected_running is False
+    assert not (state_dir / "alerts.jsonl").exists()
+    assert "canonical stop intent observed" in center.status_vars["ollama"].value
+    assert "automatic restart is disabled" in center.status_vars["ollama"].value
+
+
+def test_stale_stop_intent_does_not_hide_real_required_contour_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state" / "control-center"
+    stop_intent = tmp_path / "state" / "STOP_FARM_FULL_CYCLE.txt"
+    stop_intent.parent.mkdir(parents=True)
+    stop_intent.write_text("stale synthetic stop\n", encoding="utf-8")
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", tmp_path)
+    monkeypatch.setattr(MODULE, "STATE_DIR", state_dir)
+    monkeypatch.setattr(MODULE, "CANONICAL_STOP_INTENTS", (stop_intent,))
+
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 9
+
+    class Status:
+        value = ""
+
+        def set(self, value):
+            self.value = value
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "paper_cards"),
+        MODULE.queue.Queue(),
+    )
+    item.process = Process()
+    item.started_at = stop_intent.stat().st_mtime + 60.0
+    item.expected_running = True
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._json_status_cache = MODULE._JsonStatusCache()
+    center._logs = {"paper_cards": []}
+    center.status_vars = {"paper_cards": Status()}
+    center.selected_key = "ollama"
+    center._render_log = lambda: None
+
+    assert center._record_required_contour_exit("paper_cards", item) is True
+    alert = json.loads(
+        (state_dir / "alerts.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert alert["reason"] == "required_contour_unexpected_exit"
+    assert alert["exit_code"] == 9
+
+
+def test_single_contour_stop_marker_does_not_hide_unrelated_crash(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state" / "control-center"
+    scanner_stop = tmp_path / "state" / "STOP_NEWS_SCANNER.txt"
+    scanner_stop.parent.mkdir(parents=True)
+    scanner_stop.write_text("synthetic scanner stop\n", encoding="utf-8")
+    monkeypatch.setattr(MODULE, "STATE_DIR", state_dir)
+    monkeypatch.setattr(MODULE, "CANONICAL_STOP_INTENTS", (scanner_stop,))
+
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return 5
+
+    class Status:
+        def set(self, _value):
+            return None
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "ollama"),
+        MODULE.queue.Queue(),
+    )
+    item.process = Process()
+    item.started_at = scanner_stop.stat().st_mtime - 1.0
+    item.expected_running = True
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._logs = {"ollama": []}
+    center.status_vars = {"ollama": Status()}
+    center.selected_key = "paper_cards"
+    center._render_log = lambda: None
+
+    assert center._record_required_contour_exit("ollama", item) is True
+    alert = json.loads(
+        (state_dir / "alerts.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert alert["exit_code"] == 5
