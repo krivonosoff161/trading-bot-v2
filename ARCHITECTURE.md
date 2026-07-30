@@ -99,6 +99,15 @@ liveness and identity checks, not stop ownership; only a process retained by
 the current center's own `Popen` handle is stoppable.
 Its second status line explains per-role work issued, queued, waiting,
 completed, returned to the analyst, and the current bounded generation.
+The minimal liveness heartbeat is published by a dedicated bounded thread and
+does not execute SQLite queries, filesystem inventory, network probes, or Tk
+updates. Human-facing status snapshots remain on the UI loop and publish their
+current stage and duration into the heartbeat for diagnosis. A slow status
+probe can therefore degrade the display without falsely declaring healthy
+owned contours dead. A genuine child exit still fails closed and is never
+automatically restarted. Exits observed after a newer canonical stop intent are
+classified as part of the coordinated stop rather than as a second root-cause
+alert.
 
 Canonical farm and standalone-worker mutation authority is persisted in
 `ownership.sqlite` as an exact process identity, random owner instance,

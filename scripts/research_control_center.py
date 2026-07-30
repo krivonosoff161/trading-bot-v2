@@ -26,7 +26,7 @@ import time
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 
@@ -36,6 +36,7 @@ _WINDLL: Any = getattr(ctypes, "windll", None)
 _CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 _CREATE_NO_WINDOW = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
 _CTRL_BREAK_EVENT = int(getattr(signal, "CTRL_BREAK_EVENT", 0))
+_SnapshotT = TypeVar("_SnapshotT")
 if os.name == "nt":
     import msvcrt as _msvcrt
 
@@ -60,10 +61,16 @@ PRIVATE_ROOT = (
 )
 STATE_DIR = PRIVATE_ROOT / "state" / "control-center"
 STOP_FARM = PRIVATE_ROOT / "state" / "STOP_FARM_FULL_CYCLE.txt"
+CANONICAL_STOP_INTENTS = (
+    STOP_FARM,
+    PRIVATE_ROOT / "state" / "STOP_NEWS_SCANNER.txt",
+    PRIVATE_ROOT / "state" / "STOP_PUBLIC_NEWS.txt",
+)
 REQUIRED_RESEARCH_CONTOURS = frozenset(
     {"ollama", "public_news", "scanner", "farm", "paper_cards", "telegram_bot"}
 )
 STATUS_CACHE_SECONDS = 1.0
+HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 def _python(*args: str) -> tuple[str, ...]:
@@ -126,6 +133,72 @@ class _JsonStatusCache:
         payload = reader(path)
         self.entries[path] = _CachedJson(sampled_at=now, payload=dict(payload))
         return dict(payload)
+
+
+class _HeartbeatPublisher:
+    """Publish minimal RCC liveness independently from the Tk status loop."""
+
+    def __init__(
+        self,
+        target: Path,
+        snapshot: Callable[[], dict[str, object]],
+        *,
+        interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("heartbeat interval must be positive")
+        self.target = target
+        self.snapshot = snapshot
+        self.interval_seconds = interval_seconds
+        self.on_error = on_error
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def thread_alive(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def publish_once(self) -> None:
+        payload = self.snapshot()
+        self.target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.target.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(self.target)
+
+    def start(self) -> None:
+        if self.thread_alive:
+            raise RuntimeError("RCC heartbeat publisher already started")
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="rcc-liveness-heartbeat",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 10.0) -> bool:
+        self._stop.set()
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout=max(0.0, timeout))
+        return not thread.is_alive()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            started = time.monotonic()
+            try:
+                self.publish_once()
+            except Exception as exc:
+                if self.on_error is not None:
+                    self.on_error(exc)
+            elapsed = max(0.0, time.monotonic() - started)
+            if self._stop.wait(max(0.0, self.interval_seconds - elapsed)):
+                return
 
 
 def _request_farm_stop() -> None:
@@ -596,6 +669,20 @@ class ControlCenter(tk.Tk):
         self._closing = False
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
         self._json_status_cache = _JsonStatusCache()
+        self._ui_snapshot_lock = threading.Lock()
+        self._ui_snapshot_state: dict[str, object] = {
+            "stage": "not_started",
+            "stage_started_at": None,
+            "last_completed_at": None,
+            "last_duration_seconds": None,
+            "last_error_type": None,
+        }
+        self._last_compute_pipeline: dict[str, object] = {
+            "state": "unknown",
+            "reason": "ui_snapshot_pending",
+            "hard_fail": False,
+            "execution_allowed": False,
+        }
         self.system_var = tk.StringVar(value="Состояние фермы загружается…")
         self.learning_var = tk.StringVar(value="Контур обучения загружается…")
         self.candles_var = tk.StringVar(value="Библиотека свечей загружается…")
@@ -603,6 +690,12 @@ class ControlCenter(tk.Tk):
         self.manual_timeframe = tk.StringVar(value="15m")
         self.manual_reason = tk.StringVar(value="срочная ручная проверка")
         self._build()
+        self._heartbeat_publisher = _HeartbeatPublisher(
+            STATE_DIR / "heartbeat.json",
+            self._heartbeat_payload,
+            on_error=self._record_heartbeat_publish_error,
+        )
+        self._heartbeat_publisher.start()
         self.after(150, self._poll)
         self.after(1000, self._heartbeat)
         if autostart:
@@ -970,6 +1063,7 @@ class ControlCenter(tk.Tk):
             except queue.Empty:
                 break
             if key == "__app__" and kind == "close":
+                self._stop_heartbeat_publisher()
                 self.instance.close()
                 self.destroy()
                 return
@@ -1022,6 +1116,33 @@ class ControlCenter(tk.Tk):
                 if item.running:
                     self.status_vars[key].set(self._health_text(key, item))
 
+    @staticmethod
+    def _canonical_stop_intent_active(key: str, started_at: float) -> bool:
+        fresh: dict[str, bool] = {}
+        for path in CANONICAL_STOP_INTENTS:
+            try:
+                fresh[path.name] = (
+                    path.is_file() and path.stat().st_mtime >= started_at
+                )
+            except OSError:
+                fresh[path.name] = False
+        direct_marker = {
+            "farm": "STOP_FARM_FULL_CYCLE.txt",
+            "paper_cards": "STOP_FARM_FULL_CYCLE.txt",
+            "scanner": "STOP_NEWS_SCANNER.txt",
+            "public_news": "STOP_PUBLIC_NEWS.txt",
+        }.get(key)
+        if direct_marker and fresh.get(direct_marker, False):
+            return True
+        coordinated = {
+            "STOP_FARM_FULL_CYCLE.txt",
+            "STOP_NEWS_SCANNER.txt",
+            "STOP_PUBLIC_NEWS.txt",
+        }
+        return coordinated.issubset(
+            {name for name, is_fresh in fresh.items() if is_fresh}
+        )
+
     def _record_required_contour_exit(
         self,
         key: str,
@@ -1031,6 +1152,19 @@ class ControlCenter(tk.Tk):
             return False
         process = item.consume_unexpected_exit()
         if process is None:
+            return False
+        if self._canonical_stop_intent_active(key, float(process["started_at"])):
+            item.expected_running = False
+            message = (
+                "STOPPED: canonical stop intent observed "
+                f"(code={process['exit_code']}); automatic restart is disabled"
+            )
+            rows = self._logs[key]
+            rows.append(message)
+            del rows[:-500]
+            self.status_vars[key].set(message)
+            if key == self.selected_key:
+                self._render_log()
             return False
         farm_status = (
             self._read_cached_json(PRIVATE_ROOT / "state" / "farm_loop_status.json")
@@ -1578,59 +1712,130 @@ class ControlCenter(tk.Tk):
         except OSError:
             return 0
 
-    def _heartbeat(self) -> None:
-        self.system_var.set(self._system_snapshot())
-        self.learning_var.set(self._learning_snapshot())
-        self.candles_var.set(self._candle_snapshot())
-        contour_rows = {}
+    def _heartbeat_payload(self) -> dict[str, object]:
+        contour_rows: dict[str, dict[str, object]] = {}
         for key, item in self.contours.items():
-            external = None if item.running else self._external_descriptor(key)
-            external_pid = external.get("pid") if external else None
-            external_started_at = external.get("started_at") if external else None
+            process = item.process
+            running = bool(process and process.poll() is None)
             contour_rows[key] = {
-                "running": item.running or bool(external),
-                "owned": item.running,
-                "external": bool(external),
-                "pid": item.process.pid
-                if item.running and item.process
-                else (int(external_pid) if external_pid else None),
-                "started_at": item.started_at
-                if item.running
-                else (float(external_started_at) if external_started_at else None),
-                "status": self._health_text(key, item)
-                if item.running
-                else (
-                    "работает вне центра"
-                    if external
+                "running": running,
+                "owned": running,
+                "external": False,
+                "pid": int(process.pid) if running and process else None,
+                "started_at": float(item.started_at) if running else None,
+                "status": (
+                    "running"
+                    if running
                     else (
                         "failed_unexpected_exit"
                         if item.unexpected_exit_reported
-                        else "выключен"
+                        else "stopped"
                     )
                 ),
             }
-        payload = {
-            "schema": "ResearchControlCenterHeartbeat.v1",
+        with self._ui_snapshot_lock:
+            ui_snapshot = dict(self._ui_snapshot_state)
+        stage_started_at = ui_snapshot.get("stage_started_at")
+        ui_snapshot["stage_age_seconds"] = (
+            max(0.0, time.time() - float(stage_started_at))
+            if isinstance(stage_started_at, (int, float))
+            else None
+        )
+        return {
+            "schema": "ResearchControlCenterHeartbeat.v2",
             "updated_at": time.time(),
             "pid": os.getpid(),
             "paper_only": True,
             "execution_allowed": False,
-            "compute_pipeline": self._compute_pipeline_health(),
+            "compute_pipeline": dict(self._last_compute_pipeline),
+            "ui_snapshot": ui_snapshot,
             "contours": contour_rows,
         }
-        target = STATE_DIR / "heartbeat.json"
-        temporary = target.with_suffix(".tmp")
-        try:
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+
+    def _record_heartbeat_publish_error(self, exc: Exception) -> None:
+        self.events.put(
+            (
+                self.selected_key,
+                "log",
+                f"heartbeat publish error: {type(exc).__name__}",
             )
-            temporary.replace(target)
-        except OSError as exc:
-            rows = self._logs[self.selected_key]
-            rows.append(f"heartbeat error: {exc}")
-            del rows[:-500]
-            self._render_log()
-        self.after(5000, self._heartbeat)
+        )
+
+    def _run_ui_snapshot_stage(
+        self,
+        stage: str,
+        producer: Callable[[], _SnapshotT],
+        consumer: Callable[[_SnapshotT], None],
+    ) -> None:
+        started_at = time.time()
+        with self._ui_snapshot_lock:
+            self._ui_snapshot_state.update(
+                {
+                    "stage": stage,
+                    "stage_started_at": started_at,
+                    "last_error_type": None,
+                }
+            )
+        error_type: str | None = None
+        try:
+            consumer(producer())
+        except Exception as exc:
+            error_type = type(exc).__name__
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    f"UI status probe failed at {stage}: {error_type}",
+                )
+            )
+        finally:
+            completed_at = time.time()
+            with self._ui_snapshot_lock:
+                self._ui_snapshot_state.update(
+                    {
+                        "stage": "idle",
+                        "stage_started_at": None,
+                        "last_completed_at": completed_at,
+                        "last_duration_seconds": max(0.0, completed_at - started_at),
+                        "last_error_type": error_type,
+                    }
+                )
+
+    def _heartbeat(self) -> None:
+        try:
+            self._run_ui_snapshot_stage(
+                "system_snapshot",
+                self._system_snapshot,
+                self.system_var.set,
+            )
+            self._run_ui_snapshot_stage(
+                "learning_snapshot",
+                self._learning_snapshot,
+                self.learning_var.set,
+            )
+            self._run_ui_snapshot_stage(
+                "candle_snapshot",
+                self._candle_snapshot,
+                self.candles_var.set,
+            )
+            self._run_ui_snapshot_stage(
+                "compute_pipeline",
+                self._compute_pipeline_health,
+                lambda value: setattr(self, "_last_compute_pipeline", dict(value)),
+            )
+        finally:
+            self.after(int(HEARTBEAT_INTERVAL_SECONDS * 1000), self._heartbeat)
+
+    def _stop_heartbeat_publisher(self) -> None:
+        publisher = getattr(self, "_heartbeat_publisher", None)
+        if publisher is not None and not publisher.stop():
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    "heartbeat publisher did not stop within its bounded timeout",
+                )
+            )
 
     def _close(self) -> None:
         if self._closing:
@@ -1643,6 +1848,7 @@ class ControlCenter(tk.Tk):
         ):
             return
         if not running and not external:
+            self._stop_heartbeat_publisher()
             self.instance.close()
             self.destroy()
             return
@@ -1681,7 +1887,10 @@ def main() -> int:
         messagebox.showerror("Исследовательский центр", str(exc))
         return 2
     app = ControlCenter(instance, tuple(args.start))
-    app.mainloop()
+    try:
+        app.mainloop()
+    finally:
+        app._stop_heartbeat_publisher()
     return 0
 
 
