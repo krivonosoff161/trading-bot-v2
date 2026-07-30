@@ -373,7 +373,10 @@ class ManagedContour:
         env["TRADING_BOT_RUNTIME_ROOT"] = str(RUNTIME_ROOT)
         env["PYTHONUTF8"] = "1"
         env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
-        flags = _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW
+        # CTRL_BREAK is the documented graceful stop for owned console
+        # contours. CREATE_NO_WINDOW would detach them from a console and make
+        # that signal unreliable on Windows.
+        flags = _CREATE_NEW_PROCESS_GROUP
         self.process = subprocess.Popen(
             self.spec.command,
             cwd=ROOT,
@@ -416,10 +419,10 @@ class ManagedContour:
             "exit_code": int(return_code),
         }
 
-    def stop(self, timeout: float | None = None) -> None:
+    def stop(self, timeout: float | None = None) -> bool:
         self.expected_running = False
         if not self.running or not self.process:
-            return
+            return True
         self.stopping = True
         try:
             if self.spec.graceful_stop:
@@ -427,25 +430,32 @@ class ManagedContour:
             else:
                 try:
                     self.process.send_signal(_CTRL_BREAK_EVENT)
-                except (OSError, ValueError):
-                    self.process.terminate()
+                except (OSError, ValueError) as exc:
+                    self.events.put(
+                        (
+                            self.spec.key,
+                            "state",
+                            "graceful stop signal failed: "
+                            f"{type(exc).__name__}; process remains owned",
+                        )
+                    )
+                    return False
             deadline = time.monotonic() + (
                 self.spec.graceful_seconds if timeout is None else timeout
             )
             while self.running and time.monotonic() < deadline:
                 time.sleep(0.2)
             if self.running:
-                if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
-                        capture_output=True,
-                        text=True,
-                        timeout=15,
-                        check=False,
-                        creationflags=_CREATE_NO_WINDOW,
+                self.events.put(
+                    (
+                        self.spec.key,
+                        "state",
+                        "graceful stop deadline exhausted; "
+                        f"owned PID {self.process.pid} remains",
                     )
-                else:
-                    self.process.terminate()
+                )
+                return False
+            return True
         finally:
             self.stopping = False
 
@@ -476,6 +486,31 @@ class SingleInstance:
         else:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
         self.handle.close()
+
+
+def _request_windows_close(pid: int) -> int:
+    """Post WM_CLOSE only to top-level windows owned by the exact PID."""
+
+    if os.name != "nt" or _WINDLL is None or pid <= 0:
+        return 0
+    user32 = getattr(_WINDLL, "user32", None)
+    if user32 is None:
+        return 0
+    callback_type = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+    closed = 0
+
+    def visit(hwnd, _lparam) -> bool:
+        nonlocal closed
+        window_pid = ctypes.c_ulong(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if int(window_pid.value) == int(pid):
+            if user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE
+                closed += 1
+        return True
+
+    callback = callback_type(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(visit)
+    user32.EnumWindows(callback, 0)
+    return closed
 
 
 def _process_started_at(pid: int) -> float | None:
@@ -1044,13 +1079,11 @@ class ControlCenter(tk.Tk):
             return
 
         def stop_owned() -> None:
-            workers = [
-                threading.Thread(target=item.stop, daemon=True) for item in owned
-            ]
-            for worker in workers:
-                worker.start()
-            for worker in workers:
-                worker.join()
+            # Consumers stop before shared providers; the previous parallel
+            # stop could tear down Ollama while farm/Telegram were still
+            # finishing their own graceful paths.
+            for item in owned:
+                item.stop()
             for key, descriptor in external:
                 self._stop_external(key, descriptor)
 
@@ -1067,6 +1100,18 @@ class ControlCenter(tk.Tk):
                 self.instance.close()
                 self.destroy()
                 return
+            if key == "__app__" and kind == "stop_failed":
+                self._closing = False
+                self.deiconify()
+                self.events.put(
+                    (
+                        self.selected_key,
+                        "log",
+                        "RCC remains open because at least one owned contour "
+                        "did not stop gracefully",
+                    )
+                )
+                continue
             if kind == "state":
                 self.status_vars[key].set(value)
             else:
@@ -1438,15 +1483,10 @@ class ControlCenter(tk.Tk):
             deadline = time.monotonic() + spec.graceful_seconds
             while _same_live_process(pid, started_at) and time.monotonic() < deadline:
                 time.sleep(0.2)
-        if _same_live_process(pid, started_at):
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-                creationflags=_CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+        elif key == "ollama" and _request_windows_close(pid) > 0:
+            deadline = time.monotonic() + spec.graceful_seconds
+            while _same_live_process(pid, started_at) and time.monotonic() < deadline:
+                time.sleep(0.2)
         if not _same_live_process(pid, started_at):
             self.external_contours.pop(key, None)
             self.events.put((key, "state", f"внешний PID {pid} остановлен"))
@@ -1840,7 +1880,21 @@ class ControlCenter(tk.Tk):
     def _close(self) -> None:
         if self._closing:
             return
-        running = [item for item in self.contours.values() if item.running]
+        shutdown_order = (
+            "telegram_bot",
+            "paper_cards",
+            "farm",
+            "scanner",
+            "public_news",
+            "ollama",
+            "dashboard",
+            "graphs",
+        )
+        running = [
+            self.contours[key]
+            for key in shutdown_order
+            if key in self.contours and self.contours[key].running
+        ]
         external = self._external_profile_contours()
         if (running or external) and not messagebox.askyesno(
             "Закрыть центр",
@@ -1856,16 +1910,24 @@ class ControlCenter(tk.Tk):
         self.withdraw()
 
         def stop_all() -> None:
-            workers = [
-                threading.Thread(target=item.stop, daemon=True) for item in running
-            ]
-            for worker in workers:
-                worker.start()
-            for worker in workers:
-                worker.join()
+            stop_results = [item.stop() for item in running]
+            stopped = all(stop_results)
             for key, descriptor in external:
                 self._stop_external(key, descriptor)
-            self.events.put(("__app__", "close", ""))
+            external_stopped = all(
+                not _same_live_process(
+                    int(descriptor.get("pid") or 0),
+                    descriptor.get("started_at"),
+                )
+                for _key, descriptor in external
+            )
+            self.events.put(
+                (
+                    "__app__",
+                    "close" if stopped and external_stopped else "stop_failed",
+                    "",
+                )
+            )
 
         threading.Thread(target=stop_all, daemon=True).start()
 

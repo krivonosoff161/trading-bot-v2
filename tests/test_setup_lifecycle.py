@@ -85,3 +85,26 @@ def test_paper_jsonl_drives_positive_negative_groups(tmp_path):
     summary = summarize_setup_lifecycle(tmp_path)
     assert summary["negative_setups"] == 1
     assert summary["positive_setups"] == 0
+
+
+def test_lifecycle_reports_only_completed_input_and_row_chunks(tmp_path):
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    uc_key = "BTC::1h::momentum_breakout::ph::fp"
+    validation_id = _unique(tasks, uc_key)
+    tasks.close()
+    _write_request(tmp_path, validation_id, uc_key)
+    _write_verdict(tmp_path, validation_id, "PAPER_FORWARD_READY")
+    events: list[tuple[str, int, int]] = []
+
+    rows = derive_setup_lifecycle(
+        tmp_path,
+        progress=lambda stage, completed, total: events.append(
+            (stage, completed, total)
+        ),
+    )
+
+    assert len(rows) == 1
+    assert ("validation_requests_loaded", 1, 1) in events
+    assert ("validation_verdicts_loaded", 1, 1) in events
+    assert ("unique_candidates_loaded", 1, 1) in events
+    assert ("lifecycle_rows_derived", 1, 1) in events

@@ -83,6 +83,18 @@ a sanitized aggregate if a result needs discussion.
   slow display probe; it is diagnostic evidence, not authority and not proof
   that the owned contours stopped. Child identity, ownership, fencing, ports,
   and process liveness remain separate hard-fail inputs.
+- RCC starts owned console contours in a dedicated process group so the
+  documented CTRL_BREAK path remains available. Shutdown is dependency
+  ordered (consumers before shared providers), has a bounded deadline, and
+  reports any residual owned PID without forced termination.
+- Active canary monitoring keeps fast process/authority samples independent
+  from deeper SQLite health work. One failed probe is recorded as degraded and
+  does not count as a completed sample; loss of the lane's monotonic freshness
+  budget is the fail-closed boundary.
+- The setup-outcome memory refresh streams its paper JSONL input and reads
+  unique candidates in bounded chunks. Status milestones are published only
+  after real inputs or rows complete, so a long HDD read is distinguishable
+  from an unchanged heartbeat.
 
 ### Provenance-bound RCC marker clearance
 

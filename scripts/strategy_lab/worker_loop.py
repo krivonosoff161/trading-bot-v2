@@ -13,8 +13,6 @@ import datetime as dt
 import os
 import subprocess
 import sys
-import threading
-import time
 import uuid
 from pathlib import Path
 
@@ -23,6 +21,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.process_lease_heartbeat import (  # noqa: E402
+    ProcessLeaseHeartbeat,
+)
 from src.research_lab.ownership import (  # noqa: E402
     OwnershipConflictError,
     OwnershipStore,
@@ -33,30 +34,15 @@ from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.stop_intent import is_stop_requested, stop_intent_path  # noqa: E402
 
 
-class _LoopLeaseHeartbeat:
+class _LoopLeaseHeartbeat(ProcessLeaseHeartbeat):
+    """Compatibility name for the shared bounded process heartbeat."""
+
     def __init__(self, path: Path, lease) -> None:
-        self.path = path
-        self.lease = lease
-        self.stop_event = threading.Event()
-        self.failure: BaseException | None = None
-        self.thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def stop(self) -> None:
-        self.stop_event.set()
-        self.thread.join(timeout=5)
-
-    def _run(self) -> None:
-        store = OwnershipStore(self.path, identity_probe=probe_process_identity)
-        try:
-            while not self.stop_event.wait(30):
-                store.renew(self.lease, lease_seconds=90)
-        except BaseException as exc:
-            self.failure = exc
-        finally:
-            store.close()
+        super().__init__(
+            path,
+            lease,
+            thread_name="worker-loop-process-lease-heartbeat",
+        )
 
 
 def run_once(
@@ -143,7 +129,9 @@ def loop(
             if max_iterations and iteration >= max_iterations:
                 append_log(log_path, "worker_loop stopped by max_iterations")
                 return result.returncode
-            time.sleep(error_sleep_seconds if result.returncode else sleep_seconds)
+            heartbeat.failure_event.wait(
+                error_sleep_seconds if result.returncode else sleep_seconds
+            )
     finally:
         heartbeat.stop()
         try:

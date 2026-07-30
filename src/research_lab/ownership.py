@@ -276,6 +276,46 @@ class OwnershipStore:
         )
         self.raw_connection.commit()
 
+    @classmethod
+    def open_existing(
+        cls,
+        path: Path | str,
+        *,
+        clock: Callable[[], float] = time.time,
+        identity_probe: IdentityProbe,
+        busy_timeout_seconds: float,
+    ) -> "OwnershipStore":
+        """Open an existing authority store for a bounded renewal path.
+
+        A heartbeat must never create or migrate the authority store, and it
+        must not spend most of a lease in SQLite's default 30 second busy wait.
+        Acquisition remains responsible for schema/WAL setup; renewal gets a
+        short, caller-budgeted read/write connection to that same file.
+        """
+
+        if busy_timeout_seconds <= 0:
+            raise ValueError("positive busy timeout is required")
+        resolved = Path(path).resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError(resolved)
+        instance = cls.__new__(cls)
+        instance._clock = clock
+        instance._identity_probe = identity_probe
+        instance.raw_connection = sqlite3.connect(
+            f"{resolved.as_uri()}?mode=rw",
+            uri=True,
+            timeout=float(busy_timeout_seconds),
+        )
+        instance.raw_connection.row_factory = sqlite3.Row
+        instance.raw_connection.execute(
+            f"PRAGMA busy_timeout = {max(1, int(busy_timeout_seconds * 1000))}"
+        )
+        # Validate the expected authority surface without creating anything.
+        instance.raw_connection.execute(
+            "SELECT resource_id FROM ownership_resources LIMIT 0"
+        )
+        return instance
+
     def close(self) -> None:
         self.raw_connection.close()
 

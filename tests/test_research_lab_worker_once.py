@@ -452,29 +452,17 @@ def test_state_db_default_connection_still_configures_wal(tmp_path):
 
 def test_process_heartbeat_connection_failure_is_visible_before_work(
     tmp_path,
-    monkeypatch,
 ):
-    monkeypatch.setattr(
-        worker_once,
-        "OwnershipStore",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            sqlite3.OperationalError("synthetic")
-        ),
-    )
     heartbeat = worker_once._ProcessLeaseHeartbeat(
         ownership_path=tmp_path / "ownership.sqlite",
         process_lease=object(),
     )
 
-    heartbeat.start()
-
     with pytest.raises(
         WorkerLeaseLifecycleError,
-        match="initialization",
+        match="failed to initialize",
     ):
-        worker_once._raise_process_heartbeat_failure(
-            heartbeat,
-            stage="initialization",
-        )
+        heartbeat.start()
+    assert heartbeat.failure is not None
     heartbeat.stop()
     assert heartbeat.thread.is_alive() is False

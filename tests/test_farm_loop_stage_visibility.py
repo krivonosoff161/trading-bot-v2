@@ -922,3 +922,60 @@ class TestCycleLogStages:
         assert out["execution_allowed"] is False
         assert farm_loop.os.environ["TRADING_BOT_RESEARCH_ROOT"] == "old-root"
         assert farm_loop.os.environ["JOURNAL_ENABLE_PRIVATE_FILLS"] == "1"
+
+
+def test_production_memory_refresh_blocks_snapshot_after_owner_lease_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import setup_outcome_memory as memory
+
+    signal = farm_loop._TaskClaimFailureSignal(
+        tmp_path,
+        threading.Event(),
+        interrupt_main=lambda: None,
+    )
+    args = SimpleNamespace(task_claim_failure_signal=signal)
+    milestones: list[str] = []
+    snapshot_written = False
+
+    def build(_root, *, progress):
+        progress("lifecycle_loaded", 10, 10)
+        milestones.append("lifecycle_loaded")
+        signal.notify(
+            RuntimeError("synthetic owner lease failure"),
+            {
+                "failure_kind": "process_lease",
+                "fencing_token": 7,
+            },
+        )
+        progress("records_built", 10, 10)
+        return []
+
+    def forbidden_snapshot(*_args, **_kwargs):
+        nonlocal snapshot_written
+        snapshot_written = True
+        pytest.fail("lost process authority must block snapshot publication")
+
+    monkeypatch.setattr(memory, "build_memory_index", build)
+    monkeypatch.setattr(memory, "write_memory_snapshot", forbidden_snapshot)
+    monkeypatch.setattr(
+        farm_loop,
+        "_write_loop_status",
+        lambda *_args, **_kwargs: True,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="canonical process ownership heartbeat failed",
+    ):
+        farm_loop._refresh_setup_outcome_memory(
+            args,
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=100.0,
+        )
+
+    assert milestones == ["lifecycle_loaded"]
+    assert snapshot_written is False

@@ -48,6 +48,9 @@ from src.research_lab.ownership import (  # noqa: E402
     probe_process_identity,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.process_lease_heartbeat import (  # noqa: E402
+    ProcessLeaseHeartbeat,
+)
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E402
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
@@ -67,33 +70,16 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-class _FarmLeaseHeartbeat:
-    def __init__(self, path: Path, lease, *, lease_seconds: float = 90.0) -> None:
-        self.path = path
-        self.lease = lease
-        self.lease_seconds = lease_seconds
-        self.stop_event = threading.Event()
-        self.failure: BaseException | None = None
-        self.thread = threading.Thread(
-            target=self._run, name="farm-lease-heartbeat", daemon=True
+class _FarmLeaseHeartbeat(ProcessLeaseHeartbeat):
+    """Compatibility name for the shared bounded process heartbeat."""
+
+    def __init__(self, path: Path, lease, **kwargs) -> None:
+        super().__init__(
+            path,
+            lease,
+            thread_name="farm-lease-heartbeat",
+            **kwargs,
         )
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def stop(self) -> None:
-        self.stop_event.set()
-        self.thread.join(timeout=5)
-
-    def _run(self) -> None:
-        store = OwnershipStore(self.path, identity_probe=probe_process_identity)
-        try:
-            while not self.stop_event.wait(self.lease_seconds / 3):
-                store.renew(self.lease, lease_seconds=self.lease_seconds)
-        except BaseException as exc:
-            self.failure = exc
-        finally:
-            store.close()
 
 
 def _task_claim_guard_factory(
@@ -688,29 +674,13 @@ def _run_main_paper_derived_chain(
             loop=loop,
             cycle_started_at=cycle_started_at,
         )
-        from src.research_lab.setup_outcome_memory import (
-            build_memory_index,
-            summarize_memory,
-            summarize_product_training_memory,
-            write_memory_snapshot,
+        out["setup_outcome_memory_refresh"] = _refresh_setup_outcome_memory(
+            args,
+            private_root,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
         )
-
-        memory_records = build_memory_index(private_root)
-        memory_summary = summarize_memory(memory_records)
-        product_memory = summarize_product_training_memory(private_root)["summary"]
-        out["setup_outcome_memory_refresh"] = {
-            "schema": "setup_outcome_memory_refresh.v1",
-            "snapshot_path": str(write_memory_snapshot(private_root)),
-            "total": memory_summary.get("total", 0),
-            "paper_ready_without_hard_pass": memory_summary.get(
-                "paper_ready_without_hard_pass", 0
-            ),
-            "product_rows": product_memory.get("rows", 0),
-            "product_terminal_rows": product_memory.get("terminal_rows", 0),
-            "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
-            "paper_only": True,
-            "execution_allowed": False,
-        }
     except Exception as exc:  # noqa: BLE001 - memory refresh must not break the cycle
         out.setdefault("errors", []).append(
             {
@@ -718,6 +688,11 @@ def _run_main_paper_derived_chain(
                 "error": str(exc),
             }
         )
+    failure_signal = getattr(args, "task_claim_failure_signal", None)
+    if failure_signal is not None:
+        # A stage-local Exception handler must not turn lost ownership into a
+        # best-effort report and continue into later materialization/delivery.
+        failure_signal.raise_if_failed()
     try:
         _write_loop_status(
             private_root,
@@ -1499,6 +1474,62 @@ def _write_loop_status(
     return _loop_status_publisher(private_root).publish(payload)
 
 
+def _refresh_setup_outcome_memory(
+    args,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+) -> dict[str, Any]:
+    """Run the production memory refresh with real, completed milestones."""
+
+    from src.research_lab import setup_outcome_memory as memory
+
+    failure_signal = getattr(args, "task_claim_failure_signal", None)
+
+    def progress(milestone: str, completed: int, total: int) -> None:
+        if failure_signal is not None:
+            failure_signal.raise_if_failed()
+        _write_loop_status(
+            private_root,
+            stage="setup_outcome_memory_refresh",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={
+                "milestone": milestone,
+                "completed": int(completed),
+                "total": int(total),
+            },
+        )
+
+    records = memory.build_memory_index(private_root, progress=progress)
+    summary = memory.summarize_memory(records)
+    progress("memory_summarized", len(records), len(records))
+    product_memory = memory.summarize_product_training_memory(private_root)["summary"]
+    progress(
+        "product_memory_summarized",
+        int(product_memory.get("rows") or 0),
+        int(product_memory.get("rows") or 0),
+    )
+    snapshot_path = memory.write_memory_snapshot(private_root, records=records)
+    progress("snapshot_written", len(records), len(records))
+    return {
+        "schema": "setup_outcome_memory_refresh.v1",
+        "snapshot_path": str(snapshot_path),
+        "total": summary.get("total", 0),
+        "paper_ready_without_hard_pass": summary.get(
+            "paper_ready_without_hard_pass", 0
+        ),
+        "product_rows": product_memory.get("rows", 0),
+        "product_terminal_rows": product_memory.get("terminal_rows", 0),
+        "product_pnl_usdt": product_memory.get("paper_pnl_usdt", 0),
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
 def _run_once(
     args, tasks: FarmTasksDB, profiles, policy, private_root: Path, apply: bool
 ) -> dict:
@@ -2233,6 +2264,8 @@ class _TaskClaimFailureSignal:
         failure_stage = (
             "worker_failed"
             if failure_kind == "compute_worker_lifecycle"
+            else "owner_lease_failed"
+            if failure_kind == "process_lease"
             else "claim_failed"
         )
         try:
@@ -2265,6 +2298,8 @@ class _TaskClaimFailureSignal:
             message = (
                 "priority compute worker failed closed"
                 if failure_kind == "compute_worker_lifecycle"
+                else "canonical process ownership heartbeat failed"
+                if failure_kind == "process_lease"
                 else "priority task claim heartbeat failed"
             )
             raise RuntimeError(message) from failure
@@ -2774,10 +2809,14 @@ def main() -> None:
     ownership_store = None
     process_lease = None
     lease_heartbeat = None
+    priority_stop = threading.Event()
+    priority_thread = None
+    claim_failure_signal = None
     if apply:
         private_root = resolve_private_root(
             Path(args.private_root), allow_public_output=args.allow_public_output
         )
+        claim_failure_signal = _TaskClaimFailureSignal(private_root, priority_stop)
         legacy_lock = private_root / "state" / "farm_loop.lock"
         if legacy_lock.exists():
             print(
@@ -2804,9 +2843,19 @@ def main() -> None:
             print(f"ABORT: canonical farm ownership conflict: {exc}")
             return
         assert process_lease is not None
-        lease_heartbeat = _FarmLeaseHeartbeat(ownership_path, process_lease)
-        lease_heartbeat.start()
+        lease_heartbeat = _FarmLeaseHeartbeat(
+            ownership_path,
+            process_lease,
+        )
         try:
+            lease_heartbeat.start()
+            lease_heartbeat.on_failure = claim_failure_signal.notify
+            if lease_heartbeat.failure is not None:
+                claim_failure_signal.notify(
+                    lease_heartbeat.failure,
+                    lease_heartbeat.snapshot()
+                    | {"failure_kind": "process_lease"},
+                )
             tasks = FarmTasksDB(
                 tasks_db_path(private_root),
                 owner_id=owner_id,
@@ -2833,12 +2882,9 @@ def main() -> None:
         private_root = Path(args.private_root)
         tasks = FarmTasksDB(":memory:")  # dry-run persists nothing
 
-    priority_stop = threading.Event()
-    priority_thread = None
-    claim_failure_signal = None
     if apply:
         assert process_lease is not None
-        claim_failure_signal = _TaskClaimFailureSignal(private_root, priority_stop)
+        assert claim_failure_signal is not None
         args.canonical_owner_id = process_lease.owner_id
         args.task_claim_failure_signal = claim_failure_signal
         args.task_claim_guard_factory = _task_claim_guard_factory(

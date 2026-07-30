@@ -79,7 +79,11 @@ This is enforced by the farm boundary tests.
 ## Fenced Ownership Rules
 
 - All `farm_loop --apply` modes acquire `canonical_farm`; `--once` is not an
-  ownership bypass. Long cycles renew independently in a heartbeat thread.
+  ownership bypass. Long cycles renew through the shared
+  `process_lease_heartbeat` path. SQLite busy/locked and an unavailable
+  process-identity probe have a short bounded retry budget; owner, identity or
+  fence mismatch fails immediately. The heartbeat latches failure and wakes
+  the foreground before lease expiry.
 - `worker_once` and the standalone worker scheduler use durable process leases;
   a legacy `worker.lock` is fail-closed migration evidence and is never deleted
   by age.
@@ -92,7 +96,9 @@ This is enforced by the farm boundary tests.
   joins the same materialization and task fence rather than trusting a job ID
   alone.
 - Recovered heartbeats and listening ports are display-only. They cannot reach
-  graceful stop or `taskkill` without current in-process ownership.
+  process signals without current in-process ownership. RCC never escalates a
+  failed graceful stop to `taskkill`; an identity-bound residual process stays
+  visible as a hard operational failure.
 
 ## Telegram And LLM Surface Boundary
 

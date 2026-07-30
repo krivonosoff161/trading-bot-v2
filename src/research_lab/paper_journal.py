@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.paper_contract import PaperTradeOutcome
 
@@ -133,18 +133,27 @@ def _request_context(private_root: Path, candidate_id: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def read_paper_outcomes(private_root: Path) -> list[dict[str, Any]]:
+def read_paper_outcomes(
+    private_root: Path,
+    *,
+    progress: Callable[[int], None] | None = None,
+) -> list[dict[str, Any]]:
     path = paper_trades_path(private_root)
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
+    processed = 0
+    with path.open("r", encoding="utf-8") as source:
+        for processed, line in enumerate(source, start=1):
+            if line.strip():
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    row = None
+                if isinstance(row, dict):
+                    rows.append(row)
+            if progress is not None and processed % 1000 == 0:
+                progress(processed)
+    if progress is not None:
+        progress(processed)
     return rows
