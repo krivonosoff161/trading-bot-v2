@@ -9,6 +9,7 @@ the current lease's safety margin.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import time
@@ -53,6 +54,7 @@ class ProcessLeaseHeartbeat:
         thread_name: str = "process-lease-heartbeat",
         on_failure: FailureCallback | None = None,
         identity_probe: IdentityProbe = probe_process_identity,
+        current_pid: Callable[[], int] = os.getpid,
         clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -86,6 +88,7 @@ class ProcessLeaseHeartbeat:
         self.lease_safety_margin_seconds = float(lease_safety_margin_seconds)
         self.on_failure = on_failure
         self._identity_probe = identity_probe
+        self._current_pid = current_pid
         self._clock = clock
         self._monotonic = monotonic
         self.stop_event = threading.Event()
@@ -98,10 +101,17 @@ class ProcessLeaseHeartbeat:
         self._transient_started_mono: float | None = None
         self._transient_events = 0
         self._last_transient_type: str | None = None
+        self._renew_attempt_started_mono: float | None = None
+        self._last_renewal_completed_mono = float(self._monotonic())
         self._started = False
         self.thread = threading.Thread(
             target=self._run,
             name=thread_name,
+            daemon=True,
+        )
+        self.supervisor_thread = threading.Thread(
+            target=self._supervise,
+            name=f"{thread_name}-supervisor",
             daemon=True,
         )
 
@@ -118,7 +128,23 @@ class ProcessLeaseHeartbeat:
     def start(self) -> None:
         if self._started:
             raise RuntimeError("process lease heartbeat already started")
+        try:
+            local_holder = self.lease.identity.pid == int(self._current_pid())
+        except (AttributeError, TypeError, ValueError) as exc:
+            failure = StaleProcessLeaseError("invalid process lease")
+            failure.__cause__ = exc
+            local_holder = False
+        else:
+            failure = StaleProcessLeaseError(
+                "process lease heartbeat must run in the acquiring process"
+            )
+        if not local_holder:
+            self._record_failure(failure)
+            raise ProcessLeaseHeartbeatLifecycleError(
+                "process lease heartbeat failed to initialize"
+            ) from failure
         self.thread.start()
+        self.supervisor_thread.start()
         self._started = True
         startup_budget = (
             self.max_transient_seconds
@@ -145,7 +171,8 @@ class ProcessLeaseHeartbeat:
             else max(0.0, float(timeout))
         )
         self.thread.join(timeout=stop_timeout)
-        if self.thread.is_alive():
+        self.supervisor_thread.join(timeout=stop_timeout)
+        if self.thread.is_alive() or self.supervisor_thread.is_alive():
             raise ProcessLeaseHeartbeatLifecycleError(
                 "process lease heartbeat did not stop"
             )
@@ -182,6 +209,20 @@ class ProcessLeaseHeartbeat:
                 "last_transient_type": self._last_transient_type,
                 "failure": None if failure is None else type(failure).__name__,
                 "thread_alive": self.thread.is_alive(),
+                "supervisor_alive": self.supervisor_thread.is_alive(),
+                "renew_attempt_age_seconds": (
+                    0.0
+                    if self._renew_attempt_started_mono is None
+                    else max(
+                        0.0,
+                        float(self._monotonic())
+                        - self._renew_attempt_started_mono,
+                    )
+                ),
+                "last_renewal_completed_age_seconds": max(
+                    0.0,
+                    float(self._monotonic()) - self._last_renewal_completed_mono,
+                ),
             }
 
     def _run(self) -> None:
@@ -200,6 +241,42 @@ class ProcessLeaseHeartbeat:
             self.ready_event.set()
             if store is not None:
                 store.close()
+
+    def _supervise(self) -> None:
+        """Latch a visible failure even if the renewal worker stops returning.
+
+        SQLite busy waits are configured below the lease budget, and local
+        renewals avoid the unbounded Windows command-line identity probe.
+        This independent clock is the final fail-closed guard: an unexpected
+        C-extension or filesystem stall cannot remain invisible until expiry.
+        """
+
+        while not self.stop_event.wait(0.1):
+            if self.failure is not None:
+                return
+            with self._state_lock:
+                attempt_started = self._renew_attempt_started_mono
+                lease_expires_at = self._lease.lease_expires_at
+            now_mono = float(self._monotonic())
+            now_wall = float(self._clock())
+            attempt_age = (
+                0.0
+                if attempt_started is None
+                else max(0.0, now_mono - attempt_started)
+            )
+            if (
+                attempt_started is not None
+                and attempt_age >= self.max_transient_seconds
+            ) or (
+                now_wall + self.lease_safety_margin_seconds
+                >= lease_expires_at
+            ):
+                self._record_failure(
+                    ProcessLeaseRenewalBudgetExceeded(
+                        "process lease renewal stopped making bounded progress"
+                    )
+                )
+                return
 
     def _connect_with_bounded_retries(self) -> OwnershipStore | None:
         while not self.stop_event.is_set():
@@ -227,12 +304,17 @@ class ProcessLeaseHeartbeat:
     def _renew_with_bounded_retries(self, store: OwnershipStore) -> bool:
         while not self.stop_event.is_set():
             attempt_started = float(self._monotonic())
+            with self._state_lock:
+                self._renew_attempt_started_mono = attempt_started
             try:
-                renewed = store.renew(
+                renewed = store.renew_local(
                     self.lease,
                     lease_seconds=self.lease_seconds,
+                    cancel_requested=self.stop_event.is_set,
                 )
             except BaseException as exc:
+                with self._state_lock:
+                    self._renew_attempt_started_mono = None
                 if not self._is_retryable(exc):
                     raise
                 self._record_transient(attempt_started, exc)
@@ -244,6 +326,8 @@ class ProcessLeaseHeartbeat:
                 self._lease = renewed
                 self._renewals += 1
                 self._transient_started_mono = None
+                self._renew_attempt_started_mono = None
+                self._last_renewal_completed_mono = float(self._monotonic())
             return True
         return False
 

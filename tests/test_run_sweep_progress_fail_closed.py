@@ -55,12 +55,7 @@ def _seed_candles(root, symbol="CL_USDT_SWAP", timeframe="1h") -> None:
 
 
 def _identity() -> ProcessIdentity:
-    return ProcessIdentity(
-        pid=4242,
-        started_at=10.0,
-        executable="C:/Python/python.exe",
-        command_digest="sha256:canonical-farm",
-    )
+    return current_process_identity()
 
 
 def _wait_until(predicate, timeout=1.0) -> bool:

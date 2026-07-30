@@ -487,6 +487,8 @@ def _training_memory(
     private_root: Path,
     *,
     evidence_database_path: Path | str | None = None,
+    progress: MemoryProgress | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
@@ -504,20 +506,29 @@ def _training_memory(
     by_cell: dict[str, dict[str, Any]] = {}
     by_geometry_profile_cell: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
+    processed = 0
     try:
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        source = path.open("r", encoding="utf-8") if path.exists() else None
     except OSError:
-        lines = []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(row, dict):
-            continue
-        rows.append(row)
+        source = None
+    if source is not None:
+        with source:
+            for processed, line in enumerate(source, start=1):
+                if check_active is not None:
+                    check_active()
+                if line.strip():
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict):
+                        rows.append(row)
+                if progress is not None and processed % 1000 == 0:
+                    progress("product_training_rows_loaded", processed, 0)
+    if progress is not None:
+        progress("product_training_rows_loaded", processed, processed)
+    if check_active is not None:
+        check_active()
     generation = read_projection_view(
         private_root,
         "trades",
@@ -830,9 +841,12 @@ def build_memory_index(
     private_root: Path,
     *,
     progress: MemoryProgress | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     """One unified outcome record per unique candidate (derived; never written back to source)."""
     private_root = Path(private_root)
+    if check_active is not None:
+        check_active()
     lifecycle = derive_setup_lifecycle(
         private_root,
         progress=(
@@ -847,7 +861,24 @@ def build_memory_index(
     )
     if progress is not None:
         progress("lifecycle_loaded", len(lifecycle), len(lifecycle))
-    subreason = {r["uc_key"]: r for r in characterize_rejects(private_root)}
+    if check_active is not None:
+        check_active()
+    subreason = {
+        r["uc_key"]: r
+        for r in characterize_rejects(
+            private_root,
+            progress=(
+                None
+                if progress is None
+                else lambda stage, completed, total: progress(
+                    f"rejects:{stage}",
+                    completed,
+                    total,
+                )
+            ),
+            check_active=check_active,
+        )
+    }
     if progress is not None:
         progress("rejects_characterized", len(subreason), len(lifecycle))
     recovered_cells = _recovered_cells(private_root)
@@ -863,13 +894,19 @@ def build_memory_index(
         training_by_cell,
         _training_by_geometry_profile_cell,
         _training_evidence_selection,
-    ) = _training_memory(private_root)
+    ) = _training_memory(
+        private_root,
+        progress=progress,
+        check_active=check_active,
+    )
     retest_by_candidate, retest_by_cell = _outcome_retest_memory(private_root)
     if progress is not None:
         progress("training_inputs_loaded", 2, 2)
     records: list[dict[str, Any]] = []
     total = len(lifecycle)
     for index, lc in enumerate(lifecycle, start=1):
+        if check_active is not None:
+            check_active()
         uc = lc["uc_key"]
         cell = _training_cell_key(lc["symbol"], lc["timeframe"], lc["family"])
         sub = subreason.get(uc, {})

@@ -187,13 +187,14 @@ class TaskClaimHeartbeat:
             )
             self._record_failure(stalled_failure)
             raise stalled_failure
-        store = OwnershipStore(
+        store = OwnershipStore.open_existing(
             self.ownership_path,
             clock=self._clock,
             identity_probe=self._identity_probe,
+            busy_timeout_seconds=self.renewal_busy_timeout_seconds,
         )
         try:
-            if not store.is_authoritative(self.process_lease):
+            if not store.is_authoritative_local(self.process_lease):
                 owner_failure = StaleTaskClaimError(
                     f"canonical owner fence is stale for task {self.task_id}"
                 )
@@ -299,10 +300,11 @@ class TaskClaimHeartbeat:
         store = None
         renewal_db = None
         try:
-            store = OwnershipStore(
+            store = OwnershipStore.open_existing(
                 self.ownership_path,
                 clock=self._clock,
                 identity_probe=self._identity_probe,
+                busy_timeout_seconds=self.renewal_busy_timeout_seconds,
             )
             renewal_db = FarmTasksDB(
                 self.task_db.path,
@@ -425,7 +427,7 @@ class TaskClaimHeartbeat:
             )
         if progress_sequence == renewed_sequence:
             return False
-        if not store.is_authoritative(self.process_lease):
+        if not store.is_authoritative_local(self.process_lease):
             raise StaleTaskClaimError(
                 f"canonical owner fence is stale for task {self.task_id}"
             )

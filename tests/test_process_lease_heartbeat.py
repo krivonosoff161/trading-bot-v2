@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from src.research_lab.ownership import (
     OwnershipConflictError,
     OwnershipStore,
-    ProcessIdentity,
+    current_process_identity,
 )
 from src.research_lab.process_lease_heartbeat import (
     ProcessLeaseHeartbeat,
@@ -18,12 +19,7 @@ from src.research_lab.process_lease_heartbeat import (
 )
 
 
-IDENTITY = ProcessIdentity(
-    pid=4242,
-    started_at=100.0,
-    executable="C:/synthetic/python.exe",
-    command_digest="sha256:synthetic",
-)
+IDENTITY = current_process_identity()
 
 
 def _acquired(path: Path, *, lease_seconds: float = 0.8):
@@ -190,6 +186,74 @@ def test_transient_identity_probe_recovers_but_fence_change_fails_immediately(
     second.stop()
 
 
+def test_local_renewal_does_not_repeat_blocking_process_probe(tmp_path: Path) -> None:
+    path = tmp_path / "ownership.sqlite"
+    lease = _acquired(path)
+
+    def forbidden_probe(_pid: int):
+        raise AssertionError("local heartbeat repeated the Windows identity probe")
+
+    heartbeat = _heartbeat(path, lease, identity_probe=forbidden_probe)
+    heartbeat.start()
+
+    assert _wait_until(lambda: heartbeat.snapshot()["renewals"] >= 1)
+    assert heartbeat.failure is None
+    heartbeat.stop()
+    assert heartbeat.thread.is_alive() is False
+    assert heartbeat.supervisor_thread.is_alive() is False
+
+
+def test_supervisor_exposes_nonreturning_renewal_before_expiry(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "ownership.sqlite"
+    lease = _acquired(path, lease_seconds=0.5)
+    release_attempt = threading.Event()
+    entered = threading.Event()
+    original = OwnershipStore.renew_local
+    notifications: list[dict[str, object]] = []
+
+    def blocked_renew(
+        self,
+        process_lease,
+        *,
+        lease_seconds,
+        cancel_requested=None,
+    ):
+        entered.set()
+        release_attempt.wait(1.0)
+        return original(
+            self,
+            process_lease,
+            lease_seconds=lease_seconds,
+            cancel_requested=cancel_requested,
+        )
+
+    monkeypatch.setattr(OwnershipStore, "renew_local", blocked_renew)
+    heartbeat = _heartbeat(
+        path,
+        lease,
+        lease_seconds=0.5,
+        renew_interval_seconds=0.05,
+        max_transient_seconds=0.12,
+        on_failure=lambda _failure, snapshot: notifications.append(snapshot),
+    )
+    heartbeat.start()
+
+    assert entered.wait(0.5)
+    assert heartbeat.failure_event.wait(0.5)
+    observed_at = time.time()
+    assert observed_at < lease.lease_expires_at
+    assert isinstance(heartbeat.failure, ProcessLeaseRenewalBudgetExceeded)
+    assert len(notifications) == 1
+
+    release_attempt.set()
+    heartbeat.stop(timeout=1.0)
+    assert heartbeat.thread.is_alive() is False
+    assert heartbeat.supervisor_thread.is_alive() is False
+
+
 def test_stop_is_bounded_and_leaves_no_background_thread(tmp_path: Path) -> None:
     path = tmp_path / "ownership.sqlite"
     heartbeat = _heartbeat(path, _acquired(path))
@@ -198,4 +262,5 @@ def test_stop_is_bounded_and_leaves_no_background_thread(tmp_path: Path) -> None
     heartbeat.stop(timeout=0.5)
 
     assert heartbeat.thread.is_alive() is False
+    assert heartbeat.supervisor_thread.is_alive() is False
     assert heartbeat.failure is None

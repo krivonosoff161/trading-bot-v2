@@ -5,6 +5,8 @@ research outcome is ever paper-forward-ready. Deterministic — no real sweep/si
 import sys
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -33,6 +35,7 @@ from src.research_lab.setup_outcome_memory import (  # noqa: E402
     tactical_setups,
 )
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
+from src.research_lab.trade_path_diagnostics import characterize_rejects  # noqa: E402
 
 PROFILES = load_timeframe_profiles()
 POLICY = load_resource_policy()
@@ -364,6 +367,56 @@ class TestBuildMemoryIndex:
         assert r["okx_inst"] == "X"  # symbol has no underscores -> unchanged
         assert r["paper_forward_ready"] is False
         assert summarize_memory(recs)["paper_ready_without_hard_pass"] == 0
+
+    def test_reject_characterization_reports_real_chunks_and_is_cancellable(
+        self,
+        tmp_path,
+    ):
+        db = FarmTasksDB(tasks_db_path(tmp_path))
+        for index in range(40):
+            db.upsert_unique_candidate(
+                {
+                    "uc_key": f"X::{index}",
+                    "symbol": "X",
+                    "timeframe": "1h",
+                    "family": "momentum_breakout",
+                    "params_hash": f"ph-{index}",
+                    "data_fingerprint": "fp",
+                    "decision": "REJECT",
+                    "validation_status": "REJECT",
+                    "hard_status": "",
+                    "n_trades": 20,
+                    "avg_net_pct": -0.5,
+                    "candidate_id": f"c-{index}",
+                    "params": {},
+                    "run_dir_label": "",
+                },
+                now=float(index + 1),
+            )
+        db.close()
+        calls = 0
+        milestones: list[tuple[str, int, int]] = []
+
+        class Cancelled(RuntimeError):
+            pass
+
+        def check_active() -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 30:
+                raise Cancelled("synthetic stop")
+
+        with pytest.raises(Cancelled, match="synthetic stop"):
+            characterize_rejects(
+                tmp_path,
+                progress=lambda stage, completed, total: milestones.append(
+                    (stage, completed, total)
+                ),
+                check_active=check_active,
+            )
+
+        assert ("rejected_candidates_loaded", 40, 40) in milestones
+        assert ("rejects_characterized", 25, 40) in milestones
 
     def test_attaches_backfill_path_metrics_when_present(self, tmp_path):
         import json

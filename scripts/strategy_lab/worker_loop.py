@@ -113,7 +113,9 @@ def loop(
     try:
         while True:
             if is_stop_requested(private_root):
-                store.acknowledge_stop_intent(lease, stop_intent_path(private_root))
+                store.acknowledge_stop_intent_local(
+                    lease, stop_intent_path(private_root)
+                )
                 append_log(log_path, "worker_loop stopped by stop intent")
                 return 0
             if heartbeat.failure is not None:

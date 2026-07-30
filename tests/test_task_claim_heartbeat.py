@@ -9,7 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from src.research_lab.farm_tasks_db import FarmTasksDB, StaleTaskClaimError
-from src.research_lab.ownership import OwnershipStore, ProcessIdentity
+from src.research_lab.ownership import (
+    OwnershipStore,
+    ProcessIdentity,
+    current_process_identity,
+)
 from src.research_lab.state_db import connect, ensure_experiment_queued, init_db
 from src.research_lab.task_claim_heartbeat import (
     TaskClaimHeartbeat,
@@ -27,12 +31,7 @@ class Clock:
 
 
 def _identity() -> ProcessIdentity:
-    return ProcessIdentity(
-        pid=4242,
-        started_at=10.0,
-        executable="C:/Python/python.exe",
-        command_digest="sha256:canonical-farm",
-    )
+    return current_process_identity()
 
 
 def _process_lease(

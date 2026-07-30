@@ -4,11 +4,15 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 from types import SimpleNamespace
+from typing import Any
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -528,6 +532,8 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
     assert not (
         int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW)
     )
+    assert captured["env"]["AUTO_TRADE"] == "0"
+    assert captured["env"]["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
 
 
 def test_owned_contour_stop_fails_closed_without_force_termination(
@@ -612,6 +618,86 @@ def test_owned_contour_stop_deadline_surfaces_residual_without_taskkill(
     assert any("deadline exhausted" in event[2] for event in events)
 
 
+def test_farm_stop_marker_falls_back_to_owned_process_group_ctrl_break(
+    monkeypatch,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+    stop_requests: list[str] = []
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    class Process:
+        pid = 4242
+
+        def __init__(self):
+            self.running = True
+            self.signals: list[int] = []
+
+        def poll(self):
+            return None if self.running else 0
+
+        def send_signal(self, signal):
+            self.signals.append(signal)
+            self.running = False
+
+    spec = MODULE.ContourSpec(
+        key="paper_cards",
+        title="paper cards",
+        description="synthetic",
+        command=("synthetic",),
+        graceful_stop=lambda: stop_requests.append("marker"),
+        owner_group="canonical_farm",
+        graceful_seconds=0.0,
+        signal_fallback_seconds=0.1,
+    )
+    process = Process()
+    item = MODULE.ManagedContour(spec, Events())
+    item.process = process
+    item.started_at = 123.0
+    item.expected_running = True
+    monkeypatch.setattr(
+        MODULE,
+        "_same_live_process",
+        lambda pid, started_at: pid == 4242 and started_at == 123.0,
+    )
+
+    assert item.stop() is True
+    assert stop_requests == ["marker"]
+    assert process.signals == [MODULE._CTRL_BREAK_EVENT]
+    assert any("exact owned process group" in event[2] for event in events)
+
+
+def test_farm_stop_fallback_refuses_changed_process_identity(monkeypatch) -> None:
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return None
+
+        @staticmethod
+        def send_signal(_signal):
+            raise AssertionError("changed PID identity must not receive a signal")
+
+    spec = MODULE.ContourSpec(
+        key="paper_cards",
+        title="paper cards",
+        description="synthetic",
+        command=("synthetic",),
+        graceful_stop=lambda: None,
+        graceful_seconds=0.0,
+        signal_fallback_seconds=0.0,
+    )
+    item = MODULE.ManagedContour(spec, MODULE.queue.Queue())
+    item.process = Process()
+    item.started_at = 123.0
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: False)
+
+    assert item.stop() is False
+
+
 def test_profile_stop_is_dependency_ordered_not_parallel(monkeypatch) -> None:
     stopped: list[str] = []
     order = (
@@ -648,6 +734,102 @@ def test_profile_stop_is_dependency_ordered_not_parallel(monkeypatch) -> None:
     center._stop_research_profile()
 
     assert stopped == list(order)
+
+
+def test_cancelled_profile_stop_keeps_runtime_monitor_active(monkeypatch) -> None:
+    class Item:
+        running = True
+
+    class Monitor:
+        stopped = False
+
+        def stop(self, *, timeout):
+            self.stopped = True
+            return ()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {
+        key: Item()
+        for key in (
+            "telegram_bot",
+            "paper_cards",
+            "farm",
+            "scanner",
+            "public_news",
+            "ollama",
+        )
+    }
+    monitor = Monitor()
+    center._runtime_monitor = monitor
+    center._external_profile_contours = lambda: []
+    monkeypatch.setattr(MODULE.messagebox, "askyesno", lambda *_args: False)
+
+    center._stop_research_profile()
+
+    assert monitor.stopped is False
+    assert center._runtime_monitor is monitor
+
+
+def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    stopped: list[str] = []
+    events: list[tuple[str, str, str]] = []
+    order = (
+        "telegram_bot",
+        "paper_cards",
+        "farm",
+        "scanner",
+        "public_news",
+        "ollama",
+    )
+
+    class Item:
+        def __init__(self, key: str):
+            self.spec = SimpleNamespace(key=key)
+            self.running = True
+
+        def stop(self):
+            stopped.append(self.spec.key)
+            return True
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {key: Item(key) for key in order}
+    center.events = Events()
+    center.selected_key = "paper_cards"
+    center._hard_fail_stop_started = False
+    monkeypatch.setattr(MODULE, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
+    monkeypatch.setattr(
+        MODULE.messagebox,
+        "askyesno",
+        lambda *_args: pytest.fail("hard fail must not wait for a UI prompt"),
+    )
+
+    assert center._initiate_hard_fail_stop("synthetic_authority_failure") is True
+    assert center._initiate_hard_fail_stop("duplicate") is False
+
+    assert stopped == list(order)
+    assert sum("HARD FAIL" in event[2] for event in events) == 1
+    alerts = [
+        json.loads(line)
+        for line in (tmp_path / "alerts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(alerts) == 1
+    assert alerts[0]["reason"] == "synthetic_authority_failure"
+    assert alerts[0]["automatic_restart"] is False
 
 
 def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
@@ -952,3 +1134,153 @@ def test_single_contour_stop_marker_does_not_hide_unrelated_crash(
         (state_dir / "alerts.jsonl").read_text(encoding="utf-8").splitlines()[0]
     )
     assert alert["exit_code"] == 5
+
+
+def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
+    events: list[tuple[str, str, str]] = []
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {
+        key: SimpleNamespace(
+            process=SimpleNamespace(pid=10_000 + index),
+            running=True,
+            started_at=1_700_000_000.0 + index,
+        )
+        for index, key in enumerate(sorted(MODULE.CANONICAL_PAPER_PROFILE))
+    }
+    center.events = SimpleNamespace(put=events.append)
+    center.selected_key = "paper_cards"
+    center._closing = False
+    center._runtime_monitor_started_at = 100.0
+    center._runtime_ready = False
+    center._runtime_owner_monitor = SimpleNamespace(
+        sample=lambda: SimpleNamespace(
+            state="ready",
+            ready=True,
+            canonical_fence=38,
+            process_identity=SimpleNamespace(pid=42_424),
+            resources=("canonical_farm", "strategy_lab_worker"),
+        )
+    )
+    return center, events
+
+
+def test_runtime_probe_treats_early_missing_listener_as_starting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 103.76)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "listener_starting"
+    assert sample["ready"] is False
+    assert events == []
+
+
+def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "ready"
+    assert sample["ready"] is True
+    assert center._runtime_ready is True
+    assert len(events) == 1
+    assert "T+0 READY" in events[0][2]
+
+
+def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    center._runtime_ready = True
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="ollama_listener_unavailable",
+    ):
+        center._fast_runtime_safety_probe()
+
+
+def test_runtime_probe_rejects_owner_outside_canonical_rcc_tree(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 104.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: False)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="owner_not_in_canonical_rcc_tree",
+    ):
+        center._fast_runtime_safety_probe()
+
+
+def test_deep_runtime_probe_requires_every_canonical_database(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(MODULE, "PRIVATE_ROOT", tmp_path)
+
+    with pytest.raises(
+        MODULE.CanaryMonitorHardFailure,
+        match="canonical_database_missing:ownership.sqlite",
+    ):
+        MODULE.ControlCenter._deep_runtime_safety_probe()
+
+    paths = (
+        tmp_path / "state" / "ownership.sqlite",
+        tmp_path / "state" / "farm_tasks.sqlite",
+        tmp_path / "state" / "strategy_lab.sqlite",
+        tmp_path / "state" / "scanner_farm_loop.sqlite",
+        tmp_path / "market_data" / "candles.sqlite3",
+    )
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(path) as connection:
+            connection.execute("CREATE TABLE synthetic_guard(id INTEGER)")
+
+    sample = MODULE.ControlCenter._deep_runtime_safety_probe()
+
+    assert sample["database_count"] == 5
+    assert set(sample["database_sizes"]) == {path.name for path in paths}
