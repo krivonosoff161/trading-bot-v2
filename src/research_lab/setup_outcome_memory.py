@@ -28,7 +28,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.paper_projection_reader import (
@@ -823,17 +823,41 @@ def _uc_run_dirs(private_root: Path) -> dict[str, str]:
     return {str(r["uc_key"]): str(r["run_dir_label"] or "") for r in rows}
 
 
-def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
+MemoryProgress = Callable[[str, int, int], None]
+
+
+def build_memory_index(
+    private_root: Path,
+    *,
+    progress: MemoryProgress | None = None,
+) -> list[dict[str, Any]]:
     """One unified outcome record per unique candidate (derived; never written back to source)."""
     private_root = Path(private_root)
-    lifecycle = derive_setup_lifecycle(private_root)
+    lifecycle = derive_setup_lifecycle(
+        private_root,
+        progress=(
+            None
+            if progress is None
+            else lambda stage, completed, total: progress(
+                f"lifecycle:{stage}",
+                completed,
+                total,
+            )
+        ),
+    )
+    if progress is not None:
+        progress("lifecycle_loaded", len(lifecycle), len(lifecycle))
     subreason = {r["uc_key"]: r for r in characterize_rejects(private_root)}
+    if progress is not None:
+        progress("rejects_characterized", len(subreason), len(lifecycle))
     recovered_cells = _recovered_cells(private_root)
     run_dirs = _uc_run_dirs(private_root)
     backfill = _backfill_by_uc(private_root)
     revalidation = _derived_by_uc(private_root, "recyclable_revalidation.json")
     shadow = _derived_by_uc(private_root, "shadow_forward.json")
     exit2 = _derived_by_uc(private_root, "exit_phase2.json")
+    if progress is not None:
+        progress("derived_inputs_loaded", 6, 6)
     (
         training_by_candidate,
         training_by_cell,
@@ -841,8 +865,11 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
         _training_evidence_selection,
     ) = _training_memory(private_root)
     retest_by_candidate, retest_by_cell = _outcome_retest_memory(private_root)
+    if progress is not None:
+        progress("training_inputs_loaded", 2, 2)
     records: list[dict[str, Any]] = []
-    for lc in lifecycle:
+    total = len(lifecycle)
+    for index, lc in enumerate(lifecycle, start=1):
         uc = lc["uc_key"]
         cell = _training_cell_key(lc["symbol"], lc["timeframe"], lc["family"])
         sub = subreason.get(uc, {})
@@ -919,6 +946,8 @@ def build_memory_index(private_root: Path) -> list[dict[str, Any]]:
                 "exit_phase2_class": (exit2.get(uc) or {}).get("outcome_class"),
             }
         )
+        if progress is not None and (index == total or index % 100 == 0):
+            progress("records_built", index, total)
     return records
 
 
@@ -1058,9 +1087,13 @@ def summarize_memory(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def write_memory_snapshot(private_root: Path) -> Path:
+def write_memory_snapshot(
+    private_root: Path,
+    *,
+    records: list[dict[str, Any]] | None = None,
+) -> Path:
     """Write the derived, rebuildable read-model (NOT a source of truth, never gates money)."""
-    records = build_memory_index(private_root)
+    memory_records = build_memory_index(private_root) if records is None else records
     out_dir = Path(private_root) / "state" / "derived"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "setup_outcome_memory.json"
@@ -1068,9 +1101,9 @@ def write_memory_snapshot(private_root: Path) -> Path:
         "schema": "setup_outcome_memory.v1",
         "disclaimer": "Derived read-model rebuilt from canonical sources. Research-only: no "
         "outcome here grants PAPER_FORWARD_READY or is a trade signal.",
-        "summary": summarize_memory(records),
+        "summary": summarize_memory(memory_records),
         "product_paper_memory": summarize_product_training_memory(private_root),
-        "records": records,
+        "records": memory_records,
     }
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

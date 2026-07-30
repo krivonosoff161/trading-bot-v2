@@ -8,6 +8,7 @@ from src.research_lab.canary_checkpoint_policy import (
     FINAL_QUIESCENT_CHECKPOINT,
     CanaryFastSampleWatchdog,
     CanaryMonitorHardFailure,
+    CanaryMonitoringCoordinator,
     IntegrityEvidenceMode,
     collect_checkpoint_integrity_evidence,
     build_monitoring_lane_watchdogs,
@@ -184,3 +185,56 @@ def test_watchdog_rejects_monotonic_clock_regression() -> None:
 
     with pytest.raises(ValueError, match="backwards"):
         watchdog.assess(now=109.0)
+
+
+def test_deep_probe_failure_does_not_poison_fast_safety_lane() -> None:
+    monitor = CanaryMonitoringCoordinator(started_at=100.0)
+
+    fast = monitor.sample(
+        "fast_safety",
+        lambda: {"owner_authority": "valid"},
+        now=105.0,
+    )
+    deep = monitor.sample(
+        "deep_database",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("synthetic private detail must not escape")
+        ),
+        now=105.0,
+    )
+    next_fast = monitor.sample(
+        "fast_safety",
+        lambda: {"owner_authority": "valid"},
+        now=110.0,
+    )
+
+    assert fast.state == "healthy"
+    assert deep.state == "degraded"
+    assert deep.error_type == "RuntimeError"
+    assert dict(deep.payload) == {}
+    assert "private detail" not in repr(deep)
+    assert next_fast.state == "healthy"
+    monitor.require_lane("fast_safety", now=110.0)
+
+
+def test_repeated_fast_probe_failure_latches_only_after_freshness_budget() -> None:
+    monitor = CanaryMonitoringCoordinator(started_at=100.0)
+    monitor.sample("fast_safety", lambda: {"ok": True}, now=105.0)
+
+    transient = monitor.sample(
+        "fast_safety",
+        lambda: (_ for _ in ()).throw(OSError("synthetic")),
+        now=110.0,
+    )
+    exhausted = monitor.sample(
+        "fast_safety",
+        lambda: (_ for _ in ()).throw(OSError("synthetic")),
+        now=120.1,
+    )
+
+    assert transient.state == "degraded"
+    assert transient.watchdog.failure_reason is None
+    assert exhausted.state == "failed"
+    assert exhausted.watchdog.failure_reason == "monitor_fast_sample_freshness_lost"
+    with pytest.raises(CanaryMonitorHardFailure):
+        monitor.require_lane("fast_safety", now=120.1)

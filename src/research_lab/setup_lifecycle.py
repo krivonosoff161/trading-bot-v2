@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.farm_tasks_db import tasks_db_path
 from src.research_lab.paper_journal import read_paper_outcomes
@@ -42,6 +42,7 @@ TACTICAL_STATUSES = (
     "NOT_TACTICAL",
 )
 POWER_FLOOR = 10  # validator _check_splits has no power below n=10
+LifecycleProgress = Callable[[str, int, int], None]
 
 
 def _oi_micro_families() -> dict[str, str]:
@@ -97,23 +98,42 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _load_unique_candidates(private_root: Path) -> list[dict[str, Any]]:
+def _load_unique_candidates(
+    private_root: Path,
+    *,
+    progress: LifecycleProgress | None = None,
+) -> list[dict[str, Any]]:
     path = tasks_db_path(private_root)
     if not path.exists():
         return []
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
+        total = int(
+            conn.execute("SELECT COUNT(*) FROM unique_candidates").fetchone()[0]
+        )
+        cursor = conn.execute(
             "SELECT * FROM unique_candidates ORDER BY updated_at DESC"
-        ).fetchall()
+        )
+        rows: list[dict[str, Any]] = []
+        while True:
+            chunk = cursor.fetchmany(500)
+            if not chunk:
+                break
+            rows.extend(dict(row) for row in chunk)
+            if progress is not None:
+                progress("unique_candidates_loaded", len(rows), total)
     finally:
         conn.close()
-    return [dict(r) for r in rows]
+    if progress is not None and not rows:
+        progress("unique_candidates_loaded", 0, total)
+    return rows
 
 
 def _request_contexts(
     private_root: Path,
+    *,
+    progress: LifecycleProgress | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     from src.research_lab.validation_generation import (
         current_candidate_ids,
@@ -124,8 +144,11 @@ def _request_contexts(
     candidate_to_uc: dict[str, str] = {}
     active_ids = current_candidate_ids(private_root)
     if active_ids is not None:
-        for cid in active_ids:
+        total = len(active_ids)
+        for index, cid in enumerate(active_ids, start=1):
             data = read_current_validation_artifact(private_root, cid, "request") or {}
+            if progress is not None and (index == total or index % 100 == 0):
+                progress("validation_requests_loaded", index, total)
             if not data:
                 continue
             by_candidate[cid] = data
@@ -137,12 +160,17 @@ def _request_contexts(
             uc_key = str(metrics.get("uc_key") or "")
             if uc_key:
                 candidate_to_uc[cid] = uc_key
+        if progress is not None and not active_ids:
+            progress("validation_requests_loaded", 0, 0)
         return by_candidate, candidate_to_uc
     req_dir = private_root / "hard_validation" / "requests"
     if not req_dir.exists():
         return by_candidate, candidate_to_uc
-    for path in req_dir.glob("*.json"):
+    paths = list(req_dir.glob("*.json"))
+    for index, path in enumerate(paths, start=1):
         data = _read_json(path)
+        if progress is not None and (index == len(paths) or index % 100 == 0):
+            progress("validation_requests_loaded", index, len(paths))
         cid = str(data.get("candidate_id") or path.stem)
         if not cid:
             continue
@@ -153,10 +181,16 @@ def _request_contexts(
         uc_key = str(metrics.get("uc_key") or "")
         if uc_key:
             candidate_to_uc[cid] = uc_key
+    if progress is not None and not paths:
+        progress("validation_requests_loaded", 0, 0)
     return by_candidate, candidate_to_uc
 
 
-def _verdicts(private_root: Path) -> dict[str, str]:
+def _verdicts(
+    private_root: Path,
+    *,
+    progress: LifecycleProgress | None = None,
+) -> dict[str, str]:
     from src.research_lab.validation_generation import (
         current_candidate_ids,
         read_current_validation_artifact,
@@ -165,44 +199,70 @@ def _verdicts(private_root: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     active_ids = current_candidate_ids(private_root)
     if active_ids is not None:
-        for cid in active_ids:
+        total = len(active_ids)
+        for index, cid in enumerate(active_ids, start=1):
             data = read_current_validation_artifact(private_root, cid, "verdict") or {}
             if data:
                 out[cid] = str(data.get("hard_status") or "")
+            if progress is not None and (index == total or index % 100 == 0):
+                progress("validation_verdicts_loaded", index, total)
         return out
     vdir = private_root / "hard_validation" / "verdicts"
     if not vdir.exists():
         return out
-    for path in vdir.glob("*.json"):
+    paths = list(vdir.glob("*.json"))
+    for index, path in enumerate(paths, start=1):
         data = _read_json(path)
         cid = str(data.get("candidate_id") or path.stem)
         if cid:
             out[cid] = str(data.get("hard_status") or "")
+        if progress is not None and (index == len(paths) or index % 100 == 0):
+            progress("validation_verdicts_loaded", index, len(paths))
     return out
 
 
-def _cards(private_root: Path) -> dict[str, dict[str, Any]]:
+def _cards(
+    private_root: Path,
+    *,
+    progress: LifecycleProgress | None = None,
+) -> dict[str, dict[str, Any]]:
     from src.research_lab.validation_generation import read_current_setup_card
 
     out: dict[str, dict[str, Any]] = {}
     cards_dir = private_root / "setup_library" / "cards"
     if not cards_dir.exists():
         return out
-    for path in cards_dir.glob("*.json"):
+    paths = list(cards_dir.glob("*.json"))
+    for index, path in enumerate(paths, start=1):
         data = read_current_setup_card(private_root, path) or {}
         cid = str(data.get("candidate_id") or "")
         if cid:
             out[cid] = data
+        if progress is not None and (index == len(paths) or index % 100 == 0):
+            progress("setup_cards_loaded", index, len(paths))
     return out
 
 
 def _paper_by_uc(
-    private_root: Path, candidate_to_uc: dict[str, str]
+    private_root: Path,
+    candidate_to_uc: dict[str, str],
+    *,
+    progress: LifecycleProgress | None = None,
 ) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    for row in read_paper_outcomes(private_root):
+    rows = read_paper_outcomes(
+        private_root,
+        progress=(
+            None
+            if progress is None
+            else lambda processed: progress("paper_outcomes_loaded", processed, 0)
+        ),
+    )
+    for index, row in enumerate(rows, start=1):
         cid = str(row.get("candidate_id") or "")
         uc_key = candidate_to_uc.get(cid)
+        if progress is not None and (index == len(rows) or index % 1000 == 0):
+            progress("paper_outcomes_indexed", index, len(rows))
         if not uc_key:
             continue
         bucket = out.setdefault(
@@ -215,6 +275,8 @@ def _paper_by_uc(
         bucket["wins"] += int(net > 0)
         bucket["losses"] += int(net < 0)
         bucket["latest_state"] = str(row.get("state") or bucket["latest_state"])
+    if progress is not None and not rows:
+        progress("paper_outcomes_indexed", 0, 0)
     return out
 
 
@@ -255,16 +317,22 @@ def _derive_state(
     return "LITE_OBSERVE" if decision else "DISCOVERED"
 
 
-def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
+def derive_setup_lifecycle(
+    private_root: Path,
+    *,
+    progress: LifecycleProgress | None = None,
+) -> list[dict[str, Any]]:
     private_root = Path(private_root)
-    reqs, candidate_to_uc = _request_contexts(private_root)
+    reqs, candidate_to_uc = _request_contexts(private_root, progress=progress)
     uc_to_validation = {uc: cid for cid, uc in candidate_to_uc.items()}
-    verdicts = _verdicts(private_root)
-    cards = _cards(private_root)
-    paper = _paper_by_uc(private_root, candidate_to_uc)
+    verdicts = _verdicts(private_root, progress=progress)
+    cards = _cards(private_root, progress=progress)
+    paper = _paper_by_uc(private_root, candidate_to_uc, progress=progress)
     oi_micro = _oi_micro_families()
     rows: list[dict[str, Any]] = []
-    for row in _load_unique_candidates(private_root):
+    candidates = _load_unique_candidates(private_root, progress=progress)
+    total = len(candidates)
+    for index, row in enumerate(candidates, start=1):
         validation_id = _candidate_validation_id(row, uc_to_validation)
         card = cards.get(validation_id)
         hard_status = verdicts.get(validation_id) or str(row.get("hard_status") or "")
@@ -305,6 +373,8 @@ def derive_setup_lifecycle(private_root: Path) -> list[dict[str, Any]]:
                 "tactical_status": tactical,
             }
         )
+        if progress is not None and (index == total or index % 500 == 0):
+            progress("lifecycle_rows_derived", index, total)
     return rows
 
 

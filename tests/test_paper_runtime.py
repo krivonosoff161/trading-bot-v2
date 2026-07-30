@@ -187,3 +187,29 @@ def test_run_paper_cycle_writes_once_and_deduplicates(monkeypatch, tmp_path):
     assert len(db_rows) == 1
     assert db_rows[0]["candidate_id"] == "c1"
     assert db_rows[0]["state"] == PaperRuntimeState.CLOSED_TP.value
+
+
+def test_paper_outcome_reader_streams_and_reports_completed_chunks(
+    monkeypatch,
+    tmp_path,
+):
+    path = tmp_path / "paper" / "paper_trades.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "".join(
+            json.dumps({"trade_id": f"t-{index}", "state": "closed"}) + "\n"
+            for index in range(2001)
+        ),
+        encoding="utf-8",
+    )
+    progress: list[int] = []
+
+    def forbidden_read_text(*_args, **_kwargs):
+        raise AssertionError("paper journal must be streamed, not loaded wholesale")
+
+    monkeypatch.setattr(Path, "read_text", forbidden_read_text)
+
+    rows = read_paper_outcomes(tmp_path, progress=progress.append)
+
+    assert len(rows) == 2001
+    assert progress == [1000, 2000, 2001]

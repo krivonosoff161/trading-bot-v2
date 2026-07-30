@@ -56,6 +56,10 @@ from src.research_lab.state_db import (  # noqa: E402
     renew_job_lease,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
+from src.research_lab.process_lease_heartbeat import (  # noqa: E402
+    ProcessLeaseHeartbeat,
+    ProcessLeaseHeartbeatLifecycleError,
+)
 from src.research_lab.search_trial_evidence import (  # noqa: E402
     build_search_trial_evidence,
     write_search_trial_evidence,
@@ -87,59 +91,44 @@ def _legacy_worker_present(private_root: Path) -> bool:
     return _worker_lock_path(private_root).exists()
 
 
-class _ProcessLeaseHeartbeat:
+class _ProcessLeaseHeartbeat(ProcessLeaseHeartbeat):
+    """Compatibility adapter for the shared bounded process heartbeat."""
+
     def __init__(
         self,
         *,
         ownership_path: Path,
         process_lease,
     ) -> None:
-        self.ownership_path = ownership_path
-        self.process_lease = process_lease
-        self.stop_event = threading.Event()
-        self.ready_event = threading.Event()
-        self.failure: BaseException | None = None
-        self._started = False
-        self.thread = threading.Thread(
-            target=self._run,
-            name="worker-process-lease-heartbeat",
-            daemon=True,
+        super().__init__(
+            ownership_path,
+            process_lease,
+            lease_seconds=_LEASE_SECONDS,
+            renew_interval_seconds=_RENEW_SECONDS,
+            renewal_busy_timeout_seconds=min(2.0, _LEASE_SECONDS / 20.0),
+            renewal_retry_seconds=min(0.25, _LEASE_SECONDS / 50.0),
+            max_transient_seconds=min(30.0, _LEASE_SECONDS / 3.0),
+            lease_safety_margin_seconds=min(5.0, _LEASE_SECONDS / 10.0),
+            thread_name="worker-process-lease-heartbeat",
         )
 
-    def start(self) -> None:
-        self.thread.start()
-        self._started = True
-        if not self.ready_event.wait(timeout=5):
-            self.failure = TimeoutError(
-                "compute worker process lease heartbeat did not initialize"
+    def stop(self, *, timeout: float | None = None) -> None:
+        try:
+            super().stop(
+                timeout=_HEARTBEAT_STOP_SECONDS if timeout is None else timeout
             )
-
-    def stop(self) -> None:
-        self.stop_event.set()
-        if not self._started:
-            return
-        self.thread.join(timeout=_HEARTBEAT_STOP_SECONDS)
-        if self.thread.is_alive():
+        except ProcessLeaseHeartbeatLifecycleError as exc:
             raise WorkerLeaseLifecycleError(
                 "compute worker process lease heartbeat did not stop"
-            )
+            ) from exc
 
-    def _run(self) -> None:
-        store = None
+    def start(self) -> None:
         try:
-            store = OwnershipStore(
-                self.ownership_path,
-                identity_probe=probe_process_identity,
-            )
-            self.ready_event.set()
-            while not self.stop_event.wait(_RENEW_SECONDS):
-                store.renew(self.process_lease, lease_seconds=_LEASE_SECONDS)
-        except BaseException as exc:  # captured and checked before publication
-            self.failure = exc
-        finally:
-            self.ready_event.set()
-            if store is not None:
-                store.close()
+            super().start()
+        except ProcessLeaseHeartbeatLifecycleError as exc:
+            raise WorkerLeaseLifecycleError(
+                "compute worker process lease heartbeat failed to initialize"
+            ) from exc
 
 
 class _JobLeaseHeartbeat:

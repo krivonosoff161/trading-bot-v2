@@ -66,6 +66,15 @@ class CanaryMonitorHardFailure(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CanaryLaneSample:
+    lane: str
+    state: str
+    payload: Mapping[str, object]
+    error_type: str | None
+    watchdog: CanaryWatchdogAssessment
+
+
+@dataclass(frozen=True)
 class CanaryMonitoringLaneSpec:
     name: str
     max_sample_gap_seconds: float
@@ -100,6 +109,54 @@ def build_monitoring_lane_watchdogs(
             for spec in CANONICAL_MONITORING_LANES
         }
     )
+
+
+class CanaryMonitoringCoordinator:
+    """Keep fast safety and deep database probes on independent clocks.
+
+    A single probe exception is observable but does not fabricate a completed
+    sample. The lane fails only when its monotonic freshness budget is
+    exhausted. A slow/degraded deep database probe therefore cannot suppress
+    or invalidate successful process/authority samples.
+    """
+
+    def __init__(self, *, started_at: float) -> None:
+        self.watchdogs = build_monitoring_lane_watchdogs(started_at=started_at)
+
+    def sample(
+        self,
+        lane: str,
+        probe: Callable[[], Mapping[str, object]],
+        *,
+        now: float,
+    ) -> CanaryLaneSample:
+        watchdog = self.watchdogs[lane]
+        try:
+            payload = dict(probe())
+        except Exception as exc:  # safe metadata only; never persist the value
+            assessment = watchdog.assess(now=now)
+            return CanaryLaneSample(
+                lane=lane,
+                state=(
+                    "failed"
+                    if assessment.failure_reason is not None
+                    else "degraded"
+                ),
+                payload=MappingProxyType({}),
+                error_type=type(exc).__name__,
+                watchdog=assessment,
+            )
+        assessment = watchdog.record_fast_sample(now=now)
+        return CanaryLaneSample(
+            lane=lane,
+            state="failed" if assessment.failure_reason is not None else "healthy",
+            payload=MappingProxyType(payload),
+            error_type=None,
+            watchdog=assessment,
+        )
+
+    def require_lane(self, lane: str, *, now: float) -> None:
+        require_healthy_watchdog(self.watchdogs[lane].assess(now=now))
 
 
 def require_healthy_watchdog(assessment: CanaryWatchdogAssessment) -> None:

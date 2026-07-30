@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -232,6 +233,59 @@ def test_forged_recovered_process_cannot_reach_stop_hooks(monkeypatch):
     assert calls == []
 
 
+def test_exact_external_ollama_uses_wm_close_without_taskkill(monkeypatch):
+    events: list[tuple[str, str, str]] = []
+    live_samples = iter((True, True, False, False))
+    close_calls: list[int] = []
+    taskkill_calls: list[object] = []
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.events = Events()
+    center.external_contours = {"ollama": {"pid": 4242}}
+    center.contours = {
+        "ollama": MODULE.ManagedContour(
+            next(spec for spec in MODULE.contour_specs() if spec.key == "ollama"),
+            MODULE.queue.Queue(),
+        )
+    }
+    monkeypatch.setattr(
+        MODULE,
+        "_same_live_process",
+        lambda *_args: next(live_samples),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_request_windows_close",
+        lambda pid: close_calls.append(pid) or 1,
+    )
+    monkeypatch.setattr(MODULE.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda *_args, **_kwargs: taskkill_calls.append(object()),
+    )
+
+    MODULE.ControlCenter._stop_external(
+        center,
+        "ollama",
+        {
+            "pid": 4242,
+            "started_at": 100.0,
+            "stoppable": True,
+            "authority": "owned_child",
+        },
+    )
+
+    assert close_calls == [4242]
+    assert taskkill_calls == []
+    assert "ollama" not in center.external_contours
+    assert any("4242" in event[2] for event in events)
+
+
 def test_research_profile_methods_are_explicit_ui_actions():
     assert callable(MODULE.ControlCenter._start_research_profile)
     assert callable(MODULE.ControlCenter._stop_research_profile)
@@ -438,6 +492,162 @@ def test_intentional_stop_disarms_required_contour_exit() -> None:
 
     assert item.expected_running is False
     assert item.consume_unexpected_exit() is None
+
+
+def test_owned_contour_start_preserves_ctrl_break_process_group(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Process:
+        pid = 4242
+        stdout = [""]
+
+        @staticmethod
+        def poll():
+            return 0
+
+        @staticmethod
+        def wait():
+            return 0
+
+    def popen(*_args, **kwargs):
+        captured.update(kwargs)
+        return Process()
+
+    monkeypatch.setattr(MODULE.subprocess, "Popen", popen)
+    monkeypatch.setattr(MODULE, "_process_started_at", lambda _pid: 100.0)
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
+        MODULE.queue.Queue(),
+    )
+
+    item.start()
+
+    assert captured["creationflags"] == MODULE._CREATE_NEW_PROCESS_GROUP
+    assert not (
+        int(captured["creationflags"]) & int(MODULE._CREATE_NO_WINDOW)
+    )
+
+
+def test_owned_contour_stop_fails_closed_without_force_termination(
+    monkeypatch,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    class Process:
+        pid = 4242
+        terminated = False
+
+        @staticmethod
+        def poll():
+            return None
+
+        @staticmethod
+        def send_signal(_signal):
+            raise OSError("synthetic ctrl break failure")
+
+        def terminate(self):
+            self.terminated = True
+
+    process = Process()
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
+        Events(),
+    )
+    item.process = process
+    item.expected_running = True
+    taskkill_calls: list[object] = []
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda *_args, **_kwargs: taskkill_calls.append(object()),
+    )
+
+    assert item.stop(timeout=0.0) is False
+    assert process.terminated is False
+    assert taskkill_calls == []
+    assert any("graceful stop signal failed" in event[2] for event in events)
+
+
+def test_owned_contour_stop_deadline_surfaces_residual_without_taskkill(
+    monkeypatch,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+
+    class Events:
+        def put(self, event):
+            events.append(event)
+
+    class Process:
+        pid = 4242
+
+        @staticmethod
+        def poll():
+            return None
+
+        @staticmethod
+        def send_signal(_signal):
+            return None
+
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
+        Events(),
+    )
+    item.process = Process()
+    item.expected_running = True
+    taskkill_calls: list[object] = []
+    monkeypatch.setattr(
+        MODULE.subprocess,
+        "run",
+        lambda *_args, **_kwargs: taskkill_calls.append(object()),
+    )
+
+    assert item.stop(timeout=0.0) is False
+    assert taskkill_calls == []
+    assert any("deadline exhausted" in event[2] for event in events)
+
+
+def test_profile_stop_is_dependency_ordered_not_parallel(monkeypatch) -> None:
+    stopped: list[str] = []
+    order = (
+        "telegram_bot",
+        "paper_cards",
+        "farm",
+        "scanner",
+        "public_news",
+        "ollama",
+    )
+
+    class Item:
+        def __init__(self, key: str):
+            self.spec = SimpleNamespace(key=key)
+            self.running = True
+
+        def stop(self):
+            stopped.append(self.spec.key)
+            return True
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {key: Item(key) for key in order}
+    center._external_profile_contours = lambda: []
+    monkeypatch.setattr(MODULE.messagebox, "askyesno", lambda *_args: True)
+    monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
+
+    center._stop_research_profile()
+
+    assert stopped == list(order)
 
 
 def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
