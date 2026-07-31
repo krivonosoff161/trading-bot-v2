@@ -989,6 +989,12 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
             return None
 
     center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center._process_identity = SimpleNamespace(
+        pid=os.getpid(),
+        started_at=1_700_000_000.0,
+        executable="python.exe",
+        command_digest="sha256:rcc",
+    )
     center.contours = {"paper_cards": Item()}
     center._ui_snapshot_lock = threading.Lock()
     center._ui_snapshot_state = {
@@ -1046,7 +1052,9 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
     payload = json.loads(target.read_text(encoding="utf-8"))
 
     assert publish_count >= 3
-    assert payload["schema"] == "ResearchControlCenterHeartbeat.v2"
+    assert payload["schema"] == "ResearchControlCenterHeartbeat.v3"
+    assert payload["pid"] == os.getpid()
+    assert payload["started_at"] == 1_700_000_000.0
     assert payload["paper_only"] is True
     assert payload["execution_allowed"] is False
     assert payload["contours"]["paper_cards"]["running"] is True
