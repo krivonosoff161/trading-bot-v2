@@ -37,6 +37,11 @@ from src.research_lab.canary_checkpoint_policy import (
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
 from src.research_lab.ownership import current_process_identity, probe_process_identity
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
+from src.research_lab.windows_listener_probe import (
+    ListenerProbeStageEvent,
+    WindowsListenerProbeError,
+    collect_windows_listeners,
+)
 
 msvcrt: Any = None
 fcntl: Any = None
@@ -661,37 +666,24 @@ def _process_executable(pid: int) -> Path | None:
         _WINDLL.kernel32.CloseHandle(handle)
 
 
-def _listening_pid(port: int) -> int | None:
-    """Return the Windows PID listening on a known local TCP port."""
+def _listening_pid(
+    port: int,
+    *,
+    stage_callback: Callable[[ListenerProbeStageEvent], None] | None = None,
+) -> int | None:
+    """Return the unique Windows PID listening on a known local TCP port."""
     if os.name != "nt" or port <= 0:
         return None
-    try:
-        completed = subprocess.run(
-            ["netstat", "-ano", "-p", "tcp"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            check=False,
-            creationflags=_CREATE_NO_WINDOW,
+    pids = {
+        listener.pid
+        for listener in collect_windows_listeners(stage_callback=stage_callback)
+        if listener.port == port
+    }
+    if len(pids) > 1:
+        raise WindowsListenerProbeError(
+            "listener_probe_ambiguous_port", stage="decode"
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    for line in completed.stdout.splitlines():
-        fields = line.split()
-        if len(fields) < 5 or fields[0].upper() != "TCP":
-            continue
-        local, state, raw_pid = fields[1], fields[3].upper(), fields[4]
-        if state != "LISTENING" or not local.rsplit(":", 1)[-1].isdigit():
-            continue
-        if int(local.rsplit(":", 1)[-1]) != port or not raw_pid.isdigit():
-            continue
-        pid = int(raw_pid)
-        return pid if pid > 0 else None
-    return None
+    return next(iter(pids), None)
 
 
 def _same_live_process(pid: int, started_at: float | int | None) -> bool:
@@ -816,12 +808,25 @@ class ControlCenter(tk.Tk):
         self.selected_key = "ollama"
         self._closing = False
         self._hard_fail_stop_started = False
+        self._shutdown_state_lock = threading.Lock()
+        self._shutdown_state: dict[str, object] = {
+            "state": "running",
+            "reason_code": None,
+            "started_at": None,
+        }
         self._requested_profile_keys: set[str] = set()
         self._runtime_monitor: CanaryMonitoringService | None = None
         self._runtime_owner_monitor: CanonicalOwnerSafetyMonitor | None = None
         self._runtime_monitor_started_at: float | None = None
         self._runtime_ready = False
         self._runtime_lane_states: dict[str, str] = {}
+        self._runtime_probe_stage_lock = threading.Lock()
+        self._runtime_probe_stage: dict[str, object] = {
+            "stage": "not_started",
+            "state": "idle",
+            "monotonic_at": None,
+            "elapsed_seconds": None,
+        }
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
         self._json_status_cache = _JsonStatusCache()
         self._ui_snapshot_lock = threading.Lock()
@@ -1222,6 +1227,7 @@ class ControlCenter(tk.Tk):
         if self._hard_fail_stop_started:
             return False
         self._hard_fail_stop_started = True
+        self._set_shutdown_state("stopping", reason_code="runtime_hard_fail")
         self._closing = True
         self._stop_runtime_monitor()
         evidence_written = self._persist_hard_fail_alert(reason)
@@ -1261,6 +1267,10 @@ class ControlCenter(tk.Tk):
                 except Exception:  # noqa: BLE001 - fail closed without payloads
                     results.append(False)
             stopped = all(results)
+            if not stopped:
+                self._set_shutdown_state(
+                    "stop_failed", reason_code="owned_contour_stop_failed"
+                )
             self.events.put(
                 (
                     "__app__",
@@ -1275,6 +1285,55 @@ class ControlCenter(tk.Tk):
 
         threading.Thread(target=stop_owned, daemon=True).start()
         return True
+
+    @staticmethod
+    def _safe_shutdown_reason(reason_code: str | None) -> str | None:
+        if reason_code is None:
+            return None
+        safe = "".join(
+            char
+            for char in str(reason_code).lower()
+            if char.isascii() and (char.isalnum() or char in "_:-")
+        )[:80]
+        return safe or "unspecified"
+
+    def _set_shutdown_state(
+        self,
+        state: str,
+        *,
+        reason_code: str | None,
+    ) -> None:
+        if state not in {"running", "stopping", "stop_failed"}:
+            raise ValueError("unsupported RCC shutdown state")
+        lock = self.__dict__.get("_shutdown_state_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._shutdown_state_lock = lock
+        with lock:
+            prior = dict(self.__dict__.get("_shutdown_state", {}))
+            started_at = prior.get("started_at")
+            if state == "running":
+                started_at = None
+            elif started_at is None:
+                started_at = time.time()
+            self._shutdown_state = {
+                "state": state,
+                "reason_code": self._safe_shutdown_reason(reason_code),
+                "started_at": started_at,
+            }
+
+    def _record_listener_probe_stage(self, event: ListenerProbeStageEvent) -> None:
+        lock = self.__dict__.get("_runtime_probe_stage_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._runtime_probe_stage_lock = lock
+        with lock:
+            self._runtime_probe_stage = {
+                "stage": event.stage,
+                "state": event.state,
+                "monotonic_at": event.monotonic_at,
+                "elapsed_seconds": event.elapsed_seconds,
+            }
 
     @staticmethod
     def _persist_hard_fail_alert(reason: str) -> bool:
@@ -1404,7 +1463,10 @@ class ControlCenter(tk.Tk):
             )
         ):
             raise CanaryMonitorHardFailure("owner_not_in_canonical_rcc_tree")
-        listener_pid = _listening_pid(11434)
+        listener_pid = _listening_pid(
+            11434,
+            stage_callback=self._record_listener_probe_stage,
+        )
         ollama = self.contours["ollama"]
         listener_ready = bool(
             listener_pid
@@ -1571,6 +1633,9 @@ class ControlCenter(tk.Tk):
                 self.destroy()
                 return
             if key == "__app__" and kind == "stop_failed":
+                self._set_shutdown_state(
+                    "stop_failed", reason_code="owned_contour_stop_failed"
+                )
                 self._closing = False
                 self.deiconify()
                 self.events.put(
@@ -2259,6 +2324,29 @@ class ControlCenter(tk.Tk):
             }
         with self._ui_snapshot_lock:
             ui_snapshot = dict(self._ui_snapshot_state)
+        shutdown_lock = self.__dict__.get("_shutdown_state_lock")
+        shutdown: dict[str, object]
+        if shutdown_lock is None:
+            shutdown = {
+                "state": "running",
+                "reason_code": None,
+                "started_at": None,
+            }
+        else:
+            with shutdown_lock:
+                shutdown = dict(self._shutdown_state)
+        probe_lock = self.__dict__.get("_runtime_probe_stage_lock")
+        runtime_probe: dict[str, object]
+        if probe_lock is None:
+            runtime_probe = {
+                "stage": "not_started",
+                "state": "idle",
+                "monotonic_at": None,
+                "elapsed_seconds": None,
+            }
+        else:
+            with probe_lock:
+                runtime_probe = dict(self._runtime_probe_stage)
         stage_started_at = ui_snapshot.get("stage_started_at")
         ui_snapshot["stage_age_seconds"] = (
             max(0.0, time.time() - float(stage_started_at))
@@ -2272,6 +2360,8 @@ class ControlCenter(tk.Tk):
             "started_at": self._process_identity.started_at,
             "paper_only": True,
             "execution_allowed": False,
+            "shutdown": shutdown,
+            "runtime_probe": runtime_probe,
             "compute_pipeline": dict(self._last_compute_pipeline),
             "ui_snapshot": ui_snapshot,
             "contours": contour_rows,
@@ -2392,6 +2482,7 @@ class ControlCenter(tk.Tk):
             self.instance.close()
             self.destroy()
             return
+        self._set_shutdown_state("stopping", reason_code="operator_close")
         self._closing = True
         self._stop_runtime_monitor()
         self.withdraw()

@@ -44,6 +44,16 @@ class CanonicalRccProcessIdentity:
     started_at: float
 
 
+@dataclass(frozen=True)
+class CanonicalRccFinalizerDecision:
+    """Identity-bound action for an external graceful-stop finalizer."""
+
+    action: str
+    shutdown_state: str
+    process_identity: ProcessIdentity
+    reason_code: str | None
+
+
 def parse_rcc_heartbeat_process_identity(
     heartbeat: Mapping[str, Any],
 ) -> CanonicalRccProcessIdentity:
@@ -89,6 +99,63 @@ def verify_rcc_heartbeat_process_identity(
     if actual.pid != expected.pid or actual.started_at != expected.started_at:
         raise CanaryMonitorHardFailure("rcc_heartbeat_identity:generation_mismatch")
     return actual
+
+
+def decide_rcc_finalizer_action(
+    heartbeat: Mapping[str, Any],
+    *,
+    identity_probe: IdentityProbe,
+) -> CanonicalRccFinalizerDecision:
+    """Choose a stop action without racing an RCC-internal hard-fail stop.
+
+    The heartbeat is evidence, never authority: the caller must independently
+    possess process-control authority.  This helper only binds that caller to
+    the exact live RCC generation and prevents a second WM_CLOSE request while
+    dependency-ordered shutdown is already in progress.
+    """
+
+    identity = verify_rcc_heartbeat_process_identity(
+        heartbeat,
+        identity_probe=identity_probe,
+    )
+    shutdown = heartbeat.get("shutdown")
+    if not isinstance(shutdown, Mapping):
+        raise CanaryMonitorHardFailure("rcc_finalizer:shutdown_state_missing")
+    state = shutdown.get("state")
+    if state not in {"running", "stopping", "stop_failed"}:
+        raise CanaryMonitorHardFailure("rcc_finalizer:shutdown_state_invalid")
+    reason_value = shutdown.get("reason_code")
+    if reason_value is not None and not isinstance(reason_value, str):
+        raise CanaryMonitorHardFailure("rcc_finalizer:shutdown_reason_invalid")
+    reason_code = str(reason_value)[:80] if reason_value else None
+    started_at = shutdown.get("started_at")
+    if state == "running":
+        if started_at is not None:
+            raise CanaryMonitorHardFailure(
+                "rcc_finalizer:running_shutdown_timestamp_present"
+            )
+        action = "request_graceful_stop"
+    else:
+        if isinstance(started_at, bool) or not isinstance(
+            started_at, (int, float)
+        ):
+            raise CanaryMonitorHardFailure(
+                "rcc_finalizer:shutdown_timestamp_missing"
+            )
+        timestamp = float(started_at)
+        if not math.isfinite(timestamp) or timestamp <= 0:
+            raise CanaryMonitorHardFailure(
+                "rcc_finalizer:shutdown_timestamp_invalid"
+            )
+        action = (
+            "wait_for_quiescence" if state == "stopping" else "fail_closed"
+        )
+    return CanonicalRccFinalizerDecision(
+        action=action,
+        shutdown_state=str(state),
+        process_identity=identity,
+        reason_code=reason_code,
+    )
 
 
 class CanonicalOwnerSafetyMonitor:
