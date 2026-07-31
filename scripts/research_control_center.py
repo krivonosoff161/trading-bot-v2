@@ -1197,6 +1197,7 @@ class ControlCenter(tk.Tk):
         if self._hard_fail_stop_started:
             return False
         self._hard_fail_stop_started = True
+        self._closing = True
         self._stop_runtime_monitor()
         evidence_written = self._persist_hard_fail_alert(reason)
         owned = [
@@ -1228,15 +1229,24 @@ class ControlCenter(tk.Tk):
             )
 
         def stop_owned() -> None:
-            results = [item.stop() for item in owned]
-            if not all(results):
-                self.events.put(
+            results: list[bool] = []
+            for item in owned:
+                try:
+                    results.append(bool(item.stop()))
+                except Exception:  # noqa: BLE001 - fail closed without payloads
+                    results.append(False)
+            stopped = all(results)
+            self.events.put(
+                (
+                    "__app__",
+                    "close" if stopped else "stop_failed",
                     (
-                        "__app__",
-                        "stop_failed",
-                        "hard-fail graceful stop left an owned contour running",
-                    )
+                        ""
+                        if stopped
+                        else "hard-fail graceful stop left an owned contour running"
+                    ),
                 )
+            )
 
         threading.Thread(target=stop_owned, daemon=True).start()
         return True

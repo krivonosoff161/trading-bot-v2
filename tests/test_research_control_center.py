@@ -810,6 +810,7 @@ def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
     center.events = Events()
     center.selected_key = "paper_cards"
     center._hard_fail_stop_started = False
+    center._closing = False
     monkeypatch.setattr(MODULE, "STATE_DIR", tmp_path)
     monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
     monkeypatch.setattr(
@@ -822,6 +823,8 @@ def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
     assert center._initiate_hard_fail_stop("duplicate") is False
 
     assert stopped == list(order)
+    assert ("__app__", "close", "") in events
+    assert center._closing is True
     assert sum("HARD FAIL" in event[2] for event in events) == 1
     alerts = [
         json.loads(line)
@@ -830,6 +833,140 @@ def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
     assert len(alerts) == 1
     assert alerts[0]["reason"] == "synthetic_authority_failure"
     assert alerts[0]["automatic_restart"] is False
+
+
+def test_hard_fail_stop_failure_keeps_rcc_open_and_reports_residual(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+
+    class Item:
+        running = True
+
+        def __init__(self, key: str, stopped: bool) -> None:
+            self.spec = SimpleNamespace(key=key)
+            self.stopped = stopped
+
+        def stop(self) -> bool:
+            return self.stopped
+
+    class Events:
+        def put(self, event: tuple[str, str, str]) -> None:
+            events.append(event)
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {
+        key: Item(key, key != "paper_cards")
+        for key in (
+            "telegram_bot",
+            "paper_cards",
+            "farm",
+            "scanner",
+            "public_news",
+            "ollama",
+        )
+    }
+    center.events = Events()
+    center.selected_key = "paper_cards"
+    center._hard_fail_stop_started = False
+    center._closing = False
+    center._stop_runtime_monitor = lambda: None
+    monkeypatch.setattr(MODULE, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
+
+    assert center._initiate_hard_fail_stop("synthetic_failure") is True
+
+    assert center._closing is True
+    assert ("__app__", "close", "") not in events
+    assert (
+        "__app__",
+        "stop_failed",
+        "hard-fail graceful stop left an owned contour running",
+    ) in events
+
+
+def test_hard_fail_stop_exception_is_reported_without_losing_close_control(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, str, str]] = []
+
+    class Item:
+        running = True
+
+        def stop(self) -> bool:
+            raise OSError("synthetic stop failure")
+
+    class Events:
+        def put(self, event: tuple[str, str, str]) -> None:
+            events.append(event)
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.contours = {
+        key: Item()
+        for key in (
+            "telegram_bot",
+            "paper_cards",
+            "farm",
+            "scanner",
+            "public_news",
+            "ollama",
+        )
+    }
+    center.events = Events()
+    center.selected_key = "paper_cards"
+    center._hard_fail_stop_started = False
+    center._closing = False
+    center._stop_runtime_monitor = lambda: None
+    monkeypatch.setattr(MODULE, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(MODULE.threading, "Thread", InlineThread)
+
+    assert center._initiate_hard_fail_stop("synthetic_failure") is True
+
+    assert ("__app__", "close", "") not in events
+    assert (
+        "__app__",
+        "stop_failed",
+        "hard-fail graceful stop left an owned contour running",
+    ) in events
+
+
+def test_hard_fail_close_event_stops_publishers_and_releases_rcc_instance() -> None:
+    actions: list[str] = []
+
+    class Events:
+        def __init__(self) -> None:
+            self.items = [("__app__", "close", "")]
+
+        def get_nowait(self) -> tuple[str, str, str]:
+            if self.items:
+                return self.items.pop(0)
+            raise MODULE.queue.Empty
+
+    center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    center.events = Events()
+    center._stop_heartbeat_publisher = lambda: actions.append("heartbeat_stopped")
+    center.instance = SimpleNamespace(close=lambda: actions.append("instance_closed"))
+    center.destroy = lambda: actions.append("ui_destroyed")
+
+    center._poll()
+
+    assert actions == ["heartbeat_stopped", "instance_closed", "ui_destroyed"]
 
 
 def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
