@@ -149,7 +149,11 @@ def test_previous_heartbeat_recovers_only_same_live_process(tmp_path):
 
 
 def test_port_owned_external_service_exposes_pid(monkeypatch):
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda port: 4242 if port == 11434 else None)
+    monkeypatch.setattr(
+        MODULE,
+        "_listening_pid",
+        lambda port, **_kwargs: 4242 if port == 11434 else None,
+    )
     monkeypatch.setattr(MODULE, "_process_started_at", lambda pid: 123.0 if pid == 4242 else None)
     monkeypatch.setattr(
         MODULE,
@@ -879,6 +883,9 @@ def test_hard_fail_stop_is_dependency_ordered_idempotent_and_prompt_free(
     assert stopped == list(order)
     assert ("__app__", "close", "") in events
     assert center._closing is True
+    assert center._shutdown_state["state"] == "stopping"
+    assert center._shutdown_state["reason_code"] == "runtime_hard_fail"
+    assert isinstance(center._shutdown_state["started_at"], float)
     assert sum("HARD FAIL" in event[2] for event in events) == 1
     alerts = [
         json.loads(line)
@@ -939,6 +946,7 @@ def test_hard_fail_stop_failure_keeps_rcc_open_and_reports_residual(
     assert center._initiate_hard_fail_stop("synthetic_failure") is True
 
     assert center._closing is True
+    assert center._shutdown_state["state"] == "stop_failed"
     assert ("__app__", "close", "") not in events
     assert (
         "__app__",
@@ -1111,6 +1119,12 @@ def test_minimal_heartbeat_continues_while_ui_status_probe_is_blocked(
     assert payload["started_at"] == 1_700_000_000.0
     assert payload["paper_only"] is True
     assert payload["execution_allowed"] is False
+    assert payload["shutdown"] == {
+        "state": "running",
+        "reason_code": None,
+        "started_at": None,
+    }
+    assert payload["runtime_probe"]["stage"] == "not_started"
     assert payload["contours"]["paper_cards"]["running"] is True
     assert payload["ui_snapshot"]["stage"] == "synthetic_blocking_probe"
     assert payload["ui_snapshot"]["stage_age_seconds"] > 0
@@ -1388,7 +1402,7 @@ def test_runtime_probe_treats_early_missing_listener_as_starting(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 103.76)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: None)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1402,6 +1416,49 @@ def test_runtime_probe_treats_early_missing_listener_as_starting(
     assert events == []
 
 
+def test_runtime_probe_publishes_exact_blocked_listener_stage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, _events = _runtime_probe_center()
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 105.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+
+    def blocked_listener(_port, *, stage_callback):
+        stage_callback(
+            MODULE.ListenerProbeStageEvent(
+                stage="inventory",
+                state="started",
+                monotonic_at=105.0,
+                elapsed_seconds=0.0,
+            )
+        )
+        raise MODULE.WindowsListenerProbeError(
+            "listener_probe_timeout", stage="inventory"
+        )
+
+    monkeypatch.setattr(MODULE, "_listening_pid", blocked_listener)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(
+        MODULE.WindowsListenerProbeError,
+        match="listener_probe_timeout",
+    ):
+        center._fast_runtime_safety_probe()
+
+    assert center._runtime_probe_stage == {
+        "stage": "inventory",
+        "state": "started",
+        "monotonic_at": 105.0,
+        "elapsed_seconds": 0.0,
+    }
+
+
 def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
     monkeypatch,
     tmp_path: Path,
@@ -1411,7 +1468,9 @@ def test_runtime_probe_sets_t0_only_after_listener_and_owner_are_ready(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
+    )
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1436,7 +1495,7 @@ def test_runtime_probe_listener_loss_after_t0_is_immediate_hard_failure(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: None)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1458,7 +1517,7 @@ def test_runtime_probe_rejects_owner_outside_canonical_rcc_tree(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 104.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: False)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: None)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port, **_kwargs: None)
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1482,7 +1541,9 @@ def test_runtime_probe_keeps_supervisor_pending_before_startup_deadline(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
+    )
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",
@@ -1527,7 +1588,9 @@ def test_runtime_probe_fails_closed_on_invalid_supervisor_after_t0(
     monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
     monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
     monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE, "_listening_pid", lambda _port, **_kwargs: ollama_pid
+    )
     monkeypatch.setattr(
         MODULE,
         "CANONICAL_STOP_INTENTS",

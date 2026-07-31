@@ -82,6 +82,13 @@ a sanitized aggregate if a result needs discussion.
   Any finalizer must bind both values to the currently live process and fail
   closed when the start identity is missing or differs; it must never derive
   the expected start time by probing a heartbeat PID after the fact.
+- The same heartbeat publishes a bounded `shutdown` contract. A finalizer may
+  request the documented graceful stop only for the exact live RCC generation
+  while `shutdown.state=running`. When the identity-matched RCC reports
+  `stopping`, its internal dependency-ordered hard-fail/operator stop already
+  owns shutdown and the finalizer waits for quiescence instead of posting a
+  second `WM_CLOSE`. `stop_failed`, missing state, or malformed timestamps fail
+  closed and never authorize forced termination.
 - RCC-owned child start identities are captured through the same canonical
   process probe used by external consumers; mixing native FILETIME seconds
   with a separately rounded process timestamp is not an identity comparison.
@@ -113,6 +120,13 @@ a sanitized aggregate if a result needs discussion.
   complete sample remains an immediate hard failure. After a successful
   hard-fail contour stop, RCC closes its own UI/instance through the existing
   application close event so final quiescence includes the supervisor process.
+  RCC and external evidence adapters use the same listener inventory provider:
+  its exact PowerShell process tree is isolated in a kill-on-close Windows job,
+  output uses a temporary file instead of inherited pipes, and timeout cleanup
+  targets only that owned job. The minimal heartbeat exposes the current safe
+  `runtime_probe.stage` (`spawn`, `inventory`, `cleanup`, `decode`, `complete`)
+  so a freshness loss identifies the blocked stage without storing command
+  output, process arguments, private paths, or listener payloads.
 - The setup-outcome memory refresh streams its paper JSONL input and reads
   unique candidates in bounded chunks. Reject characterization loads and
   releases one run-artifact index at a time instead of retaining the complete

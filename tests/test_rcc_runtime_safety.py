@@ -8,6 +8,7 @@ from src.research_lab.canary_checkpoint_policy import CanaryMonitorHardFailure
 from src.research_lab.ownership import ProcessIdentity
 from src.research_lab.rcc_runtime_safety import (
     CanonicalOwnerSafetyMonitor,
+    decide_rcc_finalizer_action,
     parse_rcc_heartbeat_process_identity,
     verify_rcc_heartbeat_process_identity,
 )
@@ -25,6 +26,7 @@ def _rcc_heartbeat(
     *,
     pid: int = IDENTITY.pid,
     started_at: float = IDENTITY.started_at,
+    shutdown_state: str = "running",
 ) -> Mapping[str, object]:
     return {
         "schema": "ResearchControlCenterHeartbeat.v3",
@@ -32,6 +34,15 @@ def _rcc_heartbeat(
         "started_at": started_at,
         "paper_only": True,
         "execution_allowed": False,
+        "shutdown": {
+            "state": shutdown_state,
+            "reason_code": (
+                "runtime_hard_fail" if shutdown_state != "running" else None
+            ),
+            "started_at": (
+                1_700_000_100.0 if shutdown_state != "running" else None
+            ),
+        },
     }
 
 
@@ -110,6 +121,80 @@ def test_rcc_heartbeat_identity_rejects_process_disappearance() -> None:
         verify_rcc_heartbeat_process_identity(
             _rcc_heartbeat(),
             identity_probe=lambda _pid: None,
+        )
+
+
+def test_finalizer_requests_stop_only_for_exact_running_rcc_generation() -> None:
+    result = decide_rcc_finalizer_action(
+        _rcc_heartbeat(),
+        identity_probe=lambda _pid: IDENTITY,
+    )
+
+    assert result.action == "request_graceful_stop"
+    assert result.shutdown_state == "running"
+    assert result.process_identity == IDENTITY
+    assert result.reason_code is None
+
+
+def test_finalizer_waits_when_internal_hard_fail_shutdown_is_in_progress() -> None:
+    result = decide_rcc_finalizer_action(
+        _rcc_heartbeat(shutdown_state="stopping"),
+        identity_probe=lambda _pid: IDENTITY,
+    )
+
+    assert result.action == "wait_for_quiescence"
+    assert result.shutdown_state == "stopping"
+    assert result.reason_code == "runtime_hard_fail"
+
+
+def test_finalizer_fails_closed_on_reported_stop_failure() -> None:
+    result = decide_rcc_finalizer_action(
+        _rcc_heartbeat(shutdown_state="stop_failed"),
+        identity_probe=lambda _pid: IDENTITY,
+    )
+
+    assert result.action == "fail_closed"
+    assert result.shutdown_state == "stop_failed"
+
+
+@pytest.mark.parametrize(
+    ("shutdown", "reason"),
+    [
+        (None, "shutdown_state_missing"),
+        ({"state": "unknown"}, "shutdown_state_invalid"),
+        (
+            {"state": "running", "started_at": 1.0},
+            "running_shutdown_timestamp_present",
+        ),
+        ({"state": "stopping", "started_at": None}, "shutdown_timestamp_missing"),
+    ],
+)
+def test_finalizer_rejects_ambiguous_shutdown_contract(
+    shutdown: object,
+    reason: str,
+) -> None:
+    heartbeat = dict(_rcc_heartbeat())
+    heartbeat["shutdown"] = shutdown
+
+    with pytest.raises(CanaryMonitorHardFailure, match=reason):
+        decide_rcc_finalizer_action(
+            heartbeat,
+            identity_probe=lambda _pid: IDENTITY,
+        )
+
+
+def test_finalizer_does_not_accept_shutdown_state_from_reused_pid() -> None:
+    replacement = ProcessIdentity(
+        pid=IDENTITY.pid,
+        started_at=IDENTITY.started_at + 1.0,
+        executable=IDENTITY.executable,
+        command_digest=IDENTITY.command_digest,
+    )
+
+    with pytest.raises(CanaryMonitorHardFailure, match="generation_mismatch"):
+        decide_rcc_finalizer_action(
+            _rcc_heartbeat(shutdown_state="stopping"),
+            identity_probe=lambda _pid: replacement,
         )
 
 
