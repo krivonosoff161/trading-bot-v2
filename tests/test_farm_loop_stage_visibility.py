@@ -212,6 +212,74 @@ def test_loop_status_transient_windows_contention_recovers(
     assert farm_loop._loop_status_publisher(tmp_path).consecutive_failures == 0
 
 
+def test_durable_farm_milestones_advance_process_lease_progress(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    stages: list[str] = []
+    supervisor = SimpleNamespace(record_progress=stages.append)
+    ownership_path = tmp_path / "state" / "ownership.sqlite"
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    farm_loop._PROCESS_LEASE_SUPERVISORS[ownership_path] = supervisor
+    monkeypatch.setattr(farm_loop.time, "time", lambda: 100.0)
+    try:
+        assert farm_loop._write_loop_status(
+            tmp_path,
+            stage="setup_outcome_memory_refresh",
+            apply=True,
+            loop=True,
+            cycle_started_at=90.0,
+        )
+        farm_loop._write_priority_checkpoint(
+            tmp_path,
+            {"pivot": "idle", "active_tasks": 0},
+            sequence=1,
+        )
+        farm_loop._write_priority_worker_status(
+            tmp_path,
+            stage="idle",
+            started_at=90.0,
+        )
+    finally:
+        farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
+
+    assert stages == [
+        "setup_outcome_memory_refresh",
+        "priority_worker:checkpoint",
+        "priority_worker:idle",
+    ]
+
+
+def test_failed_status_publication_does_not_claim_process_lease_progress(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    stages: list[str] = []
+    supervisor = SimpleNamespace(record_progress=stages.append)
+    ownership_path = tmp_path / "state" / "ownership.sqlite"
+    farm_loop._PROCESS_LEASE_SUPERVISORS[ownership_path] = supervisor
+    monkeypatch.setattr(
+        farm_loop,
+        "_loop_status_publisher",
+        lambda _root: SimpleNamespace(publish=lambda _payload: False),
+    )
+    try:
+        assert (
+            farm_loop._write_loop_status(
+                tmp_path,
+                stage="setup_outcome_memory_refresh",
+                apply=True,
+                loop=True,
+                cycle_started_at=90.0,
+            )
+            is False
+        )
+    finally:
+        farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
+
+    assert stages == []
+
+
 def test_loop_status_persistent_contention_keeps_last_good_and_requests_safe_stop(
     monkeypatch,
     tmp_path: Path,

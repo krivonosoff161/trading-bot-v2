@@ -48,8 +48,8 @@ from src.research_lab.ownership import (  # noqa: E402
     probe_process_identity,
 )
 from src.research_lab.paths import DEFAULT_PRIVATE_ROOT, resolve_private_root  # noqa: E402
-from src.research_lab.process_lease_heartbeat import (  # noqa: E402
-    ProcessLeaseHeartbeat,
+from src.research_lab.process_lease_supervisor import (  # noqa: E402
+    ProcessLeaseSupervisor,
 )
 from src.research_lab.resource_policy import load_resource_policy  # noqa: E402
 from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E402
@@ -74,14 +74,17 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-class _FarmLeaseHeartbeat(ProcessLeaseHeartbeat):
-    """Compatibility name for the shared bounded process heartbeat."""
+class _FarmLeaseHeartbeat(ProcessLeaseSupervisor):
+    """Canonical farm lease renewal outside the foreground GIL domain."""
 
     def __init__(self, path: Path, lease, **kwargs) -> None:
+        state = Path(path).parent
         super().__init__(
             path,
             lease,
-            thread_name="farm-lease-heartbeat",
+            status_path=state / "farm_process_lease_status.json",
+            alert_path=state / "farm_process_lease_alerts.jsonl",
+            stop_path=state / "STOP_FARM_FULL_CYCLE.txt",
             **kwargs,
         )
 
@@ -1399,6 +1402,7 @@ class _LoopStatusPublisher:
 
 
 _LOOP_STATUS_PUBLISHERS: dict[Path, _LoopStatusPublisher] = {}
+_PROCESS_LEASE_SUPERVISORS: dict[Path, _FarmLeaseHeartbeat] = {}
 
 
 def _loop_status_publisher(private_root: Path) -> _LoopStatusPublisher:
@@ -1408,6 +1412,14 @@ def _loop_status_publisher(private_root: Path) -> _LoopStatusPublisher:
         publisher = _LoopStatusPublisher(path)
         _LOOP_STATUS_PUBLISHERS[path] = publisher
     return publisher
+
+
+def _record_process_lease_progress(private_root: Path, stage: str) -> None:
+    supervisor = _PROCESS_LEASE_SUPERVISORS.get(
+        Path(private_root) / "state" / "ownership.sqlite"
+    )
+    if supervisor is not None:
+        supervisor.record_progress(stage)
 
 
 def _status_publication_requires_stop(
@@ -1477,7 +1489,10 @@ def _write_loop_status(
         "execution_allowed": False,
         "details": details or {},
     }
-    return _loop_status_publisher(private_root).publish(payload)
+    published = _loop_status_publisher(private_root).publish(payload)
+    if published:
+        _record_process_lease_progress(private_root, stage)
+    return published
 
 
 def _refresh_setup_outcome_memory(
@@ -2209,6 +2224,7 @@ def _write_priority_checkpoint(
                 time.sleep(0.05 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
+    _record_process_lease_progress(private_root, "priority_worker:checkpoint")
     return target
 
 
@@ -2247,6 +2263,7 @@ def _write_priority_worker_status(
                 time.sleep(0.05 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
+    _record_process_lease_progress(private_root, f"priority_worker:{stage}")
     return target
 
 
@@ -2869,6 +2886,8 @@ def main() -> None:
         )
         try:
             lease_heartbeat.start()
+            _PROCESS_LEASE_SUPERVISORS[ownership_path] = lease_heartbeat
+            lease_heartbeat.record_progress("lease_supervisor_ready")
             if lease_heartbeat.failure is not None:
                 claim_failure_signal.notify(
                     lease_heartbeat.failure,
@@ -2891,6 +2910,7 @@ def main() -> None:
                     f"  reconcile: requeued {n_orphan} orphan running task(s) from a previous stop"
                 )
         except Exception:
+            _PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
             lease_heartbeat.stop()
             try:
                 ownership_store.release_local(process_lease)
@@ -3019,6 +3039,10 @@ def main() -> None:
             priority_thread.join(timeout=15)
         tasks.close()
         if lease_heartbeat is not None:
+            _PROCESS_LEASE_SUPERVISORS.pop(
+                private_root / "state" / "ownership.sqlite",
+                None,
+            )
             lease_heartbeat.stop()
         if ownership_store is not None and process_lease is not None:
             try:

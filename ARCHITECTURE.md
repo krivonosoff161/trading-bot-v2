@@ -116,6 +116,15 @@ one-shot farm runs, acquire the same canonical resource. A stop intent can be
 acknowledged only by that current owner/fence; mutable lock files and heartbeat
 bytes are never authority.
 
+The canonical farm's already-acquired process lease is renewed by a dedicated
+spawned supervisor outside the foreground interpreter's GIL domain. Renewal
+revalidates the owner PID/start identity before entering SQLite and then updates
+only the exact persisted owner/fence/process tuple. Durable completed-stage
+milestones drive a bounded no-progress contract. Supervisor failure stops
+renewal, requests the canonical graceful-stop path and is independently visible
+to RCC readiness/health; a timer-only heartbeat cannot keep a stuck farm
+authoritative.
+
 Brain tasks and compute jobs use separate fenced claims. State transitions,
 attempt history and audit rows commit transactionally. An executing attempt
 whose lease expires remains `ambiguous`; a later fence cannot rewrite it.

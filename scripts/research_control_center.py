@@ -83,6 +83,7 @@ CANONICAL_PAPER_PROFILE = frozenset(
 STATUS_CACHE_SECONDS = 1.0
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 RUNTIME_STARTUP_BUDGET_SECONDS = 600.0
+PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS = 50.0
 
 
 def _python(*args: str) -> tuple[str, ...]:
@@ -1317,6 +1318,48 @@ class ControlCenter(tk.Tk):
                 )
 
         owner = owner_monitor.sample()
+        supervisor = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "farm_process_lease_status.json"
+        )
+        supervisor_state = str(supervisor.get("state") or "")
+        supervisor_updated_at = float(supervisor.get("updated_at") or 0.0)
+        supervisor_age = (
+            max(0.0, time.time() - supervisor_updated_at)
+            if supervisor_updated_at > 0
+            else None
+        )
+        supervisor_ready = bool(
+            owner.ready
+            and supervisor.get("schema") == "ProcessLeaseSupervisorStatus.v1"
+            and supervisor_state == "running"
+            and supervisor.get("paper_only") is True
+            and supervisor.get("execution_allowed") is False
+            and supervisor_age is not None
+            and supervisor_age <= PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
+            and owner.process_identity is not None
+            and int(supervisor.get("owner_pid") or 0)
+            == owner.process_identity.pid
+            and abs(
+                float(supervisor.get("owner_started_at") or 0.0)
+                - owner.process_identity.started_at
+            )
+            <= 0.001
+            and int(supervisor.get("fencing_token") or 0)
+            == int(owner.canonical_fence or 0)
+            and float(supervisor.get("lease_expires_at") or 0.0) > time.time()
+        )
+        if owner.ready and not supervisor_ready and (
+            self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
+        ):
+            reason = (
+                "farm_process_lease_supervisor_failed"
+                if supervisor_state == "failed"
+                else "farm_process_lease_supervisor_stale"
+                if supervisor_age is not None
+                and supervisor_age > PROCESS_LEASE_SUPERVISOR_MAX_AGE_SECONDS
+                else "farm_process_lease_supervisor_unavailable"
+            )
+            raise CanaryMonitorHardFailure(reason)
         paper = self.contours["paper_cards"]
         if owner.process_identity is not None and (
             paper.process is None
@@ -1352,7 +1395,7 @@ class ControlCenter(tk.Tk):
         if stop_intent_fresh and not self._closing:
             raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
 
-        ready = contours_ready and owner.ready and listener_ready
+        ready = contours_ready and owner.ready and listener_ready and supervisor_ready
         if ready and not self._runtime_ready:
             self._runtime_ready = True
             self.events.put(
@@ -1370,6 +1413,8 @@ class ControlCenter(tk.Tk):
             if not contours_ready
             else "listener_starting"
             if not listener_ready
+            else "process_starting"
+            if not supervisor_ready
             else owner.state
         )
         return {
@@ -1377,6 +1422,8 @@ class ControlCenter(tk.Tk):
             "ready": ready,
             "owner_fence": owner.canonical_fence,
             "owner_resources": owner.resources,
+            "lease_supervisor_state": supervisor_state or "pending",
+            "lease_supervisor_age_seconds": supervisor_age,
             "ollama_listener_ready": listener_ready,
             "paper_only": True,
             "execution_allowed": False,
@@ -1739,6 +1786,9 @@ class ControlCenter(tk.Tk):
             PRIVATE_ROOT / "state" / "farm_priority_worker_status.json"
         )
         worker = self._read_cached_json(PRIVATE_ROOT / "state" / "worker_status.json")
+        process_lease = self._read_cached_json(
+            PRIVATE_ROOT / "state" / "farm_process_lease_status.json"
+        )
         farm_item = self.contours.get("farm")
         farm_running = bool(farm_item and farm_item.running)
         owned_started_at = getattr(farm_item, "started_at", None)
@@ -1759,6 +1809,7 @@ class ControlCenter(tk.Tk):
         return assess_compute_pipeline(
             priority_status=priority,
             worker_status=worker,
+            process_lease_status=process_lease,
             farm_running=farm_running,
             farm_started_at=farm_started_at,
         )

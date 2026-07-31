@@ -26,6 +26,28 @@ def test_active_worker_failure_is_hard_fail_without_identity_payload() -> None:
     assert health["execution_allowed"] is False
 
 
+def test_current_process_lease_supervisor_failure_is_compute_hard_fail() -> None:
+    health = assess_compute_pipeline(
+        priority_status={"stage": "running_slot", "updated_at": 100.0},
+        worker_status={"status": "running", "updated_at": 100.0},
+        process_lease_status={
+            "state": "failed",
+            "failure_type": "ProcessLeaseProgressStalled",
+            "updated_at": 100.5,
+        },
+        farm_running=True,
+        farm_started_at=100.0,
+        now=101.0,
+    )
+
+    assert health["state"] == "failed"
+    assert health["hard_fail"] is True
+    assert health["reason"] == "process_lease_supervisor_failed"
+    assert health["process_lease_supervisor_state"] == "failed"
+    assert "failure_type" not in health
+    assert health["execution_allowed"] is False
+
+
 def test_stale_failure_from_stopped_run_does_not_grant_current_hard_fail() -> None:
     health = assess_compute_pipeline(
         priority_status={"stage": "worker_failed", "updated_at": 100.0},

@@ -94,13 +94,17 @@ a sanitized aggregate if a result needs discussion.
   from deeper SQLite health work. The canonical RCC starts this supervisor
   with the paper profile: early owner/listener absence remains `starting`
   inside the bounded cold-start budget, then the first green owner/fence
-  generation becomes the steady-state baseline. Its disappearance, expiry,
-  generation change, foreign Ollama listener, or required-contour exit is an
-  immediate hard failure and invokes the same dependency-ordered RCC stop.
-  A blocked deep probe cannot refresh the fast lane or suppress its deadline.
+  generation and a fresh, exact identity/fence-matched process-lease supervisor
+  become the steady-state baseline. Their disappearance, expiry, generation
+  change, supervisor failure/staleness, foreign Ollama listener, or
+  required-contour exit is an immediate hard failure and invokes the same
+  dependency-ordered RCC stop. A blocked deep probe cannot refresh the fast
+  lane or suppress its deadline.
 - The setup-outcome memory refresh streams its paper JSONL input and reads
-  unique candidates in bounded chunks. Status milestones are published only
-  after real inputs or rows complete. Both a canonical stop intent and the
+  unique candidates in bounded chunks. Reject characterization loads and
+  releases one run-artifact index at a time instead of retaining the complete
+  multi-run corpus. Status milestones are published only after real inputs,
+  rows, or run-artifact groups complete. Both a canonical stop intent and the
   latched owner/claim failure are checked between real chunks, so shutdown and
   fail-closed cancellation do not depend on an artificial timer milestone.
 
