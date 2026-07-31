@@ -27,6 +27,7 @@ _CREATE_NEW_PROCESS_GROUP = int(
 )
 _CREATE_NO_WINDOW = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
 _CREATE_SUSPENDED = int(getattr(subprocess, "CREATE_SUSPENDED", 0x00000004))
+_WINDLL_FACTORY: Any = getattr(ctypes, "WinDLL", None)
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 
@@ -118,7 +119,9 @@ class _WindowsJobTreeGuard:
     def __init__(self, process: _ProcessLike) -> None:
         if os.name != "nt":
             raise OSError("windows_job_unavailable")
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if _WINDLL_FACTORY is None:
+            raise OSError("windows_job_unavailable")
+        kernel32 = _WINDLL_FACTORY("kernel32", use_last_error=True)
         kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
         kernel32.CreateJobObjectW.restype = ctypes.wintypes.HANDLE
         kernel32.SetInformationJobObject.argtypes = [
@@ -168,7 +171,9 @@ class _WindowsJobTreeGuard:
             raise
 
     def resume_process(self) -> None:
-        ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        if _WINDLL_FACTORY is None:
+            raise OSError("windows_job_unavailable")
+        ntdll = _WINDLL_FACTORY("ntdll", use_last_error=True)
         ntdll.NtResumeProcess.argtypes = [ctypes.wintypes.HANDLE]
         ntdll.NtResumeProcess.restype = ctypes.c_long
         if ntdll.NtResumeProcess(int(self._process_handle)) != 0:
