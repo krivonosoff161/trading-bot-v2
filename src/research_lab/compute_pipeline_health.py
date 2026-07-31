@@ -55,6 +55,7 @@ def assess_compute_pipeline(
     *,
     priority_status: dict[str, Any] | None,
     worker_status: dict[str, Any] | None,
+    process_lease_status: dict[str, Any] | None = None,
     farm_running: bool,
     farm_started_at: float | None = None,
     now: float | None = None,
@@ -64,6 +65,9 @@ def assess_compute_pipeline(
     current = time.time() if now is None else float(now)
     priority = priority_status if isinstance(priority_status, dict) else {}
     worker = worker_status if isinstance(worker_status, dict) else {}
+    process_lease = (
+        process_lease_status if isinstance(process_lease_status, dict) else {}
+    )
     raw_priority_stage = str(priority.get("stage") or "")
     priority_stage = (
         raw_priority_stage if raw_priority_stage in _KNOWN_PRIORITY_STAGES else ""
@@ -82,6 +86,9 @@ def assess_compute_pipeline(
     worker_age = _age(worker.get("updated_at"), current)
     priority_updated_at = _epoch(priority.get("updated_at"))
     worker_updated_at = _epoch(worker.get("updated_at"))
+    process_lease_state = str(process_lease.get("state") or "")
+    process_lease_updated_at = _epoch(process_lease.get("updated_at"))
+    process_lease_age = _age(process_lease.get("updated_at"), current)
     farm_start = float(farm_started_at or 0.0)
     priority_failure_current = bool(
         priority_stage in _FATAL_PRIORITY_STAGES
@@ -92,15 +99,25 @@ def assess_compute_pipeline(
         and worker_reason != ""
         and (farm_start <= 0 or worker_updated_at >= farm_start - 1.0)
     )
+    process_lease_failure_current = bool(
+        process_lease_state == "failed"
+        and (farm_start <= 0 or process_lease_updated_at >= farm_start - 1.0)
+    )
 
     hard_fail = bool(
         farm_running
-        and (priority_failure_current or worker_failure_current)
+        and (
+            priority_failure_current
+            or worker_failure_current
+            or process_lease_failure_current
+        )
     )
     if hard_fail:
         state = "failed"
         reason = (
-            f"priority_{priority_stage}"
+            "process_lease_supervisor_failed"
+            if process_lease_failure_current
+            else f"priority_{priority_stage}"
             if priority_failure_current
             else "worker_lease_lifecycle"
         )
@@ -134,6 +151,8 @@ def assess_compute_pipeline(
         "worker_status": worker_state or "unknown",
         "worker_reason_code": worker_reason,
         "worker_status_age_seconds": worker_age,
+        "process_lease_supervisor_state": process_lease_state or "unknown",
+        "process_lease_supervisor_age_seconds": process_lease_age,
         "paper_only": True,
         "execution_allowed": False,
     }

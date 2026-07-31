@@ -192,47 +192,57 @@ def characterize_rejects(
     if limit:
         uc = uc[:limit]
     total = len(uc)
-    total_run_labels = len({str(row.get("run_dir_label") or "") for row in uc})
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for original_index, row in enumerate(uc):
+        grouped.setdefault(str(row.get("run_dir_label") or ""), []).append(
+            (original_index, row)
+        )
+    total_run_labels = len(grouped)
     if progress is not None:
         progress("rejected_candidates_loaded", total, total)
-    cache: dict[str, dict[str, dict[str, Any]]] = {}
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any] | None] = [None] * total
     indexed_runs = 0
-    for index, r in enumerate(uc, start=1):
+    processed = 0
+    for label, members in grouped.items():
         if check_active is not None:
             check_active()
-        label = str(r.get("run_dir_label") or "")
-        if label not in cache:
-            cache[label] = _index_run_results(private_root, label)
-            indexed_runs += 1
+        run_results = _index_run_results(private_root, label)
+        indexed_runs += 1
+        if check_active is not None:
+            check_active()
+        if progress is not None:
+            progress("run_artifacts_indexed", indexed_runs, total_run_labels)
+        for original_index, r in members:
             if check_active is not None:
                 check_active()
-            if progress is not None:
-                progress("run_artifacts_indexed", indexed_runs, total_run_labels)
-        result = cache[label].get(str(r.get("params_hash") or ""))
-        facts = (
-            _trade_path_facts(result)
-            if result
-            else {
-                "n_trades": int(r.get("n_trades") or 0),
-                "avg_net_pct": float(r.get("avg_net_pct") or 0.0),
-                "best_net_pct": 0.0,
-                "worst_net_pct": 0.0,
-                "avg_mfe_pct": 0.0,
-                "avg_mae_pct": 0.0,
-                "avg_capture_ratio": 0.0,
-                "late_entry_rate": 0.0,
-                "n_tp": 0,
-                "n_sl": 0,
-                "n_timeout": 0,
-                "tp_before_sl_share": 0.0,
-                "trades_available": False,
-            }
-        )
-        hard = str(r.get("hard_status") or "")
-        sub = classify_subreason(facts, hard, str(r.get("family") or ""), oi_micro)
-        rows.append(
-            {
+            result = run_results.get(str(r.get("params_hash") or ""))
+            facts = (
+                _trade_path_facts(result)
+                if result
+                else {
+                    "n_trades": int(r.get("n_trades") or 0),
+                    "avg_net_pct": float(r.get("avg_net_pct") or 0.0),
+                    "best_net_pct": 0.0,
+                    "worst_net_pct": 0.0,
+                    "avg_mfe_pct": 0.0,
+                    "avg_mae_pct": 0.0,
+                    "avg_capture_ratio": 0.0,
+                    "late_entry_rate": 0.0,
+                    "n_tp": 0,
+                    "n_sl": 0,
+                    "n_timeout": 0,
+                    "tp_before_sl_share": 0.0,
+                    "trades_available": False,
+                }
+            )
+            hard = str(r.get("hard_status") or "")
+            sub = classify_subreason(
+                facts,
+                hard,
+                str(r.get("family") or ""),
+                oi_micro,
+            )
+            rows[original_index] = {
                 "uc_key": str(r.get("uc_key") or ""),
                 "symbol": str(r.get("symbol") or ""),
                 "timeframe": str(r.get("timeframe") or ""),
@@ -243,8 +253,8 @@ def characterize_rejects(
                 "recyclable": sub in _RECYCLABLE,
                 "trades_available": facts["trades_available"],
                 **{
-                    k: facts[k]
-                    for k in (
+                    key: facts[key]
+                    for key in (
                         "n_trades",
                         "avg_net_pct",
                         "best_net_pct",
@@ -260,10 +270,22 @@ def characterize_rejects(
                     )
                 },
             }
-        )
-        if progress is not None and (index == total or index % 25 == 0):
-            progress("rejects_characterized", index, total)
-    return rows
+            processed += 1
+            if progress is not None and (
+                processed == total or processed % 25 == 0
+            ):
+                progress("rejects_characterized", processed, total)
+        # Releasing each run before loading the next prevents an unbounded
+        # multi-gigabyte JSON cache and its one large GIL-bound cleanup pause.
+        del run_results
+        if check_active is not None:
+            check_active()
+        if progress is not None:
+            progress("run_artifacts_released", indexed_runs, total_run_labels)
+    complete = [row for row in rows if row is not None]
+    if len(complete) != total:
+        raise RuntimeError("reject characterization lost source rows")
+    return complete
 
 
 def summarize_characterization(rows: list[dict[str, Any]]) -> dict[str, Any]:

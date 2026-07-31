@@ -1139,6 +1139,9 @@ def test_single_contour_stop_marker_does_not_hide_unrelated_crash(
 def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
     events: list[tuple[str, str, str]] = []
     center = MODULE.ControlCenter.__new__(MODULE.ControlCenter)
+    owner_pid = 42_424
+    owner_started_at = 1_700_000_042.0
+    owner_fence = 38
     center.contours = {
         key: SimpleNamespace(
             process=SimpleNamespace(pid=10_000 + index),
@@ -1156,11 +1159,25 @@ def _runtime_probe_center() -> tuple[Any, list[tuple[str, str, str]]]:
         sample=lambda: SimpleNamespace(
             state="ready",
             ready=True,
-            canonical_fence=38,
-            process_identity=SimpleNamespace(pid=42_424),
+            canonical_fence=owner_fence,
+            process_identity=SimpleNamespace(
+                pid=owner_pid,
+                started_at=owner_started_at,
+            ),
             resources=("canonical_farm", "strategy_lab_worker"),
         )
     )
+    center._read_cached_json = lambda _path: {
+        "schema": "ProcessLeaseSupervisorStatus.v1",
+        "state": "running",
+        "updated_at": MODULE.time.time(),
+        "owner_pid": owner_pid,
+        "owner_started_at": owner_started_at,
+        "fencing_token": owner_fence,
+        "lease_expires_at": MODULE.time.time() + 90.0,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
     return center, events
 
 
@@ -1253,6 +1270,72 @@ def test_runtime_probe_rejects_owner_outside_canonical_rcc_tree(
         MODULE.CanaryMonitorHardFailure,
         match="owner_not_in_canonical_rcc_tree",
     ):
+        center._fast_runtime_safety_probe()
+
+
+def test_runtime_probe_keeps_supervisor_pending_before_startup_deadline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    center, events = _runtime_probe_center()
+    ollama_pid = center.contours["ollama"].process.pid
+    center._read_cached_json = lambda _path: {}
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 120.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    sample = center._fast_runtime_safety_probe()
+
+    assert sample["state"] == "process_starting"
+    assert sample["ready"] is False
+    assert sample["lease_supervisor_state"] == "pending"
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    (
+        ({"state": "failed"}, "farm_process_lease_supervisor_failed"),
+        ({"updated_at": 1.0}, "farm_process_lease_supervisor_stale"),
+        ({"owner_pid": 99_999}, "farm_process_lease_supervisor_unavailable"),
+        (
+            {"owner_started_at": 1_700_000_043.0},
+            "farm_process_lease_supervisor_unavailable",
+        ),
+        ({"fencing_token": 39}, "farm_process_lease_supervisor_unavailable"),
+    ),
+)
+def test_runtime_probe_fails_closed_on_invalid_supervisor_after_t0(
+    monkeypatch,
+    tmp_path: Path,
+    override: dict[str, object],
+    expected: str,
+) -> None:
+    center, _events = _runtime_probe_center()
+    center._runtime_ready = True
+    original_read = center._read_cached_json
+    center._read_cached_json = lambda path: {
+        **original_read(path),
+        **override,
+    }
+    ollama_pid = center.contours["ollama"].process.pid
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 125.0)
+    monkeypatch.setattr(MODULE, "_same_live_process", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_process_descends_from", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "_listening_pid", lambda _port: ollama_pid)
+    monkeypatch.setattr(
+        MODULE,
+        "CANONICAL_STOP_INTENTS",
+        (tmp_path / "absent-stop-intent",),
+    )
+
+    with pytest.raises(MODULE.CanaryMonitorHardFailure, match=expected):
         center._fast_runtime_safety_probe()
 
 

@@ -79,14 +79,18 @@ This is enforced by the farm boundary tests.
 ## Fenced Ownership Rules
 
 - All `farm_loop --apply` modes acquire `canonical_farm`; `--once` is not an
-  ownership bypass. Long cycles renew through the shared
-  `process_lease_heartbeat` path. In-process renewal verifies the acquiring
-  PID/start generation plus the persisted owner/fence without repeating the
-  potentially blocking Windows command-line probe while holding SQLite's
-  write transaction. SQLite busy/locked still has a short bounded retry
-  budget, and an independent supervisor latches a non-returning renewal before
-  lease expiry. Owner, process generation or fence mismatch fails immediately
-  and wakes the foreground.
+  ownership bypass. The canonical farm renews that already-acquired lease from
+  a dedicated spawned supervisor outside the foreground interpreter's GIL
+  domain. The supervisor proves the acquiring PID/start generation before the
+  SQLite writer transaction, then atomically renews only the persisted
+  owner/fence/process tuple. SQLite busy/locked has a short bounded retry
+  budget. Real durable farm and priority-worker milestones advance a bounded
+  no-progress contract; a stalled foreground cannot be hidden by timer-only
+  heartbeats. Owner loss, process-generation mismatch, fence advance,
+  renewal-budget exhaustion, or progress stall stops renewal, publishes a
+  private safe status/alert, and requests the canonical farm stop. RCC requires
+  a fresh identity/fence-matched supervisor status before T+0 and fails closed
+  on its later loss.
 - `worker_once` and the standalone worker scheduler use durable process leases;
   a legacy `worker.lock` is fail-closed migration evidence and is never deleted
   by age.

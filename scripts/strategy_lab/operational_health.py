@@ -139,6 +139,9 @@ def _compute_pipeline_status(
     return assess_compute_pipeline(
         priority_status=_read_status_object(state / "farm_priority_worker_status.json"),
         worker_status=_read_status_object(state / "worker_status.json"),
+        process_lease_status=_read_status_object(
+            state / "farm_process_lease_status.json"
+        ),
         farm_running=farm_running,
         farm_started_at=farm_started_at,
     )

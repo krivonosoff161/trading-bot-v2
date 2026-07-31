@@ -586,6 +586,43 @@ class OwnershipStore:
             cancel_requested=cancel_requested,
         )
 
+    def renew_supervised(
+        self,
+        lease: ProcessLease,
+        *,
+        lease_seconds: float = 30.0,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> ProcessLease:
+        """Renew from a dedicated supervisor after proving the owner process.
+
+        The potentially blocking process identity probe deliberately happens
+        before the SQLite write transaction. The subsequent fenced update can
+        extend only the same persisted owner/fence/process tuple. If the owner
+        exits after the probe, at most this one bounded lease extension
+        survives; the next probe fails and natural expiry remains intact.
+        """
+
+        if cancel_requested is not None and cancel_requested():
+            raise StaleProcessLeaseError(
+                "process lease renewal cancelled before identity probe"
+            )
+        try:
+            live = self._identity_probe(lease.identity.pid)
+        except OwnershipConflictError as exc:
+            raise StaleProcessLeaseError(
+                "process identity cannot be revalidated"
+            ) from exc
+        if not self._same_identity(live, lease.identity):
+            raise StaleProcessLeaseError(
+                "process identity no longer matches supervised lease"
+            )
+        return self._renew(
+            lease,
+            lease_seconds=lease_seconds,
+            revalidate_process_identity=False,
+            cancel_requested=cancel_requested,
+        )
+
     def _renew(
         self,
         lease: ProcessLease,
