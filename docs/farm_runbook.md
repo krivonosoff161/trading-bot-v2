@@ -78,6 +78,10 @@ a sanitized aggregate if a result needs discussion.
   launcher therefore cannot erase another operator's stop request.
 - A PID, fresh heartbeat, old lock path or expected executable is not proof of
   ownership. Recovered processes remain visible but non-stoppable.
+- The RCC heartbeat publishes the immutable RCC PID and process-start identity.
+  Any finalizer must bind both values to the currently live process and fail
+  closed when the start identity is missing or differs; it must never derive
+  the expected start time by probing a heartbeat PID after the fact.
 - The RCC liveness heartbeat is deliberately smaller than its UI status
   snapshot. A heartbeat `ui_snapshot.stage` that remains active identifies a
   slow display probe; it is diagnostic evidence, not authority and not proof

@@ -9,6 +9,7 @@ or generation change is a hard failure.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
@@ -33,6 +34,61 @@ class CanonicalOwnerSafetySample:
     canonical_fence: int | None
     process_identity: ProcessIdentity | None
     resources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CanonicalRccProcessIdentity:
+    """Immutable RCC identity published by its liveness heartbeat."""
+
+    pid: int
+    started_at: float
+
+
+def parse_rcc_heartbeat_process_identity(
+    heartbeat: Mapping[str, Any],
+) -> CanonicalRccProcessIdentity:
+    """Parse the fail-closed PID/start tuple from an RCC v3 heartbeat."""
+
+    if heartbeat.get("schema") != "ResearchControlCenterHeartbeat.v3":
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:schema_mismatch")
+    if heartbeat.get("paper_only") is not True:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:paper_boundary_missing")
+    if heartbeat.get("execution_allowed") is not False:
+        raise CanaryMonitorHardFailure(
+            "rcc_heartbeat_identity:execution_boundary_missing"
+        )
+    pid_value = heartbeat.get("pid")
+    started_at_value = heartbeat.get("started_at")
+    if (
+        isinstance(pid_value, bool)
+        or not isinstance(pid_value, int)
+        or pid_value <= 0
+    ):
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:pid_missing")
+    if isinstance(started_at_value, bool) or not isinstance(
+        started_at_value, (int, float)
+    ):
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:start_missing")
+    started_at = float(started_at_value)
+    if not math.isfinite(started_at) or started_at <= 0:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:start_invalid")
+    return CanonicalRccProcessIdentity(pid=pid_value, started_at=started_at)
+
+
+def verify_rcc_heartbeat_process_identity(
+    heartbeat: Mapping[str, Any],
+    *,
+    identity_probe: IdentityProbe,
+) -> ProcessIdentity:
+    """Bind an RCC heartbeat to the same currently live process generation."""
+
+    expected = parse_rcc_heartbeat_process_identity(heartbeat)
+    actual = identity_probe(expected.pid)
+    if actual is None:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:process_not_live")
+    if actual.pid != expected.pid or actual.started_at != expected.started_at:
+        raise CanaryMonitorHardFailure("rcc_heartbeat_identity:generation_mismatch")
+    return actual
 
 
 class CanonicalOwnerSafetyMonitor:

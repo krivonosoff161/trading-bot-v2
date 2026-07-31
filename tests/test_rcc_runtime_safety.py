@@ -6,7 +6,11 @@ import pytest
 
 from src.research_lab.canary_checkpoint_policy import CanaryMonitorHardFailure
 from src.research_lab.ownership import ProcessIdentity
-from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
+from src.research_lab.rcc_runtime_safety import (
+    CanonicalOwnerSafetyMonitor,
+    parse_rcc_heartbeat_process_identity,
+    verify_rcc_heartbeat_process_identity,
+)
 
 
 IDENTITY = ProcessIdentity(
@@ -15,6 +19,98 @@ IDENTITY = ProcessIdentity(
     executable="python.exe",
     command_digest="sha256:farm",
 )
+
+
+def _rcc_heartbeat(
+    *,
+    pid: int = IDENTITY.pid,
+    started_at: float = IDENTITY.started_at,
+) -> Mapping[str, object]:
+    return {
+        "schema": "ResearchControlCenterHeartbeat.v3",
+        "pid": pid,
+        "started_at": started_at,
+        "paper_only": True,
+        "execution_allowed": False,
+    }
+
+
+def test_rcc_heartbeat_identity_requires_exact_pid_and_process_start() -> None:
+    parsed = parse_rcc_heartbeat_process_identity(_rcc_heartbeat())
+
+    assert parsed.pid == IDENTITY.pid
+    assert parsed.started_at == IDENTITY.started_at
+    assert (
+        verify_rcc_heartbeat_process_identity(
+            _rcc_heartbeat(),
+            identity_probe=lambda _pid: IDENTITY,
+        )
+        == IDENTITY
+    )
+
+
+@pytest.mark.parametrize(
+    ("heartbeat", "reason"),
+    [
+        (
+            {
+                "schema": "ResearchControlCenterHeartbeat.v2",
+                "pid": IDENTITY.pid,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            "schema_mismatch",
+        ),
+        (
+            {
+                "schema": "ResearchControlCenterHeartbeat.v3",
+                "pid": IDENTITY.pid,
+                "paper_only": True,
+                "execution_allowed": False,
+            },
+            "start_missing",
+        ),
+        (
+            {
+                "schema": "ResearchControlCenterHeartbeat.v3",
+                "pid": IDENTITY.pid,
+                "started_at": IDENTITY.started_at,
+                "paper_only": True,
+                "execution_allowed": True,
+            },
+            "execution_boundary_missing",
+        ),
+    ],
+)
+def test_rcc_heartbeat_identity_missing_or_unsafe_fields_fail_closed(
+    heartbeat: Mapping[str, object],
+    reason: str,
+) -> None:
+    with pytest.raises(CanaryMonitorHardFailure, match=reason):
+        parse_rcc_heartbeat_process_identity(heartbeat)
+
+
+def test_rcc_heartbeat_identity_does_not_fall_back_to_reused_pid() -> None:
+    replacement = ProcessIdentity(
+        pid=IDENTITY.pid,
+        started_at=IDENTITY.started_at + 0.001,
+        executable=IDENTITY.executable,
+        command_digest=IDENTITY.command_digest,
+    )
+
+    with pytest.raises(CanaryMonitorHardFailure, match="generation_mismatch"):
+        verify_rcc_heartbeat_process_identity(
+            _rcc_heartbeat(),
+            identity_probe=lambda _pid: replacement,
+        )
+
+
+def test_rcc_heartbeat_identity_rejects_process_disappearance() -> None:
+    with pytest.raises(CanaryMonitorHardFailure, match="process_not_live"):
+        verify_rcc_heartbeat_process_identity(
+            _rcc_heartbeat(),
+            identity_probe=lambda _pid: None,
+        )
 
 
 def _row(

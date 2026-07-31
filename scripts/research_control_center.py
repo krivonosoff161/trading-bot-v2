@@ -35,7 +35,7 @@ from src.research_lab.canary_checkpoint_policy import (
     CanaryWatchdogAssessment,
 )
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
-from src.research_lab.ownership import probe_process_identity
+from src.research_lab.ownership import current_process_identity, probe_process_identity
 from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
 
 msvcrt: Any = None
@@ -782,6 +782,7 @@ class ControlCenter(tk.Tk):
         self._configure_style()
         self.events: queue.Queue[tuple[str, str, str]] = queue.Queue()
         self.instance = instance
+        self._process_identity = current_process_identity()
         self.external_contours = _load_external_contours(STATE_DIR / "heartbeat.json")
         self.contours = {
             spec.key: ManagedContour(spec, self.events) for spec in contour_specs()
@@ -2241,9 +2242,10 @@ class ControlCenter(tk.Tk):
             else None
         )
         return {
-            "schema": "ResearchControlCenterHeartbeat.v2",
+            "schema": "ResearchControlCenterHeartbeat.v3",
             "updated_at": time.time(),
-            "pid": os.getpid(),
+            "pid": self._process_identity.pid,
+            "started_at": self._process_identity.started_at,
             "paper_only": True,
             "execution_allowed": False,
             "compute_pipeline": dict(self._last_compute_pipeline),
