@@ -409,10 +409,34 @@ class ManagedContour:
             errors="replace",
             creationflags=flags,
         )
-        self.started_at = _process_started_at(self.process.pid) or time.time()
+        try:
+            identity = probe_process_identity(self.process.pid)
+        except Exception as exc:
+            self._abort_unidentified_start()
+            raise RuntimeError(
+                "owned contour process identity probe failed"
+            ) from exc
+        if identity is None:
+            self._abort_unidentified_start()
+            raise RuntimeError("owned contour process identity unavailable")
+        self.started_at = identity.started_at
         self.expected_running = True
         self.events.put((self.spec.key, "state", f"работает · PID {self.process.pid}"))
         threading.Thread(target=self._read_output, daemon=True).start()
+
+    def _abort_unidentified_start(self) -> None:
+        """Best-effort graceful rollback when a new child cannot be identified."""
+
+        process = self.process
+        self.expected_running = False
+        self.stopping = True
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.send_signal(_CTRL_BREAK_EVENT)
+            process.wait(timeout=max(1.0, self.spec.signal_fallback_seconds))
+        except (OSError, subprocess.SubprocessError):
+            return
 
     def _read_output(self) -> None:
         assert self.process and self.process.stdout
