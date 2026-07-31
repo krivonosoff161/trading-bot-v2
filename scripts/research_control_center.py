@@ -28,7 +28,15 @@ from dataclasses import dataclass, field
 from tkinter import messagebox, ttk
 from typing import Any, Callable, TypeVar
 
+from src.research_lab.canary_checkpoint_policy import (
+    CanaryLaneSample,
+    CanaryMonitorHardFailure,
+    CanaryMonitoringService,
+    CanaryWatchdogAssessment,
+)
 from src.research_lab.compute_pipeline_health import assess_compute_pipeline
+from src.research_lab.ownership import probe_process_identity
+from src.research_lab.rcc_runtime_safety import CanonicalOwnerSafetyMonitor
 
 msvcrt: Any = None
 fcntl: Any = None
@@ -69,8 +77,12 @@ CANONICAL_STOP_INTENTS = (
 REQUIRED_RESEARCH_CONTOURS = frozenset(
     {"ollama", "public_news", "scanner", "farm", "paper_cards", "telegram_bot"}
 )
+CANONICAL_PAPER_PROFILE = frozenset(
+    {"ollama", "public_news", "scanner", "paper_cards", "telegram_bot"}
+)
 STATUS_CACHE_SECONDS = 1.0
 HEARTBEAT_INTERVAL_SECONDS = 5.0
+RUNTIME_STARTUP_BUDGET_SECONDS = 600.0
 
 
 def _python(*args: str) -> tuple[str, ...]:
@@ -104,6 +116,7 @@ class ContourSpec:
     env: dict[str, str] = field(default_factory=dict)
     owner_group: str = ""
     graceful_seconds: float = 15.0
+    signal_fallback_seconds: float = 15.0
 
 
 @dataclass(frozen=True)
@@ -280,6 +293,7 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             graceful_stop=_request_farm_stop,
             owner_group="canonical_farm",
             graceful_seconds=120.0,
+            signal_fallback_seconds=30.0,
             env={
                 "STRATEGY_LAB_PAPER_PRODUCT_SEND_TELEGRAM": "0",
                 "STRATEGY_LAB_CALCULATOR_BASE_URL": "http://127.0.0.1:11434/v1",
@@ -300,6 +314,7 @@ def contour_specs() -> tuple[ContourSpec, ...]:
             graceful_stop=_request_farm_stop,
             owner_group="canonical_farm",
             graceful_seconds=120.0,
+            signal_fallback_seconds=30.0,
         ),
         ContourSpec(
             "telegram_bot",
@@ -370,6 +385,10 @@ class ManagedContour:
         for name in GPU_MASK_ENV_NAMES:
             env.pop(name, None)
         env.update(self.spec.env)
+        # Inherited host state must never upgrade the paper RCC into an
+        # execution-capable child process.
+        env["AUTO_TRADE"] = "0"
+        env["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] = "0"
         env["TRADING_BOT_RUNTIME_ROOT"] = str(RUNTIME_ROOT)
         env["PYTHONUTF8"] = "1"
         env["TRADING_BOT_RESEARCH_ROOT"] = str(PRIVATE_ROOT)
@@ -425,8 +444,53 @@ class ManagedContour:
             return True
         self.stopping = True
         try:
+            graceful_timeout = (
+                self.spec.graceful_seconds
+                if timeout is None
+                else max(0.0, float(timeout))
+            )
+            signal_timeout = (
+                self.spec.signal_fallback_seconds
+                if timeout is None
+                else max(0.0, float(timeout))
+            )
             if self.spec.graceful_stop:
                 self.spec.graceful_stop()
+                deadline = time.monotonic() + graceful_timeout
+                while self.running and time.monotonic() < deadline:
+                    time.sleep(0.2)
+                if not self.running:
+                    return True
+                if not _same_live_process(self.process.pid, self.started_at):
+                    self.events.put(
+                        (
+                            self.spec.key,
+                            "state",
+                            "owned process identity changed before graceful fallback",
+                        )
+                    )
+                    return False
+                self.events.put(
+                    (
+                        self.spec.key,
+                        "state",
+                        "stop marker deadline exhausted; sending documented "
+                        "CTRL_BREAK to the exact owned process group",
+                    )
+                )
+                try:
+                    self.process.send_signal(_CTRL_BREAK_EVENT)
+                except (OSError, ValueError) as exc:
+                    self.events.put(
+                        (
+                            self.spec.key,
+                            "state",
+                            "graceful process-group signal failed: "
+                            f"{type(exc).__name__}; process remains owned",
+                        )
+                    )
+                    return False
+                deadline = time.monotonic() + signal_timeout
             else:
                 try:
                     self.process.send_signal(_CTRL_BREAK_EVENT)
@@ -440,9 +504,7 @@ class ManagedContour:
                         )
                     )
                     return False
-            deadline = time.monotonic() + (
-                self.spec.graceful_seconds if timeout is None else timeout
-            )
+                deadline = time.monotonic() + graceful_timeout
             while self.running and time.monotonic() < deadline:
                 time.sleep(0.2)
             if self.running:
@@ -613,6 +675,31 @@ def _same_live_process(pid: int, started_at: float | int | None) -> bool:
     return bool(actual is not None and expected > 0 and abs(actual - expected) <= 5.0)
 
 
+def _process_descends_from(pid: int, ancestor_pid: int) -> bool:
+    """Prove process ancestry without reading command lines or environment."""
+
+    if pid <= 0 or ancestor_pid <= 0:
+        return False
+    if pid == ancestor_pid:
+        return True
+    try:
+        import psutil  # type: ignore[import-untyped]
+
+        current = psutil.Process(pid)
+        seen: set[int] = set()
+        while current.pid > 0 and current.pid not in seen:
+            seen.add(current.pid)
+            parent = current.parent()
+            if parent is None:
+                return False
+            if parent.pid == ancestor_pid:
+                return True
+            current = parent
+    except Exception:
+        return False
+    return False
+
+
 def _external_process_descriptor(
     *,
     key: str,
@@ -702,6 +789,13 @@ class ControlCenter(tk.Tk):
         self.buttons: dict[str, ttk.Button] = {}
         self.selected_key = "ollama"
         self._closing = False
+        self._hard_fail_stop_started = False
+        self._requested_profile_keys: set[str] = set()
+        self._runtime_monitor: CanaryMonitoringService | None = None
+        self._runtime_owner_monitor: CanonicalOwnerSafetyMonitor | None = None
+        self._runtime_monitor_started_at: float | None = None
+        self._runtime_ready = False
+        self._runtime_lane_states: dict[str, str] = {}
         self._logs: dict[str, list[str]] = {key: [] for key in self.contours}
         self._json_status_cache = _JsonStatusCache()
         self._ui_snapshot_lock = threading.Lock()
@@ -1032,6 +1126,9 @@ class ControlCenter(tk.Tk):
                 if key in self.status_vars:
                     self.status_vars[key].set(f"start rejected: {exc}")
             return
+        requested = self.__dict__.get("_requested_profile_keys", set())
+        requested.update(keys)
+        self._requested_profile_keys = requested
         for key in keys:
             item = self.contours[key]
             if not item.running and not self._external_running(key):
@@ -1039,6 +1136,8 @@ class ControlCenter(tk.Tk):
                     item.start()
                 except OSError as exc:
                     self.status_vars[key].set(f"ошибка запуска: {exc}")
+
+        self._maybe_start_runtime_monitor()
 
     def _start_research_profile(self) -> None:
         if not messagebox.askyesno(
@@ -1049,6 +1148,7 @@ class ControlCenter(tk.Tk):
             return
         if not self.contours["ollama"].running and not self._external_running("ollama"):
             self.contours["ollama"].start()
+        self._requested_profile_keys.add("ollama")
         self.after(
             2000,
             lambda: self._start_authorized(
@@ -1077,6 +1177,7 @@ class ControlCenter(tk.Tk):
             "Остановить все работающие контуры, включая обнаруженные внешние процессы?",
         ):
             return
+        self._stop_runtime_monitor()
 
         def stop_owned() -> None:
             # Consumers stop before shared providers; the previous parallel
@@ -1088,6 +1189,293 @@ class ControlCenter(tk.Tk):
                 self._stop_external(key, descriptor)
 
         threading.Thread(target=stop_owned, daemon=True).start()
+
+    def _initiate_hard_fail_stop(self, reason: str) -> bool:
+        """Stop the exact owned canonical profile once, without a UI prompt."""
+
+        if self._hard_fail_stop_started:
+            return False
+        self._hard_fail_stop_started = True
+        self._stop_runtime_monitor()
+        evidence_written = self._persist_hard_fail_alert(reason)
+        owned = [
+            self.contours[key]
+            for key in (
+                "telegram_bot",
+                "paper_cards",
+                "farm",
+                "scanner",
+                "public_news",
+                "ollama",
+            )
+            if self.contours[key].running
+        ]
+        self.events.put(
+            (
+                self.selected_key,
+                "log",
+                f"HARD FAIL: {str(reason)[:160]}; documented graceful stop started",
+            )
+        )
+        if not evidence_written:
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    "hard-fail alert evidence write failed",
+                )
+            )
+
+        def stop_owned() -> None:
+            results = [item.stop() for item in owned]
+            if not all(results):
+                self.events.put(
+                    (
+                        "__app__",
+                        "stop_failed",
+                        "hard-fail graceful stop left an owned contour running",
+                    )
+                )
+
+        threading.Thread(target=stop_owned, daemon=True).start()
+        return True
+
+    @staticmethod
+    def _persist_hard_fail_alert(reason: str) -> bool:
+        alert = {
+            "schema": "ResearchControlCenterAlert.v1",
+            "alert_id": f"rcc_hard_fail:{time.time_ns()}",
+            "reason": str(reason)[:160],
+            "detected_at": time.time(),
+            "paper_only": True,
+            "execution_allowed": False,
+            "automatic_restart": False,
+        }
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            with (STATE_DIR / "alerts.jsonl").open(
+                "a",
+                encoding="utf-8",
+                newline="\n",
+            ) as handle:
+                handle.write(
+                    json.dumps(alert, ensure_ascii=True, sort_keys=True) + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            return False
+        return True
+
+    def _read_active_authority_rows(self) -> tuple[dict[str, object], ...]:
+        path = (PRIVATE_ROOT / "state" / "ownership.sqlite").resolve()
+        if not path.is_file():
+            return ()
+        connection = sqlite3.connect(
+            f"{path.as_uri()}?mode=ro",
+            uri=True,
+            timeout=1.0,
+        )
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA busy_timeout = 1000")
+            rows = connection.execute(
+                """
+                SELECT resource_id, role_id, owner_id, pid, started_at,
+                       executable, command_digest, lease_expires_at, next_fence
+                FROM ownership_resources
+                WHERE owner_id IS NOT NULL
+                """
+            ).fetchall()
+            return tuple(dict(row) for row in rows)
+        finally:
+            connection.close()
+
+    def _fast_runtime_safety_probe(self) -> dict[str, object]:
+        started_at = self._runtime_monitor_started_at
+        owner_monitor = self._runtime_owner_monitor
+        if started_at is None or owner_monitor is None:
+            raise RuntimeError("runtime monitor was not initialized")
+        elapsed = max(0.0, time.monotonic() - started_at)
+        contours_ready = True
+        for key in CANONICAL_PAPER_PROFILE:
+            item = self.contours[key]
+            if item.process is None:
+                contours_ready = False
+                if elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS:
+                    raise CanaryMonitorHardFailure(
+                        f"required_contour_startup_timeout:{key}"
+                    )
+                continue
+            if not item.running or not _same_live_process(
+                item.process.pid,
+                item.started_at,
+            ):
+                raise CanaryMonitorHardFailure(
+                    f"required_contour_unavailable:{key}"
+                )
+
+        owner = owner_monitor.sample()
+        paper = self.contours["paper_cards"]
+        if owner.process_identity is not None and (
+            paper.process is None
+            or not _process_descends_from(
+                owner.process_identity.pid,
+                paper.process.pid,
+            )
+        ):
+            raise CanaryMonitorHardFailure("owner_not_in_canonical_rcc_tree")
+        listener_pid = _listening_pid(11434)
+        ollama = self.contours["ollama"]
+        listener_ready = bool(
+            listener_pid
+            and ollama.process is not None
+            and listener_pid == ollama.process.pid
+            and _same_live_process(listener_pid, ollama.started_at)
+        )
+        if listener_pid and not listener_ready:
+            raise CanaryMonitorHardFailure("foreign_ollama_listener")
+        if not listener_ready and (
+            self._runtime_ready or elapsed >= RUNTIME_STARTUP_BUDGET_SECONDS
+        ):
+            raise CanaryMonitorHardFailure("ollama_listener_unavailable")
+
+        wall_started_at = time.time() - elapsed
+        try:
+            stop_intent_fresh = any(
+                path.is_file() and path.stat().st_mtime >= wall_started_at
+                for path in CANONICAL_STOP_INTENTS
+            )
+        except OSError as exc:
+            raise CanaryMonitorHardFailure("stop_intent_probe_failed") from exc
+        if stop_intent_fresh and not self._closing:
+            raise CanaryMonitorHardFailure("canonical_stop_intent_during_runtime")
+
+        ready = contours_ready and owner.ready and listener_ready
+        if ready and not self._runtime_ready:
+            self._runtime_ready = True
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    "T+0 READY: canonical profile, Ollama listener, and "
+                    "identity-matched fenced farm owner are green",
+                )
+            )
+        state = (
+            "ready"
+            if ready
+            else "process_starting"
+            if not contours_ready
+            else "listener_starting"
+            if not listener_ready
+            else owner.state
+        )
+        return {
+            "state": state,
+            "ready": ready,
+            "owner_fence": owner.canonical_fence,
+            "owner_resources": owner.resources,
+            "ollama_listener_ready": listener_ready,
+            "paper_only": True,
+            "execution_allowed": False,
+        }
+
+    @staticmethod
+    def _deep_runtime_safety_probe() -> dict[str, object]:
+        sizes: dict[str, int] = {}
+        database_paths = {
+            "ownership.sqlite": PRIVATE_ROOT / "state" / "ownership.sqlite",
+            "farm_tasks.sqlite": PRIVATE_ROOT / "state" / "farm_tasks.sqlite",
+            "strategy_lab.sqlite": PRIVATE_ROOT / "state" / "strategy_lab.sqlite",
+            "scanner_farm_loop.sqlite": (
+                PRIVATE_ROOT / "state" / "scanner_farm_loop.sqlite"
+            ),
+            "candles.sqlite3": PRIVATE_ROOT / "market_data" / "candles.sqlite3",
+        }
+        for name, configured_path in database_paths.items():
+            path = configured_path.resolve()
+            if not path.is_file():
+                raise CanaryMonitorHardFailure(f"canonical_database_missing:{name}")
+            connection = sqlite3.connect(
+                f"{path.as_uri()}?mode=ro",
+                uri=True,
+                timeout=1.0,
+            )
+            try:
+                connection.execute("PRAGMA query_only = ON")
+                connection.execute("PRAGMA busy_timeout = 1000")
+                connection.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+                sizes[name] = int(path.stat().st_size)
+            finally:
+                connection.close()
+        return {"database_count": len(sizes), "database_sizes": sizes}
+
+    def _on_runtime_monitor_sample(self, sample: CanaryLaneSample) -> None:
+        prior = self._runtime_lane_states.get(sample.lane)
+        self._runtime_lane_states[sample.lane] = sample.state
+        if prior != sample.state:
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    f"runtime monitor {sample.lane}: {sample.state}",
+                )
+            )
+
+    def _on_runtime_monitor_failure(
+        self,
+        lane: str,
+        assessment: CanaryWatchdogAssessment,
+    ) -> None:
+        reason = assessment.failure_reason or "monitor_lane_failed"
+        self.events.put(("__app__", "runtime_hard_fail", f"{lane}:{reason}"))
+
+    def _maybe_start_runtime_monitor(self) -> None:
+        if self.__dict__.get("_runtime_monitor") is not None:
+            return
+        if not CANONICAL_PAPER_PROFILE.issubset(
+            self.__dict__.get("_requested_profile_keys", set())
+        ):
+            return
+        self._runtime_monitor_started_at = time.monotonic()
+        self._runtime_owner_monitor = CanonicalOwnerSafetyMonitor(
+            rows_reader=self._read_active_authority_rows,
+            identity_probe=probe_process_identity,
+            startup_budget_seconds=RUNTIME_STARTUP_BUDGET_SECONDS,
+        )
+        monitor = CanaryMonitoringService(
+            fast_probe=self._fast_runtime_safety_probe,
+            deep_probe=self._deep_runtime_safety_probe,
+            on_sample=self._on_runtime_monitor_sample,
+            on_failure=self._on_runtime_monitor_failure,
+            fast_interval_seconds=5.0,
+            deep_interval_seconds=60.0,
+        )
+        self._runtime_monitor = monitor
+        monitor.start()
+
+    def _stop_runtime_monitor(self) -> None:
+        monitor = self.__dict__.get("_runtime_monitor")
+        self._runtime_monitor = None
+        self._runtime_owner_monitor = None
+        self._runtime_monitor_started_at = None
+        self._runtime_ready = False
+        self._runtime_lane_states = {}
+        self._requested_profile_keys = set()
+        if monitor is None:
+            return
+        residual = monitor.stop(timeout=2.0)
+        if residual:
+            self.events.put(
+                (
+                    self.selected_key,
+                    "log",
+                    "runtime monitor stop left blocked lanes: "
+                    + ",".join(sorted(residual)),
+                )
+            )
 
     def _poll(self) -> None:
         while True:
@@ -1112,6 +1500,9 @@ class ControlCenter(tk.Tk):
                     )
                 )
                 continue
+            if key == "__app__" and kind == "runtime_hard_fail":
+                self._initiate_hard_fail_stop(value)
+                continue
             if kind == "state":
                 self.status_vars[key].set(value)
             else:
@@ -1124,8 +1515,10 @@ class ControlCenter(tk.Tk):
         self.after(250, self._poll)
 
     def _refresh_buttons(self) -> None:
+        hard_fail_contours: list[str] = []
         for key, item in self.contours.items():
-            self._record_required_contour_exit(key, item)
+            if self._record_required_contour_exit(key, item):
+                hard_fail_contours.append(key)
             if item.stopping:
                 self.buttons[key].configure(text="Останавливается…", state="disabled")
                 self.status_vars[key].set("штатная остановка…")
@@ -1160,6 +1553,11 @@ class ControlCenter(tk.Tk):
                 )
                 if item.running:
                     self.status_vars[key].set(self._health_text(key, item))
+        if hard_fail_contours:
+            self._initiate_hard_fail_stop(
+                "required_contour_unexpected_exit:"
+                + ",".join(sorted(hard_fail_contours))
+            )
 
     @staticmethod
     def _canonical_stop_intent_active(key: str, started_at: float) -> bool:
@@ -1902,11 +2300,13 @@ class ControlCenter(tk.Tk):
         ):
             return
         if not running and not external:
+            self._stop_runtime_monitor()
             self._stop_heartbeat_publisher()
             self.instance.close()
             self.destroy()
             return
         self._closing = True
+        self._stop_runtime_monitor()
         self.withdraw()
 
         def stop_all() -> None:

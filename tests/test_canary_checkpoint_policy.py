@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from src.research_lab.canary_checkpoint_policy import (
@@ -9,6 +12,7 @@ from src.research_lab.canary_checkpoint_policy import (
     CanaryFastSampleWatchdog,
     CanaryMonitorHardFailure,
     CanaryMonitoringCoordinator,
+    CanaryMonitoringService,
     IntegrityEvidenceMode,
     collect_checkpoint_integrity_evidence,
     build_monitoring_lane_watchdogs,
@@ -238,3 +242,91 @@ def test_repeated_fast_probe_failure_latches_only_after_freshness_budget() -> No
     assert exhausted.watchdog.failure_reason == "monitor_fast_sample_freshness_lost"
     with pytest.raises(CanaryMonitorHardFailure):
         monitor.require_lane("fast_safety", now=120.1)
+
+
+def test_blocked_deep_probe_cannot_block_fast_lane_or_hide_freshness_failure() -> None:
+    deep_entered = threading.Event()
+    release_deep = threading.Event()
+    failures: list[str] = []
+    samples: list[str] = []
+
+    def deep_probe() -> dict[str, object]:
+        deep_entered.set()
+        release_deep.wait(1.0)
+        return {"bounded": True}
+
+    service = CanaryMonitoringService(
+        fast_probe=lambda: {"authority": "valid"},
+        deep_probe=deep_probe,
+        on_sample=lambda sample: samples.append(sample.lane),
+        on_failure=lambda lane, _assessment: failures.append(lane),
+        fast_interval_seconds=0.01,
+        deep_interval_seconds=0.01,
+        supervisor_interval_seconds=0.005,
+    )
+    service.coordinator.watchdogs[
+        "fast_safety"
+    ].max_fast_sample_gap_seconds = 0.2
+    service.coordinator.watchdogs[
+        "deep_database"
+    ].max_fast_sample_gap_seconds = 0.05
+
+    service.start()
+    assert deep_entered.wait(0.2)
+    deadline = time.monotonic() + 0.5
+    while not failures and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert failures == ["deep_database"]
+    assert samples.count("fast_safety") >= 2
+    release_deep.set()
+    assert service.stop(timeout=0.5) == ()
+
+
+def test_explicit_safety_violation_is_escalated_without_waiting_for_gap() -> None:
+    failed = threading.Event()
+    failures: list[tuple[str, str | None]] = []
+
+    def hard_failure() -> dict[str, object]:
+        raise CanaryMonitorHardFailure("owner_authority:lease_expired")
+
+    service = CanaryMonitoringService(
+        fast_probe=hard_failure,
+        deep_probe=lambda: {"bounded": True},
+        on_sample=lambda _sample: None,
+        on_failure=lambda lane, assessment: (
+            failures.append((lane, assessment.failure_reason)),
+            failed.set(),
+        ),
+        fast_interval_seconds=10.0,
+        deep_interval_seconds=10.0,
+        supervisor_interval_seconds=0.01,
+    )
+    service.start()
+
+    assert failed.wait(0.5)
+    assert service.stop(timeout=0.5) == ()
+    assert failures == [("fast_safety", "owner_authority:lease_expired")]
+
+
+def test_monitor_failure_callback_is_idempotent_across_lanes() -> None:
+    failures: list[str] = []
+    service = CanaryMonitoringService(
+        fast_probe=lambda: (_ for _ in ()).throw(OSError("synthetic")),
+        deep_probe=lambda: (_ for _ in ()).throw(OSError("synthetic")),
+        on_sample=lambda _sample: None,
+        on_failure=lambda lane, _assessment: failures.append(lane),
+        fast_interval_seconds=0.005,
+        deep_interval_seconds=0.005,
+        supervisor_interval_seconds=0.005,
+    )
+    for watchdog in service.coordinator.watchdogs.values():
+        watchdog.max_fast_sample_gap_seconds = 0.02
+
+    service.start()
+    deadline = time.monotonic() + 0.5
+    while not failures and time.monotonic() < deadline:
+        time.sleep(0.005)
+    service.stop(timeout=0.5)
+
+    assert len(failures) == 1

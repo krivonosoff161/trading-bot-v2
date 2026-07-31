@@ -86,15 +86,23 @@ a sanitized aggregate if a result needs discussion.
 - RCC starts owned console contours in a dedicated process group so the
   documented CTRL_BREAK path remains available. Shutdown is dependency
   ordered (consumers before shared providers), has a bounded deadline, and
-  reports any residual owned PID without forced termination.
+  reports any residual owned PID without forced termination. For contours
+  that normally consume a stop marker, RCC waits for marker acknowledgement
+  first and only then sends CTRL_BREAK to the same verified PID/start process
+  group as its bounded graceful fallback.
 - Active canary monitoring keeps fast process/authority samples independent
-  from deeper SQLite health work. One failed probe is recorded as degraded and
-  does not count as a completed sample; loss of the lane's monotonic freshness
-  budget is the fail-closed boundary.
+  from deeper SQLite health work. The canonical RCC starts this supervisor
+  with the paper profile: early owner/listener absence remains `starting`
+  inside the bounded cold-start budget, then the first green owner/fence
+  generation becomes the steady-state baseline. Its disappearance, expiry,
+  generation change, foreign Ollama listener, or required-contour exit is an
+  immediate hard failure and invokes the same dependency-ordered RCC stop.
+  A blocked deep probe cannot refresh the fast lane or suppress its deadline.
 - The setup-outcome memory refresh streams its paper JSONL input and reads
   unique candidates in bounded chunks. Status milestones are published only
-  after real inputs or rows complete, so a long HDD read is distinguishable
-  from an unchanged heartbeat.
+  after real inputs or rows complete. Both a canonical stop intent and the
+  latched owner/claim failure are checked between real chunks, so shutdown and
+  fail-closed cancellation do not depend on an artificial timer milestone.
 
 ### Provenance-bound RCC marker clearance
 

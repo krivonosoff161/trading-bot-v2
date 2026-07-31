@@ -56,6 +56,10 @@ from src.research_lab.task_claim_heartbeat import TaskClaimHeartbeat  # noqa: E4
 from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 
 
+class FarmCycleStopRequested(RuntimeError):
+    """A canonical stop intent cancelled an interruptible long farm stage."""
+
+
 def _env_flag(name: str) -> bool:
     return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -681,6 +685,8 @@ def _run_main_paper_derived_chain(
             loop=loop,
             cycle_started_at=cycle_started_at,
         )
+    except FarmCycleStopRequested:
+        raise
     except Exception as exc:  # noqa: BLE001 - memory refresh must not break the cycle
         out.setdefault("errors", []).append(
             {
@@ -1488,9 +1494,17 @@ def _refresh_setup_outcome_memory(
 
     failure_signal = getattr(args, "task_claim_failure_signal", None)
 
-    def progress(milestone: str, completed: int, total: int) -> None:
+    def check_active() -> None:
         if failure_signal is not None:
             failure_signal.raise_if_failed()
+        stop_file = str(getattr(args, "stop_file", "") or "")
+        if stop_file and Path(stop_file).exists():
+            raise FarmCycleStopRequested(
+                "canonical stop requested during setup outcome memory refresh"
+            )
+
+    def progress(milestone: str, completed: int, total: int) -> None:
+        check_active()
         _write_loop_status(
             private_root,
             stage="setup_outcome_memory_refresh",
@@ -1503,8 +1517,13 @@ def _refresh_setup_outcome_memory(
                 "total": int(total),
             },
         )
+        check_active()
 
-    records = memory.build_memory_index(private_root, progress=progress)
+    records = memory.build_memory_index(
+        private_root,
+        progress=progress,
+        check_active=check_active,
+    )
     summary = memory.summarize_memory(records)
     progress("memory_summarized", len(records), len(records))
     product_memory = memory.summarize_product_training_memory(private_root)["summary"]
@@ -2846,10 +2865,10 @@ def main() -> None:
         lease_heartbeat = _FarmLeaseHeartbeat(
             ownership_path,
             process_lease,
+            on_failure=claim_failure_signal.notify,
         )
         try:
             lease_heartbeat.start()
-            lease_heartbeat.on_failure = claim_failure_signal.notify
             if lease_heartbeat.failure is not None:
                 claim_failure_signal.notify(
                     lease_heartbeat.failure,
@@ -2874,7 +2893,7 @@ def main() -> None:
         except Exception:
             lease_heartbeat.stop()
             try:
-                ownership_store.release(process_lease)
+                ownership_store.release_local(process_lease)
             finally:
                 ownership_store.close()
             raise
@@ -2898,7 +2917,11 @@ def main() -> None:
         )
     try:
         if not args.loop:
-            out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            try:
+                out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            except FarmCycleStopRequested:
+                print("canonical stop requested - cancelled current farm stage")
+                return
             _print_cycle(out)  # a single explicit cycle is always shown
             return
         prev_sig = None
@@ -2914,7 +2937,7 @@ def main() -> None:
         while True:
             if args.stop_file and Path(args.stop_file).exists():
                 if ownership_store is not None and process_lease is not None:
-                    ownership_store.acknowledge_stop_intent(
+                    ownership_store.acknowledge_stop_intent_local(
                         process_lease, Path(args.stop_file)
                     )
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
@@ -2930,7 +2953,19 @@ def main() -> None:
                 max_outage_seconds=args.status_publish_max_outage_seconds,
             ):
                 break
-            out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            try:
+                out = _run_once(args, tasks, profiles, policy, private_root, apply)
+            except FarmCycleStopRequested:
+                if (
+                    args.stop_file
+                    and ownership_store is not None
+                    and process_lease is not None
+                ):
+                    ownership_store.acknowledge_stop_intent_local(
+                        process_lease, Path(args.stop_file)
+                    )
+                print("canonical stop requested - cancelled current farm stage")
+                break
             if claim_failure_signal is not None:
                 claim_failure_signal.raise_if_failed()
             if apply and _leave_for_status_publication_outage(
@@ -2969,7 +3004,7 @@ def main() -> None:
                     and ownership_store is not None
                     and process_lease is not None
                 ):
-                    ownership_store.acknowledge_stop_intent(
+                    ownership_store.acknowledge_stop_intent_local(
                         process_lease, Path(args.stop_file)
                     )
                 print(f"stop-file present ({args.stop_file}) - exiting loop")
@@ -2987,7 +3022,7 @@ def main() -> None:
             lease_heartbeat.stop()
         if ownership_store is not None and process_lease is not None:
             try:
-                ownership_store.release(process_lease)
+                ownership_store.release_local(process_lease)
             except Exception:
                 pass
             ownership_store.close()

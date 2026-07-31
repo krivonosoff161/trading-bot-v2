@@ -435,7 +435,11 @@ class OwnershipStore:
         return ProcessLease(resource_id, role_id, owner_id, identity, fence, expires_at)
 
     def _assert_authoritative(
-        self, lease: ProcessLease, *, now: float | None = None
+        self,
+        lease: ProcessLease,
+        *,
+        now: float | None = None,
+        revalidate_process_identity: bool = True,
     ) -> sqlite3.Row:
         current = float(self._clock()) if now is None else float(now)
         row = self.raw_connection.execute(
@@ -453,19 +457,62 @@ class OwnershipStore:
             or float(row["lease_expires_at"] or 0) <= current
         ):
             raise StaleProcessLeaseError("stale process lease")
-        try:
-            live = self._identity_probe(persisted.pid)
-        except OwnershipConflictError as exc:
-            raise StaleProcessLeaseError(
-                "process identity cannot be revalidated"
-            ) from exc
-        if not self._same_identity(live, persisted):
-            raise StaleProcessLeaseError("process identity no longer matches lease")
+        if revalidate_process_identity:
+            try:
+                live = self._identity_probe(persisted.pid)
+            except OwnershipConflictError as exc:
+                raise StaleProcessLeaseError(
+                    "process identity cannot be revalidated"
+                ) from exc
+            if not self._same_identity(live, persisted):
+                raise StaleProcessLeaseError("process identity no longer matches lease")
         return row
+
+    @staticmethod
+    def _assert_local_holder(lease: ProcessLease) -> None:
+        """Prove that an in-process renewal is not acting for another PID.
+
+        Acquisition already captured the immutable process identity.  A lease
+        object retained by that same Python process cannot survive process
+        death or PID reuse.  Local heartbeat/release paths therefore verify the
+        current PID and the persisted owner/fence tuple without repeating a
+        potentially blocking Windows command-line probe while holding the
+        SQLite write transaction.
+        """
+
+        if lease.identity.pid != os.getpid():
+            raise StaleProcessLeaseError(
+                "local process does not hold the persisted process lease"
+            )
+        try:
+            import psutil  # type: ignore[import-untyped]
+
+            local_started_at = float(psutil.Process(os.getpid()).create_time())
+        except Exception as exc:
+            raise StaleProcessLeaseError(
+                "local process start identity cannot be verified"
+            ) from exc
+        if abs(local_started_at - float(lease.identity.started_at)) > 0.001:
+            raise StaleProcessLeaseError(
+                "local process generation does not match the persisted lease"
+            )
 
     def is_authoritative(self, lease: ProcessLease) -> bool:
         try:
             self._assert_authoritative(lease)
+        except (OwnershipConflictError, StaleProcessLeaseError):
+            return False
+        return True
+
+    def is_authoritative_local(self, lease: ProcessLease) -> bool:
+        """Fail-closed authority check for the process that acquired ``lease``."""
+
+        try:
+            self._assert_local_holder(lease)
+            self._assert_authoritative(
+                lease,
+                revalidate_process_identity=False,
+            )
         except (OwnershipConflictError, StaleProcessLeaseError):
             return False
         return True
@@ -516,14 +563,57 @@ class OwnershipStore:
     def renew(
         self, lease: ProcessLease, *, lease_seconds: float = 30.0
     ) -> ProcessLease:
+        return self._renew(
+            lease,
+            lease_seconds=lease_seconds,
+            revalidate_process_identity=True,
+        )
+
+    def renew_local(
+        self,
+        lease: ProcessLease,
+        *,
+        lease_seconds: float = 30.0,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> ProcessLease:
+        """Renew only a lease held by this exact Python process."""
+
+        self._assert_local_holder(lease)
+        return self._renew(
+            lease,
+            lease_seconds=lease_seconds,
+            revalidate_process_identity=False,
+            cancel_requested=cancel_requested,
+        )
+
+    def _renew(
+        self,
+        lease: ProcessLease,
+        *,
+        lease_seconds: float,
+        revalidate_process_identity: bool,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> ProcessLease:
         if lease_seconds <= 0:
             raise ValueError("positive lease is required")
         now = float(self._clock())
         conn = self.raw_connection
         try:
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_authoritative(lease, now=now)
+            if cancel_requested is not None and cancel_requested():
+                raise StaleProcessLeaseError(
+                    "process lease renewal cancelled before mutation"
+                )
+            self._assert_authoritative(
+                lease,
+                now=now,
+                revalidate_process_identity=revalidate_process_identity,
+            )
             expires_at = now + float(lease_seconds)
+            if cancel_requested is not None and cancel_requested():
+                raise StaleProcessLeaseError(
+                    "process lease renewal cancelled before mutation"
+                )
             conn.execute(
                 "UPDATE ownership_resources SET lease_expires_at=?, updated_at=? "
                 "WHERE resource_id=? AND owner_id=? AND next_fence=?",
@@ -542,11 +632,29 @@ class OwnershipStore:
         return replace(lease, lease_expires_at=expires_at)
 
     def release(self, lease: ProcessLease) -> None:
+        self._release(lease, revalidate_process_identity=True)
+
+    def release_local(self, lease: ProcessLease) -> None:
+        """Release only a lease held by this exact Python process."""
+
+        self._assert_local_holder(lease)
+        self._release(lease, revalidate_process_identity=False)
+
+    def _release(
+        self,
+        lease: ProcessLease,
+        *,
+        revalidate_process_identity: bool,
+    ) -> None:
         now = float(self._clock())
         conn = self.raw_connection
         try:
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_authoritative(lease, now=now)
+            self._assert_authoritative(
+                lease,
+                now=now,
+                revalidate_process_identity=revalidate_process_identity,
+            )
             conn.execute(
                 """
                 UPDATE ownership_resources
@@ -562,10 +670,38 @@ class OwnershipStore:
             raise
 
     def acknowledge_stop_intent(self, lease: ProcessLease, stop_path: Path) -> None:
+        self._acknowledge_stop_intent(
+            lease,
+            stop_path,
+            revalidate_process_identity=True,
+        )
+
+    def acknowledge_stop_intent_local(
+        self, lease: ProcessLease, stop_path: Path
+    ) -> None:
+        """Acknowledge a stop marker from its exact in-process owner."""
+
+        self._assert_local_holder(lease)
+        self._acknowledge_stop_intent(
+            lease,
+            stop_path,
+            revalidate_process_identity=False,
+        )
+
+    def _acknowledge_stop_intent(
+        self,
+        lease: ProcessLease,
+        stop_path: Path,
+        *,
+        revalidate_process_identity: bool,
+    ) -> None:
         conn = self.raw_connection
         try:
             conn.execute("BEGIN IMMEDIATE")
-            self._assert_authoritative(lease)
+            self._assert_authoritative(
+                lease,
+                revalidate_process_identity=revalidate_process_identity,
+            )
             stop_path.unlink(missing_ok=True)
             conn.commit()
         except Exception:

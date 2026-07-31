@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import threading
+import time
 from types import MappingProxyType
 from typing import Callable, Mapping
 
@@ -130,23 +132,20 @@ class CanaryMonitoringCoordinator:
         *,
         now: float,
     ) -> CanaryLaneSample:
-        watchdog = self.watchdogs[lane]
         try:
             payload = dict(probe())
         except Exception as exc:  # safe metadata only; never persist the value
-            assessment = watchdog.assess(now=now)
-            return CanaryLaneSample(
-                lane=lane,
-                state=(
-                    "failed"
-                    if assessment.failure_reason is not None
-                    else "degraded"
-                ),
-                payload=MappingProxyType({}),
-                error_type=type(exc).__name__,
-                watchdog=assessment,
-            )
-        assessment = watchdog.record_fast_sample(now=now)
+            return self.record_error(lane, type(exc).__name__, now=now)
+        return self.record_success(lane, payload, now=now)
+
+    def record_success(
+        self,
+        lane: str,
+        payload: Mapping[str, object],
+        *,
+        now: float,
+    ) -> CanaryLaneSample:
+        assessment = self.watchdogs[lane].record_fast_sample(now=now)
         return CanaryLaneSample(
             lane=lane,
             state="failed" if assessment.failure_reason is not None else "healthy",
@@ -155,8 +154,184 @@ class CanaryMonitoringCoordinator:
             watchdog=assessment,
         )
 
+    def record_error(
+        self,
+        lane: str,
+        error_type: str,
+        *,
+        now: float,
+    ) -> CanaryLaneSample:
+        assessment = self.watchdogs[lane].assess(now=now)
+        return CanaryLaneSample(
+            lane=lane,
+            state="failed" if assessment.failure_reason is not None else "degraded",
+            payload=MappingProxyType({}),
+            error_type=str(error_type)[:120],
+            watchdog=assessment,
+        )
+
     def require_lane(self, lane: str, *, now: float) -> None:
         require_healthy_watchdog(self.watchdogs[lane].assess(now=now))
+
+
+LaneSampleCallback = Callable[[CanaryLaneSample], None]
+LaneFailureCallback = Callable[[str, CanaryWatchdogAssessment], None]
+
+
+class CanaryMonitoringService:
+    """Run fast and deep canary probes on independent supervised threads.
+
+    The service never performs an operational stop itself.  It reports one
+    latched failure to its adapter, which must invoke the documented RCC
+    graceful-stop path.  A blocked deep SQLite probe therefore cannot suppress
+    fast process/authority observations or hide its own freshness expiry.
+    """
+
+    def __init__(
+        self,
+        *,
+        fast_probe: Callable[[], Mapping[str, object]],
+        deep_probe: Callable[[], Mapping[str, object]],
+        on_sample: LaneSampleCallback,
+        on_failure: LaneFailureCallback,
+        started_at: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        fast_interval_seconds: float = 5.0,
+        deep_interval_seconds: float = 60.0,
+        supervisor_interval_seconds: float = 0.25,
+    ) -> None:
+        if min(
+            fast_interval_seconds,
+            deep_interval_seconds,
+            supervisor_interval_seconds,
+        ) <= 0:
+            raise ValueError("monitoring intervals must be positive")
+        self._monotonic = monotonic
+        initial = float(monotonic() if started_at is None else started_at)
+        self.coordinator = CanaryMonitoringCoordinator(started_at=initial)
+        self._probes = {
+            "fast_safety": fast_probe,
+            "deep_database": deep_probe,
+        }
+        self._intervals = {
+            "fast_safety": float(fast_interval_seconds),
+            "deep_database": float(deep_interval_seconds),
+        }
+        self._supervisor_interval = float(supervisor_interval_seconds)
+        self._on_sample = on_sample
+        self._on_failure = on_failure
+        self._stop = threading.Event()
+        self._state_lock = threading.Lock()
+        self._failure_lane: str | None = None
+        self._threads = {
+            lane: threading.Thread(
+                target=self._run_lane,
+                args=(lane,),
+                name=f"canary-monitor-{lane}",
+                daemon=True,
+            )
+            for lane in self._probes
+        }
+        self._supervisor = threading.Thread(
+            target=self._run_supervisor,
+            name="canary-monitor-supervisor",
+            daemon=True,
+        )
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            raise RuntimeError("canary monitoring service already started")
+        self._started = True
+        for thread in self._threads.values():
+            thread.start()
+        self._supervisor.start()
+
+    def stop(self, *, timeout: float = 2.0) -> tuple[str, ...]:
+        """Stop bounded monitor control threads and report any blocked probe lane."""
+
+        self._stop.set()
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        for thread in (*self._threads.values(), self._supervisor):
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        return tuple(
+            lane
+            for lane, thread in self._threads.items()
+            if thread.is_alive()
+        )
+
+    def _run_lane(self, lane: str) -> None:
+        probe = self._probes[lane]
+        interval = self._intervals[lane]
+        while not self._stop.is_set():
+            try:
+                payload = dict(probe())
+            except CanaryMonitorHardFailure as exc:
+                now = float(self._monotonic())
+                with self._state_lock:
+                    prior = self.coordinator.watchdogs[lane].assess(now=now)
+                    assessment = CanaryWatchdogAssessment(
+                        failure_reason=str(exc)[:160] or "probe_hard_failure",
+                        alert_count=prior.alert_count + 1,
+                        last_fast_sample_at=prior.last_fast_sample_at,
+                        fast_sample_age_seconds=prior.fast_sample_age_seconds,
+                    )
+                    sample = CanaryLaneSample(
+                        lane=lane,
+                        state="failed",
+                        payload=MappingProxyType({}),
+                        error_type=type(exc).__name__,
+                        watchdog=assessment,
+                    )
+                self._on_sample(sample)
+                self._fail_once(lane, assessment)
+                return
+            except Exception as exc:
+                now = float(self._monotonic())
+                with self._state_lock:
+                    sample = self.coordinator.record_error(
+                        lane,
+                        type(exc).__name__,
+                        now=now,
+                    )
+            else:
+                now = float(self._monotonic())
+                with self._state_lock:
+                    sample = self.coordinator.record_success(
+                        lane,
+                        payload,
+                        now=now,
+                    )
+            self._on_sample(sample)
+            if sample.watchdog.failure_reason is not None:
+                self._fail_once(lane, sample.watchdog)
+                return
+            if self._stop.wait(interval):
+                return
+
+    def _run_supervisor(self) -> None:
+        while not self._stop.wait(self._supervisor_interval):
+            now = float(self._monotonic())
+            with self._state_lock:
+                assessments = {
+                    lane: watchdog.assess(now=now)
+                    for lane, watchdog in self.coordinator.watchdogs.items()
+                }
+            for lane, assessment in assessments.items():
+                if assessment.failure_reason is not None:
+                    self._fail_once(lane, assessment)
+
+    def _fail_once(
+        self,
+        lane: str,
+        assessment: CanaryWatchdogAssessment,
+    ) -> None:
+        with self._state_lock:
+            if self._failure_lane is not None:
+                return
+            self._failure_lane = lane
+        self._stop.set()
+        self._on_failure(lane, assessment)
 
 
 def require_healthy_watchdog(assessment: CanaryWatchdogAssessment) -> None:

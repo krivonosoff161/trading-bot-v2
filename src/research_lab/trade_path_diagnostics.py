@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.data_fingerprint import params_hash
 from src.research_lab.farm_tasks_db import tasks_db_path
@@ -177,20 +177,38 @@ _RECYCLABLE = {
 
 
 def characterize_rejects(
-    private_root: Path, *, limit: int | None = None
+    private_root: Path,
+    *,
+    limit: int | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     """One row per rejected unique_candidate with sub-reason + trade-path facts."""
     private_root = Path(private_root)
+    if check_active is not None:
+        check_active()
     oi_micro = oi_micro_families()
     uc = _load_rejected_uc(private_root)
     if limit:
         uc = uc[:limit]
+    total = len(uc)
+    total_run_labels = len({str(row.get("run_dir_label") or "") for row in uc})
+    if progress is not None:
+        progress("rejected_candidates_loaded", total, total)
     cache: dict[str, dict[str, dict[str, Any]]] = {}
     rows: list[dict[str, Any]] = []
-    for r in uc:
+    indexed_runs = 0
+    for index, r in enumerate(uc, start=1):
+        if check_active is not None:
+            check_active()
         label = str(r.get("run_dir_label") or "")
         if label not in cache:
             cache[label] = _index_run_results(private_root, label)
+            indexed_runs += 1
+            if check_active is not None:
+                check_active()
+            if progress is not None:
+                progress("run_artifacts_indexed", indexed_runs, total_run_labels)
         result = cache[label].get(str(r.get("params_hash") or ""))
         facts = (
             _trade_path_facts(result)
@@ -243,6 +261,8 @@ def characterize_rejects(
                 },
             }
         )
+        if progress is not None and (index == total or index % 25 == 0):
+            progress("rejects_characterized", index, total)
     return rows
 
 

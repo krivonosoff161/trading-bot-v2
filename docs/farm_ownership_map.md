@@ -80,10 +80,13 @@ This is enforced by the farm boundary tests.
 
 - All `farm_loop --apply` modes acquire `canonical_farm`; `--once` is not an
   ownership bypass. Long cycles renew through the shared
-  `process_lease_heartbeat` path. SQLite busy/locked and an unavailable
-  process-identity probe have a short bounded retry budget; owner, identity or
-  fence mismatch fails immediately. The heartbeat latches failure and wakes
-  the foreground before lease expiry.
+  `process_lease_heartbeat` path. In-process renewal verifies the acquiring
+  PID/start generation plus the persisted owner/fence without repeating the
+  potentially blocking Windows command-line probe while holding SQLite's
+  write transaction. SQLite busy/locked still has a short bounded retry
+  budget, and an independent supervisor latches a non-returning renewal before
+  lease expiry. Owner, process generation or fence mismatch fails immediately
+  and wakes the foreground.
 - `worker_once` and the standalone worker scheduler use durable process leases;
   a legacy `worker.lock` is fail-closed migration evidence and is never deleted
   by age.
@@ -98,7 +101,11 @@ This is enforced by the farm boundary tests.
 - Recovered heartbeats and listening ports are display-only. They cannot reach
   process signals without current in-process ownership. RCC never escalates a
   failed graceful stop to `taskkill`; an identity-bound residual process stays
-  visible as a hard operational failure.
+  visible as a hard operational failure. During the canonical paper profile,
+  RCC treats `canonical_farm` plus `strategy_lab_worker` rows from the same
+  exact process identity as one authority, while a different PID/start
+  generation, competing writer resource, fence change, or expired baseline
+  remains a hard failure.
 
 ## Telegram And LLM Surface Boundary
 

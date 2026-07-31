@@ -570,7 +570,7 @@ def run_worker_once(
             conn.close()
         process_heartbeat.stop()
         try:
-            ownership_store.release(process_lease)
+            ownership_store.release_local(process_lease)
         finally:
             ownership_store.close()
         raise
@@ -816,7 +816,7 @@ def run_worker_once(
         conn.close()
         release_error = None
         try:
-            ownership_store.release(process_lease)
+            ownership_store.release_local(process_lease)
         except Exception as exc:
             release_error = exc
             write_worker_status(

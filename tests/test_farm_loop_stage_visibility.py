@@ -939,7 +939,8 @@ def test_production_memory_refresh_blocks_snapshot_after_owner_lease_failure(
     milestones: list[str] = []
     snapshot_written = False
 
-    def build(_root, *, progress):
+    def build(_root, *, progress, check_active):
+        check_active()
         progress("lifecycle_loaded", 10, 10)
         milestones.append("lifecycle_loaded")
         signal.notify(
@@ -978,4 +979,46 @@ def test_production_memory_refresh_blocks_snapshot_after_owner_lease_failure(
         )
 
     assert milestones == ["lifecycle_loaded"]
+    assert snapshot_written is False
+
+
+def test_production_memory_refresh_cancels_on_stop_intent_before_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import setup_outcome_memory as memory
+
+    stop_file = tmp_path / "STOP_FARM.txt"
+    stop_file.write_text("stop", encoding="utf-8")
+    args = SimpleNamespace(
+        task_claim_failure_signal=None,
+        stop_file=str(stop_file),
+    )
+    snapshot_written = False
+
+    def build(_root, *, progress, check_active):
+        check_active()
+        progress("unreachable", 1, 1)
+        return []
+
+    def forbidden_snapshot(*_args, **_kwargs):
+        nonlocal snapshot_written
+        snapshot_written = True
+        pytest.fail("stop intent must block snapshot publication")
+
+    monkeypatch.setattr(memory, "build_memory_index", build)
+    monkeypatch.setattr(memory, "write_memory_snapshot", forbidden_snapshot)
+
+    with pytest.raises(
+        farm_loop.FarmCycleStopRequested,
+        match="canonical stop requested",
+    ):
+        farm_loop._refresh_setup_outcome_memory(
+            args,
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=100.0,
+        )
+
     assert snapshot_written is False
