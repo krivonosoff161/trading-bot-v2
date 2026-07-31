@@ -82,6 +82,9 @@ a sanitized aggregate if a result needs discussion.
   Any finalizer must bind both values to the currently live process and fail
   closed when the start identity is missing or differs; it must never derive
   the expected start time by probing a heartbeat PID after the fact.
+- RCC-owned child start identities are captured through the same canonical
+  process probe used by external consumers; mixing native FILETIME seconds
+  with a separately rounded process timestamp is not an identity comparison.
 - The RCC liveness heartbeat is deliberately smaller than its UI status
   snapshot. A heartbeat `ui_snapshot.stage` that remains active identifies a
   slow display probe; it is diagnostic evidence, not authority and not proof

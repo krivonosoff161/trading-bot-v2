@@ -520,7 +520,18 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
         return Process()
 
     monkeypatch.setattr(MODULE.subprocess, "Popen", popen)
-    monkeypatch.setattr(MODULE, "_process_started_at", lambda _pid: 100.0)
+    monkeypatch.setattr(
+        MODULE,
+        "probe_process_identity",
+        lambda _pid: SimpleNamespace(started_at=100.25),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_process_started_at",
+        lambda _pid: (_ for _ in ()).throw(
+            AssertionError("child identity must use the canonical probe")
+        ),
+    )
     item = MODULE.ManagedContour(
         next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
         MODULE.queue.Queue(),
@@ -534,6 +545,49 @@ def test_owned_contour_start_preserves_ctrl_break_process_group(
     )
     assert captured["env"]["AUTO_TRADE"] == "0"
     assert captured["env"]["TELEGRAM_BOT_ALLOW_AUTO_EXECUTE"] == "0"
+    assert item.started_at == 100.25
+
+
+def test_owned_contour_start_rolls_back_when_identity_is_unavailable(
+    monkeypatch,
+) -> None:
+    class Process:
+        pid = 4242
+        stdout = [""]
+
+        def __init__(self) -> None:
+            self.running = True
+            self.signals: list[int] = []
+
+        def poll(self):
+            return None if self.running else 0
+
+        def send_signal(self, value):
+            self.signals.append(value)
+            self.running = False
+
+        @staticmethod
+        def wait(timeout=None):
+            del timeout
+            return 0
+
+    process = Process()
+    monkeypatch.setattr(MODULE.subprocess, "Popen", lambda *_a, **_kw: process)
+    monkeypatch.setattr(MODULE, "probe_process_identity", lambda _pid: None)
+    item = MODULE.ManagedContour(
+        next(spec for spec in MODULE.contour_specs() if spec.key == "telegram_bot"),
+        MODULE.queue.Queue(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="owned contour process identity unavailable",
+    ):
+        item.start()
+
+    assert process.signals == [MODULE._CTRL_BREAK_EVENT]
+    assert item.expected_running is False
+    assert item.stopping is True
 
 
 def test_owned_contour_stop_fails_closed_without_force_termination(
