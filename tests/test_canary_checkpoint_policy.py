@@ -9,6 +9,7 @@ from src.research_lab.canary_checkpoint_policy import (
     CANONICAL_CANARY_CHECKPOINTS,
     CANONICAL_MONITORING_LANES,
     FINAL_QUIESCENT_CHECKPOINT,
+    CanonicalCanaryRuntimeWatchdog,
     CanaryFastSampleWatchdog,
     CanaryMonitorHardFailure,
     CanaryMonitoringCoordinator,
@@ -19,6 +20,7 @@ from src.research_lab.canary_checkpoint_policy import (
     due_active_checkpoints,
     require_healthy_watchdog,
 )
+from src.research_lab.windows_listener_probe import WindowsListenerProbeError
 
 
 def test_active_checkpoint_never_invokes_full_integrity_probe() -> None:
@@ -330,3 +332,160 @@ def test_monitor_failure_callback_is_idempotent_across_lanes() -> None:
     service.stop(timeout=0.5)
 
     assert len(failures) == 1
+
+
+def _complete_runtime_sample() -> dict[str, object]:
+    return {
+        "ready": True,
+        "hard_fail_reasons": [],
+        "owner": {
+            "green": True,
+            "distinct_process_authorities": 1,
+            "process_bound_to_rcc": True,
+            "owner_hash": "owner-a",
+            "fence": 40,
+        },
+        "process_lease_supervisor": {
+            "ready": True,
+            "state": "running",
+            "fresh_generation": True,
+            "paper_only": True,
+            "execution_allowed": False,
+            "identity_matches": True,
+            "fence_matches": True,
+        },
+    }
+
+
+def test_external_listener_probe_error_does_not_fabricate_supervisor_failure() -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+        max_probe_gap_seconds=90.0,
+    )
+    first = monitor.sample(_complete_runtime_sample, now=100.0)
+
+    def transient_probe() -> dict[str, object]:
+        raise WindowsListenerProbeError("synthetic_listener_probe_failure")
+
+    transient = monitor.sample(transient_probe, now=130.0)
+    recovered = monitor.sample(_complete_runtime_sample, now=160.0)
+
+    assert first.state == "healthy"
+    assert transient.state == "degraded"
+    assert transient.error_type == "WindowsListenerProbeError"
+    assert transient.payload == {}
+    assert transient.watchdog.failure_reason is None
+    assert recovered.state == "healthy"
+    assert recovered.watchdog.failure_reason is None
+
+
+def test_external_probe_loss_fails_only_after_monotonic_freshness_deadline() -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+        max_probe_gap_seconds=90.0,
+    )
+    monitor.sample(_complete_runtime_sample, now=100.0)
+
+    def unavailable() -> dict[str, object]:
+        raise OSError("synthetic")
+
+    before_deadline = monitor.sample(unavailable, now=190.0)
+    exhausted = monitor.sample(unavailable, now=190.001)
+
+    assert before_deadline.state == "degraded"
+    assert before_deadline.watchdog.failure_reason is None
+    assert exhausted.state == "failed"
+    assert (
+        exhausted.watchdog.failure_reason
+        == "monitor_fast_sample_freshness_lost"
+    )
+
+
+def test_external_explicit_safety_violation_fails_immediately() -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+    )
+
+    def hard_failure() -> dict[str, object]:
+        raise CanaryMonitorHardFailure("foreign_ollama_listener")
+
+    result = monitor.sample(hard_failure, now=100.1)
+
+    assert result.state == "failed"
+    assert result.watchdog.failure_reason == "foreign_ollama_listener"
+
+
+def test_external_complete_sample_missing_supervisor_fails_immediately() -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+    )
+    payload = _complete_runtime_sample()
+    payload.pop("process_lease_supervisor")
+
+    result = monitor.sample(lambda: payload, now=100.1)
+
+    assert result.state == "failed"
+    assert (
+        result.watchdog.failure_reason
+        == "process_lease_supervisor_not_ready"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("owner_hash", "owner-b", "canonical_owner_identity_changed"),
+        ("fence", 41, "canonical_owner_fence_changed"),
+        (
+            "distinct_process_authorities",
+            2,
+            "canonical_owner_cardinality_changed",
+        ),
+        ("process_bound_to_rcc", False, "canonical_owner_left_rcc_tree"),
+    ],
+)
+def test_external_complete_sample_preserves_owner_and_fence_fail_closed(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+    )
+    payload = _complete_runtime_sample()
+    owner = payload["owner"]
+    assert isinstance(owner, dict)
+    owner[field] = value
+
+    result = monitor.sample(lambda: payload, now=100.1)
+
+    assert result.state == "failed"
+    assert result.watchdog.failure_reason == reason
+
+
+def test_external_corrupt_complete_sample_fails_closed_without_probe_crash() -> None:
+    monitor = CanonicalCanaryRuntimeWatchdog(
+        started_at=100.0,
+        baseline_owner_hash="owner-a",
+        baseline_fence=40,
+    )
+    payload = _complete_runtime_sample()
+    owner = payload["owner"]
+    assert isinstance(owner, dict)
+    owner["fence"] = "not-an-integer"
+
+    result = monitor.sample(lambda: payload, now=100.1)
+
+    assert result.state == "failed"
+    assert result.error_type == "RuntimeSampleValidationError"
+    assert result.watchdog.failure_reason == "runtime_sample_invalid"

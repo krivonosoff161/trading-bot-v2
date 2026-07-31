@@ -99,7 +99,13 @@ a sanitized aggregate if a result needs discussion.
   change, supervisor failure/staleness, foreign Ollama listener, or
   required-contour exit is an immediate hard failure and invokes the same
   dependency-ordered RCC stop. A blocked deep probe cannot refresh the fast
-  lane or suppress its deadline.
+  lane or suppress its deadline. A bounded external evidence adapter treats
+  one ordinary listener/process probe exception as `degraded`, without
+  inventing missing owner or supervisor fields; repeated probe loss fails when
+  the monotonic freshness deadline expires. An explicit safety violation in a
+  complete sample remains an immediate hard failure. After a successful
+  hard-fail contour stop, RCC closes its own UI/instance through the existing
+  application close event so final quiescence includes the supervisor process.
 - The setup-outcome memory refresh streams its paper JSONL input and reads
   unique candidates in bounded chunks. Reject characterization loads and
   releases one run-artifact index at a time instead of retaining the complete

@@ -174,6 +174,152 @@ class CanaryMonitoringCoordinator:
         require_healthy_watchdog(self.watchdogs[lane].assess(now=now))
 
 
+class CanonicalCanaryRuntimeWatchdog:
+    """Validate complete steady-state samples without inventing failed fields.
+
+    Operational evidence adapters sample more slowly than the RCC's internal
+    five-second safety lane.  A bounded listener/process inventory can fail
+    transiently on Windows, so an ordinary probe exception is evidence that
+    the sample is unavailable, not evidence that the lease supervisor is
+    missing.  Explicit safety violations and invalid *complete* samples still
+    fail immediately.
+    """
+
+    lane = "external_runtime"
+
+    def __init__(
+        self,
+        *,
+        started_at: float,
+        baseline_owner_hash: str,
+        baseline_fence: int,
+        max_probe_gap_seconds: float = 90.0,
+    ) -> None:
+        if not baseline_owner_hash:
+            raise ValueError("baseline owner hash is required")
+        if baseline_fence <= 0:
+            raise ValueError("baseline fence must be positive")
+        self.baseline_owner_hash = str(baseline_owner_hash)
+        self.baseline_fence = int(baseline_fence)
+        self.watchdog = CanaryFastSampleWatchdog(
+            started_at=started_at,
+            max_fast_sample_gap_seconds=max_probe_gap_seconds,
+        )
+
+    def sample(
+        self,
+        probe: Callable[[], Mapping[str, object]],
+        *,
+        now: float,
+    ) -> CanaryLaneSample:
+        try:
+            payload = dict(probe())
+        except CanaryMonitorHardFailure as exc:
+            return self._hard_failure(
+                str(exc) or "runtime_probe_hard_failure",
+                type(exc).__name__,
+                now=now,
+            )
+        except Exception as exc:  # safe type only; never persist exception values
+            assessment = self.watchdog.assess(now=now)
+            return CanaryLaneSample(
+                lane=self.lane,
+                state=(
+                    "failed"
+                    if assessment.failure_reason is not None
+                    else "degraded"
+                ),
+                payload=MappingProxyType({}),
+                error_type=type(exc).__name__,
+                watchdog=assessment,
+            )
+        try:
+            self._validate_complete_sample(payload)
+        except CanaryMonitorHardFailure as exc:
+            return self._hard_failure(
+                str(exc) or "runtime_sample_hard_failure",
+                type(exc).__name__,
+                now=now,
+            )
+        except (TypeError, ValueError):
+            return self._hard_failure(
+                "runtime_sample_invalid",
+                "RuntimeSampleValidationError",
+                now=now,
+            )
+        assessment = self.watchdog.record_fast_sample(now=now)
+        return CanaryLaneSample(
+            lane=self.lane,
+            state="failed" if assessment.failure_reason is not None else "healthy",
+            payload=MappingProxyType(payload),
+            error_type=None,
+            watchdog=assessment,
+        )
+
+    def _hard_failure(
+        self,
+        reason: str,
+        error_type: str,
+        *,
+        now: float,
+    ) -> CanaryLaneSample:
+        assessment = self.watchdog.fail(str(reason)[:160], now=now)
+        return CanaryLaneSample(
+            lane=self.lane,
+            state="failed",
+            payload=MappingProxyType({}),
+            error_type=str(error_type)[:120],
+            watchdog=assessment,
+        )
+
+    def _validate_complete_sample(self, payload: Mapping[str, object]) -> None:
+        reasons = payload.get("hard_fail_reasons")
+        if isinstance(reasons, (list, tuple)) and reasons:
+            raise CanaryMonitorHardFailure(
+                "runtime:" + str(reasons[0])[:140]
+            )
+        if payload.get("ready") is not True:
+            raise CanaryMonitorHardFailure("canonical_runtime_not_ready")
+
+        owner = payload.get("owner")
+        if not isinstance(owner, Mapping):
+            raise CanaryMonitorHardFailure("canonical_owner_unavailable")
+        if owner.get("green") is not True:
+            raise CanaryMonitorHardFailure("canonical_owner_not_ready")
+        if int(owner.get("distinct_process_authorities") or 0) != 1:
+            raise CanaryMonitorHardFailure("canonical_owner_cardinality_changed")
+        if owner.get("process_bound_to_rcc") is not True:
+            raise CanaryMonitorHardFailure("canonical_owner_left_rcc_tree")
+        if str(owner.get("owner_hash") or "") != self.baseline_owner_hash:
+            raise CanaryMonitorHardFailure("canonical_owner_identity_changed")
+        if int(owner.get("fence") or 0) != self.baseline_fence:
+            raise CanaryMonitorHardFailure("canonical_owner_fence_changed")
+
+        supervisor = payload.get("process_lease_supervisor")
+        if not isinstance(supervisor, Mapping) or supervisor.get("ready") is not True:
+            raise CanaryMonitorHardFailure("process_lease_supervisor_not_ready")
+        if supervisor.get("state") != "running":
+            raise CanaryMonitorHardFailure("process_lease_supervisor_not_running")
+        if supervisor.get("fresh_generation") is not True:
+            raise CanaryMonitorHardFailure(
+                "process_lease_supervisor_generation_changed"
+            )
+        if supervisor.get("paper_only") is not True:
+            raise CanaryMonitorHardFailure(
+                "process_lease_supervisor_paper_only_drift"
+            )
+        if supervisor.get("execution_allowed") is not False:
+            raise CanaryMonitorHardFailure(
+                "process_lease_supervisor_execution_authority_drift"
+            )
+        if supervisor.get("identity_matches") is not True:
+            raise CanaryMonitorHardFailure(
+                "process_lease_supervisor_identity_changed"
+            )
+        if supervisor.get("fence_matches") is not True:
+            raise CanaryMonitorHardFailure("process_lease_supervisor_fence_changed")
+
+
 LaneSampleCallback = Callable[[CanaryLaneSample], None]
 LaneFailureCallback = Callable[[str, CanaryWatchdogAssessment], None]
 
