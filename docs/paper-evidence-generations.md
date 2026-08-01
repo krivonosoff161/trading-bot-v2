@@ -1,6 +1,13 @@
 # Paper Evidence Generations
 
-Status: **ACTIVE CODE CONTRACT; RUNTIME ROLLOUT DEFERRED**. Updated 2026-07-18.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: immutable paper-evidence authority and deferred private rollout
+- Evidence: [paper evidence tests](../tests/test_paper_evidence_store_v2.py)
+- Residual risks: public capability does not establish private migration or adoption.
+- Next gate: separate migration, parity, rollback, and owner authority.
 
 This document defines the public v2 paper-evidence boundary. The implementation
 is paper/research only. It cannot place orders, enable execution, read a private

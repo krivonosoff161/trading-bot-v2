@@ -1,6 +1,14 @@
 # Farm Runbook
 
-Status: **ACTIVE**. Updated 2026-07-18.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: supported paper-only preflight, start, monitor, and graceful stop
+- Evidence: [RCC tests](../tests/test_research_control_center.py) and
+  [entrypoint catalog](entrypoints.md)
+- Residual risks: all runtime commands still require fresh external owner authority.
+- Next gate: keep stop/finalizer behavior aligned with production code.
 
 This is the supported operator path for paper/research work. It does not
 authorize live trading, private account access, or publishing local output.

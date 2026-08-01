@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import shutil
+# Fixed, non-shell Git inventory commands only.
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+GIT = shutil.which("git")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 BATCH_REFERENCE = re.compile(r"`([^`]+\.bat)`")
 
 
 def tracked_markdown_files() -> list[Path]:
     result = subprocess.run(
-        ["git", "ls-files", "*.md"],
+        [GIT or "git", "ls-files", "*.md"],  # nosec B603
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -24,13 +27,22 @@ def tracked_markdown_files() -> list[Path]:
 
 def tracked_paths() -> set[Path]:
     result = subprocess.run(
-        ["git", "ls-files"],
+        [GIT or "git", "ls-files"],  # nosec B603
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
-    return {(ROOT / line).resolve() for line in result.stdout.splitlines() if line}
+    paths = {(ROOT / line).resolve() for line in result.stdout.splitlines() if line}
+    untracked = subprocess.run(
+        [GIT or "git", "ls-files", "--others", "--exclude-standard"],  # nosec B603
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paths.update((ROOT / line).resolve() for line in untracked.stdout.splitlines() if line)
+    return paths
 
 
 def local_destination(source: Path, raw_destination: str) -> Path | None:
@@ -63,14 +75,17 @@ def resolve_entrypoint(name: str) -> Path | None:
 
 
 def check_entrypoint_catalog() -> list[str]:
-    catalog = ROOT / "docs" / "entrypoints.md"
-    text = catalog.read_text(encoding="utf-8")
+    catalogs = (
+        ROOT / "docs" / "entrypoints.md",
+        ROOT / "docs" / "entrypoint-inventory.md",
+    )
+    text = "\n".join(path.read_text(encoding="utf-8") for path in catalogs)
     documented: set[Path] = set()
     failures: list[str] = []
     for name in sorted(set(BATCH_REFERENCE.findall(text))):
         entrypoint = resolve_entrypoint(name)
         if entrypoint is None:
-            failures.append(f"missing entrypoint referenced by catalog: {name}")
+            failures.append(f"missing entrypoint referenced by catalogs: {name}")
         else:
             documented.add(entrypoint.resolve())
 
@@ -80,7 +95,7 @@ def check_entrypoint_catalog() -> list[str]:
         for path in ROOT.glob(pattern)
     }
     for path in sorted(actual - documented):
-        failures.append(f"entrypoint missing from catalog: {path.relative_to(ROOT)}")
+        failures.append(f"entrypoint missing from catalogs: {path.relative_to(ROOT)}")
     return failures
 
 

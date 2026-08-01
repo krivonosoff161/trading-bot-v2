@@ -1,6 +1,13 @@
 # Public Artifact Policy
 
-Status: **ACTIVE**. Updated 2026-07-10.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: public/private artifact and publication boundary
+- Evidence: [tracked-artifact guard](../scripts/ci/check_tracked_artifacts.py)
+- Residual risks: scanners cannot prove absence of every sensitive value.
+- Next gate: retain human diff review alongside automated guards.
 
 Before staging a file, classify it by content rather than its extension.
 

@@ -1,0 +1,276 @@
+schema: TradingPortfolioRoadmap.v1
+version: "2026.08.01"
+status: current
+verified_date: "2026-08-01"
+documentation_owner: trading-bot-v2
+portfolio_integrator: krivonosoff161
+verified_against_kind: implementation_baseline
+public_projection: sanitized_manifest_only
+verified_against:
+  trading-bot-v2: c20322f887977c5e3c3ec2c242ca560617d056fa
+  honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
+authority_values:
+  - none
+  - advisory
+  - paper_only
+  - separately_owner_gated
+status_values:
+  - implemented
+  - implemented_bounded
+  - experimental
+  - planned
+  - blocked
+  - historical
+  - superseded
+  - unable_to_prove
+current_documents:
+  - path: README.md
+    scope: public entry point and non-claims
+    evidence: tests/test_supply_chain_policy.py
+    residual_risk: operational readiness is not established by documentation
+    next_gate: keep links and claims aligned with the machine roadmap
+  - path: CURRENT_STATE.md
+    scope: implemented public capabilities and unresolved gates
+    evidence: docs/trading-portfolio-roadmap.yaml
+    residual_risk: private runtime health is deliberately excluded
+    next_gate: update only after code and tests change the public capability state
+  - path: ARCHITECTURE.md
+    scope: component ownership, flows, and authority boundaries
+    evidence: tests/test_project_brain.py
+    residual_risk: dynamic runtime topology still requires operational evidence
+    next_gate: keep component ownership synchronized with code and the roadmap
+  - path: ROADMAP.md
+    scope: completed, current, next, and later evidence gates
+    evidence: docs/trading-portfolio-roadmap.yaml
+    residual_risk: dates and issue state can become stale
+    next_gate: reconcile against GitHub and current main before each promotion
+  - path: docs/README.md
+    scope: documentation authority and reading order
+    evidence: scripts/ci/check_public_docs.py
+    residual_risk: reference documents can still age between audits
+    next_gate: pass the documentation contract on every pull request
+  - path: docs/entrypoints.md
+    scope: supported operator entrypoints and explicit effects
+    evidence: tests/test_research_control_center.py
+    residual_risk: operator environment readiness is outside public Git
+    next_gate: require a separate operational preflight before any launch
+  - path: docs/trading-portfolio-roadmap.md
+    scope: human-readable projection of this machine contract
+    evidence: scripts/ci/check_trading_portfolio_docs.py
+    residual_risk: cross-repository behavior can drift after either main changes
+    next_gate: refresh both repository projections together
+  - path: docs/document-catalog.md
+    scope: current, reference, and historical document classification
+    evidence: scripts/ci/check_trading_portfolio_docs.py
+    residual_risk: new documents require explicit classification
+    next_gate: reject unclassified current documents in CI
+  - path: docs/farm_loop_lifecycle.md
+    scope: canonical calculation-farm lifecycle and fencing invariants
+    evidence: tests/test_farm_lifecycle_core.py
+    residual_risk: operational continuity still requires runtime evidence
+    next_gate: preserve lifecycle invariants during the long canary
+  - path: docs/farm_notification_layer.md
+    scope: visibility, preview, delivery, and acknowledgement boundaries
+    evidence: tests/test_paper_telegram_sender.py
+    residual_risk: external acknowledgement can remain ambiguous
+    next_gate: observe delivery continuity without treating it as execution
+  - path: docs/farm_ownership_map.md
+    scope: canonical owner, nested resource, and legacy-loop separation
+    evidence: tests/test_owner_authority_cardinality.py
+    residual_risk: private process identity is outside public documentation
+    next_gate: verify one process authority during operational preflight
+  - path: docs/farm_runbook.md
+    scope: supported paper-only operational procedure
+    evidence: tests/test_research_control_center.py
+    residual_risk: commands require a fresh external owner-authority manifest
+    next_gate: keep launch, stop, and hard-fail procedures aligned with RCC code
+  - path: docs/paper-evidence-generations.md
+    scope: immutable paper evidence authority and deferred private rollout
+    evidence: tests/test_paper_evidence_store_v2.py
+    residual_risk: canonical private rollout is not established by public code
+    next_gate: separate migration and operator authority before adoption
+  - path: docs/project-map.md
+    scope: concise ownership and repository-boundary projection
+    evidence: tests/test_project_brain.py
+    residual_risk: dynamic dispatch can remain unresolved in the generated graph
+    next_gate: rebuild the project graph when production symbols change
+  - path: docs/project-brain.md
+    scope: advisory graph, routing, bounded memory, and hook authority boundaries
+    evidence: tests/test_project_brain.py
+    residual_risk: static resolution and retrieved memory can be stale
+    next_gate: continue shadow evaluation before authoritative-memory promotion
+  - path: docs/public-artifact-policy.md
+    scope: public/private artifact and publication boundary
+    evidence: scripts/ci/check_tracked_artifacts.py
+    residual_risk: pattern scanners cannot prove absence of every sensitive value
+    next_gate: retain human diff review alongside automated guards
+modules:
+  - module_id: research_ingestion
+    owner_repository: trading-bot-v2
+    purpose: normalize bounded public market and news inputs for research
+    status: implemented_bounded
+    dependencies: []
+    implemented_evidence:
+      - src/research_lab/market_data_provider.py
+      - tests/test_research_lab_market_data_provider.py
+      - src/scout/trigger_enrichment.py
+    missing_evidence: continuous completeness and availability across public providers
+    next_gate: prove lineage and degraded-mode behavior over a bounded paper canary
+    authority: none
+    public_private_boundary: public adapters are code; collected data and runtime state remain private
+  - module_id: strategy_lab
+    owner_repository: trading-bot-v2
+    purpose: schedule bounded experiments, sweeps, classification, and follow-up research
+    status: implemented_bounded
+    dependencies: [research_ingestion, experiment_registry]
+    implemented_evidence:
+      - scripts/strategy_lab/farm_loop.py
+      - src/research_lab/farm_coordinator.py
+      - tests/test_farm_loop_integration.py
+    missing_evidence: a completed long-duration operational reliability window
+    next_gate: complete the separately authorized paper-only canary without a hard fail
+    authority: paper_only
+    public_private_boundary: code and synthetic tests are public; tasks, artifacts, and results are private
+  - module_id: experiment_registry
+    owner_repository: trading-bot-v2
+    purpose: bind experiment, candidate, lineage, and bounded status records
+    status: implemented
+    dependencies: []
+    implemented_evidence:
+      - src/research_lab/experiment.py
+      - src/research_lab/candidate_registry.py
+      - tests/test_research_lab_candidate_registry.py
+    missing_evidence: none for the public deterministic contract
+    next_gate: preserve schema and lineage compatibility as new families are added
+    authority: none
+    public_private_boundary: schemas are public; registry rows and rankings remain private
+  - module_id: deterministic_simulation_backtest
+    owner_repository: trading-bot-v2
+    purpose: calculate reproducible research outcomes under declared scenario limits
+    status: implemented_bounded
+    dependencies: [research_ingestion, experiment_registry]
+    implemented_evidence:
+      - src/research_lab/simulator_contract.py
+      - src/research_lab/reference_simulator.py
+      - tests/test_simulator_contract_v2.py
+    missing_evidence: complete fidelity for every live-market execution dimension
+    next_gate: extend only with explicit fixtures, truth tiers, and parity tests
+    authority: none
+    public_private_boundary: deterministic contracts and synthetic fixtures are public; real datasets are private
+  - module_id: honest_backtest_validation
+    owner_repository: honest-backtest
+    purpose: independently try to falsify candidates with deterministic validation methods
+    status: implemented_bounded
+    dependencies: [deterministic_simulation_backtest]
+    implemented_evidence:
+      - honest-backtest:src/backtest_sanity
+      - src/research_lab/honest_backtest_bridge.py
+      - tests/test_honest_backtest_bridge.py
+    missing_evidence: time-series-aware inference for every dependence structure and untouched future evidence
+    next_gate: maintain a versioned public bridge and treat pass as not-rejected only
+    authority: none
+    public_private_boundary: methods and bridge schemas are public; candidates and parameters are private
+  - module_id: candidate_lifecycle
+    owner_repository: trading-bot-v2
+    purpose: move fenced candidates through validation, readiness, and terminal research states
+    status: implemented_bounded
+    dependencies: [strategy_lab, honest_backtest_validation]
+    implemented_evidence:
+      - src/research_lab/setup_lifecycle.py
+      - src/research_lab/validation_generation.py
+      - tests/test_setup_lifecycle.py
+    missing_evidence: long-duration proof across interruption and recovery scenarios
+    next_gate: preserve generation, fence, and idempotency invariants during canary observation
+    authority: paper_only
+    public_private_boundary: state machines are public; lifecycle rows and candidate identity are private
+  - module_id: paper_observation
+    owner_repository: trading-bot-v2
+    purpose: observe validated candidates and record paper-only outcomes without orders
+    status: implemented_bounded
+    dependencies: [candidate_lifecycle, research_ingestion]
+    implemented_evidence:
+      - src/research_lab/paper_runtime.py
+      - src/research_lab/paper_signals/cycle.py
+      - tests/test_paper_runtime.py
+    missing_evidence: a completed acceptance window demonstrating stable data continuity
+    next_gate: complete paper observation and audit outcome continuity without execution
+    authority: paper_only
+    public_private_boundary: lifecycle code is public; observations, outcomes, and accounting are private
+  - module_id: research_control_center
+    owner_repository: trading-bot-v2
+    purpose: supervise the bounded paper-only runtime contours under one canonical identity
+    status: implemented_bounded
+    dependencies: [research_ingestion, strategy_lab, paper_observation, delivery]
+    implemented_evidence:
+      - scripts/research_control_center.py
+      - src/research_lab/rcc_runtime_safety.py
+      - tests/test_research_control_center.py
+    missing_evidence: a green 48-hour canary after the latest reliability repairs
+    next_gate: separate owner-authorized operational launch and continuous evidence review
+    authority: separately_owner_gated
+    public_private_boundary: supervisor code is public; process identities, ports, heartbeats, and runtime evidence are private
+  - module_id: llm_advisory
+    owner_repository: trading-bot-v2
+    purpose: produce bounded proposals and reviews that deterministic code may reject
+    status: implemented_bounded
+    dependencies: [experiment_registry, evidence_storage]
+    implemented_evidence:
+      - src/research_lab/llm_provider.py
+      - src/research_lab/llm_invocation_ledger.py
+      - tests/test_canonical_llm_traceability.py
+    missing_evidence: quality calibration against immutable held-out evidence
+    next_gate: evaluate advisory usefulness only after operational evidence contracts are stable
+    authority: advisory
+    public_private_boundary: schemas and routers are public; prompts, responses, provider identity, and ledgers are private
+  - module_id: evidence_storage
+    owner_repository: trading-bot-v2
+    purpose: provide content-bound evidence, storage policy, and synthetic migration capabilities
+    status: implemented_bounded
+    dependencies: []
+    implemented_evidence:
+      - src/research_lab/storage_capability.py
+      - src/research_lab/storage_segment_store.py
+      - tests/test_private_storage_foundation.py
+    missing_evidence: reviewed adoption by canonical private producers and readers
+    next_gate: separate inventory, parity, cutover, abort, and rollback authority
+    authority: separately_owner_gated
+    public_private_boundary: capability code and synthetic fixtures are public; storage roots and payloads are private
+  - module_id: delivery
+    owner_repository: trading-bot-v2
+    purpose: render and optionally deliver deduplicated paper-only cards after lifecycle decisions
+    status: implemented_bounded
+    dependencies: [paper_observation]
+    implemented_evidence:
+      - src/research_lab/paper_telegram_sender.py
+      - src/research_lab/paper_telegram_preview.py
+      - tests/test_paper_telegram_sender.py
+    missing_evidence: continuous delivery availability and externally unambiguous acknowledgements
+    next_gate: observe delivery and ACK state during a bounded paper canary
+    authority: separately_owner_gated
+    public_private_boundary: delivery contracts are public; recipients, tokens, messages, and ACK records are private
+  - module_id: execution_boundary
+    owner_repository: trading-bot-v2
+    purpose: keep research, validation, models, and delivery unable to authorize orders
+    status: implemented
+    dependencies: [research_control_center, llm_advisory, delivery]
+    implemented_evidence:
+      - src/research_lab/runtime_policy.py
+      - tests/test_research_lab_runtime_policy.py
+      - AGENTS.md
+    missing_evidence: live execution is intentionally outside the supported portfolio
+    next_gate: any future execution design requires a separate owner decision and repository boundary review
+    authority: separately_owner_gated
+    public_private_boundary: denial contracts are public; secrets, accounts, and private endpoints are excluded
+  - module_id: release_operational_gates
+    owner_repository: trading-bot-v2
+    purpose: require tests, public-artifact hygiene, owner authority, and operational preflight
+    status: implemented_bounded
+    dependencies: [execution_boundary, evidence_storage]
+    implemented_evidence:
+      - .github/workflows/ci.yml
+      - scripts/ci/check_supply_chain_policy.py
+      - scripts/ci/check_tracked_artifacts.py
+    missing_evidence: CI cannot prove a private runtime is healthy or authorize a launch
+    next_gate: keep release review and runtime authority as separate decisions
+    authority: separately_owner_gated
+    public_private_boundary: CI and policy are public; operational evidence and owner manifests remain private

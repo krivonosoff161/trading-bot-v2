@@ -104,6 +104,7 @@ docs/*.md
 !docs/document-catalog.md
 !docs/public-artifact-policy.md
 !docs/entrypoints.md
+!docs/entrypoint-inventory.md
 !docs/project-map.md
 !docs/project-brain.md
 !docs/project-brain-baseline.md
@@ -113,6 +114,7 @@ docs/*.md
 !docs/paper-evidence-generations.md
 !docs/storage_boundaries.md
 !docs/REMOTE_DATA_MANIFEST.md
+!docs/trading-portfolio-roadmap.md
 !docs/farm_loop_lifecycle.md
 !docs/farm_runbook.md
 !docs/farm_ownership_map.md

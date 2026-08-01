@@ -1,93 +1,71 @@
 # Current State
 
-Status: **ACTIVE**. Updated 2026-07-18.
+Status: **CURRENT**
 
-This page states what the public repository supports. It is deliberately not a
-runtime dashboard: process IDs, current balances, private journals, signal
-rows, provider state, and local findings belong outside public Git.
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: implemented public capabilities, bounded limitations, and next gates
+- Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
+  production tests linked for each module
+- Residual risks: private runtime health, data completeness, and service
+  availability are deliberately excluded.
+- Next gate: complete a separately owner-authorized long paper-only canary
+  before claiming continuous operational reliability.
 
-## Supported Today
+This page describes the public repository, not a live runtime. It does not
+publish process identities, private database rows, observations, outcomes,
+model conversations, recipients, credentials, or workstation-specific state.
 
-- A calculation farm schedules bounded paper/research tasks over public market
-  data, then classifies and exports eligible candidates.
-- The `honest-backtest` bridge supplies independent validation evidence and
-  stamps verdicts back into the local lifecycle.
-- The paper runtime records observation and outcomes without exchange order
-  authority.
-- A separate preview/delivery edge can render paper cards only when explicitly
-  configured; it is not a farm decision-maker.
-- Scanner/news intake can provide upstream context. It is not the canonical
-  source of trade authority.
-- The adaptive research-center contracts are implemented as paper-only,
-  versioned candidate flows. They create inspectable next-test requests; they
-  do not silently tune a model or promote a strategy.
-- The adaptive loop dispatches accepted typed requests to the existing farm,
-  validator, and deterministic paper replay owners. Completed results return to
-  the System Analyst and can create at most two bounded follow-up generations.
-- Alibaba is the fail-closed default cloud route. Yandex is not an automatic
-  fallback.
-- New validation requests fail closed unless they carry an untouched evaluation
-  epoch distinct from the farm selection data. Existing selection-only evidence
-  therefore needs fresh data before it can become paper-forward ready.
-- The public registry can build a deterministic synthetic history-boundary proof
-  for all 27 strategy families. This proves formula/generator/history alignment
-  for public synthetic OHLCV fixtures and declared side-data boundaries only.
-  Every history-formula term is exercised at its parameter-policy maximum, with
-  parameter N-1/N/N+1 validation and candle required-1/required/required+1
-  checks. Maxima are derived from registry defaults plus
-  `configs/strategy_lab/param_schemas.yaml`, not test-local constants. Signal and
-  no-signal outcomes are bound to each family's exact registered generator and
-  registry description instead of a shared generic predicate reason. This does not
-  prove private historical completeness, profitability, or paper readiness.
-- Public runtime code now models process, brain-task and compute-job authority
-  with renewable leases and monotonic fences. Cross-database sweep dispatch is
-  content-bound and replayable; worker results remain provisional until fenced
-  import and queue completion commit together.
-- An off-by-default private archive foundation can bind an exact dedicated
-  root, create immutable hashed objects/manifests, rebuild its metadata index,
-  and perform bounded public-safe retrieval. Synthetic tests prove
-  migration/copy parity and reversible append-only read selection. No
-  production launcher, private path, producer, or canonical database uses it.
+## Implemented Public Contracts
+
+| Capability | Status | Evidence ceiling |
+|---|---|---|
+| Public research ingestion | implemented bounded | Adapters and degraded modes are tested; continuous provider availability is not proved. |
+| Strategy Lab and experiment registry | implemented bounded | Bounded scheduling, lineage, and candidate records exist; a long reliability window remains open. |
+| Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
+| Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
+| Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested; private runtime continuity remains an operational question. |
+| Paper observation | implemented bounded | Outcomes and accounting are paper-only and cannot create exchange actions. |
+| Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist; the latest 48-hour canary has not yet completed green. |
+| LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |
+| Evidence/storage capability | implemented bounded | Content-bound and synthetic migration capabilities exist; canonical private adoption is not implied. |
+| Paper-card delivery | implemented bounded | Preview, deduplication, and guarded delivery exist; recipients, content, and acknowledgement state stay private. |
+| Execution denial boundary | implemented | No supported entrypoint grants live order authority. |
+
+The detailed ownership, evidence paths, missing proof, and next gate for every
+row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md).
+
+## Open Evidence Gates
+
+1. **Documentation truth:** merge the reviewed, machine-validated projections
+   for `trading-bot-v2` and `honest-backtest` only after both exact-head CI runs
+   are green.
+2. **Operational reliability:** complete the bounded paper-only canary without
+   a real hard fail. A clean unit-test suite is not runtime proof.
+3. **Data and lifecycle continuity:** demonstrate that missing public data,
+   interrupted work, delivery ambiguity, and recovery preserve lineage and do
+   not manufacture outcomes or duplicates.
+4. **Quality calibration:** only after reliability, measure signal, validator,
+   role, and LLM advisory quality against immutable held-out evidence.
+
+GitHub issue #224 tracks end-to-end paper-only observation. Issue #155 remains
+a later calibration task; it is not evidence that policies are ready to change.
 
 ## Explicitly Not Supported
 
-- Live trading, real-money orders, or exchange-account actions.
-- A profitability claim, a calibrated signal service, or investment advice.
-- LLM authority to change parameters, validation verdicts, paper readiness, or
-  execution permissions.
-- Publishing private data, candidate rankings, raw strategy calculations,
-  provider prompts/responses, logs, or credentials.
+- Live trading, real-money orders, private account actions, or private exchange
+  endpoints.
+- Profitability, signal-service, investment-advice, or live-readiness claims.
+- LLM authority over prices, parameters, validation verdicts, lifecycle state,
+  process control, credentials, or execution.
+- Publication of private datasets, strategy parameters, candidate rankings,
+  runtime logs, prompts/responses, recipients, or operational evidence.
 
-## Known Operational Limits
+## Verification Boundary
 
-| Limit | Current behavior |
-|---|---|
-| Market data | The system can only reason over available public/local data. Missing OI or microstructure remains an explicit gate, not a guessed value. |
-| Validation | A passing historical result is evidence only; paper outcomes are still needed. |
-| LLM providers | Alibaba is the default advisory route. Provider failures retry only within a bounded budget; deterministic code remains authoritative. |
-| Local GPU | Numeric kernels may use the supported GPU backend. Local Ollama remains CPU-pinned on this 3 GiB GPU to avoid VRAM contention; CuPy warns when `CUDA_PATH` is not discoverable. |
-| Telegram | Delivery is opt-in and deduplicated; it must never be mistaken for execution. |
-| Legacy surfaces | Old engine, `start_all.bat`, and execution-adjacent scripts are isolated references, not supported farm paths. |
-| Ownership rollout | Additive v2 schemas are public and tested, but applying them to private runtime databases requires a separate quiesced, backed-up operator rollout. |
-| Archive rollout | Exact-root archive capability and synthetic cutover proofs are public, but no private root is activated and no producer/reader is migrated. Real adoption requires separate inventory, backup/restore, quiescence, parity, abort, and rollback authority. |
-
-## How To Verify A Local Run
-
-Use the read-only status command first:
-
-```powershell
-bat\strategy_lab_status.bat
-```
-
-Then follow [Farm Runbook](docs/farm_runbook.md). Do not copy private output
-into an issue, PR, or public document; produce a sanitized aggregate instead.
-
-## Next Public Work
-
-1. Observe the merged adaptive loop through the supported paper-only surface.
-2. Inspect learning status and sanitized operational aggregates without
-   publishing private runtime data.
-3. Accumulate bounded paper evidence and run the private acceptance window for issue #172
-   before using any environment candidate as research input.
+Use [docs/entrypoints.md](docs/entrypoints.md) only as a command contract. A
+runtime start still requires a fresh external owner-authority manifest and the
+[Farm Runbook](docs/farm_runbook.md) preflight. Public documentation never
+grants process authority.
 
 The development sequence is maintained in [ROADMAP.md](ROADMAP.md).

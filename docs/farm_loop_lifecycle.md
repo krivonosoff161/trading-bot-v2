@@ -1,6 +1,13 @@
 # Farm Loop - Continuous Research Lifecycle
 
-Status: **ACTIVE**. Last updated: 2026-07-24.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: canonical calculation-farm lifecycle, claims, fencing, and idempotency
+- Evidence: [lifecycle tests](../tests/test_farm_lifecycle_core.py)
+- Residual risks: long-duration interruption behavior needs operational evidence.
+- Next gate: preserve these invariants through the paper-only canary.
 
 This is the canonical calculation-farm lifecycle. It supersedes the older
 `universe_farm_loop` and `scanner_farm_loop` operator paths. The core is

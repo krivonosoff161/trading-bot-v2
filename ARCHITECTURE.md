@@ -1,6 +1,16 @@
 # Architecture
 
-Status: **ACTIVE**. Updated 2026-07-18.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: active component ownership, information flow, and authority boundaries
+- Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml),
+  [project map](docs/project-map.md), and linked production tests
+- Residual risks: dynamic runtime topology and private data completeness need
+  separate operational evidence.
+- Next gate: keep this projection synchronized with the machine roadmap and
+  supported entrypoint catalog.
 
 This file is the current architectural source of truth. Dated reports and
 older plans under `docs/` are historical evidence unless the

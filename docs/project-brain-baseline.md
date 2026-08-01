@@ -1,6 +1,8 @@
 # Project Brain Baseline And Gap Analysis
 
-Status: **ACTIVE BASELINE**. Source commit:
+Status: **HISTORICAL / REFERENCE BASELINE**. Superseded for current status by
+[Project Brain](project-brain.md) and the
+[Trading Portfolio Roadmap](trading-portfolio-roadmap.md). Source commit:
 `7c3fa06c0dfeb146ea4216c3c1762920096ca04a` (tree
 `1fedb902a07f98208ba1403181aa88130e0a6af9`). The inventory reads tracked public
 Git blobs and public contracts only. It does not inspect private database rows,
