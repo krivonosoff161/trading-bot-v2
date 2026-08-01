@@ -8,7 +8,7 @@ verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: c20322f887977c5e3c3ec2c242ca560617d056fa
+  trading-bot-v2: 7831592cda5e204db2de37da4404f0ee7aac64cd
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -225,17 +225,20 @@ modules:
     public_private_boundary: schemas and routers are public; prompts, responses, provider identity, and ledgers are private
   - module_id: evidence_storage
     owner_repository: trading-bot-v2
-    purpose: provide content-bound evidence, storage policy, and synthetic migration capabilities
+    purpose: provide content-bound evidence, storage policy, synthetic migration, and plan-bound backup retention capabilities
     status: implemented_bounded
     dependencies: []
     implemented_evidence:
       - src/research_lab/storage_capability.py
       - src/research_lab/storage_segment_store.py
+      - src/research_lab/backup_retention.py
+      - scripts/strategy_lab/manage_backup_retention.py
       - tests/test_private_storage_foundation.py
-    missing_evidence: reviewed adoption by canonical private producers and readers
-    next_gate: separate inventory, parity, cutover, abort, and rollback authority
+      - tests/test_backup_retention.py
+    missing_evidence: post-merge exact-root cleanup proof and canonical producer/reader adoption
+    next_gate: apply only an owner-authorized exact retention plan, prove second-apply idempotence, and enforce the storage budget before canary
     authority: separately_owner_gated
-    public_private_boundary: capability code and synthetic fixtures are public; storage roots and payloads are private
+    public_private_boundary: capability code, schemas, and synthetic fixtures are public; storage roots, plans, manifests, and payloads are private
   - module_id: delivery
     owner_repository: trading-bot-v2
     purpose: render and optionally deliver deduplicated paper-only cards after lifecycle decisions

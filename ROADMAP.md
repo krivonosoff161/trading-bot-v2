@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -24,7 +24,10 @@ dependency, not by a route to live trading.
   materialization, and coordinated fail-closed RCC shutdown have public test
   contracts.
 - Public storage foundations include bounded synthetic migration, integrity,
-  reachability, and rollback proofs. They do not activate private storage.
+  reachability, rollback, and plan-digest-bound backup retention proofs. The
+  latter preserves one full unpacked generation and restore-verifies
+  content-addressed older evidence before exact-file reclamation. None of
+  these contracts activates a private root without owner authority.
 - Repository quality gates cover the full non-live test suite, Python quality,
   supply-chain policy, tracked-artifact policy, documentation links, and public
   entrypoint inventory.
@@ -32,28 +35,32 @@ dependency, not by a route to live trading.
 Completed means the bounded public contract exists. It does not mean the
 private runtime, data, or trading hypothesis is proven.
 
-## Current: Documentation Truth And Portfolio Alignment
+## Current: Storage Containment Before Reliability
 
-1. Make one machine-readable portfolio map authoritative for public capability
-   and repository ownership.
-2. Align the human projections in `trading-bot-v2` and `honest-backtest`.
-3. Mark old plans historical or superseded instead of leaving competing
-   current roadmaps.
-4. Enforce links, status vocabulary, authority vocabulary, evidence presence,
-   verified SHA/date, and public/private hygiene in CI.
+1. Catalog and hash every quiescent operational backup generation.
+2. Bind the retained unpacked generation to separate integrity/restore evidence.
+3. Archive older baseline, incident, and canary evidence into deduplicated,
+   content-addressed objects before exact-file reclamation.
+4. Prove interruption recovery, archive restoration, plan-digest enforcement,
+   and zero-change second apply.
+5. Fail closed before canary when backup size or free space exceeds the
+   reviewed budget.
 
-Exit gate: two reviewable PRs, exact-head CI green, no private artifacts, and a
-separate owner decision for merge.
+Exit gate: exact-head CI and post-merge checks green, private cleanup matches
+one dry-run plan digest, archive verification is green, second apply changes
+zero files, and the backup/free-space status is within budget.
 
 ## Next: Continuous Paper-Only Reliability
 
-1. Start only the canonical RCC paper profile under a fresh operational
+1. Enforce the reviewed backup-size and free-space budget; cleanup must use a
+   hashed dry-run plan and a separately authorized exact apply.
+2. Start only the canonical RCC paper profile under a fresh operational
    authority and quiescent preflight.
-2. Establish T+0 only after mandatory readiness, one process authority,
+3. Establish T+0 only after mandatory readiness, one process authority,
    fencing, integrity, and execution-denial checks pass.
-3. Observe lifecycle, claims, data lineage, delivery, storage growth, and real
+4. Observe lifecycle, claims, data lineage, delivery, storage growth, and real
    progress for the full bounded window.
-4. Stop gracefully at duration or at a proven hard fail; do not repair or
+5. Stop gracefully at duration or at a proven hard fail; do not repair or
    restart during the canary.
 
 Exit gate: a green long-duration report with processes/owners/ports at zero

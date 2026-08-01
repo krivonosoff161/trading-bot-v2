@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
 - Scope: supported paper/research entrypoints, effects, and incompatible owners
 - Evidence: [public documentation guard](../scripts/ci/check_public_docs.py) and
   [Research Control Center tests](../tests/test_research_control_center.py)
@@ -16,6 +16,19 @@ This page lists only supported operator or canonical component entrypoints.
 Diagnostics, experiments, maintenance commands, and retained legacy launchers
 are classified separately in the [Entrypoint Inventory](entrypoint-inventory.md).
 No entrypoint grants live trading authority.
+
+## Backup Retention Lifecycle
+
+| Goal | Command | Effects and limits |
+|---|---|---|
+| Check storage budget | `python -m scripts.strategy_lab.manage_backup_retention status --backup-root <exact-root>` | Read-only size/free-space gate; exit code 2 blocks a canary when outside budget. |
+| Build cleanup plan | `python -m scripts.strategy_lab.manage_backup_retention plan --backup-root <exact-root> --archive-root <exact-root> --retain-generation <verified-name> --retain-evidence-sha256 <sha256> --output <plan>` | Hashes and classifies every quiescent backup file without deleting it; the retained generation is bound to separate integrity/restore evidence. |
+| Apply exact plan | `python -m scripts.strategy_lab.manage_backup_retention apply --plan <plan> --authority <typed-authority> --expected-plan-digest <sha256>` | Archives, restore-verifies, then removes only plan-bound source files. |
+| Verify archive | `python -m scripts.strategy_lab.manage_backup_retention verify --plan <plan>` | Independently decompresses and hashes all archived plan objects. |
+
+The same-volume archive is a reclamation/evidence surface, not a replacement
+for the retained full backup or an independent disaster-recovery copy. These
+commands never start RCC, discover private roots, or mutate canonical databases.
 
 ## Canonical Supervisor
 
