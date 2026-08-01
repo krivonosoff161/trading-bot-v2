@@ -23,6 +23,14 @@ def _write_generation(root: Path) -> dict[str, str]:
     return expected
 
 
+def _write_mixed_generation(root: Path) -> dict[str, str]:
+    expected = _write_generation(root)
+    farm = root / "state" / "STOP_FARM_FULL_CYCLE.txt"
+    farm.write_bytes(b"stop requested at Thu 07/31/2026 18:22:03.41 \r\n")
+    expected[farm.name] = hashlib.sha256(farm.read_bytes()).hexdigest()
+    return expected
+
+
 def test_dry_run_validates_without_clearing(tmp_path: Path) -> None:
     expected = _write_generation(tmp_path)
 
@@ -54,6 +62,78 @@ def test_apply_clears_exact_generation_and_repeat_changes_zero(
     assert repeated["eligible_count"] == repeated["cleared_count"] == 0
     assert repeated["remaining_count"] == 0
     assert repeated["idempotent"] is True
+
+
+def test_mixed_documented_generation_is_name_and_hash_bound(
+    tmp_path: Path,
+) -> None:
+    expected = _write_mixed_generation(tmp_path)
+
+    dry_run = clear_expected_rcc_stop_intents(
+        tmp_path, expected_sha256=expected
+    )
+    first = clear_expected_rcc_stop_intents(
+        tmp_path, expected_sha256=expected, apply=True
+    )
+    repeated = clear_expected_rcc_stop_intents(
+        tmp_path, expected_sha256=expected, apply=True
+    )
+
+    assert dry_run["eligible_count"] == 3
+    assert dry_run["cleared_count"] == 0
+    assert first["eligible_count"] == first["cleared_count"] == 3
+    assert first["remaining_count"] == 0
+    assert repeated["eligible_count"] == repeated["cleared_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["STOP_NEWS_SCANNER.txt", "STOP_PUBLIC_NEWS.txt"],
+)
+def test_documented_farm_payload_is_rejected_for_other_markers(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    expected = _write_generation(tmp_path)
+    target = tmp_path / "state" / name
+    target.write_bytes(b"stop requested at Thu 07/31/2026 18:22:03.41 \r\n")
+    expected[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+
+    with pytest.raises(
+        StopIntentClearError, match="stop_marker_provenance_mismatch"
+    ):
+        clear_expected_rcc_stop_intents(
+            tmp_path, expected_sha256=expected, apply=True
+        )
+
+    assert all((tmp_path / "state" / marker).exists() for marker in RCC_STOP_MARKERS)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"stop requested at synthetic authority\r\n",
+        b"stop requested at Thu 07/31/2026 18:22:03.41\r\nsecond line\r\n",
+    ],
+)
+def test_foreign_farm_payload_is_rejected_without_partial_clear(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    expected = _write_generation(tmp_path)
+    target = tmp_path / "state" / "STOP_FARM_FULL_CYCLE.txt"
+    target.write_bytes(payload)
+    expected[target.name] = hashlib.sha256(payload).hexdigest()
+
+    with pytest.raises(
+        StopIntentClearError, match="stop_marker_provenance_mismatch"
+    ) as raised:
+        clear_expected_rcc_stop_intents(
+            tmp_path, expected_sha256=expected, apply=True
+        )
+
+    assert "synthetic authority" not in str(raised.value)
+    assert all((tmp_path / "state" / marker).exists() for marker in RCC_STOP_MARKERS)
 
 
 def test_hash_mismatch_fails_before_any_marker_is_cleared(tmp_path: Path) -> None:

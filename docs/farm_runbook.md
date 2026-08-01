@@ -152,12 +152,17 @@ python -m scripts.strategy_lab.clear_rcc_stop_intents `
 ```
 
 Only after this dry check reports all three markers eligible may the exact
-command be repeated with `--apply`. The utility accepts only the canonical RCC
-payload shape and recorded hashes, validates every present marker before
-changing any marker, and never reads or mutates a database. Repeating the
-exact apply changes zero markers. A missing hash, changed marker, foreign
-payload, active process, owner, or port is a blocked operational preflight; do
-not substitute `del`, `Remove-Item`, or raw SQL.
+command be repeated with `--apply`. The utility accepts the canonical RCC
+payload shape for all three names. It also accepts the documented
+`strategy_lab_farm_full_cycle_stop.bat` payload only for
+`STOP_FARM_FULL_CYCLE.txt`, because that entrypoint can replace the farm marker
+during a coordinated external stop. Every accepted marker remains bound to its
+recorded hash; the BAT payload is never accepted for the scanner or public-news
+marker. The utility validates every present marker before changing any marker
+and never reads or mutates a database. Repeating the exact apply changes zero
+markers. A missing hash, changed marker, foreign payload, active process,
+owner, or port is a blocked operational preflight; do not substitute `del`,
+`Remove-Item`, or raw SQL.
 
 ## Schema Rollout And Rollback
 
