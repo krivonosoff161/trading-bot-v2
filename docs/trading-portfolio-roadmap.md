@@ -3,8 +3,8 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
-- Trading repository SHA: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
+- Trading repository SHA: `7831592cda5e204db2de37da4404f0ee7aac64cd`
 - Validator repository SHA: `0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6`
 - Scope: public-safe ownership, capability, evidence, and authority map
 - Evidence: [machine source](trading-portfolio-roadmap.yaml) and
@@ -52,7 +52,7 @@ execution -> outside the supported portfolio and separately owner-gated
 | Paper observation | `trading-bot-v2` | implemented bounded | paper only | Records observations/outcomes without orders. | Complete a stable acceptance window. |
 | Research Control Center | `trading-bot-v2` | implemented bounded | separately owner-gated | Supervises one canonical paper-only profile. | Green 48-hour canary. |
 | LLM advisory | `trading-bot-v2` | implemented bounded | advisory | Proposals are untrusted and schema-gated. | Held-out usefulness evaluation after reliability. |
-| Evidence/storage | `trading-bot-v2` | implemented bounded | separately owner-gated | Synthetic capability; private adoption is not implied. | Reviewed inventory, parity, cutover, and rollback. |
+| Evidence/storage | `trading-bot-v2` | implemented bounded | separately owner-gated | Synthetic migration plus plan-bound private backup retention; roots and payloads stay private. | Apply the reviewed retention plan, prove idempotent reclamation, then enforce its budget before canary. |
 | Delivery | `trading-bot-v2` | implemented bounded | separately owner-gated | Paper cards only; recipients and ACK state are private. | Observe delivery continuity in canary. |
 | Execution boundary | `trading-bot-v2` | implemented denial | separately owner-gated | No supported live order path. | Separate future architecture and owner decision. |
 | Release/operational gates | `trading-bot-v2` | implemented bounded | separately owner-gated | CI proves public code, not private readiness. | Keep merge and runtime gates separate. |

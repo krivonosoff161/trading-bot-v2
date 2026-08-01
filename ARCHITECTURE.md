@@ -3,7 +3,7 @@
 Status: **CURRENT**
 
 - Verified: 2026-08-01
-- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
 - Scope: active component ownership, information flow, and authority boundaries
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml),
   [project map](docs/project-map.md), and linked production tests
@@ -193,3 +193,14 @@ integration, or runtime activation. Private artifacts remain metadata-only to
 the bounded reader. All checked migration/cutover/rollback paths use synthetic
 temporary fixtures; adopting a real root or changing a producer/reader remains
 a separate operational gate.
+
+Quiescent RCC backup generations have a separate
+`backup_retention_lifecycle.v1` operator boundary. It hashes a complete exact
+root into one immutable plan, retains one explicitly named complete generation
+whose separate integrity/restore evidence is hash-bound, deduplicates older
+files into content-addressed gzip objects, and verifies their
+restored bytes and SHA-256, persists per-file manifests, and only then removes
+the plan-bound source. Root identity, fresh typed authority, free-space budget,
+plan digest, no-follow traversal, crash resume, and idempotent re-apply are
+deterministic gates. The same-volume archive is evidence retention and physical
+reclamation, not independent disaster recovery and not runtime authority.

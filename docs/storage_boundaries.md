@@ -74,12 +74,34 @@ import, merge, dual-write, rotate, or migrate current logs. Any private adoption
 requires an exact producer/reader inventory, backup, quiescence or atomic cutover,
 parity/dedupe rules, abort metrics, rollback, and a new owner decision.
 
-## Private archive foundation
+## Private storage foundations
 
 The repository also contains an off-by-default `private_archive_storage.v1`
 foundation. It is a capability and verification library, not a launcher,
 configured path, producer migration, retention daemon, or authorization source.
 It performs no environment discovery and exposes no default private root.
+
+### Operational backup retention
+
+Quiescent operational backup generations use a separate bounded lifecycle:
+`backup_retention_lifecycle.v1`. The supported CLI is
+`python -m scripts.strategy_lab.manage_backup_retention`. It accepts only exact
+backup/archive roots. `status` and `plan` are read-only; `apply` requires a
+typed, fresh owner authority and the exact SHA-256 plan digest. One separately
+integrity/restore-verified `raw`/`logical`/`restore` generation is named
+explicitly and bound to its evidence SHA-256 before it remains unpacked. Every
+older file is hashed, copied to a content-addressed gzip object,
+restore-verified, and recorded by an immutable per-file manifest before the
+exact source file is removed. Identical content shares one object, interrupted
+apply is resumable, and a second apply changes zero source files.
+
+This same-volume archive reclaims space and preserves old baseline/incident
+evidence, but it is not an independent disaster-recovery backup. A canary
+preflight must fail closed when `status` exceeds the reviewed backup-size or
+free-space budget. The command never discovers roots from environment state,
+touches canonical databases, or grants runtime authority.
+
+### Private archive storage
 
 Activation requires an exact existing empty archive directory, an exact source
 root, and a typed, current owner-authority input bound to this project, action,
