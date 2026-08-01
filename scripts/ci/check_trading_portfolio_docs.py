@@ -52,6 +52,12 @@ REQUIRED_DOCUMENT_FIELDS = {
     "residual_risk",
     "next_gate",
 }
+REQUIRED_GOVERNANCE = {
+    "documentation_owner": "trading-bot-v2",
+    "portfolio_integrator": "krivonosoff161",
+    "verified_against_kind": "implementation_baseline",
+    "public_projection": "sanitized_manifest_only",
+}
 
 
 def tracked_markdown(root: Path) -> list[Path]:
@@ -99,6 +105,9 @@ def validate_contract(contract: Mapping[str, Any], root: Path = ROOT) -> list[st
     allowed_authorities = set(contract.get("authority_values") or [])
     if contract.get("schema") != "TradingPortfolioRoadmap.v1":
         failures.append("invalid roadmap schema")
+    for field, expected in REQUIRED_GOVERNANCE.items():
+        if contract.get(field) != expected:
+            failures.append(f"invalid documentation governance field: {field}")
     verified = contract.get("verified_against")
     if not isinstance(verified, Mapping) or any(
         not SHA256.fullmatch(str(verified.get(repo, "")))

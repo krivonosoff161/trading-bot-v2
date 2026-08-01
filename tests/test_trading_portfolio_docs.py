@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from scripts.ci.check_trading_portfolio_docs import (
+    REQUIRED_GOVERNANCE,
     ROOT,
     load_contract,
     validate_contract,
@@ -12,6 +13,16 @@ from scripts.ci.check_trading_portfolio_docs import (
 
 def test_current_trading_portfolio_contract_is_valid() -> None:
     assert validate_contract(load_contract()) == []
+
+
+def test_documentation_governance_fields_fail_closed() -> None:
+    for field in REQUIRED_GOVERNANCE:
+        contract = load_contract()
+        contract[field] = "synthetic-mismatch"
+
+        failures = validate_contract(contract)
+
+        assert f"invalid documentation governance field: {field}" in failures
 
 
 def test_duplicate_module_owner_and_invalid_authority_fail_closed() -> None:
