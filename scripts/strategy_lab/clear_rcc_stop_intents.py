@@ -1,10 +1,11 @@
-"""Hash-bound offline acknowledgement for canonical RCC stop markers.
+"""Hash-bound offline acknowledgement for canonical contour stop markers.
 
-The Research Control Center writes these markers during a graceful stop.  A
-later operator may clear only the exact, already-forensically-recorded marker
-generation after independently proving that processes, owners, and owned ports
-are quiescent.  This utility deliberately does not inspect credentials, task
-rows, or mutate a database.
+The Research Control Center writes these markers during a graceful stop.  The
+documented farm stop entrypoint may subsequently replace only the farm marker
+with its own single-line payload.  A later operator may clear only the exact,
+already-forensically-recorded marker generation after independently proving
+that processes, owners, and owned ports are quiescent.  This utility
+deliberately does not inspect credentials, task rows, or mutate a database.
 """
 
 from __future__ import annotations
@@ -27,11 +28,25 @@ RCC_STOP_MARKERS = (
 _RCC_STOP_PAYLOAD = re.compile(
     rb"control center stop requested at [0-9]+(?:\.[0-9]+)?\r?\n"
 )
+_DOCUMENTED_FARM_STOP_PAYLOAD = re.compile(
+    rb"stop requested at (?=[^\r\n]{4,160}\r?\n)"
+    rb"(?=[^\r\n]*[0-9])[^\r\n\x00-\x1f\x7f]+[ ]+"
+    rb"[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:[.,][0-9]{1,2})?[ ]?\r?\n"
+)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class StopIntentClearError(RuntimeError):
     """The requested offline acknowledgement is not provenance-safe."""
+
+
+def _payload_matches_marker(name: str, payload: bytes) -> bool:
+    if _RCC_STOP_PAYLOAD.fullmatch(payload):
+        return True
+    return (
+        name == "STOP_FARM_FULL_CYCLE.txt"
+        and _DOCUMENTED_FARM_STOP_PAYLOAD.fullmatch(payload) is not None
+    )
 
 
 def _parse_expected(values: Sequence[str]) -> dict[str, str]:
@@ -88,7 +103,7 @@ def clear_expected_rcc_stop_intents(
         except OSError as exc:
             raise StopIntentClearError("stop_marker_unreadable") from exc
         digest = hashlib.sha256(payload).hexdigest()
-        if not _RCC_STOP_PAYLOAD.fullmatch(payload):
+        if not _payload_matches_marker(name, payload):
             raise StopIntentClearError("stop_marker_provenance_mismatch")
         if digest != expected[name]:
             raise StopIntentClearError("stop_marker_hash_mismatch")
