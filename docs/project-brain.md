@@ -146,7 +146,9 @@ activation gate has exact, reviewed denominators for the supported surface:
   all other batch surfaces classified by `docs/entrypoint-inventory.md`;
 - the RCC supervisor and five canonical paper-only profile contours;
 - five active databases with declared producer and consumer edges;
-- every current document registered by `docs/trading-portfolio-roadmap.yaml`;
+- the reviewed current-document subset in `configs/project_brain/architecture.json`;
+  the complete current-document registry is enforced separately by
+  `docs/trading-portfolio-roadmap.yaml`;
 - every meaningful orphan and semantic duplicate candidate intersecting that
   supported scope.
 

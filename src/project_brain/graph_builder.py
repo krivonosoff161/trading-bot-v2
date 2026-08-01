@@ -1041,7 +1041,7 @@ def _metrics(
         "active_document_catalog_coverage": _coverage_metric(
             len(catalogued_active),
             len(active_documents),
-            "tracked Markdown declaring Status ACTIVE and explicitly named by docs/document-catalog.md",
+            "tracked Markdown declaring Status ACTIVE or CURRENT and explicitly named by docs/document-catalog.md",
         ),
         "semantic_catalog_coverage": _coverage_metric(
             len(semantic_catalogued),
@@ -1097,7 +1097,10 @@ def _document_catalog_inventory(
     active_documents = {
         path
         for path in documents
-        if re.search(r"(?im)^Status:\s*\*\*ACTIVE\*\*", snapshot.text(path))
+        if re.search(
+            r"(?im)^Status:\s*\*\*(?:ACTIVE|CURRENT)\*\*",
+            snapshot.text(path),
+        )
     }
     catalog_text = (
         snapshot.text("docs/document-catalog.md")
@@ -1346,7 +1349,7 @@ def _active_scope_metrics(
         "active_document_coverage": _coverage_metric(
             len(documented),
             len(documents),
-            "reviewed active documents that exist, declare ACTIVE, and resolve to graph nodes",
+            "reviewed documents that exist, declare CURRENT or ACTIVE, and resolve to graph nodes",
         ),
         "meaningful_orphan_disposition_coverage": _coverage_metric(
             len(resolved_orphans),

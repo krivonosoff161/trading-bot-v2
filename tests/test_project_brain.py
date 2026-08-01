@@ -813,7 +813,7 @@ def test_metrics_publish_honest_denominators_and_fallbacks(
         "tests/test_demo.py": b"from src.demo import calculate_signal\n",
         "docs/entrypoints.md": b"# Entrypoints\n",
         "docs/document-catalog.md": b"# Catalog\n[Known](known.md)\n",
-        "docs/known.md": b"# Known\n\nStatus: **ACTIVE**.\n",
+        "docs/known.md": b"# Known\n\nStatus: **CURRENT**.\n",
         "docs/unlisted.md": b"# Unlisted\n\nStatus: **ACTIVE**.\n",
     }
     snapshot = GitSnapshot(
