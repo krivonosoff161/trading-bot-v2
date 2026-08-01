@@ -8,6 +8,7 @@
 requirements-ci.txt text eol=lf
 requirements-ci.in text eol=lf
 requirements-ci.sha256 text eol=lf
+docs/trading-portfolio-roadmap.yaml text eol=lf
 
 # Остальное — нормализация по умолчанию
 * text=auto
