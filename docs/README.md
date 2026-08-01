@@ -1,7 +1,15 @@
 # Documentation Guide
 
-Status: **ACTIVE**. This is the navigation entry point for documentation in
-`trading-bot-v2`.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: documentation authority, classification, and reading order
+- Evidence: [documentation contract validator](../scripts/ci/check_trading_portfolio_docs.py)
+- Residual risks: reference documents can age between audits.
+- Next gate: every current document must remain registered in the machine roadmap.
+
+This is the navigation entry point for documentation in `trading-bot-v2`.
 
 ## How To Read This Repository
 
@@ -12,13 +20,15 @@ or a live-trading product.
 Read in this order:
 
 1. [README](../README.md) for scope, supported public setup, and claim limits.
-2. [Architecture](../ARCHITECTURE.md) for system boundaries and ownership.
-3. [Current State](../CURRENT_STATE.md) for the active engineering state.
-4. [Roadmap](../ROADMAP.md) for current work and deferred initiatives.
-5. [Farm Ownership Map](farm_ownership_map.md) before starting any runtime.
-6. [Entrypoint Catalog](entrypoints.md) before choosing a Windows launcher.
-7. [Farm Runbook](farm_runbook.md) for supported paper/research operations.
-8. [Project Map](project-map.md) for module and repository ownership.
+2. [Trading Portfolio Roadmap](trading-portfolio-roadmap.md) for the canonical
+   machine-backed cross-repository map.
+3. [Architecture](../ARCHITECTURE.md) for system boundaries and ownership.
+4. [Current State](../CURRENT_STATE.md) for the active engineering state.
+5. [Roadmap](../ROADMAP.md) for current work and deferred initiatives.
+6. [Farm Ownership Map](farm_ownership_map.md) before starting any runtime.
+7. [Entrypoint Catalog](entrypoints.md) before choosing a Windows launcher.
+8. [Farm Runbook](farm_runbook.md) for supported paper/research operations.
+9. [Project Map](project-map.md) for module and repository ownership.
 
 ## Documentation Authority
 
@@ -65,7 +75,9 @@ safety guards remain mandatory.
 - [Document catalog](document-catalog.md): current, reference, archive, and
   local-only classification.
 - [Entrypoint catalog](entrypoints.md): owner, status, and side effects for all
-  Windows batch commands.
+  supported operator and canonical component commands.
+- [Entrypoint inventory](entrypoint-inventory.md): diagnostic, maintenance,
+  legacy, superseded, and broken batch surfaces; none are supported launchers.
 - [Farm ownership map](farm_ownership_map.md): active, diagnostic, and legacy
   launch-path ownership.
 - [Farm loop lifecycle](farm_loop_lifecycle.md): current calculation lifecycle.

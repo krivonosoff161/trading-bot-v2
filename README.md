@@ -1,5 +1,16 @@
 # Trading Bot V2
 
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: public entry point, supported paper/research boundary, and non-claims
+- Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
+  [public documentation guard](scripts/ci/check_public_docs.py)
+- Residual risks: documentation and tests do not prove private runtime health,
+  signal quality, profitability, or live readiness.
+- Next gate: keep the machine roadmap and both repository projections aligned.
+
 `trading-bot-v2` is a **paper/research workbench** for studying market-data
 pipelines, bounded strategy sweeps, independent validation, paper observation,
 and auditable outcomes around public OKX market data.
@@ -26,13 +37,15 @@ reference and is not part of the supported paper path.
 
 ## Start Here
 
-1. Read [Docs Home](docs/README.md) for document authority and navigation.
-2. Read [Architecture](ARCHITECTURE.md) for the active boundaries.
-3. Read [Entrypoint Catalog](docs/entrypoints.md) before launching a Windows
+1. Read [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) for the
+   cross-repository ownership and evidence map.
+2. Read [Docs Home](docs/README.md) for document authority and navigation.
+3. Read [Architecture](ARCHITECTURE.md) for the active boundaries.
+4. Read [Entrypoint Catalog](docs/entrypoints.md) before launching a Windows
    command.
-4. Read [Storage Boundaries](docs/storage_boundaries.md) before collecting or
+5. Read [Storage Boundaries](docs/storage_boundaries.md) before collecting or
    exporting any artifact.
-5. Read [Adaptive Research Center Contract](docs/adaptive-research-center-contract.md)
+6. Read [Adaptive Research Center Contract](docs/adaptive-research-center-contract.md)
    before changing farm, validator, Trader Supervisor, or System Analyst logic.
 
 ## Public-Safe Setup

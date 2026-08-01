@@ -1,15 +1,23 @@
 # Project Brain And Main-Chat Contract
 
-Status: **ACTIVATION CANDIDATE**. The graph and routing remain advisory. The
-tracked project-local hooks become active only after Codex reviews and trusts
-their exact definition hash; authoritative-memory promotion remains a later
-decision.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: advisory project graph, bounded memory retrieval, routing, and hook boundaries
+- Evidence: `tests/test_project_brain.py` and a bounded `SessionStart` resume manifest
+- Residual risks: static call resolution and retrieved memory can be stale; neither grants authority.
+- Next gate: continue shadow evaluation before any separate authoritative-memory promotion.
+
+The graph and routing remain advisory. The tracked project-local hooks are
+installed and have emitted a bounded context-only resume manifest in the
+current client. Authoritative-memory promotion remains a separate decision.
 
 The graph, private-store implementation, router, hook runtime, and project skill
 exist in this repository. `.codex/hooks.json` is the real project-local Codex
-configuration. Codex skips it until the owner reviews and trusts its exact
-hash. `configs/project_brain/hooks.json` remains the human-readable event and
-authority catalog. Hooks never rewrite SESSION/TASK.
+configuration. `configs/project_brain/hooks.json` remains the human-readable
+event and authority catalog. Hooks never rewrite SESSION/TASK, and hook output
+never grants process, Git, delivery, database, secret, or trading authority.
 
 ## Canonical Layers
 
@@ -134,10 +142,11 @@ bound to their old content hashes.
 Whole-repository semantic coverage is intentionally not called complete. The
 activation gate has exact, reviewed denominators for the supported surface:
 
-- eight supported entrypoints from `docs/entrypoints.md`;
-- six canonical RCC contours;
+- every supported operator/component entrypoint in `docs/entrypoints.md`, with
+  all other batch surfaces classified by `docs/entrypoint-inventory.md`;
+- the RCC supervisor and five canonical paper-only profile contours;
 - five active databases with declared producer and consumer edges;
-- every Markdown document declaring `Status: **ACTIVE**`;
+- every current document registered by `docs/trading-portfolio-roadmap.yaml`;
 - every meaningful orphan and semantic duplicate candidate intersecting that
   supported scope.
 

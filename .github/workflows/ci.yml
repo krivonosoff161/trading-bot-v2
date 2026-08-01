@@ -52,7 +52,9 @@ jobs:
         run: python scripts/ci/check_tracked_artifacts.py
 
       - name: Check public documentation and entrypoint catalog
-        run: python scripts/ci/check_public_docs.py
+        run: |
+          python scripts/ci/check_public_docs.py
+          python scripts/ci/check_trading_portfolio_docs.py
 
       - name: Run non-live tests
         env:

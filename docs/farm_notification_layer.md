@@ -1,6 +1,13 @@
 # Farm Visibility And Notification Layer
 
-Status: **ACTIVE / GUARDED SURFACE**. Last updated: 2026-06-27.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: visibility, preview, paper delivery, ACK, and duplicate boundaries
+- Evidence: [paper delivery tests](../tests/test_paper_telegram_sender.py)
+- Residual risks: external delivery acknowledgement can remain ambiguous.
+- Next gate: observe continuity without treating delivery as execution evidence.
 
 The farm has visibility surfaces today, but Telegram is still not part of the
 calculation or execution path. This document separates three things that are easy to

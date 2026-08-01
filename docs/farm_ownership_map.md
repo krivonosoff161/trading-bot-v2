@@ -1,6 +1,13 @@
 # Farm Ownership Map
 
-Status: **ACTIVE**. Last updated: 2026-07-18.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: canonical process authority, nested resources, and legacy separation
+- Evidence: [owner cardinality tests](../tests/test_owner_authority_cardinality.py)
+- Residual risks: public docs cannot prove the identity of a private live process.
+- Next gate: verify one process authority during each operational preflight.
 
 Purpose: after `farm_loop` + `farm_tasks.sqlite` became the calculation farm's core,
 this map records which loops are active, diagnostic, or legacy. Nothing here gives the

@@ -1,6 +1,13 @@
 # Project Map
 
-Status: **ACTIVE**. Reviewed: 2026-07-23.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: concise module ownership and repository-boundary projection
+- Evidence: [Project Brain tests](../tests/test_project_brain.py)
+- Residual risks: dynamic dispatch and private runtime topology remain incomplete.
+- Next gate: rebuild the graph and this projection when production symbols move.
 
 The human ownership summary on this page is complemented by the reproducible,
 revision-bound [Project Brain graph](project-brain.md). The generated graph is

@@ -1,6 +1,13 @@
 # Document Catalog
 
-Status: **ACTIVE**. Updated 2026-07-18.
+Status: **CURRENT**
+
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: current, reference, historical, and local-only document classification
+- Evidence: [documentation contract validator](../scripts/ci/check_trading_portfolio_docs.py)
+- Residual risks: newly added documents need explicit classification.
+- Next gate: CI rejects an unregistered current document.
 
 This catalog prevents a dated report from silently becoming an operating
 instruction. When documents conflict, use the authority order in
@@ -14,10 +21,11 @@ instruction. When documents conflict, use the authority order in
 | Architecture and boundaries | [../ARCHITECTURE.md](../ARCHITECTURE.md) |
 | Current public support state | [../CURRENT_STATE.md](../CURRENT_STATE.md) |
 | Development sequence | [../ROADMAP.md](../ROADMAP.md) |
+| Machine-readable Trading Portfolio map | [trading-portfolio-roadmap.yaml](trading-portfolio-roadmap.yaml) |
+| Human Trading Portfolio projection | [trading-portfolio-roadmap.md](trading-portfolio-roadmap.md) |
 | Agent operating rules | [../CLAUDE.md](../CLAUDE.md) |
 | Module ownership | [project-map.md](project-map.md) |
 | Reproducible code/process/data/authority graph and dialogue-memory contract | [project-brain.md](project-brain.md) |
-| Project-brain baseline inventory and gap analysis | [project-brain-baseline.md](project-brain-baseline.md) |
 | Windows launch ownership | [entrypoints.md](entrypoints.md) |
 | Paper operator path | [farm_runbook.md](farm_runbook.md) |
 | Farm lifecycle | [farm_loop_lifecycle.md](farm_loop_lifecycle.md) |
@@ -37,6 +45,7 @@ These describe a stable limited surface but do not supersede current status:
 - `farm_ownership_map.md`
 - `paper_runtime_design.md`
 - `farm_notification_layer.md`
+- `entrypoint-inventory.md`
 - `scanner_ta_confirmation_contract.md`
 - `main_research_verdict_index.md`
 - `public_channel_news_flow.md`
@@ -46,6 +55,10 @@ These describe a stable limited surface but do not supersede current status:
 
 `deferred-adaptive-paper-architecture.md` preserves the earlier deferred
 decision. It is superseded by the active adaptive research-center contract.
+
+`project-brain-baseline.md` preserves the inventory and gap analysis used to
+design the project brain. It is superseded as current architecture by
+`project-brain.md` and the Trading Portfolio roadmap.
 
 ## Sanitized Legacy Evidence
 

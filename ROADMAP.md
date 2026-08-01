@@ -1,118 +1,95 @@
 # Roadmap
 
-Status: **ACTIVE**. Updated 2026-07-18.
+Status: **CURRENT**
 
-The project is a paper/research workbench. This roadmap is ordered by evidence
-and maintainability, not by a path to live trading.
+- Verified: 2026-08-01
+- Verified against: `c20322f887977c5e3c3ec2c242ca560617d056fa`
+- Scope: completed, current, next, and later evidence gates
+- Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
+  current GitHub issue state
+- Residual risks: issue priority and private operational state can change after
+  this verification point.
+- Next gate: refresh this sequence whenever a module status or owner changes.
 
-## Completed Foundation Gate
+The project is a paper/research workbench. This sequence is ordered by evidence
+dependency, not by a route to live trading.
 
-The shared environment repair now has one stable/product checkout plus one
-development worktree, compact replace-in-place continuity, classified
-archives/runtime data, bounded local-state write amplification, and a reviewed
-Git integration path. Runtime authority remains separate from documentation and
-Git state.
+## Completed
 
-After that gate, repair the research station in this dependency order:
+- Public market/news ingestion, bounded experiment records, deterministic
+  simulation contracts, independent validation bridge, fenced candidate
+  lifecycle, paper observation, advisory model boundaries, and guarded paper
+  delivery all have production code and non-live tests.
+- Process ownership, monotonic fencing, renewable task/job claims, idempotent
+  materialization, and coordinated fail-closed RCC shutdown have public test
+  contracts.
+- Public storage foundations include bounded synthetic migration, integrity,
+  reachability, and rollback proofs. They do not activate private storage.
+- Repository quality gates cover the full non-live test suite, Python quality,
+  supply-chain policy, tracked-artifact policy, documentation links, and public
+  entrypoint inventory.
 
-1. Candle truth, exact manifests and requirements owned by all 27 strategies.
-2. Physical separation of decision-time and post-outcome data.
-3. End-to-end source/news/data/code/experiment identity.
-4. Complete search-trial evidence and untouched independent validation.
-5. Honest GPU telemetry, reference simulation and unambiguous learning labels.
-6. One immutable AdaptiveTrial through farm, validator, paper and analyst.
-7. Prompt/tools/versioned-RAG/evals before any local-model weight training.
+Completed means the bounded public contract exists. It does not mean the
+private runtime, data, or trading hypothesis is proven.
 
-Implementation status (2026-07-14): all seven items above were reviewed in PR
-[#178](https://github.com/krivonosoff161/trading-bot-v2/pull/178), passed the
-non-live server checks, and were squash-merged into `main`. The private candle
-store was migrated non-destructively with the JSON sources retained, and the
-supported paper/research cycle was started under separate operator authority
-for observation. DSR/PBO are intentionally shadow-only until measured evidence
-justifies a separate promotion decision. LoRA/adapter training remains deferred.
+## Current: Documentation Truth And Portfolio Alignment
 
-## Current: Documentation And Public-Safety Rebuild
+1. Make one machine-readable portfolio map authoritative for public capability
+   and repository ownership.
+2. Align the human projections in `trading-bot-v2` and `honest-backtest`.
+3. Mark old plans historical or superseded instead of leaving competing
+   current roadmaps.
+4. Enforce links, status vocabulary, authority vocabulary, evidence presence,
+   verified SHA/date, and public/private hygiene in CI.
 
-1. Classify all documentation as active, reference, archive, or local-only.
-2. Make the public onboarding and command catalog match the supported paper
-   path.
-3. Remove raw private research artifacts from the public index while preserving
-   local copies outside Git.
-4. Audit links, commands, boundaries, and cross-repository contracts.
+Exit gate: two reviewable PRs, exact-head CI green, no private artifacts, and a
+separate owner decision for merge.
 
-Exit gate: a new contributor or search agent can identify the supported paper
-path, distinguish it from legacy code, and avoid private data without relying
-on a private handoff.
+## Next: Continuous Paper-Only Reliability
 
-## Current: Owner, Claim And Fencing Review
+1. Start only the canonical RCC paper profile under a fresh operational
+   authority and quiescent preflight.
+2. Establish T+0 only after mandatory readiness, one process authority,
+   fencing, integrity, and execution-denial checks pass.
+3. Observe lifecycle, claims, data lineage, delivery, storage growth, and real
+   progress for the full bounded window.
+4. Stop gracefully at duration or at a proven hard fail; do not repair or
+   restart during the canary.
 
-The public-code implementation adds exact process leases, fenced brain/compute
-claims, append-preserving attempts, content-bound materialization replay and
-provisional worker publication. Review and synthetic tests do not authorize a
-private runtime migration. The rollout gate remains quiescence, backup, legacy
-row disposition, v2-only writers and a separate operator decision.
+Exit gate: a green long-duration report with processes/owners/ports at zero
+after stop and canonical DB integrity confirmed. This is operational evidence,
+not a profitability result. GitHub issue #224 tracks this gate.
 
-## Current: Verified Adaptive Research Center
+## Then: Data, Role, And Signal Quality
 
-1. Complete typed farm search, validation provenance, Trader Supervisor replay,
-   and System Analyst feedback contracts under issue #172.
-2. Run independent correctness, architecture, security, and documentation
-   reviews and fix blocking findings.
-3. Merge only after public/private scans and required checks pass.
+- Measure missing-data and interruption behavior across ingestion, farm,
+  validation, paper outcome, analyst, and delivery boundaries.
+- Calibrate trader, validator, and analyst roles against immutable held-out
+  cases; record what each role knew before the proposed entry point.
+- Version what-if entry, exit, and risk variants instead of overwriting the
+  original decision history.
+- Evaluate LLM advisory usefulness only after deterministic evidence storage,
+  invocation traceability, and lifecycle continuity are reliable.
+- Revisit policy calibration tracked by issue #155 only with preregistered
+  evidence and an untouched evaluation set.
 
-Exit gate: all four roles exchange versioned, bounded artifacts without any LLM
-gaining calculation, verdict, state-transition, or execution authority.
+## Later And Separately Gated
 
-## Next: Paper Evidence Collection
+| Initiative | Missing proof | Return gate |
+|---|---|---|
+| Canonical private archive/storage adoption | Producer/reader inventory, quiescent parity, capacity, cutover, abort, and rollback evidence | Separate migration authority and reviewed operational package |
+| Broader strategy/search families | Reliable data and untouched comparison protocol | Predeclared trial identity and independent validation |
+| Model fine-tuning or adapter training | Stable prompt/tool/RAG baseline and enough immutable labeled evidence | Held-out evaluation shows a repeatable residual gap |
+| External simulator integration | Semantic parity, licensing, and isolation | Deterministic comparison against the local truth-tier contract |
+| Any execution product | Separate architecture, risk model, account boundary, and owner decision | Outside this roadmap until explicitly authorized |
 
-Before another long observation window, finish the private storage rollout as a
-separate operational package. The public repository now has an off-by-default
-exact-root archive capability, immutable catalog, bounded public-safe retrieval,
-and synthetic migration/cutover/rollback proof. It does not activate a private
-root or migrate a producer. The rollout exit gate is an exact inventory,
-independent-volume and capacity proof, DB/WAL/SHM-safe backup/restore where
-applicable, quiesced copy parity, reader/writer cutover evidence, abort metrics,
-and a non-destructive rollback under separate owner authority.
+Historical designs remain evidence only. The superseded adaptive-paper decision
+is retained in [docs/deferred-adaptive-paper-architecture.md](docs/deferred-adaptive-paper-architecture.md),
+while current capability and missing proof live in the machine roadmap.
 
-1. Run bounded paper-only cycles with the canonical launcher.
-2. Keep outcomes, lineage, and validation evidence in the local private root.
-3. Review only sanitized aggregates and deterministic acceptance reports.
-4. Change a family, threshold, or geometry profile only after the documented
-   evidence gate is met.
+## Permanent Non-Claims
 
-Exit gate: enough fresh, reproducible paper evidence exists to make a bounded
-research decision. This is not a profitability gate.
-
-The former deferred design is retained as history in
-[docs/deferred-adaptive-paper-architecture.md](docs/deferred-adaptive-paper-architecture.md);
-the active contract is [docs/adaptive-research-center-contract.md](docs/adaptive-research-center-contract.md).
-
-## Later Research Tracks
-
-- Scanner source-quality and context calibration.
-- Explicit data-gate handling for OI and microstructure.
-- Extend the 27-family synthetic history-boundary proof with separately authorized
-  private-history coverage manifests if that evidence campaign is approved. The
-  current public proof covers all registry history terms at authoritative
-  parameter maxima and the adjacent N-1/N/N+1 limits, with family-specific
-  generator/description identity for predicate outcomes; it remains synthetic only.
-- Independent validation improvements in `honest-backtest`.
-- Operator reports that summarize paper evidence without publishing raw data.
-
-## Deferred Decisions With Return Gates
-
-| Decision | Why deferred | Return condition |
-| --- | --- | --- |
-| Delete old worktrees, JSON candle files or duplicate-looking paths | Identity, ancestry, runtime ownership and reproducibility are not yet fully proved | Separate inventory and parity report passes; explicit deletion decision |
-| LoRA or adapter training | Zero accepted local-model advice has no proven root cause yet | Prompt/tools/RAG ablation leaves a stable measured residual failure |
-| GARCH, Kalman, OU or alternative search | Complex methods cannot be compared honestly on uncertain data/trial identity | Candle Truth, exact trial identity and untouched validation are complete |
-| Complex VRAM scheduler | GTX 1050 3 GB has no measured capacity benefit for concurrent LLM and numeric work | Hardware changes or profiling proves a real scheduling bottleneck |
-| External simulator or vectorbt integration | Independent semantics and licensing require separate review | Local reference simulator exists and a license/isolation decision is approved |
-| Automatic promotion or live execution | Paper/LLM agreement is not scientific or monetary authority | Remains out of scope unless a future explicit safety and product decision replaces this rule |
-
-## Out Of Scope Without A New Decision
-
-- Real-money execution or automatic orders.
-- Giving LLMs permission to control exchange, process, or credential surfaces.
-- Publishing private research, raw prompts/responses, paper journals, or
-  candidate rankings.
+- No current phase proves profitability or live readiness.
+- A model, validator, paper result, CI run, or canary cannot grant execution
+  authority.
+- Private research and operational evidence stay outside public Git.
