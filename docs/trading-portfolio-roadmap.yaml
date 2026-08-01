@@ -6,6 +6,7 @@ documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
+hash_canonicalization: utf8_lf
 verified_against:
   trading-bot-v2: c20322f887977c5e3c3ec2c242ca560617d056fa
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6

@@ -57,6 +57,7 @@ REQUIRED_GOVERNANCE = {
     "portfolio_integrator": "krivonosoff161",
     "verified_against_kind": "implementation_baseline",
     "public_projection": "sanitized_manifest_only",
+    "hash_canonicalization": "utf8_lf",
 }
 
 

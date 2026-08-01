@@ -9,6 +9,8 @@ Status: **CURRENT**
 - Scope: public-safe ownership, capability, evidence, and authority map
 - Evidence: [machine source](trading-portfolio-roadmap.yaml) and
   [documentation validator](../scripts/ci/check_trading_portfolio_docs.py)
+- Digest contract: SHA-256 over canonical UTF-8 text with LF line endings
+  (`hash_canonicalization: utf8_lf`), independent of checkout line endings.
 - Residual risks: documentation and tests do not prove private runtime health,
   signal quality, profitability, or readiness for live execution.
 - Next gate: keep the two repository projections aligned, then complete the
@@ -17,6 +19,8 @@ Status: **CURRENT**
 This is the canonical public map of the trading research direction. The YAML
 file is the machine source; this page is its human-readable projection. A
 module marked implemented is not automatically active in a private runtime.
+The canonicalization rule changes only text line endings before hashing; any
+semantic content change still produces a different digest.
 
 ## Evidence Flow
 
