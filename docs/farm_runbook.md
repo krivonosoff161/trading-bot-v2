@@ -129,9 +129,12 @@ a sanitized aggregate if a result needs discussion.
   hard-fail contour stop, RCC closes its own UI/instance through the existing
   application close event so final quiescence includes the supervisor process.
   RCC and external evidence adapters use the same listener inventory provider:
-  its exact PowerShell process tree is isolated in a kill-on-close Windows job,
-  output uses a temporary file instead of inherited pipes, and timeout cleanup
-  targets only that owned job. The minimal heartbeat exposes the current safe
+  an isolated Python child performs native Windows TCP enumeration through
+  `psutil`, and its exact process tree is contained in a kill-on-close Windows
+  job. Output uses a temporary file instead of inherited pipes, and timeout
+  cleanup targets only that owned job. The provider does not import project
+  code and remains fail-closed on timeout, invalid output, or unproven cleanup.
+  The minimal heartbeat exposes the current safe
   `runtime_probe.stage` (`spawn`, `inventory`, `cleanup`, `decode`, `complete`)
   so a freshness loss identifies the blocked stage without storing command
   output, process arguments, private paths, or listener payloads.

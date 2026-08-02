@@ -5,6 +5,7 @@ import ctypes.wintypes
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -14,17 +15,17 @@ from typing import Any, Protocol
 
 DEFAULT_LISTENER_PROBE_TIMEOUT_SECONDS = 8.0
 DEFAULT_LISTENER_CLEANUP_TIMEOUT_SECONDS = 1.0
-_WINDOWS_POWERSHELL = (
-    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+_NATIVE_LISTENER_SCRIPT = (
+    "import json,psutil;"
+    "rows=[];"
+    "connections=psutil.net_connections(kind='tcp');"
+    "rows=[{'LocalAddress':str(item.laddr.ip),"
+    "'LocalPort':int(item.laddr.port),'OwningProcess':int(item.pid)} "
+    "for item in connections if item.status==psutil.CONN_LISTEN "
+    "and item.pid is not None and int(item.pid)>0 and item.laddr];"
+    "print(json.dumps(rows,separators=(',',':')))"
 )
-_LISTENER_COMMAND = (
-    "Get-NetTCPConnection -State Listen -ErrorAction Stop | "
-    "Select-Object LocalAddress,LocalPort,OwningProcess | "
-    "ConvertTo-Json -Compress"
-)
-_CREATE_NEW_PROCESS_GROUP = int(
-    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-)
+_CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 _CREATE_NO_WINDOW = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
 _CREATE_SUSPENDED = int(getattr(subprocess, "CREATE_SUSPENDED", 0x00000004))
 _WINDLL_FACTORY: Any = getattr(ctypes, "WinDLL", None)
@@ -284,8 +285,10 @@ def collect_windows_listeners(
 
     Output goes to a temporary file rather than a pipe, preventing inherited
     pipe handles from extending ``communicate()`` past the deadline.  The exact
-    spawned provider is assigned to a kill-on-close Windows job; timeout cleanup
-    cannot target unrelated processes and includes any descendants it created.
+    spawned native provider is assigned to a kill-on-close Windows job; timeout
+    cleanup cannot target unrelated processes and includes any descendants it
+    created.  Isolated mode prevents project imports and environment-controlled
+    Python path changes from affecting the inventory child.
     """
 
     timeout = float(timeout_seconds)
@@ -293,12 +296,10 @@ def collect_windows_listeners(
     if timeout <= 0 or cleanup_timeout <= 0:
         raise ValueError("listener probe timeouts must be positive")
     arguments = (
-        _WINDOWS_POWERSHELL,
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        _LISTENER_COMMAND,
+        sys.executable,
+        "-I",
+        "-c",
+        _NATIVE_LISTENER_SCRIPT,
     )
     started_at = float(monotonic())
     _emit_stage(
@@ -316,9 +317,7 @@ def collect_windows_listeners(
                 stdout=output,
                 stderr=subprocess.DEVNULL,
                 creationflags=(
-                    _CREATE_NEW_PROCESS_GROUP
-                    | _CREATE_NO_WINDOW
-                    | _CREATE_SUSPENDED
+                    _CREATE_NEW_PROCESS_GROUP | _CREATE_NO_WINDOW | _CREATE_SUSPENDED
                 ),
                 close_fds=True,
             )
@@ -467,11 +466,7 @@ def collect_windows_listeners(
             raise WindowsListenerProbeError(
                 "listener_probe_invalid_row", stage="decode"
             ) from exc
-        if (
-            listener.pid <= 0
-            or not listener.host
-            or not 1 <= listener.port <= 65_535
-        ):
+        if listener.pid <= 0 or not listener.host or not 1 <= listener.port <= 65_535:
             raise WindowsListenerProbeError(
                 "listener_probe_invalid_row", stage="decode"
             )
