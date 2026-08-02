@@ -22,7 +22,9 @@ dependency, not by a route to live trading.
   delivery all have production code and non-live tests.
 - Process ownership, monotonic fencing, renewable task/job claims, idempotent
   materialization, and coordinated fail-closed RCC shutdown have public test
-  contracts.
+  contracts. The listener safety probe uses isolated native Windows TCP
+  inventory while retaining bounded Job Object cleanup and fail-closed
+  freshness enforcement.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies

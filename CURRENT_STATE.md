@@ -26,7 +26,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
 | Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested; private runtime continuity remains an operational question. |
 | Paper observation | implemented bounded | Outcomes and accounting are paper-only and cannot create exchange actions. |
-| Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist; the latest 48-hour canary has not yet completed green. |
+| Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist. Listener inventory uses an isolated, bounded native Windows provider; a fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |
 | Evidence/storage capability | implemented bounded | Content-bound archives, synthetic migration, and plan-digest-bound backup retention exist; applying them to private roots remains separately owner-gated. |
 | Paper-card delivery | implemented bounded | Preview, deduplication, and guarded delivery exist; recipients, content, and acknowledgement state stay private. |

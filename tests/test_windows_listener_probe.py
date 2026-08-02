@@ -4,6 +4,7 @@ import importlib
 import ctypes
 import ctypes.wintypes
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -106,7 +107,7 @@ def _collect(payload: str, **kwargs: Any) -> tuple[ListeningSocket, ...]:
     )
 
 
-def test_probe_is_bounded_and_uses_read_only_windows_listener_provider() -> None:
+def test_probe_is_bounded_and_uses_isolated_native_listener_provider() -> None:
     popen_factory, job_factory, observed = _factories(
         '{"LocalAddress":"127.0.0.1","LocalPort":11434,"OwningProcess":321}'
     )
@@ -118,16 +119,11 @@ def test_probe_is_bounded_and_uses_read_only_windows_listener_provider() -> None
     )
 
     assert result == (ListeningSocket(pid=321, host="127.0.0.1", port=11434),)
-    assert observed["arguments"][0].endswith(
-        "WindowsPowerShell\\v1.0\\powershell.exe"
-    )
-    assert observed["arguments"][1:5] == (
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-    )
-    assert "Get-NetTCPConnection -State Listen" in observed["arguments"][5]
+    assert observed["arguments"][0] == sys.executable
+    assert observed["arguments"][1:3] == ("-I", "-c")
+    assert "psutil.net_connections(kind='tcp')" in observed["arguments"][3]
+    assert "Get-NetTCPConnection" not in observed["arguments"][3]
+    assert "powershell" not in observed["arguments"][3].lower()
     assert observed["kwargs"]["stdin"] is subprocess.DEVNULL
     assert observed["kwargs"]["stderr"] is subprocess.DEVNULL
     assert observed["kwargs"]["close_fds"] is True
@@ -136,6 +132,37 @@ def test_probe_is_bounded_and_uses_read_only_windows_listener_provider() -> None
     assert "cwd" not in observed["kwargs"]
     assert observed["job"].resumed is True
     assert observed["job"].closed is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows listener inventory contract")
+def test_real_native_provider_finds_exact_ephemeral_listener() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = int(listener.getsockname()[1])
+
+        result = collect_windows_listeners()
+
+    assert ListeningSocket(pid=os.getpid(), host="127.0.0.1", port=port) in result
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows listener inventory contract")
+def test_native_provider_endurance_keeps_returning_real_listener() -> None:
+    samples = 20
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        expected = ListeningSocket(
+            pid=os.getpid(),
+            host="127.0.0.1",
+            port=int(listener.getsockname()[1]),
+        )
+        started_at = time.monotonic()
+        results = [collect_windows_listeners() for _ in range(samples)]
+        elapsed = time.monotonic() - started_at
+
+    assert all(expected in result for result in results)
+    assert elapsed < 15.0
 
 
 def test_multiple_rows_are_deduplicated_and_sorted() -> None:
@@ -162,9 +189,18 @@ def test_empty_listener_inventory_is_valid() -> None:
     [
         ("not-json", "listener_probe_invalid_json"),
         ('"wrong-shape"', "listener_probe_invalid_shape"),
-        ('{"LocalAddress":"127.0.0.1","LocalPort":0,"OwningProcess":1}', "listener_probe_invalid_row"),
-        ('{"LocalAddress":"","LocalPort":11434,"OwningProcess":1}', "listener_probe_invalid_row"),
-        ('{"LocalAddress":"127.0.0.1","LocalPort":11434}', "listener_probe_invalid_row"),
+        (
+            '{"LocalAddress":"127.0.0.1","LocalPort":0,"OwningProcess":1}',
+            "listener_probe_invalid_row",
+        ),
+        (
+            '{"LocalAddress":"","LocalPort":11434,"OwningProcess":1}',
+            "listener_probe_invalid_row",
+        ),
+        (
+            '{"LocalAddress":"127.0.0.1","LocalPort":11434}',
+            "listener_probe_invalid_row",
+        ),
     ],
 )
 def test_unprovable_listener_rows_fail_closed(payload: str, reason: str) -> None:
@@ -176,7 +212,9 @@ def test_provider_timeout_kills_only_the_owned_job_tree_and_returns_bounded() ->
     popen_factory, job_factory, observed = _factories("", blocks=True)
     stages: list[ListenerProbeStageEvent] = []
 
-    with pytest.raises(WindowsListenerProbeError, match="listener_probe_timeout") as caught:
+    with pytest.raises(
+        WindowsListenerProbeError, match="listener_probe_timeout"
+    ) as caught:
         collect_windows_listeners(
             timeout_seconds=0.25,
             cleanup_timeout_seconds=0.1,

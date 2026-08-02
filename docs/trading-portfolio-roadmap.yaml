@@ -205,7 +205,9 @@ modules:
     implemented_evidence:
       - scripts/research_control_center.py
       - src/research_lab/rcc_runtime_safety.py
+      - src/research_lab/windows_listener_probe.py
       - tests/test_research_control_center.py
+      - tests/test_windows_listener_probe.py
     missing_evidence: a green 48-hour canary after the latest reliability repairs
     next_gate: separate owner-authorized operational launch and continuous evidence review
     authority: separately_owner_gated
