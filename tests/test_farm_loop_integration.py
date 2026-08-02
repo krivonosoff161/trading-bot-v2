@@ -392,6 +392,153 @@ def test_validation_orchestrator_missing_uc_key_cannot_scan_unrelated_candidates
     tasks.close()
 
 
+def test_validation_orchestrator_empty_current_batch_skips_historical_artifact_scans(
+    monkeypatch, tmp_path
+):
+    """The exact canary failure path must be O(current batch), not O(history)."""
+    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key="export::stale-uc-key",
+        payload={"candidate_id": "source", "uc_key": "stale-uc-key"},
+        now=1.0,
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator._verdict_map",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("empty batch must not scan historical verdicts")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator._request_map",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("empty batch must not scan historical requests")
+        ),
+    )
+    milestones: list[tuple[str, int, int]] = []
+
+    out = run_due_validations(
+        tasks,
+        tmp_path,
+        apply=True,
+        limit=1,
+        now=2.0,
+        progress=lambda stage, completed, total: milestones.append(
+            (stage, completed, total)
+        ),
+        check_active=lambda: None,
+    )
+
+    assert out["export_tasks"] == 1
+    assert out["exported"] == 0
+    assert [stage for stage, _, _ in milestones] == [
+        "tasks_claimed",
+        "pending_generation_published",
+        "validation_entries_loaded",
+        "validation_entries_filtered",
+        "requests_exported",
+        "validations_completed",
+        "generation_published",
+        "task_deferred",
+    ]
+    manifest = load_current_generation(tmp_path)
+    assert manifest["producer_complete"] is True
+    assert manifest["active"] == {}
+    assert len(tasks.tasks_in_state("deferred", task_type="export_validation")) == 1
+    tasks.close()
+
+
+def test_validation_artifact_lookup_is_exact_and_never_globs_history(
+    monkeypatch, tmp_path
+):
+    from src.research_lab.honest_backtest_bridge import _artifact_stem
+    from src.research_lab.validation_orchestrator import _request_map, _verdict_map
+
+    candidate_id = "fv_exact"
+    artifact_name = f"{_artifact_stem(candidate_id)}.json"
+    for kind, payload in (
+        ("requests", {"candidate_id": candidate_id, "metrics": {}}),
+        ("verdicts", {"candidate_id": candidate_id, "hard_status": "NEEDS_MORE_DATA"}),
+    ):
+        directory = tmp_path / "hard_validation" / kind
+        directory.mkdir(parents=True)
+        (directory / artifact_name).write_text(json.dumps(payload), encoding="utf-8")
+        (directory / "unrelated.json").write_text(
+            json.dumps({"candidate_id": "unrelated"}), encoding="utf-8"
+        )
+
+    monkeypatch.setattr(
+        Path,
+        "glob",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("exact current-batch lookup must not glob")
+        ),
+    )
+
+    assert list(_request_map(tmp_path, [candidate_id])) == [candidate_id]
+    assert _verdict_map(tmp_path, [candidate_id]) == {
+        candidate_id: "NEEDS_MORE_DATA"
+    }
+    assert _request_map(tmp_path, []) == {}
+    assert _verdict_map(tmp_path, []) == {}
+
+
+def test_validation_lease_failure_after_export_blocks_later_side_effects(
+    monkeypatch, tmp_path
+):
+    from src.research_lab.hard_validation_export import validation_id_for_unique_candidate
+    from src.research_lab.validation_generation import load_current_generation
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    uc_key = "FAIL::1h::momentum_breakout::ph::fp"
+    validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
+    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks.enqueue_task(
+        task_type="export_validation",
+        task_key=f"export::{uc_key}",
+        payload={"candidate_id": "source", "uc_key": uc_key},
+        now=1.0,
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.export_requests",
+        lambda *_args, **_kwargs: {"exported": 1, "exported_ids": [validation_id]},
+    )
+    validation_calls: list[bool] = []
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.run_validation_batch",
+        lambda *_args, **_kwargs: validation_calls.append(True),
+    )
+    failed = False
+
+    def progress(stage: str, _completed: int, _total: int) -> None:
+        nonlocal failed
+        if stage == "requests_exported":
+            failed = True
+
+    def check_active() -> None:
+        if failed:
+            raise RuntimeError("synthetic process lease lost")
+
+    with pytest.raises(RuntimeError, match="synthetic process lease lost"):
+        run_due_validations(
+            tasks,
+            tmp_path,
+            apply=True,
+            limit=1,
+            now=2.0,
+            progress=progress,
+            check_active=check_active,
+        )
+
+    assert validation_calls == []
+    assert load_current_generation(tmp_path)["producer_complete"] is False
+    assert len(tasks.tasks_in_state("running", task_type="export_validation")) == 1
+    tasks.close()
+
+
 def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
     monkeypatch, tmp_path
 ):

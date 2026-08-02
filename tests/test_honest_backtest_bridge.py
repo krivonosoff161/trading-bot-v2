@@ -559,6 +559,88 @@ class TestRunValidationBatch:
             )
             assert result["total"] == 0
 
+    def test_explicit_empty_candidate_ids_never_glob_history(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        requests = tmp_path / "requests"
+        requests.mkdir()
+        (requests / "unrelated.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            Path,
+            "glob",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("explicit current batch must not glob history")
+            ),
+        )
+
+        result = run_validation_batch(
+            requests,
+            tmp_path,
+            dry_run=True,
+            candidate_ids=[],
+        )
+
+        assert result == {"total": 0, "validated": 0, "errors": 0, "results": []}
+
+    def test_operational_failure_callback_is_not_downgraded_to_candidate_error(
+        self, tmp_path: Path
+    ) -> None:
+        requests = tmp_path / "requests"
+        requests.mkdir()
+        candidate = _make_candidate()
+        (requests / f"{_artifact_stem(candidate.candidate_id)}.json").write_text(
+            json.dumps(candidate.to_dict()), encoding="utf-8"
+        )
+        failed = False
+
+        def progress(stage: str, _completed: int, _total: int) -> None:
+            nonlocal failed
+            if stage == "validation_request_loaded":
+                failed = True
+
+        def check_active() -> None:
+            if failed:
+                raise RuntimeError("synthetic owner fence lost")
+
+        with pytest.raises(RuntimeError, match="synthetic owner fence lost"):
+            run_validation_batch(
+                requests,
+                tmp_path,
+                dry_run=True,
+                candidate_ids=[candidate.candidate_id],
+                progress=progress,
+                check_active=check_active,
+            )
+
+    def test_validation_checks_publish_completed_real_milestones(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "src.research_lab.honest_backtest_bridge._candidate_contract_errors",
+            lambda _candidate: [],
+        )
+        monkeypatch.setattr(
+            "src.research_lab.honest_backtest_bridge._n_trials",
+            lambda _candidate: 1,
+        )
+        milestones: list[tuple[str, int, int]] = []
+
+        run_validation(
+            _make_candidate(),
+            Path("unused-dry-run-root"),
+            dry_run=True,
+            progress=lambda stage, completed, total: milestones.append(
+                (stage, completed, total)
+            ),
+            check_active=lambda: None,
+        )
+
+        checks = [item for item in milestones if item[0] == "validation_check_completed"]
+        assert checks == [
+            ("validation_check_completed", completed, 11)
+            for completed in range(1, 12)
+        ]
+
     def test_processes_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             req_dir = Path(td) / "requests"

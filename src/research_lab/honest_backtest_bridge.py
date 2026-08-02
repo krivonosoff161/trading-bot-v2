@@ -18,7 +18,7 @@ import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.hard_validation_contract import (
     CONTRACT_VERSION,
@@ -77,6 +77,26 @@ except ImportError:
 
 REPORTS_DIR = "hard_validation/reports"
 VERDICTS_DIR = "hard_validation/verdicts"
+ProgressCallback = Callable[[str, int, int], None]
+ActiveCheck = Callable[[], None]
+
+
+def _ensure_active(check_active: ActiveCheck | None) -> None:
+    if check_active is not None:
+        check_active()
+
+
+def _report_progress(
+    progress: ProgressCallback | None,
+    check_active: ActiveCheck | None,
+    stage: str,
+    completed: int,
+    total: int,
+) -> None:
+    _ensure_active(check_active)
+    if progress is not None:
+        progress(stage, int(completed), int(total))
+    _ensure_active(check_active)
 
 
 class BridgeUnavailableError(RuntimeError):
@@ -141,19 +161,28 @@ def run_validation(
     private_root: Path,
     *,
     dry_run: bool = True,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     """Run hard validation on a single candidate.
 
     Returns a summary dict with the verdict and report paths.
     """
+    _ensure_active(check_active)
     ensure_bridge_available()
     if not _HAS_NUMPY or not _HAS_BACKTEST_SANITY:
         result = _bridge_unavailable(candidate)
         if not dry_run:
+            _ensure_active(check_active)
             _write_minimal_artifacts(private_root, candidate, result)
+            _report_progress(
+                progress, check_active, "validation_artifacts_written", 1, 1
+            )
+        _report_progress(progress, check_active, "validation_result_completed", 1, 1)
         return result
 
     contract_errors = _candidate_contract_errors(candidate)
+    _report_progress(progress, check_active, "candidate_contract_checked", 1, 1)
     if contract_errors:
         checks = [
             {
@@ -166,7 +195,12 @@ def run_validation(
         verdict = _build_verdict(candidate, checks)
         report = _build_report(candidate, verdict, checks)
         if not dry_run:
+            _ensure_active(check_active)
             _write_artifacts(private_root, candidate, verdict, report)
+            _report_progress(
+                progress, check_active, "validation_artifacts_written", 1, 1
+            )
+        _report_progress(progress, check_active, "validation_result_completed", 1, 1)
         return {
             "candidate_id": candidate.candidate_id,
             "hard_status": verdict.hard_status,
@@ -177,18 +211,39 @@ def run_validation(
         }
 
     returns = _extract_returns(candidate)
+    _report_progress(
+        progress,
+        check_active,
+        "candidate_returns_extracted",
+        len(returns),
+        len(returns),
+    )
     if len(returns) < 3:
         result = _insufficient_data(candidate, len(returns))
         if not dry_run:
+            _ensure_active(check_active)
             _write_minimal_artifacts(private_root, candidate, result)
+            _report_progress(
+                progress, check_active, "validation_artifacts_written", 1, 1
+            )
+        _report_progress(progress, check_active, "validation_result_completed", 1, 1)
         return result
 
-    checks = _run_all_checks(candidate, returns)
+    checks = _run_all_checks(
+        candidate,
+        returns,
+        progress=progress,
+        check_active=check_active,
+    )
     verdict = _build_verdict(candidate, checks)
     report = _build_report(candidate, verdict, checks)
+    _report_progress(progress, check_active, "validation_verdict_built", 1, 1)
 
     if not dry_run:
+        _ensure_active(check_active)
         _write_artifacts(private_root, candidate, verdict, report)
+        _report_progress(progress, check_active, "validation_artifacts_written", 1, 1)
+    _report_progress(progress, check_active, "validation_result_completed", 1, 1)
 
     return {
         "candidate_id": candidate.candidate_id,
@@ -207,20 +262,31 @@ def run_validation_batch(
     dry_run: bool = True,
     limit: int = 50,
     candidate_ids: list[str] | None = None,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     """Run validation on all request files in a directory."""
+    _ensure_active(check_active)
     ensure_bridge_available()
     if not requests_dir.exists():
         return {"total": 0, "validated": 0, "errors": 0}
 
-    if candidate_ids:
+    if candidate_ids is not None:
         wanted = [str(cid) for cid in candidate_ids if str(cid)]
         request_files = [requests_dir / f"{_artifact_stem(cid)}.json" for cid in wanted]
         request_files = [p for p in request_files if p.exists()]
     else:
         request_files = sorted(requests_dir.glob("*.json"))[:limit]
+    _report_progress(
+        progress,
+        check_active,
+        "validation_requests_resolved",
+        len(request_files),
+        len(request_files),
+    )
     results = []
-    for rf in request_files:
+    for completed, rf in enumerate(request_files, start=1):
+        _ensure_active(check_active)
         try:
             data = _read_json(rf)
             version = data.get("contract_version") if isinstance(data, dict) else None
@@ -229,15 +295,38 @@ def run_validation_batch(
                     f"unsupported contract_version {version!r}; expected {CONTRACT_VERSION!r}"
                 )
             candidate = CandidateForValidation.from_dict(data)
-            result = run_validation(candidate, private_root, dry_run=dry_run)
+            _report_progress(
+                progress,
+                check_active,
+                "validation_request_loaded",
+                completed,
+                len(request_files),
+            )
+            result = run_validation(
+                candidate,
+                private_root,
+                dry_run=dry_run,
+                progress=progress,
+                check_active=check_active,
+            )
             results.append(result)
         except Exception as exc:
+            # Operational failure callbacks must never be converted into a
+            # candidate-level validation error.
+            _ensure_active(check_active)
             results.append(
                 {
                     "candidate_id": rf.stem,
                     "error": str(exc),
                 }
             )
+        _report_progress(
+            progress,
+            check_active,
+            "validation_candidate_completed",
+            completed,
+            len(request_files),
+        )
 
     return {
         "total": len(request_files),
@@ -394,19 +483,34 @@ def _n_trials(candidate: CandidateForValidation) -> int:
 def _run_all_checks(
     candidate: CandidateForValidation,
     returns: list[float],
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> list[dict[str, Any]]:
+    operations = (
+        lambda: _check_independent_evaluation(candidate),
+        lambda: _check_search_family_evidence(candidate),
+        lambda: _check_time_dependence_suitability(candidate),
+        lambda: _check_costs(candidate, returns),
+        lambda: _check_splits(returns),
+        lambda: _check_significance(returns, n_trials=_n_trials(candidate)),
+        lambda: _check_robustness(returns),
+        lambda: _check_overfit(candidate, returns),
+        lambda: _check_return_concentration(returns),
+        lambda: _check_forward_readiness(candidate),
+        lambda: _check_data_quality(candidate, returns),
+    )
     checks = []
-    checks.append(_check_independent_evaluation(candidate))
-    checks.append(_check_search_family_evidence(candidate))
-    checks.append(_check_time_dependence_suitability(candidate))
-    checks.append(_check_costs(candidate, returns))
-    checks.append(_check_splits(returns))
-    checks.append(_check_significance(returns, n_trials=_n_trials(candidate)))
-    checks.append(_check_robustness(returns))
-    checks.append(_check_overfit(candidate, returns))
-    checks.append(_check_return_concentration(returns))
-    checks.append(_check_forward_readiness(candidate))
-    checks.append(_check_data_quality(candidate, returns))
+    for completed, operation in enumerate(operations, start=1):
+        _ensure_active(check_active)
+        checks.append(operation())
+        _report_progress(
+            progress,
+            check_active,
+            "validation_check_completed",
+            completed,
+            len(operations),
+        )
     return checks
 
 

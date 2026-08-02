@@ -280,6 +280,134 @@ def test_failed_status_publication_does_not_claim_process_lease_progress(
     assert stages == []
 
 
+def test_validation_maintenance_binds_real_milestones_to_process_lease(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_orchestrator
+
+    stages: list[str] = []
+    supervisor = SimpleNamespace(record_progress=stages.append)
+    ownership_path = tmp_path / "state" / "ownership.sqlite"
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    farm_loop._PROCESS_LEASE_SUPERVISORS[ownership_path] = supervisor
+    seen: dict[str, object] = {}
+
+    def fake_run_due(*args, **kwargs):
+        seen["limit"] = kwargs["limit"]
+        kwargs["check_active"]()
+        kwargs["progress"]("requests_exported", 1, 1)
+        kwargs["progress"]("validations_completed", 1, 1)
+        return {"validated": 1}
+
+    monkeypatch.setattr(validation_orchestrator, "run_due_validations", fake_run_due)
+    monkeypatch.setattr(farm_loop.time, "time", lambda: 100.0)
+    try:
+        result = farm_loop._run_validation_maintenance(
+            Namespace(stop_file="", task_claim_failure_signal=None),
+            object(),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=90.0,
+        )
+    finally:
+        farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
+
+    status = json.loads(
+        (tmp_path / "state" / "farm_loop_status.json").read_text(encoding="utf-8")
+    )
+    assert result == {"validated": 1}
+    assert seen["limit"] == 1
+    assert status["details"] == {
+        "milestone": "validations_completed",
+        "completed": 1,
+        "total": 1,
+        "max_validations": 1,
+    }
+    assert stages == [
+        "validation_maintenance",
+        "validation_maintenance:requests_exported",
+        "validation_maintenance:validations_completed",
+    ]
+
+
+def test_validation_maintenance_propagates_owner_failure_before_work(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_orchestrator
+
+    monkeypatch.setattr(
+        validation_orchestrator,
+        "run_due_validations",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("validation must not start after owner failure")
+        ),
+    )
+
+    class FailedSignal:
+        def raise_if_failed(self) -> None:
+            raise RuntimeError("canonical process ownership heartbeat failed")
+
+    with pytest.raises(
+        RuntimeError, match="canonical process ownership heartbeat failed"
+    ):
+        farm_loop._run_validation_maintenance(
+            Namespace(stop_file="", task_claim_failure_signal=FailedSignal()),
+            object(),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=90.0,
+        )
+
+
+def test_validation_maintenance_over_900_logical_seconds_keeps_real_progress(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from src.research_lab import validation_orchestrator
+
+    clock = [0.0]
+    progress_times: list[float] = []
+
+    class TrackingSupervisor:
+        def record_progress(self, _stage: str) -> None:
+            progress_times.append(clock[0])
+
+    ownership_path = tmp_path / "state" / "ownership.sqlite"
+    farm_loop._LOOP_STATUS_PUBLISHERS.clear()
+    farm_loop._PROCESS_LEASE_SUPERVISORS[ownership_path] = TrackingSupervisor()
+
+    def fake_run_due(*_args, **kwargs):
+        for completed in range(1, 11):
+            clock[0] += 120.0
+            kwargs["progress"]("validation_chunk_completed", completed, 10)
+        return {"validated": 1}
+
+    monkeypatch.setattr(validation_orchestrator, "run_due_validations", fake_run_due)
+    monkeypatch.setattr(farm_loop.time, "time", lambda: clock[0])
+    try:
+        result = farm_loop._run_validation_maintenance(
+            Namespace(stop_file="", task_claim_failure_signal=None),
+            object(),
+            tmp_path,
+            apply=True,
+            loop=True,
+            cycle_started_at=0.0,
+        )
+    finally:
+        farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
+
+    assert result == {"validated": 1}
+    assert clock[0] == 1200.0
+    assert len(progress_times) == 11  # initial durable stage plus ten real chunks
+    assert max(
+        later - earlier for earlier, later in zip(progress_times, progress_times[1:])
+    ) == 120.0
+
+
 def test_loop_status_persistent_contention_keeps_last_good_and_requests_safe_stop(
     monkeypatch,
     tmp_path: Path,

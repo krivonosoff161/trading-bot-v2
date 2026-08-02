@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.hard_validation_contract import HardValidationReport
@@ -39,12 +39,54 @@ from src.research_lab.validation_generation import (
 )
 
 
-def _verdict_map(private_root: Path) -> dict[str, str]:
+ProgressCallback = Callable[[str, int, int], None]
+ActiveCheck = Callable[[], None]
+
+
+def _check_active(check_active: ActiveCheck | None) -> None:
+    if check_active is not None:
+        check_active()
+
+
+def _completed_progress(
+    progress: ProgressCallback | None,
+    check_active: ActiveCheck | None,
+    stage: str,
+    completed: int,
+    total: int,
+) -> None:
+    """Publish only a completed milestone and fail closed around publication."""
+    _check_active(check_active)
+    if progress is not None:
+        progress(stage, int(completed), int(total))
+    _check_active(check_active)
+
+
+def _artifact_paths(
+    directory: Path,
+    candidate_ids: Iterable[str] | None,
+) -> Iterable[Path]:
+    if candidate_ids is None:
+        return directory.glob("*.json")
+    return (
+        directory / f"{_artifact_stem(candidate_id)}.json"
+        for candidate_id in dict.fromkeys(
+            str(candidate_id) for candidate_id in candidate_ids if str(candidate_id)
+        )
+    )
+
+
+def _verdict_map(
+    private_root: Path,
+    candidate_ids: Iterable[str] | None = None,
+) -> dict[str, str]:
     out: dict[str, str] = {}
     vdir = Path(private_root) / "hard_validation" / "verdicts"
     if not vdir.exists():
         return out
-    for path in vdir.glob("*.json"):
+    for path in _artifact_paths(vdir, candidate_ids):
+        if not path.is_file():
+            continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -63,12 +105,17 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _request_map(private_root: Path) -> dict[str, dict[str, Any]]:
+def _request_map(
+    private_root: Path,
+    candidate_ids: Iterable[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     req_dir = Path(private_root) / "hard_validation" / "requests"
     if not req_dir.exists():
         return out
-    for path in req_dir.glob("*.json"):
+    for path in _artifact_paths(req_dir, candidate_ids):
+        if not path.is_file():
+            continue
         data = _read_json(path)
         cid = str(data.get("candidate_id") or path.stem)
         if cid:
@@ -94,12 +141,15 @@ def _read_payload(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stamp_farm_results_from_contexts(
-    private_root: Path, verdicts: dict[str, str]
+    private_root: Path,
+    verdicts: dict[str, str],
+    *,
+    requests: dict[str, dict[str, Any]] | None = None,
 ) -> int:
     """Stamp compute DB using request provenance, not just validation candidate_id."""
     from src.research_lab.state_db import connect, default_db_path, init_db
 
-    reqs = _request_map(private_root)
+    reqs = requests if requests is not None else _request_map(private_root, verdicts)
     conn = connect(default_db_path(private_root))
     init_db(conn)
     stamped = 0
@@ -134,9 +184,18 @@ def _stamp_farm_results_from_contexts(
     return stamped
 
 
-def _write_setup_cards(private_root: Path, candidate_ids: list[str]) -> int:
+def _write_setup_cards(
+    private_root: Path,
+    candidate_ids: list[str],
+    *,
+    requests: dict[str, dict[str, Any]] | None = None,
+) -> int:
     reports_dir = Path(private_root) / "hard_validation" / "reports"
-    reqs = _request_map(private_root)
+    reqs = (
+        requests
+        if requests is not None
+        else _request_map(private_root, candidate_ids)
+    )
     cards = []
     for cid in candidate_ids:
         report = _read_json(reports_dir / f"{_artifact_stem(cid)}.json")
@@ -156,6 +215,8 @@ def run_due_validations(
     apply: bool,
     limit: int = 10,
     now: float | None = None,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     """Execute export + validation + stamp-back for queued export_validation tasks."""
     counters = {
@@ -170,6 +231,7 @@ def run_due_validations(
     }
     export_tasks: list[dict] = []
     while len(export_tasks) < limit:
+        _check_active(check_active)
         task = tasks.claim_next_task(task_types=("export_validation",), now=now)
         if task is None:
             break
@@ -177,24 +239,42 @@ def run_due_validations(
     if not export_tasks:
         return counters
     counters["export_tasks"] = len(export_tasks)
+    _completed_progress(
+        progress,
+        check_active,
+        "tasks_claimed",
+        len(export_tasks),
+        len(export_tasks),
+    )
 
     if not apply:
         for task in export_tasks:
+            _check_active(check_active)
             tasks.complete_task(task["task_id"], reason="export_dry_run", now=now)
+            _completed_progress(progress, check_active, "task_completed", 1, 1)
         return counters
 
     # Revoke the previous generation before this producer creates any new
     # request/report/verdict/card side effects.  A crash anywhere below leaves
     # the paper readers on a fail-closed pending generation.
+    _check_active(check_active)
     write_pending_generation(
         Path(private_root),
         tasks=export_tasks,
         producer_time=now,
     )
+    _completed_progress(
+        progress,
+        check_active,
+        "pending_generation_published",
+        len(export_tasks),
+        len(export_tasks),
+    )
 
     uc_keys = [str(_read_payload(t).get("uc_key") or "") for t in export_tasks]
     uc_keys = [k for k in uc_keys if k]
     if uc_keys:
+        _check_active(check_active)
         summary = export_requests(
             private_root,
             dry_run=False,
@@ -202,6 +282,8 @@ def run_due_validations(
             include_regime_specific=True,
             source="farm_tasks",
             uc_keys=uc_keys,
+            progress=progress,
+            check_active=check_active,
         )
     else:
         summary = {"exported": 0, "exported_ids": []}
@@ -219,14 +301,24 @@ def run_due_validations(
         )
     )
     counters["exported"] = len(exported_ids)
+    _completed_progress(
+        progress,
+        check_active,
+        "requests_exported",
+        len(exported_ids),
+        len(export_tasks),
+    )
     requests_dir = Path(private_root) / "hard_validation" / "requests"
     if exported_ids:
+        _check_active(check_active)
         val = run_validation_batch(
             requests_dir,
             private_root,
             dry_run=False,
             limit=max(limit, len(export_tasks)),
             candidate_ids=exported_ids,
+            progress=progress,
+            check_active=check_active,
         )
     else:
         val = {"total": 0, "validated": 0, "errors": 0, "results": []}
@@ -241,10 +333,53 @@ def run_due_validations(
             and str(result.get("candidate_id") or "") in exported_set
         )
     )
+    _completed_progress(
+        progress,
+        check_active,
+        "validations_completed",
+        len(current_ids),
+        len(exported_ids),
+    )
+
+    # Empty or failed current batches must not scan historical artifact trees.
+    # Publish the bounded incomplete generation and defer only the claimed tasks.
+    if not current_ids:
+        _check_active(check_active)
+        write_current_generation(
+            Path(private_root),
+            tasks=export_tasks,
+            exported_ids=exported_ids,
+            completed_ids=[],
+            producer_time=now,
+        )
+        _completed_progress(
+            progress,
+            check_active,
+            "generation_published",
+            0,
+            len(exported_ids),
+        )
+        for completed, task in enumerate(export_tasks, start=1):
+            _check_active(check_active)
+            tasks.defer_task(
+                task["task_id"],
+                until=(now or 0) + 300,
+                reason="validation_no_verdict",
+                now=now,
+            )
+            _completed_progress(
+                progress,
+                check_active,
+                "task_deferred",
+                completed,
+                len(export_tasks),
+            )
+        return counters
 
     # auto stamp-back into farm_results (was the orphaned refresh_validation_handoff step)
     from src.research_lab.state_db import connect, default_db_path, init_db
 
+    _check_active(check_active)
     conn = connect(default_db_path(private_root))
     init_db(conn)
     try:
@@ -252,29 +387,70 @@ def run_due_validations(
         counters["stamped_db"] = int(handoff.get("rows_stamped_verdict") or 0)
     finally:
         conn.close()
+    _completed_progress(
+        progress,
+        check_active,
+        "validation_handoff_stamped",
+        int(counters["stamped_db"]),
+        len(current_ids),
+    )
 
     # mirror verdicts into the coordinator's unique_candidates view
-    verdicts_all = _verdict_map(private_root)
+    _check_active(check_active)
+    verdicts_all = _verdict_map(private_root, current_ids)
     verdicts = {cid: verdicts_all[cid] for cid in current_ids if cid in verdicts_all}
-    reqs = _request_map(private_root)
-    counters["stamped_db"] += _stamp_farm_results_from_contexts(
-        Path(private_root), verdicts
+    reqs = _request_map(private_root, current_ids)
+    _completed_progress(
+        progress,
+        check_active,
+        "validation_artifacts_loaded",
+        len(verdicts),
+        len(current_ids),
     )
-    counters["setup_cards"] = _write_setup_cards(Path(private_root), current_ids)
+    _check_active(check_active)
+    counters["stamped_db"] += _stamp_farm_results_from_contexts(
+        Path(private_root), verdicts, requests=reqs
+    )
+    _completed_progress(
+        progress,
+        check_active,
+        "validation_contexts_stamped",
+        int(counters["stamped_db"]),
+        len(verdicts),
+    )
+    _check_active(check_active)
+    counters["setup_cards"] = _write_setup_cards(
+        Path(private_root), current_ids, requests=reqs
+    )
+    _completed_progress(
+        progress,
+        check_active,
+        "setup_cards_written",
+        int(counters["setup_cards"]),
+        len(current_ids),
+    )
     reports_dir = Path(private_root) / "hard_validation" / "reports"
-    for cid in current_ids:
+    for completed, cid in enumerate(current_ids, start=1):
+        _check_active(check_active)
         report_data = _read_json(reports_dir / f"{_artifact_stem(cid)}.json")
-        if not report_data:
-            continue
-        try:
-            feedback = generate_feedback(HardValidationReport.from_dict(report_data))
-        except (KeyError, TypeError, ValueError):
-            feedback = None
-        if feedback is not None and write_feedback(
-            Path(private_root), feedback, dry_run=False
-        ):
-            counters["feedback_written"] += 1
-    for cid, hard_status in verdicts.items():
+        if report_data:
+            try:
+                feedback = generate_feedback(HardValidationReport.from_dict(report_data))
+            except (KeyError, TypeError, ValueError):
+                feedback = None
+            if feedback is not None:
+                _check_active(check_active)
+                if write_feedback(Path(private_root), feedback, dry_run=False):
+                    counters["feedback_written"] += 1
+        _completed_progress(
+            progress,
+            check_active,
+            "validation_feedback_processed",
+            completed,
+            len(current_ids),
+        )
+    for completed, (cid, hard_status) in enumerate(verdicts.items(), start=1):
+        _check_active(check_active)
         if hard_status:
             req = reqs.get(cid) or {}
             metrics = (
@@ -291,10 +467,18 @@ def run_due_validations(
                 counters["stamped_unique"] += tasks.set_candidate_hard_status(
                     cid, hard_status, now=now
                 )
+        _completed_progress(
+            progress,
+            check_active,
+            "unique_candidate_stamped",
+            completed,
+            len(verdicts),
+        )
 
     # Publish final authority while the claimed tasks still provide a recoverable
     # running marker.  If publication fails, startup orphan reconciliation can
     # requeue the tasks and the pending manifest remains fail-closed.
+    _check_active(check_active)
     write_current_generation(
         Path(private_root),
         tasks=export_tasks,
@@ -302,7 +486,15 @@ def run_due_validations(
         completed_ids=current_ids,
         producer_time=now,
     )
-    for task in export_tasks:
+    _completed_progress(
+        progress,
+        check_active,
+        "generation_published",
+        len(current_ids),
+        len(exported_ids),
+    )
+    for completed, task in enumerate(export_tasks, start=1):
+        _check_active(check_active)
         hid = _hard_id_for_task(task)
         if hid and hid in verdicts:
             tasks.complete_task(task["task_id"], reason="validated", now=now)
@@ -313,4 +505,11 @@ def run_due_validations(
                 reason="validation_no_verdict",
                 now=now,
             )
+        _completed_progress(
+            progress,
+            check_active,
+            "task_terminalized",
+            completed,
+            len(export_tasks),
+        )
     return counters

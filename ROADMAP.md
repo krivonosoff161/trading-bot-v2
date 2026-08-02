@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
+- Verified: 2026-08-02
+- Verified against: `ec5b4a3a0fe2424bfccc7293dee10b861154c75c`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -25,6 +25,11 @@ dependency, not by a route to live trading.
   contracts. The listener safety probe uses isolated native Windows TCP
   inventory while retaining bounded Job Object cleanup and fail-closed
   freshness enforcement.
+- Validation maintenance resolves only the current bounded batch before
+  historical feedback work, publishes durable progress only after completed
+  export/check/artifact chunks, and rechecks owner/fence authority before each
+  side effect. An empty current batch terminates without rescanning the full
+  historical validation corpus.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies

@@ -1,14 +1,14 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.01"
+version: "2026.08.02"
 status: current
-verified_date: "2026-08-01"
+verified_date: "2026-08-02"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 7831592cda5e204db2de37da4404f0ee7aac64cd
+  trading-bot-v2: ec5b4a3a0fe2424bfccc7293dee10b861154c75c
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -179,9 +179,11 @@ modules:
     implemented_evidence:
       - src/research_lab/setup_lifecycle.py
       - src/research_lab/validation_generation.py
+      - src/research_lab/validation_orchestrator.py
       - tests/test_setup_lifecycle.py
-    missing_evidence: long-duration proof across interruption and recovery scenarios
-    next_gate: preserve generation, fence, and idempotency invariants during canary observation
+      - tests/test_farm_loop_stage_visibility.py
+    missing_evidence: long-duration proof across interruption, recovery, and validation-maintenance progress scenarios
+    next_gate: preserve generation, fence, idempotency, and completed-chunk progress invariants during canary observation
     authority: paper_only
     public_private_boundary: state machines are public; lifecycle rows and candidate identity are private
   - module_id: paper_observation

@@ -15,7 +15,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.candidate_registry import load_entries
 from src.research_lab.candle_library import load_canonical_candles
@@ -48,6 +48,26 @@ from src.research_lab.simulator_contract import (
 
 ELIGIBLE_STATUSES = {"FORWARD_PAPER", "REGIME_SPECIFIC"}
 REQUESTS_DIR = "hard_validation/requests"
+ProgressCallback = Callable[[str, int, int], None]
+ActiveCheck = Callable[[], None]
+
+
+def _ensure_active(check_active: ActiveCheck | None) -> None:
+    if check_active is not None:
+        check_active()
+
+
+def _report_progress(
+    progress: ProgressCallback | None,
+    check_active: ActiveCheck | None,
+    stage: str,
+    completed: int,
+    total: int,
+) -> None:
+    _ensure_active(check_active)
+    if progress is not None:
+        progress(stage, int(completed), int(total))
+    _ensure_active(check_active)
 
 
 def export_requests(
@@ -61,6 +81,8 @@ def export_requests(
     candidate_id: str | None = None,
     source: str = "auto",
     uc_keys: list[str] | None = None,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     """Find eligible candidates and write validation request files.
 
@@ -68,6 +90,7 @@ def export_requests(
     """
     if source not in {"auto", "farm_tasks", "legacy_registry"}:
         raise ValueError("source must be one of: auto, farm_tasks, legacy_registry")
+    _ensure_active(check_active)
     source_used = "legacy_registry"
     entries: list[dict[str, Any]] = []
     if source in {"auto", "farm_tasks"}:
@@ -80,6 +103,13 @@ def export_requests(
         registry_file = private_root / "candidate-registry" / "candidates.jsonl"
         entries = load_entries(registry_file)
         source_used = "legacy_registry"
+    _report_progress(
+        progress,
+        check_active,
+        "validation_entries_loaded",
+        len(entries),
+        len(entries),
+    )
     eligible = _filter_entries(
         entries,
         status_filter=status_filter,
@@ -89,6 +119,13 @@ def export_requests(
     )
     eligible = _deduplicate(eligible)
     eligible = eligible[:limit]
+    _report_progress(
+        progress,
+        check_active,
+        "validation_entries_filtered",
+        len(eligible),
+        len(entries),
+    )
 
     summary: dict[str, Any] = {
         "source": source_used,
@@ -107,15 +144,36 @@ def export_requests(
     out_dir = private_root / REQUESTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for entry in eligible:
-        candidate = _build_candidate(entry, private_root)
+    for completed, entry in enumerate(eligible, start=1):
+        _ensure_active(check_active)
+        candidate = _build_candidate(
+            entry,
+            private_root,
+            progress=progress,
+            check_active=check_active,
+        )
         if candidate is None:
             summary["skipped_no_artifact"] += 1
+            _report_progress(
+                progress,
+                check_active,
+                "validation_candidate_export_processed",
+                completed,
+                len(eligible),
+            )
             continue
+        _ensure_active(check_active)
         req_path = out_dir / f"{_artifact_stem(candidate.candidate_id)}.json"
         write_json(req_path, candidate.to_dict())
         summary["exported"] += 1
         summary["exported_ids"].append(candidate.candidate_id)
+        _report_progress(
+            progress,
+            check_active,
+            "validation_candidate_export_processed",
+            completed,
+            len(eligible),
+        )
 
     return summary
 
@@ -255,9 +313,18 @@ def _deduplicate(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _build_candidate(
     entry: dict[str, Any],
     private_root: Path,
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> CandidateForValidation | None:
     artifact_label = str(entry.get("artifact_label") or "")
-    metrics = _load_experiment_metrics(private_root, artifact_label, entry)
+    metrics = _load_experiment_metrics(
+        private_root,
+        artifact_label,
+        entry,
+        progress=progress,
+        check_active=check_active,
+    )
     if metrics is None:
         return None
     evidence = metrics.get("search_trial_evidence")
@@ -405,7 +472,11 @@ def _load_experiment_metrics(
     private_root: Path,
     artifact_label: str,
     entry: dict[str, Any],
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any] | None:
+    _ensure_active(check_active)
     if not artifact_label:
         return dict(entry.get("metrics_summary") or {})
 
@@ -416,8 +487,17 @@ def _load_experiment_metrics(
     candidates = list(completed_dir.glob(f"*{artifact_label}*"))
     if not candidates:
         candidates = list(completed_dir.glob(f"*{entry.get('experiment_id', '')}*"))
+    _report_progress(
+        progress,
+        check_active,
+        "validation_experiment_candidates_resolved",
+        len(candidates),
+        len(candidates),
+    )
 
-    for run_dir in sorted(candidates, reverse=True):
+    ordered_candidates = sorted(candidates, reverse=True)
+    for directory_index, run_dir in enumerate(ordered_candidates, start=1):
+        _ensure_active(check_active)
         metrics_file = run_dir / "metrics.json"
         if not metrics_file.exists():
             continue
@@ -425,6 +505,13 @@ def _load_experiment_metrics(
             data = json.loads(metrics_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        _report_progress(
+            progress,
+            check_active,
+            "validation_experiment_metrics_loaded",
+            directory_index,
+            len(ordered_candidates),
+        )
         context = {
             "_filters": dict(data.get("filters") or {}),
             "_fees_bps": float(
@@ -455,6 +542,13 @@ def _load_experiment_metrics(
             )
         except (json.JSONDecodeError, OSError, TypeError, ValueError):
             return None
+        _report_progress(
+            progress,
+            check_active,
+            "validation_trial_evidence_loaded",
+            directory_index,
+            len(ordered_candidates),
+        )
         if context["search_trial_evidence_id"] != str(
             trial_evidence.get("search_trial_evidence_id") or ""
         ) or context["multiple_testing_family_hash"] != str(
@@ -471,7 +565,9 @@ def _load_experiment_metrics(
             str(entry.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
         )
         wanted_family = str(entry.get("strategy_id") or "")
-        for r in results:
+        for result_index, r in enumerate(results, start=1):
+            if result_index == 1 or result_index % 128 == 0:
+                _ensure_active(check_active)
             row_id = str(r.get("run_id") or r.get("candidate_id") or "")
             row_symbol = (
                 str(r.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
@@ -486,6 +582,13 @@ def _load_experiment_metrics(
                 not wanted_family or row_family == wanted_family
             )
             if exact_scope and (exact_id or exact_hash):
+                _report_progress(
+                    progress,
+                    check_active,
+                    "validation_experiment_result_selected",
+                    result_index,
+                    len(results),
+                )
                 out = dict(r.get("metrics") or {})
                 out.update(context)
                 trial_panel = _comparable_trial_panel(
@@ -493,6 +596,8 @@ def _load_experiment_metrics(
                     trial_evidence,
                     symbol=row_symbol,
                     family=row_family,
+                    progress=progress,
+                    check_active=check_active,
                 )
                 out["pbo_dsr_family_coverage"] = trial_panel["coverage"]
                 legacy = classify_legacy_search_bias_evidence(
@@ -509,13 +614,28 @@ def _load_experiment_metrics(
                 out["_params"] = _params_from_result(r)
                 trades = list(r.get("_trades") or r.get("trades") or [])
                 if not trades and int(out.get("n_trades") or 0) > 0:
-                    trades = _rebuild_trades_from_result(private_root, r, out, context)
+                    trades = _rebuild_trades_from_result(
+                        private_root,
+                        r,
+                        out,
+                        context,
+                        progress=progress,
+                        check_active=check_active,
+                    )
                 out["_trades"] = trades
                 out["source_candidate_id"] = row_id
                 out["uc_key"] = str(entry.get("uc_key") or "")
                 if entry.get("data_fingerprint"):
                     out["data_fingerprint"] = str(entry.get("data_fingerprint") or "")
                 return out
+            if result_index % 128 == 0 or result_index == len(results):
+                _report_progress(
+                    progress,
+                    check_active,
+                    "validation_experiment_results_scanned",
+                    result_index,
+                    len(results),
+                )
         if results and not entry.get("uc_key"):
             first = dict(results[0].get("metrics") or {})
             first.update(context)
@@ -523,7 +643,12 @@ def _load_experiment_metrics(
             trades = list(results[0].get("_trades") or results[0].get("trades") or [])
             if not trades and int(first.get("n_trades") or 0) > 0:
                 trades = _rebuild_trades_from_result(
-                    private_root, results[0], first, context
+                    private_root,
+                    results[0],
+                    first,
+                    context,
+                    progress=progress,
+                    check_active=check_active,
                 )
             first["_trades"] = trades
             return first
@@ -537,6 +662,8 @@ def _comparable_trial_panel(
     *,
     symbol: str,
     family: str,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> dict[str, Any]:
     by_run_id = {
         str(row.get("run_id") or row.get("candidate_id") or ""): row for row in results
@@ -544,7 +671,18 @@ def _comparable_trial_panel(
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     trial_returns: list[list[float]] = []
-    for trial in evidence.get("trials") or []:
+    trials = evidence.get("trials") or []
+    for completed, trial in enumerate(trials, start=1):
+        if completed == 1:
+            _ensure_active(check_active)
+        elif (completed - 1) % 128 == 0:
+            _report_progress(
+                progress,
+                check_active,
+                "validation_trial_panel_scanned",
+                completed - 1,
+                len(trials),
+            )
         trial_symbol = (
             str(trial.get("symbol") or "").replace("-", "_").replace("/", "_").upper()
         )
@@ -610,6 +748,14 @@ def _comparable_trial_panel(
             }
         )
         trial_returns.append(values)
+    if trials:
+        _report_progress(
+            progress,
+            check_active,
+            "validation_trial_panel_scanned",
+            len(trials),
+            len(trials),
+        )
     selected = len(included) + len(excluded)
     expected_selected = int(
         (evidence.get("search_space") or {}).get("selected_executions") or 0
@@ -638,6 +784,9 @@ def _rebuild_trades_from_result(
     row: dict[str, Any],
     metrics: dict[str, Any],
     context: dict[str, Any],
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
 ) -> list[dict[str, Any]]:
     """Recover trades only when the exact experiment snapshot can be re-selected.
 
@@ -652,12 +801,20 @@ def _rebuild_trades_from_result(
     expected_snapshot_id = str(metrics.get("data_snapshot_id") or "")
     if not tf or not symbol or not expected_snapshot_id:
         return []
+    _ensure_active(check_active)
     selected = load_canonical_candles(
         private_root,
         symbol,
         tf,
         purpose="experiment",
         coverage_policy="gap_free",
+    )
+    _report_progress(
+        progress,
+        check_active,
+        "validation_candles_loaded",
+        len(selected.rows),
+        len(selected.rows),
     )
     if (
         not selected.rows
@@ -672,7 +829,14 @@ def _rebuild_trades_from_result(
         signals = generate_signals(candles, family, params)
         signals = annotate_signals_with_regime(candles, signals, {})
         signals = filter_signals(signals, dict(context.get("_filters") or {}))
-        return simulate_trades(
+        _report_progress(
+            progress,
+            check_active,
+            "validation_signals_generated",
+            len(signals),
+            len(signals),
+        )
+        trades = simulate_trades(
             candles,
             signals,
             params,
@@ -685,6 +849,14 @@ def _rebuild_trades_from_result(
                 else context["_slippage_bps"]
             ),
         )
+        _report_progress(
+            progress,
+            check_active,
+            "validation_trades_simulated",
+            len(trades),
+            len(trades),
+        )
+        return trades
     except (OSError, ValueError, KeyError, TypeError):
         return []
 
