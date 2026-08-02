@@ -145,6 +145,13 @@ a sanitized aggregate if a result needs discussion.
   rows, or run-artifact groups complete. Both a canonical stop intent and the
   latched owner/claim failure are checked between real chunks, so shutdown and
   fail-closed cancellation do not depend on an artificial timer milestone.
+- Validation maintenance applies the same contract to its current bounded
+  batch. Export, deterministic checks, and artifact work publish a durable
+  milestone only after a real chunk completes; the process lease stores that
+  exact milestone. Owner/fence loss is checked before every write or lifecycle
+  side effect. An empty current batch is deferred and generation-stamped
+  without loading historical verdict/request directories, so stale candidate
+  references cannot turn a no-op batch into an unbounded maintenance scan.
 
 ### Provenance-bound RCC marker clearance
 

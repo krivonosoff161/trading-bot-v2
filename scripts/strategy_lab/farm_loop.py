@@ -1491,7 +1491,9 @@ def _write_loop_status(
     }
     published = _loop_status_publisher(private_root).publish(payload)
     if published:
-        _record_process_lease_progress(private_root, stage)
+        milestone = str((details or {}).get("milestone") or "").strip()
+        progress_stage = f"{stage}:{milestone}" if milestone else stage
+        _record_process_lease_progress(private_root, progress_stage)
     return published
 
 
@@ -1562,6 +1564,66 @@ def _refresh_setup_outcome_memory(
         "paper_only": True,
         "execution_allowed": False,
     }
+
+
+def _run_validation_maintenance(
+    args,
+    tasks: FarmTasksDB,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+) -> dict[str, Any]:
+    """Run one bounded validation batch with durable, real progress milestones."""
+    failure_signal = getattr(args, "task_claim_failure_signal", None)
+
+    def check_active() -> None:
+        if failure_signal is not None:
+            failure_signal.raise_if_failed()
+        stop_file = str(getattr(args, "stop_file", "") or "")
+        if stop_file and Path(stop_file).exists():
+            raise FarmCycleStopRequested(
+                "canonical stop requested during validation maintenance"
+            )
+
+    def progress(milestone: str, completed: int, total: int) -> None:
+        check_active()
+        _write_loop_status(
+            private_root,
+            stage="validation_maintenance",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={
+                "milestone": milestone,
+                "completed": int(completed),
+                "total": int(total),
+                "max_validations": 1,
+            },
+        )
+        check_active()
+
+    check_active()
+    _write_loop_status(
+        private_root,
+        stage="validation_maintenance",
+        apply=apply,
+        loop=loop,
+        cycle_started_at=cycle_started_at,
+        details={"max_validations": 1},
+    )
+    from src.research_lab.validation_orchestrator import run_due_validations
+
+    return run_due_validations(
+        tasks,
+        private_root,
+        apply=True,
+        limit=1,
+        now=time.time(),
+        progress=progress,
+        check_active=check_active,
+    )
 
 
 def _run_once(
@@ -2060,24 +2122,22 @@ def _run_once(
                 out["stop_requested"] = True
                 return out
             try:
-                _write_loop_status(
+                failure_signal = getattr(args, "task_claim_failure_signal", None)
+                out["validation_maintenance"] = _run_validation_maintenance(
+                    args,
+                    tasks,
                     private_root,
-                    stage="validation_maintenance",
                     apply=apply,
                     loop=loop,
                     cycle_started_at=cycle_started_at,
-                    details={"max_validations": 1},
                 )
-                from src.research_lab.validation_orchestrator import run_due_validations
-
-                out["validation_maintenance"] = run_due_validations(
-                    tasks,
-                    private_root,
-                    apply=True,
-                    limit=1,
-                    now=time.time(),
-                )
+            except FarmCycleStopRequested:
+                raise
             except Exception as exc:  # noqa: BLE001 - maintenance validation must not kill farm
+                if failure_signal is not None:
+                    # Lost process/task ownership is not an ordinary maintenance
+                    # error and must remain visible to the foreground fail-closed path.
+                    failure_signal.raise_if_failed()
                 out.setdefault("errors", []).append(
                     {"where": "validation_maintenance", "error": str(exc)}
                 )

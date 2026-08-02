@@ -392,3 +392,27 @@ class TestExportRequests:
             summary = export_requests(private, dry_run=False, source="farm_tasks", limit=10)
             assert summary["exported"] == 0
             assert summary["skipped_no_artifact"] == 2
+
+    def test_current_batch_reports_completed_export_milestones(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td)
+            db = FarmTasksDB(tasks_db_path(private))
+            db.close()
+            milestones: list[tuple[str, int, int]] = []
+
+            summary = export_requests(
+                private,
+                dry_run=False,
+                source="farm_tasks",
+                uc_keys=["missing-current-uc-key"],
+                progress=lambda stage, completed, total: milestones.append(
+                    (stage, completed, total)
+                ),
+                check_active=lambda: None,
+            )
+
+            assert summary["exported"] == 0
+            assert milestones == [
+                ("validation_entries_loaded", 0, 0),
+                ("validation_entries_filtered", 0, 0),
+            ]
