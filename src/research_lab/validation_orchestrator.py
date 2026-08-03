@@ -22,8 +22,9 @@ from typing import Any, Callable, Iterable
 from src.research_lab.farm_tasks_db import FarmTasksDB
 from src.research_lab.hard_validation_contract import HardValidationReport
 from src.research_lab.hard_validation_export import (
-    export_requests,
+    prepare_requests,
     validation_id_for_unique_candidate,
+    write_prepared_requests,
 )
 from src.research_lab.honest_backtest_bridge import (
     _artifact_stem,
@@ -41,6 +42,9 @@ from src.research_lab.validation_generation import (
 
 ProgressCallback = Callable[[str, int, int], None]
 ActiveCheck = Callable[[], None]
+MAX_VALIDATION_ATTEMPTS = 3
+MIN_VALIDATION_SCAN_LIMIT = 32
+MAX_VALIDATION_SCAN_LIMIT = 256
 
 
 def _check_active(check_active: ActiveCheck | None) -> None:
@@ -221,31 +225,81 @@ def run_due_validations(
     """Execute export + validation + stamp-back for queued export_validation tasks."""
     counters = {
         "export_tasks": 0,
+        "tasks_examined": 0,
         "exported": 0,
         "validated": 0,
         "stamped_db": 0,
         "stamped_unique": 0,
         "setup_cards": 0,
         "feedback_written": 0,
+        "orphan_tasks_skipped": 0,
+        "ineligible_tasks_skipped": 0,
+        "visibility_tasks_deferred": 0,
+        "retry_exhausted_skipped": 0,
+        "unexportable_candidates": 0,
+        "generation_unchanged": 0,
         "bridge_ok": all(bridge_available().values()),
     }
     export_tasks: list[dict] = []
-    while len(export_tasks) < limit:
+    scan_limit = max(
+        int(limit),
+        min(
+            MAX_VALIDATION_SCAN_LIMIT,
+            max(MIN_VALIDATION_SCAN_LIMIT, int(limit) * 32),
+        ),
+    )
+    while len(export_tasks) < limit and counters["tasks_examined"] < scan_limit:
         _check_active(check_active)
         task = tasks.claim_next_task(task_types=("export_validation",), now=now)
         if task is None:
             break
+        counters["tasks_examined"] += 1
+        counters["export_tasks"] += 1
+        disposition = tasks.classify_export_validation_task(task, now=now)
+        action = disposition["action"]
+        reason = disposition["reason"]
+        if action == "skip":
+            tasks.skip_task(task["task_id"], reason, now=now)
+            if reason == "validation_orphan_missing_unique_candidate":
+                counters["orphan_tasks_skipped"] += 1
+            else:
+                counters["ineligible_tasks_skipped"] += 1
+            _completed_progress(
+                progress,
+                check_active,
+                "task_dispositioned",
+                counters["tasks_examined"],
+                scan_limit,
+            )
+            continue
+        if action == "defer":
+            tasks.defer_task(
+                task["task_id"],
+                until=(now or 0) + 300,
+                reason=reason,
+                now=now,
+            )
+            counters["visibility_tasks_deferred"] += 1
+            _completed_progress(
+                progress,
+                check_active,
+                "task_dispositioned",
+                counters["tasks_examined"],
+                scan_limit,
+            )
+            continue
         export_tasks.append(task)
-    if not export_tasks:
-        return counters
-    counters["export_tasks"] = len(export_tasks)
     _completed_progress(
         progress,
         check_active,
         "tasks_claimed",
-        len(export_tasks),
-        len(export_tasks),
+        counters["tasks_examined"],
+        scan_limit,
     )
+
+    if not export_tasks:
+        counters["generation_unchanged"] = 1
+        return counters
 
     if not apply:
         for task in export_tasks:
@@ -254,9 +308,62 @@ def run_due_validations(
             _completed_progress(progress, check_active, "task_completed", 1, 1)
         return counters
 
-    # Revoke the previous generation before this producer creates any new
-    # request/report/verdict/card side effects.  A crash anywhere below leaves
-    # the paper readers on a fail-closed pending generation.
+    uc_keys = [str(_read_payload(t).get("uc_key") or "") for t in export_tasks]
+    uc_keys = [k for k in uc_keys if k]
+    _check_active(check_active)
+    summary, prepared = prepare_requests(
+        private_root,
+        limit=max(limit, len(export_tasks)),
+        include_regime_specific=True,
+        source="farm_tasks",
+        uc_keys=uc_keys,
+        progress=progress,
+        check_active=check_active,
+    )
+    counters["unexportable_candidates"] = int(summary.get("skipped_no_artifact") or 0)
+    expected_ids = {
+        _hard_id_for_task(task)
+        for task in export_tasks
+        if str(_read_payload(task).get("uc_key") or "")
+    }
+    expected_ids.discard("")
+    prepared_by_id = {
+        str(candidate.candidate_id): candidate
+        for candidate in prepared
+        if str(candidate.candidate_id) in expected_ids
+    }
+    ready_tasks: list[dict] = []
+    for task in export_tasks:
+        hid = _hard_id_for_task(task)
+        if hid in prepared_by_id:
+            ready_tasks.append(task)
+            continue
+        _check_active(check_active)
+        if int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
+            tasks.skip_task(
+                task["task_id"],
+                "validation_artifact_unavailable_retry_exhausted",
+                now=now,
+            )
+            counters["retry_exhausted_skipped"] += 1
+        else:
+            tasks.defer_task(
+                task["task_id"],
+                until=(now or 0) + 300,
+                reason="validation_artifact_unavailable",
+                now=now,
+            )
+        _completed_progress(progress, check_active, "task_unexportable", 1, 1)
+
+    if not ready_tasks:
+        counters["generation_unchanged"] = 1
+        return counters
+
+    export_tasks = ready_tasks
+    prepared = [prepared_by_id[_hard_id_for_task(task)] for task in export_tasks]
+
+    # Only a proven exportable batch may revoke the prior generation.  The
+    # pending manifest still precedes every request/report/verdict/card write.
     _check_active(check_active)
     write_pending_generation(
         Path(private_root),
@@ -270,35 +377,11 @@ def run_due_validations(
         len(export_tasks),
         len(export_tasks),
     )
-
-    uc_keys = [str(_read_payload(t).get("uc_key") or "") for t in export_tasks]
-    uc_keys = [k for k in uc_keys if k]
-    if uc_keys:
-        _check_active(check_active)
-        summary = export_requests(
-            private_root,
-            dry_run=False,
-            limit=max(limit, len(export_tasks)),
-            include_regime_specific=True,
-            source="farm_tasks",
-            uc_keys=uc_keys,
-            progress=progress,
-            check_active=check_active,
-        )
-    else:
-        summary = {"exported": 0, "exported_ids": []}
-    expected_ids = {
-        _hard_id_for_task(task)
-        for task in export_tasks
-        if str(_read_payload(task).get("uc_key") or "")
-    }
-    expected_ids.discard("")
-    exported_ids = list(
-        dict.fromkeys(
-            str(candidate_id)
-            for candidate_id in (summary.get("exported_ids") or [])
-            if str(candidate_id) in expected_ids
-        )
+    exported_ids = write_prepared_requests(
+        private_root,
+        prepared,
+        progress=progress,
+        check_active=check_active,
     )
     counters["exported"] = len(exported_ids)
     _completed_progress(
@@ -361,16 +444,24 @@ def run_due_validations(
         )
         for completed, task in enumerate(export_tasks, start=1):
             _check_active(check_active)
-            tasks.defer_task(
-                task["task_id"],
-                until=(now or 0) + 300,
-                reason="validation_no_verdict",
-                now=now,
-            )
+            if int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
+                tasks.skip_task(
+                    task["task_id"],
+                    "validation_no_verdict_retry_exhausted",
+                    now=now,
+                )
+                counters["retry_exhausted_skipped"] += 1
+            else:
+                tasks.defer_task(
+                    task["task_id"],
+                    until=(now or 0) + 300,
+                    reason="validation_no_verdict",
+                    now=now,
+                )
             _completed_progress(
                 progress,
                 check_active,
-                "task_deferred",
+                "task_terminalized",
                 completed,
                 len(export_tasks),
             )
@@ -498,6 +589,13 @@ def run_due_validations(
         hid = _hard_id_for_task(task)
         if hid and hid in verdicts:
             tasks.complete_task(task["task_id"], reason="validated", now=now)
+        elif int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
+            tasks.skip_task(
+                task["task_id"],
+                "validation_no_verdict_retry_exhausted",
+                now=now,
+            )
+            counters["retry_exhausted_skipped"] += 1
         else:
             tasks.defer_task(
                 task["task_id"],

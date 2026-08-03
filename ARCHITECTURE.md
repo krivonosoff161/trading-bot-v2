@@ -87,6 +87,14 @@ existing `schedule_retest`, `export_validation`, and deterministic paper-replay
 owners. Terminal results become `SystemAnalystResultInput.v1`, are reviewed
 once, and may create one bounded next generation. Generation two is terminal.
 
+`export_validation` maintenance classifies a claimed task against its exact
+unique-candidate row before it may change validation generation authority.
+Terminal missing/ineligible rows are skipped through fenced task APIs, recent
+commit-boundary visibility gaps are deferred, and selection continues through a
+bounded scan so one poison head row cannot starve later valid work. Request
+artifacts are prepared read-only; only a non-empty proven batch first publishes
+the fail-closed pending generation and may then write validation side effects.
+
 This architecture does not revive `main.py`, enable live trading, or permit a
 model to edit code, weights, verdicts, levels, or process configuration.
 

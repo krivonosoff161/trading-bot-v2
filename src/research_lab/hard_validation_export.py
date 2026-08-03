@@ -70,10 +70,9 @@ def _report_progress(
     _ensure_active(check_active)
 
 
-def export_requests(
+def prepare_requests(
     private_root: Path,
     *,
-    dry_run: bool = True,
     limit: int = 50,
     status_filter: str | None = None,
     include_regime_specific: bool = False,
@@ -83,11 +82,8 @@ def export_requests(
     uc_keys: list[str] | None = None,
     progress: ProgressCallback | None = None,
     check_active: ActiveCheck | None = None,
-) -> dict[str, Any]:
-    """Find eligible candidates and write validation request files.
-
-    Returns a summary dict with counts.
-    """
+) -> tuple[dict[str, Any], list[CandidateForValidation]]:
+    """Resolve and validate a bounded request batch without writing artifacts."""
     if source not in {"auto", "farm_tasks", "legacy_registry"}:
         raise ValueError("source must be one of: auto, farm_tasks, legacy_registry")
     _ensure_active(check_active)
@@ -135,15 +131,9 @@ def export_requests(
         "exported": 0,
         "exported_ids": [],
         "skipped_no_artifact": 0,
-        "dry_run": dry_run,
+        "prepared": 0,
     }
-
-    if dry_run or not eligible:
-        return summary
-
-    out_dir = private_root / REQUESTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    prepared: list[CandidateForValidation] = []
     for completed, entry in enumerate(eligible, start=1):
         _ensure_active(check_active)
         candidate = _build_candidate(
@@ -157,23 +147,89 @@ def export_requests(
             _report_progress(
                 progress,
                 check_active,
-                "validation_candidate_export_processed",
+                "validation_candidate_prepared",
                 completed,
                 len(eligible),
             )
             continue
+        prepared.append(candidate)
+        _report_progress(
+            progress,
+            check_active,
+            "validation_candidate_prepared",
+            completed,
+            len(eligible),
+        )
+    summary["prepared"] = len(prepared)
+    return summary, prepared
+
+
+def write_prepared_requests(
+    private_root: Path,
+    candidates: list[CandidateForValidation],
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
+) -> list[str]:
+    """Write an already prepared batch after the generation is fail-closed."""
+    if not candidates:
+        return []
+    out_dir = Path(private_root) / REQUESTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exported_ids: list[str] = []
+    for completed, candidate in enumerate(candidates, start=1):
         _ensure_active(check_active)
         req_path = out_dir / f"{_artifact_stem(candidate.candidate_id)}.json"
         write_json(req_path, candidate.to_dict())
-        summary["exported"] += 1
-        summary["exported_ids"].append(candidate.candidate_id)
+        exported_ids.append(candidate.candidate_id)
         _report_progress(
             progress,
             check_active,
             "validation_candidate_export_processed",
             completed,
-            len(eligible),
+            len(candidates),
         )
+    return exported_ids
+
+
+def export_requests(
+    private_root: Path,
+    *,
+    dry_run: bool = True,
+    limit: int = 50,
+    status_filter: str | None = None,
+    include_regime_specific: bool = False,
+    since: str | None = None,
+    candidate_id: str | None = None,
+    source: str = "auto",
+    uc_keys: list[str] | None = None,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
+) -> dict[str, Any]:
+    """Find eligible candidates and optionally write validation request files."""
+    summary, prepared = prepare_requests(
+        private_root,
+        limit=limit,
+        status_filter=status_filter,
+        include_regime_specific=include_regime_specific,
+        since=since,
+        candidate_id=candidate_id,
+        source=source,
+        uc_keys=uc_keys,
+        progress=progress,
+        check_active=check_active,
+    )
+    summary["dry_run"] = dry_run
+    if dry_run or not prepared:
+        return summary
+    exported_ids = write_prepared_requests(
+        private_root,
+        prepared,
+        progress=progress,
+        check_active=check_active,
+    )
+    summary["exported"] = len(exported_ids)
+    summary["exported_ids"] = exported_ids
 
     return summary
 

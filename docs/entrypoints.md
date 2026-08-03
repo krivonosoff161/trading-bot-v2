@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-01
-- Verified against: `7831592cda5e204db2de37da4404f0ee7aac64cd`
+- Verified: 2026-08-03
+- Verified against: `21601895118b642ea514a21607214e8de85f844c`
 - Scope: supported paper/research entrypoints, effects, and incompatible owners
 - Evidence: [public documentation guard](../scripts/ci/check_public_docs.py) and
   [Research Control Center tests](../tests/test_research_control_center.py)
@@ -80,6 +80,8 @@ still requires action-specific authority and duplicate-owner checks.
 | Periodic status | `bat\strategy_lab_status_monitor.bat` | Read-only periodic view. |
 | Clear generic stop | `bat\strategy_lab_clear_stop.bat` | Supported only after quiescence and provenance proof. |
 | Clear exact RCC marker generation | `python -m scripts.strategy_lab.clear_rcc_stop_intents` | Hash-bound dry-run/apply for the exact three-marker generation after quiescence. |
+| Plan terminal validation-task disposition | `python -m scripts.strategy_lab.validation_task_disposition plan --private-root <exact-private-root> --output <private-plan> --missing-grace-seconds <seconds> --json` | Read-only, hash-bound classification of unclaimed queued/deferred orphan, malformed, or no-longer-eligible `export_validation` tasks. The plan must stay outside public Git. |
+| Apply exact validation-task disposition | `python -m scripts.strategy_lab.validation_task_disposition apply --private-root <exact-private-root> --plan <private-plan> --expected-plan-digest <sha256> --json` | Requires zero active owners and zero running tasks; applies only exact fence/sequence/payload-bound terminal transitions through the canonical task API. A second exact apply changes zero rows. |
 
 Never substitute manual file deletion, raw SQL, arbitrary process termination,
 or a legacy stop launcher for the documented mechanisms.
