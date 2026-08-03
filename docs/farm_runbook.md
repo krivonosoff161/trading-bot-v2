@@ -198,6 +198,22 @@ Rollback is forward-only: stop/disable consumers or deploy a v2-aware reader
 while preserving ownership, transition, attempt and outbox history. Never reset
 a fence or manufacture owners for historical rows.
 
+## Validation Maintenance Disposition
+
+An `export_validation` head task is not allowed to revoke a valid generation
+until its unique-candidate identity is eligible and its request can be prepared.
+The runtime scans a bounded number of claimed tasks, terminally skips old
+missing or ineligible identities under their existing fence, and continues to a
+later eligible task. Recent candidate-visibility gaps and temporarily missing
+artifacts defer for a bounded retry; repeated no-verdict or unexportable work
+becomes terminal after the documented attempt budget.
+
+Bulk disposition is an offline maintenance operation. Prove processes, owners,
+ports, running tasks, and database integrity are quiescent; write the plan only
+to private evidence storage; review its reason counts and digest; then apply the
+same digest through `scripts.strategy_lab.validation_task_disposition`. Never
+substitute raw SQL. Reapply the exact plan to prove that zero rows change.
+
 ## Data And Storage
 
 Local/private artifacts include market-data caches, SQLite state, journals,

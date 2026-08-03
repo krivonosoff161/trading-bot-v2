@@ -1548,6 +1548,150 @@ class FarmTasksDB:
     def skip_task(self, task_id: int, reason: str, *, now: float | None = None) -> None:
         self._set_state(task_id, "skipped", reason=reason, now=now)
 
+    def classify_export_validation_task(
+        self,
+        task: dict[str, Any],
+        *,
+        now: float | None = None,
+        missing_grace_seconds: float = 600.0,
+    ) -> dict[str, str]:
+        """Classify a claimed validation task before it can revoke authority.
+
+        A recently created task whose candidate row is not visible is deferred to
+        tolerate the coordinator/priority-worker commit boundary.  An older missing
+        row, a malformed payload, or a candidate that is no longer validation-eligible
+        is terminally skipped by the caller under the task's existing fence.
+        """
+        if str(task.get("task_type") or "") != "export_validation":
+            raise ValueError("task is not export_validation")
+        current = self._effective_now(now)
+        try:
+            payload = json.loads(str(task.get("payload_json") or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        uc_key = str(payload.get("uc_key") or "") if isinstance(payload, dict) else ""
+        if not uc_key:
+            return {"action": "skip", "reason": "validation_task_missing_uc_key"}
+        row = self._conn.execute(
+            "SELECT validation_status FROM unique_candidates WHERE uc_key=?",
+            (uc_key,),
+        ).fetchone()
+        if row is None:
+            age = max(0.0, current - float(task.get("created_at") or current))
+            if age < max(0.0, float(missing_grace_seconds)):
+                return {
+                    "action": "defer",
+                    "reason": "validation_candidate_not_yet_visible",
+                }
+            return {
+                "action": "skip",
+                "reason": "validation_orphan_missing_unique_candidate",
+            }
+        if str(row["validation_status"] or "") not in {
+            "FORWARD_PAPER",
+            "REGIME_SPECIFIC",
+        }:
+            return {
+                "action": "skip",
+                "reason": "validation_candidate_no_longer_eligible",
+            }
+        return {"action": "eligible", "reason": ""}
+
+    def apply_export_validation_disposition_plan(
+        self,
+        entries: list[dict[str, Any]],
+        *,
+        now: float | None = None,
+    ) -> int:
+        """Atomically apply an exact, hash-bound orphan disposition plan.
+
+        Every row must still match its planned state, fence, mutation sequence and
+        payload digest.  Reapplying the same plan after a complete commit changes zero
+        rows.  Any other drift fails closed before the first transition.
+        """
+        current = self._effective_now(now)
+        pending: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+        already_applied = 0
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            for item in entries:
+                task_id = int(item["task_id"])
+                row = self._conn.execute(
+                    "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+                ).fetchone()
+                if row is None or str(row["task_type"] or "") != "export_validation":
+                    raise StaleTaskClaimError("validation disposition task identity changed")
+                payload_digest = hashlib.sha256(
+                    str(row["payload_json"] or "").encode("utf-8")
+                ).hexdigest()
+                expected_seq = int(item["mutation_seq"])
+                expected_reason = str(item["reason"])
+                if (
+                    str(row["state"]) == "skipped"
+                    and str(row["machine_reason"] or "") == expected_reason
+                    and int(row["fencing_token"] or 0) == int(item["fencing_token"])
+                    and int(row["mutation_seq"] or 0) == expected_seq + 1
+                    and payload_digest == str(item["payload_sha256"])
+                    and row["claim_owner"] is None
+                ):
+                    already_applied += 1
+                    continue
+                if not (
+                    str(row["state"]) == str(item["state"])
+                    and str(row["state"]) in {"queued", "deferred"}
+                    and int(row["fencing_token"] or 0) == int(item["fencing_token"])
+                    and int(row["mutation_seq"] or 0) == expected_seq
+                    and payload_digest == str(item["payload_sha256"])
+                    and row["claim_owner"] is None
+                ):
+                    raise StaleTaskClaimError("validation disposition plan is stale")
+                pending.append((row, item))
+            if already_applied and pending:
+                raise StaleTaskClaimError("validation disposition plan is partially applied")
+            emitted: list[tuple[int, str]] = []
+            for row, item in pending:
+                task_id = int(row["task_id"])
+                mutation_seq = int(row["mutation_seq"] or 0) + 1
+                reason = str(item["reason"])
+                cur = self._conn.execute(
+                    """UPDATE tasks
+                       SET state='skipped', machine_reason=?, updated_at=?,
+                           mutation_protocol='fenced.v2', mutation_seq=?,
+                           claim_owner=NULL, claim_expires_at=NULL
+                       WHERE task_id=? AND state=? AND fencing_token=?
+                         AND mutation_protocol='fenced.v2' AND mutation_seq=?
+                         AND claim_owner IS NULL""",
+                    (
+                        reason,
+                        current,
+                        mutation_seq,
+                        task_id,
+                        str(row["state"]),
+                        int(row["fencing_token"] or 0),
+                        int(row["mutation_seq"] or 0),
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise StaleTaskClaimError("validation disposition changed during apply")
+                self._record_transition(
+                    task_id,
+                    str(row["state"]),
+                    "skipped",
+                    reason,
+                    current,
+                    self.owner_id,
+                    int(row["fencing_token"] or 0),
+                    mutation_seq,
+                )
+                emitted.append((task_id, reason))
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        for task_id, reason in emitted:
+            self._emit_transition(task_id, "skipped", reason, current)
+        return len(pending)
+
     def block_task(
         self, task_id: int, reason: str, *, now: float | None = None
     ) -> None:

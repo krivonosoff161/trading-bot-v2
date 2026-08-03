@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-02
-- Verified against: `ec5b4a3a0fe2424bfccc7293dee10b861154c75c`
+- Verified: 2026-08-03
+- Verified against: `21601895118b642ea514a21607214e8de85f844c`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -24,7 +24,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Strategy Lab and experiment registry | implemented bounded | Bounded scheduling, lineage, and candidate records exist; a long reliability window remains open. |
 | Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
-| Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Validation maintenance uses batch-scoped artifact lookup, completed-chunk progress, and fail-closed owner/fence cancellation; private runtime continuity remains an operational question. |
+| Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Validation maintenance uses bounded fair selection past terminal orphan/ineligible tasks, a finite no-verdict retry budget, batch-scoped artifact lookup, completed-chunk progress, and fail-closed owner/fence cancellation. A batch with no exportable candidate preserves the last valid generation; private runtime continuity remains an operational question. |
 | Paper observation | implemented bounded | Outcomes and accounting are paper-only and cannot create exchange actions. |
 | Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist. Listener inventory uses an isolated, bounded native Windows provider; a fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |

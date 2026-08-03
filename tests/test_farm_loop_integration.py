@@ -5,6 +5,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,25 @@ from src.research_lab.timeframes import load_timeframe_profiles  # noqa: E402
 PROFILES = load_timeframe_profiles()
 POLICY = load_resource_policy()
 _HOUR_MS = 3_600_000
+
+
+def _upsert_validation_candidate(tasks: FarmTasksDB, uc_key: str, *, now: float = 1.0) -> None:
+    tasks.upsert_unique_candidate(
+        {
+            "uc_key": uc_key,
+            "symbol": "X",
+            "timeframe": "1h",
+            "family": "momentum_breakout",
+            "params_hash": "ph",
+            "data_fingerprint": "fp",
+            "decision": "OBSERVE",
+            "validation_status": "FORWARD_PAPER",
+            "hard_status": "",
+            "candidate_id": "source",
+            "params": {},
+        },
+        now=now,
+    )
 
 
 def _write_1h_candles(private_root: Path, symbol: str, n: int = 200) -> None:
@@ -158,8 +178,15 @@ def test_validation_orchestrator_auto_stampback(monkeypatch, tmp_path):
                 "results": [{"candidate_id": validation_id, "hard_status": "PAPER_FORWARD_READY"}]}
 
     monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests",
-        lambda *args, **kwargs: {"exported": 1, "exported_ids": [validation_id]},
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *args, **kwargs: (
+            {"skipped_no_artifact": 0},
+            [SimpleNamespace(candidate_id=validation_id)],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests",
+        lambda *args, **kwargs: [validation_id],
     )
     monkeypatch.setattr("src.research_lab.validation_orchestrator.run_validation_batch", fake_validation_batch)
     out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
@@ -285,9 +312,21 @@ def test_validation_orchestrator_rejects_stale_generation_when_current_export_is
     )
     assert [card.candidate_id for card in load_ready_setup_cards(tmp_path)] == [validation_id]
 
+    from src.research_lab.validation_generation import write_current_generation
+
+    queued = tasks.tasks_in_state("queued", task_type="export_validation")[0]
+    write_current_generation(
+        tmp_path,
+        tasks=[queued],
+        exported_ids=[validation_id],
+        completed_ids=[validation_id],
+        producer_time=1.5,
+    )
+    generation_path = tmp_path / "hard_validation" / "current_generation.json"
+    previous_generation = generation_path.read_bytes()
     monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests",
-        lambda *args, **kwargs: {"exported": 0, "exported_ids": []},
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *args, **kwargs: ({"skipped_no_artifact": 1}, []),
     )
     batch_calls = []
 
@@ -310,20 +349,25 @@ def test_validation_orchestrator_rejects_stale_generation_when_current_export_is
     assert out["validated"] == 0
     assert out["stamped_unique"] == 0
     assert out["setup_cards"] == 0
+    assert out["generation_unchanged"] == 1
     assert batch_calls == []
     assert tasks.latest_unique_candidates()[0]["hard_status"] == ""
     assert tasks.tasks_in_state("deferred", task_type="export_validation")
-    assert load_ready_setup_cards(tmp_path) == []
+    assert generation_path.read_bytes() == previous_generation
     tasks.close()
 
 
 def test_validation_orchestrator_publishes_pending_before_export_side_effects(
     monkeypatch, tmp_path
 ):
+    from src.research_lab.hard_validation_export import (
+        validation_id_for_unique_candidate,
+    )
     from src.research_lab.validation_generation import load_current_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    _upsert_validation_candidate(tasks, "crash-window")
     tasks.enqueue_task(
         task_type="export_validation",
         task_key="export::crash-window",
@@ -343,7 +387,20 @@ def test_validation_orchestrator_publishes_pending_before_export_side_effects(
         raise RuntimeError("synthetic producer crash")
 
     monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests", crash_export
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *args, **kwargs: (
+            {"skipped_no_artifact": 0},
+            [
+                SimpleNamespace(
+                    candidate_id=validation_id_for_unique_candidate(
+                        {"uc_key": "crash-window"}
+                    )
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests", crash_export
     )
 
     with pytest.raises(RuntimeError, match="synthetic producer crash"):
@@ -359,7 +416,6 @@ def test_validation_orchestrator_publishes_pending_before_export_side_effects(
 def test_validation_orchestrator_missing_uc_key_cannot_scan_unrelated_candidates(
     monkeypatch, tmp_path
 ):
-    from src.research_lab.validation_generation import load_current_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
@@ -372,23 +428,15 @@ def test_validation_orchestrator_missing_uc_key_cannot_scan_unrelated_candidates
         payload={"candidate_id": "source-only"},
         now=1.0,
     )
-    export_calls = []
-    monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests",
-        lambda *args, **kwargs: export_calls.append((args, kwargs)),
-    )
-
     out = run_due_validations(tasks, tmp_path, apply=True, limit=10, now=2.0)
 
     assert out["export_tasks"] == 1
     assert out["exported"] == 0
     assert out["validated"] == 0
-    assert export_calls == []
-    manifest = load_current_generation(tmp_path)
-    assert manifest["producer_complete"] is True
-    assert manifest["exported_ids"] == []
-    assert manifest["active"] == {}
-    assert tasks.tasks_in_state("deferred", task_type="export_validation")
+    assert out["generation_unchanged"] == 1
+    assert not (tmp_path / "hard_validation" / "current_generation.json").exists()
+    skipped = tasks.tasks_in_state("skipped", task_type="export_validation")
+    assert skipped[0]["machine_reason"] == "validation_task_missing_uc_key"
     tasks.close()
 
 
@@ -396,10 +444,9 @@ def test_validation_orchestrator_empty_current_batch_skips_historical_artifact_s
     monkeypatch, tmp_path
 ):
     """The exact canary failure path must be O(current batch), not O(history)."""
-    from src.research_lab.validation_generation import load_current_generation
     from src.research_lab.validation_orchestrator import run_due_validations
 
-    tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    tasks = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1.0)
     tasks.enqueue_task(
         task_type="export_validation",
         task_key="export::stale-uc-key",
@@ -425,7 +472,7 @@ def test_validation_orchestrator_empty_current_batch_skips_historical_artifact_s
         tmp_path,
         apply=True,
         limit=1,
-        now=2.0,
+        now=1_000.0,
         progress=lambda stage, completed, total: milestones.append(
             (stage, completed, total)
         ),
@@ -435,19 +482,13 @@ def test_validation_orchestrator_empty_current_batch_skips_historical_artifact_s
     assert out["export_tasks"] == 1
     assert out["exported"] == 0
     assert [stage for stage, _, _ in milestones] == [
+        "task_dispositioned",
         "tasks_claimed",
-        "pending_generation_published",
-        "validation_entries_loaded",
-        "validation_entries_filtered",
-        "requests_exported",
-        "validations_completed",
-        "generation_published",
-        "task_deferred",
     ]
-    manifest = load_current_generation(tmp_path)
-    assert manifest["producer_complete"] is True
-    assert manifest["active"] == {}
-    assert len(tasks.tasks_in_state("deferred", task_type="export_validation")) == 1
+    assert out["orphan_tasks_skipped"] == 1
+    assert out["generation_unchanged"] == 1
+    assert not (tmp_path / "hard_validation" / "current_generation.json").exists()
+    assert len(tasks.tasks_in_state("skipped", task_type="export_validation")) == 1
     tasks.close()
 
 
@@ -496,6 +537,7 @@ def test_validation_lease_failure_after_export_blocks_later_side_effects(
     uc_key = "FAIL::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    _upsert_validation_candidate(tasks, uc_key)
     tasks.enqueue_task(
         task_type="export_validation",
         task_key=f"export::{uc_key}",
@@ -503,8 +545,15 @@ def test_validation_lease_failure_after_export_blocks_later_side_effects(
         now=1.0,
     )
     monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests",
-        lambda *_args, **_kwargs: {"exported": 1, "exported_ids": [validation_id]},
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *_args, **_kwargs: (
+            {"skipped_no_artifact": 0},
+            [SimpleNamespace(candidate_id=validation_id)],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests",
+        lambda *_args, **_kwargs: [validation_id],
     )
     validation_calls: list[bool] = []
     monkeypatch.setattr(
@@ -549,6 +598,7 @@ def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
     uc_key = "X::1h::momentum_breakout::ph::fp"
     validation_id = validation_id_for_unique_candidate({"uc_key": uc_key})
     tasks = FarmTasksDB(tasks_db_path(tmp_path))
+    _upsert_validation_candidate(tasks, uc_key)
     tasks.enqueue_task(
         task_type="export_validation",
         task_key=f"export::{uc_key}",
@@ -559,8 +609,15 @@ def test_final_generation_failure_leaves_running_task_for_orphan_recovery(
         now=1.0,
     )
     monkeypatch.setattr(
-        "src.research_lab.validation_orchestrator.export_requests",
-        lambda *args, **kwargs: {"exported": 1, "exported_ids": [validation_id]},
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *args, **kwargs: (
+            {"skipped_no_artifact": 0},
+            [SimpleNamespace(candidate_id=validation_id)],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests",
+        lambda *args, **kwargs: [validation_id],
     )
     monkeypatch.setattr(
         "src.research_lab.validation_orchestrator.run_validation_batch",

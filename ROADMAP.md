@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-02
-- Verified against: `ec5b4a3a0fe2424bfccc7293dee10b861154c75c`
+- Verified: 2026-08-03
+- Verified against: `21601895118b642ea514a21607214e8de85f844c`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -28,8 +28,11 @@ dependency, not by a route to live trading.
 - Validation maintenance resolves only the current bounded batch before
   historical feedback work, publishes durable progress only after completed
   export/check/artifact chunks, and rechecks owner/fence authority before each
-  side effect. An empty current batch terminates without rescanning the full
-  historical validation corpus.
+  side effect. Bounded fair selection terminally classifies stale orphan and
+  ineligible tasks instead of reclaiming the head row forever, while a finite
+  retry budget terminally classifies repeated no-verdict work. A batch with no
+  exportable candidate preserves the prior generation and does not rescan the
+  full historical validation corpus.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies
