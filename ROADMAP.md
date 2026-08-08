@@ -42,6 +42,12 @@ dependency, not by a route to live trading.
   prefix no-lookahead contract inside a bounded recent horizon derived from the
   strategy history requirement and paper hold window; completed chunks advance
   process-lease liveness and recheck fail-closed cancellation.
+- Paper market-data observation now distinguishes provider failure, candle
+  continuity gaps, and a successful empty provider response. These conditions
+  preserve active observations and produce deduplicated operational
+  incident/recovery evidence; defense-in-depth selectors exclude them from
+  family ranking, training projections, setup memory, adaptive recommendations,
+  and advisory outcome-review inputs.
 - Public storage foundations include bounded synthetic migration, integrity,
   reachability, rollback, and plan-digest-bound backup retention proofs. The
   latter preserves one full unpacked generation and restore-verifies
@@ -58,8 +64,9 @@ private runtime, data, or trading hypothesis is proven.
 
 1. Prove validation service capacity, artifact-aware fairness, high-water
    backpressure, and oldest-age SLO observability under synthetic contention.
-2. Separate provider errors and operational data gaps from genuine market-data
-   absence, and censor technical failures from outcome memory and training.
+2. Verify during the bounded canary that the implemented provider-error/data-gap/
+   genuine-no-market-data taxonomy preserves observations through a real outage
+   and recovery while technical evidence remains absent from all learning inputs.
 3. Bind paper consumers to a verified current validation generation and perform
    any private v2 cutover only through the separately authorized operational gate.
 4. Monitor end-to-end product progress and generation freshness rather than PID

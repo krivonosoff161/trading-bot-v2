@@ -14,12 +14,12 @@ from typing import Any
 
 from src.research_lab.lineage_contract import write_cycle_links
 from src.research_lab.paper_projection_reader import read_projection_view
-from src.research_lab.paper_signals import store
+from src.research_lab.paper_signals import outcome_evidence, store
 from src.research_lab.paper_signals.contract import PaperActionSignal
 from src.research_lab.trade_math import first_tp, geometry, midpoint
 
 SCHEMA = "TrainingRow.v2"
-ROW_FIELDS_VERSION = "lifecycle_cursor.v2"
+ROW_FIELDS_VERSION = "outcome_evidence_taxonomy.v3"
 TERMINAL_STATUSES = {"closed_paper", "expired", "invalidated", "reviewed"}
 
 
@@ -331,6 +331,13 @@ def training_row(
         "max_hold_bars": int(sig.max_hold_bars),
         "max_hold_minutes": int(sig.max_hold_minutes),
         "result": str(outcome.get("result") or ""),
+        "outcome_evidence_kind": outcome_evidence.evidence_kind(
+            {
+                **outcome,
+                "diagnosis": review.get("diagnosis"),
+                "market_data_status": trade.get("status"),
+            }
+        ),
         "lifecycle_schema": str(outcome.get("lifecycle_schema") or "legacy"),
         "observed_entry": outcome.get("entry"),
         "observed_exit": outcome.get("exit"),
@@ -421,14 +428,22 @@ def export_training_rows(
         evidence_database_path=evidence_database_path,
     )
     source_terminal_all = [sig for sig in signals if sig.status in TERMINAL_STATUSES]
+    source_terminal_market = [
+        sig
+        for sig in source_terminal_all
+        if outcome_evidence.is_market_outcome(
+            {**(sig.outcome or {}), "diagnosis": (sig.review or {}).get("diagnosis")}
+        )
+    ]
+    source_terminal_technical = len(source_terminal_all) - len(source_terminal_market)
     if trade_generation["authority_database_exists"]:
         source_terminal = [
             sig
-            for sig in source_terminal_all
+            for sig in source_terminal_market
             if (trades.get(sig.signal_id) or {}).get("terminal_lifecycle_event_id")
         ]
     else:
-        source_terminal = source_terminal_all
+        source_terminal = source_terminal_market
     source_terminal_hash = _source_hash(source_terminal)
     advice_by_feature = _calculator_refs(private_root)
     policy_by_signal = _adaptive_policy_refs(private_root)
@@ -464,7 +479,15 @@ def export_training_rows(
         }
     if terminal_only:
         signals = source_terminal
-    rows = [
+    else:
+        signals = [
+            sig
+            for sig in signals
+            if outcome_evidence.is_market_outcome(
+                {**(sig.outcome or {}), "diagnosis": (sig.review or {}).get("diagnosis")}
+            )
+        ]
+    candidate_rows = [
         training_row(
             sig,
             telegram_card=cards.get(sig.signal_id),
@@ -475,6 +498,8 @@ def export_training_rows(
         )
         for sig in signals
     ]
+    rows = [row for row in candidate_rows if outcome_evidence.is_market_outcome(row)]
+    referenced_technical_censored = len(candidate_rows) - len(rows)
     write_cycle_links(
         private_root,
         [
@@ -526,7 +551,10 @@ def export_training_rows(
         "rows": len(rows),
         "terminal_only": terminal_only,
         "source_terminal_rows": len(source_terminal),
-        "source_terminal_rows_unbound": len(source_terminal_all) - len(source_terminal),
+        "source_terminal_rows_discovered": len(source_terminal_all),
+        "source_terminal_rows_technical_censored": source_terminal_technical,
+        "referenced_operational_rows_censored": referenced_technical_censored,
+        "source_terminal_rows_unbound": len(source_terminal_market) - len(source_terminal),
         "source_terminal_hash": source_terminal_hash,
         "export_refs_hash": export_refs_hash,
         "skipped": False,
