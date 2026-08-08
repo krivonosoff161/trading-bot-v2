@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-03
-- Verified against: `21601895118b642ea514a21607214e8de85f844c`
+- Verified: 2026-08-09
+- Verified against: `fb381deceac935328dbdbf0db3d6b59fa1a4f81c`
 - Scope: implemented public capabilities, bounded limitations, and next gates
 - Evidence: [machine roadmap](docs/trading-portfolio-roadmap.yaml) and the
   production tests linked for each module
@@ -24,7 +24,7 @@ model conversations, recipients, credentials, or workstation-specific state.
 | Strategy Lab and experiment registry | implemented bounded | Bounded scheduling, lineage, and candidate records exist; a long reliability window remains open. |
 | Deterministic simulation | implemented bounded | Declared truth tiers and synthetic parity are covered; full market execution fidelity is not claimed. |
 | Independent validation bridge | implemented bounded | `honest-backtest` can try to falsify a candidate; a pass means only not rejected. |
-| Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Validation maintenance uses bounded fair selection past terminal orphan/ineligible tasks, a finite no-verdict retry budget, batch-scoped artifact lookup, completed-chunk progress, and fail-closed owner/fence cancellation. A batch with no exportable candidate preserves the last valid generation; private runtime continuity remains an operational question. |
+| Fenced candidate lifecycle | implemented bounded | Owner, fence, claim, generation, and idempotency contracts are tested. Continuous validation maintenance honors the configured batch capacity, scans a bounded window past terminal orphan/ineligible and artifact-unavailable head tasks, and applies upstream classification backpressure at a configurable high-water mark without discarding classify work. Aggregate backlog, oldest age, arrival, service, and drain estimates are observable; a finite retry budget terminalizes repeated failures. A batch with no exportable candidate preserves the last valid generation; private runtime continuity and SLO compliance remain operational questions. |
 | Paper observation | implemented bounded | Current-generation authority is content-verified once per cycle, active cards are loaded directly without a historical catalog scan, and signal evaluation preserves prefix no-lookahead semantics inside a declared-history-bounded recent horizon with completed-chunk progress and fail-closed cancellation. Outcomes and accounting are paper-only and cannot create exchange actions; continuous private-runtime reliability remains unproved. |
 | Research Control Center | implemented bounded | The canonical paper-only supervisor and fail-closed safety checks exist. Listener inventory uses an isolated, bounded native Windows provider; a fresh 48-hour canary is still required. |
 | LLM advisory contour | implemented bounded | Inputs and outputs are bounded proposals; deterministic code owns calculations, verdicts, state changes, and permissions. |
@@ -47,7 +47,10 @@ row are canonical in the [Trading Portfolio Roadmap](docs/trading-portfolio-road
 3. **Data and lifecycle continuity:** demonstrate that missing public data,
    interrupted work, delivery ambiguity, and recovery preserve lineage and do
    not manufacture outcomes or duplicates.
-4. **Quality calibration:** only after reliability, measure signal, validator,
+4. **Validation service SLO:** prove during the paper-only canary that the
+   configured service capacity drains rather than grows the validation backlog,
+   the oldest-age SLO remains bounded, and backpressure never loses classify work.
+5. **Quality calibration:** only after reliability, measure signal, validator,
    role, and LLM advisory quality against immutable held-out evidence.
 
 GitHub issue #224 tracks end-to-end paper-only observation. Issue #155 remains

@@ -64,6 +64,61 @@ def test_priority_worker_uses_independent_db_and_stops_cleanly(monkeypatch, tmp_
     assert seen["statuses"] == ["running_slot", "idle", "stopped"]
 
 
+def test_priority_worker_drains_validation_before_producing_more_work(
+    monkeypatch, tmp_path
+) -> None:
+    seen = {"validation": 0, "slots": 0}
+
+    class FakeTasks:
+        on_transition = None
+
+        def eligible_count(self, *, task_types=None):
+            return 1 if task_types == ("export_validation",) else 0
+
+        def close(self):
+            pass
+
+    stop = threading.Event()
+
+    def fake_validation(*_args, **kwargs):
+        seen["validation"] += 1
+        assert kwargs["status_target"] == "priority_worker"
+        return {"validated": 2}
+
+    def fake_slot(*_args, **_kwargs):
+        seen["slots"] += 1
+        stop.set()
+        return {
+            "pivot": "idle",
+            "active_tasks": 0,
+            "counters": {},
+            "status": {},
+            "errors": [],
+        }
+
+    monkeypatch.setattr(farm_loop, "FarmTasksDB", lambda *_args, **_kwargs: FakeTasks())
+    monkeypatch.setattr(farm_loop, "_run_validation_maintenance", fake_validation)
+    monkeypatch.setattr(farm_loop, "_run_priority_slot", fake_slot)
+    monkeypatch.setattr(farm_loop, "_write_priority_checkpoint", lambda *_a, **_k: tmp_path / "cp")
+    monkeypatch.setattr(farm_loop, "_write_priority_worker_status", lambda *_a, **_k: None)
+    monkeypatch.setattr(farm_journal, "make_transition_sink", lambda _root: None)
+
+    farm_loop._priority_worker_loop(
+        Namespace(
+            stop_file="",
+            run_validation=True,
+            busy_slot_seconds=0.1,
+            idle_poll_seconds=0.1,
+        ),
+        {},
+        {},
+        tmp_path,
+        stop,
+    )
+
+    assert seen == {"validation": 1, "slots": 1}
+
+
 def test_claim_failure_signal_stops_worker_and_interrupts_foreground(tmp_path) -> None:
     stop = threading.Event()
     interrupted = []
@@ -304,7 +359,13 @@ def test_validation_maintenance_binds_real_milestones_to_process_lease(
     monkeypatch.setattr(farm_loop.time, "time", lambda: 100.0)
     try:
         result = farm_loop._run_validation_maintenance(
-            Namespace(stop_file="", task_claim_failure_signal=None),
+            Namespace(
+                stop_file="",
+                task_claim_failure_signal=None,
+                max_validations=7,
+                validation_backlog_high_water=11,
+                validation_backlog_slo_seconds=22.0,
+            ),
             object(),
             tmp_path,
             apply=True,
@@ -317,16 +378,18 @@ def test_validation_maintenance_binds_real_milestones_to_process_lease(
     status = json.loads(
         (tmp_path / "state" / "farm_loop_status.json").read_text(encoding="utf-8")
     )
-    assert result == {"validated": 1}
-    assert seen["limit"] == 1
-    assert status["details"] == {
-        "milestone": "validations_completed",
-        "completed": 1,
-        "total": 1,
-        "max_validations": 1,
-    }
+    assert result["validated"] == 1
+    assert result["backlog_after"]["active"] == 0
+    assert seen["limit"] == 7
+    assert status["details"]["milestone"] == "validations_completed"
+    assert status["details"]["completed"] == 1
+    assert status["details"]["total"] == 1
+    assert status["details"]["max_validations"] == 7
+    assert status["details"]["backlog_high_water"] == 11
+    assert status["details"]["backlog_slo_seconds"] == 22.0
+    assert status["details"]["backlog"]["active"] == 0
     assert stages == [
-        "validation_maintenance",
+        "validation_maintenance:starting",
         "validation_maintenance:requests_exported",
         "validation_maintenance:validations_completed",
     ]
@@ -475,7 +538,8 @@ def test_validation_maintenance_over_900_logical_seconds_keeps_real_progress(
     finally:
         farm_loop._PROCESS_LEASE_SUPERVISORS.pop(ownership_path, None)
 
-    assert result == {"validated": 1}
+    assert result["validated"] == 1
+    assert result["backlog_after"]["active"] == 0
     assert clock[0] == 1200.0
     assert len(progress_times) == 11  # initial durable stage plus ten real chunks
     assert max(
@@ -1131,6 +1195,16 @@ class TestCycleLogStages:
         assert "'--live-universe-ttl-seconds','%STRATEGY_LAB_LIVE_UNIVERSE_TTL_SECONDS%'" in bat
         assert "'--live-universe-top-n','%STRATEGY_LAB_LIVE_UNIVERSE_TOP_N%'" in bat
         assert "'--max-validations','%STRATEGY_LAB_FARM_MAX_VALIDATIONS%'" in bat
+        assert "STRATEGY_LAB_VALIDATION_BACKLOG_HIGH_WATER=256" in bat
+        assert "STRATEGY_LAB_VALIDATION_BACKLOG_SLO_SECONDS=3600" in bat
+        assert (
+            "'--validation-backlog-high-water',"
+            "'%STRATEGY_LAB_VALIDATION_BACKLOG_HIGH_WATER%'"
+        ) in bat
+        assert (
+            "'--validation-backlog-slo-seconds',"
+            "'%STRATEGY_LAB_VALIDATION_BACKLOG_SLO_SECONDS%'"
+        ) in bat
         assert "STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED=2" in bat
         assert "'--paper-signals-pfr-reserved','%STRATEGY_LAB_PAPER_SIGNALS_PFR_RESERVED%'" in bat
         assert "STRATEGY_LAB_RUN_CALCULATOR_ADVISOR=1" in bat

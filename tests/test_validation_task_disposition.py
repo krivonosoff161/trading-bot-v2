@@ -141,6 +141,131 @@ def test_runtime_scans_past_orphan_to_valid_task(monkeypatch, tmp_path) -> None:
     store.close()
 
 
+def test_runtime_scans_past_artifact_unavailable_head_to_ready_task(
+    monkeypatch, tmp_path
+) -> None:
+    path = tasks_db_path(tmp_path)
+    store = FarmTasksDB(path, clock=lambda: 1.0)
+    _candidate(store, "artifact-missing")
+    _task(store, "artifact-missing", "000-artifact-missing")
+    _candidate(store, "artifact-ready")
+    _task(store, "artifact-ready", "001-artifact-ready")
+    validation_id = validation_id_for_unique_candidate({"uc_key": "artifact-ready"})
+
+    def fake_prepare(*_args, **kwargs):
+        requested = set(kwargs["uc_keys"])
+        if "artifact-ready" in requested:
+            return (
+                {"skipped_no_artifact": len(requested) - 1},
+                [SimpleNamespace(candidate_id=validation_id)],
+            )
+        return {"skipped_no_artifact": len(requested)}, []
+
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.prepare_requests", fake_prepare
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.write_prepared_requests",
+        lambda *_args, **_kwargs: [validation_id],
+    )
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.run_validation_batch",
+        lambda *_args, **_kwargs: {
+            "total": 1,
+            "validated": 0,
+            "errors": 0,
+            "results": [],
+        },
+    )
+
+    out = run_due_validations(store, tmp_path, apply=True, limit=1, now=1_000.0)
+
+    assert out["tasks_examined"] == 2
+    assert out["artifact_batches"] == 2
+    assert out["artifact_ready_tasks"] == 1
+    assert out["unexportable_candidates"] == 1
+    assert out["exported"] == 1
+    reasons = {
+        row["machine_reason"]
+        for row in store.tasks_in_state("deferred", task_type="export_validation")
+    }
+    assert reasons == {"validation_artifact_unavailable", "validation_no_verdict"}
+    store.close()
+
+
+def test_validation_backpressure_preserves_classify_task_and_reports_rates(
+    monkeypatch, tmp_path
+) -> None:
+    from src.research_lab import farm_coordinator
+
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1.0)
+    _task(store, "backlog-a", "backlog-a")
+    _task(store, "backlog-b", "backlog-b")
+    store.enqueue_task(
+        task_type="classify_result",
+        task_key="classify::blocked-by-validation-capacity",
+        payload={"run_dir_label": "must-not-run"},
+        now=1.0,
+    )
+    monkeypatch.setattr(
+        farm_coordinator,
+        "classify_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("classification must yield under validation backpressure")
+        ),
+    )
+    counters: dict[str, object] = {}
+
+    farm_coordinator._classify_due(
+        store,
+        private_root=tmp_path,
+        limit=2,
+        validation_backlog_high_water=2,
+        counters=counters,
+        now=1_000.0,
+    )
+
+    assert counters["validation_backpressure_active"] == 1
+    assert counters["validation_backlog_active"] == 2
+    assert counters["validation_classify_yielded"] == 1
+    assert len(store.tasks_in_state("queued", task_type="classify_result")) == 1
+
+    claimed = store.claim_next_task(task_types=("export_validation",), now=1_000.0)
+    assert claimed is not None
+    store.skip_task(claimed["task_id"], "synthetic_terminal", now=1_000.0)
+    metrics = store.validation_backlog_metrics(now=1_000.0)
+    assert metrics["active"] == 1
+    assert metrics["arrivals"] == 2
+    assert metrics["terminal"] == 1
+    assert metrics["arrival_rate_per_hour"] == 2.0
+    assert metrics["service_rate_per_hour"] == 1.0
+    assert metrics["drain_eta_hours"] is None
+    store.close()
+
+
+def test_artifact_unavailable_retry_budget_is_terminal(monkeypatch, tmp_path) -> None:
+    store = FarmTasksDB(tasks_db_path(tmp_path), clock=lambda: 1.0)
+    _candidate(store, "artifact-never-arrives")
+    _task(store, "artifact-never-arrives", "artifact-never-arrives")
+    monkeypatch.setattr(
+        "src.research_lab.validation_orchestrator.prepare_requests",
+        lambda *_args, **_kwargs: ({"skipped_no_artifact": 1}, []),
+    )
+
+    for now in (1_000.0, 1_400.0, 1_800.0):
+        out = run_due_validations(store, tmp_path, apply=True, limit=1, now=now)
+        assert out["generation_unchanged"] == 1
+
+    skipped = store.tasks_in_state("skipped", task_type="export_validation")
+    assert len(skipped) == 1
+    assert (
+        skipped[0]["machine_reason"]
+        == "validation_artifact_unavailable_retry_exhausted"
+    )
+    assert skipped[0]["attempts"] == 3
+    store.close()
+
+
 def test_no_verdict_retry_budget_is_terminal(monkeypatch, tmp_path) -> None:
     path = tasks_db_path(tmp_path)
     store = FarmTasksDB(path, clock=lambda: 1.0)
