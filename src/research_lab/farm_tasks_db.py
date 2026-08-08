@@ -777,6 +777,92 @@ class FarmTasksDB:
                     0
                 ]
             ),
+            "validation_backlog": self.validation_backlog_metrics(),
+        }
+
+    def validation_backlog_metrics(
+        self,
+        *,
+        now: float | None = None,
+        window_seconds: float = 3600.0,
+    ) -> dict[str, Any]:
+        """Return bounded aggregate evidence for export-validation capacity.
+
+        The metrics deliberately expose counts and timing only.  They never read task
+        payloads or validation artifacts, so status surfaces can measure arrival/service
+        pressure without leaking private research rows.
+        """
+
+        current = self._effective_now(now)
+        window = max(1.0, float(window_seconds))
+        since = current - window
+        active_placeholders = ",".join("?" for _ in ACTIVE_STATES)
+        state_rows = self._conn.execute(
+            f"""SELECT state, COUNT(*) AS n
+                FROM tasks
+                WHERE task_type='export_validation' AND state IN ({active_placeholders})
+                GROUP BY state""",
+            ACTIVE_STATES,
+        ).fetchall()
+        by_state = {str(row["state"]): int(row["n"]) for row in state_rows}
+        active = sum(by_state.values())
+        oldest_row = self._conn.execute(
+            f"""SELECT MIN(created_at) AS oldest
+                FROM tasks
+                WHERE task_type='export_validation' AND state IN ({active_placeholders})""",
+            ACTIVE_STATES,
+        ).fetchone()
+        oldest_created_at = (
+            None
+            if oldest_row is None or oldest_row["oldest"] is None
+            else float(oldest_row["oldest"])
+        )
+        arrivals = int(
+            self._conn.execute(
+                """SELECT COUNT(*) FROM tasks
+                   WHERE task_type='export_validation' AND created_at>=?""",
+                (since,),
+            ).fetchone()[0]
+        )
+        terminal = int(
+            self._conn.execute(
+                """SELECT COUNT(*) FROM tasks
+                   WHERE task_type='export_validation'
+                     AND state IN ('completed','skipped','failed')
+                     AND updated_at>=?""",
+                (since,),
+            ).fetchone()[0]
+        )
+        hours = window / 3600.0
+        arrival_rate = arrivals / hours
+        service_rate = terminal / hours
+        net_drain_rate = service_rate - arrival_rate
+        return {
+            "active": int(active),
+            "eligible": self.eligible_count(
+                current, task_types=("export_validation",)
+            ),
+            "by_state": by_state,
+            "oldest_age_seconds": (
+                0.0
+                if oldest_created_at is None
+                else round(max(0.0, current - oldest_created_at), 3)
+            ),
+            "window_seconds": window,
+            "arrivals": arrivals,
+            "terminal": terminal,
+            "arrival_count_method": "task_created_in_window",
+            "service_count_method": "current_terminal_state_updated_in_window",
+            "arrival_rate_per_hour": round(arrival_rate, 3),
+            "service_rate_per_hour": round(service_rate, 3),
+            "net_drain_rate_per_hour": round(net_drain_rate, 3),
+            "drain_eta_hours": (
+                round(active / net_drain_rate, 3)
+                if active and net_drain_rate > 0
+                else 0.0
+                if not active
+                else None
+            ),
         }
 
     def _set_state(

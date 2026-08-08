@@ -78,6 +78,13 @@ _COUNTER_KEYS = (
     "classified",
     "unique_upserted",
     "exports_created",
+    "validation_backpressure_active",
+    "validation_classify_yielded",
+    "validation_backlog_active",
+    "validation_backlog_eligible",
+    "validation_backlog_oldest_age_seconds",
+    "validation_arrival_rate_per_hour",
+    "validation_service_rate_per_hour",
     "followups_scheduled",
     "followups_deduped",
     "followup_notes",
@@ -1488,10 +1495,37 @@ def _sync_completions(tasks: FarmTasksDB, *, conn, counters, now) -> None:
             )
 
 
-def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> None:
+def _classify_due(
+    tasks: FarmTasksDB,
+    *,
+    private_root,
+    limit,
+    validation_backlog_high_water,
+    counters,
+    now,
+) -> None:
     import json
 
+    high_water = max(1, int(validation_backlog_high_water))
     for _ in range(limit):
+        backlog = tasks.validation_backlog_metrics(now=now)
+        counters["validation_backlog_active"] = int(backlog["active"])
+        counters["validation_backlog_eligible"] = int(backlog["eligible"])
+        counters["validation_backlog_oldest_age_seconds"] = float(
+            backlog["oldest_age_seconds"]
+        )
+        counters["validation_arrival_rate_per_hour"] = float(
+            backlog["arrival_rate_per_hour"]
+        )
+        counters["validation_service_rate_per_hour"] = float(
+            backlog["service_rate_per_hour"]
+        )
+        if int(backlog["active"]) >= high_water:
+            counters["validation_backpressure_active"] = 1
+            counters["validation_classify_yielded"] = tasks.eligible_count(
+                now, task_types=("classify_result",)
+            )
+            break
         task = tasks.claim_next_task(task_types=("classify_result",), now=now)
         if task is None:
             break
@@ -1525,6 +1559,19 @@ def _classify_due(tasks: FarmTasksDB, *, private_root, limit, counters, now) -> 
                     _bump(counters, "exports_created")
         tasks.complete_task(task["task_id"], reason="classified", now=now)
         _bump(counters, "classified")
+
+    backlog = tasks.validation_backlog_metrics(now=now)
+    counters["validation_backlog_active"] = int(backlog["active"])
+    counters["validation_backlog_eligible"] = int(backlog["eligible"])
+    counters["validation_backlog_oldest_age_seconds"] = float(
+        backlog["oldest_age_seconds"]
+    )
+    counters["validation_arrival_rate_per_hour"] = float(
+        backlog["arrival_rate_per_hour"]
+    )
+    counters["validation_service_rate_per_hour"] = float(
+        backlog["service_rate_per_hour"]
+    )
 
 
 def _drain_worker(private_root, max_jobs: int, night_mode: bool, errors: list) -> None:
@@ -1628,6 +1675,7 @@ def run_coordinator_cycle(
     max_discovery: int = 20,
     run_validation: bool = False,
     max_validations: int = 10,
+    validation_backlog_high_water: int = 256,
     run_followups: bool = True,
     max_followups: int = 10,
     sweep_tier: str = "normal",
@@ -1751,6 +1799,7 @@ def run_coordinator_cycle(
                 tasks,
                 private_root=private_root,
                 limit=max_classify,
+                validation_backlog_high_water=validation_backlog_high_water,
                 counters=counters,
                 now=now,
             )

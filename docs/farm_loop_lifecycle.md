@@ -98,8 +98,15 @@ clears, for example `NEEDS_OI_DATA`.
    invocation may be stamped or activated. A pending manifest revokes the prior generation
    before producer side effects begin; the completed atomic `HardValidationGeneration.v1`
    manifest content-binds tasks, requests, producer/validator and paper-reader code,
-   reports, verdicts, and cards. Zero current exports validate nothing and invalidate old
-   cards and old PFR database rows as current.
+   reports, verdicts, and cards. The priority worker continuously drains at most
+   `--max-validations` ready candidates per slot. Its bounded fair scan continues past
+   orphan, ineligible, or artifact-unavailable head tasks; repeated no-artifact or
+   no-verdict attempts terminalize instead of reclaiming forever. When the active
+   validation backlog reaches `--validation-backlog-high-water`, classification remains
+   queued until service capacity is available. Status publishes active/eligible counts,
+   oldest age, one-hour arrival/service rates, and a drain estimate; the operator SLO is
+   `--validation-backlog-slo-seconds`. Zero exportable candidates preserve the prior
+   completed generation rather than activating historical or incomplete artifacts.
 8. **Follow-up:** hard-validation feedback is converted into bounded
    `schedule_followup` tasks. Queueable actions (`NARROW_PARAMS`, `WIDEN_PARAMS`,
    `REGIME_SWEEP`) become ordinary typed `run_sweep` tasks and then use the same

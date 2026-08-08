@@ -2,8 +2,8 @@
 
 Status: **CURRENT**
 
-- Verified: 2026-08-03
-- Verified against: `21601895118b642ea514a21607214e8de85f844c`
+- Verified: 2026-08-09
+- Verified against: `fb381deceac935328dbdbf0db3d6b59fa1a4f81c`
 - Scope: completed, current, next, and later evidence gates
 - Evidence: [Trading Portfolio Roadmap](docs/trading-portfolio-roadmap.md) and
   current GitHub issue state
@@ -25,14 +25,17 @@ dependency, not by a route to live trading.
   contracts. The listener safety probe uses isolated native Windows TCP
   inventory while retaining bounded Job Object cleanup and fail-closed
   freshness enforcement.
-- Validation maintenance resolves only the current bounded batch before
-  historical feedback work, publishes durable progress only after completed
+- Validation maintenance continuously drains from the priority worker using the
+  configured batch capacity, publishes durable progress only after completed
   export/check/artifact chunks, and rechecks owner/fence authority before each
-  side effect. Bounded fair selection terminally classifies stale orphan and
-  ineligible tasks instead of reclaiming the head row forever, while a finite
-  retry budget terminally classifies repeated no-verdict work. A batch with no
-  exportable candidate preserves the prior generation and does not rescan the
-  full historical validation corpus.
+  side effect. Bounded fair selection passes stale orphan, ineligible, and
+  artifact-unavailable head tasks instead of letting one row consume every
+  service slot. Classification yields at a configurable validation high-water
+  mark without dropping its queued work. Aggregate backlog, oldest age,
+  arrival/service rates, and drain estimates expose the service SLO; a finite
+  retry budget terminally classifies repeated no-artifact/no-verdict work. A
+  batch with no exportable candidate preserves the prior generation and does
+  not rescan the full historical validation corpus.
 - Paper runtime consumers share one content-verified current-generation
   snapshot per cycle, load only manifest-named active cards, and expose explicit
   pending/stale/empty/invalid availability states. Signal evaluation retains the
@@ -51,20 +54,22 @@ dependency, not by a route to live trading.
 Completed means the bounded public contract exists. It does not mean the
 private runtime, data, or trading hypothesis is proven.
 
-## Current: Storage Containment Before Reliability
+## Current: Product-Chain Integrity Before Reliability
 
-1. Catalog and hash every quiescent operational backup generation.
-2. Bind the retained unpacked generation to separate integrity/restore evidence.
-3. Archive older baseline, incident, and canary evidence into deduplicated,
-   content-addressed objects before exact-file reclamation.
-4. Prove interruption recovery, archive restoration, plan-digest enforcement,
-   and zero-change second apply.
-5. Fail closed before canary when backup size or free space exceeds the
-   reviewed budget.
+1. Prove validation service capacity, artifact-aware fairness, high-water
+   backpressure, and oldest-age SLO observability under synthetic contention.
+2. Separate provider errors and operational data gaps from genuine market-data
+   absence, and censor technical failures from outcome memory and training.
+3. Bind paper consumers to a verified current validation generation and perform
+   any private v2 cutover only through the separately authorized operational gate.
+4. Monitor end-to-end product progress and generation freshness rather than PID
+   liveness alone, including deterministic chaos scenarios.
+5. Apply bounded private storage rotation only after exact backup, restore,
+   digest, interruption, and idempotent cleanup proofs.
 
-Exit gate: exact-head CI and post-merge checks green, private cleanup matches
-one dry-run plan digest, archive verification is green, second apply changes
-zero files, and the backup/free-space status is within budget.
+Exit gate: each phase has an exact-head green scoped PR and green post-merge
+verification; operational cutover/cleanup then passes backup, restore, parity,
+digest, and zero-change second-apply gates before runtime.
 
 ## Next: Continuous Paper-Only Reliability
 
@@ -75,7 +80,9 @@ zero files, and the backup/free-space status is within budget.
 3. Establish T+0 only after mandatory readiness, one process authority,
    fencing, integrity, and execution-denial checks pass.
 4. Observe lifecycle, claims, data lineage, delivery, storage growth, and real
-   progress for the full bounded window.
+   product progress for the full bounded window, including validation arrival
+   versus service rate, oldest backlog age, generation freshness, and the
+   absence of technical outcomes in learning inputs.
 5. Stop gracefully at duration or at a proven hard fail; do not repair or
    restart during the canary.
 

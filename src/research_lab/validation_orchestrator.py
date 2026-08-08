@@ -237,10 +237,15 @@ def run_due_validations(
         "visibility_tasks_deferred": 0,
         "retry_exhausted_skipped": 0,
         "unexportable_candidates": 0,
+        "artifact_batches": 0,
+        "artifact_ready_tasks": 0,
+        "fair_scan_exhausted": 0,
         "generation_unchanged": 0,
         "bridge_ok": all(bridge_available().values()),
     }
+    limit = max(0, int(limit))
     export_tasks: list[dict] = []
+    prepared_by_id: dict[str, Any] = {}
     scan_limit = max(
         int(limit),
         min(
@@ -248,47 +253,124 @@ def run_due_validations(
             max(MIN_VALIDATION_SCAN_LIMIT, int(limit) * 32),
         ),
     )
+    queue_exhausted = False
     while len(export_tasks) < limit and counters["tasks_examined"] < scan_limit:
+        probe_tasks: list[dict[str, Any]] = []
+        probe_capacity = min(
+            limit - len(export_tasks),
+            scan_limit - counters["tasks_examined"],
+        )
+        while (
+            len(probe_tasks) < probe_capacity
+            and counters["tasks_examined"] < scan_limit
+        ):
+            _check_active(check_active)
+            task = tasks.claim_next_task(task_types=("export_validation",), now=now)
+            if task is None:
+                queue_exhausted = True
+                break
+            counters["tasks_examined"] += 1
+            counters["export_tasks"] += 1
+            disposition = tasks.classify_export_validation_task(task, now=now)
+            action = disposition["action"]
+            reason = disposition["reason"]
+            if action == "skip":
+                tasks.skip_task(task["task_id"], reason, now=now)
+                if reason == "validation_orphan_missing_unique_candidate":
+                    counters["orphan_tasks_skipped"] += 1
+                else:
+                    counters["ineligible_tasks_skipped"] += 1
+                _completed_progress(
+                    progress,
+                    check_active,
+                    "task_dispositioned",
+                    counters["tasks_examined"],
+                    scan_limit,
+                )
+                continue
+            if action == "defer":
+                tasks.defer_task(
+                    task["task_id"],
+                    until=(now or 0) + 300,
+                    reason=reason,
+                    now=now,
+                )
+                counters["visibility_tasks_deferred"] += 1
+                _completed_progress(
+                    progress,
+                    check_active,
+                    "task_dispositioned",
+                    counters["tasks_examined"],
+                    scan_limit,
+                )
+                continue
+            probe_tasks.append(task)
+
+        if not probe_tasks:
+            if queue_exhausted:
+                break
+            continue
+
+        if not apply:
+            export_tasks.extend(probe_tasks)
+            continue
+
+        uc_keys = [str(_read_payload(task).get("uc_key") or "") for task in probe_tasks]
+        uc_keys = [key for key in uc_keys if key]
         _check_active(check_active)
-        task = tasks.claim_next_task(task_types=("export_validation",), now=now)
-        if task is None:
-            break
-        counters["tasks_examined"] += 1
-        counters["export_tasks"] += 1
-        disposition = tasks.classify_export_validation_task(task, now=now)
-        action = disposition["action"]
-        reason = disposition["reason"]
-        if action == "skip":
-            tasks.skip_task(task["task_id"], reason, now=now)
-            if reason == "validation_orphan_missing_unique_candidate":
-                counters["orphan_tasks_skipped"] += 1
+        summary, prepared_batch = prepare_requests(
+            private_root,
+            limit=len(probe_tasks),
+            include_regime_specific=True,
+            source="farm_tasks",
+            uc_keys=uc_keys,
+            progress=progress,
+            check_active=check_active,
+        )
+        counters["artifact_batches"] += 1
+        counters["unexportable_candidates"] += int(
+            summary.get("skipped_no_artifact") or 0
+        )
+        expected_ids = {
+            _hard_id_for_task(task)
+            for task in probe_tasks
+            if str(_read_payload(task).get("uc_key") or "")
+        }
+        expected_ids.discard("")
+        batch_by_id = {
+            str(candidate.candidate_id): candidate
+            for candidate in prepared_batch
+            if str(candidate.candidate_id) in expected_ids
+        }
+        for task in probe_tasks:
+            hard_id = _hard_id_for_task(task)
+            if hard_id in batch_by_id:
+                export_tasks.append(task)
+                prepared_by_id[hard_id] = batch_by_id[hard_id]
+                counters["artifact_ready_tasks"] += 1
+                continue
+            _check_active(check_active)
+            if int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
+                tasks.skip_task(
+                    task["task_id"],
+                    "validation_artifact_unavailable_retry_exhausted",
+                    now=now,
+                )
+                counters["retry_exhausted_skipped"] += 1
             else:
-                counters["ineligible_tasks_skipped"] += 1
-            _completed_progress(
-                progress,
-                check_active,
-                "task_dispositioned",
-                counters["tasks_examined"],
-                scan_limit,
-            )
-            continue
-        if action == "defer":
-            tasks.defer_task(
-                task["task_id"],
-                until=(now or 0) + 300,
-                reason=reason,
-                now=now,
-            )
-            counters["visibility_tasks_deferred"] += 1
-            _completed_progress(
-                progress,
-                check_active,
-                "task_dispositioned",
-                counters["tasks_examined"],
-                scan_limit,
-            )
-            continue
-        export_tasks.append(task)
+                tasks.defer_task(
+                    task["task_id"],
+                    until=(now or 0) + 300,
+                    reason="validation_artifact_unavailable",
+                    now=now,
+                )
+            _completed_progress(progress, check_active, "task_unexportable", 1, 1)
+
+        if queue_exhausted:
+            break
+
+    if counters["tasks_examined"] >= scan_limit and len(export_tasks) < limit:
+        counters["fair_scan_exhausted"] = 1
     _completed_progress(
         progress,
         check_active,
@@ -307,59 +389,6 @@ def run_due_validations(
             tasks.complete_task(task["task_id"], reason="export_dry_run", now=now)
             _completed_progress(progress, check_active, "task_completed", 1, 1)
         return counters
-
-    uc_keys = [str(_read_payload(t).get("uc_key") or "") for t in export_tasks]
-    uc_keys = [k for k in uc_keys if k]
-    _check_active(check_active)
-    summary, prepared = prepare_requests(
-        private_root,
-        limit=max(limit, len(export_tasks)),
-        include_regime_specific=True,
-        source="farm_tasks",
-        uc_keys=uc_keys,
-        progress=progress,
-        check_active=check_active,
-    )
-    counters["unexportable_candidates"] = int(summary.get("skipped_no_artifact") or 0)
-    expected_ids = {
-        _hard_id_for_task(task)
-        for task in export_tasks
-        if str(_read_payload(task).get("uc_key") or "")
-    }
-    expected_ids.discard("")
-    prepared_by_id = {
-        str(candidate.candidate_id): candidate
-        for candidate in prepared
-        if str(candidate.candidate_id) in expected_ids
-    }
-    ready_tasks: list[dict] = []
-    for task in export_tasks:
-        hid = _hard_id_for_task(task)
-        if hid in prepared_by_id:
-            ready_tasks.append(task)
-            continue
-        _check_active(check_active)
-        if int(task.get("attempts") or 0) >= MAX_VALIDATION_ATTEMPTS:
-            tasks.skip_task(
-                task["task_id"],
-                "validation_artifact_unavailable_retry_exhausted",
-                now=now,
-            )
-            counters["retry_exhausted_skipped"] += 1
-        else:
-            tasks.defer_task(
-                task["task_id"],
-                until=(now or 0) + 300,
-                reason="validation_artifact_unavailable",
-                now=now,
-            )
-        _completed_progress(progress, check_active, "task_unexportable", 1, 1)
-
-    if not ready_tasks:
-        counters["generation_unchanged"] = 1
-        return counters
-
-    export_tasks = ready_tasks
     prepared = [prepared_by_id[_hard_id_for_task(task)] for task in export_tasks]
 
     # Only a proven exportable batch may revoke the prior generation.  The

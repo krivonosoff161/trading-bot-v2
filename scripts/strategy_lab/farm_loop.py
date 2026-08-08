@@ -1623,9 +1623,60 @@ def _run_validation_maintenance(
     apply: bool,
     loop: bool,
     cycle_started_at: float,
+    status_target: str = "farm_loop",
 ) -> dict[str, Any]:
     """Run one bounded validation batch with durable, real progress milestones."""
     failure_signal = getattr(args, "task_claim_failure_signal", None)
+    max_validations = max(1, int(getattr(args, "max_validations", 10)))
+    backlog_slo_seconds = max(
+        1.0, float(getattr(args, "validation_backlog_slo_seconds", 3600.0))
+    )
+
+    def backlog_snapshot() -> dict[str, Any]:
+        metrics = getattr(tasks, "validation_backlog_metrics", None)
+        if callable(metrics):
+            return metrics()
+        return {
+            "active": 0,
+            "eligible": 0,
+            "by_state": {},
+            "oldest_age_seconds": 0.0,
+            "window_seconds": 3600.0,
+            "arrivals": 0,
+            "terminal": 0,
+            "arrival_count_method": "task_created_in_window",
+            "service_count_method": "current_terminal_state_updated_in_window",
+            "arrival_rate_per_hour": 0.0,
+            "service_rate_per_hour": 0.0,
+            "net_drain_rate_per_hour": 0.0,
+            "drain_eta_hours": 0.0,
+        }
+
+    def publish(details: dict[str, Any]) -> None:
+        payload = {
+            **details,
+            "max_validations": max_validations,
+            "backlog_high_water": max(
+                1, int(getattr(args, "validation_backlog_high_water", 256))
+            ),
+            "backlog_slo_seconds": backlog_slo_seconds,
+        }
+        if status_target == "priority_worker":
+            _write_priority_worker_status(
+                private_root,
+                stage="validation_maintenance",
+                started_at=cycle_started_at,
+                details=payload,
+            )
+            return
+        _write_loop_status(
+            private_root,
+            stage="validation_maintenance",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details=payload,
+        )
 
     def check_active() -> None:
         if failure_signal is not None:
@@ -1638,41 +1689,53 @@ def _run_validation_maintenance(
 
     def progress(milestone: str, completed: int, total: int) -> None:
         check_active()
-        _write_loop_status(
-            private_root,
-            stage="validation_maintenance",
-            apply=apply,
-            loop=loop,
-            cycle_started_at=cycle_started_at,
-            details={
+        backlog = backlog_snapshot()
+        publish(
+            {
                 "milestone": milestone,
                 "completed": int(completed),
                 "total": int(total),
-                "max_validations": 1,
-            },
+                "backlog": backlog,
+                "backlog_slo_breached": bool(
+                    float(backlog["oldest_age_seconds"]) > backlog_slo_seconds
+                ),
+            }
         )
         check_active()
 
     check_active()
-    _write_loop_status(
-        private_root,
-        stage="validation_maintenance",
-        apply=apply,
-        loop=loop,
-        cycle_started_at=cycle_started_at,
-        details={"max_validations": 1},
+    backlog_before = backlog_snapshot()
+    publish(
+        {
+            "milestone": "starting",
+            "backlog": backlog_before,
+            "backlog_slo_breached": bool(
+                float(backlog_before["oldest_age_seconds"]) > backlog_slo_seconds
+            ),
+        }
     )
     from src.research_lab.validation_orchestrator import run_due_validations
 
-    return run_due_validations(
+    result = run_due_validations(
         tasks,
         private_root,
         apply=True,
-        limit=1,
+        limit=max_validations,
         now=time.time(),
         progress=progress,
         check_active=check_active,
     )
+    backlog_after = backlog_snapshot()
+    result["backlog_before"] = backlog_before
+    result["backlog_after"] = backlog_after
+    result["backlog_high_water"] = max(
+        1, int(getattr(args, "validation_backlog_high_water", 256))
+    )
+    result["backlog_slo_seconds"] = backlog_slo_seconds
+    result["backlog_slo_breached"] = bool(
+        float(backlog_after["oldest_age_seconds"]) > backlog_slo_seconds
+    )
+    return result
 
 
 def _run_once(
@@ -1772,6 +1835,9 @@ def _run_once(
             discovery_snapshot=snapshot,
             max_discovery=args.max_plan_events,
             max_validations=int(getattr(args, "max_validations", 10)),
+            validation_backlog_high_water=int(
+                getattr(args, "validation_backlog_high_water", 256)
+            ),
             run_validation=args.run_validation,
             run_followups=not getattr(args, "no_followups", False),
             max_followups=getattr(args, "max_followups", 10),
@@ -2170,30 +2236,6 @@ def _run_once(
                 out.setdefault("errors", []).append(
                     {"where": "paper_signals", "error": str(exc)}
                 )
-        if bool(getattr(args, "priority_worker_active", False)) and args.run_validation:
-            if cycle_stop_requested():
-                out["stop_requested"] = True
-                return out
-            try:
-                failure_signal = getattr(args, "task_claim_failure_signal", None)
-                out["validation_maintenance"] = _run_validation_maintenance(
-                    args,
-                    tasks,
-                    private_root,
-                    apply=apply,
-                    loop=loop,
-                    cycle_started_at=cycle_started_at,
-                )
-            except FarmCycleStopRequested:
-                raise
-            except Exception as exc:  # noqa: BLE001 - maintenance validation must not kill farm
-                if failure_signal is not None:
-                    # Lost process/task ownership is not an ordinary maintenance
-                    # error and must remain visible to the foreground fail-closed path.
-                    failure_signal.raise_if_failed()
-                out.setdefault("errors", []).append(
-                    {"where": "validation_maintenance", "error": str(exc)}
-                )
     stages = _stage_status(args, apply)
     out["stages"] = stages
     if apply:
@@ -2273,6 +2315,9 @@ def _run_priority_slot(
         max_enrich=0,
         max_sweeps=1,
         max_classify=2,
+        validation_backlog_high_water=int(
+            getattr(args, "validation_backlog_high_water", 256)
+        ),
         run_worker=True,
         max_worker_jobs=1,
         night_mode=args.night_mode,
@@ -2289,6 +2334,7 @@ def _run_priority_slot(
 
 def _slot_did_work(slot: dict) -> bool:
     counters = slot.get("counters") or {}
+    validation = slot.get("validation_maintenance") or {}
     return any(
         int(counters.get(name) or 0) > 0
         for name in (
@@ -2299,6 +2345,15 @@ def _slot_did_work(slot: dict) -> bool:
             "runs_completed",
             "classified",
             "unblocked",
+        )
+    ) or any(
+        int(validation.get(name) or 0) > 0
+        for name in (
+            "validated",
+            "exported",
+            "orphan_tasks_skipped",
+            "ineligible_tasks_skipped",
+            "retry_exhausted_skipped",
         )
     )
 
@@ -2497,9 +2552,24 @@ def _priority_worker_loop(
                     started_at=slot_started,
                     details={"sequence": sequence + 1},
                 )
+                validation_maintenance: dict[str, Any] = {}
+                if bool(getattr(args, "run_validation", False)) and worker_tasks.eligible_count(
+                    task_types=("export_validation",)
+                ):
+                    validation_maintenance = _run_validation_maintenance(
+                        args,
+                        worker_tasks,
+                        private_root,
+                        apply=True,
+                        loop=True,
+                        cycle_started_at=slot_started,
+                        status_target="priority_worker",
+                    )
                 slot = _run_priority_slot(
                     args, worker_tasks, profiles, policy, private_root
                 )
+                if validation_maintenance:
+                    slot["validation_maintenance"] = validation_maintenance
                 sequence += 1
                 _write_priority_checkpoint(private_root, slot, sequence=sequence)
                 did_work = _slot_did_work(slot)
@@ -2883,6 +2953,21 @@ def main() -> None:
     ap.add_argument("--max-sweeps", type=int, default=4)
     ap.add_argument("--max-worker-jobs", type=int, default=4)
     ap.add_argument("--max-validations", type=int, default=10)
+    ap.add_argument(
+        "--validation-backlog-high-water",
+        type=int,
+        default=256,
+        help=(
+            "pause classify_result consumption when active export_validation backlog "
+            "reaches this bound"
+        ),
+    )
+    ap.add_argument(
+        "--validation-backlog-slo-seconds",
+        type=float,
+        default=3600.0,
+        help="operator SLO for the oldest active export_validation task",
+    )
     ap.add_argument("--max-paper-cards", type=int, default=20)
     ap.add_argument("--max-followups", type=int, default=10)
     ap.add_argument(

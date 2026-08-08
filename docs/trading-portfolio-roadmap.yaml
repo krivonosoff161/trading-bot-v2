@@ -1,14 +1,14 @@
 schema: TradingPortfolioRoadmap.v1
-version: "2026.08.03"
+version: "2026.08.09"
 status: current
-verified_date: "2026-08-03"
+verified_date: "2026-08-09"
 documentation_owner: trading-bot-v2
 portfolio_integrator: krivonosoff161
 verified_against_kind: implementation_baseline
 public_projection: sanitized_manifest_only
 hash_canonicalization: utf8_lf
 verified_against:
-  trading-bot-v2: 21601895118b642ea514a21607214e8de85f844c
+  trading-bot-v2: fb381deceac935328dbdbf0db3d6b59fa1a4f81c
   honest-backtest: 0f537a8fa0b80b17d100d38c0696f9a07d8e4ba6
 authority_values:
   - none
@@ -181,12 +181,14 @@ modules:
       - src/research_lab/validation_generation.py
       - tests/test_validation_generation.py
       - src/research_lab/validation_orchestrator.py
+      - src/research_lab/farm_coordinator.py
+      - src/research_lab/farm_tasks_db.py
       - src/research_lab/validation_task_disposition.py
       - tests/test_setup_lifecycle.py
       - tests/test_farm_loop_stage_visibility.py
       - tests/test_validation_task_disposition.py
-    missing_evidence: long-duration proof across interruption, recovery, and validation-maintenance progress scenarios
-    next_gate: preserve generation, fence, idempotency, and completed-chunk progress invariants during canary observation
+    missing_evidence: long-duration proof that configured validation capacity drains arrivals, bounds oldest age, and preserves generation/fence invariants under interruption
+    next_gate: preserve generation, fence, idempotency, backlog SLO, backpressure, and completed-chunk progress invariants during canary observation
     authority: paper_only
     public_private_boundary: state machines are public; lifecycle rows and candidate identity are private
   - module_id: paper_observation
