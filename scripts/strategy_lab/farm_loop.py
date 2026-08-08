@@ -1497,6 +1497,55 @@ def _write_loop_status(
     return published
 
 
+def _run_paper_runtime(
+    args,
+    private_root: Path,
+    *,
+    apply: bool,
+    loop: bool,
+    cycle_started_at: float,
+) -> dict[str, Any]:
+    """Run paper evaluation with real completed-chunk lease progress."""
+
+    from src.research_lab.paper_runtime import run_paper_cycle
+
+    failure_signal = getattr(args, "task_claim_failure_signal", None)
+
+    def check_active() -> None:
+        if failure_signal is not None:
+            failure_signal.raise_if_failed()
+        stop_file = str(getattr(args, "stop_file", "") or "")
+        if stop_file and Path(stop_file).exists():
+            raise FarmCycleStopRequested(
+                "canonical stop requested during paper runtime"
+            )
+
+    def progress(milestone: str, completed: int, total: int) -> None:
+        check_active()
+        _write_loop_status(
+            private_root,
+            stage="paper_runtime",
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+            details={
+                "milestone": milestone,
+                "completed": int(completed),
+                "total": int(total),
+            },
+        )
+        check_active()
+
+    check_active()
+    return run_paper_cycle(
+        private_root,
+        apply=apply,
+        limit=args.max_paper_cards,
+        progress=progress,
+        check_active=check_active,
+    )
+
+
 def _refresh_setup_outcome_memory(
     args,
     private_root: Path,
@@ -1762,9 +1811,13 @@ def _run_once(
             loop=loop,
             cycle_started_at=cycle_started_at,
         )
-        from src.research_lab.paper_runtime import run_paper_cycle
-
-        paper = run_paper_cycle(private_root, apply=apply, limit=args.max_paper_cards)
+        paper = _run_paper_runtime(
+            args,
+            private_root,
+            apply=apply,
+            loop=loop,
+            cycle_started_at=cycle_started_at,
+        )
         out["paper"] = {
             "counters": paper.get("counters", {}),
             "readiness": paper.get("readiness", {}),

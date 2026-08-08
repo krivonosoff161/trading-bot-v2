@@ -12,7 +12,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.experiment import finalize_trade, generate_signals
 from src.research_lab.candle_library import load_canonical_candles
@@ -27,7 +27,14 @@ from src.research_lab.paper_contract import (
 from src.research_lab.paper_journal import append_paper_outcome, load_seen_trade_ids
 from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.simulator_contract import build_cost_ledger, legacy_fixture_manifest
-from src.research_lab.validation_generation import read_current_setup_card
+from src.research_lab.strategy_registry import get_strategy
+from src.research_lab.validation_generation import (
+    CurrentGenerationSnapshot,
+    load_current_generation_snapshot,
+    read_current_setup_card,
+)
+
+_PAPER_SIGNAL_SEARCH_BARS = 250
 
 
 @dataclass(frozen=True)
@@ -43,12 +50,53 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def load_ready_setup_cards(private_root: Path, *, limit: int = 50) -> list[SetupCard]:
+def load_ready_setup_cards(
+    private_root: Path,
+    *,
+    limit: int = 50,
+    generation: CurrentGenerationSnapshot | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> list[SetupCard]:
     """Load paper-forward-ready setup cards from the private setup library."""
+    generation = generation or load_current_generation_snapshot(
+        private_root,
+        progress=progress,
+        check_active=check_active,
+    )
+    if generation.status != "legacy_absent":
+        if not generation.usable:
+            return []
+        direct_cards: list[SetupCard] = []
+        rows = list(generation.payloads.items())
+        card_limit = max(0, int(limit))
+        if card_limit == 0:
+            return []
+        for completed, (_candidate_id, payloads) in enumerate(rows, start=1):
+            if check_active is not None:
+                check_active()
+            try:
+                card = SetupCard.from_dict(payloads["setup_card"][1])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if card.paper_forward_ready:
+                direct_cards.append(card)
+                if len(direct_cards) >= card_limit:
+                    if progress is not None:
+                        progress("paper_card_loaded", completed, len(rows))
+                    if check_active is not None:
+                        check_active()
+                    break
+            if progress is not None:
+                progress("paper_card_loaded", completed, len(rows))
+            if check_active is not None:
+                check_active()
+        return direct_cards
+
     cards_dir = Path(private_root) / "setup_library" / "cards"
     if not cards_dir.exists():
         return []
-    cards: list[SetupCard] = []
+    legacy_cards: list[SetupCard] = []
     for path in sorted(cards_dir.glob("*.json")):
         try:
             payload = read_current_setup_card(private_root, path)
@@ -58,16 +106,31 @@ def load_ready_setup_cards(private_root: Path, *, limit: int = 50) -> list[Setup
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             continue
         if card.paper_forward_ready:
-            cards.append(card)
-        if len(cards) >= limit:
+            legacy_cards.append(card)
+        if len(legacy_cards) >= limit:
             break
-    return cards
+    return legacy_cards
 
 
-def local_candles_for_plan(private_root: Path, plan: PaperTradePlan) -> list[dict[str, Any]]:
+def local_candles_for_plan(
+    private_root: Path,
+    plan: PaperTradePlan,
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> list[dict[str, Any]]:
+    def candle_progress(stage: str) -> None:
+        if check_active is not None:
+            check_active()
+        if progress is not None:
+            progress(f"paper_candles:{stage}", 1, 1)
+        if check_active is not None:
+            check_active()
+
     selected = load_canonical_candles(
         private_root, plan.symbol, plan.timeframe,
         purpose="paper_runtime", coverage_policy="gap_free",
+        progress=candle_progress,
     )
     if selected.manifest.provenance_status != "complete":
         return []
@@ -75,22 +138,49 @@ def local_candles_for_plan(private_root: Path, plan: PaperTradePlan) -> list[dic
 
 
 def _candidate_signals_no_lookahead(
-    candles: list[dict[str, Any]], plan: PaperTradePlan
+    candles: list[dict[str, Any]],
+    plan: PaperTradePlan,
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+    chunk_size: int = 250,
 ) -> list[dict[str, Any]]:
-    """Generate entry signals incrementally so future bars cannot create the entry."""
+    """Evaluate a bounded recent horizon with the original prefix semantics."""
     found: dict[int, dict[str, Any]] = {}
-    for end in range(1, len(candles) + 1):
-        visible = candles[:end]
+    definition = get_strategy(plan.family)
+    history_bars = int(definition.required_history_bars(plan.params)) + 2
+    hold_bars = max(1, int(plan.max_hold.get("bars") or 1))
+    evaluation_bound = history_bars + hold_bars + _PAPER_SIGNAL_SEARCH_BARS
+    offset = max(0, len(candles) - evaluation_bound)
+    evaluation = candles[offset:]
+    if progress is not None:
+        progress("signal_history_window_selected", len(evaluation), len(candles))
+    if check_active is not None:
+        check_active()
+    completed_since_progress = 0
+    chunk_size = max(1, int(chunk_size))
+    for end in range(1, len(evaluation) + 1):
+        if check_active is not None:
+            check_active()
+        visible = evaluation[:end]
         for sig in generate_signals(visible, plan.family, plan.params):
             try:
                 idx = int(sig["idx"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if idx != end - 1:
+            if idx != len(visible) - 1:
                 continue
             if plan.direction != "both" and str(sig.get("side") or "").lower() != plan.direction:
                 continue
-            found[idx] = dict(sig)
+            global_idx = offset + idx
+            found[global_idx] = {**dict(sig), "idx": global_idx}
+        completed_since_progress += 1
+        if completed_since_progress >= chunk_size or end == len(evaluation):
+            if progress is not None:
+                progress("signal_history_chunk_completed", end, len(evaluation))
+            if check_active is not None:
+                check_active()
+            completed_since_progress = 0
     return [found[i] for i in sorted(found)]
 
 
@@ -166,11 +256,22 @@ def _state_for_outcome(outcome: str) -> PaperRuntimeState:
     return PaperRuntimeState.CLOSED_TIMEOUT
 
 
-def execute_plan_once(plan: PaperTradePlan, candles: list[dict[str, Any]]) -> PaperRunResult:
+def execute_plan_once(
+    plan: PaperTradePlan,
+    candles: list[dict[str, Any]],
+    *,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> PaperRunResult:
     """Execute the most recent eligible signal for a plan against local candles."""
     if len(candles) < 2:
         return PaperRunResult(plan.setup_id, "skipped", "missing_data")
-    signals = _candidate_signals_no_lookahead(candles, plan)
+    signals = _candidate_signals_no_lookahead(
+        candles,
+        plan,
+        progress=progress,
+        check_active=check_active,
+    )
     if not signals:
         return PaperRunResult(plan.setup_id, "skipped", "no_signal")
     for sig in reversed(signals):
@@ -217,10 +318,31 @@ def run_paper_cycle(
     *,
     apply: bool = False,
     limit: int = 20,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Run one bounded paper cycle. Writes outcomes only when apply=True."""
     private_root = Path(private_root)
-    readiness = summarize_paper_readiness(private_root)
+    generation = load_current_generation_snapshot(
+        private_root,
+        progress=progress,
+        check_active=check_active,
+    )
+    cards = load_ready_setup_cards(
+        private_root,
+        limit=limit,
+        generation=generation,
+        progress=progress,
+        check_active=check_active,
+    )
+    readiness = summarize_paper_readiness(
+        private_root,
+        limit=500,
+        check_local_data=False,
+        generation=generation,
+        progress=progress,
+        check_active=check_active,
+    )
     seen = load_seen_trade_ids(private_root)
     counters = {
         "cards": 0,
@@ -232,13 +354,25 @@ def run_paper_cycle(
         "written": 0,
     }
     results: list[dict[str, Any]] = []
-    for card in load_ready_setup_cards(private_root, limit=limit):
+    for completed_cards, card in enumerate(cards, start=1):
+        if check_active is not None:
+            check_active()
         counters["cards"] += 1
         try:
             plan = plan_from_setup_card(card)
             counters["planned"] += 1
-            candles = local_candles_for_plan(private_root, plan)
-            result = execute_plan_once(plan, candles)
+            candles = local_candles_for_plan(
+                private_root,
+                plan,
+                progress=progress,
+                check_active=check_active,
+            )
+            result = execute_plan_once(
+                plan,
+                candles,
+                progress=progress,
+                check_active=check_active,
+            )
         except (PaperPlanError, ValueError, OSError, KeyError, TypeError) as exc:
             counters["errors"] += 1
             results.append({"setup_id": card.setup_id, "status": "error", "reason": str(exc)})
@@ -273,4 +407,8 @@ def run_paper_cycle(
             "net_pct": row.get("net_pct"),
             "r_multiple": row.get("r_multiple"),
         })
+        if progress is not None:
+            progress("paper_plan_completed", completed_cards, len(cards))
+        if check_active is not None:
+            check_active()
     return {"apply": apply, "counters": counters, "readiness": readiness, "results": results}

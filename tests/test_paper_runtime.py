@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.candle_store import CandleStore
 from src.research_lab.paper_contract import PaperRuntimeState, plan_from_setup_card
 from src.research_lab.paper_journal import read_paper_outcomes
 from src.research_lab.paper_runtime import (
+    _PAPER_SIGNAL_SEARCH_BARS,
+    _candidate_signals_no_lookahead,
     execute_plan_once,
     load_ready_setup_cards,
     run_paper_cycle,
@@ -17,6 +22,8 @@ from src.research_lab.paper_runtime import (
 from src.research_lab.paper_readiness import summarize_paper_readiness
 from src.research_lab.setup_library import write_setup_library
 from src.research_lab.simulator_contract import legacy_fixture_manifest
+from src.research_lab.strategy_history_proof import synthetic_candles
+from src.research_lab.strategy_registry import REGISTRY
 
 _SIMULATOR_MANIFEST = legacy_fixture_manifest()
 
@@ -213,3 +220,105 @@ def test_paper_outcome_reader_streams_and_reports_completed_chunks(
 
     assert len(rows) == 2001
     assert progress == [1000, 2000, 2001]
+
+
+def test_bounded_no_lookahead_matches_prefix_reference_for_registry_defaults():
+    def prefix_reference(candles, plan):
+        found = {}
+        definition = REGISTRY[plan.family]
+        for end in range(1, len(candles) + 1):
+            for signal in definition.generate_signals(candles[:end], plan.params):
+                idx = int(signal["idx"])
+                if idx != end - 1:
+                    continue
+                if (
+                    plan.direction != "both"
+                    and str(signal.get("side") or "").lower() != plan.direction
+                ):
+                    continue
+                found[idx] = dict(signal)
+        return [found[index] for index in sorted(found)]
+
+    base_plan = plan_from_setup_card(_card())
+    for strategy_id, definition in REGISTRY.items():
+        params = dict(definition.parameter_defaults)
+        params.setdefault("stop_pct", 2.0)
+        params.setdefault("take_pct", 4.0)
+        params.setdefault("hold_bars", 3)
+        plan = replace(
+            base_plan,
+            family=strategy_id,
+            params=params,
+        )
+        candles = synthetic_candles(
+            220,
+            include_required_data=definition.required_data,
+        )
+        assert _candidate_signals_no_lookahead(candles, plan) == prefix_reference(
+            candles,
+            plan,
+        )
+
+
+def test_no_lookahead_work_is_history_bounded_and_reports_completed_chunks(monkeypatch):
+    plan = plan_from_setup_card(_card())
+    candles = _candles_for_take() * 30
+    visible_sizes: list[int] = []
+    progress: list[tuple[str, int, int]] = []
+
+    def fake_generate(visible, _family, _params):
+        visible_sizes.append(len(visible))
+        return []
+
+    monkeypatch.setattr("src.research_lab.paper_runtime.generate_signals", fake_generate)
+    _candidate_signals_no_lookahead(
+        candles,
+        plan,
+        chunk_size=250,
+        progress=lambda stage, completed, total: progress.append(
+            (stage, completed, total)
+        ),
+    )
+
+    declared_bound = (
+        REGISTRY[plan.family].required_history_bars(plan.params)
+        + 2
+        + int(plan.max_hold["bars"])
+        + _PAPER_SIGNAL_SEARCH_BARS
+    )
+    assert len(visible_sizes) == min(len(candles), declared_bound)
+    assert max(visible_sizes) <= declared_bound
+    assert progress[-1] == (
+        "signal_history_chunk_completed",
+        min(len(candles), declared_bound),
+        min(len(candles), declared_bound),
+    )
+
+
+def test_cycle_blocks_write_after_active_check_failure(tmp_path, monkeypatch):
+    write_setup_library(tmp_path, [_card()], dry_run=False)
+    _write_data(tmp_path, _candles_for_take())
+    CandleStore(tmp_path).upsert_candles(
+        "ABC_USDT_SWAP",
+        "1h",
+        _candles_for_take(),
+        source="paper-runtime-fixture",
+        available_at_ms=1,
+    )
+    checks = 0
+
+    def check_active():
+        nonlocal checks
+        checks += 1
+        if checks >= 4:
+            raise RuntimeError("heartbeat failed")
+
+    appended: list[object] = []
+    monkeypatch.setattr(
+        "src.research_lab.paper_runtime.append_paper_outcome",
+        lambda *_args, **_kwargs: appended.append(object()),
+    )
+
+    with pytest.raises(RuntimeError, match="heartbeat failed"):
+        run_paper_cycle(tmp_path, apply=True, check_active=check_active)
+    assert appended == []

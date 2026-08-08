@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.honest_backtest_bridge import _artifact_stem
 
@@ -26,6 +27,47 @@ _IDENTITY_FIELDS = (
     "active",
     "incomplete_ids",
 )
+
+ProgressCallback = Callable[[str, int, int], None]
+ActiveCheck = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class CurrentGenerationSnapshot:
+    """One content-verified view of the current validation generation.
+
+    Artifact directories are historical storage, not an index.  Consumers must share
+    this snapshot so one paper cycle hashes the producer tree and each active artifact
+    chain exactly once instead of rediscovering authority through directory scans.
+    """
+
+    status: str
+    generation_id: str
+    payloads: dict[str, dict[str, tuple[Path, dict[str, Any]]]]
+    active_candidates: int
+    invalid_candidates: tuple[str, ...] = ()
+
+    @property
+    def usable(self) -> bool:
+        return self.status in {"ready", "ready_empty"}
+
+
+def _ensure_active(check_active: ActiveCheck | None) -> None:
+    if check_active is not None:
+        check_active()
+
+
+def _report_progress(
+    progress: ProgressCallback | None,
+    check_active: ActiveCheck | None,
+    stage: str,
+    completed: int,
+    total: int,
+) -> None:
+    _ensure_active(check_active)
+    if progress is not None:
+        progress(stage, int(completed), int(total))
+    _ensure_active(check_active)
 
 
 def manifest_path(private_root: Path) -> Path:
@@ -345,8 +387,10 @@ def _active_payloads(
     private_root: Path,
     manifest: dict[str, Any],
     candidate_id: str,
+    *,
+    base_validated: bool = False,
 ) -> dict[str, tuple[Path, dict[str, Any]]] | None:
-    if not _base_manifest_valid(manifest):
+    if not base_validated and not _base_manifest_valid(manifest):
         return None
     if candidate_id not in (manifest.get("exported_ids") or []):
         return None
@@ -411,19 +455,88 @@ def _active_payloads(
     return payloads
 
 
-def current_candidate_ids(private_root: Path) -> set[str] | None:
-    """Return fully verified active IDs, ``None`` only for legacy absence."""
+def load_current_generation_snapshot(
+    private_root: Path,
+    *,
+    progress: ProgressCallback | None = None,
+    check_active: ActiveCheck | None = None,
+) -> CurrentGenerationSnapshot:
+    """Verify current generation once and return a cycle-local authority snapshot."""
+
+    private_root = Path(private_root)
+    _ensure_active(check_active)
     manifest = load_current_generation(private_root)
     if manifest is None:
+        return CurrentGenerationSnapshot("legacy_absent", "", {}, 0)
+    generation_id = str(manifest.get("generation_id") or "")
+    if manifest.get("producer_complete") is not True:
+        return CurrentGenerationSnapshot("pending", generation_id, {}, 0)
+    if (
+        manifest.get("schema") != SCHEMA
+        or manifest.get("paper_only") is not True
+        or manifest.get("execution_allowed") is not False
+        or not isinstance(manifest.get("active"), dict)
+        or generation_id != _generation_id(_identity(manifest))
+    ):
+        return CurrentGenerationSnapshot("invalid_manifest", generation_id, {}, 0)
+    try:
+        current_code = _producer_code_manifest()
+    except OSError:
+        return CurrentGenerationSnapshot("producer_code_unavailable", generation_id, {}, 0)
+    _report_progress(progress, check_active, "generation_manifest_verified", 1, 1)
+    if _identity(manifest).get("producer_code") != current_code:
+        return CurrentGenerationSnapshot("code_stale", generation_id, {}, 0)
+
+    active: dict[str, Any] = manifest["active"]
+    candidate_ids = sorted(str(item) for item in active if str(item))
+    payloads: dict[str, dict[str, tuple[Path, dict[str, Any]]]] = {}
+    invalid: list[str] = []
+    total = len(candidate_ids)
+    for completed, candidate_id in enumerate(candidate_ids, start=1):
+        _ensure_active(check_active)
+        verified = _active_payloads(
+            private_root,
+            manifest,
+            candidate_id,
+            base_validated=True,
+        )
+        if verified is None:
+            invalid.append(candidate_id)
+        else:
+            payloads[candidate_id] = verified
+        _report_progress(
+            progress,
+            check_active,
+            "generation_candidate_verified",
+            completed,
+            total,
+        )
+    if invalid:
+        # A published generation is one authority unit.  Corruption of one active
+        # chain cannot silently downgrade it to partial authority.
+        return CurrentGenerationSnapshot(
+            "invalid_candidate_chain",
+            generation_id,
+            {},
+            total,
+            tuple(invalid),
+        )
+    return CurrentGenerationSnapshot(
+        "ready" if payloads else "ready_empty",
+        generation_id,
+        payloads,
+        total,
+    )
+
+
+def current_candidate_ids(private_root: Path) -> set[str] | None:
+    """Return fully verified active IDs, ``None`` only for legacy absence."""
+    snapshot = load_current_generation_snapshot(private_root)
+    if snapshot.status == "legacy_absent":
         return None
-    if not _base_manifest_valid(manifest):
+    if not snapshot.usable:
         return set()
-    return {
-        str(candidate_id)
-        for candidate_id in manifest.get("active", {})
-        if str(candidate_id)
-        and _active_payloads(private_root, manifest, str(candidate_id)) is not None
-    }
+    return set(snapshot.payloads)
 
 
 def read_current_validation_artifact(

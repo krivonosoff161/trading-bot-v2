@@ -179,6 +179,7 @@ modules:
     implemented_evidence:
       - src/research_lab/setup_lifecycle.py
       - src/research_lab/validation_generation.py
+      - tests/test_validation_generation.py
       - src/research_lab/validation_orchestrator.py
       - src/research_lab/validation_task_disposition.py
       - tests/test_setup_lifecycle.py
@@ -195,8 +196,10 @@ modules:
     dependencies: [candidate_lifecycle, research_ingestion]
     implemented_evidence:
       - src/research_lab/paper_runtime.py
+      - src/research_lab/paper_readiness.py
       - src/research_lab/paper_signals/cycle.py
       - tests/test_paper_runtime.py
+      - tests/test_pfr_bridge.py
     missing_evidence: a completed acceptance window demonstrating stable data continuity
     next_gate: complete paper observation and audit outcome continuity without execution
     authority: paper_only

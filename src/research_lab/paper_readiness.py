@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.research_lab.candle_library import load_canonical_candles
 from src.research_lab.hard_validation_contract import SetupCard
 from src.research_lab.paper_contract import PaperPlanError, plan_from_setup_card
-from src.research_lab.validation_generation import read_current_setup_card
+from src.research_lab.validation_generation import (
+    CurrentGenerationSnapshot,
+    load_current_generation_snapshot,
+    read_current_setup_card,
+)
 
 
 def _short_reason(reason: str, *, max_len: int = 120) -> str:
@@ -22,22 +26,61 @@ def _short_reason(reason: str, *, max_len: int = 120) -> str:
     return reason if len(reason) <= max_len else reason[: max_len - 3] + "..."
 
 
-def _load_cards(private_root: Path, *, limit: int = 500) -> tuple[list[SetupCard], int]:
+def _load_cards(
+    private_root: Path,
+    *,
+    limit: int = 500,
+    generation: CurrentGenerationSnapshot | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
+) -> tuple[list[SetupCard], int, CurrentGenerationSnapshot]:
+    generation = generation or load_current_generation_snapshot(
+        private_root,
+        progress=progress,
+        check_active=check_active,
+    )
+    if generation.status != "legacy_absent":
+        if not generation.usable:
+            return [], generation.active_candidates, generation
+        rows = list(generation.payloads.items())[: max(0, int(limit))]
+        direct_cards: list[SetupCard] = []
+        unreadable = 0
+        total = len(rows)
+        for completed, (_candidate_id, payloads) in enumerate(rows, start=1):
+            if check_active is not None:
+                check_active()
+            try:
+                direct_cards.append(SetupCard.from_dict(payloads["setup_card"][1]))
+            except (KeyError, TypeError, ValueError):
+                unreadable += 1
+            if progress is not None:
+                progress("paper_card_loaded", completed, total)
+            if check_active is not None:
+                check_active()
+        return direct_cards, unreadable, generation
+
     cards_dir = Path(private_root) / "setup_library" / "cards"
     if not cards_dir.exists():
-        return [], 0
-    cards: list[SetupCard] = []
+        return [], 0, generation
+    legacy_cards: list[SetupCard] = []
     unreadable = 0
-    for path in sorted(cards_dir.glob("*.json"))[: max(0, int(limit))]:
+    paths = sorted(cards_dir.glob("*.json"))[: max(0, int(limit))]
+    for completed, path in enumerate(paths, start=1):
+        if check_active is not None:
+            check_active()
         try:
             payload = read_current_setup_card(private_root, path)
             if payload is None:
                 unreadable += 1
                 continue
-            cards.append(SetupCard.from_dict(payload))
+            legacy_cards.append(SetupCard.from_dict(payload))
         except (OSError, KeyError, TypeError, ValueError):
             unreadable += 1
-    return cards, unreadable
+        if progress is not None:
+            progress("legacy_paper_card_loaded", completed, len(paths))
+        if check_active is not None:
+            check_active()
+    return legacy_cards, unreadable, generation
 
 
 def summarize_paper_readiness(
@@ -45,9 +88,27 @@ def summarize_paper_readiness(
     *,
     limit: int = 500,
     check_local_data: bool = True,
+    generation: CurrentGenerationSnapshot | None = None,
+    cards: list[SetupCard] | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
+    check_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Summarize setup-library readiness without writing anything."""
-    cards, unreadable = _load_cards(Path(private_root), limit=limit)
+    if cards is None:
+        cards, unreadable, generation = _load_cards(
+            Path(private_root),
+            limit=limit,
+            generation=generation,
+            progress=progress,
+            check_active=check_active,
+        )
+    else:
+        unreadable = 0
+        generation = generation or load_current_generation_snapshot(
+            private_root,
+            progress=progress,
+            check_active=check_active,
+        )
     hard: Counter[str] = Counter()
     lite: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
@@ -59,7 +120,9 @@ def summarize_paper_readiness(
     local_data_unproven = 0
     data_manifests: dict[str, dict[str, Any]] = {}
 
-    for card in cards:
+    for completed, card in enumerate(cards, start=1):
+        if check_active is not None:
+            check_active()
         hard_status = str(card.hard_status or "missing").strip() or "missing"
         lite_status = str(card.lite_status or "missing").strip() or "missing"
         hard[hard_status] += 1
@@ -126,8 +189,16 @@ def summarize_paper_readiness(
                 })
         else:
             local_data_ready += 1
+        if progress is not None:
+            progress("paper_readiness_card_checked", completed, len(cards))
+        if check_active is not None:
+            check_active()
 
     return {
+        "generation_status": generation.status,
+        "generation_id": generation.generation_id,
+        "generation_active_candidates": generation.active_candidates,
+        "generation_invalid_candidates": len(generation.invalid_candidates),
         "checked_cards": len(cards),
         "unreadable_cards": unreadable,
         "paper_forward_ready": ready_cards,

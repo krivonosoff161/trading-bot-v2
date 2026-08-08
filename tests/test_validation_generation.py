@@ -151,3 +151,133 @@ def test_canonical_card_wins_over_duplicate_and_pending_revokes_it(tmp_path):
     )
     assert generation.current_candidate_ids(tmp_path) == set()
     assert generation.read_current_setup_card(tmp_path, canonical) is None
+
+
+def test_generation_snapshot_hashes_producer_once_and_reports_real_progress(
+    tmp_path,
+    monkeypatch,
+):
+    chain = _write_chain(tmp_path)
+    candidate_id = str(chain["candidate_id"])
+    original = generation._producer_code_manifest
+    calls = 0
+    progress: list[tuple[str, int, int]] = []
+
+    def counted_manifest():
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(generation, "_producer_code_manifest", counted_manifest)
+    snapshot = generation.load_current_generation_snapshot(
+        tmp_path,
+        progress=lambda stage, completed, total: progress.append(
+            (stage, completed, total)
+        ),
+    )
+
+    assert snapshot.status == "ready"
+    assert set(snapshot.payloads) == {candidate_id}
+    assert calls == 1
+    assert progress == [
+        ("generation_manifest_verified", 1, 1),
+        ("generation_candidate_verified", 1, 1),
+    ]
+
+
+def test_current_generation_card_load_does_not_scan_historical_catalog(
+    tmp_path,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from src.research_lab import paper_runtime
+
+    chain = _write_chain(tmp_path)
+    candidate_id = str(chain["candidate_id"])
+
+    def forbidden_glob(*_args, **_kwargs):
+        raise AssertionError("current generation must not scan historical cards")
+
+    monkeypatch.setattr(generation.Path, "glob", forbidden_glob)
+    monkeypatch.setattr(
+        paper_runtime.SetupCard,
+        "from_dict",
+        staticmethod(
+            lambda payload: SimpleNamespace(
+                candidate_id=payload["candidate_id"],
+                paper_forward_ready=True,
+            )
+        ),
+    )
+    cards = paper_runtime.load_ready_setup_cards(tmp_path)
+
+    assert [card.candidate_id for card in cards] == [candidate_id]
+
+
+def test_generation_snapshot_is_atomic_when_one_active_chain_is_corrupt(tmp_path):
+    _write_chain(tmp_path, "fv_one")
+    _write_chain(tmp_path, "fv_two")
+    generation.write_current_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 1,
+            "task_type": "export_validation",
+            "task_key": "batch",
+            "payload_json": "{}",
+        }],
+        exported_ids=["fv_one", "fv_two"],
+        completed_ids=["fv_one", "fv_two"],
+        producer_time=3.0,
+    )
+    bad = tmp_path / "setup_library" / "cards" / "setup-fv_two.json"
+    bad.write_text(bad.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    snapshot = generation.load_current_generation_snapshot(tmp_path)
+
+    assert snapshot.status == "invalid_candidate_chain"
+    assert snapshot.payloads == {}
+    assert snapshot.invalid_candidates == ("fv_two",)
+
+
+def test_generation_snapshot_cancellation_is_fail_closed(tmp_path):
+    _write_chain(tmp_path)
+    checks = 0
+
+    def check_active():
+        nonlocal checks
+        checks += 1
+        if checks >= 3:
+            raise RuntimeError("lost fence")
+
+    with pytest.raises(RuntimeError, match="lost fence"):
+        generation.load_current_generation_snapshot(
+            tmp_path,
+            check_active=check_active,
+        )
+
+
+def test_generation_snapshot_distinguishes_pending_and_code_stale(
+    tmp_path,
+    monkeypatch,
+):
+    generation.write_pending_generation(
+        tmp_path,
+        tasks=[{
+            "task_id": 3,
+            "task_type": "export_validation",
+            "task_key": "pending",
+            "payload_json": "{}",
+        }],
+        producer_time=4.0,
+    )
+    assert generation.load_current_generation_snapshot(tmp_path).status == "pending"
+
+    _write_chain(tmp_path)
+    actual = generation._producer_code_manifest()
+    monkeypatch.setattr(
+        generation,
+        "_producer_code_manifest",
+        lambda: {**actual, "src/research_lab/paper_runtime.py": "new-code"},
+    )
+    assert generation.load_current_generation_snapshot(tmp_path).status == "code_stale"

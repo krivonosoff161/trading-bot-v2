@@ -702,7 +702,11 @@ def run_cycle(private_root: Path, *, mode: str = "live", timeframes=("15m", "1h"
         pfr_cap = max_new if pfr_reserved <= 0 else pfr_reserved
         if pfr_reserved:
             pfr_counts["pfr_reserved_slots"] = pfr_reserved
-        all_pfr = pfr_bridge.load_pfr_records(pfr_db_path, private_root=private_root)
+        all_pfr = pfr_bridge.load_pfr_records(
+            pfr_db_path,
+            private_root=private_root,
+            status_counts=pfr_counts,
+        )
         passed_pfr, rejected_pfr = pfr_bridge.apply_quality_policy(
             all_pfr, policy=pfr_quality_policy
         )
